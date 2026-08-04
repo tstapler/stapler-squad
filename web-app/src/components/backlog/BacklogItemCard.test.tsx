@@ -262,6 +262,43 @@ describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-
 
     expect(onClick).not.toHaveBeenCalled();
   });
+
+  it("BacklogItemCard_should_NotTriggerCardOnClick_When_EnterPressedOnProvenanceBadge", () => {
+    // Regression test: the card's onKeyDown handler used to fire on ANY
+    // bubbled Enter/Space keydown, including from this nested focusable
+    // anchor — preventDefault() on the bubbled event meant a keyboard user
+    // could never actually follow the link via Enter. Guarding on
+    // `e.target === e.currentTarget` fixes it; this asserts the card's
+    // onClick (its keyboard-activation path) is not invoked when the event
+    // originates on the badge.
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://github.com/acme/widget/issues/42", externalId: "42" })}
+        onAction={jest.fn()}
+        onClick={onClick}
+      />
+    );
+
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
+    fireEvent.keyDown(badge, { key: "Enter" });
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_TriggerOnClick_When_EnterPressedOnCardItself", () => {
+    // Companion test: the guard must not break the card's own keyboard
+    // activation — Enter on the card (not a nested child) should still
+    // invoke onClick.
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={onClick} />
+    );
+
+    fireEvent.keyDown(screen.getByTestId("backlog-item-card"), { key: "Enter" });
+
+    expect(onClick).toHaveBeenCalledWith("item-1");
+  });
 });
 
 describe("BacklogBoard — cross-card independence", () => {

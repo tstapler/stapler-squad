@@ -224,10 +224,14 @@ export const syncDirectionGroup = style({
   borderRadius: vars.radii.sm,
 });
 
+// textMuted on surfaceMuted (this label's ambient background via
+// syncDirectionGroup) fails WCAG AA in the dark theme (2.99:1) and clean
+// theme (3.10:1) — textSecondary clears 4.5:1 against surfaceMuted in
+// every theme (see theme.css.ts for the clean-theme token fix).
 export const subHeading = style({
   fontSize: vars.fontSize.xs,
   fontWeight: vars.fontWeight.semibold,
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   textTransform: "uppercase",
   letterSpacing: "0.05em",
 });
@@ -252,10 +256,13 @@ export const bothDirectionsWarning = style({
 });
 
 // Epic 4.4: "Checking impact…" label shown next to the backward-sync toggle
-// while PreviewBackwardSyncImpact is in flight.
+// while PreviewBackwardSyncImpact is in flight. Rendered inside
+// syncDirectionGroup (surfaceMuted background) — textMuted fails WCAG AA
+// there in the dark/clean themes, so use textSecondary (see subHeading
+// above and theme.css.ts for the clean-theme token fix).
 export const previewPendingLabel = style({
   fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontStyle: "italic",
 });
 

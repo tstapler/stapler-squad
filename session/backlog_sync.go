@@ -131,15 +131,6 @@ func (sl *SyncLoop) runAllSources(ctx context.Context) {
 // If decryption is not available or not needed, returns the raw config unchanged.
 // Exported so package server/services (holding a *SyncLoop handle) can call it
 // cross-package for the forward-sync subscriber.
-//
-// TestDecryptConfigToken remains as a thin forwarding wrapper: it is used by
-// server/services/backlog_service_encryption_test.go (outside this task's
-// file-ownership scope), which was not updated to call DecryptConfigToken
-// directly as part of this rename — see plan Task 0.6.2a.
-func (sl *SyncLoop) TestDecryptConfigToken(raw string) (string, error) {
-	return sl.DecryptConfigToken(raw)
-}
-
 func (sl *SyncLoop) DecryptConfigToken(raw string) (string, error) {
 	if raw == "" {
 		return raw, nil
@@ -428,6 +419,13 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 				} else {
 					log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (mid-flight or terminal, no auto-archive)", existing.ID, existing.Status)
 					skipped++
+					// Nothing changed locally — don't advance the watermark, or a
+					// later manual revert to a pre-work status (with no further
+					// GitHub-side change) would have alreadyReconciled short-circuit
+					// before determineBackwardSyncTarget is even consulted again,
+					// permanently suppressing an otherwise-legitimate auto-archive.
+					// Same fix pattern as the transition-failure branch above.
+					advanceWatermark = false
 				}
 				if advanceWatermark {
 					watermark := extItem.IssueUpdatedAt

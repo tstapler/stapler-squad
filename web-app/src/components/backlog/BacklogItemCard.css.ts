@@ -124,12 +124,16 @@ export const provenanceBadge = style({
   fontWeight: vars.fontWeight.medium,
   height: "20px",
   background: vars.color.surfaceMuted,
-  color: vars.color.textMuted,
+  // textMuted on surfaceMuted fails WCAG AA in the dark theme (2.99:1) and
+  // clean theme (was 3.10:1, and textSecondary itself was marginal at
+  // 4.02:1 before the theme.css.ts fix) — textSecondary now clears 4.5:1
+  // against surfaceMuted in every theme.
+  color: vars.color.textSecondary,
   border: `1px solid ${vars.color.borderMuted}`,
   textDecoration: "none",
   flexShrink: 0,
   ":hover": {
-    color: vars.color.textSecondary,
+    color: vars.color.textPrimary,
     borderColor: vars.color.borderHover,
   },
 });

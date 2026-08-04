@@ -46,6 +46,13 @@ export function BacklogSourcesSettings() {
   const [sources, setSources] = useState<ItemSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  // Per-source in-flight guards for the enabled/forward-sync toggles — same
+  // pattern as backwardSyncPreviewPendingId below, added to close a
+  // stale-closure double-click bug: without this, a rapid second click
+  // reads the same (still-current) `source.enabled` / `source.forwardSyncEnabled`
+  // prop and sends the same target value twice instead of toggling back.
+  const [enabledTogglePendingId, setEnabledTogglePendingId] = useState<string | null>(null);
+  const [forwardSyncTogglePendingId, setForwardSyncTogglePendingId] = useState<string | null>(null);
   const [historyBySource, setHistoryBySource] = useState<Record<string, SyncHistoryResult>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // Local in-progress edits to the close-label input, keyed by source id —
@@ -140,13 +147,25 @@ export function BacklogSourcesSettings() {
   };
 
   const handleToggleEnabled = async (source: ItemSource) => {
-    const updated = await setItemSourceEnabled(source, !source.enabled);
-    if (updated) await refresh();
+    if (enabledTogglePendingId === source.id) return;
+    setEnabledTogglePendingId(source.id);
+    try {
+      const updated = await setItemSourceEnabled(source, !source.enabled);
+      if (updated) await refresh();
+    } finally {
+      setEnabledTogglePendingId(null);
+    }
   };
 
   const handleToggleForwardSync = async (source: ItemSource) => {
-    const updated = await setForwardSyncEnabled(source, !source.forwardSyncEnabled);
-    if (updated) await refresh();
+    if (forwardSyncTogglePendingId === source.id) return;
+    setForwardSyncTogglePendingId(source.id);
+    try {
+      const updated = await setForwardSyncEnabled(source, !source.forwardSyncEnabled);
+      if (updated) await refresh();
+    } finally {
+      setForwardSyncTogglePendingId(null);
+    }
   };
 
   // Turning backward sync OFF still flips directly on click — only turning
@@ -201,7 +220,19 @@ export function BacklogSourcesSettings() {
 
   const handleCloseLabelChange = async (source: ItemSource, closeLabel: string) => {
     const updated = await setForwardSyncCloseLabel(source, closeLabel);
-    if (updated) await refresh();
+    if (updated) {
+      await refresh();
+      // Clear the local draft now that the server has the committed value —
+      // otherwise closeLabelValue's `closeLabelDrafts[source.id] ?? ...`
+      // fallback keeps pinning to this stale local value forever and the
+      // input never reconciles with server truth again (e.g. after another
+      // client changes it).
+      setCloseLabelDrafts((prev) => {
+        const next = { ...prev };
+        delete next[source.id];
+        return next;
+      });
+    }
   };
 
   const handleDelete = async (source: ItemSource) => {
@@ -270,7 +301,11 @@ export function BacklogSourcesSettings() {
                   <button
                     role="switch"
                     aria-checked={source.enabled}
-                    className={`${styles.toggle} ${source.enabled ? styles.toggleOn : ""}`}
+                    aria-busy={enabledTogglePendingId === source.id}
+                    disabled={enabledTogglePendingId === source.id}
+                    className={`${styles.toggle} ${source.enabled ? styles.toggleOn : ""} ${
+                      enabledTogglePendingId === source.id ? styles.togglePending : ""
+                    }`}
                     onClick={() => handleToggleEnabled(source)}
                     aria-label={`${source.enabled ? "Disable" : "Enable"} ${source.displayName}`}
                   />
@@ -290,7 +325,11 @@ export function BacklogSourcesSettings() {
                     <button
                       role="switch"
                       aria-checked={source.forwardSyncEnabled}
-                      className={`${styles.toggle} ${source.forwardSyncEnabled ? styles.toggleOn : ""}`}
+                      aria-busy={forwardSyncTogglePendingId === source.id}
+                      disabled={forwardSyncTogglePendingId === source.id}
+                      className={`${styles.toggle} ${source.forwardSyncEnabled ? styles.toggleOn : ""} ${
+                        forwardSyncTogglePendingId === source.id ? styles.togglePending : ""
+                      }`}
                       onClick={() => handleToggleForwardSync(source)}
                       aria-label={`${source.forwardSyncEnabled ? "Disable" : "Enable"} closing GitHub issues when done`}
                     />

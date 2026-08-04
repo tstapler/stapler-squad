@@ -36,6 +36,9 @@ func (s *BacklogService) PreviewBackwardSyncImpact(
 	if s.pluginRegistry == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("sync not configured — no plugin registry wired"))
 	}
+	if s.syncFeatureEnabled != nil && !s.syncFeatureEnabled() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("backlog sync is disabled"))
+	}
 	if req.Msg.SourceId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("source_id is required"))
 	}
@@ -43,12 +46,7 @@ func (s *BacklogService) PreviewBackwardSyncImpact(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid source_id %q: %w", req.Msg.SourceId, parseErr))
 	}
 
-	var sl *session.SyncLoop
-	if s.syncKeyFunc != nil {
-		sl = session.NewSyncLoopWithKeyProvider(s.storage, s.pluginRegistry, s.syncKeyFunc)
-	} else {
-		sl = session.NewSyncLoop(s.storage, s.pluginRegistry)
-	}
+	sl := s.SyncLoopForForwardSync()
 
 	previewCtx, cancel := context.WithTimeout(ctx, defaultTriggerSyncTimeout)
 	defer cancel()

@@ -140,6 +140,12 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ignore keydowns that bubbled up from a nested focusable child (the
+    // provenance badge link, the action button) — otherwise Enter on those
+    // elements both triggers their own behavior AND this card's onClick,
+    // and for the badge `<a>` specifically, this handler's preventDefault()
+    // stops the anchor from navigating at all.
+    if (e.target !== e.currentTarget) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onClick(item.id);

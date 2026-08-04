@@ -205,6 +205,32 @@ describe("BacklogSourcesSettings", () => {
     });
   });
 
+  it("ignores a second rapid click on the enabled toggle while its RPC is in flight", async () => {
+    // Regression test: handleToggleEnabled had no in-flight guard, unlike
+    // handleToggleBackwardSync's backwardSyncPreviewPendingId pattern. A
+    // rapid double-click both read the same (still-current) source.enabled
+    // prop and sent the same target value twice, silently dropping the
+    // user's second click intent.
+    let resolveUpdate: (value: { source: typeof sampleSource }) => void = () => {};
+    mockUpdateItemSource.mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpdate = resolve;
+      })
+    );
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    const toggle = screen.getByRole("switch", { name: "Disable Acme Issues" });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toBeDisabled());
+    fireEvent.click(toggle);
+
+    resolveUpdate({ source: { ...sampleSource, enabled: false } });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+
+    expect(mockUpdateItemSource).toHaveBeenCalledTimes(1);
+  });
+
   it("calls deleteItemSource when remove is clicked", async () => {
     render(<BacklogSourcesSettings />);
     await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
@@ -299,6 +325,28 @@ describe("BacklogSourcesSettings — Epic 4.3 (backlog-github-two-way-sync): syn
     });
   });
 
+  it("ignores a second rapid click on the forward-sync toggle while its RPC is in flight", async () => {
+    // Same stale-closure double-click guard as the enabled toggle above.
+    let resolveUpdate: (value: { source: typeof sampleSource }) => void = () => {};
+    mockUpdateItemSource.mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpdate = resolve;
+      })
+    );
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    const toggle = screen.getByRole("switch", { name: /closing GitHub issues/ });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toBeDisabled());
+    fireEvent.click(toggle);
+
+    resolveUpdate({ source: { ...sampleSource, forwardSyncEnabled: true } });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+
+    expect(mockUpdateItemSource).toHaveBeenCalledTimes(1);
+  });
+
   it("calls setBackwardSyncEnabled directly when disabling an already-enabled backward toggle", async () => {
     mockListItemSources.mockResolvedValue({
       sources: [{ ...sampleSource, backwardSyncEnabled: true }],
@@ -330,6 +378,39 @@ describe("BacklogSourcesSettings — Epic 4.3 (backlog-github-two-way-sync): syn
     await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
 
     expect(screen.getByPlaceholderText("Label to apply on close (optional)")).toBeInTheDocument();
+  });
+
+  it("reconciles the close-label input with server truth after a successful commit instead of pinning to the local draft forever", async () => {
+    // Regression test: closeLabelDrafts[source.id] used to be set on every
+    // keystroke and never cleared after a successful commit, so the input
+    // permanently pinned to the locally-typed value and never reflected a
+    // later server-side change (e.g. from another client).
+    mockListItemSources
+      .mockResolvedValueOnce({
+        sources: [{ ...sampleSource, forwardSyncEnabled: true, forwardSyncCloseLabel: "old-label" }],
+      })
+      .mockResolvedValue({
+        sources: [{ ...sampleSource, forwardSyncEnabled: true, forwardSyncCloseLabel: "server-label" }],
+      });
+    mockUpdateItemSource.mockResolvedValue({
+      source: { ...sampleSource, forwardSyncEnabled: true, forwardSyncCloseLabel: "typed-label" },
+    });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText("Label to apply on close (optional)");
+    fireEvent.change(input, { target: { value: "typed-label" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(mockUpdateItemSource).toHaveBeenCalledWith(
+        expect.objectContaining({ forwardSyncCloseLabel: "typed-label" })
+      );
+    });
+
+    // Once the commit + refresh land, the input should show the server's
+    // value ("server-label"), not stay pinned to "typed-label".
+    await waitFor(() => expect(input).toHaveValue("server-label"));
   });
 
   it("BacklogSourcesSettings_should_ShowBothDirectionsWarning_When_BothTogglesEnabled", async () => {

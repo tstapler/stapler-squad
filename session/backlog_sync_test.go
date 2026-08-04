@@ -652,11 +652,70 @@ func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusInProgress), refetched.Status, "no valid target for in_progress under ADR-002")
+	// Regression guard: nothing changed locally on this skip branch, so the
+	// loop-prevention watermark must NOT advance — otherwise a later manual
+	// revert to a pre-work status (with no further GitHub-side change) would
+	// have alreadyReconciled short-circuit before determineBackwardSyncTarget
+	// is even consulted again, permanently suppressing an otherwise-
+	// legitimate auto-archive. Mirrors the transition-failure branch's fix.
+	require.Nil(t, refetched.GitHubSyncedIssueUpdatedAt, "watermark must not advance on a no-valid-target skip")
 
 	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
 	require.NoError(t, err)
 	require.Equal(t, 0, events[0].ItemsErrored)
 	require.Greater(t, events[0].ItemsSkipped, 0, "should be counted as skipped, not errored")
+}
+
+// TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing proves the
+// watermark fix end-to-end: a closed issue synced against a mid-flight item
+// (no valid backward-sync target) must not permanently suppress
+// reprocessing. If the item is later manually reverted to a pre-work status
+// with no further GitHub-side change (same IssueUpdatedAt), the next sync
+// tick must still archive it — which only happens if the first tick left the
+// watermark unadvanced.
+func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testing.T) {
+	issueUpdatedAt := time.Now()
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: issueUpdatedAt},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusInProgress),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+
+	// Tick 1: closed issue vs. in_progress item — no valid target, skipped.
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusInProgress), refetched.Status)
+	require.Nil(t, refetched.GitHubSyncedIssueUpdatedAt)
+
+	// Simulate a manual revert to a pre-work status (e.g. the in-progress
+	// session was abandoned) — no GitHub-side change accompanies this.
+	_, err = storage.TransitionBacklogItemStatus(ctx, created.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	// Tick 2: same closed issue, same IssueUpdatedAt. If the watermark had
+	// wrongly advanced on tick 1, alreadyReconciled would short-circuit here
+	// and the item would never be archived.
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+	refetched, err = storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusArchived), refetched.Status, "tick 2 must still reprocess and archive")
 }
 
 // TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled proves the master
