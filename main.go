@@ -94,7 +94,19 @@ var (
 				// load-time read of the flag (rather than a live BacklogController,
 				// which BuildCoreDeps doesn't construct) is sufficient.
 				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled)
+				// No AutoReopenSpawner in this path: buildMCPDeps only constructs Phase 1
+				// CoreDeps (no BacklogService — that needs Phase 2/3 deps this short-lived
+				// subprocess doesn't build), and building a second, independently-wired
+				// BacklogService here just for this one call risks behaving inconsistently
+				// with the fully-wired instance the main long-running server process uses
+				// (different rework caps, notification wiring, etc.) — worse than not
+				// having it. submit_review_verdict's eager transition is a latency
+				// improvement, not a correctness requirement: the main server's
+				// reconcileUnprocessedReviewVerdicts sweep (session/backlog_lifecycle.go)
+				// still catches an idle-but-unactioned verdict within
+				// reviewVerdictIdleThreshold regardless of which MCP transport the
+				// reviewer connected through.
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil)
 			}
 
 			// Enable test mode if flag is set

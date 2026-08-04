@@ -17,9 +17,9 @@ import (
 )
 
 // expectedToolCount registers the tool set the exact same way main.go's
-// --mcp fallback path does (buildMCPDeps + RunServer(ctx, ..., nil, nil) --
-// eventBus and prCache are both nil there) and returns how many tools that
-// produces. This is the single source of truth for
+// --mcp fallback path does (buildMCPDeps + RunServer(ctx, ..., nil, nil, nil) --
+// eventBus, prCache, and autoReopener are all nil there) and returns how many
+// tools that produces. This is the single source of truth for
 // TestMCPHandshakeSubprocess's assertion below -- adding, removing, or
 // gating a tool anywhere in this package changes this count automatically,
 // with nothing to update by hand.
@@ -27,7 +27,7 @@ func expectedToolCount(t *testing.T) int {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
 	svc := services.NewSessionService(storage, nil)
-	s := NewCore(&stubStore{}, svc, nil, storage, nil, nil, nil)
+	s := NewCore(&stubStore{}, svc, nil, storage, nil, nil, nil, nil)
 	return len(s.ListTools())
 }
 

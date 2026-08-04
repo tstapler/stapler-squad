@@ -1752,6 +1752,18 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 	}
 }
 
+// reviewVerdictIdleThreshold is how long an unprocessed review verdict may sit
+// on a review session the SessionLivenessChecker still reports alive before
+// reconcileUnprocessedReviewVerdicts treats it as actionable anyway. This is
+// the "reviewer went idle without exiting" shape: the process really is still
+// alive (so process-liveness can never flag it), it just never calls
+// submit_review_verdict's follow-on exit and never produces more output.
+// Matches maxReworkBlockStaleness's 15-minute convention
+// (server/services/backlog_service_triage.go) — the same "idle session
+// blocking forward progress" class of problem, just on the review side
+// instead of the work side.
+const reviewVerdictIdleThreshold = 15 * time.Minute
+
 // reconcileUnprocessedReviewVerdicts closes the gap where a review session
 // submitted its verdict (PASS/FAIL/PARTIAL/UNVERIFIABLE) but died — crash, OOM,
 // server restart — before its exit event ever reached handleReviewSessionExited,
@@ -1773,8 +1785,23 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 // correctly rejected (item already past "in_progress").
 //
 // Acts on the most recent review-role session only, once it is confirmed not
-// still wrapping up on its own (EndedAt already set, or the liveness checker
-// says it's dead) — a session that's merely slow to exit is left alone.
+// still wrapping up on its own (EndedAt already set, the liveness checker
+// says it's dead, or — see reviewVerdictIdleThreshold — its verdict has sat
+// unactioned long enough that liveness no longer matters) — a session that's
+// merely slow to exit is left alone.
+//
+// The idle-timeout leg of that check is defense in depth for a reviewer that
+// submits a verdict and then simply goes idle: process alive, no more output,
+// no exit call. That shape is invisible to both real-time paths —
+// handleReviewSessionExited never fires (no exit event) and the liveness
+// checker (pure process liveness) reports the session alive forever — so
+// without it the item would wedge in "review" permanently. FAIL/PARTIAL/
+// UNVERIFIABLE verdicts also get an eager transition at verdict-submission
+// time (server/mcp/tools_backlog.go's submitReviewVerdict, via this same
+// AutoReopenSpawner), so in practice this sweep's idle-timeout leg matters
+// most for PASS — which is deliberately still session-exit-driven, see
+// handleReviewSessionExited's PASS case — and for any future role that
+// doesn't get an eager path of its own.
 //
 // latest is deliberately NOT required to carry its own ReviewVerdict. The
 // query's HasReviewVerdict() filter only guarantees the ITEM has some
@@ -1809,6 +1836,13 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		dead := latest.EndedAt != nil
 		if !dead && checker != nil {
 			dead = !checker(latest.SessionUUID)
+		}
+		// Idle-timeout fallback: a verdict that has sat unactioned for longer
+		// than reviewVerdictIdleThreshold is actionable regardless of what the
+		// liveness checker reports — see reviewVerdictIdleThreshold's doc
+		// comment for why process-liveness alone can never catch this shape.
+		if !dead && latest.Edges.ReviewVerdict != nil {
+			dead = time.Since(latest.Edges.ReviewVerdict.CreatedAt) > reviewVerdictIdleThreshold
 		}
 		if !dead {
 			continue // still plausibly wrapping up on its own — leave it alone

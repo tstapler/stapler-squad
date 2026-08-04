@@ -25,7 +25,10 @@ import (
 // (matches pre-flag behavior, used by tests). When set, it gates registration
 // at startup (belt-and-suspenders) and is threaded into each backlog/goal
 // handler so a live flag flip takes effect without restarting the MCP server.
-func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool) *mcpserver.MCPServer {
+// autoReopener is optional — when nil, submit_review_verdict falls back to the
+// pre-fix behavior of leaving the eager review→in_progress transition to the
+// normal session-exit/crash-recovery paths (see backlogHandlers.autoReopener).
+func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"stapler-squad",
 		"1.0.0",
@@ -51,7 +54,7 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
-		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled})
+		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener})
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
 	}
 	if prCache != nil {
@@ -67,11 +70,12 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 // eventBus is optional — pass nil to disable triage-complete notifications.
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
-func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool) *mcpserver.StreamableHTTPServer {
+// autoReopener is optional — see NewCore.
+func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner) *mcpserver.StreamableHTTPServer {
 	// Stateless mode: accept any session ID rather than tracking them in memory.
 	// This allows Claude Code sessions to survive server restarts without needing
 	// to re-initialize the MCP connection (which would require restarting the agent).
-	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled), mcpserver.WithStateLess(true))
+	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener), mcpserver.WithStateLess(true))
 }
 
 // RunServer initializes and starts the MCP stdio server.
@@ -82,7 +86,8 @@ func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, s
 // eventBus is optional — pass nil to disable triage-complete notifications on stdio path.
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
-func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool) error {
+// autoReopener is optional — see NewCore.
+func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner) error {
 	log.Info("mcp server starting on stdio transport")
 
 	// Inject session UUID from environment into the root context so that
@@ -92,7 +97,7 @@ func RunServer(ctx context.Context, store session.InstanceStore, svc *services.S
 		log.InfoLog.Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
-	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled))
+	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener))
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 

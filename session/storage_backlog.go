@@ -69,6 +69,14 @@ type ReviewVerdictData struct {
 	OverrideBy     string
 	OverrideReason string
 	OverrideAt     *time.Time
+	// CreatedAt overrides the verdict's created_at when non-zero. Only meant
+	// for tests that need to backdate a verdict past
+	// reviewVerdictIdleThreshold (session/backlog_lifecycle.go) without
+	// sleeping in real time — the review_verdicts.created_at column is
+	// Immutable() in the ent schema (no generated Update setter), so this is
+	// only settable at creation time. Production callers leave this zero and
+	// get the schema's Default(time.Now) behavior.
+	CreatedAt time.Time
 }
 
 // --- ItemSession ---
@@ -461,7 +469,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 
 	if ent.IsNotFound(queryErr) || existing == nil {
 		// Create new verdict.
-		_, err = tx.ReviewVerdict.Create().
+		createQ := tx.ReviewVerdict.Create().
 			SetOverallOutcome(string(verdict.OverallOutcome)).
 			SetNillablePerCriterion(nilIfEmpty(verdict.PerCriterion)).
 			SetNillableSummary(nilIfEmpty(verdict.Summary)).
@@ -472,8 +480,11 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 			SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
 			SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 			SetNillableOverrideAt(verdict.OverrideAt).
-			SetItemSessionID(parsedSessionID).
-			Save(ctx)
+			SetItemSessionID(parsedSessionID)
+		if !verdict.CreatedAt.IsZero() {
+			createQ = createQ.SetCreatedAt(verdict.CreatedAt)
+		}
+		_, err = createQ.Save(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to create review verdict: %w", err)
 		}
@@ -547,7 +558,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 		return ItemSessionSummary{}, fmt.Errorf("create item session: %w", err)
 	}
 
-	rv, err := tx.ReviewVerdict.Create().
+	verdictQ := tx.ReviewVerdict.Create().
 		SetOverallOutcome(string(verdict.OverallOutcome)).
 		SetNillablePerCriterion(nilIfEmpty(verdict.PerCriterion)).
 		SetNillableSummary(nilIfEmpty(verdict.Summary)).
@@ -558,8 +569,11 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 		SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
 		SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 		SetNillableOverrideAt(verdict.OverrideAt).
-		SetItemSessionID(is.ID).
-		Save(ctx)
+		SetItemSessionID(is.ID)
+	if !verdict.CreatedAt.IsZero() {
+		verdictQ = verdictQ.SetCreatedAt(verdict.CreatedAt)
+	}
+	rv, err := verdictQ.Save(ctx)
 	if err != nil {
 		return ItemSessionSummary{}, fmt.Errorf("create review verdict: %w", err)
 	}

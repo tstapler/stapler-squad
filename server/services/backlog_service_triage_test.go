@@ -1191,6 +1191,74 @@ func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgr
 	assert.Equal(t, 1, workCount, "must not spawn a second work session when one is already active")
 }
 
+// TestAutoReopenAfterFailedReview_CalledTwiceForSameVerdict_SecondCallFailsPreconditionWithoutCorruptingState
+// is the regression test for backlog item
+// d6ddbef3-238e-43dc-8a69-c3700cc440bf's AC #2: submit_review_verdict now
+// dispatches an eager call into AutoReopenAfterFailedReview at
+// verdict-submission time (server/mcp/tools_backlog.go). If the review
+// session goes on to exit normally moments later anyway,
+// BacklogLifecycleListener.handleReviewSessionExited's own call into this
+// same function (via autoReopenWithBackoffGate,
+// session/backlog_lifecycle.go) must not double-transition the item or
+// corrupt its state — it should simply fail its own CAS precondition
+// (ExpectedStatus: review, already changed to in_progress by the first call)
+// and get logged, exactly like any other already-logged-only double-call
+// race (session/backlog_lifecycle.go:1116-1118, deliberately unchanged by
+// this fix). Simulates the eager call directly, the same way
+// TestRequestReview_SucceedsAgain_AfterAutoReopenFollowingZombieReviewerFailure
+// (server/mcp/tools_backlog_test.go) already does for the crash-recovery
+// sweep's call into this function.
+func TestAutoReopenAfterFailedReview_CalledTwiceForSameVerdict_SecondCallFailsPreconditionWithoutCorruptingState(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Reviewer submits FAIL then exits normally shortly after",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// The work session that originally requested review — still alive, exactly
+	// as it would be immediately after a fresh FAIL verdict.
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "still-alive-work-session",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// First call: simulates submit_review_verdict's new eager dispatch.
+	require.NoError(t, svc.AutoReopenAfterFailedReview(ctx, item.ID))
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status, "sanity: the eager call must have already transitioned the item")
+
+	// Second call: simulates the review session exiting normally moments
+	// later, routing through handleReviewSessionExited ->
+	// autoReopenWithBackoffGate -> this exact same function.
+	secondErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.Error(t, secondErr, "the second call's own CAS precondition (ExpectedStatus: review) must fail — the item already left review")
+
+	// The item must be left exactly where the first call put it — not rolled
+	// back, not double-transitioned, not corrupted.
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), final.Status,
+		"a failed second call must not change the item's status at all")
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	workCount := 0
+	for _, is := range sessions {
+		if is.Role == session.SessionRoleWork {
+			workCount++
+		}
+	}
+	assert.Equal(t, 1, workCount, "the second, failed call must not have spawned a redundant work session")
+}
+
 // --- Stale-but-alive blocking work session: closes the "zero operator signal" gap ---
 //
 // hasActiveWorkSession's guard (above) is purely liveness-based (EndedAt == nil) and

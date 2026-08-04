@@ -477,8 +477,17 @@ func TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewS
 }
 
 // TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStillAlive
-// verifies a review session that hasn't ended yet and isn't confirmed dead is left
-// alone — it may simply be doing its own post-verdict cleanup.
+// verifies a review session that hasn't ended yet, isn't confirmed dead, and
+// whose verdict is still fresh (within reviewVerdictIdleThreshold) is left
+// alone — it may simply be doing its own post-verdict cleanup. This is
+// deliberately scoped to the fresh-verdict grace period, not "alive == never
+// act, forever" — that contract was the bug (see the idle-timeout sibling
+// test below, TestReconcileUnprocessedReviewVerdicts_should_act_When_ReviewSessionAliveButVerdictIdleTooLong):
+// a reviewer that submits a verdict and then simply goes idle (process alive,
+// no more output, no exit call) must eventually become actionable regardless
+// of what SessionLivenessChecker reports, or the item wedges in "review"
+// permanently. newStuckReviewTestItem's verdict is created "now" here, well
+// inside the threshold.
 func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStillAlive(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -494,7 +503,59 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a still-alive review session must not be acted on")
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a still-alive review session with a fresh, unactioned verdict must not be acted on yet")
+}
+
+// TestReconcileUnprocessedReviewVerdicts_should_act_When_ReviewSessionAliveButVerdictIdleTooLong
+// is the regression test for backlog item 4c71d3a3-1dd5-4d82-86ec-694a98835d2f
+// ("bug: reviewer session that submits a verdict but never exits leaves the
+// item wedged in review forever", idle 7+ hours at time of writing): a
+// reviewer that submits FAIL/PARTIAL/UNVERIFIABLE and then goes idle —
+// process alive, no more output, no exit call — is invisible to
+// SessionLivenessChecker forever, since the process really is still alive.
+// Before this idle-timeout leg existed, "alive" meant "never act", full stop,
+// and the item stayed in "review" permanently. A verdict older than
+// reviewVerdictIdleThreshold must now be treated as actionable regardless of
+// liveness.
+func TestReconcileUnprocessedReviewVerdicts_should_act_When_ReviewSessionAliveButVerdictIdleTooLong(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Idle reviewer test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-review-" + uuid.New().String(),
+		SessionRole: SessionRoleReview,
+	}, ReviewVerdictData{
+		OverallOutcome: ReviewVerdictFail,
+		Summary:        "no diff available",
+		CreatedAt:      time.Now().Add(-reviewVerdictIdleThreshold - time.Minute),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // process genuinely alive, forever
+
+	reopener := newFakeAutoReopenSpawner()
+	listener.SetAutoReopener(reopener)
+
+	er := storage.repo.(*EntRepository)
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case gotID := <-reopener.called:
+		assert.Equal(t, item.ID, gotID, "the idle-but-alive review session's stale verdict must now trigger auto-reopen")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AutoReopenAfterFailedReview was never called for a verdict that has sat idle past reviewVerdictIdleThreshold")
+	}
 }
 
 // TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemReenteredReviewAfterAlreadyShipping

@@ -121,6 +121,18 @@ type backlogHandlers struct {
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
 	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
 
+	// autoReopener drives submit_review_verdict's eager review→in_progress
+	// transition for FAIL/PARTIAL/UNVERIFIABLE verdicts (see submitReviewVerdict) —
+	// the same session.AutoReopenSpawner implementation
+	// (server/services/backlog_service_triage.go's BacklogService) that
+	// session/backlog_lifecycle.go's handleReviewSessionExited calls on a real
+	// session exit, reused here so the rework-cap check, circuit breaker,
+	// stale-work notification, and spawn-a-new-work-session logic already
+	// built for that path apply at verdict-submission time too. Optional; nil
+	// means the transition is left to the normal session-exit/crash-recovery
+	// paths (pre-fix behavior — mainly relevant to tests that don't wire it).
+	autoReopener session.AutoReopenSpawner
+
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
@@ -265,6 +277,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Check each AC criterion against the implementation\n")
 		sb.WriteString("2. Call submit_review_verdict with per-criterion verdicts (PASS/FAIL/PARTIAL) + evidence\n")
 		sb.WriteString("   PASS → item transitions to done. FAIL → item sent back for rework.\n")
+		sb.WriteString("3. End your session immediately after calling submit_review_verdict — there is nothing left for you to do. Do not wait, poll, or keep the session open: an idle reviewer session is indistinguishable from a stuck one and blocks automated cleanup.\n")
 	default:
 		sb.WriteString("## Available MCP Tools\n")
 		sb.WriteString("- report_progress — mark an AC criterion pass/fail/in_progress (role: work)\n")
@@ -650,14 +663,39 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("save review verdict: %v", saveErr), ""), nil
 	}
 
-	// Deliberately no status transition here: BacklogLifecycleListener.
-	// handleReviewSessionExited (session/backlog_lifecycle.go) is the sole place
-	// that decides what happens next once this review session exits — on PASS it
+	// PASS still gets no status transition here: BacklogLifecycleListener.
+	// handleReviewSessionExited (session/backlog_lifecycle.go) remains the sole
+	// place that decides what happens next once the review session exits — it
 	// pushes the branch, creates a PR, and transitions to pr_pending
-	// (pushAndCreatePR); on FAIL/PARTIAL/UNVERIFIABLE it triggers auto-reopen.
-	// Transitioning straight to done here would race that handler: its own
-	// precondition (ExpectedStatus: review) would then fail once the session
-	// actually exits, silently skipping PR creation.
+	// (pushAndCreatePR). Transitioning straight to done here would race that
+	// handler: its own precondition (ExpectedStatus: review) would then fail
+	// once the session actually exits, silently skipping PR creation. See
+	// handleReviewSessionExited's PASS case for the full rationale (it's about
+	// work-session liveness, not review-session liveness, so it doesn't apply
+	// to the FAIL/PARTIAL/UNVERIFIABLE path below).
+	//
+	// FAIL/PARTIAL/UNVERIFIABLE, on the other hand, get an eager transition
+	// right here rather than waiting for the review session to exit or for
+	// reconcileUnprocessedReviewVerdicts' 60s crash-recovery sweep. Both of
+	// those paths key off the review session actually dying (an exit event, or
+	// SessionLivenessChecker reporting it dead) — a reviewer that submits a
+	// verdict and then simply goes idle (process alive, no more output, no
+	// exit call) is invisible to both, and the item would wedge in "review"
+	// forever. Routed through the existing AutoReopenSpawner
+	// (BacklogService.AutoReopenAfterFailedReview) rather than reimplemented
+	// here, so the rework-cap check, circuit breaker, stale-work notification,
+	// and new-work-session spawn logic already built for the session-exit path
+	// apply at verdict-submission time too. That function CAS-guards its own
+	// transition (ExpectedStatus: review) — if the review session goes on to
+	// exit normally moments later, handleReviewSessionExited's own call into
+	// the same function will simply fail that precondition and log the error,
+	// exactly as it already does for any other double-call race (see
+	// session/backlog_lifecycle.go's autoReopenWithBackoffGate).
+	if overallOutcome != session.ReviewVerdictPass && h.autoReopener != nil {
+		if reopenErr := h.autoReopener.AutoReopenAfterFailedReview(ctx, itemID); reopenErr != nil {
+			log.WarningLog.Printf("[mcp:submit_review_verdict] AutoReopenAfterFailedReview item=%s: %v", itemID, reopenErr)
+		}
+	}
 
 	// Stop the AutonomousDriver for this review session (belt-and-suspenders).
 	// The verdict is already persisted; a subsequent Stuck fireCompletion is harmless
