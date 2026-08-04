@@ -764,7 +764,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 				if err := json.Unmarshal(prRaw, &groups); err == nil {
 					for _, g := range groups {
 						for _, h := range g.Hooks {
-							if h.Type == "command" && strings.Contains(h.Command, hookApprovalURL()) {
+							if h.Type == "command" && hookCommandReferencesURL(h.Command, hookApprovalURL()) {
 								log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
 								return nil
 							}
