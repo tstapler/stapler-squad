@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
@@ -67,6 +68,7 @@ const (
 	TypeReviewVerdict           = "ReviewVerdict"
 	TypeSession                 = "Session"
 	TypeSessionGoal             = "SessionGoal"
+	TypeSessionSummary          = "SessionSummary"
 	TypeShell                   = "Shell"
 	TypeSourceSyncEvent         = "SourceSyncEvent"
 	TypeTag                     = "Tag"
@@ -24411,6 +24413,2288 @@ func (m *SessionGoalMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *SessionGoalMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown SessionGoal edge %s", name)
+}
+
+// SessionSummaryMutation represents an operation that mutates the SessionSummary nodes in the graph.
+type SessionSummaryMutation struct {
+	config
+	op                                 Op
+	typ                                string
+	id                                 *string
+	session_id                         *string
+	session_title                      *string
+	status                             *string
+	narrative                          *string
+	narrative_fallback_used            *bool
+	diff_files_changed                 *int
+	adddiff_files_changed              *int
+	diff_added                         *int
+	adddiff_added                      *int
+	diff_removed                       *int
+	adddiff_removed                    *int
+	decisions_auto_approved            *int
+	adddecisions_auto_approved         *int
+	decisions_manually_approved        *int
+	adddecisions_manually_approved     *int
+	decisions_denied                   *int
+	adddecisions_denied                *int
+	decisions_review_queue_resolved    *int
+	adddecisions_review_queue_resolved *int
+	decisions_still_open               *int
+	adddecisions_still_open            *int
+	session_started_at                 *time.Time
+	session_stopped_at                 *time.Time
+	duration_ms                        *int64
+	addduration_ms                     *int64
+	total_tokens                       *int64
+	addtotal_tokens                    *int64
+	estimated_cost_usd                 *float64
+	addestimated_cost_usd              *float64
+	cost_data_unavailable              *bool
+	markdown                           *string
+	error_message                      *string
+	error_stage                        *string
+	generation_started_at              *time.Time
+	generated_at                       *time.Time
+	created_at                         *time.Time
+	updated_at                         *time.Time
+	clearedFields                      map[string]struct{}
+	done                               bool
+	oldValue                           func(context.Context) (*SessionSummary, error)
+	predicates                         []predicate.SessionSummary
+}
+
+var _ ent.Mutation = (*SessionSummaryMutation)(nil)
+
+// sessionsummaryOption allows management of the mutation configuration using functional options.
+type sessionsummaryOption func(*SessionSummaryMutation)
+
+// newSessionSummaryMutation creates new mutation for the SessionSummary entity.
+func newSessionSummaryMutation(c config, op Op, opts ...sessionsummaryOption) *SessionSummaryMutation {
+	m := &SessionSummaryMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeSessionSummary,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withSessionSummaryID sets the ID field of the mutation.
+func withSessionSummaryID(id string) sessionsummaryOption {
+	return func(m *SessionSummaryMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *SessionSummary
+		)
+		m.oldValue = func(ctx context.Context) (*SessionSummary, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().SessionSummary.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withSessionSummary sets the old SessionSummary of the mutation.
+func withSessionSummary(node *SessionSummary) sessionsummaryOption {
+	return func(m *SessionSummaryMutation) {
+		m.oldValue = func(context.Context) (*SessionSummary, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m SessionSummaryMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m SessionSummaryMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of SessionSummary entities.
+func (m *SessionSummaryMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *SessionSummaryMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *SessionSummaryMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().SessionSummary.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetSessionID sets the "session_id" field.
+func (m *SessionSummaryMutation) SetSessionID(s string) {
+	m.session_id = &s
+}
+
+// SessionID returns the value of the "session_id" field in the mutation.
+func (m *SessionSummaryMutation) SessionID() (r string, exists bool) {
+	v := m.session_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionID returns the old "session_id" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldSessionID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionID: %w", err)
+	}
+	return oldValue.SessionID, nil
+}
+
+// ResetSessionID resets all changes to the "session_id" field.
+func (m *SessionSummaryMutation) ResetSessionID() {
+	m.session_id = nil
+}
+
+// SetSessionTitle sets the "session_title" field.
+func (m *SessionSummaryMutation) SetSessionTitle(s string) {
+	m.session_title = &s
+}
+
+// SessionTitle returns the value of the "session_title" field in the mutation.
+func (m *SessionSummaryMutation) SessionTitle() (r string, exists bool) {
+	v := m.session_title
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionTitle returns the old "session_title" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldSessionTitle(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionTitle is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionTitle requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionTitle: %w", err)
+	}
+	return oldValue.SessionTitle, nil
+}
+
+// ClearSessionTitle clears the value of the "session_title" field.
+func (m *SessionSummaryMutation) ClearSessionTitle() {
+	m.session_title = nil
+	m.clearedFields[sessionsummary.FieldSessionTitle] = struct{}{}
+}
+
+// SessionTitleCleared returns if the "session_title" field was cleared in this mutation.
+func (m *SessionSummaryMutation) SessionTitleCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldSessionTitle]
+	return ok
+}
+
+// ResetSessionTitle resets all changes to the "session_title" field.
+func (m *SessionSummaryMutation) ResetSessionTitle() {
+	m.session_title = nil
+	delete(m.clearedFields, sessionsummary.FieldSessionTitle)
+}
+
+// SetStatus sets the "status" field.
+func (m *SessionSummaryMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *SessionSummaryMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *SessionSummaryMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetNarrative sets the "narrative" field.
+func (m *SessionSummaryMutation) SetNarrative(s string) {
+	m.narrative = &s
+}
+
+// Narrative returns the value of the "narrative" field in the mutation.
+func (m *SessionSummaryMutation) Narrative() (r string, exists bool) {
+	v := m.narrative
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNarrative returns the old "narrative" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldNarrative(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNarrative is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNarrative requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNarrative: %w", err)
+	}
+	return oldValue.Narrative, nil
+}
+
+// ClearNarrative clears the value of the "narrative" field.
+func (m *SessionSummaryMutation) ClearNarrative() {
+	m.narrative = nil
+	m.clearedFields[sessionsummary.FieldNarrative] = struct{}{}
+}
+
+// NarrativeCleared returns if the "narrative" field was cleared in this mutation.
+func (m *SessionSummaryMutation) NarrativeCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldNarrative]
+	return ok
+}
+
+// ResetNarrative resets all changes to the "narrative" field.
+func (m *SessionSummaryMutation) ResetNarrative() {
+	m.narrative = nil
+	delete(m.clearedFields, sessionsummary.FieldNarrative)
+}
+
+// SetNarrativeFallbackUsed sets the "narrative_fallback_used" field.
+func (m *SessionSummaryMutation) SetNarrativeFallbackUsed(b bool) {
+	m.narrative_fallback_used = &b
+}
+
+// NarrativeFallbackUsed returns the value of the "narrative_fallback_used" field in the mutation.
+func (m *SessionSummaryMutation) NarrativeFallbackUsed() (r bool, exists bool) {
+	v := m.narrative_fallback_used
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNarrativeFallbackUsed returns the old "narrative_fallback_used" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldNarrativeFallbackUsed(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNarrativeFallbackUsed is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNarrativeFallbackUsed requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNarrativeFallbackUsed: %w", err)
+	}
+	return oldValue.NarrativeFallbackUsed, nil
+}
+
+// ResetNarrativeFallbackUsed resets all changes to the "narrative_fallback_used" field.
+func (m *SessionSummaryMutation) ResetNarrativeFallbackUsed() {
+	m.narrative_fallback_used = nil
+}
+
+// SetDiffFilesChanged sets the "diff_files_changed" field.
+func (m *SessionSummaryMutation) SetDiffFilesChanged(i int) {
+	m.diff_files_changed = &i
+	m.adddiff_files_changed = nil
+}
+
+// DiffFilesChanged returns the value of the "diff_files_changed" field in the mutation.
+func (m *SessionSummaryMutation) DiffFilesChanged() (r int, exists bool) {
+	v := m.diff_files_changed
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDiffFilesChanged returns the old "diff_files_changed" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDiffFilesChanged(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDiffFilesChanged is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDiffFilesChanged requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDiffFilesChanged: %w", err)
+	}
+	return oldValue.DiffFilesChanged, nil
+}
+
+// AddDiffFilesChanged adds i to the "diff_files_changed" field.
+func (m *SessionSummaryMutation) AddDiffFilesChanged(i int) {
+	if m.adddiff_files_changed != nil {
+		*m.adddiff_files_changed += i
+	} else {
+		m.adddiff_files_changed = &i
+	}
+}
+
+// AddedDiffFilesChanged returns the value that was added to the "diff_files_changed" field in this mutation.
+func (m *SessionSummaryMutation) AddedDiffFilesChanged() (r int, exists bool) {
+	v := m.adddiff_files_changed
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDiffFilesChanged resets all changes to the "diff_files_changed" field.
+func (m *SessionSummaryMutation) ResetDiffFilesChanged() {
+	m.diff_files_changed = nil
+	m.adddiff_files_changed = nil
+}
+
+// SetDiffAdded sets the "diff_added" field.
+func (m *SessionSummaryMutation) SetDiffAdded(i int) {
+	m.diff_added = &i
+	m.adddiff_added = nil
+}
+
+// DiffAdded returns the value of the "diff_added" field in the mutation.
+func (m *SessionSummaryMutation) DiffAdded() (r int, exists bool) {
+	v := m.diff_added
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDiffAdded returns the old "diff_added" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDiffAdded(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDiffAdded is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDiffAdded requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDiffAdded: %w", err)
+	}
+	return oldValue.DiffAdded, nil
+}
+
+// AddDiffAdded adds i to the "diff_added" field.
+func (m *SessionSummaryMutation) AddDiffAdded(i int) {
+	if m.adddiff_added != nil {
+		*m.adddiff_added += i
+	} else {
+		m.adddiff_added = &i
+	}
+}
+
+// AddedDiffAdded returns the value that was added to the "diff_added" field in this mutation.
+func (m *SessionSummaryMutation) AddedDiffAdded() (r int, exists bool) {
+	v := m.adddiff_added
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDiffAdded resets all changes to the "diff_added" field.
+func (m *SessionSummaryMutation) ResetDiffAdded() {
+	m.diff_added = nil
+	m.adddiff_added = nil
+}
+
+// SetDiffRemoved sets the "diff_removed" field.
+func (m *SessionSummaryMutation) SetDiffRemoved(i int) {
+	m.diff_removed = &i
+	m.adddiff_removed = nil
+}
+
+// DiffRemoved returns the value of the "diff_removed" field in the mutation.
+func (m *SessionSummaryMutation) DiffRemoved() (r int, exists bool) {
+	v := m.diff_removed
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDiffRemoved returns the old "diff_removed" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDiffRemoved(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDiffRemoved is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDiffRemoved requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDiffRemoved: %w", err)
+	}
+	return oldValue.DiffRemoved, nil
+}
+
+// AddDiffRemoved adds i to the "diff_removed" field.
+func (m *SessionSummaryMutation) AddDiffRemoved(i int) {
+	if m.adddiff_removed != nil {
+		*m.adddiff_removed += i
+	} else {
+		m.adddiff_removed = &i
+	}
+}
+
+// AddedDiffRemoved returns the value that was added to the "diff_removed" field in this mutation.
+func (m *SessionSummaryMutation) AddedDiffRemoved() (r int, exists bool) {
+	v := m.adddiff_removed
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDiffRemoved resets all changes to the "diff_removed" field.
+func (m *SessionSummaryMutation) ResetDiffRemoved() {
+	m.diff_removed = nil
+	m.adddiff_removed = nil
+}
+
+// SetDecisionsAutoApproved sets the "decisions_auto_approved" field.
+func (m *SessionSummaryMutation) SetDecisionsAutoApproved(i int) {
+	m.decisions_auto_approved = &i
+	m.adddecisions_auto_approved = nil
+}
+
+// DecisionsAutoApproved returns the value of the "decisions_auto_approved" field in the mutation.
+func (m *SessionSummaryMutation) DecisionsAutoApproved() (r int, exists bool) {
+	v := m.decisions_auto_approved
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDecisionsAutoApproved returns the old "decisions_auto_approved" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDecisionsAutoApproved(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDecisionsAutoApproved is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDecisionsAutoApproved requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDecisionsAutoApproved: %w", err)
+	}
+	return oldValue.DecisionsAutoApproved, nil
+}
+
+// AddDecisionsAutoApproved adds i to the "decisions_auto_approved" field.
+func (m *SessionSummaryMutation) AddDecisionsAutoApproved(i int) {
+	if m.adddecisions_auto_approved != nil {
+		*m.adddecisions_auto_approved += i
+	} else {
+		m.adddecisions_auto_approved = &i
+	}
+}
+
+// AddedDecisionsAutoApproved returns the value that was added to the "decisions_auto_approved" field in this mutation.
+func (m *SessionSummaryMutation) AddedDecisionsAutoApproved() (r int, exists bool) {
+	v := m.adddecisions_auto_approved
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDecisionsAutoApproved resets all changes to the "decisions_auto_approved" field.
+func (m *SessionSummaryMutation) ResetDecisionsAutoApproved() {
+	m.decisions_auto_approved = nil
+	m.adddecisions_auto_approved = nil
+}
+
+// SetDecisionsManuallyApproved sets the "decisions_manually_approved" field.
+func (m *SessionSummaryMutation) SetDecisionsManuallyApproved(i int) {
+	m.decisions_manually_approved = &i
+	m.adddecisions_manually_approved = nil
+}
+
+// DecisionsManuallyApproved returns the value of the "decisions_manually_approved" field in the mutation.
+func (m *SessionSummaryMutation) DecisionsManuallyApproved() (r int, exists bool) {
+	v := m.decisions_manually_approved
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDecisionsManuallyApproved returns the old "decisions_manually_approved" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDecisionsManuallyApproved(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDecisionsManuallyApproved is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDecisionsManuallyApproved requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDecisionsManuallyApproved: %w", err)
+	}
+	return oldValue.DecisionsManuallyApproved, nil
+}
+
+// AddDecisionsManuallyApproved adds i to the "decisions_manually_approved" field.
+func (m *SessionSummaryMutation) AddDecisionsManuallyApproved(i int) {
+	if m.adddecisions_manually_approved != nil {
+		*m.adddecisions_manually_approved += i
+	} else {
+		m.adddecisions_manually_approved = &i
+	}
+}
+
+// AddedDecisionsManuallyApproved returns the value that was added to the "decisions_manually_approved" field in this mutation.
+func (m *SessionSummaryMutation) AddedDecisionsManuallyApproved() (r int, exists bool) {
+	v := m.adddecisions_manually_approved
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDecisionsManuallyApproved resets all changes to the "decisions_manually_approved" field.
+func (m *SessionSummaryMutation) ResetDecisionsManuallyApproved() {
+	m.decisions_manually_approved = nil
+	m.adddecisions_manually_approved = nil
+}
+
+// SetDecisionsDenied sets the "decisions_denied" field.
+func (m *SessionSummaryMutation) SetDecisionsDenied(i int) {
+	m.decisions_denied = &i
+	m.adddecisions_denied = nil
+}
+
+// DecisionsDenied returns the value of the "decisions_denied" field in the mutation.
+func (m *SessionSummaryMutation) DecisionsDenied() (r int, exists bool) {
+	v := m.decisions_denied
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDecisionsDenied returns the old "decisions_denied" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDecisionsDenied(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDecisionsDenied is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDecisionsDenied requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDecisionsDenied: %w", err)
+	}
+	return oldValue.DecisionsDenied, nil
+}
+
+// AddDecisionsDenied adds i to the "decisions_denied" field.
+func (m *SessionSummaryMutation) AddDecisionsDenied(i int) {
+	if m.adddecisions_denied != nil {
+		*m.adddecisions_denied += i
+	} else {
+		m.adddecisions_denied = &i
+	}
+}
+
+// AddedDecisionsDenied returns the value that was added to the "decisions_denied" field in this mutation.
+func (m *SessionSummaryMutation) AddedDecisionsDenied() (r int, exists bool) {
+	v := m.adddecisions_denied
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDecisionsDenied resets all changes to the "decisions_denied" field.
+func (m *SessionSummaryMutation) ResetDecisionsDenied() {
+	m.decisions_denied = nil
+	m.adddecisions_denied = nil
+}
+
+// SetDecisionsReviewQueueResolved sets the "decisions_review_queue_resolved" field.
+func (m *SessionSummaryMutation) SetDecisionsReviewQueueResolved(i int) {
+	m.decisions_review_queue_resolved = &i
+	m.adddecisions_review_queue_resolved = nil
+}
+
+// DecisionsReviewQueueResolved returns the value of the "decisions_review_queue_resolved" field in the mutation.
+func (m *SessionSummaryMutation) DecisionsReviewQueueResolved() (r int, exists bool) {
+	v := m.decisions_review_queue_resolved
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDecisionsReviewQueueResolved returns the old "decisions_review_queue_resolved" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDecisionsReviewQueueResolved(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDecisionsReviewQueueResolved is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDecisionsReviewQueueResolved requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDecisionsReviewQueueResolved: %w", err)
+	}
+	return oldValue.DecisionsReviewQueueResolved, nil
+}
+
+// AddDecisionsReviewQueueResolved adds i to the "decisions_review_queue_resolved" field.
+func (m *SessionSummaryMutation) AddDecisionsReviewQueueResolved(i int) {
+	if m.adddecisions_review_queue_resolved != nil {
+		*m.adddecisions_review_queue_resolved += i
+	} else {
+		m.adddecisions_review_queue_resolved = &i
+	}
+}
+
+// AddedDecisionsReviewQueueResolved returns the value that was added to the "decisions_review_queue_resolved" field in this mutation.
+func (m *SessionSummaryMutation) AddedDecisionsReviewQueueResolved() (r int, exists bool) {
+	v := m.adddecisions_review_queue_resolved
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDecisionsReviewQueueResolved resets all changes to the "decisions_review_queue_resolved" field.
+func (m *SessionSummaryMutation) ResetDecisionsReviewQueueResolved() {
+	m.decisions_review_queue_resolved = nil
+	m.adddecisions_review_queue_resolved = nil
+}
+
+// SetDecisionsStillOpen sets the "decisions_still_open" field.
+func (m *SessionSummaryMutation) SetDecisionsStillOpen(i int) {
+	m.decisions_still_open = &i
+	m.adddecisions_still_open = nil
+}
+
+// DecisionsStillOpen returns the value of the "decisions_still_open" field in the mutation.
+func (m *SessionSummaryMutation) DecisionsStillOpen() (r int, exists bool) {
+	v := m.decisions_still_open
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDecisionsStillOpen returns the old "decisions_still_open" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDecisionsStillOpen(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDecisionsStillOpen is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDecisionsStillOpen requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDecisionsStillOpen: %w", err)
+	}
+	return oldValue.DecisionsStillOpen, nil
+}
+
+// AddDecisionsStillOpen adds i to the "decisions_still_open" field.
+func (m *SessionSummaryMutation) AddDecisionsStillOpen(i int) {
+	if m.adddecisions_still_open != nil {
+		*m.adddecisions_still_open += i
+	} else {
+		m.adddecisions_still_open = &i
+	}
+}
+
+// AddedDecisionsStillOpen returns the value that was added to the "decisions_still_open" field in this mutation.
+func (m *SessionSummaryMutation) AddedDecisionsStillOpen() (r int, exists bool) {
+	v := m.adddecisions_still_open
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDecisionsStillOpen resets all changes to the "decisions_still_open" field.
+func (m *SessionSummaryMutation) ResetDecisionsStillOpen() {
+	m.decisions_still_open = nil
+	m.adddecisions_still_open = nil
+}
+
+// SetSessionStartedAt sets the "session_started_at" field.
+func (m *SessionSummaryMutation) SetSessionStartedAt(t time.Time) {
+	m.session_started_at = &t
+}
+
+// SessionStartedAt returns the value of the "session_started_at" field in the mutation.
+func (m *SessionSummaryMutation) SessionStartedAt() (r time.Time, exists bool) {
+	v := m.session_started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionStartedAt returns the old "session_started_at" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldSessionStartedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionStartedAt: %w", err)
+	}
+	return oldValue.SessionStartedAt, nil
+}
+
+// ClearSessionStartedAt clears the value of the "session_started_at" field.
+func (m *SessionSummaryMutation) ClearSessionStartedAt() {
+	m.session_started_at = nil
+	m.clearedFields[sessionsummary.FieldSessionStartedAt] = struct{}{}
+}
+
+// SessionStartedAtCleared returns if the "session_started_at" field was cleared in this mutation.
+func (m *SessionSummaryMutation) SessionStartedAtCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldSessionStartedAt]
+	return ok
+}
+
+// ResetSessionStartedAt resets all changes to the "session_started_at" field.
+func (m *SessionSummaryMutation) ResetSessionStartedAt() {
+	m.session_started_at = nil
+	delete(m.clearedFields, sessionsummary.FieldSessionStartedAt)
+}
+
+// SetSessionStoppedAt sets the "session_stopped_at" field.
+func (m *SessionSummaryMutation) SetSessionStoppedAt(t time.Time) {
+	m.session_stopped_at = &t
+}
+
+// SessionStoppedAt returns the value of the "session_stopped_at" field in the mutation.
+func (m *SessionSummaryMutation) SessionStoppedAt() (r time.Time, exists bool) {
+	v := m.session_stopped_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionStoppedAt returns the old "session_stopped_at" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldSessionStoppedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionStoppedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionStoppedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionStoppedAt: %w", err)
+	}
+	return oldValue.SessionStoppedAt, nil
+}
+
+// ClearSessionStoppedAt clears the value of the "session_stopped_at" field.
+func (m *SessionSummaryMutation) ClearSessionStoppedAt() {
+	m.session_stopped_at = nil
+	m.clearedFields[sessionsummary.FieldSessionStoppedAt] = struct{}{}
+}
+
+// SessionStoppedAtCleared returns if the "session_stopped_at" field was cleared in this mutation.
+func (m *SessionSummaryMutation) SessionStoppedAtCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldSessionStoppedAt]
+	return ok
+}
+
+// ResetSessionStoppedAt resets all changes to the "session_stopped_at" field.
+func (m *SessionSummaryMutation) ResetSessionStoppedAt() {
+	m.session_stopped_at = nil
+	delete(m.clearedFields, sessionsummary.FieldSessionStoppedAt)
+}
+
+// SetDurationMs sets the "duration_ms" field.
+func (m *SessionSummaryMutation) SetDurationMs(i int64) {
+	m.duration_ms = &i
+	m.addduration_ms = nil
+}
+
+// DurationMs returns the value of the "duration_ms" field in the mutation.
+func (m *SessionSummaryMutation) DurationMs() (r int64, exists bool) {
+	v := m.duration_ms
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDurationMs returns the old "duration_ms" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldDurationMs(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDurationMs is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDurationMs requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDurationMs: %w", err)
+	}
+	return oldValue.DurationMs, nil
+}
+
+// AddDurationMs adds i to the "duration_ms" field.
+func (m *SessionSummaryMutation) AddDurationMs(i int64) {
+	if m.addduration_ms != nil {
+		*m.addduration_ms += i
+	} else {
+		m.addduration_ms = &i
+	}
+}
+
+// AddedDurationMs returns the value that was added to the "duration_ms" field in this mutation.
+func (m *SessionSummaryMutation) AddedDurationMs() (r int64, exists bool) {
+	v := m.addduration_ms
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearDurationMs clears the value of the "duration_ms" field.
+func (m *SessionSummaryMutation) ClearDurationMs() {
+	m.duration_ms = nil
+	m.addduration_ms = nil
+	m.clearedFields[sessionsummary.FieldDurationMs] = struct{}{}
+}
+
+// DurationMsCleared returns if the "duration_ms" field was cleared in this mutation.
+func (m *SessionSummaryMutation) DurationMsCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldDurationMs]
+	return ok
+}
+
+// ResetDurationMs resets all changes to the "duration_ms" field.
+func (m *SessionSummaryMutation) ResetDurationMs() {
+	m.duration_ms = nil
+	m.addduration_ms = nil
+	delete(m.clearedFields, sessionsummary.FieldDurationMs)
+}
+
+// SetTotalTokens sets the "total_tokens" field.
+func (m *SessionSummaryMutation) SetTotalTokens(i int64) {
+	m.total_tokens = &i
+	m.addtotal_tokens = nil
+}
+
+// TotalTokens returns the value of the "total_tokens" field in the mutation.
+func (m *SessionSummaryMutation) TotalTokens() (r int64, exists bool) {
+	v := m.total_tokens
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTotalTokens returns the old "total_tokens" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldTotalTokens(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTotalTokens is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTotalTokens requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTotalTokens: %w", err)
+	}
+	return oldValue.TotalTokens, nil
+}
+
+// AddTotalTokens adds i to the "total_tokens" field.
+func (m *SessionSummaryMutation) AddTotalTokens(i int64) {
+	if m.addtotal_tokens != nil {
+		*m.addtotal_tokens += i
+	} else {
+		m.addtotal_tokens = &i
+	}
+}
+
+// AddedTotalTokens returns the value that was added to the "total_tokens" field in this mutation.
+func (m *SessionSummaryMutation) AddedTotalTokens() (r int64, exists bool) {
+	v := m.addtotal_tokens
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearTotalTokens clears the value of the "total_tokens" field.
+func (m *SessionSummaryMutation) ClearTotalTokens() {
+	m.total_tokens = nil
+	m.addtotal_tokens = nil
+	m.clearedFields[sessionsummary.FieldTotalTokens] = struct{}{}
+}
+
+// TotalTokensCleared returns if the "total_tokens" field was cleared in this mutation.
+func (m *SessionSummaryMutation) TotalTokensCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldTotalTokens]
+	return ok
+}
+
+// ResetTotalTokens resets all changes to the "total_tokens" field.
+func (m *SessionSummaryMutation) ResetTotalTokens() {
+	m.total_tokens = nil
+	m.addtotal_tokens = nil
+	delete(m.clearedFields, sessionsummary.FieldTotalTokens)
+}
+
+// SetEstimatedCostUsd sets the "estimated_cost_usd" field.
+func (m *SessionSummaryMutation) SetEstimatedCostUsd(f float64) {
+	m.estimated_cost_usd = &f
+	m.addestimated_cost_usd = nil
+}
+
+// EstimatedCostUsd returns the value of the "estimated_cost_usd" field in the mutation.
+func (m *SessionSummaryMutation) EstimatedCostUsd() (r float64, exists bool) {
+	v := m.estimated_cost_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEstimatedCostUsd returns the old "estimated_cost_usd" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldEstimatedCostUsd(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEstimatedCostUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEstimatedCostUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEstimatedCostUsd: %w", err)
+	}
+	return oldValue.EstimatedCostUsd, nil
+}
+
+// AddEstimatedCostUsd adds f to the "estimated_cost_usd" field.
+func (m *SessionSummaryMutation) AddEstimatedCostUsd(f float64) {
+	if m.addestimated_cost_usd != nil {
+		*m.addestimated_cost_usd += f
+	} else {
+		m.addestimated_cost_usd = &f
+	}
+}
+
+// AddedEstimatedCostUsd returns the value that was added to the "estimated_cost_usd" field in this mutation.
+func (m *SessionSummaryMutation) AddedEstimatedCostUsd() (r float64, exists bool) {
+	v := m.addestimated_cost_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearEstimatedCostUsd clears the value of the "estimated_cost_usd" field.
+func (m *SessionSummaryMutation) ClearEstimatedCostUsd() {
+	m.estimated_cost_usd = nil
+	m.addestimated_cost_usd = nil
+	m.clearedFields[sessionsummary.FieldEstimatedCostUsd] = struct{}{}
+}
+
+// EstimatedCostUsdCleared returns if the "estimated_cost_usd" field was cleared in this mutation.
+func (m *SessionSummaryMutation) EstimatedCostUsdCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldEstimatedCostUsd]
+	return ok
+}
+
+// ResetEstimatedCostUsd resets all changes to the "estimated_cost_usd" field.
+func (m *SessionSummaryMutation) ResetEstimatedCostUsd() {
+	m.estimated_cost_usd = nil
+	m.addestimated_cost_usd = nil
+	delete(m.clearedFields, sessionsummary.FieldEstimatedCostUsd)
+}
+
+// SetCostDataUnavailable sets the "cost_data_unavailable" field.
+func (m *SessionSummaryMutation) SetCostDataUnavailable(b bool) {
+	m.cost_data_unavailable = &b
+}
+
+// CostDataUnavailable returns the value of the "cost_data_unavailable" field in the mutation.
+func (m *SessionSummaryMutation) CostDataUnavailable() (r bool, exists bool) {
+	v := m.cost_data_unavailable
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCostDataUnavailable returns the old "cost_data_unavailable" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldCostDataUnavailable(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCostDataUnavailable is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCostDataUnavailable requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCostDataUnavailable: %w", err)
+	}
+	return oldValue.CostDataUnavailable, nil
+}
+
+// ResetCostDataUnavailable resets all changes to the "cost_data_unavailable" field.
+func (m *SessionSummaryMutation) ResetCostDataUnavailable() {
+	m.cost_data_unavailable = nil
+}
+
+// SetMarkdown sets the "markdown" field.
+func (m *SessionSummaryMutation) SetMarkdown(s string) {
+	m.markdown = &s
+}
+
+// Markdown returns the value of the "markdown" field in the mutation.
+func (m *SessionSummaryMutation) Markdown() (r string, exists bool) {
+	v := m.markdown
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMarkdown returns the old "markdown" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldMarkdown(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMarkdown is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMarkdown requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMarkdown: %w", err)
+	}
+	return oldValue.Markdown, nil
+}
+
+// ClearMarkdown clears the value of the "markdown" field.
+func (m *SessionSummaryMutation) ClearMarkdown() {
+	m.markdown = nil
+	m.clearedFields[sessionsummary.FieldMarkdown] = struct{}{}
+}
+
+// MarkdownCleared returns if the "markdown" field was cleared in this mutation.
+func (m *SessionSummaryMutation) MarkdownCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldMarkdown]
+	return ok
+}
+
+// ResetMarkdown resets all changes to the "markdown" field.
+func (m *SessionSummaryMutation) ResetMarkdown() {
+	m.markdown = nil
+	delete(m.clearedFields, sessionsummary.FieldMarkdown)
+}
+
+// SetErrorMessage sets the "error_message" field.
+func (m *SessionSummaryMutation) SetErrorMessage(s string) {
+	m.error_message = &s
+}
+
+// ErrorMessage returns the value of the "error_message" field in the mutation.
+func (m *SessionSummaryMutation) ErrorMessage() (r string, exists bool) {
+	v := m.error_message
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorMessage returns the old "error_message" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldErrorMessage(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorMessage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorMessage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorMessage: %w", err)
+	}
+	return oldValue.ErrorMessage, nil
+}
+
+// ClearErrorMessage clears the value of the "error_message" field.
+func (m *SessionSummaryMutation) ClearErrorMessage() {
+	m.error_message = nil
+	m.clearedFields[sessionsummary.FieldErrorMessage] = struct{}{}
+}
+
+// ErrorMessageCleared returns if the "error_message" field was cleared in this mutation.
+func (m *SessionSummaryMutation) ErrorMessageCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldErrorMessage]
+	return ok
+}
+
+// ResetErrorMessage resets all changes to the "error_message" field.
+func (m *SessionSummaryMutation) ResetErrorMessage() {
+	m.error_message = nil
+	delete(m.clearedFields, sessionsummary.FieldErrorMessage)
+}
+
+// SetErrorStage sets the "error_stage" field.
+func (m *SessionSummaryMutation) SetErrorStage(s string) {
+	m.error_stage = &s
+}
+
+// ErrorStage returns the value of the "error_stage" field in the mutation.
+func (m *SessionSummaryMutation) ErrorStage() (r string, exists bool) {
+	v := m.error_stage
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorStage returns the old "error_stage" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldErrorStage(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorStage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorStage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorStage: %w", err)
+	}
+	return oldValue.ErrorStage, nil
+}
+
+// ClearErrorStage clears the value of the "error_stage" field.
+func (m *SessionSummaryMutation) ClearErrorStage() {
+	m.error_stage = nil
+	m.clearedFields[sessionsummary.FieldErrorStage] = struct{}{}
+}
+
+// ErrorStageCleared returns if the "error_stage" field was cleared in this mutation.
+func (m *SessionSummaryMutation) ErrorStageCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldErrorStage]
+	return ok
+}
+
+// ResetErrorStage resets all changes to the "error_stage" field.
+func (m *SessionSummaryMutation) ResetErrorStage() {
+	m.error_stage = nil
+	delete(m.clearedFields, sessionsummary.FieldErrorStage)
+}
+
+// SetGenerationStartedAt sets the "generation_started_at" field.
+func (m *SessionSummaryMutation) SetGenerationStartedAt(t time.Time) {
+	m.generation_started_at = &t
+}
+
+// GenerationStartedAt returns the value of the "generation_started_at" field in the mutation.
+func (m *SessionSummaryMutation) GenerationStartedAt() (r time.Time, exists bool) {
+	v := m.generation_started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGenerationStartedAt returns the old "generation_started_at" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldGenerationStartedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGenerationStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGenerationStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGenerationStartedAt: %w", err)
+	}
+	return oldValue.GenerationStartedAt, nil
+}
+
+// ClearGenerationStartedAt clears the value of the "generation_started_at" field.
+func (m *SessionSummaryMutation) ClearGenerationStartedAt() {
+	m.generation_started_at = nil
+	m.clearedFields[sessionsummary.FieldGenerationStartedAt] = struct{}{}
+}
+
+// GenerationStartedAtCleared returns if the "generation_started_at" field was cleared in this mutation.
+func (m *SessionSummaryMutation) GenerationStartedAtCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldGenerationStartedAt]
+	return ok
+}
+
+// ResetGenerationStartedAt resets all changes to the "generation_started_at" field.
+func (m *SessionSummaryMutation) ResetGenerationStartedAt() {
+	m.generation_started_at = nil
+	delete(m.clearedFields, sessionsummary.FieldGenerationStartedAt)
+}
+
+// SetGeneratedAt sets the "generated_at" field.
+func (m *SessionSummaryMutation) SetGeneratedAt(t time.Time) {
+	m.generated_at = &t
+}
+
+// GeneratedAt returns the value of the "generated_at" field in the mutation.
+func (m *SessionSummaryMutation) GeneratedAt() (r time.Time, exists bool) {
+	v := m.generated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGeneratedAt returns the old "generated_at" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldGeneratedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGeneratedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGeneratedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGeneratedAt: %w", err)
+	}
+	return oldValue.GeneratedAt, nil
+}
+
+// ClearGeneratedAt clears the value of the "generated_at" field.
+func (m *SessionSummaryMutation) ClearGeneratedAt() {
+	m.generated_at = nil
+	m.clearedFields[sessionsummary.FieldGeneratedAt] = struct{}{}
+}
+
+// GeneratedAtCleared returns if the "generated_at" field was cleared in this mutation.
+func (m *SessionSummaryMutation) GeneratedAtCleared() bool {
+	_, ok := m.clearedFields[sessionsummary.FieldGeneratedAt]
+	return ok
+}
+
+// ResetGeneratedAt resets all changes to the "generated_at" field.
+func (m *SessionSummaryMutation) ResetGeneratedAt() {
+	m.generated_at = nil
+	delete(m.clearedFields, sessionsummary.FieldGeneratedAt)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *SessionSummaryMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *SessionSummaryMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *SessionSummaryMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *SessionSummaryMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *SessionSummaryMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the SessionSummary entity.
+// If the SessionSummary object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionSummaryMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *SessionSummaryMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the SessionSummaryMutation builder.
+func (m *SessionSummaryMutation) Where(ps ...predicate.SessionSummary) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the SessionSummaryMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *SessionSummaryMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.SessionSummary, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *SessionSummaryMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *SessionSummaryMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (SessionSummary).
+func (m *SessionSummaryMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *SessionSummaryMutation) Fields() []string {
+	fields := make([]string, 0, 26)
+	if m.session_id != nil {
+		fields = append(fields, sessionsummary.FieldSessionID)
+	}
+	if m.session_title != nil {
+		fields = append(fields, sessionsummary.FieldSessionTitle)
+	}
+	if m.status != nil {
+		fields = append(fields, sessionsummary.FieldStatus)
+	}
+	if m.narrative != nil {
+		fields = append(fields, sessionsummary.FieldNarrative)
+	}
+	if m.narrative_fallback_used != nil {
+		fields = append(fields, sessionsummary.FieldNarrativeFallbackUsed)
+	}
+	if m.diff_files_changed != nil {
+		fields = append(fields, sessionsummary.FieldDiffFilesChanged)
+	}
+	if m.diff_added != nil {
+		fields = append(fields, sessionsummary.FieldDiffAdded)
+	}
+	if m.diff_removed != nil {
+		fields = append(fields, sessionsummary.FieldDiffRemoved)
+	}
+	if m.decisions_auto_approved != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsAutoApproved)
+	}
+	if m.decisions_manually_approved != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsManuallyApproved)
+	}
+	if m.decisions_denied != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsDenied)
+	}
+	if m.decisions_review_queue_resolved != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsReviewQueueResolved)
+	}
+	if m.decisions_still_open != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsStillOpen)
+	}
+	if m.session_started_at != nil {
+		fields = append(fields, sessionsummary.FieldSessionStartedAt)
+	}
+	if m.session_stopped_at != nil {
+		fields = append(fields, sessionsummary.FieldSessionStoppedAt)
+	}
+	if m.duration_ms != nil {
+		fields = append(fields, sessionsummary.FieldDurationMs)
+	}
+	if m.total_tokens != nil {
+		fields = append(fields, sessionsummary.FieldTotalTokens)
+	}
+	if m.estimated_cost_usd != nil {
+		fields = append(fields, sessionsummary.FieldEstimatedCostUsd)
+	}
+	if m.cost_data_unavailable != nil {
+		fields = append(fields, sessionsummary.FieldCostDataUnavailable)
+	}
+	if m.markdown != nil {
+		fields = append(fields, sessionsummary.FieldMarkdown)
+	}
+	if m.error_message != nil {
+		fields = append(fields, sessionsummary.FieldErrorMessage)
+	}
+	if m.error_stage != nil {
+		fields = append(fields, sessionsummary.FieldErrorStage)
+	}
+	if m.generation_started_at != nil {
+		fields = append(fields, sessionsummary.FieldGenerationStartedAt)
+	}
+	if m.generated_at != nil {
+		fields = append(fields, sessionsummary.FieldGeneratedAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, sessionsummary.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, sessionsummary.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *SessionSummaryMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case sessionsummary.FieldSessionID:
+		return m.SessionID()
+	case sessionsummary.FieldSessionTitle:
+		return m.SessionTitle()
+	case sessionsummary.FieldStatus:
+		return m.Status()
+	case sessionsummary.FieldNarrative:
+		return m.Narrative()
+	case sessionsummary.FieldNarrativeFallbackUsed:
+		return m.NarrativeFallbackUsed()
+	case sessionsummary.FieldDiffFilesChanged:
+		return m.DiffFilesChanged()
+	case sessionsummary.FieldDiffAdded:
+		return m.DiffAdded()
+	case sessionsummary.FieldDiffRemoved:
+		return m.DiffRemoved()
+	case sessionsummary.FieldDecisionsAutoApproved:
+		return m.DecisionsAutoApproved()
+	case sessionsummary.FieldDecisionsManuallyApproved:
+		return m.DecisionsManuallyApproved()
+	case sessionsummary.FieldDecisionsDenied:
+		return m.DecisionsDenied()
+	case sessionsummary.FieldDecisionsReviewQueueResolved:
+		return m.DecisionsReviewQueueResolved()
+	case sessionsummary.FieldDecisionsStillOpen:
+		return m.DecisionsStillOpen()
+	case sessionsummary.FieldSessionStartedAt:
+		return m.SessionStartedAt()
+	case sessionsummary.FieldSessionStoppedAt:
+		return m.SessionStoppedAt()
+	case sessionsummary.FieldDurationMs:
+		return m.DurationMs()
+	case sessionsummary.FieldTotalTokens:
+		return m.TotalTokens()
+	case sessionsummary.FieldEstimatedCostUsd:
+		return m.EstimatedCostUsd()
+	case sessionsummary.FieldCostDataUnavailable:
+		return m.CostDataUnavailable()
+	case sessionsummary.FieldMarkdown:
+		return m.Markdown()
+	case sessionsummary.FieldErrorMessage:
+		return m.ErrorMessage()
+	case sessionsummary.FieldErrorStage:
+		return m.ErrorStage()
+	case sessionsummary.FieldGenerationStartedAt:
+		return m.GenerationStartedAt()
+	case sessionsummary.FieldGeneratedAt:
+		return m.GeneratedAt()
+	case sessionsummary.FieldCreatedAt:
+		return m.CreatedAt()
+	case sessionsummary.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *SessionSummaryMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case sessionsummary.FieldSessionID:
+		return m.OldSessionID(ctx)
+	case sessionsummary.FieldSessionTitle:
+		return m.OldSessionTitle(ctx)
+	case sessionsummary.FieldStatus:
+		return m.OldStatus(ctx)
+	case sessionsummary.FieldNarrative:
+		return m.OldNarrative(ctx)
+	case sessionsummary.FieldNarrativeFallbackUsed:
+		return m.OldNarrativeFallbackUsed(ctx)
+	case sessionsummary.FieldDiffFilesChanged:
+		return m.OldDiffFilesChanged(ctx)
+	case sessionsummary.FieldDiffAdded:
+		return m.OldDiffAdded(ctx)
+	case sessionsummary.FieldDiffRemoved:
+		return m.OldDiffRemoved(ctx)
+	case sessionsummary.FieldDecisionsAutoApproved:
+		return m.OldDecisionsAutoApproved(ctx)
+	case sessionsummary.FieldDecisionsManuallyApproved:
+		return m.OldDecisionsManuallyApproved(ctx)
+	case sessionsummary.FieldDecisionsDenied:
+		return m.OldDecisionsDenied(ctx)
+	case sessionsummary.FieldDecisionsReviewQueueResolved:
+		return m.OldDecisionsReviewQueueResolved(ctx)
+	case sessionsummary.FieldDecisionsStillOpen:
+		return m.OldDecisionsStillOpen(ctx)
+	case sessionsummary.FieldSessionStartedAt:
+		return m.OldSessionStartedAt(ctx)
+	case sessionsummary.FieldSessionStoppedAt:
+		return m.OldSessionStoppedAt(ctx)
+	case sessionsummary.FieldDurationMs:
+		return m.OldDurationMs(ctx)
+	case sessionsummary.FieldTotalTokens:
+		return m.OldTotalTokens(ctx)
+	case sessionsummary.FieldEstimatedCostUsd:
+		return m.OldEstimatedCostUsd(ctx)
+	case sessionsummary.FieldCostDataUnavailable:
+		return m.OldCostDataUnavailable(ctx)
+	case sessionsummary.FieldMarkdown:
+		return m.OldMarkdown(ctx)
+	case sessionsummary.FieldErrorMessage:
+		return m.OldErrorMessage(ctx)
+	case sessionsummary.FieldErrorStage:
+		return m.OldErrorStage(ctx)
+	case sessionsummary.FieldGenerationStartedAt:
+		return m.OldGenerationStartedAt(ctx)
+	case sessionsummary.FieldGeneratedAt:
+		return m.OldGeneratedAt(ctx)
+	case sessionsummary.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case sessionsummary.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown SessionSummary field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SessionSummaryMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case sessionsummary.FieldSessionID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionID(v)
+		return nil
+	case sessionsummary.FieldSessionTitle:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionTitle(v)
+		return nil
+	case sessionsummary.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case sessionsummary.FieldNarrative:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNarrative(v)
+		return nil
+	case sessionsummary.FieldNarrativeFallbackUsed:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNarrativeFallbackUsed(v)
+		return nil
+	case sessionsummary.FieldDiffFilesChanged:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDiffFilesChanged(v)
+		return nil
+	case sessionsummary.FieldDiffAdded:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDiffAdded(v)
+		return nil
+	case sessionsummary.FieldDiffRemoved:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDiffRemoved(v)
+		return nil
+	case sessionsummary.FieldDecisionsAutoApproved:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDecisionsAutoApproved(v)
+		return nil
+	case sessionsummary.FieldDecisionsManuallyApproved:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDecisionsManuallyApproved(v)
+		return nil
+	case sessionsummary.FieldDecisionsDenied:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDecisionsDenied(v)
+		return nil
+	case sessionsummary.FieldDecisionsReviewQueueResolved:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDecisionsReviewQueueResolved(v)
+		return nil
+	case sessionsummary.FieldDecisionsStillOpen:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDecisionsStillOpen(v)
+		return nil
+	case sessionsummary.FieldSessionStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionStartedAt(v)
+		return nil
+	case sessionsummary.FieldSessionStoppedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionStoppedAt(v)
+		return nil
+	case sessionsummary.FieldDurationMs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDurationMs(v)
+		return nil
+	case sessionsummary.FieldTotalTokens:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTotalTokens(v)
+		return nil
+	case sessionsummary.FieldEstimatedCostUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEstimatedCostUsd(v)
+		return nil
+	case sessionsummary.FieldCostDataUnavailable:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCostDataUnavailable(v)
+		return nil
+	case sessionsummary.FieldMarkdown:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMarkdown(v)
+		return nil
+	case sessionsummary.FieldErrorMessage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorMessage(v)
+		return nil
+	case sessionsummary.FieldErrorStage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorStage(v)
+		return nil
+	case sessionsummary.FieldGenerationStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGenerationStartedAt(v)
+		return nil
+	case sessionsummary.FieldGeneratedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGeneratedAt(v)
+		return nil
+	case sessionsummary.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case sessionsummary.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown SessionSummary field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *SessionSummaryMutation) AddedFields() []string {
+	var fields []string
+	if m.adddiff_files_changed != nil {
+		fields = append(fields, sessionsummary.FieldDiffFilesChanged)
+	}
+	if m.adddiff_added != nil {
+		fields = append(fields, sessionsummary.FieldDiffAdded)
+	}
+	if m.adddiff_removed != nil {
+		fields = append(fields, sessionsummary.FieldDiffRemoved)
+	}
+	if m.adddecisions_auto_approved != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsAutoApproved)
+	}
+	if m.adddecisions_manually_approved != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsManuallyApproved)
+	}
+	if m.adddecisions_denied != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsDenied)
+	}
+	if m.adddecisions_review_queue_resolved != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsReviewQueueResolved)
+	}
+	if m.adddecisions_still_open != nil {
+		fields = append(fields, sessionsummary.FieldDecisionsStillOpen)
+	}
+	if m.addduration_ms != nil {
+		fields = append(fields, sessionsummary.FieldDurationMs)
+	}
+	if m.addtotal_tokens != nil {
+		fields = append(fields, sessionsummary.FieldTotalTokens)
+	}
+	if m.addestimated_cost_usd != nil {
+		fields = append(fields, sessionsummary.FieldEstimatedCostUsd)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *SessionSummaryMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case sessionsummary.FieldDiffFilesChanged:
+		return m.AddedDiffFilesChanged()
+	case sessionsummary.FieldDiffAdded:
+		return m.AddedDiffAdded()
+	case sessionsummary.FieldDiffRemoved:
+		return m.AddedDiffRemoved()
+	case sessionsummary.FieldDecisionsAutoApproved:
+		return m.AddedDecisionsAutoApproved()
+	case sessionsummary.FieldDecisionsManuallyApproved:
+		return m.AddedDecisionsManuallyApproved()
+	case sessionsummary.FieldDecisionsDenied:
+		return m.AddedDecisionsDenied()
+	case sessionsummary.FieldDecisionsReviewQueueResolved:
+		return m.AddedDecisionsReviewQueueResolved()
+	case sessionsummary.FieldDecisionsStillOpen:
+		return m.AddedDecisionsStillOpen()
+	case sessionsummary.FieldDurationMs:
+		return m.AddedDurationMs()
+	case sessionsummary.FieldTotalTokens:
+		return m.AddedTotalTokens()
+	case sessionsummary.FieldEstimatedCostUsd:
+		return m.AddedEstimatedCostUsd()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SessionSummaryMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case sessionsummary.FieldDiffFilesChanged:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDiffFilesChanged(v)
+		return nil
+	case sessionsummary.FieldDiffAdded:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDiffAdded(v)
+		return nil
+	case sessionsummary.FieldDiffRemoved:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDiffRemoved(v)
+		return nil
+	case sessionsummary.FieldDecisionsAutoApproved:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDecisionsAutoApproved(v)
+		return nil
+	case sessionsummary.FieldDecisionsManuallyApproved:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDecisionsManuallyApproved(v)
+		return nil
+	case sessionsummary.FieldDecisionsDenied:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDecisionsDenied(v)
+		return nil
+	case sessionsummary.FieldDecisionsReviewQueueResolved:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDecisionsReviewQueueResolved(v)
+		return nil
+	case sessionsummary.FieldDecisionsStillOpen:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDecisionsStillOpen(v)
+		return nil
+	case sessionsummary.FieldDurationMs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDurationMs(v)
+		return nil
+	case sessionsummary.FieldTotalTokens:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTotalTokens(v)
+		return nil
+	case sessionsummary.FieldEstimatedCostUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddEstimatedCostUsd(v)
+		return nil
+	}
+	return fmt.Errorf("unknown SessionSummary numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *SessionSummaryMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(sessionsummary.FieldSessionTitle) {
+		fields = append(fields, sessionsummary.FieldSessionTitle)
+	}
+	if m.FieldCleared(sessionsummary.FieldNarrative) {
+		fields = append(fields, sessionsummary.FieldNarrative)
+	}
+	if m.FieldCleared(sessionsummary.FieldSessionStartedAt) {
+		fields = append(fields, sessionsummary.FieldSessionStartedAt)
+	}
+	if m.FieldCleared(sessionsummary.FieldSessionStoppedAt) {
+		fields = append(fields, sessionsummary.FieldSessionStoppedAt)
+	}
+	if m.FieldCleared(sessionsummary.FieldDurationMs) {
+		fields = append(fields, sessionsummary.FieldDurationMs)
+	}
+	if m.FieldCleared(sessionsummary.FieldTotalTokens) {
+		fields = append(fields, sessionsummary.FieldTotalTokens)
+	}
+	if m.FieldCleared(sessionsummary.FieldEstimatedCostUsd) {
+		fields = append(fields, sessionsummary.FieldEstimatedCostUsd)
+	}
+	if m.FieldCleared(sessionsummary.FieldMarkdown) {
+		fields = append(fields, sessionsummary.FieldMarkdown)
+	}
+	if m.FieldCleared(sessionsummary.FieldErrorMessage) {
+		fields = append(fields, sessionsummary.FieldErrorMessage)
+	}
+	if m.FieldCleared(sessionsummary.FieldErrorStage) {
+		fields = append(fields, sessionsummary.FieldErrorStage)
+	}
+	if m.FieldCleared(sessionsummary.FieldGenerationStartedAt) {
+		fields = append(fields, sessionsummary.FieldGenerationStartedAt)
+	}
+	if m.FieldCleared(sessionsummary.FieldGeneratedAt) {
+		fields = append(fields, sessionsummary.FieldGeneratedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *SessionSummaryMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *SessionSummaryMutation) ClearField(name string) error {
+	switch name {
+	case sessionsummary.FieldSessionTitle:
+		m.ClearSessionTitle()
+		return nil
+	case sessionsummary.FieldNarrative:
+		m.ClearNarrative()
+		return nil
+	case sessionsummary.FieldSessionStartedAt:
+		m.ClearSessionStartedAt()
+		return nil
+	case sessionsummary.FieldSessionStoppedAt:
+		m.ClearSessionStoppedAt()
+		return nil
+	case sessionsummary.FieldDurationMs:
+		m.ClearDurationMs()
+		return nil
+	case sessionsummary.FieldTotalTokens:
+		m.ClearTotalTokens()
+		return nil
+	case sessionsummary.FieldEstimatedCostUsd:
+		m.ClearEstimatedCostUsd()
+		return nil
+	case sessionsummary.FieldMarkdown:
+		m.ClearMarkdown()
+		return nil
+	case sessionsummary.FieldErrorMessage:
+		m.ClearErrorMessage()
+		return nil
+	case sessionsummary.FieldErrorStage:
+		m.ClearErrorStage()
+		return nil
+	case sessionsummary.FieldGenerationStartedAt:
+		m.ClearGenerationStartedAt()
+		return nil
+	case sessionsummary.FieldGeneratedAt:
+		m.ClearGeneratedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown SessionSummary nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *SessionSummaryMutation) ResetField(name string) error {
+	switch name {
+	case sessionsummary.FieldSessionID:
+		m.ResetSessionID()
+		return nil
+	case sessionsummary.FieldSessionTitle:
+		m.ResetSessionTitle()
+		return nil
+	case sessionsummary.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case sessionsummary.FieldNarrative:
+		m.ResetNarrative()
+		return nil
+	case sessionsummary.FieldNarrativeFallbackUsed:
+		m.ResetNarrativeFallbackUsed()
+		return nil
+	case sessionsummary.FieldDiffFilesChanged:
+		m.ResetDiffFilesChanged()
+		return nil
+	case sessionsummary.FieldDiffAdded:
+		m.ResetDiffAdded()
+		return nil
+	case sessionsummary.FieldDiffRemoved:
+		m.ResetDiffRemoved()
+		return nil
+	case sessionsummary.FieldDecisionsAutoApproved:
+		m.ResetDecisionsAutoApproved()
+		return nil
+	case sessionsummary.FieldDecisionsManuallyApproved:
+		m.ResetDecisionsManuallyApproved()
+		return nil
+	case sessionsummary.FieldDecisionsDenied:
+		m.ResetDecisionsDenied()
+		return nil
+	case sessionsummary.FieldDecisionsReviewQueueResolved:
+		m.ResetDecisionsReviewQueueResolved()
+		return nil
+	case sessionsummary.FieldDecisionsStillOpen:
+		m.ResetDecisionsStillOpen()
+		return nil
+	case sessionsummary.FieldSessionStartedAt:
+		m.ResetSessionStartedAt()
+		return nil
+	case sessionsummary.FieldSessionStoppedAt:
+		m.ResetSessionStoppedAt()
+		return nil
+	case sessionsummary.FieldDurationMs:
+		m.ResetDurationMs()
+		return nil
+	case sessionsummary.FieldTotalTokens:
+		m.ResetTotalTokens()
+		return nil
+	case sessionsummary.FieldEstimatedCostUsd:
+		m.ResetEstimatedCostUsd()
+		return nil
+	case sessionsummary.FieldCostDataUnavailable:
+		m.ResetCostDataUnavailable()
+		return nil
+	case sessionsummary.FieldMarkdown:
+		m.ResetMarkdown()
+		return nil
+	case sessionsummary.FieldErrorMessage:
+		m.ResetErrorMessage()
+		return nil
+	case sessionsummary.FieldErrorStage:
+		m.ResetErrorStage()
+		return nil
+	case sessionsummary.FieldGenerationStartedAt:
+		m.ResetGenerationStartedAt()
+		return nil
+	case sessionsummary.FieldGeneratedAt:
+		m.ResetGeneratedAt()
+		return nil
+	case sessionsummary.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case sessionsummary.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown SessionSummary field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *SessionSummaryMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *SessionSummaryMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *SessionSummaryMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *SessionSummaryMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *SessionSummaryMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *SessionSummaryMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *SessionSummaryMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown SessionSummary unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *SessionSummaryMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown SessionSummary edge %s", name)
 }
 
 // ShellMutation represents an operation that mutates the Shell nodes in the graph.

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -92,6 +93,12 @@ type ServerDependencies struct {
 
 	// Registry is the live-handle map for all running sessions.
 	Registry *session.Registry
+
+	// SessionSummaryGenerator drives async session-completion-summary generation.
+	// Nil when storage is not ent-backed. Its NotificationDecisionLister/TokenStore
+	// dependencies are wired later via SetNotificationLister/SetTokenStore (see
+	// server.go's RunServer) — see the comment on SetNotificationLister for why.
+	SessionSummaryGenerator *session.SessionSummaryGenerator
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -130,6 +137,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		WorkflowRepo:            rt.WorkflowRepo,
 		WorkflowScheduler:       rt.WorkflowScheduler,
 		Registry:                rt.Registry,
+		SessionSummaryGenerator: rt.SessionSummaryGenerator,
 	}
 }
 
@@ -424,6 +432,45 @@ type RuntimeDeps struct {
 
 	// Registry is the live-handle map for all running sessions.
 	Registry *session.Registry
+
+	// SessionSummaryGenerator drives async session-completion-summary generation.
+	// Nil when storage is not ent-backed.
+	SessionSummaryGenerator *session.SessionSummaryGenerator
+}
+
+// reviewQueueLookupAdapter adapts session.Storage's ItemSession/ReviewVerdict
+// queries to session.ReviewQueueLookup, which BuildDecisionsSnapshot
+// (session/session_summary_snapshot.go) needs. A session's resolved/still-open
+// review counts are derived from every ItemSession attached to the same backlog
+// item as this session's own ItemSession (siblings included) — the backlog item,
+// not just this one session, is the natural "review queue" scope, mirroring how
+// review_queue_manager.go's itemSessionLookupTimeout bounds the identical
+// ItemSession/ReviewVerdict storage lookup.
+type reviewQueueLookupAdapter struct {
+	storage *session.Storage
+}
+
+// ReviewQueueResolvedCount implements session.ReviewQueueLookup.
+func (a *reviewQueueLookupAdapter) ReviewQueueResolvedCount(ctx context.Context, sessionID string) (resolved, stillOpen int, err error) {
+	itemSession, err := a.storage.GetItemSessionBySessionUUID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return 0, 0, nil // no linked backlog item (FR-6's first-class empty case)
+		}
+		return 0, 0, err
+	}
+	sessions, err := a.storage.ListItemSessions(ctx, itemSession.BacklogItemID)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, is := range sessions {
+		if is.OverallOutcome != "" {
+			resolved++
+		} else {
+			stillOpen++
+		}
+	}
+	return resolved, stillOpen, nil
 }
 
 // BuildRuntimeDeps constructs Phase 3 dependencies using Phase 2 outputs.
@@ -529,6 +576,29 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}
 
+	// SessionSummaryGenerator — constructed here (not deferred to server.go) so it
+	// can be wired to every instance in the loop just below, mirroring
+	// backlogLifecycleListener's setup. Its NotificationDecisionLister/TokenStore
+	// dependencies aren't ready yet at this point in startup (NotificationHistoryStore
+	// is built later, in server.go's RunServer; the token store further below in this
+	// function) — wired in later via SetNotificationLister/SetTokenStore, the same
+	// "Set* called long after construction" ordering constraint SetHeadlessPool used
+	// to have (see the comment above backlogLifecycleListener). Nil when storage isn't
+	// ent-backed.
+	var sessionSummaryGenerator *session.SessionSummaryGenerator
+	if entClient := storage.GetEntClient(); entClient != nil {
+		sessionSummaryGenerator = session.NewSessionSummaryGenerator(
+			entClient,
+			headlessPool,
+			nil, // NotificationDecisionLister — wired later via SetNotificationLister
+			nil, // TokenStoreReader — wired later via SetTokenStore
+			&reviewQueueLookupAdapter{storage: storage},
+		)
+		sessionService.SetSessionSummaryGenerator(sessionSummaryGenerator)
+	} else {
+		log.Warn("session summary generation unavailable: storage is not ent-backed")
+	}
+
 	// Backlog lifecycle listener — always created, enabled state set from config below.
 	// The pool is passed at construction time to close the race window that existed when
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
@@ -554,6 +624,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		inst.SetReviewQueue(reviewQueue)
 		inst.SetStatusManager(statusManager)
 		backlogLifecycleListener.WireToInstance(inst)
+		if sessionSummaryGenerator != nil {
+			session.WireSessionSummaryListener(sessionSummaryGenerator, inst)
+		}
 	}
 
 	// Restore dirBaseSHA for directory-mode backlog sessions that were persisted
@@ -762,6 +835,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		svc.PRStatusPoller.AddInstance(instance)
 		historyLinker.AddInstance(instance)
 		backlogLifecycleListener.WireToInstance(instance)
+		if sessionSummaryGenerator != nil {
+			session.WireSessionSummaryListener(sessionSummaryGenerator, instance)
+		}
 		log.Info("added external session to review queue poller, PR status poller, and history linker", "session", instance.Title)
 	})
 	externalDiscovery.OnSessionRemoved(func(instance *session.Instance) {
@@ -1095,6 +1171,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator)
 		sessionService.SetTokenStoreReader(tokenStore)
 		backlogSvc.SetTokenStore(tokenStore, pricing)
+		if sessionSummaryGenerator != nil {
+			sessionSummaryGenerator.SetTokenStore(tokenStore)
+		}
 		log.Info("InsightsService initialized", "historyDir", historyDir)
 
 		// Wire ArtifactExtractor to extract PR links, commits, and URLs from JSONL history.
@@ -1207,6 +1286,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		WorkflowRepo:            workflowRepo,
 		WorkflowScheduler:       workflowScheduler,
 		Registry:                svc.Registry,
+		SessionSummaryGenerator: sessionSummaryGenerator,
 	}, nil
 }
 
