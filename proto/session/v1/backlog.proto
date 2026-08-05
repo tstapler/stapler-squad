@@ -154,6 +154,11 @@ message BacklogItem {
   // labels mirrors the source tracker's labels (e.g. a GitHub issue's label
   // names), populated for imported items only.
   repeated string labels = 31;
+  // allowed_transitions is the server's WorkflowEngine.AllowedTransitions(status)
+  // for this item's current status — the authoritative set of target statuses
+  // a manual status override may choose from. The frontend must render this
+  // list verbatim rather than re-encoding the transition graph client-side.
+  repeated string allowed_transitions = 32;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -374,6 +379,14 @@ message UpdateBacklogItemRequest {
   // "leave the item's stored category untouched", a non-nil pointer
   // (including one pointing at "") explicitly sets/clears it.
   optional string category = 16;
+  // pr_url/pr_number are presence-gated (optional on the wire) and must be
+  // set together or not at all: setting exactly one is rejected with
+  // CodeInvalidArgument. When both are set, the server validates pr_url
+  // parses as a GitHub PR URL whose embedded PR number matches pr_number,
+  // then writes through the shared SetBacklogItemPRAndTransition primitive
+  // (requires the item to currently be in "review" status).
+  optional string pr_url = 17;
+  optional int32 pr_number = 18;
 }
 
 message UpdateBacklogItemResponse {

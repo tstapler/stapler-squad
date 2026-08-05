@@ -589,18 +589,18 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:          item.ID,
-		Title:       item.Title,
-		Priority:    int32(item.Priority),
-		Status:      string(item.Status),
-		RepoPath:    item.RepoPath,
-		Notes:       item.Notes,
-		ExternalId:  item.ExternalID,
-		Labels:      item.Labels,
-		PrUrl:       item.PrURL,
-		PrNumber:    int32(item.PrNumber),
-		CreatedAt:   timestamppb.New(item.CreatedAt),
-		UpdatedAt:   timestamppb.New(item.UpdatedAt),
+		Id:         item.ID,
+		Title:      item.Title,
+		Priority:   int32(item.Priority),
+		Status:     string(item.Status),
+		RepoPath:   item.RepoPath,
+		Notes:      item.Notes,
+		ExternalId: item.ExternalID,
+		Labels:     item.Labels,
+		PrUrl:      item.PrURL,
+		PrNumber:   int32(item.PrNumber),
+		CreatedAt:  timestamppb.New(item.CreatedAt),
+		UpdatedAt:  timestamppb.New(item.UpdatedAt),
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -636,31 +636,51 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
+// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
+// surface AllowedTransitions on the wire (backlogItemToProto below) — package
+// state is safe here since the underlying transitions map is never mutated
+// after construction. Not s.engine: backlogItemToProto is a free function
+// called from many BacklogService methods, and threading an engine parameter
+// through every call site would be a much larger change for the same result.
+var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
+
+// allowedTransitionStrings returns the string form of
+// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
+func allowedTransitionStrings(from session.BacklogStatus) []string {
+	targets := protoWorkflowEngine.AllowedTransitions(from)
+	out := make([]string, len(targets))
+	for i, t := range targets {
+		out[i] = string(t)
+	}
+	return out
+}
+
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                item.ID,
-		Title:             item.Title,
-		Description:       item.Description,
-		Priority:          int32(item.Priority),
-		Status:            item.Status,
-		RepoPath:          item.RepoPath,
-		SkipReviewGate:    item.SkipReviewGate,
-		SkipPlanning:      item.SkipPlanning,
-		AutoSpawnSession:  item.AutoSpawnSession,
-		AutoCreatePr:      item.AutoCreatePR,
-		PipelineMode:      &item.PipelineMode,
-		Category:          &item.Category,
-		PlanApproved:      item.PlanApproved,
-		PlanArtifactsPath: item.PlanArtifactsPath,
-		Notes:             item.Notes,
-		ExternalId:        item.ExternalID,
-		Labels:            item.Labels,
-		SourceId:          item.SourceID,
-		PrUrl:             item.PrURL,
-		PrNumber:          int32(item.PrNumber),
-		CreatedAt:         timestamppb.New(item.CreatedAt),
-		UpdatedAt:         timestamppb.New(item.UpdatedAt),
+		Id:                 item.ID,
+		Title:              item.Title,
+		Description:        item.Description,
+		Priority:           int32(item.Priority),
+		Status:             item.Status,
+		RepoPath:           item.RepoPath,
+		SkipReviewGate:     item.SkipReviewGate,
+		SkipPlanning:       item.SkipPlanning,
+		AutoSpawnSession:   item.AutoSpawnSession,
+		AutoCreatePr:       item.AutoCreatePR,
+		PipelineMode:       &item.PipelineMode,
+		Category:           &item.Category,
+		PlanApproved:       item.PlanApproved,
+		PlanArtifactsPath:  item.PlanArtifactsPath,
+		Notes:              item.Notes,
+		ExternalId:         item.ExternalID,
+		Labels:             item.Labels,
+		SourceId:           item.SourceID,
+		PrUrl:              item.PrURL,
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL

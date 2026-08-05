@@ -48,6 +48,7 @@ import { SessionsSection } from "./detail/SessionsSection";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { NotesSection } from "./detail/NotesSection";
+import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -324,6 +325,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
   const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
   const [sourceExpanded, setSourceExpanded] = useSectionExpandState(itemId, "source", false);
+  const [manualOverrideExpanded, setManualOverrideExpanded] = useSectionExpandState(itemId, "manual-override", false);
 
   // Story 3.1.5: applies each status-dependent section's real default
   // exactly once, the first time `item` becomes available after this
@@ -382,6 +384,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
     ["notes", notesExpanded, setNotesExpanded],
     ["source", sourceExpanded, setSourceExpanded],
+    ["manual-override", manualOverrideExpanded, setManualOverrideExpanded],
   ];
   const openSectionKeys = sectionExpandEntries.filter(([, expanded]) => expanded).map(([key]) => key);
   const handleGroupValueChange = (next: string[]) => {
@@ -767,7 +770,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         throw new Error("Failed to apply suggestions — item may have been modified by another process. Reload and try again.");
       }
       // Step 2: Transition to ready
-      const transitioned = await transitionStatus(item.id, "ready", "idea");
+      const transitioned = await transitionStatus(item.id, "ready", { expectedStatus: "idea" });
       if (!transitioned) {
         throw new Error("Failed to mark item ready — please try again.");
       }
@@ -878,6 +881,90 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       }
     },
     [item, overrideVerdict, load, showActionToast]
+  );
+
+  // Manual overrides (ManualOverrideSection) — the operator escape hatch for
+  // an item whose automation has gotten wedged. Unlike the four handlers
+  // above (called from GateVerdictBox, status-conditional on being in
+  // review), these are always reachable regardless of status.
+  const handleManualStatusOverride = useCallback(
+    async (toStatus: string, reason: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:manual_override_status`;
+      setActionLoading("manual_override_status");
+      try {
+        // expectedStatus only, no expectedUpdatedAt. item.updatedAt is a JS
+        // Date-derived ISO string — millisecond precision at best — but the
+        // server's real updated_at column carries full Go time.Time
+        // (nanosecond) precision, and ent's CAS check is exact equality
+        // (session/ent_repository_backlog.go's UpdatedAtEQ). Verified twice,
+        // live, against the real server: even after fixing mapBacklogItem's
+        // separate nanos-truncation bug (it used to drop the whole `nanos`
+        // field, not just round it — see useBacklogService.ts), every write
+        // still failed this feature's own e2e test with "concurrent
+        // modification detected: updated_at mismatch", because a
+        // JS-Date round trip can never land on the server's exact
+        // nanosecond value. Threading expectedUpdatedAt through a lossy
+        // client timestamp is unreliable by construction, not a bug to
+        // patch here — status-only is also the only CAS mode any other
+        // caller in this hook already uses.
+        //
+        // This does NOT weaken race protection for the case criterion 7
+        // actually names ("a concurrent automated transition racing a
+        // manual override"): the WHERE clause is on the item's STARTING
+        // status, so whichever writer commits first flips it away from
+        // what the loser's read captured, and the loser's write matches
+        // zero rows regardless of target status — proven by
+        // TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverrideRaces
+        // (server/services/backlog_service_lifecycle_test.go), which uses
+        // this exact status-only precondition and passes. The only gap
+        // expectedUpdatedAt would additionally catch is a narrow ABA
+        // sequence (status flips through and back to the same value inside
+        // the race window) that this state machine's guards make very hard
+        // to hit in practice.
+        const ok = await transitionStatus(item.id, toStatus, {
+          expectedStatus: item.status,
+          overrideReason: reason,
+        });
+        if (!ok) {
+          const msg = lastError?.message ?? "Someone else changed this item — reload and try again.";
+          showActionToast(msg, "error", toastKey);
+          throw new Error(msg);
+        }
+        showActionToast(`Status manually overridden to ${toStatus}.`, "success", toastKey);
+        await load();
+      } catch (e) {
+        showActionToast(e instanceof Error ? e.message : "Status override failed.", "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, transitionStatus, lastError, load, showActionToast]
+  );
+
+  const handleManualAssociatePR = useCallback(
+    async (prUrl: string, prNumber: number) => {
+      if (!item) return;
+      const toastKey = `${item.id}:manual_associate_pr`;
+      setActionLoading("manual_associate_pr");
+      try {
+        const updated = await updateBacklogItem(item.id, { ...currentFlags(), prUrl, prNumber });
+        if (!updated) {
+          const msg = lastError?.message ?? "Failed to link PR — please try again.";
+          showActionToast(msg, "error", toastKey);
+          throw new Error(msg);
+        }
+        showActionToast(`PR #${prNumber} linked — item moved to pr_pending.`, "success", toastKey);
+        await load();
+      } catch (e) {
+        showActionToast(e instanceof Error ? e.message : "PR association failed.", "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, updateBacklogItem, lastError, load, currentFlags, showActionToast]
   );
 
   const handleGateSkip = useCallback(async () => {
@@ -1317,6 +1404,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               setNotesValue(item.notes ?? "");
               setEditingNotes(false);
             }}
+          />
+
+          <ManualOverrideSection
+            item={item}
+            defaultExpanded={manualOverrideExpanded}
+            readOnly={terminalState !== null}
+            onOverrideStatus={handleManualStatusOverride}
+            onAssociatePR={handleManualAssociatePR}
           />
         </CollapsibleGroup>
       </div>
