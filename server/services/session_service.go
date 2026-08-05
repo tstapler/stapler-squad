@@ -1305,20 +1305,31 @@ func (s *SessionService) CreateSession(
 			"fork_at_message", req.Msg.ForkAtMessage)
 	}
 
-	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/github.com/owner/repo)
+	// Load config once; used by the GitHub URL resolution below as well as the
+	// one-off path and the defaults/alias path further down.
+	cfg := config.LoadConfig()
+
+	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
 	resolvedPath := expandTildePath(req.Msg.Path)
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
 
-	if session.IsGitHubURL(req.Msg.Path) {
+	enterpriseHosts := make([]string, 0, len(cfg.GetGitHubEnterpriseHosts()))
+	for _, h := range cfg.GetGitHubEnterpriseHosts() {
+		enterpriseHosts = append(enterpriseHosts, h.Host)
+	}
+
+	if session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
 
-		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// ResolveGitHubInputCtxWithHosts threads ctx down to the underlying git
 		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
 		// timeout genuinely cancels the subprocess instead of abandoning it
-		// to keep running in the background after the RPC returns.
-		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
+		// to keep running in the background after the RPC returns. It also
+		// recognizes URLs against any configured GitHub Enterprise hosts, not
+		// just github.com.
+		localPath, ref, err := session.ResolveGitHubInputCtxWithHosts(ctx, req.Msg.Path, enterpriseHosts)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
@@ -1336,9 +1347,6 @@ func (s *SessionService) CreateSession(
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
 	}
-
-	// Load config once; used by both the one-off path and the defaults/alias path below.
-	cfg := config.LoadConfig()
 
 	// One-off session: generate a fresh directory and override resolvedPath.
 	// Autonomous sessions created without an explicit path (the omnibar's normal

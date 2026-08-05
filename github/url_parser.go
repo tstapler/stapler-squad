@@ -226,7 +226,11 @@ var (
 
 // hostAlternation builds a regex alternation of github.com plus any
 // normalized, deduped extra hosts, each escaped for safe embedding in a
-// regex pattern.
+// regex pattern. The whole alternation is wrapped case-insensitive: GHE
+// hosts are free-text config, so a URL pasted with different case than the
+// registered host (or a registered host typed in mixed case) must still
+// match — NormalizeHost lowercases the captured Host afterward for
+// consistent downstream comparisons (e.g. keychain lookup).
 func hostAlternation(extraHosts []string) string {
 	hosts := []string{regexp.QuoteMeta(defaultHost)}
 	seen := map[string]bool{defaultHost: true}
@@ -238,7 +242,7 @@ func hostAlternation(extraHosts []string) string {
 		seen[h] = true
 		hosts = append(hosts, regexp.QuoteMeta(h))
 	}
-	return strings.Join(hosts, "|")
+	return "(?i:" + strings.Join(hosts, "|") + ")"
 }
 
 // ghPatterns is the set of compiled URL patterns for a given host alternation.
@@ -302,7 +306,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 		}
 		return &ParsedGitHubRef{
 			Type:        RefTypePR,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			PRNumber:    prNum,
@@ -314,7 +318,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 	if matches := p.file.FindStringSubmatch(input); matches != nil {
 		ref := &ParsedGitHubRef{
 			Type:        RefTypeFile,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			Branch:      matches[4],
@@ -341,7 +345,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 	if matches := p.commit.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeCommit,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			CommitSHA:   matches[4],
@@ -357,7 +361,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 		}
 		return &ParsedGitHubRef{
 			Type:        RefTypeIssue,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			IssueNumber: issueNum,
@@ -369,7 +373,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 	if matches := p.compare.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeCompare,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			BaseBranch:  matches[4],
@@ -382,7 +386,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 	if matches := p.release.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeRelease,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			Tag:         matches[4],
@@ -394,7 +398,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 	if matches := p.branch.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeBranch,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			Branch:      matches[4],
@@ -406,7 +410,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 	if matches := p.repo.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeRepo,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			OriginalURL: input,
@@ -417,7 +421,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 	if matches := p.ssh.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeRepo,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			OriginalURL: input,
@@ -428,7 +432,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 	if matches := p.sshProtocol.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeRepo,
-			Host:        matches[1],
+			Host:        NormalizeHost(matches[1]),
 			Owner:       matches[2],
 			Repo:        matches[3],
 			OriginalURL: input,
