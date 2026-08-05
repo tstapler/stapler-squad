@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -55,6 +56,7 @@ func NewRepoPathManagerWithBase(baseDir string) *RepoPathManager {
 
 // GitHubRef represents a parsed GitHub reference.
 type GitHubRef struct {
+	Host     string // GitHub host, e.g. "github.com" or a GHES hostname; "" means github.com
 	Owner    string
 	Repo     string
 	Branch   string
@@ -82,7 +84,7 @@ func isTraversalSegment(s string) bool {
 	return s == "." || s == ".."
 }
 
-// ParseGitHubURL parses a GitHub URL and returns the components.
+// ParseGitHubURL parses a github.com URL and returns the components.
 // Supported formats:
 //   - https://github.com/owner/repo
 //   - https://github.com/owner/repo.git
@@ -91,94 +93,93 @@ func isTraversalSegment(s string) bool {
 //   - owner/repo (shorthand)
 //   - owner/repo:branch (shorthand with branch)
 func ParseGitHubURL(input string) (*GitHubRef, error) {
-	input = strings.TrimSpace(input)
-
-	// GitHub PR URL pattern
-	prPattern := regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)`)
-	if match := prPattern.FindStringSubmatch(input); match != nil {
-		owner, repo := match[1], strings.TrimSuffix(match[2], ".git")
-		if isTraversalSegment(owner) || isTraversalSegment(repo) {
-			return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
-		}
-		prNum := 0
-		fmt.Sscanf(match[3], "%d", &prNum)
-		return &GitHubRef{
-			Owner:    owner,
-			Repo:     repo,
-			PRNumber: prNum,
-			Type:     GitHubRefTypePR,
-		}, nil
-	}
-
-	// GitHub branch URL pattern
-	branchPattern := regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+)/tree/(.+)$`)
-	if match := branchPattern.FindStringSubmatch(input); match != nil {
-		owner, repo := match[1], strings.TrimSuffix(match[2], ".git")
-		if isTraversalSegment(owner) || isTraversalSegment(repo) {
-			return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
-		}
-		return &GitHubRef{
-			Owner:  owner,
-			Repo:   repo,
-			Branch: match[3],
-			Type:   GitHubRefTypeBranch,
-		}, nil
-	}
-
-	// GitHub repo URL pattern (must come after branch pattern)
-	repoPattern := regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$`)
-	if match := repoPattern.FindStringSubmatch(input); match != nil {
-		owner, repo := match[1], strings.TrimSuffix(match[2], ".git")
-		if isTraversalSegment(owner) || isTraversalSegment(repo) {
-			return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
-		}
-		return &GitHubRef{
-			Owner: owner,
-			Repo:  repo,
-			Type:  GitHubRefTypeRepo,
-		}, nil
-	}
-
-	// Shorthand pattern: owner/repo or owner/repo:branch
-	shorthandPattern := regexp.MustCompile(`^([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)(?::([a-zA-Z0-9_/.-]+))?$`)
-	if match := shorthandPattern.FindStringSubmatch(input); match != nil {
-		// Make sure it doesn't look like a local path
-		if !strings.HasPrefix(input, "/") && !strings.HasPrefix(input, "~") && !strings.HasPrefix(input, ".") {
-			owner, repo := match[1], match[2]
-			if isTraversalSegment(owner) || isTraversalSegment(repo) {
-				return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
-			}
-			ref := &GitHubRef{
-				Owner: owner,
-				Repo:  repo,
-				Type:  GitHubRefTypeRepo,
-			}
-			if match[3] != "" {
-				ref.Branch = match[3]
-				ref.Type = GitHubRefTypeBranch
-			}
-			return ref, nil
-		}
-	}
-
-	return nil, fmt.Errorf("not a recognized GitHub URL format: %s", input)
+	return ParseGitHubURLWithHosts(input, nil)
 }
 
-// IsGitHubURL returns true if the input looks like a GitHub URL or shorthand.
+// ParseGitHubURLWithHosts parses a GitHub URL or shorthand, additionally
+// recognizing URLs against any of the given GitHub Enterprise hostnames (in
+// addition to github.com). Delegates the regex/host matching to the github
+// package's ParseGitHubRefWithHosts, then re-validates Owner/Repo against
+// isTraversalSegment: the github package's own parsing provides no
+// path-traversal protection (its only validation, isValidGitHubName, is used
+// solely for the shorthand path and explicitly permits "." and ".."), so this
+// guard must be re-applied here before Owner/Repo are ever used to build a
+// local filesystem path in GetRepoPath.
+func ParseGitHubURLWithHosts(input string, enterpriseHosts []string) (*GitHubRef, error) {
+	input = strings.TrimSpace(input)
+
+	parsed, err := github.ParseGitHubRefWithHosts(input, enterpriseHosts)
+	if err != nil {
+		return nil, fmt.Errorf("not a recognized GitHub URL format: %s", input)
+	}
+
+	if isTraversalSegment(parsed.Owner) || isTraversalSegment(parsed.Repo) {
+		return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
+	}
+
+	var refType GitHubRefType
+	switch parsed.Type {
+	case github.RefTypePR:
+		refType = GitHubRefTypePR
+	case github.RefTypeBranch:
+		refType = GitHubRefTypeBranch
+	case github.RefTypeRepo:
+		refType = GitHubRefTypeRepo
+	default:
+		// File/Commit/Issue/Compare/Release refs aren't valid session-creation
+		// inputs; treat them as unrecognized rather than silently misrouting.
+		return nil, fmt.Errorf("not a recognized GitHub URL format: %s", input)
+	}
+
+	return &GitHubRef{
+		Host:     parsed.Host,
+		Owner:    parsed.Owner,
+		Repo:     parsed.Repo,
+		Branch:   parsed.Branch,
+		PRNumber: parsed.PRNumber,
+		Type:     refType,
+	}, nil
+}
+
+// IsGitHubURL returns true if the input looks like a github.com URL or shorthand.
 func IsGitHubURL(input string) bool {
 	_, err := ParseGitHubURL(input)
 	return err == nil
 }
 
-// GetRepoPath returns the local path where a GitHub repo should be stored.
-// Format: ~/.stapler-squad/repos/github.com/owner/repo
-func (m *RepoPathManager) GetRepoPath(ref *GitHubRef) string {
-	return filepath.Join(m.baseDir, "github.com", ref.Owner, ref.Repo)
+// IsGitHubURLWithHosts returns true if the input looks like a GitHub URL or
+// shorthand, recognizing URLs against the given GitHub Enterprise hostnames
+// in addition to github.com.
+func IsGitHubURLWithHosts(input string, enterpriseHosts []string) bool {
+	_, err := ParseGitHubURLWithHosts(input, enterpriseHosts)
+	return err == nil
 }
 
-// GetCloneURL returns the git clone URL for a GitHub ref.
+// repoHost returns the normalized host for ref, defaulting to "github.com"
+// when Host is unset (github.com refs leave Host as the zero value).
+func repoHost(ref *GitHubRef) string {
+	if ref.Host == "" {
+		return "github.com"
+	}
+	return ref.Host
+}
+
+// GetRepoPath returns the local path where a GitHub repo should be stored.
+// Format: ~/.stapler-squad/repos/<host>/owner/repo
+func (m *RepoPathManager) GetRepoPath(ref *GitHubRef) string {
+	return filepath.Join(m.baseDir, repoHost(ref), ref.Owner, ref.Repo)
+}
+
+// GetCloneURL returns the git clone URL for a GitHub ref, injecting a stored
+// keychain token for the ref's host when one is available (required for
+// private repos on GitHub Enterprise hosts, where an unauthenticated clone
+// would otherwise fail).
 func (m *RepoPathManager) GetCloneURL(ref *GitHubRef) string {
-	return fmt.Sprintf("https://github.com/%s/%s.git", ref.Owner, ref.Repo)
+	host := repoHost(ref)
+	if token := github.GetKeychainTokenForHost(host); token != "" {
+		return fmt.Sprintf("https://x-access-token:%s@%s/%s/%s.git", token, host, ref.Owner, ref.Repo)
+	}
+	return fmt.Sprintf("https://%s/%s/%s.git", host, ref.Owner, ref.Repo)
 }
 
 // EnsureRepoCloned ensures the repository is cloned to the local path.
@@ -268,6 +269,25 @@ func (m *RepoPathManager) ResolveGitHubInputCtx(ctx context.Context, input strin
 	return localPath, ref, nil
 }
 
+// ResolveGitHubInputCtxWithHosts takes a GitHub URL/shorthand and returns a
+// resolved path, recognizing URLs against the given GitHub Enterprise
+// hostnames in addition to github.com, and threading ctx down to
+// EnsureRepoCloned so the underlying git clone/fetch subprocess is actually
+// cancelled if ctx is cancelled or times out.
+func (m *RepoPathManager) ResolveGitHubInputCtxWithHosts(ctx context.Context, input string, enterpriseHosts []string) (localPath string, ref *GitHubRef, err error) {
+	ref, err = ParseGitHubURLWithHosts(input, enterpriseHosts)
+	if err != nil {
+		return "", nil, err
+	}
+
+	localPath, err = m.EnsureRepoCloned(ctx, ref)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return localPath, ref, nil
+}
+
 // DefaultRepoPathManager is the default instance used for GitHub URL resolution.
 var DefaultRepoPathManager = NewRepoPathManager()
 
@@ -280,6 +300,13 @@ func ResolveGitHubInput(input string) (localPath string, ref *GitHubRef, err err
 // threading ctx down to the underlying git clone/fetch subprocess.
 func ResolveGitHubInputCtx(ctx context.Context, input string) (localPath string, ref *GitHubRef, err error) {
 	return DefaultRepoPathManager.ResolveGitHubInputCtx(ctx, input)
+}
+
+// ResolveGitHubInputCtxWithHosts is a convenience function using the default
+// manager, recognizing URLs against the given GitHub Enterprise hostnames in
+// addition to github.com.
+func ResolveGitHubInputCtxWithHosts(ctx context.Context, input string, enterpriseHosts []string) (localPath string, ref *GitHubRef, err error) {
+	return DefaultRepoPathManager.ResolveGitHubInputCtxWithHosts(ctx, input, enterpriseHosts)
 }
 
 // WorktreeInfo contains information about a git worktree
