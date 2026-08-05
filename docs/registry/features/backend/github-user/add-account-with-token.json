@@ -10,7 +10,8 @@
   "testIds": [
     "TestAddGitHubAccountWithToken_ValidToken_StoresAndReturnsAccount",
     "TestAddGitHubAccountWithToken_InvalidToken_ReturnsPermissionDenied",
-    "TestAddGitHubAccountWithToken_EmptyToken_ReturnsInvalidArgument"
+    "TestAddGitHubAccountWithToken_EmptyToken_ReturnsInvalidArgument",
+    "TestListGitHubAccounts_AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts"
   ],
-  "lastModified": "2026-07-28T12:24:26.383558421-07:00"
+  "lastModified": "2026-08-05T00:00:00-07:00"
 }

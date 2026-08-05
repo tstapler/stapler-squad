@@ -75,3 +75,32 @@ func TestAddGitHubAccountWithToken_EmptyToken_ReturnsInvalidArgument(t *testing.
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
 }
+
+func TestListGitHubAccounts_AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+	}))
+	defer ts.Close()
+	const enterpriseHost = "github.netflix.net"
+	gh.EnterpriseBaseURLOverride[enterpriseHost] = ts.URL + "/"
+	defer delete(gh.EnterpriseBaseURLOverride, enterpriseHost)
+
+	// svc has no statically configured enterprise hosts (newTestGitHubUserService
+	// passes nil), mirroring an account added via AddGitHubAccountFromCLI/
+	// AddGitHubAccountWithToken for a host with no OAuth App registered in
+	// config.json.
+	svc := newTestGitHubUserService(t)
+
+	_, err := svc.AddGitHubAccountWithToken(context.Background(),
+		connect.NewRequest(&sessionv1.AddGitHubAccountWithTokenRequest{
+			Host:  enterpriseHost,
+			Token: "test-token",
+		}))
+	require.NoError(t, err)
+
+	resp, err := svc.ListGitHubAccounts(context.Background(),
+		connect.NewRequest(&sessionv1.ListGitHubAccountsRequest{}))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Msg.EnterpriseHosts, enterpriseHost)
+}

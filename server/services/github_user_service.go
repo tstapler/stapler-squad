@@ -236,9 +236,27 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	_ *connect.Request[sessionv1.ListGitHubAccountsRequest],
 ) (*connect.Response[sessionv1.ListGitHubAccountsResponse], error) {
 	accounts := s.buildAccountList()
-	hosts := make([]string, 0, len(s.enterpriseHosts))
+
+	// EnterpriseHosts drives the omnibar's GHE URL detector, so it must reflect
+	// every host the user can actually reach — not just hosts with a
+	// statically configured OAuth App (s.enterpriseHosts), which omits hosts
+	// added via AddGitHubAccountWithToken/AddGitHubAccountFromCLI (e.g. gh CLI
+	// import) since those never touch s.enterpriseHosts.
+	seen := make(map[string]bool, len(s.enterpriseHosts)+len(accounts))
+	hosts := make([]string, 0, len(s.enterpriseHosts)+len(accounts))
+	addHost := func(host string) {
+		host = githubpkg.NormalizeHost(host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+			return
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
 	for _, h := range s.enterpriseHosts {
-		hosts = append(hosts, githubpkg.NormalizeHost(h.Host))
+		addHost(h.Host)
+	}
+	for _, a := range accounts {
+		addHost(a.Host)
 	}
 	return connect.NewResponse(&sessionv1.ListGitHubAccountsResponse{
 		Accounts:        accounts,
