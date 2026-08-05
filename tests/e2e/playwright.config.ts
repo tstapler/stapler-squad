@@ -10,6 +10,9 @@ export default defineConfig({
   globalSetup: './global-setup.ts',
   globalTeardown: './global-teardown.ts',
   testDir: './',
+  // Playwright specs are *.spec.ts (see .claude/rules/e2e-test-conventions.md); *.test.ts files
+  // (e.g. global-setup.dev-mode.test.ts) are Jest unit tests and must not be collected here.
+  testIgnore: '**/*.test.ts',
 
   // Test timeout (individual test)
   timeout: 30000,
