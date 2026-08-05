@@ -894,6 +894,48 @@ func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome ReviewOutcom
 	return item
 }
 
+// newStuckReviewTestItemWithVerdictAge is newStuckReviewTestItem's shape but
+// backdates the ReviewVerdict's created_at by verdictAge, for tests of
+// reconcileUnprocessedReviewVerdicts' idle-timeout OR condition
+// (reviewVerdictIdleThreshold). created_at is Immutable() in the ent schema
+// (no Update-builder setter — see newOrphanedTriageTestItem's identical
+// comment), so the backdated value is set at Create time via the raw ent
+// client rather than storage.CreateItemSessionWithVerdict (which always uses
+// time.Now()). The review session itself is left alive (EndedAt nil) so only
+// the verdict-age path, not the ordinary dead-session path, can explain a
+// "dead" verdict.
+func newStuckReviewTestItemWithVerdictAge(t *testing.T, storage *Storage, er *EntRepository, outcome ReviewOutcome, verdictAge time.Duration) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Stuck review test item (backdated verdict)",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	parsedItemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	is, err := er.client.ItemSession.Create().
+		SetSessionUUID("headless-review-" + uuid.New().String()).
+		SetSessionRole(string(SessionRoleReview)).
+		SetBacklogItemID(parsedItemID).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = er.client.ReviewVerdict.Create().
+		SetOverallOutcome(string(outcome)).
+		SetSummary("no diff available").
+		SetItemSessionID(is.ID).
+		SetCreatedAt(time.Now().Add(-verdictAge)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	return item
+}
+
 // TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless is a
 // regression test for a live-data bug found via manual QA: an item whose
 // AutoReopenAfterFailedReview spawn attempt failed and rolled the status back
