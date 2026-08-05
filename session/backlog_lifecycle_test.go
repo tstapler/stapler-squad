@@ -1591,19 +1591,14 @@ func TestReconcilePRPending_ClosedPR_ClosesAsSupersededInsteadOfReopening_When_L
 	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
-	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: uuid.New().String(),
-		SessionRole: SessionRoleWork,
-	})
-	require.NoError(t, err)
-	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, shippedSHA, "the fix", time.Now(), 1))
+	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/closed-pr-superseded", shippedSHA)
 
 	listener := NewBacklogLifecycleListener(storage)
 	checker := &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}}
 	overridePRPendingChecker(t, listener, checker)
 	fakeSpawner := &fakePRFixSpawner{}
 	listener.SetPRFixSpawner(fakeSpawner)
+	stubMatchingPRByNumberFinder(listener, "backlog/closed-pr-superseded")
 
 	er := storage.repo.(*EntRepository)
 	listener.ReconcilePRPending(ctx, er)
@@ -1661,15 +1656,10 @@ func TestReconcilePRPending_ClosesSupersededPR_When_LastCommitAlreadyOnMain(t *t
 	// A work session whose last commit is the one already on main — the same
 	// shape as the live incident (this item's own branch's work already
 	// shipped, but its stale PR still references it).
-	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: uuid.New().String(),
-		SessionRole: SessionRoleWork,
-	})
-	require.NoError(t, err)
-	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, shippedSHA, "the fix", time.Now(), 1))
+	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/superseded-pr", shippedSHA)
 
 	listener := NewBacklogLifecycleListener(storage)
+	stubMatchingPRByNumberFinder(listener, "backlog/superseded-pr")
 	checker := &fakePRPendingChecker{
 		status: &git.PRStatus{
 			CIFailing:    true,
@@ -3407,12 +3397,14 @@ func TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_
 	ctx := context.Background()
 
 	item := newPRPendingTestItem(t, storage, 9003)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/ship-snapshot-merged", "")
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
 		merged: true,
 		status: &git.PRStatus{ApprovedCount: 1, ChangesRequestedCount: 0, CIFailing: false},
 	})
+	stubMatchingPRByNumberFinder(listener, "backlog/ship-snapshot-merged")
 
 	er := storage.repo.(*EntRepository)
 	listener.ReconcilePRPending(ctx, er)
@@ -3465,6 +3457,7 @@ func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T
 		merged: true,
 		status: &git.PRStatus{ApprovedCount: 1},
 	})
+	stubMatchingPRByNumberFinder(listener, "backlog/some-item")
 
 	er := storage.repo.(*EntRepository)
 	listener.ReconcilePRPending(ctx, er)

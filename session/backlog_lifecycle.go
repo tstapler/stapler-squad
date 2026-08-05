@@ -268,6 +268,22 @@ func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*git
 	return github.GetPRForBranch(ctx, ref.Owner(), ref.Repo(), branch)
 }
 
+// defaultPRByNumberFinder resolves repoPath's GitHub owner/repo from its git
+// remote, then looks up prNumber directly (immutable-number-keyed, not
+// branch-name-keyed — see github.GetPRByNumber's doc comment). This is the
+// production default installed by newListenerBase for
+// verifyPRHeadBranchMatchesTracked's live-GitHub re-check.
+func defaultPRByNumberFinder(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
+	ref, err := github.GetOwnerRepoFromRemote(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	if !ref.IsValid() {
+		return nil, fmt.Errorf("could not resolve a GitHub owner/repo from the git remote at %s", repoPath)
+	}
+	return github.GetPRByNumber(ctx, ref.Owner(), ref.Repo(), prNumber)
+}
+
 // maxConcurrentReviewGates is the maximum number of review gates that can run
 // concurrently. This caps goroutine fan-out when many sessions exit simultaneously.
 const maxConcurrentReviewGates = 8
@@ -355,6 +371,19 @@ type BacklogLifecycleListener struct {
 	// repoPath's git remote, then queries GitHub); overridable in tests to
 	// avoid real GitHub API calls or needing a real git remote on disk.
 	orphanedPRFinder func(ctx context.Context, repoPath, branch string) (*github.PRInfo, error)
+
+	// prByNumberFinderMu guards prByNumberFinder for concurrent Set/get access.
+	prByNumberFinderMu sync.RWMutex
+	// prByNumberFinder looks up a PR by its immutable number — used by
+	// verifyPRHeadBranchMatchesTracked to re-verify, via a live GitHub lookup,
+	// that item.PrNumber's real head branch still matches the item's
+	// currently-tracked branch before an automated reconciliation call site
+	// treats that PR number as ground truth (Story 6, adversarial-review.md's
+	// Blocker). Defaults to defaultPRByNumberFinder via newListenerBase
+	// (resolves owner/repo from repoPath's git remote, then queries GitHub by
+	// PR number); overridable in tests to avoid real GitHub API calls or
+	// needing a real git remote on disk.
+	prByNumberFinder func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error)
 
 	// branchReconcilerMu guards branchReconciler for concurrent Set/get access.
 	branchReconcilerMu sync.RWMutex
@@ -633,6 +662,24 @@ func (l *BacklogLifecycleListener) getOrphanedPRFinder() func(ctx context.Contex
 	return l.orphanedPRFinder
 }
 
+// SetPRByNumberFinder overrides the function used to look up a PR by its
+// immutable number, used by verifyPRHeadBranchMatchesTracked (Story 6).
+// Overridable in tests to avoid real GitHub API calls or needing a real git
+// remote on disk; production code never needs to call this, since
+// newListenerBase installs defaultPRByNumberFinder.
+func (l *BacklogLifecycleListener) SetPRByNumberFinder(f func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error)) {
+	l.prByNumberFinderMu.Lock()
+	defer l.prByNumberFinderMu.Unlock()
+	l.prByNumberFinder = f
+}
+
+// getPRByNumberFinder returns the current PR-by-number finder under a read lock.
+func (l *BacklogLifecycleListener) getPRByNumberFinder() func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
+	l.prByNumberFinderMu.RLock()
+	defer l.prByNumberFinderMu.RUnlock()
+	return l.prByNumberFinder
+}
+
 // SetBranchReconciler overrides the function used to fetch+merge a branch's
 // remote ref into its worktree for push_failed remediation
 // (attemptPushRemediation). Overridable in tests to avoid needing a real git
@@ -757,6 +804,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 		prCreatorFactory:        defaultPRCreatorFactory,
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,
+		prByNumberFinder:        defaultPRByNumberFinder,
 	}
 	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
@@ -2653,6 +2701,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 			continue
 		}
 
+		// NOTE: this still looks up by branch name (github.GetPRForBranch via getOrphanedPRFinder), so it has the same blind spot report_pr_created had before the number-keyed fix in tools_github.go's VerifyPRMatchesBranch — a PR opened from a fallback branch is invisible here too. Not fixed here (out of scope per project_plans/report-pr-created-branch-mismatch/requirements.md); a future fast-follow could reuse VerifyPRMatchesBranch/GetPRByNumber's shape.
 		info, prErr := l.getOrphanedPRFinder()(ctx, item.RepoPath, wt.BranchName)
 		if prErr != nil {
 			if !errors.Is(prErr, github.ErrNoPR) {
@@ -2820,6 +2869,16 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			if mergedErr != nil {
 				log.DebugLog.Printf("[BacklogLifecycle] reconcileBouncingItems IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
 			} else if merged {
+				// Story 6 guard (adversarial-review.md's Blocker): re-verify,
+				// via a live GitHub lookup, that PR #item.PrNumber's head
+				// branch still matches this item's currently-tracked branch
+				// before auto-completing it on the strength of item.PrNumber
+				// alone. Fails closed identically to
+				// verifyPRAssociationForFixSpawn's own contract.
+				if !l.verifyPRAssociationForFixSpawn(ctx, item.ID, item.RepoPath, item.PrNumber) {
+					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+					continue
+				}
 				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
 				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition item=%s: %v", item.ID, transErr)
@@ -3911,6 +3970,21 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 				}
 			}
 
+			// Story 6 guard (adversarial-review.md's Blocker): re-verify, via a
+			// live GitHub lookup, that PR #item.PrNumber's head branch still
+			// matches this item's currently-tracked branch before treating the
+			// merge as this item's own and auto-completing it. wt == nil (no
+			// work session, or a GetWorktreeDataBySessionUUID failure above) is
+			// treated identically to a definitive mismatch — fail closed.
+			var trackedBranch string
+			if wt != nil {
+				trackedBranch = wt.BranchName
+			}
+			if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, trackedBranch, item.PrNumber); verifyErr != nil || !matches {
+				log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+				continue
+			}
+
 			if capErr := CaptureShipSnapshot(ctx, l.storage, &itemData, snapshotPRStatus, lastWork, wt); capErr != nil {
 				// CaptureShipSnapshot always returns nil today; this branch
 				// exists defensively in case that contract ever changes, and
@@ -3994,6 +4068,9 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 				continue
 			}
 			fixCtx := fmt.Sprintf("PR #%d (%s) was closed without merging. Investigate why, address any concerns, and open a fresh PR.", closedPrNum, closedPrURL)
+			if !l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, closedPrNum) {
+				fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
+			}
 			log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
 			attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
 			if !attempted {
@@ -4104,12 +4181,82 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			continue
 		}
 		fixCtx := fmt.Sprintf("PR #%d (%s) needs fixes:\n\n%s", item.PrNumber, item.PrURL, prStatus.FeedbackText)
+		if !l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, item.PrNumber) {
+			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
+		}
 		log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v)",
 			item.ID, prStatus.CIFailing, prStatus.HasBlockingReviews, prStatus.HasConflicts)
 		if _, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx); fixErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)
 		}
 	}
+}
+
+// verifyPRHeadBranchMatchesTracked re-verifies, via a live GitHub lookup,
+// that prNumber's real head branch still equals the item's currently-tracked
+// branch (trackedBranch) — the guard Story 6 adds in response to
+// adversarial-review.md's Blocker, called immediately before any of
+// closeIfSupersededByMain/ReconcilePRPending/reconcileBouncingItems treats
+// item.PrNumber as ground truth for an automated GitHub-mutating or
+// completing action. Fails closed in both directions: an empty
+// trackedBranch (the caller couldn't resolve the item's own tracked branch)
+// returns false without even calling the finder, and a finder error (e.g. a
+// transient GitHub failure) also returns false — neither is ever read as a
+// verified match.
+func (l *BacklogLifecycleListener) verifyPRHeadBranchMatchesTracked(ctx context.Context, repoPath, trackedBranch string, prNumber int) (bool, error) {
+	if trackedBranch == "" {
+		return false, fmt.Errorf("verifyPRHeadBranchMatchesTracked: no tracked branch to verify PR #%d against", prNumber)
+	}
+	info, err := l.getPRByNumberFinder()(ctx, repoPath, prNumber)
+	if err != nil {
+		return false, err
+	}
+	return info.HeadRef == trackedBranch, nil
+}
+
+// unverifiedPRAssociationDisclaimer is prepended (Task 6.3a) to a spawned
+// fix session's context whenever verifyPRAssociationForFixSpawn can't
+// confirm a PR's head branch still matches the item's tracked branch —
+// disclosing that the association is unverified rather than briefing the
+// spawned session to investigate/fix it as established fact.
+const unverifiedPRAssociationDisclaimer = "NOTE: this PR's association with this backlog item could not be verified (its head branch does not match — or no longer matches — the item's tracked branch, possibly because it was linked via report_pr_created's override_reason path). Confirm this PR is actually relevant to this item's work before investigating or commenting on it. "
+
+// verifyPRAssociationForFixSpawn independently resolves itemIDStr's
+// currently-tracked branch (its most recent work session's worktree data,
+// mirroring closeIfSupersededByMain's identical session-lookup loop) and
+// re-runs verifyPRHeadBranchMatchesTracked against prNumber. Used at Task
+// 6.3a's two fixCtx-building call sites in ReconcilePRPending and Task 6.5's
+// reconcileBouncingItems done-transition guard — deliberately re-run rather
+// than threaded through closeIfSupersededByMain's return value, since that
+// function returns false for several reasons unrelated to branch
+// verification and its return value alone can't distinguish "guard tripped"
+// from "nothing to verify yet" (see plan.md's Task 6.3a rationale). Fails
+// closed identically to verifyPRHeadBranchMatchesTracked's own contract: no
+// work session, a GetWorktreeDataBySessionUUID error, or the guard itself
+// erroring all count as "unverified", never "verified".
+func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Context, itemIDStr, repoPath string, prNumber int) bool {
+	sessions, sessErr := l.storage.ListItemSessions(ctx, itemIDStr)
+	if sessErr != nil {
+		return false
+	}
+	var lastWork *ItemSessionSummary
+	for i := range sessions {
+		// Ascending by CreatedAt (ListItemSessions' query order) — keep
+		// overwriting so this ends up holding the *most recent* work
+		// session, mirroring the identical pattern elsewhere in this file.
+		if sessions[i].Role == SessionRoleWork {
+			lastWork = &sessions[i]
+		}
+	}
+	if lastWork == nil {
+		return false
+	}
+	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
+	if wtErr != nil {
+		return false
+	}
+	matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, repoPath, wt.BranchName, prNumber)
+	return verifyErr == nil && matches
 }
 
 // closeIfSupersededByMain checks whether item's last known work-session commit
@@ -4161,6 +4308,22 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 
 	log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: last commit %s is already on %s — PR #%d is superseded, closing instead of spawning another fix cycle",
 		item.ID, lastWork.LastCommitSha, bounceMainBranch, item.PrNumber)
+
+	// Story 6 guard (adversarial-review.md's Blocker): re-verify, via a live
+	// GitHub lookup, that PR #item.PrNumber's head branch still matches this
+	// item's currently-tracked branch before auto-closing it. Without this,
+	// a PR attached via report_pr_created's override_reason path (by
+	// construction, a head-branch mismatch) could be auto-closed on the
+	// strength of item.PrNumber alone.
+	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
+	if wtErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-close (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+		return false
+	}
+	if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, wt.BranchName, item.PrNumber); verifyErr != nil || !matches {
+		log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-close (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+		return false
+	}
 
 	closeComment := fmt.Sprintf(
 		"Closing as superseded: this branch's last known commit (%s) is already present on %s, so this item's work has already shipped through another path. No further fix is needed here.",
