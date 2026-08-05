@@ -53,6 +53,10 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 		writeLim:   newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
+	if svc != nil {
+		registerWorkflowTools(s, &workflowHandlers{svc: svc})
+		registerRulesTools(s, &rulesHandlers{svc: svc})
+	}
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
 		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener})
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
