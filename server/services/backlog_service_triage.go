@@ -866,9 +866,10 @@ func (s *BacklogService) spawnSessionAfterGates(
 	}
 
 	// 12b. Capture the pre-work HEAD SHA so the review gate can diff base..HEAD across
-	// all commits the agent makes (not just HEAD~1..HEAD at review time).
+	// all commits the agent makes (not just HEAD~1..HEAD at review time). This goes in
+	// BaseCommitSha, never LastCommitSha — see SetItemSessionBaseCommit's doc comment.
 	if baseSHA, shaErr := session.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
-		_ = s.storage.UpdateItemSessionGitActivity(ctx, is.ID, baseSHA, "", time.Now(), 0)
+		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 		inst.SetDirBaseSHA(baseSHA)
 	}
 
@@ -2795,7 +2796,7 @@ Do not modify the code. Only write the review verdict.
 
 	// Capture the pre-review HEAD SHA so diffs against base..HEAD work correctly.
 	if baseSHA, shaErr := session.GetGitHeadSHA(item.RepoPath); shaErr == nil && baseSHA != "" {
-		_ = s.storage.UpdateItemSessionGitActivity(ctx, is.ID, baseSHA, "", time.Now(), 0)
+		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 	}
 
 	log.InfoLog.Printf("[TriggerReReview] spawned re-review session %s for item %s", inst.UUID, item.ID)
@@ -3054,8 +3055,11 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	}
 	// Fallback: diff in the main repo between base and last commit. Git worktrees
 	// share the object store, so commits from any worktree are reachable here.
-	if diffBaseSHA == "" && workSession.LastCommitSha != "" {
-		diffBaseSHA = workSession.LastCommitSha
+	// BaseCommitSha, not LastCommitSha: this is the *base* of the diff. It only
+	// ever worked because the two were historically the same value — spawn wrote
+	// the base SHA into LastCommitSha and nothing ever refreshed it (BUG-047).
+	if diffBaseSHA == "" && workSession.BaseCommitSha != "" {
+		diffBaseSHA = workSession.BaseCommitSha
 	}
 	diff, _, diffErr := session.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
 	if diffErr == nil {

@@ -111,6 +111,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		AcSnapshot:               AcCriteriaJSON(is.AcSnapshot),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		BaseCommitSha:            is.BaseCommitSha,
 		LastCommitSha:            is.LastCommitSha,
 		LastCommitMessage:        is.LastCommitMessage,
 		CommitCountSinceSpawn:    is.CommitCountSinceSpawn,

@@ -513,6 +513,7 @@ var (
 		{Name: "pipeline_mode_snapshot_hash", Type: field.TypeString, Default: ""},
 		{Name: "triage_result", Type: field.TypeString, Nullable: true},
 		{Name: "verification_notes", Type: field.TypeString, Nullable: true},
+		{Name: "base_commit_sha", Type: field.TypeString, Nullable: true, Default: ""},
 		{Name: "last_commit_sha", Type: field.TypeString, Nullable: true},
 		{Name: "last_commit_at", Type: field.TypeTime, Nullable: true},
 		{Name: "last_commit_message", Type: field.TypeString, Nullable: true},
@@ -531,7 +532,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "item_sessions_backlog_items_item_sessions",
-				Columns:    []*schema.Column{ItemSessionsColumns[19]},
+				Columns:    []*schema.Column{ItemSessionsColumns[20]},
 				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -545,7 +546,7 @@ var (
 			{
 				Name:    "itemsession_created_at_backlog_item_item_sessions",
 				Unique:  false,
-				Columns: []*schema.Column{ItemSessionsColumns[17], ItemSessionsColumns[19]},
+				Columns: []*schema.Column{ItemSessionsColumns[18], ItemSessionsColumns[20]},
 			},
 		},
 	}

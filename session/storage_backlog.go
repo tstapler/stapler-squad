@@ -305,7 +305,35 @@ func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id
 	return nil
 }
 
-// UpdateItemSessionGitActivity updates git-related fields on an ItemSession.
+// SetItemSessionBaseCommit records the worktree's pre-work HEAD SHA for the
+// item session, so the review gate can diff base..HEAD across every commit the
+// agent makes rather than just HEAD~1..HEAD.
+//
+// This is deliberately NOT UpdateItemSessionGitActivity: that function's fields
+// mean "the session's latest commit", and seeding them with the spawn-time base
+// SHA is what let closeIfSupersededByMain close real, unmerged PRs as
+// "superseded" — a branch's own base commit is by construction already an
+// ancestor of main, so IsCommitOnMain on it is always true (BUG-047).
+func (r *EntRepository) SetItemSessionBaseCommit(ctx context.Context, id, sha string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	if _, err := r.client.ItemSession.UpdateOneID(parsedID).
+		SetBaseCommitSha(sha).
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to set base commit sha on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionGitActivity records the item session's *current* tip commit
+// and the count of commits it has authored since its base. Called repeatedly by
+// refreshWorkSessionGitActivity (session/backlog_lifecycle.go) while the session
+// is active, so downstream "has this session's work landed on main?" checks read
+// live data. To record the spawn-time baseline instead, use
+// SetItemSessionBaseCommit.
 func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {

@@ -1504,6 +1504,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// detector's panic cannot skip the others or merge detection below.
 	var okNames, panickedNames []string
 
+	// Re-read each live work session's actual HEAD into its ItemSession row, so
+	// LastCommitSha means "the session's latest commit" rather than the value it
+	// was seeded with at spawn. Registered first so every detector below in this
+	// same tick — notably pr_ready+merge_detection's closeIfSupersededByMain —
+	// sees fresh data rather than lagging a full tick behind (BUG-047).
+	l.runStuckDetector("work_commit_refresh", &okNames, &panickedNames, func() {
+		l.refreshWorkSessionGitActivity(ctx)
+	})
+
 	// Flag in_progress work sessions that have gone quiet for too long. Detection +
 	// notification only — a slow-but-alive agent should not be force-stopped.
 	l.runStuckDetector("stale_work", &okNames, &panickedNames, func() {
@@ -2084,6 +2093,96 @@ const maxHeadlessTriageSessionStaleness = 35 * time.Minute
 // same lag autoReopenWithBackoffGate/retryPushFailedWithBackoffGate get for
 // free from being invoked out-of-band from their reason's own MarkStuck call
 // site.
+// refreshWorkSessionGitActivity re-reads the real current tip commit of each
+// non-terminal item's most recent work session and writes it back to that
+// session's LastCommitSha/LastCommitMessage/LastCommitAt/CommitCountSinceSpawn.
+//
+// Before this existed, LastCommitSha was written exactly once — at spawn, with
+// the worktree's pre-work base HEAD (see SetItemSessionBaseCommit) — and never
+// again, so a field named "last commit" permanently held a commit the session
+// had not authored. Every consumer that asked "has this session's work landed
+// on main?" therefore got an unconditional yes, because a branch's own base
+// commit is by construction already an ancestor of main. That is how
+// closeIfSupersededByMain closed PR #342 — a real, reviewed, CI-green fix — as
+// "superseded" and marked its item done (BUG-047).
+//
+// Deliberately reuses the sweep loop every other stuck detector already runs on
+// rather than adding a poller of its own; it is registered first in that sweep
+// so same-tick consumers read fresh values.
+//
+// Best-effort throughout: an unresolvable HEAD leaves the stored value alone
+// rather than clearing it, because the last known real tip is still the most
+// accurate answer available once a merged branch has been deleted. Writes are
+// skipped entirely when the tip has not moved, so an idle session costs one
+// HEAD read per tick and no DB write or change event.
+func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Context) {
+	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
+		Statuses: []string{
+			string(BacklogStatusInProgress),
+			string(BacklogStatusReview),
+			string(BacklogStatusPRPending),
+		},
+	})
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity list error: %v", err)
+		return
+	}
+
+	for _, item := range items {
+		if item.RepoPath == "" {
+			continue
+		}
+		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListItemSessions item=%s: %v", item.ID, sessErr)
+			continue
+		}
+		var lastWork *ItemSessionSummary
+		for i := range sessions {
+			// Ascending by CreatedAt (ListItemSessions' query order) — keep
+			// overwriting so this ends up holding the *most recent* work session.
+			if sessions[i].Role == SessionRoleWork {
+				lastWork = &sessions[i]
+			}
+		}
+		if lastWork == nil {
+			continue
+		}
+
+		head := l.resolveLatestWorkCommit(ctx, lastWork.SessionUUID, item.RepoPath)
+		if head == "" || head == lastWork.LastCommitSha {
+			continue
+		}
+		// The base commit is not a commit this session authored — recording it
+		// as the latest is precisely the bug this function exists to prevent.
+		if head == lastWork.BaseCommitSha {
+			continue
+		}
+
+		info, infoErr := git.CommitInfo(item.RepoPath, head)
+		if infoErr != nil {
+			log.DebugLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity CommitInfo item=%s sha=%s: %v", item.ID, head, infoErr)
+			continue
+		}
+
+		commitCount := lastWork.CommitCountSinceSpawn
+		if lastWork.BaseCommitSha != "" {
+			if shipped, listErr := git.ListShippedCommits(item.RepoPath, lastWork.BaseCommitSha, head); listErr == nil {
+				commitCount = len(shipped)
+			} else {
+				log.DebugLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListShippedCommits item=%s: %v", item.ID, listErr)
+			}
+		}
+
+		if updErr := l.storage.UpdateItemSessionGitActivity(ctx, lastWork.ID, head, info.Summary, info.AuthorAt, commitCount); updErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity update item=%s session=%s: %v", item.ID, lastWork.SessionUUID, updErr)
+			continue
+		}
+		log.DebugLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity item=%s session=%s: last commit %s → %s (%d since base)",
+			item.ID, lastWork.SessionUUID, lastWork.LastCommitSha, head, commitCount)
+	}
+}
+
 func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
 		Statuses: []string{string(BacklogStatusInProgress)},
@@ -4379,7 +4478,21 @@ func logFeedbackBatchCoverage(itemID string, prStatus *git.PRStatus) {
 // own CI-fix-spawn handling for this item this tick). Returns false — the
 // caller proceeds with its normal path — whenever this can't be determined:
 // no work session, no recorded commit SHA, an IsCommitOnMain error, or the
-// commit genuinely isn't on main yet. Best-effort throughout: secondary
+// commit genuinely isn't on main yet.
+//
+// BUG-047: this check must never run against the session's pre-work base
+// commit. That commit is by construction already an ancestor of main, so
+// IsCommitOnMain on it is unconditionally true — and until LastCommitSha was
+// split from BaseCommitSha and given a live refresh
+// (refreshWorkSessionGitActivity), the base SHA was the only value the field
+// ever held. Confirmed live 2026-08-05: item d6ddbef3's real fix on branch
+// backlog/stapler-squad-fix-idle-reviewer-wedge (PR #342, reviewed and
+// CI-green) was closed unmerged as "superseded" against base SHA 1a751723 — an
+// unrelated commit from ~24h before that work even started. Hence both the
+// resolveLatestWorkCommit call and the explicit BaseCommitSha guard below: the
+// guard is the belt to the refresh's braces, so a session whose HEAD cannot be
+// resolved this tick can never fall back onto its own base commit and close a
+// live PR. Best-effort throughout: secondary
 // failures (the GitHub close call, the field clear) are logged, never block
 // the done transition, which is the one write that actually matters once the
 // commit is confirmed shipped.
@@ -4398,13 +4511,24 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 			lastWork = &sessions[i]
 		}
 	}
-	if lastWork == nil || lastWork.LastCommitSha == "" {
+	if lastWork == nil {
 		return false
 	}
 
-	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, bounceMainBranch, lastWork.LastCommitSha)
+	// Resolve the session's real current tip rather than trusting a stored
+	// field, and refuse to act on the pre-work base commit under any
+	// circumstances — see this function's doc comment (BUG-047).
+	lastCommitSha := l.resolveLatestWorkCommit(ctx, lastWork.SessionUUID, item.RepoPath)
+	if lastCommitSha == "" {
+		lastCommitSha = lastWork.LastCommitSha
+	}
+	if lastCommitSha == "" || lastCommitSha == lastWork.BaseCommitSha {
+		return false
+	}
+
+	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, bounceMainBranch, lastCommitSha)
 	if mainErr != nil {
-		log.DebugLog.Printf("[BacklogLifecycle] closeIfSupersededByMain IsCommitOnMain item=%s sha=%s: %v", item.ID, lastWork.LastCommitSha, mainErr)
+		log.DebugLog.Printf("[BacklogLifecycle] closeIfSupersededByMain IsCommitOnMain item=%s sha=%s: %v", item.ID, lastCommitSha, mainErr)
 		return false
 	}
 	if !onMain {
@@ -4412,11 +4536,11 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	}
 
 	log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: last commit %s is already on %s — PR #%d is superseded, closing instead of spawning another fix cycle",
-		item.ID, lastWork.LastCommitSha, bounceMainBranch, item.PrNumber)
+		item.ID, lastCommitSha, bounceMainBranch, item.PrNumber)
 
 	closeComment := fmt.Sprintf(
 		"Closing as superseded: this branch's last known commit (%s) is already present on %s, so this item's work has already shipped through another path. No further fix is needed here.",
-		lastWork.LastCommitSha, bounceMainBranch)
+		lastCommitSha, bounceMainBranch)
 	if closeErr := checker.ClosePR(item.PrNumber, closeComment); closeErr != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain ClosePR item=%s pr=%d: %v", item.ID, item.PrNumber, closeErr)
 		// Still proceed — the item's code is on main regardless of whether the
@@ -4435,7 +4559,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	precondition := &BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusPRPending),
 		Note: fmt.Sprintf("self-heal: PR #%d closed as superseded — commit %s already on %s",
-			closedPrNum, lastWork.LastCommitSha, bounceMainBranch),
+			closedPrNum, lastCommitSha, bounceMainBranch),
 	}
 	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] closeIfSupersededByMain done transition item=%s: %v", item.ID, transErr)

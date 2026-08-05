@@ -376,16 +376,20 @@ func init() {
 	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[8].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshotHash holds the default value on creation for the pipeline_mode_snapshot_hash field.
 	itemsession.DefaultPipelineModeSnapshotHash = itemsessionDescPipelineModeSnapshotHash.Default.(string)
+	// itemsessionDescBaseCommitSha is the schema descriptor for base_commit_sha field.
+	itemsessionDescBaseCommitSha := itemsessionFields[11].Descriptor()
+	// itemsession.DefaultBaseCommitSha holds the default value on creation for the base_commit_sha field.
+	itemsession.DefaultBaseCommitSha = itemsessionDescBaseCommitSha.Default.(string)
 	// itemsessionDescCommitCountSinceSpawn is the schema descriptor for commit_count_since_spawn field.
-	itemsessionDescCommitCountSinceSpawn := itemsessionFields[14].Descriptor()
+	itemsessionDescCommitCountSinceSpawn := itemsessionFields[15].Descriptor()
 	// itemsession.DefaultCommitCountSinceSpawn holds the default value on creation for the commit_count_since_spawn field.
 	itemsession.DefaultCommitCountSinceSpawn = itemsessionDescCommitCountSinceSpawn.Default.(int)
 	// itemsessionDescCreatedAt is the schema descriptor for created_at field.
-	itemsessionDescCreatedAt := itemsessionFields[17].Descriptor()
+	itemsessionDescCreatedAt := itemsessionFields[18].Descriptor()
 	// itemsession.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsession.DefaultCreatedAt = itemsessionDescCreatedAt.Default.(func() time.Time)
 	// itemsessionDescEstimatedCostUsd is the schema descriptor for estimated_cost_usd field.
-	itemsessionDescEstimatedCostUsd := itemsessionFields[18].Descriptor()
+	itemsessionDescEstimatedCostUsd := itemsessionFields[19].Descriptor()
 	// itemsession.DefaultEstimatedCostUsd holds the default value on creation for the estimated_cost_usd field.
 	itemsession.DefaultEstimatedCostUsd = itemsessionDescEstimatedCostUsd.Default.(float64)
 	// itemsessionDescID is the schema descriptor for id field.

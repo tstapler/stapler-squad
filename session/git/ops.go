@@ -234,6 +234,27 @@ type ShippedCommit struct {
 	AuthorName string
 }
 
+// CommitInfo returns the summary line, author and author timestamp for a single
+// resolved commit hash in the repo at repoPath, read via go-git — no subshell
+// (.claude/rules/prefer-go-git-over-subshells.md).
+func CommitInfo(repoPath, sha string) (ShippedCommit, error) {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return ShippedCommit{}, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	c, err := repo.CommitObject(plumbing.NewHash(sha))
+	if err != nil {
+		return ShippedCommit{}, fmt.Errorf("failed to resolve commit %s: %w", sha, err)
+	}
+	summary, _, _ := strings.Cut(c.Message, "\n")
+	return ShippedCommit{
+		SHA:        c.Hash.String(),
+		Summary:    strings.TrimSpace(summary),
+		AuthorAt:   c.Author.When,
+		AuthorName: c.Author.Name,
+	}, nil
+}
+
 // listShippedCommitsCap bounds ListShippedCommits the same way
 // countCommitsNotAncestorOfCap bounds the ahead/behind walk — a UI commit list
 // only ever needs "the last several", not an unbounded history dump.
