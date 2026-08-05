@@ -363,6 +363,19 @@ func (s *BacklogService) UpdateBacklogItem(
 		// Same cheap, no-network cross-check reportPRCreated does
 		// (server/mcp/tools_backlog.go) before ever touching storage: a
 		// typo'd URL/number pair fails fast here.
+		//
+		// Known, deliberately-scoped-out gap (code review, security pass):
+		// unlike reportPRCreated, this manual path does not verify pr_url's
+		// owner/repo matches the item's own repo, nor call GitHub to
+		// confirm the PR exists — an operator could associate a PR from an
+		// unrelated project, and the automated ReconcilePRPending sweep
+		// would then walk the item to "done" on that unrelated PR's merge.
+		// A live GitHub check was already explicitly scoped out of v1
+		// (pitfalls.md §3 — the branch-match check the agent path can do,
+		// but this out-of-band, no-session path structurally cannot). A
+		// local repo-name cross-check would close part of this without a
+		// network call, but is new capability (resolving the item's git
+		// remote), not a quick fix — tracked as a follow-up.
 		ref, parseErr := session.ParseGitHubURL(prURL)
 		if parseErr != nil || ref.Type != session.GitHubRefTypePR {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
@@ -402,7 +415,17 @@ func (s *BacklogService) UpdateBacklogItem(
 		// the PR fields land as one atomic UPDATE, same as report_pr_created.
 		// A split write here would reopen the BUG-040 pr_pending_no_pr class
 		// of bug (session/storage.go's SetBacklogItemPRAndTransition doc
-		// comment).
+		// comment). That atomicity is scoped to THIS write alone, not the
+		// whole request: this is a second, separate write from the general
+		// field update above (own precondition, own failure mode) — if a
+		// caller combines regular field changes with pr_url/pr_number and
+		// this second write fails, the first write's changes stay
+		// committed (no rollback). Today's only caller (ManualOverrideSection)
+		// never combines them meaningfully (its non-PR fields are
+		// currentFlags()'s idempotent no-ops), so this has no live impact,
+		// but a future caller relying on whole-request atomicity across
+		// both would be surprised — flagged in code review, not silently
+		// left unstated.
 		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
 		if setErr := s.storage.SetBacklogItemPRAndTransition(ctx, req.Msg.ItemId, prURL, prNumber, note); setErr != nil {
 			if errors.Is(setErr, session.ErrPreconditionFailed) {
