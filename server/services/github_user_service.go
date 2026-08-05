@@ -282,6 +282,73 @@ func (s *GitHubUserService) AddGitHubAccountWithToken(
 	}), nil
 }
 
+// +api: github-user:list-cli-hosts
+// ListGitHubCLIHosts discovers hosts the local gh CLI is already
+// authenticated to, so the UI can offer one-click imports.
+func (s *GitHubUserService) ListGitHubCLIHosts(
+	_ context.Context,
+	_ *connect.Request[sessionv1.ListGitHubCLIHostsRequest],
+) (*connect.Response[sessionv1.ListGitHubCLIHostsResponse], error) {
+	cliHosts, err := githubpkg.ListCLIHosts()
+	if err != nil {
+		return connect.NewResponse(&sessionv1.ListGitHubCLIHostsResponse{
+			GhAvailable: false,
+		}), nil
+	}
+
+	connected := make(map[string]bool)
+	for _, a := range s.cache.GetCachedAccounts() {
+		connected[githubpkg.NormalizeHost(a.Host)+"|"+a.Login] = true
+	}
+
+	hosts := make([]*sessionv1.GitHubCLIHost, 0, len(cliHosts))
+	for _, h := range cliHosts {
+		hosts = append(hosts, &sessionv1.GitHubCLIHost{
+			Host:         h.Host,
+			Username:     h.Username,
+			AlreadyAdded: connected[h.Host+"|"+h.Username],
+		})
+	}
+	return connect.NewResponse(&sessionv1.ListGitHubCLIHostsResponse{
+		Hosts:       hosts,
+		GhAvailable: true,
+	}), nil
+}
+
+// +api: github-user:add-account-from-cli
+// AddGitHubAccountFromCLI fetches the token gh CLI already holds for a host
+// (discovered via ListGitHubCLIHosts), validates it, and stores it in the
+// keychain — same outcome as AddGitHubAccountWithToken without manual paste.
+func (s *GitHubUserService) AddGitHubAccountFromCLI(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AddGitHubAccountFromCLIRequest],
+) (*connect.Response[sessionv1.AddGitHubAccountWithTokenResponse], error) {
+	host := githubpkg.NormalizeHost(req.Msg.Host)
+
+	token, err := githubpkg.GetCLIToken(ctx, host)
+	if err != nil || token == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("gh CLI has no token for %s: %w", host, err))
+	}
+
+	login, err := githubpkg.GetCurrentUserLoginWithToken(ctx, host, token)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("validate token: %w", err))
+	}
+	if login == "" {
+		// CodePermissionDenied, not CodeUnauthenticated: see AddGitHubAccountWithToken.
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("gh CLI token was rejected by the host"))
+	}
+	if err := githubpkg.SetKeychainTokenForAccount(host, login, token); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("store token: %w", err))
+	}
+
+	s.cache.InvalidateLoginCache()
+	_ = s.cache.Refresh(ctx)
+	return connect.NewResponse(&sessionv1.AddGitHubAccountWithTokenResponse{
+		AuthState: s.resolveAuthState(ctx),
+	}), nil
+}
+
 // resolveAuthState returns the current GitHub auth state from the cache.
 // No network call is made; it reads the logins stored by the background fetch.
 func (s *GitHubUserService) resolveAuthState(_ context.Context) *sessionv1.GitHubAuthState {

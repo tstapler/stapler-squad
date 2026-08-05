@@ -1,0 +1,12 @@
+{
+  "id": "github-user:list-cli-hosts",
+  "type": "backend",
+  "service": "GitHubUserService",
+  "method": "ListGitHubCLIHosts",
+  "protoFile": "proto/session/v1/github_user.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/github_user_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-08-05T12:17:53.750983246-07:00"
+}

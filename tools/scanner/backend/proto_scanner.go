@@ -224,6 +224,8 @@ var methodToID = map[string]string{
 	"WatchUserPRs":              "github-user:watch-prs",
 	"GetGitHubAuthState":        "github-user:get-auth-state",
 	"AddGitHubAccountWithToken": "github-user:add-account-with-token",
+	"ListGitHubCLIHosts":        "github-user:list-cli-hosts",
+	"AddGitHubAccountFromCLI":   "github-user:add-account-from-cli",
 	// Provider limits RPCs
 	"GetProviderLimits": "session:get-provider-limits",
 	// Config file rules RPCs (stub implementations in RulesService)

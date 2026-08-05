@@ -391,6 +391,47 @@ export const addAccountButton = style({
   },
 });
 
+export const cliImportSection = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  padding: `${vars.space["2"]} 0`,
+});
+
+export const cliImportLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const cliImportHostList = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+});
+
+export const cliImportHostButton = style({
+  padding: `2px ${vars.space["2"]}`,
+  background: vars.color.accentBg,
+  border: `1px solid ${vars.color.inputFocusBorder}`,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.inputFocusBorder,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  selectors: {
+    "&:disabled": {
+      opacity: 0.6,
+      cursor: "default",
+    },
+  },
+});
+
+export const cliImportDivider = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  opacity: 0.7,
+});
+
 // --- Stats bar ---
 
 export const statsBar = style({
