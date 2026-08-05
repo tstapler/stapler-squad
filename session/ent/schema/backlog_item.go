@@ -125,9 +125,26 @@ func (BacklogItem) Fields() []ent.Field {
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),
+		// updated_at is stored/compared in UTC, not time.Now's default Local
+		// zone. mattn/go-sqlite3 binds time.Time by formatting it as TEXT in
+		// the value's own Location (sqlite3.go's statementBind, `case
+		// time.Time: b := []byte(v.Format(SQLiteTimestampFormats[0]))`), so
+		// two time.Time values representing the identical instant but with
+		// different Locations (e.g. Local "-07:00" vs UTC "Z") serialize to
+		// different bytes and fail a `WHERE updated_at = ?` CAS comparison
+		// even though they're semantically equal (confirmed: time.Now() and
+		// time.Now().UTC() satisfy .Equal() but format to different
+		// strings). Every value that arrives via a protobuf Timestamp
+		// (google.golang.org/protobuf/types/known/timestamppb's AsTime()
+		// always returns UTC) — e.g. TransitionBacklogItemStatusRequest's
+		// expected_updated_at, round-tripped from any RPC client — could
+		// therefore never match a Local-zoned stored value, making that CAS
+		// precondition unconditionally fail. Storing in UTC here makes the
+		// column consistent with what every protobuf-sourced comparison
+		// value already is.
 		field.Time("updated_at").
-			Default(time.Now).
-			UpdateDefault(time.Now),
+			Default(func() time.Time { return time.Now().UTC() }).
+			UpdateDefault(func() time.Time { return time.Now().UTC() }),
 	}
 }
 

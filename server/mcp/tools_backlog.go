@@ -830,6 +830,151 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	)), nil
 }
 
+// --- create_backlog_item / import_github_issue ---
+
+// acCriteriaFromStrings builds AcCriteriaJSON from a plain list of criterion
+// texts, assigning sequential indices and AcStatusPending — the shape a
+// brand-new item's criteria always start in. Mirrors acCriteriaToJSON
+// (server/services/backlog_service_lifecycle.go), which starts from proto
+// AcCriterion instead of plain strings.
+func acCriteriaFromStrings(lines []string) (session.AcCriteriaJSON, error) {
+	if len(lines) == 0 {
+		return "", nil
+	}
+	criteria := make([]session.AcCriterion, len(lines))
+	for i, text := range lines {
+		criteria[i] = session.AcCriterion{Index: i, Text: text, Status: session.AcStatusPending}
+	}
+	b, err := json.Marshal(criteria)
+	if err != nil {
+		return "", err
+	}
+	return session.AcCriteriaJSON(b), nil
+}
+
+// createBacklogItem adds a brand-new item to the backlog, same as a human
+// filling out the "New Idea" form in the web UI. No item link/role is
+// required — there is no item yet — only a valid caller session, for the
+// audit-trail log line.
+func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+
+	title, ok := args["title"].(string)
+	if !ok || title == "" {
+		return errResult(ErrInvalidArgument, "title is required", ""), nil
+	}
+
+	description, _ := args["description"].(string)
+	repoPath, _ := args["repo_path"].(string)
+	notes, _ := args["notes"].(string)
+	category, _ := args["category"].(string)
+	if category != "" && !session.IsValidBacklogCategory(category) {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid category %q", category), ""), nil
+	}
+
+	priority := session.DefaultBacklogPriority
+	if pf, ok := args["priority"].(float64); ok && pf != 0 {
+		priority = int(pf)
+		if priority < 1 || priority > 5 {
+			return errResult(ErrInvalidArgument, "priority must be between 1 and 5", ""), nil
+		}
+	}
+
+	var acLines []string
+	if raw, ok := args["acceptance_criteria"].([]any); ok {
+		for _, v := range raw {
+			if s, ok := v.(string); ok && s != "" {
+				acLines = append(acLines, s)
+			}
+		}
+	}
+	acJSON, err := acCriteriaFromStrings(acLines)
+	if err != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid acceptance_criteria: %v", err), ""), nil
+	}
+
+	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:              title,
+		Description:        description,
+		AcceptanceCriteria: acJSON,
+		Priority:           priority,
+		Status:             string(session.BacklogStatusIdea),
+		RepoPath:           repoPath,
+		Category:           category,
+		Notes:              notes,
+	})
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil
+	}
+
+	log.InfoLog.Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
+
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Created backlog item %s: %q (status: idea, priority: P%d).", created.ID, created.Title, created.Priority,
+	)), nil
+}
+
+// importGitHubIssue creates a backlog item pre-populated from a GitHub issue,
+// the MCP-tool equivalent of the web UI's "Import from GitHub" action
+// (BacklogService.ImportGitHubIssue, server/services/backlog_service_sync.go)
+// — same storage.CreateBacklogItem call, but issue title/body/URL come from
+// the GitHub API instead of being typed in by hand. GitHub Enterprise hosts
+// are intentionally not supported here (pass a plain github.com URL) — that
+// config lives on BacklogService, which this package-level handler has no
+// access to; use the web UI's importer for a GHES issue.
+func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+	issueURL, ok := args["issue_url"].(string)
+	if !ok || issueURL == "" {
+		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
+	}
+	repoPath, _ := args["repo_path"].(string)
+
+	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(issueURL, nil)
+	if parseErr != nil || ref.Type != githubpkg.RefTypeIssue {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", parseErr), ""), nil
+	}
+
+	issue, fetchErr := githubpkg.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+	if fetchErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
+	}
+
+	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:       issue.Title,
+		Description: issue.Body,
+		Priority:    session.DefaultBacklogPriority,
+		Status:      string(session.BacklogStatusIdea),
+		RepoPath:    repoPath,
+		Notes:       fmt.Sprintf("Imported from %s", issue.URL),
+	})
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil
+	}
+
+	log.InfoLog.Printf("[mcp:import_github_issue] session=%s item=%s issue=%s", callerUUID, created.ID, issue.URL)
+
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Imported backlog item %s: %q from %s (status: idea, priority: P%d).", created.ID, created.Title, issue.URL, created.Priority,
+	)), nil
+}
+
 // --- report_duplicate ---
 
 // verifyRef runs the GitHub existence check via the overridable
@@ -1383,6 +1528,53 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.reportPRCreated,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("create_backlog_item",
+			mcpgo.WithDescription("Create a new backlog item — same effect as filling out the \"New Idea\" form in the web UI. Not role/item-gated (there is no item yet); any Stapler Squad session may call this. Returns the new item's UUID."),
+			mcpgo.WithString("title",
+				mcpgo.Description("Short title for the item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("description",
+				mcpgo.Description("Full description: summary, context, steps to reproduce (for a bug), suggested fix, etc."),
+			),
+			mcpgo.WithArray("acceptance_criteria",
+				mcpgo.Description("Plain list of acceptance criterion strings, e.g. [\"Given X, when Y, then Z\"]. All start as pending."),
+				mcpgo.Items(map[string]any{"type": "string"}),
+			),
+			mcpgo.WithNumber("priority",
+				mcpgo.Description("1 (critical) to 5 (trivial). Default 3."),
+				mcpgo.Min(1),
+				mcpgo.Max(5),
+			),
+			mcpgo.WithString("category",
+				mcpgo.Description("Coarse classification, one of: bugfix, feature, chore, refactor. Omit if unsure."),
+				mcpgo.Enum("bugfix", "feature", "chore", "refactor"),
+			),
+			mcpgo.WithString("repo_path",
+				mcpgo.Description("Local filesystem path or owner/repo this item targets. Omit for a repo-less item."),
+			),
+			mcpgo.WithString("notes",
+				mcpgo.Description("Freeform operator notes, e.g. where this request came from."),
+			),
+		),
+		h.createBacklogItem,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("import_github_issue",
+			mcpgo.WithDescription("Create a backlog item pre-populated from a GitHub issue (title, body, and a link back to the issue as Notes) — same effect as the web UI's \"Import from GitHub\" action. GitHub Enterprise hosts are not supported here; use the web UI for a GHES issue."),
+			mcpgo.WithString("issue_url",
+				mcpgo.Description("GitHub issue URL, e.g. https://github.com/owner/repo/issues/123"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("repo_path",
+				mcpgo.Description("Local filesystem path this item targets. Omit for a repo-less item."),
+			),
+		),
+		h.importGitHubIssue,
 	)
 
 	s.AddTool(

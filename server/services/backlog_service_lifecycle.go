@@ -343,6 +343,50 @@ func (s *BacklogService) UpdateBacklogItem(
 		update.Notes = &notes
 	}
 
+	// pr_url/pr_number are presence-gated and must be set together — this is
+	// the manual "associate an existing PR after the fact" escape hatch, for
+	// items whose real fix landed via an out-of-band worktree with no
+	// item_sessions link (so report_pr_created was never callable for them).
+	// Validated up front, before any write, so a bad pair never lands a
+	// partial update.
+	if (req.Msg.PrUrl != nil) != (req.Msg.PrNumber != nil) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("pr_url and pr_number must both be set or both be unset"))
+	}
+	var associatePR bool
+	var prURL string
+	var prNumber int
+	if req.Msg.PrUrl != nil && req.Msg.PrNumber != nil {
+		associatePR = true
+		prURL = *req.Msg.PrUrl
+		prNumber = int(*req.Msg.PrNumber)
+		// Same cheap, no-network cross-check reportPRCreated does
+		// (server/mcp/tools_backlog.go) before ever touching storage: a
+		// typo'd URL/number pair fails fast here.
+		//
+		// Known, deliberately-scoped-out gap (code review, security pass):
+		// unlike reportPRCreated, this manual path does not verify pr_url's
+		// owner/repo matches the item's own repo, nor call GitHub to
+		// confirm the PR exists — an operator could associate a PR from an
+		// unrelated project, and the automated ReconcilePRPending sweep
+		// would then walk the item to "done" on that unrelated PR's merge.
+		// A live GitHub check was already explicitly scoped out of v1
+		// (pitfalls.md §3 — the branch-match check the agent path can do,
+		// but this out-of-band, no-session path structurally cannot). A
+		// local repo-name cross-check would close part of this without a
+		// network call, but is new capability (resolving the item's git
+		// remote), not a quick fix — tracked as a follow-up.
+		ref, parseErr := session.ParseGitHubURL(prURL)
+		if parseErr != nil || ref.Type != session.GitHubRefTypePR {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("pr_url is not a recognizable GitHub PR URL: %v", parseErr))
+		}
+		if ref.PRNumber != prNumber {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("pr_url references PR #%d but pr_number=%d was given — these must match", ref.PRNumber, prNumber))
+		}
+	}
+
 	var precondition *session.BacklogItemPrecondition
 	if req.Msg.ExpectedStatus != "" || req.Msg.ExpectedUpdatedAt != nil {
 		precondition = &session.BacklogItemPrecondition{
@@ -363,6 +407,44 @@ func (s *BacklogService) UpdateBacklogItem(
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
+	}
+
+	if associatePR {
+		// Routed through the shared primary-write path — not a hand-rolled
+		// field write — so the status transition (review -> pr_pending) and
+		// the PR fields land as one atomic UPDATE, same as report_pr_created.
+		// A split write here would reopen the BUG-040 pr_pending_no_pr class
+		// of bug (session/storage.go's SetBacklogItemPRAndTransition doc
+		// comment). That atomicity is scoped to THIS write alone, not the
+		// whole request: this is a second, separate write from the general
+		// field update above (own precondition, own failure mode) — if a
+		// caller combines regular field changes with pr_url/pr_number and
+		// this second write fails, the first write's changes stay
+		// committed (no rollback). Today's only caller (ManualOverrideSection)
+		// never combines them meaningfully (its non-PR fields are
+		// currentFlags()'s idempotent no-ops), so this has no live impact,
+		// but a future caller relying on whole-request atomicity across
+		// both would be surprised — flagged in code review, not silently
+		// left unstated.
+		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
+		if setErr := s.storage.SetBacklogItemPRAndTransition(ctx, req.Msg.ItemId, prURL, prNumber, note); setErr != nil {
+			if errors.Is(setErr, session.ErrPreconditionFailed) {
+				current, reloadErr := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+				status := "unknown"
+				if reloadErr == nil && current != nil {
+					status = current.Status
+				}
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("cannot associate PR: item must be in %q status to link a PR, but is currently %q", session.BacklogStatusReview, status))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to associate PR: %w", setErr))
+		}
+		reloaded, reloadErr := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+		if reloadErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after PR association: %w", reloadErr))
+		}
+		updated = reloaded
+		s.notifyManualOverride(updated.ID, updated.Title, fmt.Sprintf("PR #%d (%s) manually linked by operator — item moved to pr_pending.", prNumber, prURL))
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateBacklogItemResponse{
@@ -614,6 +696,17 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to transition backlog item: %w", err))
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
+
+	// override_reason set means this was a manual operator override (bypassing
+	// TransitionGuard, per session.TransitionGuard's override handling above),
+	// not a routine automated transition — make it visible, not a silent write.
+	if req.Msg.OverrideReason != "" {
+		note := fmt.Sprintf("Manually overridden by operator: %s -> %s (%s)", from, to, req.Msg.OverrideReason)
+		if noteErr := s.storage.AppendProgressNote(ctx, req.Msg.ItemId, -1, note, string(to)); noteErr != nil {
+			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to append override progress note for item %s: %v", req.Msg.ItemId, noteErr)
+		}
+		s.notifyManualOverride(updated.ID, updated.Title, fmt.Sprintf("status manually overridden %s -> %s: %s", from, to, req.Msg.OverrideReason))
+	}
 
 	// Best-effort: clean up git worktrees and archive work sessions on terminal
 	// transitions, so they stop accumulating in the default session list once
@@ -868,7 +961,17 @@ func (s *BacklogService) OverrideVerdict(
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
 		}
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
+		// CAS-protected like every other transition write path (see
+		// TransitionBacklogItemStatus above) — a nil precondition here would
+		// let this unconditional write silently clobber a transition that
+		// happened concurrently between the GetBacklogItem read above and
+		// this write.
+		updatedAt := currentItem.UpdatedAt
+		precondition := &session.BacklogItemPrecondition{
+			ExpectedStatus:    string(from),
+			ExpectedUpdatedAt: &updatedAt,
+		}
+		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, precondition, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
 		if transErr != nil {
 			log.ErrorLog.Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		} else {

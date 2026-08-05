@@ -1774,6 +1774,141 @@ func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testin
 	assert.Contains(t, fetched.PrURL, fmt.Sprintf("/pull/%d", winnerPRNumber))
 }
 
+// TestCreateBacklogItem_should_PersistItem_When_TitleProvided verifies the
+// happy path: a plain title-only call creates an idea-status item with
+// default priority, discoverable afterward via GetBacklogItem.
+func TestCreateBacklogItem_should_PersistItem_When_TitleProvided(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	req := makeToolReq(map[string]interface{}{
+		"title":               "Fix the thing",
+		"description":         "It's broken because of X.",
+		"acceptance_criteria": []interface{}{"Given X, when Y, then Z"},
+		"priority":            float64(1),
+		"category":            "bugfix",
+	})
+
+	result, err := handler.createBacklogItem(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Fix the thing")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Created backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, "Fix the thing", fetched.Title)
+	assert.Equal(t, string(session.BacklogStatusIdea), fetched.Status)
+	assert.Equal(t, 1, fetched.Priority)
+	assert.Equal(t, "bugfix", fetched.Category)
+	ac, parseErr := session.ParseAcCriteria(fetched.AcceptanceCriteria)
+	require.NoError(t, parseErr)
+	require.Len(t, ac, 1)
+	assert.Equal(t, "Given X, when Y, then Z", ac[0].Text)
+	assert.Equal(t, session.AcStatusPending, ac[0].Status)
+}
+
+// TestCreateBacklogItem_should_ReturnError_When_TitleMissing verifies the
+// tool refuses an empty title rather than persisting an untitled item.
+func TestCreateBacklogItem_should_ReturnError_When_TitleMissing(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"description": "No title here.",
+	}))
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "create_backlog_item must reject a missing title")
+}
+
+// TestCreateBacklogItem_should_ReturnError_When_PriorityOutOfRange verifies
+// the 1-5 priority bound (matching the web UI's BacklogItemForm P1-P5 select)
+// is enforced here too, not just at the proto/UI layer.
+func TestCreateBacklogItem_should_ReturnError_When_PriorityOutOfRange(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title":    "Bad priority",
+		"priority": float64(9),
+	}))
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "create_backlog_item must reject an out-of-range priority")
+}
+
+// TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds verifies
+// the happy path against a stubbed GitHub API — title/body land on the new
+// item and Notes records the source issue URL, mirroring
+// BacklogService.ImportGitHubIssue's own behavior (backlog_service_sync.go).
+func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"number": 316, "title": "bug: something is broken", "body": "Steps to reproduce...",
+			"html_url": "https://github.com/tstapler/stapler-squad/issues/316",
+			"user": {"login": "tstapler"}, "state": "open"
+		}`))
+	}))
+	defer srv.Close()
+	prevBaseURL := githubpkg.GhBaseURL
+	githubpkg.GhBaseURL = srv.URL + "/"
+	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/issues/316",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "bug: something is broken")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Imported backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, "bug: something is broken", fetched.Title)
+	assert.Equal(t, "Steps to reproduce...", fetched.Description)
+	assert.Contains(t, fetched.Notes, "https://github.com/tstapler/stapler-squad/issues/316")
+}
+
+// TestImportGitHubIssue_should_ReturnError_When_URLNotAnIssue verifies a
+// non-issue GitHub URL (e.g. a PR) is rejected before any network call.
+func TestImportGitHubIssue_should_ReturnError_When_URLNotAnIssue(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/pull/320",
+	}))
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "import_github_issue must reject a non-issue URL")
+}
+
 // TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement
 // verifies that the request_review tool description (and its verification_notes
 // field description) instruct the agent to cite an exact file path and

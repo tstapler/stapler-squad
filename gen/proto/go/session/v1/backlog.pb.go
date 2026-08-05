@@ -961,9 +961,14 @@ type BacklogItem struct {
 	ExternalUrl *string `protobuf:"bytes,30,opt,name=external_url,json=externalUrl,proto3,oneof" json:"external_url,omitempty"`
 	// labels mirrors the source tracker's labels (e.g. a GitHub issue's label
 	// names), populated for imported items only.
-	Labels        []string `protobuf:"bytes,31,rep,name=labels,proto3" json:"labels,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Labels []string `protobuf:"bytes,31,rep,name=labels,proto3" json:"labels,omitempty"`
+	// allowed_transitions is the server's WorkflowEngine.AllowedTransitions(status)
+	// for this item's current status — the authoritative set of target statuses
+	// a manual status override may choose from. The frontend must render this
+	// list verbatim rather than re-encoding the transition graph client-side.
+	AllowedTransitions []string `protobuf:"bytes,32,rep,name=allowed_transitions,json=allowedTransitions,proto3" json:"allowed_transitions,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *BacklogItem) Reset() {
@@ -1209,6 +1214,13 @@ func (x *BacklogItem) GetExternalUrl() string {
 func (x *BacklogItem) GetLabels() []string {
 	if x != nil {
 		return x.Labels
+	}
+	return nil
+}
+
+func (x *BacklogItem) GetAllowedTransitions() []string {
+	if x != nil {
+		return x.AllowedTransitions
 	}
 	return nil
 }
@@ -2500,7 +2512,15 @@ type UpdateBacklogItemRequest struct {
 	// category is presence-gated (optional string on the wire): unset means
 	// "leave the item's stored category untouched", a non-nil pointer
 	// (including one pointing at "") explicitly sets/clears it.
-	Category      *string `protobuf:"bytes,16,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	Category *string `protobuf:"bytes,16,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	// pr_url/pr_number are presence-gated (optional on the wire) and must be
+	// set together or not at all: setting exactly one is rejected with
+	// CodeInvalidArgument. When both are set, the server validates pr_url
+	// parses as a GitHub PR URL whose embedded PR number matches pr_number,
+	// then writes through the shared SetBacklogItemPRAndTransition primitive
+	// (requires the item to currently be in "review" status).
+	PrUrl         *string `protobuf:"bytes,17,opt,name=pr_url,json=prUrl,proto3,oneof" json:"pr_url,omitempty"`
+	PrNumber      *int32  `protobuf:"varint,18,opt,name=pr_number,json=prNumber,proto3,oneof" json:"pr_number,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2645,6 +2665,20 @@ func (x *UpdateBacklogItemRequest) GetCategory() string {
 		return *x.Category
 	}
 	return ""
+}
+
+func (x *UpdateBacklogItemRequest) GetPrUrl() string {
+	if x != nil && x.PrUrl != nil {
+		return *x.PrUrl
+	}
+	return ""
+}
+
+func (x *UpdateBacklogItemRequest) GetPrNumber() int32 {
+	if x != nil && x.PrNumber != nil {
+		return *x.PrNumber
+	}
+	return 0
 }
 
 type UpdateBacklogItemResponse struct {
@@ -7692,8 +7726,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x04note\x18\x03 \x01(\tR\x04note\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf5\n" +
-	"\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xa6\v\n" +
 	"\vBacklogItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -7730,7 +7763,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x13rework_cap_override\x18\x1c \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01\x12\x1f\n" +
 	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01\x12&\n" +
 	"\fexternal_url\x18\x1e \x01(\tH\x03R\vexternalUrl\x88\x01\x01\x12\x16\n" +
-	"\x06labels\x18\x1f \x03(\tR\x06labelsB\x10\n" +
+	"\x06labels\x18\x1f \x03(\tR\x06labels\x12/\n" +
+	"\x13allowed_transitions\x18  \x03(\tR\x12allowedTransitionsB\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
 	"\x14_rework_cap_overrideB\v\n" +
 	"\t_categoryB\x0f\n" +
@@ -7856,7 +7890,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x10include_terminal\x18\x04 \x01(\bR\x0fincludeTerminal\x12)\n" +
 	"\x10include_archived\x18\x05 \x01(\bR\x0fincludeArchived\"I\n" +
 	"\x18ListBacklogItemsResponse\x12-\n" +
-	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xd3\x05\n" +
+	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xaa\x06\n" +
 	"\x18UpdateBacklogItemRequest\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -7874,10 +7908,15 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\rpipeline_mode\x18\r \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
 	"\x0eauto_create_pr\x18\x0e \x01(\bR\fautoCreatePr\x123\n" +
 	"\x13rework_cap_override\x18\x0f \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01\x12\x1f\n" +
-	"\bcategory\x18\x10 \x01(\tH\x02R\bcategory\x88\x01\x01B\x10\n" +
+	"\bcategory\x18\x10 \x01(\tH\x02R\bcategory\x88\x01\x01\x12\x1a\n" +
+	"\x06pr_url\x18\x11 \x01(\tH\x03R\x05prUrl\x88\x01\x01\x12 \n" +
+	"\tpr_number\x18\x12 \x01(\x05H\x04R\bprNumber\x88\x01\x01B\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
 	"\x14_rework_cap_overrideB\v\n" +
-	"\t_category\"H\n" +
+	"\t_categoryB\t\n" +
+	"\a_pr_urlB\f\n" +
+	"\n" +
+	"_pr_number\"H\n" +
 	"\x19UpdateBacklogItemResponse\x12+\n" +
 	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\"4\n" +
 	"\x19ArchiveBacklogItemRequest\x12\x17\n" +
