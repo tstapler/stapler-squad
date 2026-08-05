@@ -108,6 +108,15 @@ func ParseGitHubURL(input string) (*GitHubRef, error) {
 func ParseGitHubURLWithHosts(input string, enterpriseHosts []string) (*GitHubRef, error) {
 	input = strings.TrimSpace(input)
 
+	// Reject local-looking paths before shorthand parsing gets a chance at
+	// them: "owner/repo" shorthand's regex can't distinguish a real shorthand
+	// from a relative/absolute/home-relative local path (e.g. ".git/repo",
+	// "/abs/path", "~/path") — both are just "segment/segment". Full URLs are
+	// unaffected since they always start with "http://" or "https://".
+	if strings.HasPrefix(input, "/") || strings.HasPrefix(input, "~") || strings.HasPrefix(input, ".") {
+		return nil, fmt.Errorf("not a recognized GitHub URL format: %s", input)
+	}
+
 	parsed, err := github.ParseGitHubRefWithHosts(input, enterpriseHosts)
 	if err != nil {
 		return nil, fmt.Errorf("not a recognized GitHub URL format: %s", input)
@@ -182,6 +191,20 @@ func (m *RepoPathManager) GetCloneURL(ref *GitHubRef) string {
 	return fmt.Sprintf("https://%s/%s/%s.git", host, ref.Owner, ref.Repo)
 }
 
+// sanitizeCloneOutput strips an embedded credential from git's own error output
+// before it's wrapped into an error (which callers may log or surface to the
+// UI). git commonly echoes the clone URL verbatim in messages like
+// "fatal: repository 'https://x-access-token:<token>@host/owner/repo.git' not
+// found" — cloneURL is only ever credential-bearing here, so a literal
+// substring replace is sufficient without needing to parse URLs.
+func sanitizeCloneOutput(output []byte, cloneURL string) string {
+	if !strings.Contains(cloneURL, "@") {
+		return string(output)
+	}
+	redacted := strings.Replace(cloneURL, cloneURL[len("https://"):strings.Index(cloneURL, "@")+1], "", 1)
+	return strings.ReplaceAll(string(output), cloneURL, redacted)
+}
+
 // EnsureRepoCloned ensures the repository is cloned to the local path.
 // If already cloned, it fetches the latest changes.
 // Returns the path to the cloned repository.
@@ -222,13 +245,25 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 		return "", fmt.Errorf("failed to create directory %s: %w", parentDir, err)
 	}
 
-	// Clone the repository
-	log.Info("cloning repository", "url", cloneURL, "path", repoPath)
+	// Clone the repository. cloneURL may carry an embedded keychain token
+	// (see GetCloneURL) — never log it verbatim, and reset the remote's URL
+	// back to a credential-free form after cloning so the token isn't left
+	// sitting in the resulting .git/config indefinitely.
+	host := repoHost(ref)
+	log.Info("cloning repository", "host", host, "owner", ref.Owner, "repo", ref.Repo, "path", repoPath)
 	cloneCtx, cloneCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cloneCancel()
 	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("failed to clone repository: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("failed to clone repository: %w\nOutput: %s", err, sanitizeCloneOutput(output, cloneURL))
+	}
+
+	if strings.Contains(cloneURL, "@") {
+		publicURL := fmt.Sprintf("https://%s/%s/%s.git", host, ref.Owner, ref.Repo)
+		setURLCmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "set-url", "origin", publicURL)
+		if output, err := setURLCmd.CombinedOutput(); err != nil {
+			log.Warn("failed to strip credentials from remote url", "err", err, "output", string(output))
+		}
 	}
 
 	log.Info("successfully cloned repository", "owner", ref.Owner, "repo", ref.Repo)

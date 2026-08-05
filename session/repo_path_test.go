@@ -1,6 +1,11 @@
 package session
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tstapler/stapler-squad/github"
+	"github.com/zalando/go-keyring"
+)
 
 // stapler-squad#152 security review: GitHub owner/repo regexes only exclude
 // "/" from the captured segments, so "." and ".." pass through syntactically.
@@ -121,5 +126,50 @@ func TestGetCloneURL_UsesHostSpecificURL(t *testing.T) {
 	want := "https://github.example-corp.com/engineering/widget-service.git"
 	if url != want {
 		t.Errorf("GetCloneURL() = %q, want %q", url, want)
+	}
+}
+
+// TestGetCloneURL_EmbedsKeychainToken_When_HostHasStoredAccount locks in the
+// token-injection branch of GetCloneURL, which previously had no test
+// coverage — the exact code path that EnsureRepoCloned's credential-logging
+// fix (host/owner/repo-only logging, post-clone `git remote set-url`
+// stripping, sanitizeCloneOutput) depends on actually firing.
+func TestGetCloneURL_EmbedsKeychainToken_When_HostHasStoredAccount(t *testing.T) {
+	keyring.MockInit()
+	host := "github.example-corp.com"
+	if err := github.SetKeychainTokenForAccount(host, "octocat", "token-abc123"); err != nil {
+		t.Fatalf("SetKeychainTokenForAccount failed: %v", err)
+	}
+
+	m := NewRepoPathManagerWithBase("/tmp/repos-base")
+	url := m.GetCloneURL(&GitHubRef{Host: host, Owner: "engineering", Repo: "widget-service"})
+	want := "https://x-access-token:token-abc123@github.example-corp.com/engineering/widget-service.git"
+	if url != want {
+		t.Errorf("GetCloneURL() = %q, want %q", url, want)
+	}
+}
+
+// TestParseGitHubURLWithHosts_RejectsLocalLookingPaths is the regression test
+// for the dropped path-vs-shorthand guard: the "owner/repo" shorthand regex
+// can't distinguish a real shorthand from a relative/absolute/home-relative
+// local path, since both are just "segment/segment". Concretely,
+// ParseGitHubURL(".git/repo") used to be rejected (see the pre-refactor
+// implementation's `!strings.HasPrefix(input, ".")` guard) but started
+// succeeding with Owner=".git" once shorthand parsing moved into the shared
+// github package, which has no equivalent guard.
+func TestParseGitHubURLWithHosts_RejectsLocalLookingPaths(t *testing.T) {
+	cases := []string{
+		".git/repo",
+		"./relative/path",
+		"/absolute/path",
+		"~/home/path",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			ref, err := ParseGitHubURL(in)
+			if err == nil {
+				t.Errorf("ParseGitHubURL(%q) = %+v, want error (local-looking path)", in, ref)
+			}
+		})
 	}
 }
