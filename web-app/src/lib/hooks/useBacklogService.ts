@@ -3,7 +3,8 @@
 import { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { timestampFromDate, timestampDate } from "@bufbuild/protobuf/wkt";
+import { timestampDate } from "@bufbuild/protobuf/wkt";
+import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import {
   BacklogService,
@@ -111,6 +112,17 @@ export interface BacklogItem {
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * The raw, undecoded protobuf Timestamp backing `updatedAt` — kept
+   * alongside the display-oriented ISO string because `updatedAt` is
+   * lossy (a JS Date is millisecond-precision; the server's real
+   * updated_at column is nanosecond-precision Go time.Time, and ent's CAS
+   * check is exact equality). Passing this straight back as
+   * transitionStatus's expectedUpdatedAt is a lossless passthrough — the
+   * exact bytes the server sent, never touched by a Date conversion — so
+   * it round-trips correctly where `updatedAt` cannot.
+   */
+  updatedAtRaw?: Timestamp;
   /** Gate verdict from the most recent item session (if in review status) */
   gateVerdict?: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "UNVERIFIABLE";
   gateVerdictSummary?: string;
@@ -464,11 +476,11 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     // timestampDate (not a hand-rolled `Number(seconds) * 1000`) — the
     // previous conversion silently dropped the sub-second `nanos` field
     // entirely, truncating to the whole second. Still only millisecond
-    // precision (a JS Date's ceiling), not the full nanosecond precision a
-    // Timestamp carries — see transitionStatus's CAS precondition comment
-    // in BacklogItemDetail.tsx for why that residual gap still matters.
+    // precision (a JS Date's ceiling) for display purposes — updatedAtRaw
+    // below is the lossless form used for exact-equality CAS checks.
     createdAt: p.createdAt ? timestampDate(p.createdAt).toISOString() : undefined,
     updatedAt: p.updatedAt ? timestampDate(p.updatedAt).toISOString() : undefined,
+    updatedAtRaw: p.updatedAt,
     gateVerdict,
     gateVerdictSummary,
     gateCriteria,
@@ -554,8 +566,15 @@ interface UseBacklogServiceReturn {
     options?: {
       /** CAS precondition: reject if the item's current status isn't this. */
       expectedStatus?: BacklogItemStatus;
-      /** CAS precondition: reject if the item's updated_at isn't this (ISO string, from the already-loaded item). */
-      expectedUpdatedAt?: string;
+      /**
+       * CAS precondition: reject if the item's updated_at isn't this.
+       * Pass the item's own `updatedAtRaw` (the undecoded protobuf
+       * Timestamp), not `updatedAt` (a display-oriented ISO string) — the
+       * latter is millisecond-precision and can never exactly match the
+       * server's nanosecond-precision column, so a write built from it
+       * would spuriously fail CAS on virtually every call.
+       */
+      expectedUpdatedAt?: Timestamp;
       /**
        * Non-empty means this is a manual operator override (bypasses
        * TransitionGuard's business-rule gates, e.g. review->done without a
@@ -750,7 +769,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       toStatus: BacklogItemStatus,
       options?: {
         expectedStatus?: BacklogItemStatus;
-        expectedUpdatedAt?: string;
+        expectedUpdatedAt?: Timestamp;
         overrideReason?: string;
       }
     ): Promise<BacklogItem | null> => {
@@ -761,9 +780,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
           itemId: id,
           targetStatus: toStatus,
           expectedStatus: options?.expectedStatus ?? "",
-          expectedUpdatedAt: options?.expectedUpdatedAt
-            ? timestampFromDate(new Date(options.expectedUpdatedAt))
-            : undefined,
+          // Passed through verbatim — no Date round-trip. See the
+          // expectedUpdatedAt doc comment above for why that matters.
+          expectedUpdatedAt: options?.expectedUpdatedAt,
           overrideReason: options?.overrideReason ?? "",
         });
         return resp.item ? mapBacklogItem(resp.item) : null;

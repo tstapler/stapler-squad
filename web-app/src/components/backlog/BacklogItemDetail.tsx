@@ -893,37 +893,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       const toastKey = `${item.id}:manual_override_status`;
       setActionLoading("manual_override_status");
       try {
-        // expectedStatus only, no expectedUpdatedAt. item.updatedAt is a JS
-        // Date-derived ISO string — millisecond precision at best — but the
-        // server's real updated_at column carries full Go time.Time
-        // (nanosecond) precision, and ent's CAS check is exact equality
-        // (session/ent_repository_backlog.go's UpdatedAtEQ). Verified twice,
-        // live, against the real server: even after fixing mapBacklogItem's
-        // separate nanos-truncation bug (it used to drop the whole `nanos`
-        // field, not just round it — see useBacklogService.ts), every write
-        // still failed this feature's own e2e test with "concurrent
-        // modification detected: updated_at mismatch", because a
-        // JS-Date round trip can never land on the server's exact
-        // nanosecond value. Threading expectedUpdatedAt through a lossy
-        // client timestamp is unreliable by construction, not a bug to
-        // patch here — status-only is also the only CAS mode any other
-        // caller in this hook already uses.
-        //
-        // This does NOT weaken race protection for the case criterion 7
-        // actually names ("a concurrent automated transition racing a
-        // manual override"): the WHERE clause is on the item's STARTING
-        // status, so whichever writer commits first flips it away from
-        // what the loser's read captured, and the loser's write matches
-        // zero rows regardless of target status — proven by
-        // TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverrideRaces
-        // (server/services/backlog_service_lifecycle_test.go), which uses
-        // this exact status-only precondition and passes. The only gap
-        // expectedUpdatedAt would additionally catch is a narrow ABA
-        // sequence (status flips through and back to the same value inside
-        // the race window) that this state machine's guards make very hard
-        // to hit in practice.
+        // expectedUpdatedAt uses item.updatedAtRaw (the undecoded protobuf
+        // Timestamp), not item.updatedAt (a display-oriented ISO string) —
+        // an earlier version of this code built the precondition from the
+        // ISO string via `new Date(...)` + timestampFromDate, which is only
+        // millisecond-precision and can never exactly match the server's
+        // nanosecond-precision updated_at column (ent's CAS check is exact
+        // equality), so every write spuriously failed. Passing the raw
+        // Timestamp through verbatim avoids the round-trip entirely.
         const ok = await transitionStatus(item.id, toStatus, {
           expectedStatus: item.status,
+          expectedUpdatedAt: item.updatedAtRaw,
           overrideReason: reason,
         });
         if (!ok) {
