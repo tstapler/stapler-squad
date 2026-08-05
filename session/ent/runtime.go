@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/schema"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
@@ -575,6 +576,70 @@ func init() {
 	sessiongoalDescID := sessiongoalFields[0].Descriptor()
 	// sessiongoal.DefaultID holds the default value on creation for the id field.
 	sessiongoal.DefaultID = sessiongoalDescID.Default.(func() uuid.UUID)
+	sessionsummaryFields := schema.SessionSummary{}.Fields()
+	_ = sessionsummaryFields
+	// sessionsummaryDescSessionID is the schema descriptor for session_id field.
+	sessionsummaryDescSessionID := sessionsummaryFields[1].Descriptor()
+	// sessionsummary.SessionIDValidator is a validator for the "session_id" field. It is called by the builders before save.
+	sessionsummary.SessionIDValidator = sessionsummaryDescSessionID.Validators[0].(func(string) error)
+	// sessionsummaryDescStatus is the schema descriptor for status field.
+	sessionsummaryDescStatus := sessionsummaryFields[3].Descriptor()
+	// sessionsummary.DefaultStatus holds the default value on creation for the status field.
+	sessionsummary.DefaultStatus = sessionsummaryDescStatus.Default.(string)
+	// sessionsummaryDescNarrativeFallbackUsed is the schema descriptor for narrative_fallback_used field.
+	sessionsummaryDescNarrativeFallbackUsed := sessionsummaryFields[5].Descriptor()
+	// sessionsummary.DefaultNarrativeFallbackUsed holds the default value on creation for the narrative_fallback_used field.
+	sessionsummary.DefaultNarrativeFallbackUsed = sessionsummaryDescNarrativeFallbackUsed.Default.(bool)
+	// sessionsummaryDescDiffFilesChanged is the schema descriptor for diff_files_changed field.
+	sessionsummaryDescDiffFilesChanged := sessionsummaryFields[6].Descriptor()
+	// sessionsummary.DefaultDiffFilesChanged holds the default value on creation for the diff_files_changed field.
+	sessionsummary.DefaultDiffFilesChanged = sessionsummaryDescDiffFilesChanged.Default.(int)
+	// sessionsummaryDescDiffAdded is the schema descriptor for diff_added field.
+	sessionsummaryDescDiffAdded := sessionsummaryFields[7].Descriptor()
+	// sessionsummary.DefaultDiffAdded holds the default value on creation for the diff_added field.
+	sessionsummary.DefaultDiffAdded = sessionsummaryDescDiffAdded.Default.(int)
+	// sessionsummaryDescDiffRemoved is the schema descriptor for diff_removed field.
+	sessionsummaryDescDiffRemoved := sessionsummaryFields[8].Descriptor()
+	// sessionsummary.DefaultDiffRemoved holds the default value on creation for the diff_removed field.
+	sessionsummary.DefaultDiffRemoved = sessionsummaryDescDiffRemoved.Default.(int)
+	// sessionsummaryDescDecisionsAutoApproved is the schema descriptor for decisions_auto_approved field.
+	sessionsummaryDescDecisionsAutoApproved := sessionsummaryFields[9].Descriptor()
+	// sessionsummary.DefaultDecisionsAutoApproved holds the default value on creation for the decisions_auto_approved field.
+	sessionsummary.DefaultDecisionsAutoApproved = sessionsummaryDescDecisionsAutoApproved.Default.(int)
+	// sessionsummaryDescDecisionsManuallyApproved is the schema descriptor for decisions_manually_approved field.
+	sessionsummaryDescDecisionsManuallyApproved := sessionsummaryFields[10].Descriptor()
+	// sessionsummary.DefaultDecisionsManuallyApproved holds the default value on creation for the decisions_manually_approved field.
+	sessionsummary.DefaultDecisionsManuallyApproved = sessionsummaryDescDecisionsManuallyApproved.Default.(int)
+	// sessionsummaryDescDecisionsDenied is the schema descriptor for decisions_denied field.
+	sessionsummaryDescDecisionsDenied := sessionsummaryFields[11].Descriptor()
+	// sessionsummary.DefaultDecisionsDenied holds the default value on creation for the decisions_denied field.
+	sessionsummary.DefaultDecisionsDenied = sessionsummaryDescDecisionsDenied.Default.(int)
+	// sessionsummaryDescDecisionsReviewQueueResolved is the schema descriptor for decisions_review_queue_resolved field.
+	sessionsummaryDescDecisionsReviewQueueResolved := sessionsummaryFields[12].Descriptor()
+	// sessionsummary.DefaultDecisionsReviewQueueResolved holds the default value on creation for the decisions_review_queue_resolved field.
+	sessionsummary.DefaultDecisionsReviewQueueResolved = sessionsummaryDescDecisionsReviewQueueResolved.Default.(int)
+	// sessionsummaryDescDecisionsStillOpen is the schema descriptor for decisions_still_open field.
+	sessionsummaryDescDecisionsStillOpen := sessionsummaryFields[13].Descriptor()
+	// sessionsummary.DefaultDecisionsStillOpen holds the default value on creation for the decisions_still_open field.
+	sessionsummary.DefaultDecisionsStillOpen = sessionsummaryDescDecisionsStillOpen.Default.(int)
+	// sessionsummaryDescCostDataUnavailable is the schema descriptor for cost_data_unavailable field.
+	sessionsummaryDescCostDataUnavailable := sessionsummaryFields[19].Descriptor()
+	// sessionsummary.DefaultCostDataUnavailable holds the default value on creation for the cost_data_unavailable field.
+	sessionsummary.DefaultCostDataUnavailable = sessionsummaryDescCostDataUnavailable.Default.(bool)
+	// sessionsummaryDescCreatedAt is the schema descriptor for created_at field.
+	sessionsummaryDescCreatedAt := sessionsummaryFields[25].Descriptor()
+	// sessionsummary.DefaultCreatedAt holds the default value on creation for the created_at field.
+	sessionsummary.DefaultCreatedAt = sessionsummaryDescCreatedAt.Default.(func() time.Time)
+	// sessionsummaryDescUpdatedAt is the schema descriptor for updated_at field.
+	sessionsummaryDescUpdatedAt := sessionsummaryFields[26].Descriptor()
+	// sessionsummary.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	sessionsummary.DefaultUpdatedAt = sessionsummaryDescUpdatedAt.Default.(func() time.Time)
+	// sessionsummary.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	sessionsummary.UpdateDefaultUpdatedAt = sessionsummaryDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// sessionsummaryDescID is the schema descriptor for id field.
+	sessionsummaryDescID := sessionsummaryFields[0].Descriptor()
+	// sessionsummary.IDValidator is a validator for the "id" field. It is called by the builders before save.
+	sessionsummary.IDValidator = sessionsummaryDescID.Validators[0].(func(string) error)
 	shellFields := schema.Shell{}.Fields()
 	_ = shellFields
 	// shellDescCommand is the schema descriptor for command field.
