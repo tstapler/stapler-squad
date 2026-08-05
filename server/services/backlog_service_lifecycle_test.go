@@ -989,101 +989,76 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 		"final status must be exactly one writer's intended target, not a third bounced state")
 }
 
-// TestOverrideVerdict_should_LetOnlyOneWriteLand_When_TwoOverridesRaceConcurrently
-// is the regression test for criterion 9 — OverrideVerdict previously passed a
-// nil CAS precondition to TransitionBacklogItemStatus (unlike its sibling RPC
-// handler above), so its write was unconditional and always succeeded
-// regardless of what changed concurrently between its own read and write.
-// Two racers of identical shape (both go through OverrideVerdict's full path
-// — GetItemSession, SaveReviewVerdict, GetBacklogItem, CanTransitionBacklog,
-// TransitionBacklogItemStatus) so neither has a built-in latency advantage —
-// racing OverrideVerdict against a single raw storage call was tried first
-// and never actually contends, since the raw call is always faster and wins
-// before OverrideVerdict even reaches its read.
+// A true concurrent-race test for OverrideVerdict's CAS fix (criterion 9) was
+// deliberately NOT kept here after two rounds of live CI failures exposed it
+// as fundamentally unreliable, not just occasionally flaky:
 //
-// The response's reported status can't be used to distinguish old from new
-// behavior: TransitionBacklogItemStatus reloads the item via a fresh GET
-// *after* its own write commits (session/ent_repository_backlog.go:966-969),
-// so even the old unconditional write's response ends up reflecting whichever
-// racer wrote last — both responses converge on the same value either way.
-// The real signal is how many BacklogStatusEvent audit rows the race
-// produces: pre-fix, both racers' nil-precondition writes are unconditional
-// (`WHERE id = ?` only — no status/updated_at clause, session/
-// ent_repository_backlog.go:931-939) and both succeed, appending two audit
-// events for a single logical transition. Post-fix, the loser's WHERE clause
-// no longer matches (status already moved), affected==0, and it returns
-// ErrPreconditionFailed before ever reaching recordStatusEvent — exactly one
-// audit event is appended. Verified empirically: reverting the fix makes this
-// assertion fail 15/15 trials with numStatusEvents==2; the fix passes 15/15
-// with numStatusEvents==1.
-func TestOverrideVerdict_should_LetOnlyOneWriteLand_When_TwoOverridesRaceConcurrently(t *testing.T) {
+//  1. A raw BacklogStatusEvent count can't be asserted unconditionally —
+//     both racers' targets (in_progress, pr_pending) are legal from "review",
+//     and pr_pending->in_progress is ALSO legal, so a sequential resolution
+//     (no true overlap) can legitimately produce two real, valid events, not
+//     just one. Confirmed live on a GitHub Actions runner.
+//  2. Distinguishing "two legitimate sequential writes" from "the pre-fix
+//     nil-precondition bug letting both racers clobber each other" by
+//     checking causal continuity between events' FromStatus/ToStatus (sorted
+//     by CreatedAt) is ALSO unreliable: recordStatusEvent's own time.Now()
+//     call is a separate statement issued after its CAS write already
+//     committed, so the audit log's CreatedAt ordering between two
+//     independently-racing goroutines does not reliably reflect true commit
+//     order. Confirmed live on CI: a second failure showed two admittedly
+//     legitimate events (both correctly CAS-protected) in an order that
+//     made them look non-causally-chained purely from log-write scheduling.
+//
+// Both failure modes stem from the same root cause identified early in this
+// feature's development: this specific internal race window (between
+// OverrideVerdict's own GetBacklogItem read and its TransitionBacklogItemStatus
+// write) is only a few Go statements wide and cannot be forced to overlap
+// deterministically, nor observed reliably after the fact, without a
+// test-only synchronization hook in production code — not justified for
+// this fix's scope. The underlying CAS mechanism itself IS deterministically
+// regression-tested at the storage layer, without any of this ordering
+// ambiguity, by TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverrideRaces
+// above (same session.BacklogItemPrecondition type OverrideVerdict now
+// builds) and by direct inspection: OverrideVerdict
+// (server/services/backlog_service_lifecycle.go) now builds a real
+// &session.BacklogItemPrecondition{ExpectedStatus, ExpectedUpdatedAt} from
+// the freshly-loaded item immediately before its write, replacing the prior
+// unconditional nil precondition — the same pattern its sibling
+// TransitionBacklogItemStatus RPC handler already used.
+//
+// TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce is the
+// deterministic, non-racy regression guard: proves the new CAS precondition
+// doesn't break the ordinary (non-concurrent) call path — e.g. a precondition
+// built from the wrong field, or an off-by-one in from/to status, would fail
+// even a single straight-line call.
+func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-		Title:  "item with two racing overrides",
+		Title:  "item for a single non-racing override",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	isA, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
 		ItemID:      item.ID,
-		SessionUUID: "review-session-race-a",
-		SessionRole: session.SessionRoleReview,
-	})
-	require.NoError(t, err)
-	isB, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: "review-session-race-b",
+		SessionUUID: "review-session-single-override",
 		SessionRole: session.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
-	var wg sync.WaitGroup
-	var startBarrier sync.WaitGroup
-	startBarrier.Add(1)
-
-	var respA, respB *connect.Response[sessionv1.OverrideVerdictResponse]
-	var errA, errB error
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		startBarrier.Wait()
-		respA, errA = svc.OverrideVerdict(t.Context(), connect.NewRequest(&sessionv1.OverrideVerdictRequest{
-			ItemSessionId:  isA.ID,
-			ToStatus:       string(session.BacklogStatusInProgress),
-			OverrideReason: "racer A",
-		}))
-	}()
-	go func() {
-		defer wg.Done()
-		startBarrier.Wait()
-		respB, errB = svc.OverrideVerdict(t.Context(), connect.NewRequest(&sessionv1.OverrideVerdictRequest{
-			ItemSessionId:  isB.ID,
-			ToStatus:       string(session.BacklogStatusPRPending),
-			OverrideReason: "racer B",
-		}))
-	}()
-	startBarrier.Done()
-	wg.Wait()
-
-	// Both racers' targets (in_progress, pr_pending) are legal from "review",
-	// so a genuine overlap (both reading "review" before either writes) makes
-	// both calls succeed at the RPC layer regardless of which one's storage
-	// write actually wins the CAS. If the goroutines happened to run fully
-	// sequentially instead (no overlap), the second one would see the first's
-	// already-applied status and fail CanTransitionBacklog before ever
-	// reaching the write — a real, different, and uninteresting error for
-	// this test, so skip rather than assert on a race that didn't occur.
-	if errA != nil || errB != nil {
-		t.Skip("racers did not overlap (ran effectively sequentially) — not a failure of the CAS fix, skipping")
-	}
-	require.NotNil(t, respA)
-	require.NotNil(t, respB)
+	resp, err := svc.OverrideVerdict(t.Context(), connect.NewRequest(&sessionv1.OverrideVerdictRequest{
+		ItemSessionId:  is.ID,
+		ToStatus:       string(session.BacklogStatusInProgress),
+		OverrideReason: "unsticking manually",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), resp.Msg.Item.Status)
 
 	final, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Len(t, final.StatusEvents, 1,
-		"exactly one racer's write must actually land — the loser must be rejected by the CAS precondition before recordStatusEvent, not silently succeed alongside the winner")
+	require.Len(t, final.StatusEvents, 1)
+	assert.Equal(t, string(session.BacklogStatusReview), final.StatusEvents[0].FromStatus)
+	assert.Equal(t, string(session.BacklogStatusInProgress), final.StatusEvents[0].ToStatus)
 }

@@ -8,7 +8,7 @@
   "handlerFile": "server/services/backlog_service_lifecycle.go",
   "tested": true,
   "testIds": [
-    "TestOverrideVerdict_should_LetOnlyOneWriteLand_When_TwoOverridesRaceConcurrently"
+    "TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce"
   ],
-  "lastModified": "2026-08-04T00:00:00-07:00"
+  "lastModified": "2026-08-05T00:00:00-07:00"
 }
