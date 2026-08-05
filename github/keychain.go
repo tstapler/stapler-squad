@@ -120,6 +120,28 @@ func ListKeychainAccounts() []AccountRef {
 	return accounts
 }
 
+// GetKeychainTokenForHost returns any stored token for host, regardless of
+// which account it belongs to. Backlog sync plugins (session/backlog_plugin_github.go,
+// session/backlog_plugin_github_prs.go) only know a host, not a username, so they
+// can't call GetKeychainTokenForAccount directly. Falls back to the legacy
+// single-account slot for github.com when no named account matches.
+func GetKeychainTokenForHost(host string) string {
+	normalized := NormalizeHost(host)
+	for _, ref := range ListKeychainAccounts() {
+		if NormalizeHost(ref.Host) == normalized {
+			if tok := GetKeychainTokenForAccount(ref.Host, ref.Username); tok != "" {
+				return tok
+			}
+		}
+	}
+	if IsGitHubCom(host) {
+		if tok, err := keyringGet(keychainService, keychainTokenKey); err == nil {
+			return tok
+		}
+	}
+	return ""
+}
+
 // GetKeychainTokenForAccount returns the stored token for username on host, or "".
 func GetKeychainTokenForAccount(host, username string) string {
 	tok, err := keyringGet(keychainService, accountKey(AccountRef{Username: username, Host: host}))

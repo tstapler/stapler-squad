@@ -1,0 +1,14 @@
+{
+  "id": "session-summary-standalone-route",
+  "type": "frontend",
+  "component": "SessionSummaryPage",
+  "path": "web-app/src/app/sessions/summary/page.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "SessionSummaryPage > renders SessionSummaryPanel with the sessionId taken from the sessionId search param",
+    "SessionSummaryPage > renders a back link and no Redux-dependent chrome (terminal/VCS/files tabs)",
+    "SessionSummaryPage > does not render SessionSummaryPanel when sessionId is absent from the URL"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}

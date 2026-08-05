@@ -159,6 +159,13 @@ type SessionService struct {
 	// backlog item state transitions fire when the session exits.
 	backlogLifecycleListener *session.BacklogLifecycleListener
 
+	// sessionSummaryGenerator is wired to each newly created session (alongside
+	// backlogLifecycleListener, at the same call sites) so that session-completion-
+	// summary generation fires on exit/stop. Nil until SetSessionSummaryGenerator is
+	// called (session/session_summary_service.go's ent-client/headless-pool wiring
+	// happens after SessionService construction).
+	sessionSummaryGenerator *session.SessionSummaryGenerator
+
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
 
@@ -802,6 +809,14 @@ func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycle
 	return s.backlogLifecycleListener
 }
 
+// SetSessionSummaryGenerator wires the generator to all sessions created via
+// CreateSession/CreateDirectorySession/CreateWorktreeSession after this call,
+// mirroring SetBacklogLifecycleListener's wiring pattern (see the WireToInstance
+// call sites alongside session.WireSessionSummaryListener below).
+func (s *SessionService) SetSessionSummaryGenerator(g *session.SessionSummaryGenerator) {
+	s.sessionSummaryGenerator = g
+}
+
 // SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
 // service so that completed work sessions immediately kick off headless review.
 func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
@@ -880,6 +895,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	}
 	return instance, nil
 }
 
@@ -928,6 +946,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
+	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 	}
 	return instance, nil
 }
@@ -1565,6 +1586,9 @@ func (s *SessionService) CreateSession(
 
 		if s.backlogLifecycleListener != nil {
 			s.backlogLifecycleListener.WireToInstance(instance)
+		}
+		if s.sessionSummaryGenerator != nil {
+			session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 		}
 
 		// Wire the status manager and start the controller AFTER Start() returns so the

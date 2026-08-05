@@ -275,6 +275,28 @@ func (s *BacklogService) notifyTransitionFailed(itemID, itemTitle, failureContex
 	))
 }
 
+// notifyManualOverride publishes an operator-facing notification when a human
+// manually associates a PR or forces a status transition on a backlog item.
+// Unlike notifyTransitionFailed above, this fires on the SUCCESS path — a
+// manual override is exactly the kind of edge-case state change other
+// sessions/agents and reconciliation sweeps will read and act on without
+// surrounding narrative (a work session polling get_backlog_item after a
+// force-transition has no way to know why it jumped). No-op if no event bus
+// is wired.
+func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string) {
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		"Manual override applied",
+		fmt.Sprintf("%s — %s", itemTitle, message),
+		map[string]string{"item_id": itemID},
+	))
+}
+
 // headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
 // headless triage path. The orphan guard uses this prefix to identify sessions that have no
 // live tmux process and can be safely tombstoned on re-trigger.

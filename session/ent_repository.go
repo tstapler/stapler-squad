@@ -107,6 +107,17 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 
 	repo.client = client
 
+	// Normalize any pre-existing BacklogItem.updated_at rows from Local to
+	// UTC (idempotent) — see backlog_item_updated_at_utc_migration.go for
+	// why this is required, not just cosmetic: mixed Local/UTC-formatted
+	// TEXT rows sort incorrectly and spuriously fail CAS preconditions
+	// built from a protobuf Timestamp (always UTC) until each row is
+	// touched once.
+	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
+	}
+
 	return repo, nil
 }
 

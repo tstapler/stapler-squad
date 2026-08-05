@@ -178,6 +178,31 @@ func (s *BacklogService) TriggerSync(
 	return connect.NewResponse(&sessionv1.TriggerSyncResponse{}), nil
 }
 
+// Registry returns the plugin registry backing TriggerSync, or nil if none is
+// wired. Exposed so server.go can wire the GitHub forward-sync EventBus
+// subscriber (server/services/backlog_github_forward_sync.go) with the same
+// registry TriggerSync uses, without needing its own copy of the dependency
+// graph that builds it (see server/dependencies.go's syncRegistry).
+func (s *BacklogService) Registry() *session.PluginRegistry {
+	return s.pluginRegistry
+}
+
+// SyncLoopForForwardSync returns a *session.SyncLoop sharing this service's
+// plugin registry and encryption key provider — mirrors TriggerSync's own
+// inline SyncLoop construction below, but exposed for the GitHub forward-sync
+// EventBus subscriber, which only needs DecryptConfigToken from it (registry
+// access goes through Registry() above). Returns nil if no plugin registry is
+// wired, matching TriggerSync's CodeUnimplemented guard.
+func (s *BacklogService) SyncLoopForForwardSync() *session.SyncLoop {
+	if s.pluginRegistry == nil {
+		return nil
+	}
+	if s.syncKeyFunc != nil {
+		return session.NewSyncLoopWithKeyProvider(s.storage, s.pluginRegistry, s.syncKeyFunc)
+	}
+	return session.NewSyncLoop(s.storage, s.pluginRegistry)
+}
+
 // enterpriseHosts returns the configured GitHub Enterprise Server hostnames,
 // for passing to host-aware GitHub URL parsing.
 func (s *BacklogService) enterpriseHosts() []string {

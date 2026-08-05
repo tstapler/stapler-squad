@@ -190,6 +190,8 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		PlanArtifactsPath:            item.PlanArtifactsPath,
 		Notes:                        item.Notes,
 		ExternalID:                   item.ExternalID,
+		ExternalURL:                  item.ExternalURL,
+		Labels:                       item.Labels,
 		ArchivedAt:                   item.ArchivedAt,
 		PrURL:                        item.PrURL,
 		PrNumber:                     item.PrNumber,
@@ -198,6 +200,8 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedChangesReqCount:       item.ShippedChangesReqCount,
 		ShippedSnapshotAt:            item.ShippedSnapshotAt,
 		PrFeedbackAddressedAt:        item.PrFeedbackAddressedAt,
+		GitHubSyncedIssueUpdatedAt:   item.GithubSyncedIssueUpdatedAt,
+		UserModifiedFields:           item.UserModifiedFields,
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:            item.ReworkCapOverride,
@@ -243,14 +247,17 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 
 func itemSourceToData(src *ent.ItemSource) ItemSourceData {
 	data := ItemSourceData{
-		ID:           src.ID.String(),
-		PluginID:     src.PluginID,
-		DisplayName:  src.DisplayName,
-		Config:       src.Config,
-		Enabled:      src.Enabled,
-		LastSyncedAt: src.LastSyncedAt,
-		CreatedAt:    src.CreatedAt,
-		UpdatedAt:    src.UpdatedAt,
+		ID:                    src.ID.String(),
+		PluginID:              src.PluginID,
+		DisplayName:           src.DisplayName,
+		Config:                src.Config,
+		Enabled:               src.Enabled,
+		ForwardSyncEnabled:    src.ForwardSyncEnabled,
+		BackwardSyncEnabled:   src.BackwardSyncEnabled,
+		ForwardSyncCloseLabel: src.ForwardSyncCloseLabel,
+		LastSyncedAt:          src.LastSyncedAt,
+		CreatedAt:             src.CreatedAt,
+		UpdatedAt:             src.UpdatedAt,
 	}
 	// TokenConfigured: true when the config JSON contains a non-empty "token" key.
 	data.TokenConfigured = src.Config != "" && strings.Contains(src.Config, `"token"`)
@@ -290,8 +297,11 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
+		SetNillableExternalURL(&data.ExternalURL).
+		SetLabels(data.Labels).
 		SetNillableArchivedAt(data.ArchivedAt).
-		SetNillableReworkCapOverride(data.ReworkCapOverride)
+		SetNillableReworkCapOverride(data.ReworkCapOverride).
+		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt)
 
 	if data.SourceID != "" {
 		sourceUUID, parseErr := uuid.Parse(data.SourceID)
@@ -487,6 +497,8 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 		summaries[i] = BacklogItemSummary{
 			ID:                 item.ID.String(),
 			ExternalID:         item.ExternalID,
+			ExternalURL:        item.ExternalURL,
+			Labels:             item.Labels,
 			Title:              item.Title,
 			Status:             BacklogStatus(item.Status),
 			Priority:           item.Priority,
@@ -638,6 +650,20 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.ReworkCapOverride != nil {
 		u.SetReworkCapOverride(*update.ReworkCapOverride)
 	}
+	if update.ExternalURL != nil {
+		u.SetExternalURL(*update.ExternalURL)
+	}
+	if update.Labels != nil {
+		u.SetLabels(*update.Labels)
+	}
+	if update.ClearGitHubSyncedIssueUpdatedAt {
+		u.ClearGithubSyncedIssueUpdatedAt()
+	} else if update.GitHubSyncedIssueUpdatedAt != nil {
+		u.SetGithubSyncedIssueUpdatedAt(*update.GitHubSyncedIssueUpdatedAt)
+	}
+	if update.UserModifiedFields != nil {
+		u.SetUserModifiedFields(*update.UserModifiedFields)
+	}
 
 	item, err := u.Save(ctx)
 	if err != nil {
@@ -743,6 +769,18 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.ReworkCapOverride != nil {
 		fields = append(fields, "reworkCapOverride")
+	}
+	if update.ExternalURL != nil {
+		fields = append(fields, "externalUrl")
+	}
+	if update.Labels != nil {
+		fields = append(fields, "labels")
+	}
+	if update.GitHubSyncedIssueUpdatedAt != nil || update.ClearGitHubSyncedIssueUpdatedAt {
+		fields = append(fields, "gitHubSyncedIssueUpdatedAt")
+	}
+	if update.UserModifiedFields != nil {
+		fields = append(fields, "userModifiedFields")
 	}
 	return fields
 }
@@ -1474,6 +1512,9 @@ func (r *EntRepository) CreateItemSource(ctx context.Context, data ItemSourceDat
 		SetDisplayName(data.DisplayName).
 		SetNillableConfig(&data.Config).
 		SetEnabled(data.Enabled).
+		SetForwardSyncEnabled(data.ForwardSyncEnabled).
+		SetBackwardSyncEnabled(data.BackwardSyncEnabled).
+		SetNillableForwardSyncCloseLabel(&data.ForwardSyncCloseLabel).
 		Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create item source: %w", err)
@@ -1508,6 +1549,15 @@ func (r *EntRepository) UpdateItemSource(ctx context.Context, id string, update 
 	}
 	if update.Enabled != nil {
 		u.SetEnabled(*update.Enabled)
+	}
+	if update.ForwardSyncEnabled != nil {
+		u.SetForwardSyncEnabled(*update.ForwardSyncEnabled)
+	}
+	if update.BackwardSyncEnabled != nil {
+		u.SetBackwardSyncEnabled(*update.BackwardSyncEnabled)
+	}
+	if update.ForwardSyncCloseLabel != nil {
+		u.SetForwardSyncCloseLabel(*update.ForwardSyncCloseLabel)
 	}
 	if update.Config != nil {
 		u.SetConfig(*update.Config)
@@ -1578,6 +1628,39 @@ func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, sourceID
 		return nil, fmt.Errorf("failed to query backlog item by external_id %q: %w", externalID, err)
 	}
 	return item, nil
+}
+
+// GetBacklogItemsByExternalIDs batches GetBacklogItemByExternalID's lookup
+// across many external IDs at once (a single IN query rather than one query
+// per ID), scoped to sourceID the same way. Used by
+// SyncLoop.PreviewBackwardSyncImpact, which previously issued one
+// GetBacklogItemByExternalID call per closed issue in a loop — an N+1 query
+// pattern against an index that isn't composite with the source FK. Returns
+// a map keyed by external_id; IDs with no matching local item are simply
+// absent from the map (not an error), matching the "not locally-imported,
+// exclude it" semantics the per-item lookup had.
+func (r *EntRepository) GetBacklogItemsByExternalIDs(ctx context.Context, sourceID string, externalIDs []string) (map[string]*ent.BacklogItem, error) {
+	result := make(map[string]*ent.BacklogItem, len(externalIDs))
+	if len(externalIDs) == 0 {
+		return result, nil
+	}
+
+	parsedSourceID, err := uuid.Parse(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid source id %q: %v", ErrNotFound, sourceID, err)
+	}
+
+	items, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ExternalIDIn(externalIDs...), backlogitem.HasSourceWith(itemsource.ID(parsedSourceID))).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch query backlog items by external_ids: %w", err)
+	}
+
+	for _, item := range items {
+		result[item.ExternalID] = item
+	}
+	return result, nil
 }
 
 // maxSourceSyncEventsHistory caps how many sync history rows a single
@@ -1653,6 +1736,19 @@ func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID stri
 		return fmt.Errorf("failed to create source sync event for source %s: %w", sourceID, err)
 	}
 	return nil
+}
+
+// RecordSourceSyncFailure persists a zero-item sync-history row recording a
+// forward-sync failure (e.g. the forward-sync EventBus subscriber's CloseIssue
+// call erroring — see server/services/backlog_github_forward_sync.go), so the
+// failure is queryable via ListSourceSyncEvents / the Settings UI's row-level
+// warning (Story 4.3.2) instead of only appearing in server logs. Mirrors
+// CreateSourceSyncEvent's error-message convention used by SyncOne's own
+// fetch-failure path, but for the write direction (forward sync) rather than
+// the read direction (Fetch).
+func (r *EntRepository) RecordSourceSyncFailure(ctx context.Context, sourceID string, message string) error {
+	now := time.Now()
+	return r.CreateSourceSyncEvent(ctx, sourceID, "", 0, 0, 0, 1, message, now, now)
 }
 
 // FinishSourceSync atomically advances an ItemSource's sync cursor/last_synced_at
