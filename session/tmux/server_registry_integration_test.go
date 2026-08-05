@@ -38,7 +38,7 @@ func newIsolatedSocket(t *testing.T) string {
 		}
 	}
 	t.Cleanup(func() {
-		exec.Command("tmux", "-L", safeSocket, "kill-server").Run() //nolint:errcheck
+		exec.Command(tmux.Binary(), "-L", safeSocket, "kill-server").Run() //nolint:errcheck
 	})
 	return safeSocket
 }
@@ -57,7 +57,7 @@ func newSessionWithRetry(t *testing.T, socket string, args ...string) {
 	var lastErr error
 	var lastOut []byte
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		out, err := exec.Command("tmux", fullArgs...).CombinedOutput()
+		out, err := exec.Command(tmux.Binary(), fullArgs...).CombinedOutput()
 		if err == nil {
 			return
 		}
@@ -142,7 +142,7 @@ func TestTmuxServerRegistry_SessionCreated(t *testing.T) {
 	sessionName := "testcreated"
 	newSessionWithRetry(t, socket, "-d", "-s", sessionName)
 	t.Cleanup(func() {
-		exec.Command("tmux", "-L", socket, "kill-session", "-t", sessionName).Run() //nolint:errcheck
+		exec.Command(tmux.Binary(), "-L", socket, "kill-session", "-t", sessionName).Run() //nolint:errcheck
 	})
 
 	pollUntil(t, registryPollTimeout, "session not visible in registry within 3s", func() bool {
@@ -169,7 +169,7 @@ func TestTmuxServerRegistry_PaneExitChannel(t *testing.T) {
 
 	exitCh := registry.SubscribePaneExit(ctx, sessionName)
 
-	if out, err := exec.Command("tmux", "-L", socket, "kill-session", "-t", sessionName).CombinedOutput(); err != nil {
+	if out, err := exec.Command(tmux.Binary(), "-L", socket, "kill-session", "-t", sessionName).CombinedOutput(); err != nil {
 		t.Fatalf("kill-session: %v (%s)", err, out)
 	}
 
@@ -194,7 +194,7 @@ func TestTmuxServerRegistry_ListSessions(t *testing.T) {
 		newSessionWithRetry(t, socket, "-d", "-s", name)
 	}
 	t.Cleanup(func() {
-		exec.Command("tmux", "-L", socket, "kill-session", "-t", "bar").Run() //nolint:errcheck
+		exec.Command(tmux.Binary(), "-L", socket, "kill-session", "-t", "bar").Run() //nolint:errcheck
 	})
 
 	// Wait for both sessions to appear.
@@ -204,7 +204,7 @@ func TestTmuxServerRegistry_ListSessions(t *testing.T) {
 	})
 
 	// Kill "foo" and verify only "bar" remains.
-	if out, err := exec.Command("tmux", "-L", socket, "kill-session", "-t", "foo").CombinedOutput(); err != nil {
+	if out, err := exec.Command(tmux.Binary(), "-L", socket, "kill-session", "-t", "foo").CombinedOutput(); err != nil {
 		t.Fatalf("kill-session foo: %v (%s)", err, out)
 	}
 
@@ -243,7 +243,7 @@ func TestTmuxServerRegistry_ConcurrentSubscriptions(t *testing.T) {
 	wg.Wait()
 
 	// Kill the session; all subscriber channels must close.
-	if out, err := exec.Command("tmux", "-L", socket, "kill-session", "-t", sessionName).CombinedOutput(); err != nil {
+	if out, err := exec.Command(tmux.Binary(), "-L", socket, "kill-session", "-t", sessionName).CombinedOutput(); err != nil {
 		t.Fatalf("kill-session: %v (%s)", err, out)
 	}
 
