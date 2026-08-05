@@ -76,6 +76,21 @@ func TestParseGitHubURLWithHosts_RecognizesEnterprisePRURL(t *testing.T) {
 	}
 }
 
+// TestParseGitHubURLWithHosts_MatchesRegardlessOfHostCase is the regression
+// test for the round-2 review finding: GHE hosts are free-text admin/user
+// input (unlike the hardcoded "github.com"), so a registered host typed in
+// one case must still match a URL pasted in another case.
+func TestParseGitHubURLWithHosts_MatchesRegardlessOfHostCase(t *testing.T) {
+	hosts := []string{"Github.Example-Corp.com"}
+	ref, err := ParseGitHubURLWithHosts("https://GITHUB.EXAMPLE-CORP.COM/engineering/widget-service/pull/370", hosts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ref.Host != "github.example-corp.com" || ref.Owner != "engineering" || ref.Repo != "widget-service" || ref.PRNumber != 370 {
+		t.Errorf("got %+v, want Host=github.example-corp.com Owner=engineering Repo=widget-service PRNumber=370", ref)
+	}
+}
+
 func TestParseGitHubURLWithHosts_RejectsUnregisteredHost(t *testing.T) {
 	// Without the host registered, an enterprise URL must not be silently
 	// mis-parsed against github.com.

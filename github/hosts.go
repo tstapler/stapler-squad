@@ -5,10 +5,13 @@ import "strings"
 // defaultHost is the GitHub.com hostname used when no host is specified.
 const defaultHost = "github.com"
 
-// NormalizeHost returns the canonical form of a GitHub host: no scheme, no
-// trailing slash, and "" mapped to github.com.
+// NormalizeHost returns the canonical form of a GitHub host: lowercased, no
+// scheme, no trailing slash, and "" mapped to github.com. Hostnames are
+// case-insensitive (DNS), and GHE hosts are free-text admin/user input, so
+// lowercasing here keeps registration and URL-match comparisons consistent
+// regardless of how a host was typed.
 func NormalizeHost(host string) string {
-	host = strings.TrimSpace(host)
+	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "" {
 		return defaultHost
 	}
