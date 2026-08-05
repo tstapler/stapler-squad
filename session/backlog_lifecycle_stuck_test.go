@@ -301,6 +301,7 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_PRMerged(t *testing.T)
 	ctx := context.Background()
 
 	item := newPRPendingTestItem(t, storage, 148)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/pr-ready-merged", "")
 	er := storage.repo.(*EntRepository)
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "PR is green & mergeable")
 	require.NoError(t, err)
@@ -308,6 +309,7 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_PRMerged(t *testing.T)
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/pr-ready-merged")
 
 	listener.ReconcilePRPending(ctx, er)
 
@@ -2468,6 +2470,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 		PrNumber: &prNumber,
 	}, nil)
 	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged", "")
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
 	// shape isBouncing flags.
@@ -2480,6 +2483,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-merged")
 	notifier := &fakeNotifier{}
 	listener.SetNotifier(notifier)
 
@@ -2529,6 +2533,7 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 		PrNumber: &prNumber,
 	}, nil)
 	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-race", "")
 
 	for i := 0; i < 3; i++ {
 		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
@@ -2550,6 +2555,7 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 	}
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, checker)
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-race")
 	notifier := &fakeNotifier{}
 	listener.SetNotifier(notifier)
 
