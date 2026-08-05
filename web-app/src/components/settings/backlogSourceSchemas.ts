@@ -10,6 +10,11 @@ export interface PluginSchema {
   fields: SourceFieldSchema[];
   requiresToken: boolean;
   tokenLabel: string;
+  // When true, this plugin authenticates via the shared, host-keyed GitHub
+  // keychain (Settings > GitHub Accounts) instead of a per-source token field.
+  // BacklogSourcesSettings.tsx renders a link to that page instead of a
+  // token input when this is set.
+  credentialsManagedExternally?: boolean;
 }
 
 // Adding a source type for a new plugin (e.g. Jira, Linear) means adding one entry
@@ -29,6 +34,7 @@ export const PLUGIN_SCHEMAS: PluginSchema[] = [
     ],
     requiresToken: true,
     tokenLabel: "GitHub personal access token",
+    credentialsManagedExternally: true,
   },
   {
     id: "github_prs",
@@ -39,5 +45,6 @@ export const PLUGIN_SCHEMAS: PluginSchema[] = [
     ],
     requiresToken: true,
     tokenLabel: "GitHub personal access token",
+    credentialsManagedExternally: true,
   },
 ];

@@ -73,6 +73,10 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional(),
 		field.String("external_id").
 			Optional(),
+		field.String("external_url").
+			Optional(),
+		field.Strings("labels").
+			Optional(),
 		field.Time("user_modified_status_at").
 			Optional().
 			Nillable(),
@@ -103,6 +107,10 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Per-item high-water mark: the newest substantive PR review-feedback timestamp a fix session has already been dispatched to address. GitHub never clears COMMENTED reviews/comments on push, so this watermark is what stops already-addressed feedback from re-triggering a fix session on every ReconcilePRPending tick."),
+		field.Time("github_synced_issue_updated_at").
+			Optional().
+			Nillable().
+			Comment("Per-item high-water mark: the GitHub issue updated_at value most recently synced from GitHub into this item. Stops a forward-sync write from GitHub from being re-observed and re-synced back to GitHub on the next poll (loop prevention)."),
 		field.String("shipped_file_stats").
 			Optional().
 			Comment("JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time"),

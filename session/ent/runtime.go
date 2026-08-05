@@ -182,27 +182,27 @@ func init() {
 	// backlogitem.DefaultQueuedAutonomous holds the default value on creation for the queued_autonomous field.
 	backlogitem.DefaultQueuedAutonomous = backlogitemDescQueuedAutonomous.Default.(bool)
 	// backlogitemDescPrNumber is the schema descriptor for pr_number field.
-	backlogitemDescPrNumber := backlogitemFields[24].Descriptor()
+	backlogitemDescPrNumber := backlogitemFields[26].Descriptor()
 	// backlogitem.DefaultPrNumber holds the default value on creation for the pr_number field.
 	backlogitem.DefaultPrNumber = backlogitemDescPrNumber.Default.(int)
 	// backlogitemDescShippedApprovedCount is the schema descriptor for shipped_approved_count field.
-	backlogitemDescShippedApprovedCount := backlogitemFields[26].Descriptor()
+	backlogitemDescShippedApprovedCount := backlogitemFields[28].Descriptor()
 	// backlogitem.DefaultShippedApprovedCount holds the default value on creation for the shipped_approved_count field.
 	backlogitem.DefaultShippedApprovedCount = backlogitemDescShippedApprovedCount.Default.(int)
 	// backlogitemDescShippedChangesReqCount is the schema descriptor for shipped_changes_req_count field.
-	backlogitemDescShippedChangesReqCount := backlogitemFields[27].Descriptor()
+	backlogitemDescShippedChangesReqCount := backlogitemFields[29].Descriptor()
 	// backlogitem.DefaultShippedChangesReqCount holds the default value on creation for the shipped_changes_req_count field.
 	backlogitem.DefaultShippedChangesReqCount = backlogitemDescShippedChangesReqCount.Default.(int)
 	// backlogitemDescShippedSnapshotCaptureFailed is the schema descriptor for shipped_snapshot_capture_failed field.
-	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[31].Descriptor()
+	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[34].Descriptor()
 	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
 	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[33].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[36].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[34].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[37].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -397,12 +397,20 @@ func init() {
 	itemsourceDescEnabled := itemsourceFields[4].Descriptor()
 	// itemsource.DefaultEnabled holds the default value on creation for the enabled field.
 	itemsource.DefaultEnabled = itemsourceDescEnabled.Default.(bool)
+	// itemsourceDescForwardSyncEnabled is the schema descriptor for forward_sync_enabled field.
+	itemsourceDescForwardSyncEnabled := itemsourceFields[5].Descriptor()
+	// itemsource.DefaultForwardSyncEnabled holds the default value on creation for the forward_sync_enabled field.
+	itemsource.DefaultForwardSyncEnabled = itemsourceDescForwardSyncEnabled.Default.(bool)
+	// itemsourceDescBackwardSyncEnabled is the schema descriptor for backward_sync_enabled field.
+	itemsourceDescBackwardSyncEnabled := itemsourceFields[6].Descriptor()
+	// itemsource.DefaultBackwardSyncEnabled holds the default value on creation for the backward_sync_enabled field.
+	itemsource.DefaultBackwardSyncEnabled = itemsourceDescBackwardSyncEnabled.Default.(bool)
 	// itemsourceDescCreatedAt is the schema descriptor for created_at field.
-	itemsourceDescCreatedAt := itemsourceFields[7].Descriptor()
+	itemsourceDescCreatedAt := itemsourceFields[10].Descriptor()
 	// itemsource.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsource.DefaultCreatedAt = itemsourceDescCreatedAt.Default.(func() time.Time)
 	// itemsourceDescUpdatedAt is the schema descriptor for updated_at field.
-	itemsourceDescUpdatedAt := itemsourceFields[8].Descriptor()
+	itemsourceDescUpdatedAt := itemsourceFields[11].Descriptor()
 	// itemsource.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	itemsource.DefaultUpdatedAt = itemsourceDescUpdatedAt.Default.(func() time.Time)
 	// itemsource.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

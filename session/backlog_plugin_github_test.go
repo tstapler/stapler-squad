@@ -2,10 +2,13 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,6 +74,56 @@ func TestGitHubIssuesPlugin_Fetch_ParsesIssuesAndComputesPriority(t *testing.T) 
 	require.Equal(t, "2024-01-03", newCursor)
 }
 
+// TestGitHubIssuesPlugin_Fetch_IssueUpdatedAtMatchesCursorValue verifies that
+// ExternalItem.IssueUpdatedAt (Epic 0.2, Story 0.2.2) is parsed from the same
+// updated_at value used to compute newCursor for that same issue — i.e. it's
+// the already-observed timestamp, not independently re-derived.
+func TestGitHubIssuesPlugin_Fetch_IssueUpdatedAtMatchesCursorValue(t *testing.T) {
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[
+			{"number":1,"title":"Bug A","body":"desc A","updated_at":"2024-01-02T10:00:00Z","html_url":"https://x/1"},
+			{"number":2,"title":"Bug B","body":"desc B","updated_at":"2024-01-03T15:30:00Z","html_url":"https://x/2"}
+		]`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, newCursor, err := p.Fetch(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	require.Equal(t, "2024-01-03T15:30:00Z", newCursor)
+	require.True(t, items[0].IssueUpdatedAt.Equal(time.Date(2024, 1, 2, 10, 0, 0, 0, time.UTC)))
+	require.True(t, items[1].IssueUpdatedAt.Equal(time.Date(2024, 1, 3, 15, 30, 0, 0, time.UTC)))
+	require.Equal(t, newCursor, items[1].IssueUpdatedAt.Format(time.RFC3339))
+}
+
+// TestGitHubIssuesPlugin_Fetch_IncludesClosedIssues verifies Fetch's query
+// switched from state=open to state=all (Epic 0.2, Story 0.2.1 / AC0): a
+// closed issue in the mock response — previously invisible to Fetch — now
+// appears in the returned []ExternalItem, with State decoded correctly for
+// both the open and closed issue.
+func TestGitHubIssuesPlugin_Fetch_IncludesClosedIssues(t *testing.T) {
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "all", r.URL.Query().Get("state"))
+		w.Write([]byte(`[
+			{"number":1,"title":"Open issue","body":"still open","state":"open","updated_at":"2024-01-02T00:00:00Z","html_url":"https://x/1"},
+			{"number":2,"title":"Closed issue","body":"already closed","state":"closed","updated_at":"2024-01-03T00:00:00Z","html_url":"https://x/2"}
+		]`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, _, err := p.Fetch(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	require.Equal(t, "1", items[0].ExternalID)
+	require.Equal(t, "open", items[0].State)
+	require.Equal(t, "2", items[1].ExternalID)
+	require.Equal(t, "closed", items[1].State)
+}
+
 func TestGitHubIssuesPlugin_Fetch_RateLimited(t *testing.T) {
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -80,6 +133,89 @@ func TestGitHubIssuesPlugin_Fetch_RateLimited(t *testing.T) {
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	_, _, err := p.Fetch(context.Background(), cfg, "")
 	require.Error(t, err)
+}
+
+// fakeGithubIssuesPage renders a JSON array of n synthetic issues, numbered
+// starting at startNumber, for use as a canned page response in FetchAll
+// pagination tests.
+func fakeGithubIssuesPage(startNumber, n int) string {
+	issues := make([]string, n)
+	for i := 0; i < n; i++ {
+		num := startNumber + i
+		issues[i] = fmt.Sprintf(`{"number":%d,"title":"Issue %d","state":"closed","updated_at":"2024-01-01T00:00:00Z","html_url":"https://x/%d"}`, num, num, num)
+	}
+	return "[" + strings.Join(issues, ",") + "]"
+}
+
+// TestGitHubIssuesPlugin_FetchAll_AggregatesMultiplePages verifies FetchAll
+// (the PaginatedFetcher implementation used by PreviewBackwardSyncImpact)
+// follows page= across a full first page and a short second page, stopping
+// once a page comes back under githubIssuesPerPage — proving it retrieves
+// issues beyond what a single Fetch call (page 1 only) would see.
+func TestGitHubIssuesPlugin_FetchAll_AggregatesMultiplePages(t *testing.T) {
+	var pagesRequested []string
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		pagesRequested = append(pagesRequested, page)
+		switch page {
+		case "1", "":
+			w.Write([]byte(fakeGithubIssuesPage(1, githubIssuesPerPage)))
+		case "2":
+			w.Write([]byte(fakeGithubIssuesPage(githubIssuesPerPage+1, 10)))
+		default:
+			t.Fatalf("unexpected page requested: %q", page)
+		}
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, _, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"1", "2"}, pagesRequested)
+	require.Len(t, items, githubIssuesPerPage+10)
+	require.False(t, possiblyIncomplete, "short second page means the full result set was retrieved")
+	require.Equal(t, "1", items[0].ExternalID)
+	require.Equal(t, strconv.Itoa(githubIssuesPerPage+10), items[len(items)-1].ExternalID)
+}
+
+// TestGitHubIssuesPlugin_FetchAll_SetsPossiblyIncompleteWhenCapHit verifies
+// that when every page up to the pagination cap comes back full, FetchAll
+// reports possiblyIncomplete=true rather than silently under-reporting the
+// blast radius as if the result set were exhaustive — the CRITICAL finding
+// this fixes: a single-page Fetch on a repo with >50 issues could report
+// "0 items affected" when older closed issues existed beyond page 1.
+func TestGitHubIssuesPlugin_FetchAll_SetsPossiblyIncompleteWhenCapHit(t *testing.T) {
+	origCap := maxPreviewFetchPages
+	maxPreviewFetchPages = 2
+	t.Cleanup(func() { maxPreviewFetchPages = origCap })
+
+	requestedPages := 0
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requestedPages++
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		w.Write([]byte(fakeGithubIssuesPage((page-1)*githubIssuesPerPage+1, githubIssuesPerPage)))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, _, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Equal(t, 2, requestedPages, "should stop at the cap rather than fetching indefinitely")
+	require.Len(t, items, 2*githubIssuesPerPage)
+	require.True(t, possiblyIncomplete, "every page was full up to the cap, so more issues may exist beyond it")
+}
+
+// TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing mirrors
+// Fetch's "disabled source" contract: FetchAll must not attempt any request
+// when no token is configured.
+func TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing(t *testing.T) {
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
+	items, cursor, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "old-cursor")
+	require.NoError(t, err)
+	require.Empty(t, items)
+	require.Equal(t, "old-cursor", cursor)
+	require.False(t, possiblyIncomplete)
 }
 
 func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
@@ -98,6 +234,8 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 		Title:       string(longTitle),
 		Description: string(longDesc),
 		Priority:    2,
+		Labels:      []string{"bug", "p1"},
+		URL:         "https://github.com/acme/widgets/issues/42",
 	}
 	data := p.MapToBacklogItem(item, "src-1")
 	require.Len(t, data.Title, 200)
@@ -105,6 +243,118 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	require.Equal(t, "42", data.ExternalID)
 	require.Equal(t, "src-1", data.SourceID)
 	require.Equal(t, string(BacklogStatusIdea), data.Status)
+	// Epic 0.1 (Story 0.1.3): Labels and ExternalURL must pass through unchanged.
+	require.Equal(t, []string{"bug", "p1"}, data.Labels)
+	require.Equal(t, "https://github.com/acme/widgets/issues/42", data.ExternalURL)
+}
+
+// TestGitHubIssuesPlugin_CloseIssue_MergesLabels verifies that CloseIssue
+// merges closeLabel into the issue's existing labels (never replacing them —
+// GitHub's PATCH .../issues/{n} endpoint fully replaces the labels array, so
+// existingLabels must be passed in and merged locally) — AC3, Story 1.1.1.
+func TestGitHubIssuesPlugin_CloseIssue_MergesLabels(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]interface{}
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Write([]byte(`{"number":42,"state":"closed","updated_at":"2024-05-01T12:00:00Z"}`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	_, err := p.CloseIssue(context.Background(), cfg, "42", []string{"bug"}, "shipped")
+	require.NoError(t, err)
+
+	require.Equal(t, http.MethodPatch, gotMethod)
+	require.Equal(t, "/repos/acme/widgets/issues/42", gotPath)
+	require.Equal(t, "closed", gotBody["state"])
+	require.ElementsMatch(t, []interface{}{"bug", "shipped"}, gotBody["labels"])
+}
+
+// TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField verifies that when
+// closeLabel == "", the PATCH body omits `labels` entirely rather than sending
+// an empty array — GitHub interprets an empty array as "clear all labels",
+// which is a different (destructive) semantic from "don't touch labels".
+func TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField(t *testing.T) {
+	var gotBody map[string]interface{}
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Write([]byte(`{"number":42,"state":"closed","updated_at":"2024-05-01T12:00:00Z"}`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	_, err := p.CloseIssue(context.Background(), cfg, "42", []string{"bug"}, "")
+	require.NoError(t, err)
+
+	require.Equal(t, "closed", gotBody["state"])
+	_, hasLabels := gotBody["labels"]
+	require.False(t, hasLabels, "labels field must be omitted entirely, not sent as an empty array")
+}
+
+// TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError verifies a 403 +
+// X-RateLimit-Remaining:0 response surfaces a descriptive error rather than
+// panicking.
+func TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError(t *testing.T) {
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	_, err := p.CloseIssue(context.Background(), cfg, "42", nil, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rate limited")
+}
+
+// TestGitHubIssuesPlugin_CloseIssue_ReturnsResponseUpdatedAt is the regression
+// test for pre-mortem P1 #1: CloseIssue must return the PATCH response's own
+// updated_at, not the test's (or caller's) wall-clock time. ADR-003 chose the
+// per-resource-timestamp watermark specifically to avoid clock skew.
+func TestGitHubIssuesPlugin_CloseIssue_ReturnsResponseUpdatedAt(t *testing.T) {
+	const fixedTimestamp = "2019-03-14T09:26:53Z"
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"number":42,"state":"closed","updated_at":"` + fixedTimestamp + `"}`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	updatedAt, err := p.CloseIssue(context.Background(), cfg, "42", nil, "")
+	require.NoError(t, err)
+
+	expected, parseErr := time.Parse(time.RFC3339, fixedTimestamp)
+	require.NoError(t, parseErr)
+	require.True(t, updatedAt.Equal(expected), "expected %v, got %v (must not be wall-clock time)", expected, updatedAt)
+	require.False(t, updatedAt.Equal(time.Now()), "must not equal wall-clock time")
+}
+
+// TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody verifies the bot
+// comment left on an automated close (AC3, Story 1.1.2 — "no silent automated
+// action" convention).
+func TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]string
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		w.Write([]byte(`{"id":1}`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	const comment = "Closed automatically — the linked backlog item was marked done in stapler-squad."
+	err := p.PostIssueComment(context.Background(), cfg, "42", comment)
+	require.NoError(t, err)
+
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/repos/acme/widgets/issues/42/comments", gotPath)
+	require.Equal(t, comment, gotBody["body"])
 }
 
 func TestGitHubPRsPlugin_PluginID(t *testing.T) {

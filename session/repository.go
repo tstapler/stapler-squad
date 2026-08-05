@@ -402,10 +402,17 @@ type BacklogItemData struct {
 	QueuedAutonomous bool
 	Notes            string
 	ExternalID       string
-	ArchivedAt       *time.Time
-	SourceID         string
-	PrURL            string
-	PrNumber         int
+	// ExternalURL is the browser-facing URL of the linked external item (e.g.
+	// the GitHub issue's html_url). Empty when the item has no linked source.
+	ExternalURL string
+	// Labels holds the external source's label set (e.g. GitHub issue labels)
+	// as of the most recent Fetch. Nil/empty for items with no linked source
+	// or no labels.
+	Labels     []string
+	ArchivedAt *time.Time
+	SourceID   string
+	PrURL      string
+	PrNumber   int
 	// ShippedCheckConclusion holds the durable GitHub CI-conclusion snapshot
 	// captured at ship time — genuine GitHub CI-conclusion values only, never
 	// a capture-failure sentinel. See ShippedSnapshotCaptureFailed.
@@ -424,6 +431,16 @@ type BacklogItemData struct {
 	// already been dispatched to address. Nil when no feedback-triggered fix
 	// has ever been dispatched for this item's current PR.
 	PrFeedbackAddressedAt *time.Time
+	// GitHubSyncedIssueUpdatedAt is the loop-prevention watermark: the GitHub
+	// issue updated_at value most recently synced from GitHub into this item.
+	// Nil when the item has never been synced from GitHub.
+	GitHubSyncedIssueUpdatedAt *time.Time
+	// UserModifiedFields is the JSON-encoded set of field names (title,
+	// description, priority) the user has directly edited via UpdateBacklogItem
+	// — see ParseUserModifiedFields/MergeUserModifiedFields. Empty string means
+	// no field is locally locked; backward sync (SyncOne) treats any field in
+	// this set as local-wins and skips overwriting it from the remote source.
+	UserModifiedFields string
 	// ShippedFileStats holds the JSON-encoded []ShippedFileStat snapshot of
 	// per-file diff stats captured at ship time.
 	ShippedFileStats string
@@ -451,6 +468,8 @@ type BacklogItemData struct {
 type BacklogItemSummary struct {
 	ID                 string               `json:"id"`
 	ExternalID         string               `json:"external_id"`
+	ExternalURL        string               `json:"external_url"`
+	Labels             []string             `json:"labels"`
 	Title              string               `json:"title"`
 	Status             BacklogStatus        `json:"status"`
 	Priority           int                  `json:"priority"`
@@ -520,8 +539,14 @@ type BacklogItemUpdate struct {
 	// item's stored category untouched", while a non-nil pointer (including
 	// one pointing at "") explicitly sets/clears it. See
 	// BacklogItemData.Category for the field's semantics.
-	Category          *string
-	Notes             *string
+	Category *string
+	Notes    *string
+	// ExternalURL and Labels follow the same partial-update-presence
+	// convention as the other pointer fields on this struct: nil means "leave
+	// untouched", a non-nil pointer (including one pointing at "" / an empty
+	// slice) explicitly sets it.
+	ExternalURL       *string
+	Labels            *[]string
 	PlanApproved      *bool
 	PlanApprovedAt    *time.Time
 	PlanArtifactsPath *string
@@ -552,6 +577,12 @@ type BacklogItemUpdate struct {
 	// watermark).
 	PrFeedbackAddressedAt      *time.Time
 	ClearPrFeedbackAddressedAt bool
+	// GitHubSyncedIssueUpdatedAt follows the same partial-update-presence
+	// convention as PrFeedbackAddressedAt: nil means "leave untouched", a
+	// non-nil pointer sets the loop-prevention watermark. Use
+	// ClearGitHubSyncedIssueUpdatedAt to explicitly clear it back to nil.
+	GitHubSyncedIssueUpdatedAt      *time.Time
+	ClearGitHubSyncedIssueUpdatedAt bool
 	// ReworkCapOverride follows the same single-pointer presence convention as
 	// the fields above: nil means "leave untouched". A non-nil pointer sets the
 	// item's override (0 = unlimited, >0 = this item's own cap). There is
@@ -559,6 +590,11 @@ type BacklogItemUpdate struct {
 	// default" via this struct — a deliberate simplification; add a
 	// ClearReworkCapOverride bool alongside this if that's needed later.
 	ReworkCapOverride *int
+	// UserModifiedFields follows the same partial-update-presence convention:
+	// nil means "leave untouched", a non-nil pointer sets the stored
+	// JSON-encoded set of user-modified field names (e.g. `["title"]`). Build
+	// the value with MergeUserModifiedFields rather than hand-encoding JSON.
+	UserModifiedFields *string
 }
 
 // BacklogItemPrecondition is used for optimistic locking on update/transition.
@@ -575,22 +611,28 @@ type BacklogItemPrecondition struct {
 
 // ItemSourceData is the domain model for an external item source.
 type ItemSourceData struct {
-	ID              string
-	PluginID        string
-	DisplayName     string
-	Config          string // JSON, may contain encrypted token
-	Enabled         bool
-	TokenConfigured bool
-	LastSyncedAt    *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                    string
+	PluginID              string
+	DisplayName           string
+	Config                string // JSON, may contain encrypted token
+	Enabled               bool
+	ForwardSyncEnabled    bool
+	BackwardSyncEnabled   bool
+	ForwardSyncCloseLabel string
+	TokenConfigured       bool
+	LastSyncedAt          *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // ItemSourceUpdate carries the mutable fields for UpdateItemSource.
 type ItemSourceUpdate struct {
-	DisplayName *string
-	Enabled     *bool
-	Config      *string
+	DisplayName           *string
+	Enabled               *bool
+	ForwardSyncEnabled    *bool
+	BackwardSyncEnabled   *bool
+	ForwardSyncCloseLabel *string
+	Config                *string
 }
 
 // ShellRepository is the minimal persistence interface for per-session shell management.
