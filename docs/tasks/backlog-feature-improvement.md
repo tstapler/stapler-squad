@@ -9,6 +9,59 @@ and four quality-skill passes (`quality:architecture-review`, `ux:review`, `code
 Findings are bucketed: **[1] reconciliation bugs**, **[2] manual gates that could be
 policy-driven**, **[3] hardcoded pipeline steps that need a configurability seam**.
 
+## Update — 2026-08-05 (correction, same day): the "self-healing" story above was itself a false positive — `closeIfSupersededByMain` uses a structurally stale `LastCommitSha`, CRITICAL, systemic
+
+Checking on `d6ddbef3`'s progress after the update below revealed the update's own headline
+claim was wrong. `d6ddbef3` now shows `status: done`, PR #342 closed via
+`self-heal: PR #342 closed as superseded — commit 1a751723b4ce38bb3b9f55700ba3bc896c1780c3
+already on main`. That commit is real and on main — but it's `1a751723b`
+("feat(review-queue): surface pending plan reviews and busy sessions"), an unrelated commit
+that predates this branch's own work by almost a day (authored 2026-08-04T17:29:18Z). `gh pr
+view 342 --json commits` shows the branch's *real* fix commits — `541fc846e7`
+("fix(backlog): recover items wedged in review by an idle-but-alive reviewer") and `342c49b6ed`
+(review-fix follow-up) — landed at 2026-08-05T17:03:40Z/17:25:38Z, **after** the SHA that got
+marked "superseded." Those two commits exist only on the PR branch; PR #342 is `CLOSED`, not
+merged. **BUG-047 (the reviewer-wedge fix) is not on main. The two live wedged reviews
+(`3065ecfb`, `4c71d3a3`) will NOT self-heal** — correcting the "no action needed... strong
+evidence" conclusion below, which was wrong.
+
+**Root cause, verified by reading the code**: `closeIfSupersededByMain`
+(`session/backlog_lifecycle.go:4386`) checks `git.IsCommitOnMain(..., lastWork.LastCommitSha)`
+on the assumption that `LastCommitSha` tracks "the work session's most recent commit." It
+doesn't. Every writer of this field —
+`SpawnSessionFromItem` step 12b (`server/services/backlog_service_triage.go:846-851`),
+`AttachSessionToItem` (`server/services/backlog_service_sync.go:103-108`, comment: "same as
+SpawnSessionFromItem step 12b") — captures it exactly **once, at session-start, as the
+pre-work baseline HEAD SHA**, explicitly for the review gate's `base..HEAD` diffing. No call
+site anywhere updates it again as the agent commits during the session (confirmed by grep:
+`UpdateItemSessionGitActivity` has no other callers). So `LastCommitSha` is permanently frozen
+at whatever main's tip was when the worktree branched — which `IsCommitOnMain` will always
+report as "on main," because it always was, trivially. Any item whose merge-detection sweep
+runs against this field will false-positive "superseded" **regardless of whether the item's
+actual work ever shipped** — this isn't specific to `d6ddbef3`; it's a structural property of
+the field. `server/services/backlog_service_ship_status.go:61-76` (`GetBacklogItemShipStatus`,
+backing the item detail page's "Ship PR" self-service action per 07-18's entry) reads the same
+field the same way — the user-facing "has this shipped?" check is subject to the identical
+false positive.
+
+**Blast radius unknown, not yet quantified this pass** — log retention (~1 day locally) doesn't
+reach back far enough to count how many prior `done` transitions went through this exact path;
+a proper fix should include an audit query for backlog items whose `done` transition note
+matches `"closed as superseded"` to check how many silently-discarded PRs this has produced
+historically, not just this occurrence.
+
+### Recommended Next Action
+
+`sdd:fix-bug`, priority CRITICAL (raised from the deferred/low-priority framing this doc
+otherwise defaults to) — `closeIfSupersededByMain` and `GetBacklogItemShipStatus` need
+`LastCommitSha` to actually track the work session's latest commit (wire a real updater into
+whatever already observes agent commits — e.g. the same hook that updates
+`CommitCountSinceSpawn`/`LastProgressAt` elsewhere), not a permanently-frozen pre-work
+baseline. Until fixed, `d6ddbef3`/PR #342 needs to be manually reopened and re-merged (the
+fix code itself passed review and `make ci`, per its own status-event history — it's the
+close-as-superseded step that was wrong, not the implementation), and the historical
+blast-radius audit above should run alongside the fix.
+
 ## Update — 2026-08-05: light verification pass — pipeline is now self-detecting and self-fixing its own reconciliation bugs live; one new 4th sibling instance of the known `hasActiveWorkSession`-blocks-silently shape found
 
 Not a full 4-agent re-run (same rationale as every pass since 07-28). `ListStuckBacklogItems`
