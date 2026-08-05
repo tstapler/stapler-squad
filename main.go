@@ -94,7 +94,11 @@ var (
 				// load-time read of the flag (rather than a live BacklogController,
 				// which BuildCoreDeps doesn't construct) is sufficient.
 				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled)
+				// No BacklogService on this stdio fallback path (buildMCPDeps only
+				// builds Phase 1 CoreDeps) — submit_review_verdict's eager
+				// review->in_progress transition is skipped here; see RunServer's
+				// doc comment.
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil)
 			}
 
 			// Enable test mode if flag is set

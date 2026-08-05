@@ -140,7 +140,7 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	}
 
 	t.Run("disabled at boot", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return false })
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return false }, nil)
 		tools := s.ListTools()
 		for _, name := range backlogToolNames {
 			_, present := tools[name]
@@ -149,7 +149,7 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	})
 
 	t.Run("enabled at boot", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return true })
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return true }, nil)
 		tools := s.ListTools()
 		for _, name := range backlogToolNames {
 			_, present := tools[name]
@@ -158,7 +158,7 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	})
 
 	t.Run("nil check defaults to enabled", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, nil)
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, nil, nil)
 		tools := s.ListTools()
 		_, present := tools["get_backlog_item"]
 		require.True(t, present, "nil backlogEnabled must default to always-enabled for callers that don't wire the flag")
