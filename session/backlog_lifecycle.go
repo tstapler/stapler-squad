@@ -1819,6 +1819,21 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		if !dead && checker != nil {
 			dead = !checker(latest.SessionUUID)
 		}
+		if !dead && latest.Edges.ReviewVerdict != nil && time.Since(latest.Edges.ReviewVerdict.CreatedAt) > reviewVerdictIdleThreshold {
+			// A reviewer that submitted a verdict and then simply never exited
+			// (process alive, no further output) reads as alive forever per the
+			// checks above — submitReviewVerdict's eager review->in_progress
+			// transition (server/mcp/tools_backlog.go) is the primary fix for
+			// this shape on FAIL/PARTIAL/UNVERIFIABLE, but this sweep is what
+			// still needs to catch PASS verdicts (deferred to session-exit by
+			// design) and any case the eager path didn't reach (e.g. no
+			// AutoReopenSpawner wired, or the process crashed between saving
+			// the verdict and running the eager transition). Age the verdict
+			// itself instead of the session, independent of whatever the
+			// liveness checker (or its absence, see getSessionLivenessChecker's
+			// doc comment) reports.
+			dead = true
+		}
 		if !dead {
 			continue // still plausibly wrapping up on its own — leave it alone
 		}
@@ -2046,6 +2061,16 @@ func findOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason doma
 // reporting progress before ReconcileStuck flags it as stale. Mirrors the order of
 // magnitude of maxTriageSessionAge (server/services/backlog_service_triage.go).
 const maxWorkSessionStaleness = 2 * time.Hour
+
+// reviewVerdictIdleThreshold bounds how long reconcileUnprocessedReviewVerdicts
+// trusts SessionLivenessChecker's "alive" verdict once a review session has
+// actually saved a verdict. Set to maxWorkSessionStaleness's value rather than
+// abandonedReview's much shorter 15-minute grace: a reviewer doing legitimately
+// slow verification (large diff, running a full test suite) must not be reaped
+// mid-review, so this errs conservative — same order of magnitude as the other
+// "is this session still doing real work" threshold in this file, not the much
+// tighter "did anything ever start" grace period abandonedReview enforces.
+const reviewVerdictIdleThreshold = maxWorkSessionStaleness
 
 // headlessTriageSessionUUIDPrefix mirrors server/services/backlog_service_triage.go's
 // headlessTriageUUIDPrefix constant (duplicated here rather than imported: server/services

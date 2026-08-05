@@ -517,7 +517,20 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register MCP HTTP transport at /mcp so Claude sessions can connect
 	// without spawning a subprocess. The URL is passed via --mcp-server to
 	// claude when creating new sessions (no settings-file injection needed).
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck)
+	//
+	// deps.BacklogService is nil-guarded here (mirroring the other three
+	// nil-checks on this same field in this function) rather than passed
+	// directly: boxing a nil *services.BacklogService straight into the
+	// session.AutoReopenSpawner interface parameter would produce a non-nil
+	// interface value around a nil pointer — submitReviewVerdict's own
+	// `h.autoReopener != nil` guard would then read true, and calling
+	// AutoReopenAfterFailedReview would panic on the nil receiver instead of
+	// being skipped.
+	var autoReopener session.AutoReopenSpawner
+	if deps.BacklogService != nil {
+		autoReopener = deps.BacklogService
+	}
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {

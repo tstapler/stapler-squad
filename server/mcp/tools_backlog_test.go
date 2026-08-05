@@ -364,6 +364,47 @@ func TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap(t
 	require.NotContains(t, text, "you're finished", "a PASS verdict must no longer read as the end of the task")
 }
 
+// TestGetBacklogItem_ReviewRoleGuidance_InstructsEndingSessionAfterVerdict is
+// the regression guard for BUG-047 (a reviewer that submits a verdict and
+// then never exits leaves the item wedged in "review" forever). Symmetric to
+// TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap's
+// coverage of the work role's "Do NOT end your session" instruction.
+func TestGetBacklogItem_ReviewRoleGuidance_InstructsEndingSessionAfterVerdict(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusReview),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+	})
+
+	result, err := handler.getBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	text := tc.Text
+
+	require.Contains(t, text, "Your Role: Review")
+	require.Contains(t, text, "End your session immediately after calling submit_review_verdict")
+}
+
 // TestGetBacklogItem_ReturnsNotFoundError verifies that getBacklogItem
 // returns an error when item doesn't exist.
 func TestGetBacklogItem_ReturnsNotFoundError(t *testing.T) {
@@ -3173,4 +3214,203 @@ func TestRegisterBacklogTools_ReportDuplicate_DescribesRetryGuidance(t *testing.
 		"report_duplicate's description must give explicit retry guidance for INTERNAL_ERROR results (FR10)")
 	assert.Contains(t, content, "no configured GitHub credentials",
 		"report_duplicate's description must escalate the no-credentials case as non-retryable, distinct from ordinary retry guidance")
+}
+
+// --- BUG-047: submit_review_verdict eager review->in_progress transition ---
+
+// fakeAutoReopenSpawner is a minimal session.AutoReopenSpawner test double —
+// records every itemID it's called with, so tests can assert the eager
+// transition path was (or wasn't) invoked without needing a real
+// *services.BacklogService (heavy setup: SessionService, worktrees, etc.).
+type fakeAutoReopenSpawner struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+}
+
+func (f *fakeAutoReopenSpawner) AutoReopenAfterFailedReview(ctx context.Context, itemID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, itemID)
+	return f.err
+}
+
+func (f *fakeAutoReopenSpawner) calledWith() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// setupReviewSession creates a review-status BacklogItem with a linked
+// review-role ItemSession for sessionUUID, mirroring the setup shape used by
+// TestRequestReview_TransitionsItemToReview for the work role.
+func setupReviewSession(t *testing.T, storage *session.Storage) (itemID, sessionUUID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	sessUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	return item.ID, sessUUID
+}
+
+func verdictsArg(outcome string) []interface{} {
+	return []interface{}{
+		map[string]interface{}{
+			"criterion_index": float64(0),
+			"outcome":         outcome,
+			"evidence":        "clear evidence from the diff",
+		},
+	}
+}
+
+// TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsFail is
+// acceptance criterion 0/2's core regression guard: a FAIL verdict must drive
+// the review->in_progress transition (via AutoReopenSpawner, which owns
+// spawning a new work session when none is active) immediately, in the same
+// call, rather than waiting for the review session to exit or the sweep to fire.
+func TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsFail(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+
+	reopener := &fakeAutoReopenSpawner{}
+	handler := &backlogHandlers{storage: storage, autoReopener: reopener}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Blocked by security check.",
+		"verdicts": verdictsArg("FAIL"),
+	})
+
+	_, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{itemID}, reopener.calledWith(),
+		"a FAIL verdict must eagerly call AutoReopenAfterFailedReview exactly once")
+}
+
+// TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsPartialOrUnverifiable
+// extends the FAIL coverage above to the other two reject outcomes.
+func TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsPartialOrUnverifiable(t *testing.T) {
+	for _, outcome := range []string{"PARTIAL", "UNVERIFIABLE"} {
+		t.Run(outcome, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			itemID, sessUUID := setupReviewSession(t, storage)
+
+			reopener := &fakeAutoReopenSpawner{}
+			handler := &backlogHandlers{storage: storage, autoReopener: reopener}
+			ctx := WithSessionUUID(context.Background(), sessUUID)
+
+			req := makeToolReq(map[string]interface{}{
+				"item_id":  itemID,
+				"summary":  "Needs more work.",
+				"verdicts": verdictsArg(outcome),
+			})
+
+			_, err := handler.submitReviewVerdict(ctx, req)
+			require.NoError(t, err)
+
+			assert.Equal(t, []string{itemID}, reopener.calledWith())
+		})
+	}
+}
+
+// TestSubmitReviewVerdict_should_NotInvokeAutoReopener_When_OutcomeIsPass is
+// acceptance criterion 5: PASS stays deferred to handleReviewSessionExited
+// (which pushes the branch and creates the PR) — the eager path must not
+// fire for it.
+func TestSubmitReviewVerdict_should_NotInvokeAutoReopener_When_OutcomeIsPass(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+
+	reopener := &fakeAutoReopenSpawner{}
+	handler := &backlogHandlers{storage: storage, autoReopener: reopener}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "All good.",
+		"verdicts": verdictsArg("PASS"),
+	})
+
+	_, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+
+	assert.Empty(t, reopener.calledWith(), "a PASS verdict must not trigger the eager auto-reopen path")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"PASS must leave the item in review — only handleReviewSessionExited transitions it, on session exit")
+}
+
+// TestSubmitReviewVerdict_should_NotError_When_AutoReopenerNil verifies the
+// eager transition is optional/nil-safe (the stdio MCP fallback path has no
+// BacklogService to wire — see RunServer's doc comment) rather than a hard
+// dependency that would break submit_review_verdict wherever it isn't wired.
+func TestSubmitReviewVerdict_should_NotError_When_AutoReopenerNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+
+	handler := &backlogHandlers{storage: storage} // autoReopener left nil
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Blocked.",
+		"verdicts": verdictsArg("FAIL"),
+	})
+
+	result, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"with autoReopener nil, the eager transition must be skipped entirely — the item stays in review for the session-exit/sweep paths to handle, not silently left in some other state")
+}
+
+// TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails
+// verifies acceptance criterion 1's CAS-harmless-failure contract from the
+// caller's side: if AutoReopenAfterFailedReview's own CAS precondition fails
+// (e.g. handleReviewSessionExited already raced ahead of it), the error is
+// swallowed (logged only) — the review session's submit_review_verdict call
+// must not itself fail or surface that as an error to the caller.
+func TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+
+	reopener := &fakeAutoReopenSpawner{err: errors.New("concurrent modification detected: expected status review, got in_progress")}
+	handler := &backlogHandlers{storage: storage, autoReopener: reopener}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Blocked.",
+		"verdicts": verdictsArg("FAIL"),
+	})
+
+	result, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Review verdict submitted",
+		"AutoReopenAfterFailedReview's CAS failure must not surface as a tool error — the normal success text must still be returned")
+	assert.Equal(t, []string{itemID}, reopener.calledWith())
 }

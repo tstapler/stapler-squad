@@ -1191,6 +1191,98 @@ func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgr
 	assert.Equal(t, 1, workCount, "must not spawn a second work session when one is already active")
 }
 
+// TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarmlessly
+// is the regression guard for BUG-047 acceptance criterion 1: submit_review_verdict's
+// eager review->in_progress transition (server/mcp/tools_backlog.go) and
+// BacklogLifecycleListener.handleReviewSessionExited both call into
+// AutoReopenAfterFailedReview for the same item — the eager path fires first, at
+// verdict-submission time, and if the review session goes on to exit normally
+// moments later, handleReviewSessionExited fires this exact same call a second
+// time. The second call's own ExpectedStatus: review CAS precondition must fail
+// (the item already left review after the first call succeeded) — surfaced as an
+// error to that second caller only, never corrupting the item's state or
+// double-transitioning it. Both submitReviewVerdict and autoReopenWithBackoffGate
+// already treat this error as log-only, not propagated to any end user — this test
+// covers the CAS behavior itself, one level below that error-swallowing.
+func TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarmlessly(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose reviewer submits FAIL then exits normally moments later",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// An active work session so the first call reuses it instead of spawning a
+	// new one (spawning needs a real repo_path/worktree, irrelevant to what
+	// this test is verifying — the CAS behavior across two calls).
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "still-alive-work-session",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	firstErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, firstErr, "the first call (the eager submit_review_verdict path) must succeed")
+
+	afterFirst, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), afterFirst.Status)
+
+	secondErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	assert.Error(t, secondErr, "the second call (handleReviewSessionExited racing in afterward) must fail its own CAS — the item is no longer in review")
+
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), final.Status,
+		"the failed second call must not corrupt or revert the state the first call already established")
+}
+
+// TestAutoReopenAfterFailedReview_NoActiveWorkSession_SpawnsNewOne is
+// acceptance criterion 2's core regression guard: when submit_review_verdict's
+// eager transition (server/mcp/tools_backlog.go) fires for a FAIL/PARTIAL/
+// UNVERIFIABLE verdict and no work session is currently active for the item —
+// e.g. the original work session already exited after calling request_review —
+// AutoReopenAfterFailedReview must both transition the item back to
+// in_progress AND spawn a fresh work session, so the item is never left
+// in_progress with nothing acting on it.
+func TestAutoReopenAfterFailedReview_NoActiveWorkSession_SpawnsNewOne(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Item whose work session already exited before the reviewer's FAIL verdict",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// The original work session already ended — nothing is active for this item.
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "ended-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), sessions[0].ID, time.Now()))
+
+	require.NoError(t, svc.AutoReopenAfterFailedReview(context.Background(), item.ID))
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+	assert.Len(t, creator.calls, 1, "a fresh work session must be spawned when nothing is active")
+}
+
 // --- Stale-but-alive blocking work session: closes the "zero operator signal" gap ---
 //
 // hasActiveWorkSession's guard (above) is purely liveness-based (EndedAt == nil) and
