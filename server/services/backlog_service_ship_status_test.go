@@ -358,3 +358,48 @@ func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstR
 	require.Len(t, st.FileStats, 1)
 	assert.Equal(t, "only.go", st.FileStats[0].Path)
 }
+
+// TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBaseShaIsRecorded
+// is the RPC-side half of BUG-047's regression coverage (the reconciler side
+// lives in session/backlog_lifecycle_superseded_test.go).
+//
+// ItemSession.LastCommitSha used to be seeded once at spawn with the worktree's
+// pre-work base SHA and never refreshed. A base SHA is by construction already
+// an ancestor of main, so this RPC — which backs the item detail page's Ship PR
+// button and its "shipped" badge — reported *every* item as already shipped,
+// however much unmerged work its session actually had. This test records only
+// the base SHA (no work commit recorded on top) and asserts the RPC refuses to
+// claim the item shipped.
+func TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBaseShaIsRecorded(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item whose session only ever recorded its base SHA",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "base-only-work",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// Exactly what spawn seeding leaves behind, in both the new field and the
+	// legacy one, so pre-fix rows already in production are covered too.
+	require.NoError(t, repo.SetItemSessionBaseCommit(t.Context(), is.ID, baseSHA))
+	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, baseSHA, "", time.Now(), 0))
+
+	resp, err := svc.GetBacklogItemShipStatus(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemShipStatusRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	st := resp.Msg.Status
+	assert.False(t, st.Shipped,
+		"the session's own base commit is always on main; it must never be read as proof the item's work shipped")
+	assert.Empty(t, st.ShippedVia)
+	assert.NotEmpty(t, st.Error, "the RPC should say it has no committed work to judge, not silently claim success")
+}

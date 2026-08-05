@@ -290,22 +290,31 @@ type ItemSessionSummary struct {
 	AcSnapshot               AcCriteriaJSON
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
-	LastCommitSha            string
-	LastCommitMessage        string
-	CommitCountSinceSpawn    int
-	StartedAt                *time.Time
-	EndedAt                  *time.Time
-	EndReason                string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
-	LastCommitAt             *time.Time
-	LastFileTouchAt          *time.Time
-	LastProgressAt           *time.Time
-	CreatedAt                time.Time
-	EstimatedCostUsd         float64
-	TriageResult             string // raw JSON stored in triage_result column
-	TriageResultSummary      string // summary field parsed from TriageResult
-	VerificationNotes        string // freeform verification evidence reported via request_review
-	OverallOutcome           string // from linked review_verdict (empty if none)
-	ReviewVerdict            *ReviewVerdictSummary
+	// BaseCommitSha is the worktree's pre-work HEAD, captured once at spawn —
+	// the base of the review gate's base..HEAD diff, and by construction always
+	// already an ancestor of main. Never use it as evidence that this session's
+	// work shipped; that is LastCommitSha's job. See the ItemSession ent
+	// schema's field comments for the full BUG-047 rationale.
+	BaseCommitSha string
+	// LastCommitSha is the session's current tip commit, refreshed each
+	// reconciliation tick while the session is active (see
+	// BacklogLifecycleListener.refreshWorkSessionGitActivity).
+	LastCommitSha         string
+	LastCommitMessage     string
+	CommitCountSinceSpawn int
+	StartedAt             *time.Time
+	EndedAt               *time.Time
+	EndReason             string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
+	LastCommitAt          *time.Time
+	LastFileTouchAt       *time.Time
+	LastProgressAt        *time.Time
+	CreatedAt             time.Time
+	EstimatedCostUsd      float64
+	TriageResult          string // raw JSON stored in triage_result column
+	TriageResultSummary   string // summary field parsed from TriageResult
+	VerificationNotes     string // freeform verification evidence reported via request_review
+	OverallOutcome        string // from linked review_verdict (empty if none)
+	ReviewVerdict         *ReviewVerdictSummary
 }
 
 // BacklogStatusEventData is the domain DTO replacing *ent.BacklogStatusEvent in Storage returns.

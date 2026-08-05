@@ -101,9 +101,10 @@ func (s *BacklogService) AttachSessionToItem(
 				}
 				s.worktreeMu.Unlock()
 				// Capture pre-work HEAD SHA so the review gate can diff base..HEAD
-				// across all commits the agent makes (same as SpawnSessionFromItem step 12b).
+				// across all commits the agent makes (same as SpawnSessionFromItem step 12b) —
+				// into BaseCommitSha, never LastCommitSha (see SetItemSessionBaseCommit).
 				if baseSHA, shaErr := session.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
-					_ = s.storage.UpdateItemSessionGitActivity(ctx, is.ID, baseSHA, "", time.Now(), 0)
+					_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 					inst.SetDirBaseSHA(baseSHA)
 				}
 				// Persist synchronously so the review gate's worktree lookup (by session

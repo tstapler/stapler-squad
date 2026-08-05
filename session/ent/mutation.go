@@ -14321,6 +14321,7 @@ type ItemSessionMutation struct {
 	pipeline_mode_snapshot_hash *string
 	triage_result               *string
 	verification_notes          *string
+	base_commit_sha             *string
 	last_commit_sha             *string
 	last_commit_at              *time.Time
 	last_commit_message         *string
@@ -14883,6 +14884,55 @@ func (m *ItemSessionMutation) ResetVerificationNotes() {
 	delete(m.clearedFields, itemsession.FieldVerificationNotes)
 }
 
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (m *ItemSessionMutation) SetBaseCommitSha(s string) {
+	m.base_commit_sha = &s
+}
+
+// BaseCommitSha returns the value of the "base_commit_sha" field in the mutation.
+func (m *ItemSessionMutation) BaseCommitSha() (r string, exists bool) {
+	v := m.base_commit_sha
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBaseCommitSha returns the old "base_commit_sha" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldBaseCommitSha(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBaseCommitSha is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBaseCommitSha requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBaseCommitSha: %w", err)
+	}
+	return oldValue.BaseCommitSha, nil
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (m *ItemSessionMutation) ClearBaseCommitSha() {
+	m.base_commit_sha = nil
+	m.clearedFields[itemsession.FieldBaseCommitSha] = struct{}{}
+}
+
+// BaseCommitShaCleared returns if the "base_commit_sha" field was cleared in this mutation.
+func (m *ItemSessionMutation) BaseCommitShaCleared() bool {
+	_, ok := m.clearedFields[itemsession.FieldBaseCommitSha]
+	return ok
+}
+
+// ResetBaseCommitSha resets all changes to the "base_commit_sha" field.
+func (m *ItemSessionMutation) ResetBaseCommitSha() {
+	m.base_commit_sha = nil
+	delete(m.clearedFields, itemsession.FieldBaseCommitSha)
+}
+
 // SetLastCommitSha sets the "last_commit_sha" field.
 func (m *ItemSessionMutation) SetLastCommitSha(s string) {
 	m.last_commit_sha = &s
@@ -15402,7 +15452,7 @@ func (m *ItemSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSessionMutation) Fields() []string {
-	fields := make([]string, 0, 18)
+	fields := make([]string, 0, 19)
 	if m.session_uuid != nil {
 		fields = append(fields, itemsession.FieldSessionUUID)
 	}
@@ -15432,6 +15482,9 @@ func (m *ItemSessionMutation) Fields() []string {
 	}
 	if m.verification_notes != nil {
 		fields = append(fields, itemsession.FieldVerificationNotes)
+	}
+	if m.base_commit_sha != nil {
+		fields = append(fields, itemsession.FieldBaseCommitSha)
 	}
 	if m.last_commit_sha != nil {
 		fields = append(fields, itemsession.FieldLastCommitSha)
@@ -15485,6 +15538,8 @@ func (m *ItemSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.TriageResult()
 	case itemsession.FieldVerificationNotes:
 		return m.VerificationNotes()
+	case itemsession.FieldBaseCommitSha:
+		return m.BaseCommitSha()
 	case itemsession.FieldLastCommitSha:
 		return m.LastCommitSha()
 	case itemsession.FieldLastCommitAt:
@@ -15530,6 +15585,8 @@ func (m *ItemSessionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldTriageResult(ctx)
 	case itemsession.FieldVerificationNotes:
 		return m.OldVerificationNotes(ctx)
+	case itemsession.FieldBaseCommitSha:
+		return m.OldBaseCommitSha(ctx)
 	case itemsession.FieldLastCommitSha:
 		return m.OldLastCommitSha(ctx)
 	case itemsession.FieldLastCommitAt:
@@ -15624,6 +15681,13 @@ func (m *ItemSessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetVerificationNotes(v)
+		return nil
+	case itemsession.FieldBaseCommitSha:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBaseCommitSha(v)
 		return nil
 	case itemsession.FieldLastCommitSha:
 		v, ok := value.(string)
@@ -15756,6 +15820,9 @@ func (m *ItemSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsession.FieldVerificationNotes) {
 		fields = append(fields, itemsession.FieldVerificationNotes)
 	}
+	if m.FieldCleared(itemsession.FieldBaseCommitSha) {
+		fields = append(fields, itemsession.FieldBaseCommitSha)
+	}
 	if m.FieldCleared(itemsession.FieldLastCommitSha) {
 		fields = append(fields, itemsession.FieldLastCommitSha)
 	}
@@ -15805,6 +15872,9 @@ func (m *ItemSessionMutation) ClearField(name string) error {
 		return nil
 	case itemsession.FieldVerificationNotes:
 		m.ClearVerificationNotes()
+		return nil
+	case itemsession.FieldBaseCommitSha:
+		m.ClearBaseCommitSha()
 		return nil
 	case itemsession.FieldLastCommitSha:
 		m.ClearLastCommitSha()
@@ -15861,6 +15931,9 @@ func (m *ItemSessionMutation) ResetField(name string) error {
 		return nil
 	case itemsession.FieldVerificationNotes:
 		m.ResetVerificationNotes()
+		return nil
+	case itemsession.FieldBaseCommitSha:
+		m.ResetBaseCommitSha()
 		return nil
 	case itemsession.FieldLastCommitSha:
 		m.ResetLastCommitSha()

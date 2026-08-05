@@ -207,6 +207,26 @@ func (_u *ItemSessionUpdate) ClearVerificationNotes() *ItemSessionUpdate {
 	return _u
 }
 
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (_u *ItemSessionUpdate) SetBaseCommitSha(v string) *ItemSessionUpdate {
+	_u.mutation.SetBaseCommitSha(v)
+	return _u
+}
+
+// SetNillableBaseCommitSha sets the "base_commit_sha" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillableBaseCommitSha(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetBaseCommitSha(*v)
+	}
+	return _u
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (_u *ItemSessionUpdate) ClearBaseCommitSha() *ItemSessionUpdate {
+	_u.mutation.ClearBaseCommitSha()
+	return _u
+}
+
 // SetLastCommitSha sets the "last_commit_sha" field.
 func (_u *ItemSessionUpdate) SetLastCommitSha(v string) *ItemSessionUpdate {
 	_u.mutation.SetLastCommitSha(v)
@@ -496,6 +516,12 @@ func (_u *ItemSessionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.VerificationNotesCleared() {
 		_spec.ClearField(itemsession.FieldVerificationNotes, field.TypeString)
+	}
+	if value, ok := _u.mutation.BaseCommitSha(); ok {
+		_spec.SetField(itemsession.FieldBaseCommitSha, field.TypeString, value)
+	}
+	if _u.mutation.BaseCommitShaCleared() {
+		_spec.ClearField(itemsession.FieldBaseCommitSha, field.TypeString)
 	}
 	if value, ok := _u.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
@@ -793,6 +819,26 @@ func (_u *ItemSessionUpdateOne) SetNillableVerificationNotes(v *string) *ItemSes
 // ClearVerificationNotes clears the value of the "verification_notes" field.
 func (_u *ItemSessionUpdateOne) ClearVerificationNotes() *ItemSessionUpdateOne {
 	_u.mutation.ClearVerificationNotes()
+	return _u
+}
+
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (_u *ItemSessionUpdateOne) SetBaseCommitSha(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetBaseCommitSha(v)
+	return _u
+}
+
+// SetNillableBaseCommitSha sets the "base_commit_sha" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillableBaseCommitSha(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetBaseCommitSha(*v)
+	}
+	return _u
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (_u *ItemSessionUpdateOne) ClearBaseCommitSha() *ItemSessionUpdateOne {
+	_u.mutation.ClearBaseCommitSha()
 	return _u
 }
 
@@ -1115,6 +1161,12 @@ func (_u *ItemSessionUpdateOne) sqlSave(ctx context.Context) (_node *ItemSession
 	}
 	if _u.mutation.VerificationNotesCleared() {
 		_spec.ClearField(itemsession.FieldVerificationNotes, field.TypeString)
+	}
+	if value, ok := _u.mutation.BaseCommitSha(); ok {
+		_spec.SetField(itemsession.FieldBaseCommitSha, field.TypeString, value)
+	}
+	if _u.mutation.BaseCommitShaCleared() {
+		_spec.ClearField(itemsession.FieldBaseCommitSha, field.TypeString)
 	}
 	if value, ok := _u.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)

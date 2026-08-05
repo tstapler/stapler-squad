@@ -1019,7 +1019,19 @@ func (s *Storage) UpdateItemSessionStarted(ctx context.Context, id string, start
 	return er.UpdateItemSessionStarted(ctx, id, startedAt)
 }
 
-// UpdateItemSessionGitActivity records the latest commit SHA and related fields on an ItemSession.
+// SetItemSessionBaseCommit records the pre-work base commit SHA on an ItemSession.
+// See the EntRepository method for why this is separate from git activity.
+func (s *Storage) SetItemSessionBaseCommit(ctx context.Context, id, sha string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.SetItemSessionBaseCommit(ctx, id, sha)
+}
+
+// UpdateItemSessionGitActivity records the session's current tip commit and
+// related fields on an ItemSession. For the spawn-time baseline, use
+// SetItemSessionBaseCommit.
 func (s *Storage) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
