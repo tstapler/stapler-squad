@@ -9,6 +9,87 @@ and four quality-skill passes (`quality:architecture-review`, `ux:review`, `code
 Findings are bucketed: **[1] reconciliation bugs**, **[2] manual gates that could be
 policy-driven**, **[3] hardcoded pipeline steps that need a configurability seam**.
 
+## Update — 2026-08-05 (fix shipped + independently verified blast radius): 13 items had real work wrongly discarded, not 1 — plus 2 more unfixed instances of the same "field written once at creation, never kept live" shape
+
+**Fix shipped**: PR [#346](https://github.com/tstapler/stapler-squad/pull/346) (merged) splits `base_commit_sha`
+(spawn-time baseline, still feeds the review gate's diff) from a genuinely-live `last_commit_sha`,
+refreshed via go-git on the existing reconciliation sweep. Fixes both `closeIfSupersededByMain`
+and `GetBacklogItemShipStatus`. PR [#347](https://github.com/tstapler/stapler-squad/pull/347)
+(merged) recovers BUG-047's actual fix (commits `541fc846e7`/`342c49b6ed`) that PR #342 had
+wrongly discarded. Root cause turned out to be a **missed call site**, not a novel bug class —
+the repo had already fixed this staleness pattern for other consumers via a
+`resolveLatestWorkCommit` helper; `closeIfSupersededByMain` was simply never migrated to it.
+
+**Blast radius — independently verified via `ListBacklogItems{includeTerminal:true,
+includeArchived:true}` (78 items total) + a parallel `GetBacklogItem` fetch of all 64
+done/archived items, grepped for `"closed as superseded"` in `statusEvents`.** Found **14
+items / 15 events** (one item, `98f006f2`, hit twice) between 2026-07-25 and 2026-08-05 — a
+6-week window, not a one-off. Cross-referenced every cited PR via `gh pr view --json state`:
+
+| Outcome | Count | Detail |
+|---|---|---|
+| Real work discarded (PR `CLOSED`, never merged) | 12 events / 12 items | `310`, `297`, `324`, `305`, `224`, `342`, `298`, `331`, `313`, `314`, `307`, `281` |
+| Real work discarded (PR left `OPEN` — the `ClosePR` call itself silently failed, item marked `done` anyway per the code's own best-effort comment) | 2 events / 2 items | `312`, `286` |
+| Likely harmless (PR `188` had genuinely already `MERGED` 5 days before the self-heal note fired — a legitimate catch-up, not data loss) | 1 event / 1 item | `12601982` |
+
+13 of 14 items are true false-positives — confirmed not coincidental supersession, since the
+cited SHAs repeat across *unrelated* items: `654c6012fe` closes 4 events across 3 different
+items (cross-session FTS5 search, subagent spawn tracking, "Wire Jest into CI" — closed this
+way **twice**, PR #313 then #314, on the identical stale SHA both times, proving the system did
+retry and got bitten again before the fix landed); `4eca0ed34a` closes 3 (archive-item MCP
+tool, Omnibar modal scroll fix, terminal resize feedback-loop fix); `32f504c803` closes 3
+(phantom-keystroke fix, flaky-CI-hook-wait fix, TOML agent-detector plugins). Titles span
+completely unrelated features — no plausible legitimate cross-shipping explains the overlap.
+
+**Not yet recovered** — this pass only confirmed the list and cross-referenced PR state; it did
+not attempt to rebase/reopen the other 13 branches the way PR #347 did for #342. Branch
+existence for each is unverified. Whether these are still worth recovering (vs. superseded for
+real by since-shipped work, given up to 6 weeks have passed) needs a per-item look before
+committing recovery effort — flagged for the user rather than assumed.
+
+**Two more unfixed instances of the same recurring shape, assessed (not fixed) this pass:**
+
+- **`LastFileTouchAt`** — LOW severity, inert. Its only writer, `UpdateItemSessionFileTouch`
+  (`session/storage_backlog.go:342-356`), has zero callers anywhere in the codebase (confirmed
+  by grep) — dead code, not just under-called. The field stays permanently `nil`; its one
+  reader (`server/services/backlog_service.go:500-501`) just omits it from API responses when
+  nil. Unlike `LastCommitSha`, nothing consumes this incorrectly — it's an unfinished feature,
+  not an active bug.
+- **`LastProgressAt`** — MODERATE severity, opposite-direction risk from the `LastCommitSha`
+  bug. Confirmed by reading `reportProgress` (`server/mcp/tools_backlog.go:306-380`) end to
+  end: it calls `UpdateAcCriterionStatus` and `AppendProgressNote` only — never touches
+  `ItemSession`/`LastProgressAt` at all. So the MCP tool an active work session calls most
+  often (marking AC criteria pass/fail) does not reset the staleness clock that
+  `remediateStaleWorkWithBackoffGate` (`session/backlog_lifecycle.go:1298-1299, 2115-2116`)
+  reads to decide whether to remediate. Since PR #346 also fixed `UpdateItemSessionGitActivity`
+  to run periodically (not just once at spawn), `LastProgressAt` now at least refreshes on
+  every new commit as a side effect — but a session doing real work between commits (research,
+  test runs, criteria updates) still won't reset it, risking a false "stale" verdict. Bounded by
+  the existing backoff/circuit-breaker machinery, so not CRITICAL, but a real gap.
+- **`EstimatedCostUsd`** — LOW-MODERATE severity, reporting accuracy only. Confirmed by reading
+  `TriggerTriage`'s `CreateItemSession` call (`server/services/backlog_service_triage.go`,
+  ~line 2180) — it never sets `EstimatedCostUsd`, unlike the sibling `TriggerReReview` path
+  (`backlog_service_triage.go:2672-2677`), which correctly threads `callCostUSD` through via
+  `CreateItemSessionWithVerdict`. Every headless triage session's cost silently reports $0,
+  understating total spend in any cost aggregation (`server/services/backlog_service.go:627,
+  694`) that includes triage rounds. Mechanical fix (thread the same value through the
+  sibling code path already does) whenever prioritized.
+
+### Recommended Next Actions
+
+1. **Decide recovery scope for the 13 false-positive items** — a per-item check (does the
+   branch still exist? is the fix still relevant given elapsed time?) before committing to
+   full recovery effort matching what PR #347 did for #342. User input needed on how much of
+   this to pursue.
+2. `LastProgressAt` not being touched by `report_progress` — worth a small, mechanical
+   `sdd:fix-bug` given it's now fully characterized; low effort relative to the moderate
+   staleness-detection accuracy gain.
+3. `EstimatedCostUsd` gap in `TriggerTriage` — worth a small, mechanical fix for the same
+   reason; both this and #2 are good candidates for a single combined fix session since
+   they're both "thread an existing value through a sibling code path that already does it
+   correctly" shaped, not novel design work.
+4. `LastFileTouchAt` — deprioritized; inert dead code, no active harm, lowest value fix here.
+
 ## Update — 2026-08-05 (correction, same day): the "self-healing" story above was itself a false positive — `closeIfSupersededByMain` uses a structurally stale `LastCommitSha`, CRITICAL, systemic
 
 Checking on `d6ddbef3`'s progress after the update below revealed the update's own headline
