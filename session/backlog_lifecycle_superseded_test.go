@@ -241,3 +241,54 @@ func TestRefreshWorkSessionGitActivity_should_ReplaceSpawnTimeBaseWithSessionsRe
 		"one commit authored since the base")
 	assert.Equal(t, workIS.ID, after[0].ID)
 }
+
+// TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_When_CommitIsBackdated
+// guards a regression the live-refresh sweep would otherwise have introduced.
+//
+// last_progress_at drives reconcileStaleWorkSessions' staleness clock. Git author
+// timestamps survive rebases and cherry-picks, and this repo rebases session
+// worktrees onto main routinely — so recording the *commit's author date* as
+// progress would push that clock backwards whenever a session rebased an older
+// commit, falsely flagging a healthy, actively-committing session as stale_work
+// and handing it to automated remediation. Progress is recorded when it is
+// observed; last_commit_at keeps the true author time for display.
+func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_When_CommitIsBackdated(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "item whose session rebased a backdated commit",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "backdated-commit-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// A commit authored 3 days ago — well past the staleness threshold — but
+	// observed by the refresh sweep right now.
+	authoredAt := time.Now().Add(-72 * time.Hour)
+	before := time.Now()
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, "deadbeef", "rebased work", authoredAt, 1))
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+
+	require.NotNil(t, sessions[0].LastCommitAt)
+	assert.WithinDuration(t, authoredAt, *sessions[0].LastCommitAt, time.Second,
+		"last_commit_at must preserve the commit's real author time for display")
+
+	require.NotNil(t, sessions[0].LastProgressAt)
+	assert.False(t, sessions[0].LastProgressAt.Before(before.Add(-time.Second)),
+		"last_progress_at must be observation time, not the backdated author time — otherwise a rebase instantly marks a healthy session stale")
+	assert.True(t, staleWork(authoredAt, time.Now()),
+		"precondition: the author date really is old enough to trip the staleness threshold, so this test would fail if the author date leaked through")
+	assert.False(t, staleWork(*sessions[0].LastProgressAt, time.Now()),
+		"the session must not be considered stale after just reporting a commit")
+}

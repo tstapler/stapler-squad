@@ -158,20 +158,30 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 	return result, nil
 }
 
-// GetBaseCommitSHAsForSessions returns a map of sessionUUID → last_commit_sha for the
-// given session UUIDs, including only rows where last_commit_sha is non-empty.
-// Used at startup to restore dirBaseSHA for directory-mode backlog sessions.
+// GetBaseCommitSHAsForSessions returns a map of sessionUUID → base_commit_sha for
+// the given session UUIDs, including only rows with a non-empty value. Used at
+// startup to restore dirBaseSHA for directory-mode backlog sessions — the
+// counterpart to the SetDirBaseSHA call at spawn.
+//
+// Reads base_commit_sha, falling back to last_commit_sha only for rows written
+// before the two were split. That fallback is safe precisely because the bug
+// being fixed meant the two fields held the same value on every legacy row; it
+// must NOT be extended to rows that have a base_commit_sha, since last_commit_sha
+// is now live-refreshed to the session's tip and would give a moving diff base.
 func (r *EntRepository) GetBaseCommitSHAsForSessions(ctx context.Context, sessionUUIDs []string) (map[string]string, error) {
 	rows, err := r.client.ItemSession.Query().
 		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
-		Select(itemsession.FieldSessionUUID, itemsession.FieldLastCommitSha).
+		Select(itemsession.FieldSessionUUID, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha).
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("GetBaseCommitSHAsForSessions: %w", err)
 	}
 	result := make(map[string]string, len(rows))
 	for _, row := range rows {
-		if row.LastCommitSha != "" {
+		switch {
+		case row.BaseCommitSha != "":
+			result[row.SessionUUID] = row.BaseCommitSha
+		case row.LastCommitSha != "":
 			result[row.SessionUUID] = row.LastCommitSha
 		}
 	}
@@ -340,12 +350,21 @@ func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id str
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
+	// last_progress_at records when progress was *observed*, not when the commit
+	// was authored — deliberately time.Now() rather than commitAt. Git author
+	// timestamps survive rebases and cherry-picks, and this repo rebases session
+	// worktrees onto main routinely, so feeding an author date into the staleness
+	// clock (reconcileStaleWorkSessions, which reads this field) would push it
+	// backwards on a rebase and falsely flag a healthy, actively-committing
+	// session as stale_work — triggering automated remediation against a session
+	// that is working fine. Observing a new commit right now IS progress now.
+	// last_commit_at keeps the true author time for display.
 	_, err = r.client.ItemSession.UpdateOneID(parsedID).
 		SetLastCommitSha(sha).
 		SetLastCommitMessage(msg).
 		SetLastCommitAt(commitAt).
 		SetCommitCountSinceSpawn(commitCount).
-		SetLastProgressAt(commitAt).
+		SetLastProgressAt(time.Now()).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update git activity on item session %s: %w", id, err)
