@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -684,9 +685,25 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	// logs — no double-transition, no error surfaced to either caller.
 	if overallOutcome == session.ReviewVerdictFail || overallOutcome == session.ReviewVerdictPartial || overallOutcome == session.ReviewVerdictUnverifiable {
 		if h.autoReopener != nil {
-			if reopenErr := h.autoReopener.AutoReopenAfterFailedReview(ctx, itemID); reopenErr != nil {
+			// Detached from the request ctx (context.WithoutCancel) and
+			// explicitly time-bounded: AutoReopenAfterFailedReview's only
+			// other callers (session/backlog_lifecycle.go) run on long-lived
+			// background contexts, but this call runs on the live
+			// submit_review_verdict request's ctx, which a client-side
+			// disconnect/timeout can cancel mid-call. AutoReopenAfterFailedReview's
+			// own rollback-on-spawn-failure path reuses whatever ctx it's
+			// given, so an inherited cancellation could take out both the
+			// transition attempt and its own safety-net rollback together —
+			// exactly the "stranded in_progress with no active session" case
+			// its rollback exists to prevent. The verdict itself is already
+			// durably persisted above, so this transition must be allowed to
+			// finish (or cleanly roll back) independent of the caller's
+			// connection.
+			reopenCtx, reopenCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			if reopenErr := h.autoReopener.AutoReopenAfterFailedReview(reopenCtx, itemID); reopenErr != nil {
 				log.WarningLog.Printf("[submitReviewVerdict] AutoReopenAfterFailedReview item=%s: %v", itemID, reopenErr)
 			}
+			reopenCancel()
 		}
 	}
 

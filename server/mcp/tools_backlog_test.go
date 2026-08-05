@@ -3378,6 +3378,11 @@ func TestSubmitReviewVerdict_should_NotError_When_AutoReopenerNil(t *testing.T) 
 	result, err := handler.submitReviewVerdict(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, result)
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"with autoReopener nil, the eager transition must be skipped entirely — the item stays in review for the session-exit/sweep paths to handle, not silently left in some other state")
 }
 
 // TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails

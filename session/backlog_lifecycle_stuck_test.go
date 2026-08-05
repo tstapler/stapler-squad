@@ -533,6 +533,61 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 			}
 		}
 	})
+
+	t.Run("verdict just under idle threshold: still no-act", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		er := storage.repo.(*EntRepository)
+		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold-time.Minute)
+
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
+
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, string(BacklogStatusReview), fetched.Status,
+			"a verdict just under reviewVerdictIdleThreshold must not be swept yet — only the (older, exercised above) case should trigger")
+	})
+
+	// PASS is deferred to session-exit by design, so it never gets the eager
+	// transition submitReviewVerdict drives for FAIL/PARTIAL/UNVERIFIABLE
+	// (server/mcp/tools_backlog.go) — this idle-timeout branch is PASS's
+	// *only* path back out of "review" once its reviewer session goes idle
+	// without exiting, so it needs its own direct coverage rather than
+	// inheriting confidence from the FAIL case above.
+	t.Run("PASS verdict older than idle threshold: now acts even though session reports alive", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		er := storage.repo.(*EntRepository)
+		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictPass, reviewVerdictIdleThreshold+time.Hour)
+
+		// A work session so the PASS verdict has something to ship — mirrors
+		// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive's
+		// setup; no worktree recorded, so this exercises the same pre-existing
+		// fallbackToDone("no worktree") branch that test does.
+		_, err := storage.CreateItemSession(ctx, ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: uuid.New().String(),
+			SessionRole: SessionRoleWork,
+		})
+		require.NoError(t, err)
+
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive — only the verdict age should trigger action
+
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+			"a PASS verdict aged past reviewVerdictIdleThreshold must still ship even though SessionLivenessChecker reports the review session alive")
+	})
 }
 
 // TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemReenteredReviewAfterAlreadyShipping
