@@ -137,7 +137,7 @@ func triageEndReasonOrUnknown(endReason string) string {
 //     pattern for the closest analogous detector in this file: a headless triage
 //     call routinely runs 7-15 minutes, so per-tick liveness signals are noisy
 //     here; staleness alone is the reliable signal. Headless-triage sessions (the
-//     common case) get the much shorter maxHeadlessTriageSessionStaleness (30m)
+//     common case) get the much shorter maxHeadlessTriageSessionStaleness (35m)
 //     rather than the general-purpose maxWorkSessionStaleness (2h): an open
 //     headless row found later reliably means dead, not slow (see that constant's
 //     doc comment). Not generalized beyond idea: nothing in this codebase creates

@@ -123,6 +123,6 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 		}
 	}
 	if processed > 0 {
-		log.InfoLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions: processed %d work session(s) across %d terminal item(s)", processed, len(items))
+		log.InfoLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions: processed %d work/review session(s) across %d terminal item(s)", processed, len(items))
 	}
 }

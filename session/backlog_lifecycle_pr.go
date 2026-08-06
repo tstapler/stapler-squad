@@ -87,7 +87,7 @@ type prPendingChecker interface {
 
 // prCreator is the subset of GitWorktree's push/PR-creation behavior that
 // pushAndCreatePR depends on. Defined here (the consumer), scoped to exactly
-// what's called, mirroring prPendingChecker below.
+// what's called, mirroring prPendingChecker above.
 type prCreator interface {
 	CommitChanges(commitMessage string) error
 	PushBranch() error
