@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
@@ -598,7 +599,8 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	name := stapleSquadTmuxName(title)
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", name)
+	args := tmux.ResolveSocket("").Args("kill-session", "-t", name)
+	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		combined := strings.ToLower(string(out))
