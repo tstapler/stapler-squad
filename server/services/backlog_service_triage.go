@@ -1659,6 +1659,26 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 // by whichever of the rework cap or MaxRemediationAttempts (session/
 // backlog_remediation.go) is tighter, never solely by a rework cap an
 // operator may have set to 0 (unlimited) for a different reason.
+//
+// BUG-064: UpdateItemSessionEnded runs BEFORE KillTmuxPaneOnly, deliberately
+// — not just cosmetically — ordered this way. Killing the tmux pane fires
+// the Instance's EventStopped lifecycle notification, which
+// session.BacklogLifecycleListener.onSessionExited (session/
+// backlog_lifecycle.go) handles in its own goroutine by unconditionally
+// transitioning any in_progress item straight to "review" the moment a work
+// ItemSession's EndedAt is observed set. Live evidence (backlog item
+// 2d7fac56, 2026-08-06): that goroutine's transition raced ahead of this
+// function's own AutoRespawnAutonomousWork call below — which no-ops once
+// item.Status is no longer in_progress ("already moved on ... nothing to
+// do") — so the stale session was killed but no fresh work session was ever
+// spawned, and the item silently went straight back into review carrying the
+// exact same (already twice-PARTIAL) diff instead of getting a fresh turn
+// budget. Ending the session here first, before the kill, guarantees
+// (program-order happens-before, not a race) that whenever onSessionExited's
+// goroutine eventually runs, it observes EndedAt already non-nil for this
+// session and skips its own transition (see onSessionExited's own guard),
+// leaving this function's AutoRespawnAutonomousWork call as the sole decider
+// of what happens next.
 func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID string) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
@@ -1694,21 +1714,23 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 		return s.AutoRespawnAutonomousWork(ctx, itemID)
 	}
 
+	// End the ItemSession row BEFORE killing the pane (BUG-064 — see doc
+	// comment above): this ordering is what lets onSessionExited's
+	// already-ended guard close the race with AutoRespawnAutonomousWork below.
+	now := time.Now()
+	if endErr := s.storage.UpdateItemSessionEnded(ctx, active.ID, now); endErr != nil {
+		return fmt.Errorf("end stale work session %s: %w", active.ID, endErr)
+	}
+
 	// Kill the stale tmux pane only (Instance.KillSession, NOT Instance.Kill),
 	// keeping the worktree intact so any in-progress but uncommitted work
 	// survives for the next work session to pick up. Best-effort: even if the
-	// kill fails (session already gone, tmux server hiccup), still tombstone
-	// the DB row and respawn below rather than leaving the item stranded on a
-	// pure kill failure.
+	// kill fails (session already gone, tmux server hiccup), still respawn
+	// below rather than leaving the item stranded on a pure kill failure.
 	if s.sessionStopper != nil {
 		if killErr := s.sessionStopper.KillTmuxPaneOnly(ctx, active.SessionUUID); killErr != nil {
 			log.WarningLog.Printf("[RemediateStaleWorkSession] item=%s session=%s: kill failed (continuing): %v", itemID, active.SessionUUID, killErr)
 		}
-	}
-
-	now := time.Now()
-	if endErr := s.storage.UpdateItemSessionEnded(ctx, active.ID, now); endErr != nil {
-		return fmt.Errorf("end stale work session %s: %w", active.ID, endErr)
 	}
 	log.InfoLog.Printf("[RemediateStaleWorkSession] item=%s ended stale work session=%s (session_uuid=%s), respawning", itemID, active.ID, active.SessionUUID)
 
@@ -2067,6 +2089,40 @@ func classifyHeadlessCallError(err error, elapsed time.Duration) string {
 	}
 }
 
+// MaybeTriggerTriage is the single "should this newly created item get
+// auto-triaged" decision, shared by every backlog-item creation entry point:
+// RPC CreateBacklogItem and ImportGitHubIssue (backlog_service_lifecycle.go,
+// backlog_service_sync.go), and the create_backlog_item/import_github_issue
+// MCP tools (server/mcp/tools_backlog.go). Before this helper existed, the
+// MCP tools called storage.CreateBacklogItem directly and skipped this gate
+// entirely — every backlog item self-filed by an agent session via those
+// tools sat in "idea" with zero triage attempts until (at best) a human
+// noticed and manually re-triggered triage, since reconcileOrphanedTriageItems
+// (session/backlog_lifecycle.go) only ever detects items that already have a
+// prior triage-role ItemSession and cannot originate the first attempt.
+//
+// Mirrors the RPC handlers' existing inline gate exactly: skip if the caller
+// asked to, if the item has no repo_path (nothing to run triage against), or
+// if no headless pool is wired (e.g. claude binary unavailable). Best-effort
+// — a failure to trigger is logged and never fails item creation. Returns
+// whether triage was actually triggered, for callers that surface it back to
+// the client (e.g. CreateBacklogItemResponse.TriageTriggered).
+func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, skipTriage bool, repoPath string) bool {
+	if skipTriage || repoPath == "" || s.headlessPool == nil {
+		return false
+	}
+	// 30s gates only the synchronous path (item lookup + ItemSession creation).
+	// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
+	triageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	_, err := s.TriggerTriage(triageCtx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
+	if err != nil {
+		log.WarningLog.Printf("[MaybeTriggerTriage] auto-triage failed for item %s: %v", itemID, err)
+		return false
+	}
+	return true
+}
+
 // TriggerTriage kicks off a headless triage planning call for a backlog item.
 // Returns immediately after creating an ItemSession; actual triage runs in a goroutine.
 // +api: backlog:trigger-triage
@@ -2098,6 +2154,28 @@ func (s *BacklogService) TriggerTriage(
 	if item.RepoPath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("set repo_path before triggering triage"))
+	}
+
+	// 3z. repo_path must be an absolute, existing directory. Without this check, a
+	// bare slug (e.g. "stapler-squad" instead of
+	// "/home/tstapler/Programming/stapler-squad") reaches the headless LLM
+	// subprocess's WorkDir unchanged (see the goroutine's CallOptions.WorkDir below),
+	// and os/exec has a well-documented quirk: when Cmd.Dir doesn't exist, the
+	// fork/exec error names the EXECUTABLE path, not the directory — e.g.
+	// "fork/exec /home/tstapler/.local/bin/claude: no such file or directory" — which
+	// looks exactly like the claude binary is missing even though the binary is fine
+	// and the real problem is the bogus working directory (BUG-062). Validating here,
+	// synchronously and before any ItemSession/artifact-dir creation, means every
+	// caller (this RPC, MaybeTriggerTriage, and any future creation path that reuses
+	// it) gets an immediate, correctly-attributed rejection instead of a doomed
+	// goroutine that fails 0-1s later with a misleading error.
+	if !filepath.IsAbs(item.RepoPath) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("repo_path %q is not an absolute path", item.RepoPath))
+	}
+	if fi, statErr := os.Stat(item.RepoPath); statErr != nil || !fi.IsDir() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("repo_path %q does not exist or is not a directory", item.RepoPath))
 	}
 
 	// 3a. Orphan-aware guard: if an open triage session exists, check whether it is

@@ -804,7 +804,7 @@ export function SessionDetailView({
 
         {activeTab === "diff" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-diff">
-            <DiffViewer />
+            <DiffViewer session={session} />
           </div>
         )}
         {activeTab === "vcs" && (

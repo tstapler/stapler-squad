@@ -499,6 +499,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		inst := deps.SessionService.FindLiveInstance(sessionID)
 		return inst != nil && inst.AutonomousMode
 	})
+	// Thread the poller's live-configured interval into the CI-status staleness guard
+	// (Task 1.1.2b) so it can't silently desync from the real poll interval.
+	if deps.PRStatusPoller != nil {
+		approvalHandler.SetPollInterval(deps.PRStatusPoller.PollInterval())
+	}
+	// CI status (GitHubCheckConclusion/LastPRStatusCheck) is not persisted — it only
+	// lives on the poller's in-memory Instance — so the classifier's ci_passing
+	// condition (Task 1.1.2a) must read through the live registry, not deps.Storage.
+	approvalHandler.SetLiveInstanceFinder(deps.SessionService)
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 
@@ -530,7 +539,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		autoReopener = deps.BacklogService
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {

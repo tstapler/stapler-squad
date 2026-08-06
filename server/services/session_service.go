@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
@@ -383,6 +384,10 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
 	workspaceSvc.SetLiveFinder(svc)
+	// Wire the live-instance lookup into ApprovalService's block-on-red-CI guard (AC5).
+	// GitHubCheckConclusion is not persisted (see plan.md's Implementation Deviations),
+	// so this must be the live registry, not storage.
+	approvalSvc.SetLiveInstanceFinder(svc)
 	// Wire the live-instance provider so ListClaudeHistory can populate
 	// session_status on history entries without a separate storage call.
 	svc.searchSvc.SetInstanceProvider(svc.allInstances)
@@ -594,7 +599,8 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	name := stapleSquadTmuxName(title)
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", name)
+	args := tmux.ResolveSocket("").Args("kill-session", "-t", name)
+	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		combined := strings.ToLower(string(out))

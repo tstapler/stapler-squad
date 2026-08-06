@@ -17,6 +17,11 @@ import (
 // read.
 const sddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
 
+// blockApprovalOnCIFailureFlagName is shared between knownFeatureFlags below and
+// ApprovalService.ResolveApproval's CI-red guard (approval_service.go) so the flag
+// name can't drift between where it's declared and where it's read.
+const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
+
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
 var knownFeatureFlags = []struct {
@@ -42,6 +47,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        sddDefaultPipelineFlagName,
 		description: "New backlog items with no explicitly chosen pipeline mode default to the 'sdd' pipeline mode (research, plan, validate, implement, and an adversarial verify pass before review) instead of the flat default pipeline. Never affects existing items or an item with any explicit pipeline_mode value, including an explicit empty one.",
+	},
+	{
+		name:        blockApprovalOnCIFailureFlagName,
+		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
 	},
 }
 

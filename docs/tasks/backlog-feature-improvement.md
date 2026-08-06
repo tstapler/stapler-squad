@@ -9,6 +9,224 @@ and four quality-skill passes (`quality:architecture-review`, `ux:review`, `code
 Findings are bucketed: **[1] reconciliation bugs**, **[2] manual gates that could be
 policy-driven**, **[3] hardcoded pipeline steps that need a configurability seam**.
 
+## Update — 2026-08-05 (fix shipped + independently verified blast radius): 13 items had real work wrongly discarded, not 1 — plus 2 more unfixed instances of the same "field written once at creation, never kept live" shape
+
+**Fix shipped**: PR [#346](https://github.com/tstapler/stapler-squad/pull/346) (merged) splits `base_commit_sha`
+(spawn-time baseline, still feeds the review gate's diff) from a genuinely-live `last_commit_sha`,
+refreshed via go-git on the existing reconciliation sweep. Fixes both `closeIfSupersededByMain`
+and `GetBacklogItemShipStatus`. PR [#347](https://github.com/tstapler/stapler-squad/pull/347)
+(merged) recovers BUG-047's actual fix (commits `541fc846e7`/`342c49b6ed`) that PR #342 had
+wrongly discarded. Root cause turned out to be a **missed call site**, not a novel bug class —
+the repo had already fixed this staleness pattern for other consumers via a
+`resolveLatestWorkCommit` helper; `closeIfSupersededByMain` was simply never migrated to it.
+
+**Blast radius — independently verified via `ListBacklogItems{includeTerminal:true,
+includeArchived:true}` (78 items total) + a parallel `GetBacklogItem` fetch of all 64
+done/archived items, grepped for `"closed as superseded"` in `statusEvents`.** Found **14
+items / 15 events** (one item, `98f006f2`, hit twice) between 2026-07-25 and 2026-08-05 — a
+6-week window, not a one-off. Cross-referenced every cited PR via `gh pr view --json state`:
+
+| Outcome | Count | Detail |
+|---|---|---|
+| Real work discarded (PR `CLOSED`, never merged) | 12 events / 12 items | `310`, `297`, `324`, `305`, `224`, `342`, `298`, `331`, `313`, `314`, `307`, `281` |
+| Real work discarded (PR left `OPEN` — the `ClosePR` call itself silently failed, item marked `done` anyway per the code's own best-effort comment) | 2 events / 2 items | `312`, `286` |
+| Likely harmless (PR `188` had genuinely already `MERGED` 5 days before the self-heal note fired — a legitimate catch-up, not data loss) | 1 event / 1 item | `12601982` |
+
+13 of 14 items are true false-positives — confirmed not coincidental supersession, since the
+cited SHAs repeat across *unrelated* items: `654c6012fe` closes 4 events across 3 different
+items (cross-session FTS5 search, subagent spawn tracking, "Wire Jest into CI" — closed this
+way **twice**, PR #313 then #314, on the identical stale SHA both times, proving the system did
+retry and got bitten again before the fix landed); `4eca0ed34a` closes 3 (archive-item MCP
+tool, Omnibar modal scroll fix, terminal resize feedback-loop fix); `32f504c803` closes 3
+(phantom-keystroke fix, flaky-CI-hook-wait fix, TOML agent-detector plugins). Titles span
+completely unrelated features — no plausible legitimate cross-shipping explains the overlap.
+
+**Not yet recovered** — this pass only confirmed the list and cross-referenced PR state; it did
+not attempt to rebase/reopen the other 13 branches the way PR #347 did for #342. Branch
+existence for each is unverified. Whether these are still worth recovering (vs. superseded for
+real by since-shipped work, given up to 6 weeks have passed) needs a per-item look before
+committing recovery effort — flagged for the user rather than assumed.
+
+**Two more unfixed instances of the same recurring shape, assessed (not fixed) this pass:**
+
+- **`LastFileTouchAt`** — LOW severity, inert. Its only writer, `UpdateItemSessionFileTouch`
+  (`session/storage_backlog.go:342-356`), has zero callers anywhere in the codebase (confirmed
+  by grep) — dead code, not just under-called. The field stays permanently `nil`; its one
+  reader (`server/services/backlog_service.go:500-501`) just omits it from API responses when
+  nil. Unlike `LastCommitSha`, nothing consumes this incorrectly — it's an unfinished feature,
+  not an active bug.
+- **`LastProgressAt`** — MODERATE severity, opposite-direction risk from the `LastCommitSha`
+  bug. Confirmed by reading `reportProgress` (`server/mcp/tools_backlog.go:306-380`) end to
+  end: it calls `UpdateAcCriterionStatus` and `AppendProgressNote` only — never touches
+  `ItemSession`/`LastProgressAt` at all. So the MCP tool an active work session calls most
+  often (marking AC criteria pass/fail) does not reset the staleness clock that
+  `remediateStaleWorkWithBackoffGate` (`session/backlog_lifecycle.go:1298-1299, 2115-2116`)
+  reads to decide whether to remediate. Since PR #346 also fixed `UpdateItemSessionGitActivity`
+  to run periodically (not just once at spawn), `LastProgressAt` now at least refreshes on
+  every new commit as a side effect — but a session doing real work between commits (research,
+  test runs, criteria updates) still won't reset it, risking a false "stale" verdict. Bounded by
+  the existing backoff/circuit-breaker machinery, so not CRITICAL, but a real gap.
+- **`EstimatedCostUsd`** — LOW-MODERATE severity, reporting accuracy only. Confirmed by reading
+  `TriggerTriage`'s `CreateItemSession` call (`server/services/backlog_service_triage.go`,
+  ~line 2180) — it never sets `EstimatedCostUsd`, unlike the sibling `TriggerReReview` path
+  (`backlog_service_triage.go:2672-2677`), which correctly threads `callCostUSD` through via
+  `CreateItemSessionWithVerdict`. Every headless triage session's cost silently reports $0,
+  understating total spend in any cost aggregation (`server/services/backlog_service.go:627,
+  694`) that includes triage rounds. Mechanical fix (thread the same value through the
+  sibling code path already does) whenever prioritized.
+
+### Recommended Next Actions
+
+1. **Decide recovery scope for the 13 false-positive items** — a per-item check (does the
+   branch still exist? is the fix still relevant given elapsed time?) before committing to
+   full recovery effort matching what PR #347 did for #342. User input needed on how much of
+   this to pursue.
+2. `LastProgressAt` not being touched by `report_progress` — worth a small, mechanical
+   `sdd:fix-bug` given it's now fully characterized; low effort relative to the moderate
+   staleness-detection accuracy gain.
+3. `EstimatedCostUsd` gap in `TriggerTriage` — worth a small, mechanical fix for the same
+   reason; both this and #2 are good candidates for a single combined fix session since
+   they're both "thread an existing value through a sibling code path that already does it
+   correctly" shaped, not novel design work.
+4. `LastFileTouchAt` — deprioritized; inert dead code, no active harm, lowest value fix here.
+
+## Update — 2026-08-05 (correction, same day): the "self-healing" story above was itself a false positive — `closeIfSupersededByMain` uses a structurally stale `LastCommitSha`, CRITICAL, systemic
+
+Checking on `d6ddbef3`'s progress after the update below revealed the update's own headline
+claim was wrong. `d6ddbef3` now shows `status: done`, PR #342 closed via
+`self-heal: PR #342 closed as superseded — commit 1a751723b4ce38bb3b9f55700ba3bc896c1780c3
+already on main`. That commit is real and on main — but it's `1a751723b`
+("feat(review-queue): surface pending plan reviews and busy sessions"), an unrelated commit
+that predates this branch's own work by almost a day (authored 2026-08-04T17:29:18Z). `gh pr
+view 342 --json commits` shows the branch's *real* fix commits — `541fc846e7`
+("fix(backlog): recover items wedged in review by an idle-but-alive reviewer") and `342c49b6ed`
+(review-fix follow-up) — landed at 2026-08-05T17:03:40Z/17:25:38Z, **after** the SHA that got
+marked "superseded." Those two commits exist only on the PR branch; PR #342 is `CLOSED`, not
+merged. **BUG-047 (the reviewer-wedge fix) is not on main. The two live wedged reviews
+(`3065ecfb`, `4c71d3a3`) will NOT self-heal** — correcting the "no action needed... strong
+evidence" conclusion below, which was wrong.
+
+**Root cause, verified by reading the code**: `closeIfSupersededByMain`
+(`session/backlog_lifecycle.go:4386`) checks `git.IsCommitOnMain(..., lastWork.LastCommitSha)`
+on the assumption that `LastCommitSha` tracks "the work session's most recent commit." It
+doesn't. Every writer of this field —
+`SpawnSessionFromItem` step 12b (`server/services/backlog_service_triage.go:846-851`),
+`AttachSessionToItem` (`server/services/backlog_service_sync.go:103-108`, comment: "same as
+SpawnSessionFromItem step 12b") — captures it exactly **once, at session-start, as the
+pre-work baseline HEAD SHA**, explicitly for the review gate's `base..HEAD` diffing. No call
+site anywhere updates it again as the agent commits during the session (confirmed by grep:
+`UpdateItemSessionGitActivity` has no other callers). So `LastCommitSha` is permanently frozen
+at whatever main's tip was when the worktree branched — which `IsCommitOnMain` will always
+report as "on main," because it always was, trivially. Any item whose merge-detection sweep
+runs against this field will false-positive "superseded" **regardless of whether the item's
+actual work ever shipped** — this isn't specific to `d6ddbef3`; it's a structural property of
+the field. `server/services/backlog_service_ship_status.go:61-76` (`GetBacklogItemShipStatus`,
+backing the item detail page's "Ship PR" self-service action per 07-18's entry) reads the same
+field the same way — the user-facing "has this shipped?" check is subject to the identical
+false positive.
+
+**Blast radius unknown, not yet quantified this pass** — log retention (~1 day locally) doesn't
+reach back far enough to count how many prior `done` transitions went through this exact path;
+a proper fix should include an audit query for backlog items whose `done` transition note
+matches `"closed as superseded"` to check how many silently-discarded PRs this has produced
+historically, not just this occurrence.
+
+### Recommended Next Action
+
+`sdd:fix-bug`, priority CRITICAL (raised from the deferred/low-priority framing this doc
+otherwise defaults to) — `closeIfSupersededByMain` and `GetBacklogItemShipStatus` need
+`LastCommitSha` to actually track the work session's latest commit (wire a real updater into
+whatever already observes agent commits — e.g. the same hook that updates
+`CommitCountSinceSpawn`/`LastProgressAt` elsewhere), not a permanently-frozen pre-work
+baseline. Until fixed, `d6ddbef3`/PR #342 needs to be manually reopened and re-merged (the
+fix code itself passed review and `make ci`, per its own status-event history — it's the
+close-as-superseded step that was wrong, not the implementation), and the historical
+blast-radius audit above should run alongside the fix.
+
+## Update — 2026-08-05: light verification pass — pipeline is now self-detecting and self-fixing its own reconciliation bugs live; one new 4th sibling instance of the known `hasActiveWorkSession`-blocks-silently shape found
+
+Not a full 4-agent re-run (same rationale as every pass since 07-28). `ListStuckBacklogItems`
+now returns **3 rows** (up from 1 on 08-03), but none needed a fresh fix this pass — two are
+already being actively repaired by the system's own in-flight work, one new gap is found and
+documented below.
+
+**Live state**: 6 total backlog items visible via `ListBacklogItems` beyond idea/queued/review
+buckets (4 idea, 4 queued, 4 review, 1 in_progress — 13 shown; some done/archived items are
+excluded from the default list).
+
+**The headline finding this pass isn't a bug — it's the pipeline working as intended.** Two of
+the three stuck rows are `3065ecfb` ("CI/CD status in diff viewer", `review`,
+`STUCK_REASON_AUTONOMOUS_STUCK`) and the pre-existing `59bbff11` bucket. Investigating why
+`3065ecfb`'s review verdict (PARTIAL) never resolved led to `staplersquad_review_3065ecfb`
+being a live-but-idle tmux session — a reviewer that submitted its verdict and never exited,
+the exact "wedged review" shape this doc first named 07-22. **The system had already caught
+this itself**: backlog item `d6ddbef3` ("bug: reviewer session that submits a verdict but
+never exits leaves the item wedged in review forever", `in_progress`, work session
+`stapler-squad-fix-idle-reviewer-wedge-r1` spawned 2026-08-05T16:03:35Z and active as of this
+writing) is a general fix for exactly this class, and its own AC7 explicitly targets recovering
+the *other* live wedged item, `4c71d3a3` ("bug: request_review fails permanently when a
+backlog item is stuck in 'review' status with no active reviewer") — itself a previously-routed
+fix for the same shape, now PARTIAL-reviewed and itself wedged by the very bug its sibling item
+is fixing (confirmed via `staplersquad_review_4c71d3a3` also idle-but-alive). Both are being
+worked live; no action needed from this pass beyond recording that the self-detection loop
+closed this gap without human intervention — strong evidence for bucket 3/the "software
+factory" framing this doc's mandate is built around. Not routing a duplicate fix.
+
+**New finding, root-caused: `DequeueNextQueuedItems` is a 4th, previously-uncounted sibling of
+the `hasActiveWorkSession`-blocks-with-no-signal gap (PR #292/07-31).** `59bbff11`'s
+`statusEvents` show two `in_progress → queued` transitions today (02:14:32Z and 16:03:34Z) each
+annotated `"dequeue spawn failed"`, both roughly 14 hours apart with no successful respawn in
+between — consistent with the log line
+(`server/services/backlog_service_triage.go:633`, `staplersquad-2026-08-05T09-07-58.230.log.gz`):
+```
+[DequeueNextQueuedItems] spawn failed for dequeued item=59bbff11...: already_exists: a work
+session (9ea71ee2...) is already active for this item; wait for it to finish or kill it first —
+likely stalled: no output in 47m39s (stale threshold 15m0s); rolling back to queued
+```
+The guard's own staleness check is correct and precise (47m39s idle vs. a 15-minute threshold)
+— but the only consequence is a `log.WarningLog.Printf` (`backlog_service_triage.go:633`) and a
+silent rollback to `queued`; `notifySpawnAndRollbackFailed` only fires if the *rollback itself*
+fails (`:636-643`), not on the underlying spawn-blocked condition. The stale session
+(`9ea71ee2`, work session for `59bbff11`, alive since 2026-08-03T18:56Z — **45+ hours** by the
+time of this check) never reaches the `stale_work` sweep detector either: that detector's own
+staleness definition and remediation path (`remediateStaleWorkWithBackoffGate`,
+`session/backlog_lifecycle.go:2306`) is a separate code path from this inline 15-minute check
+inside the dequeue guard, and `ListStuckBacklogItems` never flagged this item's underlying
+session as stuck — only the *symptom* (repeated failed dequeue) is visible, and only in a log
+line an operator would have to go looking for. This is the same shape as the 3 sibling call
+sites already carried forward since 07-31 (`AutoRespawnAutonomousWork:1441`,
+`AutoReopenForPRFix`, `AutoRespawnReview`) — a spawn correctly declines to duplicate an active
+session, but the "already active" signal it computed (including its own staleness verdict) is
+discarded instead of being routed into the `RespawnEvent`/stuck-detector machinery that already
+exists for this exact purpose. `DequeueNextQueuedItems` (`backlog_service_triage.go:576-649`)
+was not among the 3 named in the 07-31/08-03 entries — this is a genuinely new 4th site, not a
+repeat citation.
+
+**Not routed to `sdd:fix-bug` this pass** — same standing rationale as the 3 known siblings
+("still not urgent enough to route unprompted"), plus two live overlapping sessions already
+running against the same reconciliation-bug family (`fix-idle-reviewer-wedge-r1`,
+`review-status-recovery-r1`) — routing a 5th concurrent backlog work item into an
+already-active WIP slot risks contention rather than adding signal. `d6ddbef3`'s AC4
+("`reconcileUnprocessedReviewVerdicts` treats a verdict older than an idle threshold as
+actionable even when `SessionLivenessChecker` reports the session alive") is solving the
+identical "process alive but stalled" false-liveness problem for reviewer sessions; once it
+ships, the natural follow-on is generalizing the same idle-threshold approach to
+`DequeueNextQueuedItems`' work-session guard rather than patching this site in isolation.
+
+### Recommended Next Actions
+
+1. Once `d6ddbef3` ships and both live wedged reviews (`3065ecfb`, `4c71d3a3`) self-heal per its
+   AC7, confirm both leave `review` status without manual intervention — verification item for
+   the next pass, not a new fix.
+2. `DequeueNextQueuedItems` (`backlog_service_triage.go:633`) — 4th sibling call site added to
+   the existing low-priority `hasActiveWorkSession`-signal-loss backlog; extend `RespawnEvent`
+   recording here too, ideally in the same follow-on that generalizes `d6ddbef3`'s idle-threshold
+   liveness check, once that pattern exists to reuse.
+3. Carried forward unchanged: interface-pollution cleanup (`PipelineModeRepository`,
+   `Repository`), and the pre-08-05 assessment that `59bbff11`'s stalled work session
+   (`9ea71ee2`, now 45+ hours idle) will most likely resolve itself once (1) or (2) lands —
+   no separate action needed.
+
 ## Update — 2026-07-17 (night): PR #168's abandon-review respawn verified live, with one caveat
 
 Deployed PR #168 (`make install-service`) and watched the live 60s reconciliation sweep

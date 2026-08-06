@@ -46,6 +46,10 @@ export class SessionDetailPage {
     return this.page.getByTestId(/connection-indicator|live-indicator/);
   }
 
+  getCIStatusBadge(): Locator {
+    return this.page.getByTestId("ci-status-badge");
+  }
+
   // ---------------------------------------------------------------------
   // Terminal tab — added for session-completion-summary.spec.ts, which
   // types `exit` into a plain-shell one-off session's terminal to end it

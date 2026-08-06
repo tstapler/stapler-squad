@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -401,6 +402,125 @@ func addPausedInstanceWithUUID(t *testing.T, storage *session.Storage, title, uu
 		UpdatedAt: now,
 	}
 	require.NoError(t, storage.AddInstance(inst))
+}
+
+// capturingClassifier records the ClassificationContext it was last called with,
+// so tests can assert what ApprovalHandler populated before delegating to it.
+// Always returns Escalate so HandlePermissionRequest falls through to the
+// (short-timeout) manual-approval wait path rather than auto-allowing/denying.
+type capturingClassifier struct {
+	lastCtx classifier.ClassificationContext
+}
+
+func (c *capturingClassifier) Classify(_ classifier.PermissionRequestPayload, ctx classifier.ClassificationContext) classifier.ClassificationResult {
+	c.lastCtx = ctx
+	return classifier.ClassificationResult{Decision: classifier.Escalate, RiskLevel: classifier.RiskMedium, Reason: "test"}
+}
+
+func (c *capturingClassifier) BuildContext(_ string) classifier.ClassificationContext {
+	return classifier.ClassificationContext{}
+}
+
+// fakeApprovalLiveInstanceFinder is a test double for LiveInstanceFinder: GitHubCheckConclusion/
+// LastPRStatusCheck are not persisted (see Storage.UpdateInstancePRStatus), so
+// ApprovalHandler reads them through this live-registry seam instead of *session.Storage.
+type fakeApprovalLiveInstanceFinder struct {
+	inst *session.Instance
+}
+
+func (f *fakeApprovalLiveInstanceFinder) FindLiveInstance(id string) *session.Instance {
+	if f.inst != nil && (f.inst.UUID == id || f.inst.Title == id) {
+		return f.inst
+	}
+	return nil
+}
+
+// TestHandlePermissionRequest_StaleCIStatus_TreatedAsUnknown is the regression test
+// for Task 1.1.2b's staleness guard (pre-mortem.md Failure #1/adversarial-review.md
+// Blocker 3): a cached GitHubCheckConclusion="success" older than 2x the configured
+// poll interval must not reach the classifier as "success" — a RequireCIPassing rule
+// must not silently auto-approve on data that may no longer reflect the branch's CI.
+func TestHandlePermissionRequest_StaleCIStatus_TreatedAsUnknown(t *testing.T) {
+	h, storage := newHandlerWithStorage(t)
+	cc := &capturingClassifier{}
+	h.SetClassifier(cc)
+	h.pollInterval = 60 * time.Second
+	h.timeout = 100 * time.Millisecond // short so the Escalate fallthrough times out fast
+
+	const uuid = "cccccccc-1111-2222-3333-ffffffffffff"
+	now := time.Now()
+	inst := &session.Instance{
+		Title:                 "stale-ci-session",
+		UUID:                  uuid,
+		Path:                  "/projects/stale-ci",
+		Status:                session.Paused,
+		Program:               "claude",
+		CreatedAt:             now,
+		UpdatedAt:             now,
+		GitHubPRNumber:        42,
+		GitHubCheckConclusion: "success",
+		LastPRStatusCheck:     now.Add(-3 * time.Minute), // > 2x pollInterval (120s)
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
+
+	payload := map[string]interface{}{
+		"tool_name":  "Bash",
+		"tool_input": map[string]interface{}{"command": "npm publish"},
+		"cwd":        "/projects/stale-ci",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/permission-request", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CS-Session-ID", uuid)
+
+	rr := httptest.NewRecorder()
+	h.HandlePermissionRequest(rr, req)
+
+	assert.Equal(t, "", cc.lastCtx.CIStatus,
+		"a stale-but-cached GitHubCheckConclusion=\"success\" (LastPRStatusCheck older than 2x pollInterval) must reach the classifier as unknown, not \"success\"")
+}
+
+// TestHandlePermissionRequest_FreshCIStatus_Populated is the happy-path counterpart:
+// a fresh conclusion within the staleness window is passed through unchanged.
+func TestHandlePermissionRequest_FreshCIStatus_Populated(t *testing.T) {
+	h, storage := newHandlerWithStorage(t)
+	cc := &capturingClassifier{}
+	h.SetClassifier(cc)
+	h.pollInterval = 60 * time.Second
+	h.timeout = 100 * time.Millisecond
+
+	const uuid = "dddddddd-1111-2222-3333-ffffffffffff"
+	now := time.Now()
+	inst := &session.Instance{
+		Title:                 "fresh-ci-session",
+		UUID:                  uuid,
+		Path:                  "/projects/fresh-ci",
+		Status:                session.Paused,
+		Program:               "claude",
+		CreatedAt:             now,
+		UpdatedAt:             now,
+		GitHubPRNumber:        42,
+		GitHubCheckConclusion: "success",
+		LastPRStatusCheck:     now, // fresh
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
+
+	payload := map[string]interface{}{
+		"tool_name":  "Bash",
+		"tool_input": map[string]interface{}{"command": "npm publish"},
+		"cwd":        "/projects/fresh-ci",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/permission-request", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CS-Session-ID", uuid)
+
+	rr := httptest.NewRecorder()
+	h.HandlePermissionRequest(rr, req)
+
+	assert.Equal(t, "success", cc.lastCtx.CIStatus, "a fresh GitHubCheckConclusion should be passed through unchanged")
 }
 
 // TestResolveSessionID_ByTitle verifies that when a hook sends a session title

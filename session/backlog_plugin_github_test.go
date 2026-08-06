@@ -16,6 +16,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// These tests (both GitHubIssuesPlugin and GitHubPRsPlugin) rely on
+// TestMain in integration_test.go calling keyring.MockInit() to keep
+// github.GetKeychainTokenForHost from reading a real OS keychain entry. If
+// integration_test.go is ever moved or its TestMain removed, these tests
+// will silently start hitting the real GitHub API with a real token on any
+// machine that has one stored.
+
 // withGitHubTestServer points githubAPIBaseURL at ts for the duration of the test.
 func withGitHubTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
@@ -33,6 +40,11 @@ func TestGitHubIssuesPlugin_PluginID(t *testing.T) {
 	require.Equal(t, "github_issues", NewGitHubIssuesPlugin().PluginID())
 }
 
+// Also serves as the regression guard for the keychain-token leak fixed in
+// 8a84747ca: relies on TestMain's keyring.MockInit() to keep
+// GetKeychainTokenForHost from returning a real machine-local token instead
+// of "". If MockInit is ever dropped from TestMain, this test starts failing
+// on any machine with a real GitHub account connected.
 func TestGitHubIssuesPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
 	p := NewGitHubIssuesPlugin()
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}

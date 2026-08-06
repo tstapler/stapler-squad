@@ -172,6 +172,14 @@ type mockSessionStopper struct {
 	// must still handle the disagreement gracefully rather than assume it. Nil
 	// (the default) preserves the old coupled behavior for every other test.
 	tslmoOverrideNotLive map[string]bool
+	// onKillTmuxPaneOnly, if set, is invoked synchronously from
+	// KillTmuxPaneOnly before it records the call — lets a test observe
+	// storage state at the exact moment the pane would be killed in
+	// production (BUG-064: RemediateStaleWorkSession must end the
+	// ItemSession row before calling KillTmuxPaneOnly, not after, so that
+	// onSessionExited's already-ended guard has something to observe once
+	// the (real) tmux kill asynchronously fires the exit event).
+	onKillTmuxPaneOnly func(uuid string)
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -192,6 +200,9 @@ func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string)
 }
 
 func (m *mockSessionStopper) KillTmuxPaneOnly(_ context.Context, uuid string) error {
+	if m.onKillTmuxPaneOnly != nil {
+		m.onKillTmuxPaneOnly(uuid)
+	}
 	m.killedPaneUUIDs = append(m.killedPaneUUIDs, uuid)
 	return nil
 }
@@ -1570,6 +1581,73 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	}
 	assert.True(t, staleEnded, "the stale session must be tombstoned (EndedAt set)")
 	assert.True(t, newOpen, "the newly-spawned work session must be open")
+}
+
+// TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_ActiveWorkSessionIsStale
+// is a regression test for BUG-064: killing the stale session's tmux pane
+// (KillTmuxPaneOnly -> Instance.KillSession) fires the Instance's exit event
+// asynchronously, which session.BacklogLifecycleListener.onSessionExited
+// handles in its own goroutine — and, before this fix, unconditionally
+// transitioned the (still in_progress) item straight to "review" the moment
+// it observed the work session's EndedAt set, racing ahead of this
+// function's own AutoRespawnAutonomousWork call and silently discarding the
+// intended fresh work-session respawn (live repro: item 2d7fac56,
+// 2026-08-06). Ending the ItemSession row before killing the pane turns that
+// race into a guaranteed happens-before: onSessionExited's own "already
+// ended by another path" guard (session/backlog_lifecycle.go) can only work
+// if EndedAt is already non-nil by the time it reads the row, which requires
+// this ordering. Verifies the ordering directly via a hook on
+// KillTmuxPaneOnly that inspects storage at the exact moment the pane would
+// be killed in production.
+func TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_ActiveWorkSessionIsStale(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with stale-but-alive work session")
+
+	createdIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "stale-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	var (
+		firstKillObserved     bool
+		endedAtWhenKillCalled *time.Time
+	)
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"stale-work-session-uuid": true},
+		onKillTmuxPaneOnly: func(uuid string) {
+			if uuid != "stale-work-session-uuid" || firstKillObserved {
+				// Only the first kill matters here: a real Instance.KillSession
+				// no-ops (HasSession() check) on an already-dead pane and never
+				// re-fires the exit event, but killEndedWorkSessionPanes
+				// (called later, right before AutoRespawnAutonomousWork spawns
+				// the replacement) legitimately re-invokes KillTmuxPaneOnly on
+				// the now-ended session too — that later, redundant call is not
+				// the one racing onSessionExited and must not overwrite what
+				// this test is actually checking.
+				return
+			}
+			firstKillObserved = true
+			is, getErr := storage.GetItemSession(t.Context(), createdIS.ID)
+			require.NoError(t, getErr)
+			endedAtWhenKillCalled = is.EndedAt
+		},
+	}
+	svc.SetSessionStopper(stopper)
+
+	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
+	require.NoError(t, remediateErr)
+
+	require.Contains(t, stopper.killedPaneUUIDs, "stale-work-session-uuid")
+	require.NotNil(t, endedAtWhenKillCalled, "the ItemSession row must already have EndedAt set by the time KillTmuxPaneOnly is called — killing the pane fires onSessionExited asynchronously, which needs to observe EndedAt already non-nil to correctly skip its own status transition")
 }
 
 // TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress verifies

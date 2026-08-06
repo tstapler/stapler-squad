@@ -123,6 +123,20 @@ type backlogHandlers struct {
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
 	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
 
+	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create
+	// auto-triage trigger (BUG-061: these two MCP tools used to call
+	// h.storage.CreateBacklogItem directly and skip triage entirely, unlike
+	// the RPC handlers of the same name — see BacklogService.MaybeTriggerTriage's
+	// doc comment). Held as the concrete type (not a narrower interface) to
+	// match this package's existing pattern for *services.SessionService
+	// (svc field on workflowHandlers/rulesHandlers/lifecycleHandlers) — a
+	// single-purpose interface here would have exactly one implementation and
+	// no near-term second one. Optional; nil means auto-triage is skipped and
+	// the item is created exactly as before this fix (matches enabledCheck's
+	// "nil means always-enabled (tests)" convention for other optional deps
+	// on this struct).
+	backlogSvc *services.BacklogService
+
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
@@ -1061,6 +1075,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 			return errResult(ErrInvalidArgument, "priority must be between 1 and 5", ""), nil
 		}
 	}
+	skipTriage, _ := args["skip_triage"].(bool)
 
 	var acLines []string
 	if raw, ok := args["acceptance_criteria"].([]any); ok {
@@ -1091,8 +1106,17 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 
 	log.InfoLog.Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
 
+	triageTriggered := false
+	if h.backlogSvc != nil {
+		triageTriggered = h.backlogSvc.MaybeTriggerTriage(ctx, created.ID, skipTriage, created.RepoPath)
+	}
+
+	triageNote := " Auto-triage not triggered (no repo_path, skip_triage set, or triage unavailable)."
+	if triageTriggered {
+		triageNote = " Auto-triage started."
+	}
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Created backlog item %s: %q (status: idea, priority: P%d).", created.ID, created.Title, created.Priority,
+		"Created backlog item %s: %q (status: idea, priority: P%d).%s", created.ID, created.Title, created.Priority, triageNote,
 	)), nil
 }
 
@@ -1119,6 +1143,7 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
 	}
 	repoPath, _ := args["repo_path"].(string)
+	skipTriage, _ := args["skip_triage"].(bool)
 
 	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(issueURL, nil)
 	if parseErr != nil || ref.Type != githubpkg.RefTypeIssue {
@@ -1144,8 +1169,17 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 
 	log.InfoLog.Printf("[mcp:import_github_issue] session=%s item=%s issue=%s", callerUUID, created.ID, issue.URL)
 
+	triageTriggered := false
+	if h.backlogSvc != nil {
+		triageTriggered = h.backlogSvc.MaybeTriggerTriage(ctx, created.ID, skipTriage, created.RepoPath)
+	}
+
+	triageNote := " Auto-triage not triggered (no repo_path, skip_triage set, or triage unavailable)."
+	if triageTriggered {
+		triageNote = " Auto-triage started."
+	}
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Imported backlog item %s: %q from %s (status: idea, priority: P%d).", created.ID, created.Title, issue.URL, created.Priority,
+		"Imported backlog item %s: %q from %s (status: idea, priority: P%d).%s", created.ID, created.Title, issue.URL, created.Priority, triageNote,
 	)), nil
 }
 
@@ -1732,10 +1766,13 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				mcpgo.Enum("bugfix", "feature", "chore", "refactor"),
 			),
 			mcpgo.WithString("repo_path",
-				mcpgo.Description("Local filesystem path or owner/repo this item targets. Omit for a repo-less item."),
+				mcpgo.Description("Absolute local filesystem path this item targets, e.g. /home/user/Programming/my-repo — NOT a bare repo name or owner/repo shorthand (triage will reject those with a clear error). Omit for a repo-less item."),
 			),
 			mcpgo.WithString("notes",
 				mcpgo.Description("Freeform operator notes, e.g. where this request came from."),
+			),
+			mcpgo.WithBoolean("skip_triage",
+				mcpgo.Description("Skip auto-triage on creation (default false: an item with a repo_path is triaged automatically, same as the web UI's \"New Idea\" form). Set true to leave the item in idea status untouched, e.g. when filing several related items you intend to triage together later."),
 			),
 		),
 		h.createBacklogItem,
@@ -1749,7 +1786,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				mcpgo.Required(),
 			),
 			mcpgo.WithString("repo_path",
-				mcpgo.Description("Local filesystem path this item targets. Omit for a repo-less item."),
+				mcpgo.Description("Absolute local filesystem path this item targets, e.g. /home/user/Programming/my-repo — NOT a bare repo name or owner/repo shorthand (triage will reject those with a clear error). Omit for a repo-less item."),
+			),
+			mcpgo.WithBoolean("skip_triage",
+				mcpgo.Description("Skip auto-triage on creation (default false: an item with a repo_path is triaged automatically, same as the web UI's \"Import from GitHub\" action). Set true to leave the item in idea status untouched."),
 			),
 		),
 		h.importGitHubIssue,

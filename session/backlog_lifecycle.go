@@ -249,6 +249,7 @@ type prCreator interface {
 	CreatePR(title, body string) (prURL string, prNumber int, err error)
 	EnablePRAutoMerge(prNumber int) error
 	RequestCopilotReview(prNumber int) error
+	HasCommitsAheadOfMain(mainBranch string) (bool, error)
 }
 
 // defaultPRCreatorFactory constructs the push/PR-creation client for a given
@@ -908,6 +909,30 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		return
 	}
 
+	// Snapshot before this call's own bookkeeping (below) overwrites it: a
+	// non-nil EndedAt here means some OTHER code path already deliberately
+	// closed this session out before this exit event even arrived, and that
+	// path — not this one — owns whatever should happen next. See BUG-064:
+	// RemediateStaleWorkSession ends a stale work session's ItemSession row
+	// and kills its tmux pane (KillTmuxPaneOnly -> Instance.KillSession) before
+	// calling AutoRespawnAutonomousWork to give the item a fresh work-session
+	// turn. Killing the pane fires this exact onSessionExited path
+	// asynchronously, in its own goroutine (instanceBacklogListener.
+	// OnLifecycleEvent), racing AutoRespawnAutonomousWork's synchronous
+	// respawn. This handler's DB-only work is reliably faster than
+	// AutoRespawnAutonomousWork's (GetBacklogItem + ListItemSessions +
+	// tombstone + SpawnSessionFromItem), so without this guard it wins nearly
+	// every time — flipping status to review out from under
+	// AutoRespawnAutonomousWork, whose own "already moved on" guard then
+	// silently no-ops (no error, no log line), permanently discarding the
+	// intended fresh work session and instead re-reviewing the exact same
+	// stale, already-rejected diff. Confirmed live (item 2d7fac56,
+	// 2026-08-06T00:44:12): staplersquad.log shows "ended stale work
+	// session=...respawning" immediately followed by "transitioned to review"
+	// for the very same session, with no AutoRespawnAutonomousWork log line
+	// ever appearing.
+	alreadyEndedByOtherPath := is.EndedAt != nil
+
 	// Record end time for all session roles (triage, review, work).
 	now := time.Now()
 	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition bookkeeping timestamp; the zombie-session detector (reconcileStuckReviewItems) falls back to SessionLivenessChecker rather than relying solely on EndedAt, so a failed write here doesn't fully hide a dead session
@@ -928,6 +953,16 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	case SessionRoleWork:
 		// fall through to the in_progress→review/done logic below.
 	default:
+		return
+	}
+
+	if alreadyEndedByOtherPath {
+		// Whoever closed this session out ahead of this exit event already
+		// owns the follow-up (e.g. AutoRespawnAutonomousWork deciding whether
+		// to spawn a fresh work session) — driving our own status transition
+		// here would race it and, per BUG-064, reliably win, silently
+		// discarding that follow-up. Nothing further to do.
+		log.DebugLog.Printf("[BacklogLifecycle] onSessionExited item=%s session=%s: already ended by another code path before this exit event; skipping status transition", is.BacklogItemID, sessionUUID)
 		return
 	}
 
@@ -2518,6 +2553,23 @@ func latestTriageSession(sessions []ItemSessionSummary) *ItemSessionSummary {
 	return latest
 }
 
+// triageEndReasonOrUnknown formats a persisted ItemSession.EndReason (the
+// errType bucket TriggerTriage's classifyHeadlessCallError writes via
+// UpdateItemSessionEndedWithReason — server/services/backlog_service_triage.go)
+// for a human-facing stuck-reason message. Falls back to "unknown" rather than
+// rendering an empty parenthetical: a session can also end via the plain
+// UpdateItemSessionEnded path (no errType classification recorded — e.g. a
+// legacy row predating classifyHeadlessCallError, or the shutdown-respawn
+// carve-out having already routed the "shutdown" bucket away before this is
+// ever reached), and "ended () without..." would read as a rendering bug
+// rather than a genuinely uncategorized failure.
+func triageEndReasonOrUnknown(endReason string) string {
+	if endReason == "" {
+		return "unknown"
+	}
+	return endReason
+}
+
 // reconcileOrphanedTriageItems flags items gated on plan approval (no
 // SkipPlanning, no PlanApproved) whose most recent triage-role ItemSession
 // never left a usable plan behind. Originally scoped to idea-status items
@@ -2673,7 +2725,14 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			if isIdea {
 				// Shape 2: already ended, item still in idea. Nothing to tombstone —
 				// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
-				reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
+				// EndReason carries classifyHeadlessCallError's bucket
+				// (server/services/backlog_service_triage.go) — surface it so the
+				// operator (and any future automated remediation) sees the actual
+				// failure category instead of a generic "ended" message with no
+				// diagnostic value. See triageEndReasonOrUnknown's doc comment for
+				// why an empty EndReason still renders instead of being omitted.
+				reasonDetail = fmt.Sprintf("triage session %s ended (%s) without moving the item out of idea",
+					latestTriage.SessionUUID, triageEndReasonOrUnknown(latestTriage.EndReason))
 			} else {
 				// Shape 3 (generalized): item advanced past idea (queued) but is
 				// still gated on plan approval, and its most recent triage session
@@ -2684,7 +2743,8 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				if item.SkipPlanning || item.PlanApproved || latestTriage.TriageResult != "" {
 					continue
 				}
-				reasonDetail = fmt.Sprintf("triage session %s ended with no usable plan while item was gated on plan approval (status=%s)", latestTriage.SessionUUID, item.Status)
+				reasonDetail = fmt.Sprintf("triage session %s ended (%s) with no usable plan while item was gated on plan approval (status=%s)",
+					latestTriage.SessionUUID, triageEndReasonOrUnknown(latestTriage.EndReason), item.Status)
 			}
 		}
 
@@ -3238,18 +3298,41 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems CountReviewCyclesSince item=%s: %v", item.ID, countErr)
 			continue
 		}
-		outcome, verdictErr := er.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+		// Fetch the full most-recent verdict (outcome + reviewer summary), not
+		// just the outcome, so a bouncing item's stuck-state context can
+		// surface *why* the last attempt failed instead of only that it did
+		// (BUG-060, the same discard-after-fetch shape BUG-059 fixed for
+		// orphaned_triage's EndReason). Across a multi-cycle bounce there may
+		// be several different verdicts; only the single most recent one is
+		// surfaced here — proportional to a diagnostic string, not a full
+		// verdict history. GetRecentReviewVerdictSummaries runs the identical
+		// "most recent ItemSession with a verdict" query
+		// GetMostRecentReviewVerdictForItem uses, so limit 1 returns the same
+		// verdict either would.
+		recentVerdicts, verdictErr := er.GetRecentReviewVerdictSummaries(ctx, item.ID, 1)
 		if verdictErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems GetMostRecentReviewVerdictForItem item=%s: %v", item.ID, verdictErr)
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems GetRecentReviewVerdictSummaries item=%s: %v", item.ID, verdictErr)
 		}
-		hasPass := outcome == ReviewOutcomePass
+		var latestOutcome, latestSummary string
+		if len(recentVerdicts) > 0 {
+			latestOutcome = recentVerdicts[0].OverallOutcome
+			latestSummary = recentVerdicts[0].Summary
+		}
+		hasPass := latestOutcome == string(ReviewOutcomePass)
 
 		if !isBouncing(count, hasPass) {
 			continue
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatus(item.Status),
-			fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, bounceLookback))
+		reasonDetail := fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, bounceLookback)
+		if latestOutcome != "" {
+			// sanitizeField at 500 matches the existing convention for
+			// rendering a ReviewVerdict.Summary into operator/agent-facing
+			// text (see backlog_context.go, backlog_review.go).
+			reasonDetail = fmt.Sprintf("%s (most recent verdict: %s — %s)", reasonDetail, latestOutcome, sanitizeField(latestSummary, 500))
+		}
+
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems MarkStuck item=%s: %v", item.ID, markErr)
 			continue
@@ -3267,9 +3350,13 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			continue
 		}
 		log.WarningLog.Printf("[BacklogLifecycle] item %s bouncing (%d cycles in %s, no PASS)", item.ID, count, bounceLookback)
+		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, bounceLookback)
+		if latestOutcome != "" {
+			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, sanitizeField(latestSummary, 500))
+		}
 		l.notify(item.ID,
 			"Item is thrashing between work and review",
-			fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, bounceLookback),
+			notifyBody,
 			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)
@@ -3506,14 +3593,34 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 	if ref, parseErr := ParseGitHubURL(prURL); parseErr == nil {
 		prNumber = ref.PRNumber
 	}
-	if prNumber > 0 {
-		prURLCopy, prNumCopy := prURL, prNumber
-		if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-			PrURL:    &prURLCopy,
-			PrNumber: &prNumCopy,
-		}, nil); updateErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback store PR fields item=%s: %v", item.ID, updateErr)
-		}
+	// BUG-063: prNumber<=0 (an unparseable/irrelevant prURL — e.g. the agent's
+	// final output happened to mention an unrelated existing PR rather than
+	// one it just created) must NOT fall through to the unconditional
+	// resolveToPRPending below. Doing so was the exact mechanism that landed
+	// an item in pr_pending with pr_number still 0: permanently invisible to
+	// every downstream reconciler's PrNumberGT(0) filter, with nothing left
+	// to retry. This mirrors the identical BUG-040 shape pushAndCreatePR was
+	// already fixed for (see its own PR-field-persist-failure handling below)
+	// — that fix was never propagated to this sibling call site until now.
+	// We can't tell whether the agent's one-shot actually created a real PR
+	// we simply failed to parse, so — like pushAndCreatePR's own persist
+	// failure — the safe choice is to stay in review and let a human (or the
+	// next TriggerReReview) sort it out, not silently retry PR creation and
+	// risk a duplicate.
+	if prNumber <= 0 {
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
+			fmt.Sprintf("agent-driven ship via one-shot /backlog/ship produced an unusable PR reference (%q)", prURL),
+			fmt.Errorf("could not parse a PR number from the one-shot ship output"))
+		return
+	}
+	prURLCopy, prNumCopy := prURL, prNumber
+	if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURLCopy,
+		PrNumber: &prNumCopy,
+	}, nil); updateErr != nil {
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
+			fmt.Sprintf("failed to persist PR #%d fields from agent-driven ship", prNumber), updateErr)
+		return
 	}
 	if transErr := l.resolveToPRPending(ctx, item.ID, "agent-driven ship via one-shot /backlog/ship", "shipViaAgentOrFallback"); transErr != nil {
 		// May just be a harmless race with RunOneShot's own RecordPRCreatedOutOfBand
@@ -3548,60 +3655,6 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		}
 	}
 
-	// stayInReviewAndNotify handles push/PR-creation failures. Unlike fallbackToDone,
-	// this must NOT transition the item to done: code was committed to the worktree but
-	// never reached GitHub, so marking it done would silently discard that fact. The
-	// item stays in review — a human can retry via TriggerReReview, or fix the underlying
-	// issue (auth, network, branch protection) and let the next review pass retry.
-	stayInReviewAndNotify := func(reason string, err error) {
-		log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s: %s: %v — leaving in review, code is committed but not shipped", item.ID, reason, err)
-
-		notifyToast := func() {
-			l.notify(item.ID,
-				"PR creation failed",
-				fmt.Sprintf("%s — %s: %v. Code is committed locally but not pushed; retry or investigate manually.", item.Title, reason, err),
-				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-			)
-		}
-
-		// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
-		// toast's dedup key below — without a durable repo to gate on, fall back
-		// to the old always-notify behavior rather than silently dropping the toast.
-		er, ok := l.storage.repo.(*EntRepository)
-		if !ok {
-			notifyToast()
-			return
-		}
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
-			fmt.Sprintf("%s: %v", reason, err))
-		if markErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR MarkStuck(push_failed) item=%s: %v", item.ID, markErr)
-			return
-		}
-		if !applied {
-			return
-		}
-
-		// Notify-once dedup (same pattern as markAbandonedReview and the other
-		// stuck reasons): MarkStuckNotified only flips notified_at nil -> now
-		// once per open stuck-state row, so repeated calls for the same
-		// still-open failure (e.g. a non-fast-forward push retried every
-		// reconciliation tick) skip the ephemeral ERROR toast after the first —
-		// this is what was previously firing a fresh "PR creation failed" toast
-		// every few seconds with no dedup. The toast fires again only once the
-		// row is resolved (push/PR succeeds) and later reopens on a new failure.
-		notifiedNow, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPushFailed)
-		if notifyErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR MarkStuckNotified(push_failed) item=%s: %v", item.ID, notifyErr)
-			return
-		}
-		if !notifiedNow {
-			return
-		}
-		notifyToast()
-	}
-
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
 	if wtErr != nil || wt.WorktreePath == "" {
 		fallbackToDone("no worktree")
@@ -3618,7 +3671,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 
 	// Push branch to origin.
 	if pushErr := g.PushBranch(); pushErr != nil {
-		stayInReviewAndNotify("push failed", pushErr)
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title, "push failed", pushErr)
 		return
 	}
 
@@ -3631,6 +3684,23 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		prNumber = item.PrNumber
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s reusing existing PR #%d", item.ID, prNumber)
 	} else {
+		// Pre-flight (BUG-063): a branch with zero commits ahead of main has
+		// genuinely nothing to ship — CreatePR below would fail with gh's "No
+		// commits between X and Y" error, which is not a retryable push/PR
+		// failure. A PASS verdict already confirmed the work (it's often
+		// already shipped by an earlier, unrelated PR), so route this case
+		// through fallbackToDone exactly like the "no worktree at all" case
+		// above, rather than leaving the item stuck in review forever behind
+		// an unresolvable push_failed row. Any error from the check itself is
+		// treated as inconclusive (HasCommitsAheadOfMain returns true), so a
+		// broken check never blocks a real PR creation attempt.
+		if hasCommits, aheadErr := g.HasCommitsAheadOfMain(bounceMainBranch); aheadErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR HasCommitsAheadOfMain item=%s: %v; proceeding with PR creation attempt", item.ID, aheadErr)
+		} else if !hasCommits {
+			fallbackToDone(fmt.Sprintf("branch %s has no commits ahead of %s — nothing to ship", wt.BranchName, bounceMainBranch))
+			return
+		}
+
 		prTitle := item.Title
 		prBody := buildFallbackPRBody(item)
 		if pool := l.getHeadlessPool(); pool != nil {
@@ -3646,7 +3716,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		var prErr error
 		prURL, prNumber, prErr = g.CreatePR(prTitle, prBody)
 		if prErr != nil {
-			stayInReviewAndNotify("PR creation failed", prErr)
+			l.stayInReviewAndNotify(ctx, item.ID, item.Title, "PR creation failed", prErr)
 			return
 		}
 		// Cache PR URL + number on the item so the reconciler and UI can use
@@ -3668,7 +3738,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			PrURL:    &prURLCopy,
 			PrNumber: &prNumCopy,
 		}, nil); updateErr != nil {
-			stayInReviewAndNotify(fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
+			l.stayInReviewAndNotify(ctx, item.ID, item.Title, fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
 			return
 		}
 	}
@@ -3714,6 +3784,66 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		return
 	}
 	log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
+}
+
+// stayInReviewAndNotify handles push/PR-creation failures for both
+// pushAndCreatePR and shipViaAgentOrFallback (BUG-063). Unlike fallbackToDone,
+// this must NOT transition the item: pushAndCreatePR's callers may have
+// committed code to the worktree that never reached GitHub, and
+// shipViaAgentOrFallback's caller cannot tell whether the agent-driven
+// one-shot actually created a real PR it just failed to parse/persist a
+// reference to — in both cases marking the item done or pr_pending would
+// risk silently discarding real work or duplicating a PR. The item stays in
+// review — a human can retry via TriggerReReview, or fix the underlying
+// issue (auth, network, branch protection, a storage error) and let the next
+// review pass retry.
+func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, itemID, itemTitle, reason string, err error) {
+	log.WarningLog.Printf("[BacklogLifecycle] item=%s: %s: %v — leaving in review", itemID, reason, err)
+
+	notifyToast := func() {
+		l.notify(itemID,
+			"PR creation failed",
+			fmt.Sprintf("%s — %s: %v. Retry or investigate manually.", itemTitle, reason, err),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+
+	// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
+	// toast's dedup key below — without a durable repo to gate on, fall back
+	// to the old always-notify behavior rather than silently dropping the toast.
+	er, ok := l.storage.repo.(*EntRepository)
+	if !ok {
+		notifyToast()
+		return
+	}
+	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		fmt.Sprintf("%s: %v", reason, err))
+	if markErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] MarkStuck(push_failed) item=%s: %v", itemID, markErr)
+		return
+	}
+	if !applied {
+		return
+	}
+
+	// Notify-once dedup (same pattern as markAbandonedReview and the other
+	// stuck reasons): MarkStuckNotified only flips notified_at nil -> now
+	// once per open stuck-state row, so repeated calls for the same
+	// still-open failure (e.g. a non-fast-forward push retried every
+	// reconciliation tick) skip the ephemeral ERROR toast after the first —
+	// this is what was previously firing a fresh "PR creation failed" toast
+	// every few seconds with no dedup. The toast fires again only once the
+	// row is resolved (push/PR succeeds) and later reopens on a new failure.
+	notifiedNow, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonPushFailed)
+	if notifyErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] MarkStuckNotified(push_failed) item=%s: %v", itemID, notifyErr)
+		return
+	}
+	if !notifiedNow {
+		return
+	}
+	notifyToast()
 }
 
 // resolveToPRPending performs the transition+resolve tail shared by every

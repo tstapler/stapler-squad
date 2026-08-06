@@ -1253,6 +1253,7 @@ func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error
 			RequiredFlagPrefixes:  rule.RequiredFlagPrefixes,
 			PythonModes:           rule.PythonModes,
 			SafePythonImportsOnly: rule.SafePythonImportsOnly,
+			RequireCIPassing:      rule.RequireCiPassing,
 		}
 	}
 	return result, nil
@@ -1310,6 +1311,7 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetRequiredFlagPrefixes(requiredFlagPrefixes).
 		SetPythonModes(pythonModes).
 		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
+		SetRequireCiPassing(data.RequireCIPassing).
 		OnConflictColumns(approvalrule.FieldRuleID).
 		UpdateNewValues().
 		Exec(ctx)
