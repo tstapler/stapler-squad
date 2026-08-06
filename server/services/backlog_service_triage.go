@@ -2134,6 +2134,28 @@ func (s *BacklogService) TriggerTriage(
 			fmt.Errorf("set repo_path before triggering triage"))
 	}
 
+	// 3z. repo_path must be an absolute, existing directory. Without this check, a
+	// bare slug (e.g. "stapler-squad" instead of
+	// "/home/tstapler/Programming/stapler-squad") reaches the headless LLM
+	// subprocess's WorkDir unchanged (see the goroutine's CallOptions.WorkDir below),
+	// and os/exec has a well-documented quirk: when Cmd.Dir doesn't exist, the
+	// fork/exec error names the EXECUTABLE path, not the directory — e.g.
+	// "fork/exec /home/tstapler/.local/bin/claude: no such file or directory" — which
+	// looks exactly like the claude binary is missing even though the binary is fine
+	// and the real problem is the bogus working directory (BUG-062). Validating here,
+	// synchronously and before any ItemSession/artifact-dir creation, means every
+	// caller (this RPC, MaybeTriggerTriage, and any future creation path that reuses
+	// it) gets an immediate, correctly-attributed rejection instead of a doomed
+	// goroutine that fails 0-1s later with a misleading error.
+	if !filepath.IsAbs(item.RepoPath) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("repo_path %q is not an absolute path", item.RepoPath))
+	}
+	if fi, statErr := os.Stat(item.RepoPath); statErr != nil || !fi.IsDir() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("repo_path %q does not exist or is not a directory", item.RepoPath))
+	}
+
 	// 3a. Orphan-aware guard: if an open triage session exists, check whether it is
 	// genuinely still running — via s.triageInFlight for a headless call (this
 	// process's own in-memory liveness record, see that field's doc comment) or via
