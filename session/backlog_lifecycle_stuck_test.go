@@ -2386,6 +2386,67 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	assert.Len(t, notifier.calls, 1)
 }
 
+// TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_When_BouncingWithFailedVerdict
+// is the regression test for BUG-060: reconcileBouncingItems fetched the
+// item's most recent review verdict via GetMostRecentReviewVerdictForItem but
+// collapsed it to a bare hasPass bool before building the stuck-state
+// context, so an operator only ever saw "bounced ... with no PASS verdict"
+// with no indication of which verdict (PARTIAL/FAIL) or why. This is the same
+// discard-after-fetch shape BUG-059 fixed for reconcileOrphanedTriageItems'
+// EndReason. This test attaches a FAIL verdict with a distinctive summary to
+// the item's most recent review ItemSession, then asserts both the persisted
+// BacklogStuckState.Context and the operator notification body contain the
+// verdict's outcome and summary text, not just the generic bounce message.
+func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_When_BouncingWithFailedVerdict(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bouncing item with failed verdict",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	// Attach a FAIL verdict, with a distinctive summary, to a review
+	// ItemSession for this item — this is the diagnostic detail the fix must
+	// thread through into the stuck-state context instead of discarding.
+	const wantSummary = "AC3 not implemented: rate limiting missing from the new endpoint"
+	_, err = storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-review-" + uuid.New().String(),
+		SessionRole: SessionRoleReview,
+	}, ReviewVerdictData{
+		OverallOutcome: ReviewOutcomeFail,
+		Summary:        wantSummary,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason)
+	assert.Contains(t, open[0].Context, string(ReviewOutcomeFail), "context must surface which verdict (FAIL), not just that no PASS was recorded")
+	assert.Contains(t, open[0].Context, wantSummary, "context must surface the reviewer's actual summary, not a generic message")
+
+	require.Len(t, notifier.calls, 1)
+	assert.Contains(t, notifier.calls[0].Message, string(ReviewOutcomeFail))
+	assert.Contains(t, notifier.calls[0].Message, wantSummary)
+}
+
 // TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass verifies
 // an item with fewer than bounceThreshold cycles, and one with a recorded
 // PASS verdict, are not flagged bouncing.
