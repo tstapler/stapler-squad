@@ -2311,7 +2311,14 @@ func (s *BacklogService) TriggerTriage(
 			// write to fail immediately with context.Canceled.
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cleanupCancel()
-			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			// EndReason="shutdown" (not the plain UpdateItemSessionEnded) — BUG-065.
+			// This item never even reached the semaphore (8 concurrent slots, see
+			// triageSem above); it was still queued when our own graceful shutdown
+			// fired. reconcileOrphanedTriageItems' shutdown carve-out (session/backlog_lifecycle.go)
+			// only recognizes EndReason=="shutdown" to respawn for free with no
+			// stuck-notification; leaving this blank made every queued-but-never-started
+			// item indistinguishable from a genuine unclassified triage failure.
+			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), "shutdown")
 			return
 		}
 		defer func() { <-s.triageSem }()
@@ -2976,13 +2983,53 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 		notLive := isStale || !live
 		statusAdvanced := itemStatus != string(session.BacklogStatusIdea)
 		if notLive || statusAdvanced {
-			_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now())
+			// BUG-065: attribute this tombstone to "shutdown" — matching
+			// classifyHeadlessCallError's bucket name, which
+			// reconcileOrphanedTriageItems' shutdown carve-out (session/backlog_lifecycle.go)
+			// keys off to respawn for free with no stuck-notification — when the row
+			// can ONLY be explained by our own process having restarted since it was
+			// created, not a genuine failure. See shouldAttributeTombstoneToShutdown's
+			// doc comment for the exact criteria.
+			reason := ""
+			if shouldAttributeTombstoneToShutdown(isHeadless, isStale, live, is.CreatedAt, serverStartTime) {
+				reason = "shutdown"
+			}
+			if reason != "" {
+				_ = s.storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), reason)
+			} else {
+				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now())
+			}
 			continue
 		}
 		return connect.NewError(connect.CodeAlreadyExists,
 			fmt.Errorf("triage session already running for item %s", itemID))
 	}
 	return nil
+}
+
+// shouldAttributeTombstoneToShutdown reports whether an open triage session
+// tombstoneOrphanTriageSessions is about to close can only be explained by
+// this process's own restart, rather than a genuine failure — BUG-065. Pure
+// and side-effect-free (bootTime passed explicitly, not read as a package
+// var) so the decision table is directly testable, same rationale as
+// evaluateRemediation (session/backlog_remediation.go) and
+// classifyHeadlessCallError above.
+//
+// s.triageInFlight (backing IsTriageLive, hence the `live` param) is a fresh
+// in-memory map every boot: it can never truthfully vouch for a session this
+// process didn't itself start, so "!live" alone is ambiguous between "dead"
+// and "we just don't remember it." createdAt.Before(bootTime) resolves that
+// ambiguity — a session created before this process even started can only be
+// a leftover from a prior (now-dead) instance. Two conditions must ALSO hold
+// to avoid misattributing genuinely unrelated tombstones:
+//   - !isStale: an isStale row is independently explained by
+//     maxTriageSessionAge (genuinely old/hung), regardless of which process
+//     created it — don't relabel that as "our restart's fault".
+//   - isHeadless: a non-headless (tmux-backed) session's liveness comes from
+//     sessionStopper, not triageInFlight, so createdAt-vs-bootTime carries no
+//     signal about our own process lifecycle for it.
+func shouldAttributeTombstoneToShutdown(isHeadless, isStale, live bool, createdAt, bootTime time.Time) bool {
+	return isHeadless && !isStale && !live && createdAt.Before(bootTime)
 }
 
 // findPriorTriageResult returns the most recent successfully-parsed triage result from

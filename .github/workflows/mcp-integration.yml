@@ -46,6 +46,6 @@ jobs:
       # It calls `go build` internally, so the Go toolchain must be present.
       - name: Run MCP integration tests
         run: |
-          go test -tags=integration -timeout=240s -v -race \
+          go test -tags=integration -timeout=150s -v -race \
             ./server/mcp/... \
             ./server/services/...

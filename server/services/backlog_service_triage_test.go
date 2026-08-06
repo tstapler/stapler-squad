@@ -4086,3 +4086,110 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 	require.Len(t, sessions, 1, "a valid repo_path must still create the triage ItemSession")
 	assert.Equal(t, string(session.SessionRoleTriage), sessions[0].Role)
 }
+
+// TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown
+// is a regression test for BUG-065: an item whose triage goroutine was still
+// blocked waiting for a free concurrency slot (all 8 taken) when the server's
+// own graceful shutdown fired used to end via the plain UpdateItemSessionEnded,
+// leaving EndReason empty. reconcileOrphanedTriageItems' shutdown carve-out
+// (session/backlog_lifecycle.go) only recognizes EndReason=="shutdown" to
+// respawn for free with no stuck-notification — a blank EndReason made this
+// self-inflicted, zero-evidence case indistinguishable from a genuine
+// unclassified triage failure, generating a spurious "Triage may be stuck"
+// notification for every item unlucky enough to still be queued at shutdown
+// time (the common case during a bulk import, which routinely queues well
+// past the 8-slot cap).
+func TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: time.Hour}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	// Occupy all 8 concurrency slots with calls that block until shutdown
+	// cancels them (mirrors triageSem's cap in backlog_service.go).
+	for i := 0; i < 8; i++ {
+		item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			Title:    fmt.Sprintf("occupier-%d", i),
+			Status:   string(session.BacklogStatusIdea),
+			Priority: 3,
+			RepoPath: t.TempDir(),
+		})
+		require.NoError(t, err)
+		_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+		require.NoError(t, trigErr)
+	}
+	require.Eventually(t, func() bool { return pool.callCount() == 8 }, 2*time.Second, 10*time.Millisecond,
+		"all 8 occupiers must have actually entered CallBlocking before the 9th is triggered")
+
+	queuedItem, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "queued-item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: queuedItem.ID}))
+	require.NoError(t, trigErr)
+
+	// Confirm the 9th item is genuinely queued (never dispatched to the pool)
+	// before shutting down, so this exercises the semaphore-wait branch and
+	// not the already-running branch classifyHeadlessCallError covers.
+	require.Never(t, func() bool { return pool.callCount() > 8 }, 200*time.Millisecond, 20*time.Millisecond,
+		"the 9th item must still be queued behind the 8-slot cap, not dispatched")
+
+	svc.Shutdown()
+
+	require.Eventually(t, func() bool {
+		sessions, listErr := storage.ListItemSessions(context.Background(), queuedItem.ID)
+		if listErr != nil {
+			return false
+		}
+		for _, is := range sessions {
+			if is.Role == string(session.SessionRoleTriage) && is.EndedAt != nil {
+				return is.EndReason == "shutdown"
+			}
+		}
+		return false
+	}, 2*time.Second, 20*time.Millisecond,
+		"a triage session still queued for a semaphore slot at shutdown must end with EndReason=shutdown, not blank/unknown")
+}
+
+// TestShouldAttributeTombstoneToShutdown_should_MatchOnlyPreBootNonStaleNotLiveHeadlessSessions
+// is a regression test for BUG-065's second code path: tombstoneOrphanTriageSessions
+// used to close a stale-looking open triage session via the plain
+// UpdateItemSessionEnded regardless of why it looked dead. When a headless
+// session predates this process's own start time and isn't old enough to be
+// independently flagged via maxTriageSessionAge, the only possible
+// explanation is that a prior process instance died mid-triage (this
+// process's triageInFlight is always empty for a session it never started) —
+// that's the same self-inflicted, zero-evidence shape the "shutdown" carve-out
+// exists for, so it must be attributed the same way instead of surfacing as an
+// "(unknown)" failure. Table-driven against the extracted pure decision
+// function (not a full DB round-trip): ItemSession.created_at is Immutable()
+// in the ent schema, and this process's own serverStartTime is fixed before
+// any test runs, so no session created during a test can ever actually
+// predate it — the pure function is the only way to exercise this branch.
+func TestShouldAttributeTombstoneToShutdown_should_MatchOnlyPreBootNonStaleNotLiveHeadlessSessions(t *testing.T) {
+	boot := time.Now()
+	before := boot.Add(-time.Hour)
+	after := boot.Add(time.Hour)
+
+	tests := []struct {
+		name                      string
+		isHeadless, isStale, live bool
+		createdAt                 time.Time
+		want                      bool
+	}{
+		{"headless, not stale, not live, predates boot -> shutdown", true, false, false, before, true},
+		{"headless, not stale, not live, created after boot -> not shutdown (genuine same-process anomaly)", true, false, false, after, false},
+		{"headless, stale, not live, predates boot -> not shutdown (independently explained by staleness)", true, true, false, before, false},
+		{"headless, not stale, live, predates boot -> not shutdown (still genuinely running)", true, false, true, before, false},
+		{"non-headless, not stale, not live, predates boot -> not shutdown (liveness signal is unrelated to boot)", false, false, false, before, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldAttributeTombstoneToShutdown(tt.isHeadless, tt.isStale, tt.live, tt.createdAt, boot)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

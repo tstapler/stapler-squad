@@ -40,6 +40,7 @@ func setupForkTestFixture(t *testing.T) *forkTestFixture {
 
 	bus := events.NewEventBus(16)
 	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire the ReviewQueuePoller so findInstance() can resolve instances.
 	queue := session.NewReviewQueue()
