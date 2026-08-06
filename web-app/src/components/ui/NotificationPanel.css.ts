@@ -515,6 +515,12 @@ export const ciBlockedText = style({
   color: vars.color.warningText,
 });
 
+export const ciBlockedLink = style({
+  fontSize: "0.75rem",
+  color: vars.color.primary,
+  textDecoration: "underline",
+});
+
 export const resolvedBadge = style({
   display: "inline-flex",
   alignItems: "center",

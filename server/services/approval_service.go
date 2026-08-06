@@ -100,8 +100,11 @@ func (as *ApprovalService) ResolveApproval(
 				log.Info("[ApprovalService] approved despite failing CI (override)",
 					"approval_id", req.Msg.ApprovalId, "session_id", sessionID, "ci_conclusion", github.GitHubCheckConclusion)
 			} else if blocked {
-				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("CI is failing on this branch — review before approving"))
+				msg := "Approval blocked: CI is failing on this branch — review before approving."
+				if github.GitHubPRURL != "" {
+					msg += " " + github.GitHubPRURL + "/checks"
+				}
+				return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s", msg))
 			}
 		}
 		// inst == nil (session not found/not live): fail open — an infrastructure lookup

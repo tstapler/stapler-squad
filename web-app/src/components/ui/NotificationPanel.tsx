@@ -18,6 +18,7 @@ import {
   notificationTypeLabel,
   priorityColor,
   notificationTypeFilter,
+  splitCIBlockMessage,
 } from "@/lib/utils/notificationMapping";
 import {
   overlay,
@@ -67,6 +68,7 @@ import {
   denyButton,
   ciBlockedRow,
   ciBlockedText,
+  ciBlockedLink,
   focusButton,
   viewButton,
   loadMore,
@@ -474,9 +476,21 @@ export function NotificationPanel() {
                           if (blockedMessage) {
                             // AC5/Story 2.2.4: visible inline explanation (not a silent no-op or
                             // disabled button) plus an audited "Approve anyway" override.
+                            const { text: blockedText, checksUrl } = splitCIBlockMessage(blockedMessage);
                             return (
                               <div className={ciBlockedRow} data-testid="ci-block-message">
-                                <span className={ciBlockedText}>⚠️ {blockedMessage}</span>
+                                <span className={ciBlockedText}>⚠️ {blockedText}</span>
+                                {checksUrl && (
+                                  <a
+                                    href={checksUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={ciBlockedLink}
+                                    data-testid="ci-block-view-run-link"
+                                  >
+                                    View CI run
+                                  </a>
+                                )}
                                 <div className={itemActions}>
                                   <button
                                     className={approveButton}
