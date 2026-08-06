@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package multi.v1;
+
+rpc OrphanMethod(OrphanRequest) returns (OrphanResponse) {}
+
+message OrphanRequest {}
+message OrphanResponse {}
+
+message FooRequest {}
+message FooResponse {}
+
+message BarRequest {}
+message BarResponse {}
+
+service Alpha {
+  rpc Foo(FooRequest) returns (FooResponse) {}
+}
+
+service Beta {
+  rpc Bar(BarRequest) returns (BarResponse) {}
+}
