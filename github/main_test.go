@@ -1,6 +1,7 @@
 package github
 
 import (
+	"os"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -15,5 +16,5 @@ import (
 // backlog item this fixes for the observed failure mode).
 func TestMain(m *testing.M) {
 	keyring.MockInit()
-	m.Run()
+	os.Exit(m.Run())
 }
