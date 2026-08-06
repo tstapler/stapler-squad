@@ -5,7 +5,10 @@
   "method": "GetApprovalAnalytics",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+  "tested": true,
+  "testIds": [
+    "TestComputeSummary_EscalationReasonCounts",
+    "TestGetApprovalAnalytics_IncludesEscalationReasonCounts"
+  ],
+  "lastModified": "2026-08-02T00:00:00Z"
 }

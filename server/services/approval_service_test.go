@@ -1,6 +1,12 @@
 package services
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -316,6 +322,56 @@ func TestGetApprovalAnalytics_CustomWindowDays(t *testing.T) {
 	assert.NotNil(t, resp.Msg.Summary)
 }
 
+// TestGetApprovalAnalytics_IncludesEscalationReasonCounts is an integration test through
+// the real AnalyticsStore/RulesService chain (no mocking), sibling to
+// TestGetApprovalAnalytics_ReturnsEmptySummaryWhenNoData/_CustomWindowDays above
+// (validation.md AC4 "analytics summary end-to-end through the real store" row, flagged
+// as required by AC4's chain but not explicitly named in plan.md's task list). It records
+// real AnalyticsEntry values via the store's async Record path (mirroring
+// analytics_store_test.go's TestComputeSummary_EscalationReasonCounts fixture), waits for
+// the background flush to persist them, then calls GetApprovalAnalytics and asserts the
+// RPC response's EscalationReasonCounts survives the full ComputeSummary -> summaryToProto
+// chain -- not just the pure ComputeSummary unit test in isolation.
+func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
+	storage := createTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore.Start(context.Background())
+	c := classifier.NewRuleBasedClassifier()
+	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+
+	entries := []AnalyticsEntry{
+		{SessionID: "s1", ToolName: "Bash", Decision: "escalate", RiskLevel: "medium", RuleID: "", CommandPreview: "totally-unmatched-cmd-xyz123"},
+		{SessionID: "s2", ToolName: "Bash", Decision: "escalate", RiskLevel: "medium", RuleID: "", CommandPreview: "another-unmatched-cmd-abc456"},
+		{SessionID: "s3", ToolName: "Bash", Decision: "escalate", RiskLevel: "high", RuleID: "new-domain-check"},
+		{SessionID: "s4", ToolName: "Bash", Decision: "auto_deny", RiskLevel: "critical", RuleID: "secret-scan"},
+		{SessionID: "s5", ToolName: "Bash", Decision: "escalate", RiskLevel: "medium", RuleID: "shell-expansion-program"},
+		{SessionID: "s6", ToolName: "Bash", Decision: "escalate", RiskLevel: "medium", RuleID: "seed-escalate-git-branch-safe-delete"},
+		{SessionID: "s7", ToolName: "Bash", Decision: "auto_allow", RiskLevel: "low", RuleID: "some-rule"},
+	}
+	for _, e := range entries {
+		analyticsStore.Record(e)
+	}
+
+	require.Eventually(t, func() bool {
+		loaded, loadErr := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		return loadErr == nil && len(loaded) >= len(entries)
+	}, 2*time.Second, 10*time.Millisecond, "all analytics entries must persist within 2s")
+
+	resp, err := svc.GetApprovalAnalytics(t.Context(), connect.NewRequest(&sessionv1.GetApprovalAnalyticsRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Summary)
+
+	assert.Equal(t, map[string]int32{
+		"no-match":       2,
+		"domain-age":     1,
+		"secret-scan":    1,
+		"unclassifiable": 1,
+		"explicit-rule":  1,
+	}, resp.Msg.Summary.EscalationReasonCounts)
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 // newTestPendingApproval builds a minimal PendingApproval for test use.
@@ -396,7 +452,7 @@ func TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled(t *testing.T) {
 
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
-	svc.SetLiveInstanceFinder(&fakeLiveInstanceFinder{inst: failingCIInstance("session-X")})
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("session-X")})
 
 	a := newTestPendingApproval("appr-block", "session-X", "Bash")
 	require.NoError(t, store.Create(a))
@@ -420,7 +476,7 @@ func TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled(t *testing.T) {
 
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
-	svc.SetLiveInstanceFinder(&fakeLiveInstanceFinder{inst: failingCIInstance("session-X")})
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("session-X")})
 
 	a := newTestPendingApproval("appr-noflag", "session-X", "Bash")
 	require.NoError(t, store.Create(a))
@@ -440,7 +496,7 @@ func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
 	svc := NewApprovalService(store)
 	// GitHubPRNumber == 0: no PR, so even a "failure" conclusion (which shouldn't occur
 	// in practice without a PR) must not trigger the block.
-	svc.SetLiveInstanceFinder(&fakeLiveInstanceFinder{inst: &session.Instance{
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &session.Instance{
 		Title:                 "session-X",
 		UUID:                  "session-X",
 		GitHubPRNumber:        0,
@@ -469,7 +525,7 @@ func TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound(t *testing.T) {
 	svc := NewApprovalService(store)
 	// liveFinder wired but returns nil (session raced out of the live registry between
 	// escalation and the human clicking Approve) — must fail open, not block or panic.
-	svc.SetLiveInstanceFinder(&fakeLiveInstanceFinder{inst: nil})
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: nil})
 
 	a := newTestPendingApproval("appr-miss", "session-X", "Bash")
 	require.NoError(t, store.Create(a))
@@ -506,7 +562,7 @@ func TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly(t *testing
 
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
-	svc.SetLiveInstanceFinder(&fakeLiveInstanceFinder{inst: failingCIInstance("session-X")})
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("session-X")})
 
 	a := newTestPendingApproval("appr-override", "session-X", "Bash")
 	require.NoError(t, store.Create(a))
@@ -532,7 +588,7 @@ func TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired(t *test
 
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
-	svc.SetLiveInstanceFinder(&fakeLiveInstanceFinder{inst: failingCIInstance("session-X")})
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("session-X")})
 
 	a := newTestPendingApproval("appr-override-noop", "session-X", "Bash")
 	require.NoError(t, store.Create(a))
@@ -543,4 +599,92 @@ func TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired(t *test
 		OverrideCiBlock: true,
 	}))
 	require.NoError(t, err, "behavior must match the equivalent non-override request when the block would not fire")
+}
+
+// ─── Escalation reason persistence + concurrency (escalation-reasoning Epic 5.1, Story 5.1.1) ──
+
+// TestApprovalStore_LoadFromDisk_PreservesEscalationReason is the AC2 "four-struct chain"
+// regression guard (plan.md Story 5.1.1's 4th AC, validation.md AC2 "persist round-trip
+// through disk" row): a pending_approvals.json fixture written with
+// escalation_reason/escalation_category populated for one entry must survive a simulated
+// restart (a fresh ApprovalStore constructed against that file) with both fields intact on
+// the resulting ApprovalMetadata, and Orphaned == true. If any single struct/copy-loop in
+// the PendingApproval -> PersistedApproval -> disk -> PendingApproval -> ApprovalMetadata
+// chain were missed, this test fails with an empty string, not a compile error.
+func TestApprovalStore_LoadFromDisk_PreservesEscalationReason(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pending_approvals.json")
+
+	fixture := []PersistedApproval{
+		{
+			ID:                 "appr-restart-1",
+			SessionID:          "session-restart",
+			ToolName:           "Bash",
+			ToolInput:          map[string]interface{}{"command": "git branch -d feature/foo"},
+			Cwd:                "/tmp",
+			CreatedAt:          time.Now().Add(-1 * time.Minute),
+			ExpiresAt:          time.Now().Add(3 * time.Minute),
+			EscalationReason:   "Branch deletion modifies repository structure and should be reviewed.",
+			EscalationCategory: "explicit-rule",
+			Orphaned:           false, // pre-restart value; loadFromDisk must force this to true regardless
+		},
+	}
+	data, err := json.MarshalIndent(fixture, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0600))
+
+	// Simulate a server restart: a fresh ApprovalStore constructed against the same file.
+	store := NewApprovalStore(path)
+
+	metas := store.GetApprovalMetadataBySession("session-restart")
+	require.Len(t, metas, 1)
+	assert.Equal(t, "Branch deletion modifies repository structure and should be reviewed.", metas[0].EscalationReason)
+	assert.Equal(t, "explicit-rule", metas[0].EscalationCategory)
+	assert.True(t, metas[0].Orphaned, "approvals loaded from disk after a restart must be marked Orphaned")
+}
+
+// TestApprovalStore_Create_ConcurrentEscalations_NoDataRace is the pre-mortem P2
+// concurrency regression guard (plan.md Task 5.1.1d). N goroutines call store.Create
+// concurrently, each with a distinct EscalationReason/EscalationCategory pair, and all N
+// must persist intact afterward -- no lost writes, no corrupted EscalationReason bleeding
+// across entries. ApprovalStore's existing single mutex already serializes Create; this
+// test's job is confirming the two new string fields don't introduce a copy/aliasing bug
+// under concurrent load, not benchmarking throughput. Must be run with `go test -race`.
+func TestApprovalStore_Create_ConcurrentEscalations_NoDataRace(t *testing.T) {
+	store := NewApprovalStore("")
+	const n = 20
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			a := &PendingApproval{
+				ID:                 fmt.Sprintf("appr-concurrent-%d", i),
+				SessionID:          fmt.Sprintf("session-%d", i),
+				ToolName:           "Bash",
+				EscalationReason:   fmt.Sprintf("reason-%d", i),
+				EscalationCategory: fmt.Sprintf("category-%d", i),
+			}
+			if err := store.Create(a); err != nil {
+				t.Errorf("Create(%d) returned error: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	all := store.ListAll()
+	require.Len(t, all, n)
+
+	byID := make(map[string]*PendingApproval, n)
+	for _, a := range all {
+		byID[a.ID] = a
+	}
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("appr-concurrent-%d", i)
+		a, ok := byID[id]
+		require.True(t, ok, "approval %s missing after concurrent Create", id)
+		assert.Equal(t, fmt.Sprintf("reason-%d", i), a.EscalationReason, "EscalationReason must not bleed across concurrently-created entries")
+		assert.Equal(t, fmt.Sprintf("category-%d", i), a.EscalationCategory, "EscalationCategory must not bleed across concurrently-created entries")
+	}
 }

@@ -58,6 +58,22 @@ func SetHookBaseURLFn(fn func() string) {
 	}
 }
 
+// hookCommandReferencesURL reports whether curlCmd is the hook command built for url (see the
+// curl command template in InjectHooksConfig/InjectHookConfig, which always wraps the URL in
+// single quotes: `-X POST '<url>' -H ...`). Matching on the quoted form, not a bare
+// strings.Contains(command, url), is required because some hook URLs are string prefixes of
+// others -- e.g. HookPostToolLogging's ".../api/hooks/post-tool-use" is a strict prefix of
+// HookGitDriftCheck's ".../api/hooks/post-tool-use-drift-check". A bare substring check treats
+// the shorter URL as "already present" whenever the longer one's command exists, which (via
+// Go's randomized map iteration order over the `wanted` set in InjectHooksConfig) intermittently
+// dropped one of the two PostToolUse hooks entirely and made RemoveHooksConfig delete the
+// survivor's group too -- the root cause of the flaky
+// TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresent failure. The
+// quote characters bound the match so a strict-prefix URL can never falsely match a longer one.
+func hookCommandReferencesURL(curlCmd, url string) bool {
+	return strings.Contains(curlCmd, "'"+url+"'")
+}
+
 // hookEndpoints builds the HookName -> URL map fresh from baseURLFn() on every call (never
 // cached into a package-level map), so hook URLs written into a session's settings always
 // reflect the base URL current at hook-injection time rather than one baked in at server- or
@@ -139,7 +155,7 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 				alreadyPresent := false
 				for _, g := range groups {
 					for _, h := range g.Hooks {
-						if h.Type == "command" && strings.Contains(h.Command, url) {
+						if h.Type == "command" && hookCommandReferencesURL(h.Command, url) {
 							alreadyPresent = true
 							break
 						}
@@ -252,7 +268,7 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 		for _, g := range groups {
 			keptHooks := make([]hookEntry, 0, len(g.Hooks))
 			for _, h := range g.Hooks {
-				if h.Type == "command" && strings.Contains(h.Command, url) {
+				if h.Type == "command" && hookCommandReferencesURL(h.Command, url) {
 					changed = true
 					continue
 				}

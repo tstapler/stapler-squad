@@ -1,0 +1,18 @@
+{
+  "id": "insights-sessions-table",
+  "type": "frontend",
+  "component": "SessionsTable",
+  "path": "web-app/src/app/insights/SessionsTable.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "SessionsTable > SessionsTable_should_showUnpricedBadge_When_sessionHasUnpricedModels > renders the cost value and an unpriced badge for that row",
+    "SessionsTable > SessionsTable_should_showUnpricedBadge_When_sessionHasUnpricedModels > does not render a button/CTA alongside the badge",
+    "SessionsTable > SessionsTable_should_omitUnpricedBadge_When_noUnpricedModels > shows only the plain cost figure, no badge",
+    "SessionsTable > SessionsTable_should_triggerOnSessionClick_When_rowWithUnpricedBadgeClicked > still calls onSessionClick when a badged row is clicked",
+    "SessionsTable > SessionsTable_should_supportClickToSort_When_headerClicked > sorts by cost descending on first click",
+    "SessionsTable > SessionsTable_should_supportClickToSort_When_headerClicked > toggles to ascending on second click of the same header",
+    "SessionsTable > SessionsTable_should_supportClickToSort_When_headerClicked > sorts unpriced sessions last for cost regardless of direction"
+  ],
+  "lastModified": "2026-08-02T00:00:00.000Z"
+}

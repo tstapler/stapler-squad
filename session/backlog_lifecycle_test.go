@@ -894,6 +894,48 @@ func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome ReviewOutcom
 	return item
 }
 
+// newStuckReviewTestItemWithVerdictAge is newStuckReviewTestItem's shape but
+// backdates the ReviewVerdict's created_at by verdictAge, for tests of
+// reconcileUnprocessedReviewVerdicts' idle-timeout OR condition
+// (reviewVerdictIdleThreshold). created_at is Immutable() in the ent schema
+// (no Update-builder setter — see newOrphanedTriageTestItem's identical
+// comment), so the backdated value is set at Create time via the raw ent
+// client rather than storage.CreateItemSessionWithVerdict (which always uses
+// time.Now()). The review session itself is left alive (EndedAt nil) so only
+// the verdict-age path, not the ordinary dead-session path, can explain a
+// "dead" verdict.
+func newStuckReviewTestItemWithVerdictAge(t *testing.T, storage *Storage, er *EntRepository, outcome ReviewOutcome, verdictAge time.Duration) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Stuck review test item (backdated verdict)",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	parsedItemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	is, err := er.client.ItemSession.Create().
+		SetSessionUUID("headless-review-" + uuid.New().String()).
+		SetSessionRole(string(SessionRoleReview)).
+		SetBacklogItemID(parsedItemID).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = er.client.ReviewVerdict.Create().
+		SetOverallOutcome(string(outcome)).
+		SetSummary("no diff available").
+		SetItemSessionID(is.ID).
+		SetCreatedAt(time.Now().Add(-verdictAge)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	return item
+}
+
 // TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless is a
 // regression test for a live-data bug found via manual QA: an item whose
 // AutoReopenAfterFailedReview spawn attempt failed and rolled the status back
@@ -1148,6 +1190,17 @@ func newPRPendingTestItem(t *testing.T, storage *Storage, prNumber int) *Backlog
 	}, nil)
 	require.NoError(t, err)
 	return updated
+}
+
+// parsePRStatusPayloadForTest wraps git.ParsePRStatusPayload for fixtures that
+// need a *git.PRStatus with commentReviews/generalComments genuinely
+// populated (e.g. multi-author FeedbackAuthors() assertions), which a plain
+// git.PRStatus{} struct literal cannot set since those fields are unexported.
+func parsePRStatusPayloadForTest(t *testing.T, raw []byte) *git.PRStatus {
+	t.Helper()
+	status, err := git.ParsePRStatusPayload(raw)
+	require.NoError(t, err)
+	return status
 }
 
 // overridePRPendingChecker installs checker as listener's PR-pending-checker
@@ -1433,6 +1486,261 @@ func TestReconcilePRPending_NoSpawn_WhenAllSignalsFalse(t *testing.T) {
 	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "item status must remain pr_pending")
 }
 
+// TestReconcilePRPending_hasNewFeedback_should_ReturnTrue_When_LatestFeedbackAtAfterWatermark
+// verifies substantive PR review feedback (HasReviewFeedback=true), with no
+// prior watermark, triggers a fix-session spawn even when CI/reviews/conflict
+// are all healthy — the new fourth trigger.
+func TestReconcilePRPending_hasNewFeedback_should_ReturnTrue_When_LatestFeedbackAtAfterWatermark(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	newPRPendingTestItem(t, storage, 152)
+	feedbackAt, err := time.Parse(time.RFC3339, "2026-08-02T14:32:07Z")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{
+			HasReviewFeedback: true,
+			LatestFeedbackAt:  feedbackAt,
+			FeedbackText:      "## Reviewer comments\n@copilot-pull-request-reviewer[bot]: Consider extracting this into a helper function.\n\n",
+		},
+	})
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(context.Background(), er)
+
+	assert.True(t, fakeSpawner.spawnCalled, "HasReviewFeedback alone (nil watermark) should trigger a fix-session spawn")
+}
+
+// TestReconcilePRPending_hasNewFeedback_should_ReturnFalse_When_WatermarkEqualsLatestFeedbackAt
+// verifies already-addressed feedback (watermark == LatestFeedbackAt) does not
+// re-trigger a spawn — the .After() comparison on equal timestamps is false —
+// and the item takes the healthy branch exactly as it would today.
+func TestReconcilePRPending_hasNewFeedback_should_ReturnFalse_When_WatermarkEqualsLatestFeedbackAt(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 152)
+	feedbackAt, err := time.Parse(time.RFC3339, "2026-08-02T14:32:07Z")
+	require.NoError(t, err)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrFeedbackAddressedAt: &feedbackAt}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{
+			HasReviewFeedback: true,
+			LatestFeedbackAt:  feedbackAt,
+		},
+	})
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.False(t, fakeSpawner.spawnCalled, "already-addressed feedback (watermark == LatestFeedbackAt) must not re-trigger a spawn")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "item status must remain pr_pending")
+}
+
+// TestReconcilePRPending_DispatchLog_should_IncludeFeedbackFlag_When_FeedbackTriggersSpawn
+// verifies the dispatch log line gains a fourth feedback=%v argument.
+func TestReconcilePRPending_DispatchLog_should_IncludeFeedbackFlag_When_FeedbackTriggersSpawn(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	newPRPendingTestItem(t, storage, 152)
+	feedbackAt, err := time.Parse(time.RFC3339, "2026-08-02T14:32:07Z")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{
+			HasReviewFeedback: true,
+			LatestFeedbackAt:  feedbackAt,
+		},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	var buf bytes.Buffer
+	redirectInfoLog(t, &buf)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(context.Background(), er)
+
+	assert.Contains(t, buf.String(), "feedback=true")
+	assert.Contains(t, buf.String(), "CI=false")
+	assert.Contains(t, buf.String(), "reviews=false")
+	assert.Contains(t, buf.String(), "conflict=false")
+}
+
+// TestReconcilePRPending_should_PersistWatermark_When_DispatchConfirmed verifies
+// PrFeedbackAddressedAt is persisted to prStatus.LatestFeedbackAt once
+// remediatePRFixWithBackoffGate confirms the dispatch (attempted=true, err=nil).
+func TestReconcilePRPending_should_PersistWatermark_When_DispatchConfirmed(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 152)
+	feedbackAt, err := time.Parse(time.RFC3339, "2026-08-02T14:32:07Z")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{
+			HasReviewFeedback: true,
+			LatestFeedbackAt:  feedbackAt,
+		},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched.PrFeedbackAddressedAt, "PrFeedbackAddressedAt must be persisted once dispatch is confirmed")
+	assert.True(t, feedbackAt.Equal(*fetched.PrFeedbackAddressedAt))
+}
+
+// TestReconcilePRPending_should_NotPersistWatermark_When_BackoffNotDue verifies
+// the watermark is NOT advanced when remediatePRFixWithBackoffGate declines to
+// attempt (backoff not yet due) — so the feedback is retried once backoff opens,
+// rather than being silently marked addressed without a fix session ever running.
+func TestReconcilePRPending_should_NotPersistWatermark_When_BackoffNotDue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 152)
+	feedbackAt1, err := time.Parse(time.RFC3339, "2026-08-02T14:32:07Z")
+	require.NoError(t, err)
+	feedbackAt2, err := time.Parse(time.RFC3339, "2026-08-02T15:00:00Z")
+	require.NoError(t, err)
+
+	checker := &fakePRPendingChecker{
+		status: &git.PRStatus{HasReviewFeedback: true, LatestFeedbackAt: feedbackAt1},
+	}
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, checker)
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched.PrFeedbackAddressedAt)
+	assert.True(t, feedbackAt1.Equal(*fetched.PrFeedbackAddressedAt), "first tick must persist the watermark")
+
+	// New feedback arrives before the backoff window (30m) opens.
+	checker.status.LatestFeedbackAt = feedbackAt2
+
+	listener.ReconcilePRPending(ctx, er)
+
+	fetchedAfterSecondTick, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterSecondTick.PrFeedbackAddressedAt)
+	assert.True(t, feedbackAt1.Equal(*fetchedAfterSecondTick.PrFeedbackAddressedAt), "watermark must stay at its prior value while backoff is not yet due, so the newer feedback is retried once the backoff opens")
+}
+
+// TestReconcilePRPending_BatchCoverageLog_should_FireForMultiItemDispatch_And_NotForSingleItem
+// is the regression test for pre-mortem.md's P1 mitigation: when a single
+// hasNewFeedback dispatch covers more than one substantive feedback item, a log
+// line records the item count and authors, so a partially-addressed multi-item
+// batch is discoverable rather than silently unresolved forever.
+func TestReconcilePRPending_BatchCoverageLog_should_FireForMultiItemDispatch_And_NotForSingleItem(t *testing.T) {
+	t.Run("2-item batch logs count and authors", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+
+		newPRPendingTestItem(t, storage, 152)
+
+		raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"Consider extracting this into a helper function.","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:32:07Z"}],"comments":[{"body":"Please rebase onto main.","author":{"login":"tstapler"},"createdAt":"2026-08-02T15:10:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+		status := parsePRStatusPayloadForTest(t, raw)
+
+		listener := NewBacklogLifecycleListener(storage)
+		overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: status})
+		listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+		var buf bytes.Buffer
+		redirectInfoLog(t, &buf)
+
+		er := storage.repo.(*EntRepository)
+		listener.ReconcilePRPending(context.Background(), er)
+
+		assert.Contains(t, buf.String(), "dispatching PR-fix session covering 2 feedback item(s)")
+		assert.Contains(t, buf.String(), "copilot-pull-request-reviewer[bot]")
+		assert.Contains(t, buf.String(), "tstapler")
+	})
+
+	t.Run("single-item dispatch does not log batch coverage", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+
+		newPRPendingTestItem(t, storage, 152)
+		feedbackAt, err := time.Parse(time.RFC3339, "2026-08-02T14:32:07Z")
+		require.NoError(t, err)
+
+		listener := NewBacklogLifecycleListener(storage)
+		overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+			status: &git.PRStatus{HasReviewFeedback: true, LatestFeedbackAt: feedbackAt},
+		})
+		listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+		var buf bytes.Buffer
+		redirectInfoLog(t, &buf)
+
+		er := storage.repo.(*EntRepository)
+		listener.ReconcilePRPending(context.Background(), er)
+
+		assert.NotContains(t, buf.String(), "dispatching PR-fix session covering")
+	})
+}
+
+// TestReconcilePRPending_HasNewFeedback_UnparseableTimestampStillAdvancesWatermark
+// is the regression test for the adversarial-review.md BLOCKER: parsePRStatusPayload's
+// time.Now() fallback for an unparseable submittedAt/createdAt must never be masked
+// by an already-persisted, later watermark — it is guaranteed no earlier than any
+// watermark this process could have already persisted, so it can only ever push
+// LatestFeedbackAt later, never mask a real later item under an earlier one.
+func TestReconcilePRPending_HasNewFeedback_UnparseableTimestampStillAdvancesWatermark(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 152)
+	priorWatermark, err := time.Parse(time.RFC3339, "2026-08-01T10:00:00Z")
+	require.NoError(t, err)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrFeedbackAddressedAt: &priorWatermark}, nil)
+	require.NoError(t, err)
+
+	// Simulate parsePRStatusPayload's fallback outcome for a malformed
+	// submittedAt: LatestFeedbackAt lands at (approximately) time.Now(),
+	// strictly after the stored watermark.
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"Consider extracting this into a helper function.","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"not-a-valid-timestamp"}],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+	status := parsePRStatusPayloadForTest(t, raw)
+	require.True(t, status.LatestFeedbackAt.After(priorWatermark), "test setup: fallback time.Now() must be after the prior watermark")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: status})
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.True(t, fakeSpawner.spawnCalled, "the time.Now() parse-error fallback must still be treated as genuinely new feedback, not masked by the existing watermark")
+}
+
 // TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens verifies that
 // a PR closed without merging (state=CLOSED, not caught by IsPRMerged since that
 // only returns true for MERGED) does not stall forever as a "healthy open PR" —
@@ -1474,6 +1782,43 @@ func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testi
 	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status, "item must have actually left pr_pending")
 	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared so the next pushAndCreatePR creates a fresh PR")
 	assert.Empty(t, fetched.PrURL, "PrURL must be cleared so the next pushAndCreatePR creates a fresh PR")
+}
+
+// TestReconcilePRPending_should_ClearWatermark_When_PRClosedWithoutMerging verifies
+// the same field-clear block also clears PrFeedbackAddressedAt, so a fresh PR
+// (after a closed-without-merging cycle) starts with a clean feedback watermark —
+// stale feedback from the now-defunct PR must never suppress detection on the new one.
+func TestReconcilePRPending_should_ClearWatermark_When_PRClosedWithoutMerging(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 152)
+	priorWatermark, err := time.Parse(time.RFC3339, "2026-08-02T14:32:07Z")
+	require.NoError(t, err)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrFeedbackAddressedAt: &priorWatermark}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: false,
+		status: &git.PRStatus{IsClosed: true},
+	})
+	fakeSpawner := &fakePRFixSpawner{
+		onCall: func() {
+			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			require.NoError(t, transErr)
+		},
+	}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status, "item must have actually left pr_pending")
+	assert.Nil(t, fetched.PrFeedbackAddressedAt, "PrFeedbackAddressedAt must be cleared alongside PrURL/PrNumber on a confirmed closed-without-merging reopen")
 }
 
 // TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenNoOps
@@ -1810,13 +2155,15 @@ func TestBackfillMissingPRNumbers_ParsesNumberFromURL(t *testing.T) {
 // fakePRCreator is a test double implementing prCreator, letting tests inject
 // canned push/CreatePR results without a live git worktree or authenticated gh CLI.
 type fakePRCreator struct {
-	pushErr      error
-	createErr    error
-	createURL    string
-	createNumber int
-	autoMergeErr error
-	pushCalled   bool
-	createCalled bool
+	pushErr             error
+	createErr           error
+	createURL           string
+	createNumber        int
+	autoMergeErr        error
+	copilotReviewErr    error
+	pushCalled          bool
+	createCalled        bool
+	copilotReviewCalled bool
 }
 
 func (f *fakePRCreator) CommitChanges(commitMessage string) error { return nil }
@@ -1829,6 +2176,10 @@ func (f *fakePRCreator) CreatePR(title, body string) (string, int, error) {
 	return f.createURL, f.createNumber, f.createErr
 }
 func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return f.autoMergeErr }
+func (f *fakePRCreator) RequestCopilotReview(prNumber int) error {
+	f.copilotReviewCalled = true
+	return f.copilotReviewErr
+}
 
 // fakeOneShotShipRunnerCall records a single RunOneShotForSession invocation's
 // arguments, so tests can assert shipViaAgentOrFallback called it with the
@@ -2123,6 +2474,63 @@ func TestPushAndCreatePR_AutoMergeFails_StillTransitionsButNotifies(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "the PR was created successfully — the item must still advance to pr_pending")
 	assert.Contains(t, notifier.titles(), "Auto-merge not enabled", "operator must be told the PR needs a manual merge, not just a log line")
+}
+
+// TestPushAndCreatePR_should_RequestCopilotReview_When_PRCreated verifies the
+// ship flow requests a Copilot review right after enabling auto-merge, on the
+// happy path.
+func TestPushAndCreatePR_should_RequestCopilotReview_When_PRCreated(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{
+		createURL:    "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/321",
+		createNumber: 321,
+	}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+
+	listener.pushAndCreatePR(context.Background(), item, is)
+
+	assert.True(t, fakeCreator.copilotReviewCalled, "RequestCopilotReview must be called once the PR is created")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+}
+
+// TestPushAndCreatePR_should_SendWarningNotification_When_RequestCopilotReviewFails
+// verifies a failed Copilot review request is best-effort: the item still
+// transitions to pr_pending, and the operator gets a low-priority warning
+// notification rather than only a log line.
+func TestPushAndCreatePR_should_SendWarningNotification_When_RequestCopilotReviewFails(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{
+		createURL:        "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/321",
+		createNumber:     321,
+		copilotReviewErr: errors.New("copilot code review is not enabled for this org"),
+	}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.pushAndCreatePR(context.Background(), item, is)
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "the PR was created successfully — the item must still advance to pr_pending")
+	assert.Contains(t, notifier.titles(), "Copilot review not requested")
 }
 
 // TestPushAndCreatePR_ReusesExistingPR_WhenAlreadySet verifies the "PR already
@@ -3573,4 +3981,28 @@ func TestReconcileOrphanedAgentPRs_should_NoOp_When_NoMatchingPR(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "no matching PR — item must stay in review")
 	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestCreateBacklogItem_Labels_RoundTripsThroughGetBacklogItem is the
+// Epic 0.1 (Story 0.1.2) round-trip test: an item created with Labels/
+// ExternalURL set must read back identically via GetBacklogItem, confirming
+// the ent create+read mapping for both new fields end-to-end through Storage.
+func TestCreateBacklogItem_Labels_RoundTripsThroughGetBacklogItem(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:       "item with labels and external URL",
+		Labels:      []string{"bug", "p1"},
+		ExternalURL: "https://github.com/tstapler/stapler-squad/issues/42",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bug", "p1"}, created.Labels)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/issues/42", created.ExternalURL)
+
+	fetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bug", "p1"}, fetched.Labels)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/issues/42", fetched.ExternalURL)
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -159,6 +160,18 @@ type mockSessionStopper struct {
 	// TimeSinceLastMeaningfulOutput should report for it. A UUID present in
 	// liveUUIDs but absent here reports (0, true) — live and fresh.
 	staleFor map[string]time.Duration
+	// tslmoOverrideNotLive forces TimeSinceLastMeaningfulOutput to report
+	// live=false for a UUID even though it's present (true) in liveUUIDs, so
+	// IsSessionLive still reports it as live. Models the real SessionService
+	// implementation's rare edge case where a session is deregistered from the
+	// live poller between an earlier IsSessionLive check (e.g.
+	// tombstoneOrphanWorkSessions' orphan sweep) and a later
+	// TimeSinceLastMeaningfulOutput call in the same request — both are backed
+	// by the same FindLiveInstance lookup in production, so they normally
+	// agree, but a caller enriching an error message with the progress signal
+	// must still handle the disagreement gracefully rather than assume it. Nil
+	// (the default) preserves the old coupled behavior for every other test.
+	tslmoOverrideNotLive map[string]bool
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -166,7 +179,7 @@ func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
 }
 
 func (m *mockSessionStopper) TimeSinceLastMeaningfulOutput(uuid string) (time.Duration, bool) {
-	if !m.liveUUIDs[uuid] {
+	if !m.liveUUIDs[uuid] || m.tslmoOverrideNotLive[uuid] {
 		return 0, false
 	}
 	return m.staleFor[uuid], true
@@ -459,6 +472,60 @@ func TestUpdateBacklogItem_GitHubResolveError_ReturnsInvalidArgument(t *testing.
 	require.ErrorAs(t, err, &connErr)
 	assert.Equal(t, connect.CodeInvalidArgument, connErr.Code())
 	assert.Contains(t, connErr.Error(), "https://github.com/owner/does-not-exist")
+}
+
+// TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit is the Epic 0.3
+// prerequisite test (plan.md Task 0.3.2c): a genuinely different Title
+// populates the item's UserModifiedFields with "title".
+func TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "Original Title",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId: created.Msg.Item.Id,
+		Title:  "New Title",
+	}))
+	require.NoError(t, err)
+
+	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "New Title", refetched.Title)
+	assert.True(t, session.ContainsModifiedField(session.ParseUserModifiedFields(refetched.UserModifiedFields), "title"),
+		"UserModifiedFields must contain \"title\" after a genuine title edit, got %q", refetched.UserModifiedFields)
+}
+
+// TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged is the
+// regression test for the pre-mortem P1 #2 value-diff correction (plan.md
+// Task 0.3.2b/0.3.2c): the frontend edit form always resubmits the current
+// Title verbatim, so a presence-only check would falsely mark it as
+// user-modified on nearly every edit. Resubmitting the unchanged Title
+// alongside a genuinely different Priority must mark only "priority".
+func TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "Unchanged Title",
+		Priority: 3,
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:   created.Msg.Item.Id,
+		Title:    "Unchanged Title", // resubmitted verbatim, mirroring the real edit form
+		Priority: 5,                 // genuinely changed
+	}))
+	require.NoError(t, err)
+
+	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 5, refetched.Priority)
+	modified := session.ParseUserModifiedFields(refetched.UserModifiedFields)
+	assert.True(t, session.ContainsModifiedField(modified, "priority"), "priority genuinely changed, must be marked modified")
+	assert.False(t, session.ContainsModifiedField(modified, "title"), "title was resubmitted unchanged, must NOT be marked modified")
 }
 
 // ─── ListBacklogItems ─────────────────────────────────────────────────────────
@@ -1140,6 +1207,31 @@ func createReadyItemForSpawn(t *testing.T, svc *BacklogService, repoPath, title 
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:    title,
 		RepoPath: repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+	return itemID
+}
+
+// createReadyItemWithPriority is createReadyItemForSpawn plus an explicit priority
+// (1 = P1/highest ... 5 = P5/lowest), for tests asserting dequeue ordering.
+func createReadyItemWithPriority(t *testing.T, svc *BacklogService, repoPath, title string, priority int32) string {
+	t.Helper()
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    title,
+		RepoPath: repoPath,
+		Priority: priority,
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
@@ -2632,6 +2724,78 @@ func TestTriggerTriage_Success(t *testing.T) {
 	assert.NotNil(t, sessions[0].EndedAt, "triage item session should be marked ended on success")
 }
 
+// TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem guards
+// the fix making triage actually assign priority/category instead of leaving every item
+// at DefaultBacklogPriority forever (which defeats DequeueNextQueuedItems' priority-order
+// auto-spawn — every item tied at the same priority is effectively still FIFO). The LLM's
+// assessed priority and item_category must land on the item once triage completes.
+func TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: `{"summary":"critical bug","priority":1,"item_category":"bugfix","suggestions":[{"text":"fix it","rationale":"why"}]}`}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "assessed priority item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: session.DefaultBacklogPriority,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated.Priority, "the LLM's assessed priority must be applied to the item")
+	assert.Equal(t, "bugfix", updated.Category, "the LLM's assessed item_category must be applied to the item")
+}
+
+// TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmitsThem
+// guards the "don't clobber" half of the same fix: a triage result with no priority/
+// item_category (the model didn't provide one, or ParseHeadlessTriageResult zero-values
+// them) must leave whatever the item already had untouched, not reset it.
+func TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmitsThem(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()} // no priority/item_category field
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "pre-set priority item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 2,
+		Category: string(session.BacklogCategoryChore),
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.Priority, "an omitted priority must not clobber the item's existing priority")
+	assert.Equal(t, string(session.BacklogCategoryChore), updated.Category, "an omitted item_category must not clobber the item's existing category")
+}
+
 // TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick verifies the
 // opt-in auto-spawn-session toggle: when AutoSpawnSession is true, TriggerTriage's
 // completion goroutine spawns a work session automatically (Autonomous: true, bypassing
@@ -2949,6 +3113,59 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
+// TestTriggerTriage_AlreadyExists_LiveHeadlessSession guards the fix for BUG-054:
+// before triageInFlight existed, a headless triage session with EndedAt == nil was
+// *always* treated as dead (see the removed isHeadless-implies-notLive branch this
+// test replaces the assumption behind), so retriggering triage for an item whose
+// headless call was genuinely still running silently tombstoned the live session in
+// the DB and started a fully redundant duplicate LLM call — confirmed live
+// 2026-08-01 (docs/bugs/fixed/BUG-054): a manual "Retry now" click raced a still-running
+// auto-respawned triage call, producing a real "concurrent modification detected"
+// error when the older call finally finished and tried to also transition idea->ready.
+// A headless triage session must now be treated as live exactly when this process's
+// own triageInFlight record says so.
+func TestTriggerTriage_AlreadyExists_LiveHeadlessSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "live headless triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	// Open headless triage session, exactly like the genuinely-still-running case:
+	// no EndedAt, headless-prefixed UUID.
+	_, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-11111111-live-0000-000000000000",
+		SessionRole: string(session.SessionRoleTriage),
+	})
+	require.NoError(t, isErr)
+
+	// Simulate the goroutine actually still running this call, the way TriggerTriage
+	// itself would have set it before launching that goroutine.
+	svc.triageInFlight.Store(item.ID, struct{}{})
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr, "a live headless triage call must block re-trigger instead of being silently tombstoned and duplicated")
+	var connErr *connect.Error
+	require.ErrorAs(t, trigErr, &connErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connErr.Code())
+
+	// The original session must NOT have been tombstoned.
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a genuinely live headless session must not be marked ended")
+}
+
 // ─── TriggerSync / GetSyncHistory ──────────────────────────────────────────────
 
 // fakeSourcePlugin is a minimal session.ItemSourcePlugin stub for TriggerSync tests.
@@ -3239,4 +3456,128 @@ func TestBacklogService_ScrollbackManager_ConcurrentSetAndGet_NoRace(t *testing.
 		}()
 	}
 	wg.Wait()
+}
+
+// ─── Epic 0.5: per-source sync-direction settings (ForwardSyncEnabled,
+// BackwardSyncEnabled, ForwardSyncCloseLabel) ──────────────────────────────
+
+// TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled verifies the
+// three new sync-direction fields flow all the way from the UpdateItemSource
+// RPC through storage and back out via ListItemSources, mirroring how the
+// pre-existing Enabled field already round-trips.
+func TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	created, err := svc.CreateItemSource(context.Background(), &connect.Request[sessionv1.CreateItemSourceRequest]{
+		Msg: &sessionv1.CreateItemSourceRequest{
+			PluginId:    "github_issues",
+			DisplayName: "My GitHub",
+		},
+	})
+	require.NoError(t, err)
+	sourceID := created.Msg.Source.Id
+
+	// Newly created sources default to both directions disabled and no close label.
+	require.False(t, created.Msg.Source.ForwardSyncEnabled)
+	require.False(t, created.Msg.Source.BackwardSyncEnabled)
+	require.Equal(t, "", created.Msg.Source.ForwardSyncCloseLabel)
+
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			Enabled:               true,
+			ForwardSyncEnabled:    true,
+			BackwardSyncEnabled:   true,
+			ForwardSyncCloseLabel: "wontfix",
+		},
+	})
+	require.NoError(t, err)
+
+	listResp, err := svc.ListItemSources(context.Background(), &connect.Request[sessionv1.ListItemSourcesRequest]{})
+	require.NoError(t, err)
+
+	var found *sessionv1.ItemSource
+	for _, s := range listResp.Msg.Sources {
+		if s.Id == sourceID {
+			found = s
+			break
+		}
+	}
+	require.NotNil(t, found, "updated source not found in ListItemSources")
+	assert.True(t, found.ForwardSyncEnabled)
+	assert.True(t, found.BackwardSyncEnabled)
+	assert.Equal(t, "wontfix", found.ForwardSyncCloseLabel)
+}
+
+// TestUpdateItemSource_ClearsForwardSyncCloseLabel verifies that sending an
+// empty ForwardSyncCloseLabel actually clears a previously-set label.
+// UpdateItemSource is a full-state overwrite (see the frontend's
+// useBacklogSourcesService.ts comment), so guarding the write on a non-empty
+// string — as the handler previously did — silently ignored a user's attempt
+// to clear the field via blur-triggered updates in BacklogSourcesSettings.tsx.
+func TestUpdateItemSource_ClearsForwardSyncCloseLabel(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	created, err := svc.CreateItemSource(context.Background(), &connect.Request[sessionv1.CreateItemSourceRequest]{
+		Msg: &sessionv1.CreateItemSourceRequest{
+			PluginId:    "github_issues",
+			DisplayName: "My GitHub",
+		},
+	})
+	require.NoError(t, err)
+	sourceID := created.Msg.Source.Id
+
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			ForwardSyncCloseLabel: "wontfix",
+		},
+	})
+	require.NoError(t, err)
+
+	// Now clear it — this must actually persist as empty, not be silently
+	// ignored because the RPC field is the empty string.
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			ForwardSyncCloseLabel: "",
+		},
+	})
+	require.NoError(t, err)
+
+	listResp, err := svc.ListItemSources(context.Background(), &connect.Request[sessionv1.ListItemSourcesRequest]{})
+	require.NoError(t, err)
+
+	var found *sessionv1.ItemSource
+	for _, s := range listResp.Msg.Sources {
+		if s.Id == sourceID {
+			found = s
+			break
+		}
+	}
+	require.NotNil(t, found, "updated source not found in ListItemSources")
+	assert.Equal(t, "", found.ForwardSyncCloseLabel, "close label should have been cleared, not left unchanged")
+}
+
+// TestUpdateItemSource_ReturnsErrorForUnknownSourceId verifies UpdateItemSource
+// surfaces a NotFound error (rather than silently succeeding) when the target
+// source id does not exist — the error path counterpart to the round-trip test.
+func TestUpdateItemSource_ReturnsErrorForUnknownSourceId(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	_, err := svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:           uuid.NewString(),
+			DisplayName:        "Nonexistent",
+			ForwardSyncEnabled: true,
+		},
+	})
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }

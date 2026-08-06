@@ -159,6 +159,13 @@ type SessionService struct {
 	// backlog item state transitions fire when the session exits.
 	backlogLifecycleListener *session.BacklogLifecycleListener
 
+	// sessionSummaryGenerator is wired to each newly created session (alongside
+	// backlogLifecycleListener, at the same call sites) so that session-completion-
+	// summary generation fires on exit/stop. Nil until SetSessionSummaryGenerator is
+	// called (session/session_summary_service.go's ent-client/headless-pool wiring
+	// happens after SessionService construction).
+	sessionSummaryGenerator *session.SessionSummaryGenerator
+
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
 
@@ -520,7 +527,9 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if inst == nil {
 		return nil // already gone / never tracked
 	}
-	if !inst.SetArchivedAtIfNil(time.Now()) {
+	// SetArchivedAtIfNilAndStop also transitions Status to Stopped (see ArchiveSession's
+	// comment) — safe to call unconditionally: no-ops the transition if already Stopped.
+	if !inst.SetArchivedAtIfNilAndStop(time.Now()) {
 		return nil // already archived
 	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
@@ -804,6 +813,14 @@ func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycle
 	return s.backlogLifecycleListener
 }
 
+// SetSessionSummaryGenerator wires the generator to all sessions created via
+// CreateSession/CreateDirectorySession/CreateWorktreeSession after this call,
+// mirroring SetBacklogLifecycleListener's wiring pattern (see the WireToInstance
+// call sites alongside session.WireSessionSummaryListener below).
+func (s *SessionService) SetSessionSummaryGenerator(g *session.SessionSummaryGenerator) {
+	s.sessionSummaryGenerator = g
+}
+
 // SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
 // service so that completed work sessions immediately kick off headless review.
 func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
@@ -882,6 +899,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	}
 	return instance, nil
 }
 
@@ -931,6 +951,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	}
 	return instance, nil
 }
 
@@ -963,6 +986,19 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	s.wireClaudeSessionIDCallback(inst)
 	s.wireAutoArchiveCallback(inst)
 	s.wireSessionExitedPublisher(inst)
+	// Register with the HistoryLinker so its poll/fsnotify correlation loop
+	// detects this session's Claude JSONL file and persists claude_session_id.
+	// Without this, only sessions loaded at server boot (server/dependencies.go)
+	// were ever registered — every session created afterward (regular sessions
+	// via CreateSession, and every backlog/autonomous session via
+	// CreateWorktreeSession/CreateDirectorySession) never got a conversation
+	// UUID captured, so HasClaudeSession() stayed false and a session whose
+	// tmux pane died (restart, hibernation, crash) started a fresh Claude
+	// conversation on recovery instead of resuming — confirmed live
+	// 2026-08-02 on backlog work sessions failing to resume post-restart.
+	if s.historyLinker != nil {
+		s.historyLinker.AddInstance(inst)
+	}
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.
@@ -1273,20 +1309,31 @@ func (s *SessionService) CreateSession(
 			"fork_at_message", req.Msg.ForkAtMessage)
 	}
 
-	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/github.com/owner/repo)
+	// Load config once; used by the GitHub URL resolution below as well as the
+	// one-off path and the defaults/alias path further down.
+	cfg := config.LoadConfig()
+
+	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
 	resolvedPath := expandTildePath(req.Msg.Path)
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
 
-	if session.IsGitHubURL(req.Msg.Path) {
+	enterpriseHosts := make([]string, 0, len(cfg.GetGitHubEnterpriseHosts()))
+	for _, h := range cfg.GetGitHubEnterpriseHosts() {
+		enterpriseHosts = append(enterpriseHosts, h.Host)
+	}
+
+	if session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
 
-		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// ResolveGitHubInputCtxWithHosts threads ctx down to the underlying git
 		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
 		// timeout genuinely cancels the subprocess instead of abandoning it
-		// to keep running in the background after the RPC returns.
-		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
+		// to keep running in the background after the RPC returns. It also
+		// recognizes URLs against any configured GitHub Enterprise hosts, not
+		// just github.com.
+		localPath, ref, err := session.ResolveGitHubInputCtxWithHosts(ctx, req.Msg.Path, enterpriseHosts)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
@@ -1304,9 +1351,6 @@ func (s *SessionService) CreateSession(
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
 	}
-
-	// Load config once; used by both the one-off path and the defaults/alias path below.
-	cfg := config.LoadConfig()
 
 	// One-off session: generate a fresh directory and override resolvedPath.
 	// Autonomous sessions created without an explicit path (the omnibar's normal
@@ -1554,6 +1598,9 @@ func (s *SessionService) CreateSession(
 
 		if s.backlogLifecycleListener != nil {
 			s.backlogLifecycleListener.WireToInstance(instance)
+		}
+		if s.sessionSummaryGenerator != nil {
+			session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 		}
 
 		// Wire the status manager and start the controller AFTER Start() returns so the
@@ -1990,6 +2037,16 @@ func (s *SessionService) DeleteSession(
 	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
 	s.autonomousSvc.stopAndDeregisterDriver(sessionTitle)
 
+	// Capture the live instance BEFORE removing from pollers. removeFromAllPollers
+	// (below) evicts this session from the ReviewQueuePoller's instance list — the
+	// exact list FindLiveInstance searches — so calling FindLiveInstance after
+	// removeFromAllPollers always returned nil here, silently skipping Destroy()'s
+	// git worktree cleanup for every delete (live or not) in favor of the
+	// tmux-only KillTmuxSessionByTitle fallback. Capturing the pointer first fixes
+	// that without reopening the race the ordering comment below is about (that
+	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
+	liveInst := s.FindLiveInstance(sessionTitle)
+
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
 	// re-add the session between storage deletion and the old LoadInstances() reload.
@@ -1999,9 +2056,9 @@ func (s *SessionService) DeleteSession(
 	// Destroy tmux/git resources asynchronously so the RPC returns immediately
 	// after storage deletion. Cleanup errors are non-fatal — they are logged and
 	// do not affect the success response the caller receives.
-	if inst := s.FindLiveInstance(sessionTitle); inst != nil {
+	if liveInst != nil {
 		go func() {
-			if err := inst.Destroy(); err != nil {
+			if err := liveInst.Destroy(); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		}()
@@ -4226,7 +4283,12 @@ func (s *SessionService) ArchiveSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 	now := time.Now()
-	inst.SetArchivedAt(&now)
+	// ArchiveWithStop also transitions Status to Stopped (best-effort — archiving
+	// previously left ArchivedAt set while Status stayed Active/Paused/Hibernated,
+	// which the retention sweep and other Stopped-gated logic depend on being in sync).
+	if err := inst.ArchiveWithStop(now); err != nil {
+		log.Warn("failed to transition archived session to Stopped", "session", req.Msg.SessionId, "err", err)
+	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}

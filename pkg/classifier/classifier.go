@@ -495,7 +495,7 @@ func (c *RuleBasedClassifier) classifyInternal(payload PermissionRequestPayload,
 						RiskLevel:   RiskMedium,
 						Reason:      fmt.Sprintf("Command program is a shell expansion (%q); cannot determine the actual executable without evaluating the shell. Review the command before approving.", pc.Program),
 						Alternative: "Use the concrete program name directly, or expand the variable in a separate step.",
-						RuleID:      "shell-expansion-program",
+						RuleID:      RuleIDShellExpansionProgram,
 					}
 				}
 
@@ -546,7 +546,7 @@ func (c *RuleBasedClassifier) classifyOneSubCmd(sub ParsedCommand, payload Permi
 			RiskLevel:   RiskMedium,
 			Reason:      fmt.Sprintf("Command program is a shell expansion (%q); cannot determine the actual executable without evaluating the shell. Review the command before approving.", sub.Program),
 			Alternative: "Use the concrete program name directly, or expand the variable in a separate step.",
-			RuleID:      "shell-expansion-program",
+			RuleID:      RuleIDShellExpansionProgram,
 		}
 	}
 	if depth < maxRecursionDepth {

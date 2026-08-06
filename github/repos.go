@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -15,12 +15,39 @@ import (
 // GitHub token is configured (GITHUB_TOKEN, GH_TOKEN, or OS keychain).
 var ErrNotAuthenticated = errors.New("github token not configured")
 
+// ErrGitHubRefNotFound is a definitive 404: the referenced PR/issue/commit
+// doesn't exist, or exists but is invisible to the configured token (GitHub
+// disguises "exists, no access" as "not found" for security).
+var ErrGitHubRefNotFound = errors.New("github: reference not found")
+
+// ErrGitHubAccessDenied is 401, or 403 with no rate-limit signal — retrying
+// with the same credentials will not change the outcome.
+var ErrGitHubAccessDenied = errors.New("github: access denied")
+
 // RepoResult is the domain return type for SearchUserRepos.
 type RepoResult struct {
 	Owner       string
 	Repo        string
 	Description string
 	Private     bool
+}
+
+// PRResult is the domain return type for GetPR — a lean existence check, not
+// the richer PRInfo returned by GetPRInfoCtx (which shells out to `gh`).
+type PRResult struct {
+	Number  int
+	Title   string
+	State   string
+	HTMLURL string
+}
+
+// ghPRJSON matches the minimal fields this package needs from the GitHub REST
+// API /repos/{owner}/{repo}/pulls/{number} response.
+type ghPRJSON struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	State   string `json:"state"`
+	HTMLURL string `json:"html_url"`
 }
 
 // IssueResult is the domain return type for ListRepoIssues and GetIssue.
@@ -107,29 +134,8 @@ func SearchUserRepos(ctx context.Context, query string, limit int) ([]RepoResult
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 403 {
-		if resp.Header.Get("Retry-After") != "" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
-		}
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
-		}
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: forbidden (403): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 429 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("GitHub API: rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -197,29 +203,8 @@ func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limi
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 403 {
-		if resp.Header.Get("Retry-After") != "" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
-		}
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
-		}
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: forbidden (403): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 429 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("GitHub API: rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -285,32 +270,8 @@ func GetIssue(ctx context.Context, owner, repo string, number int) (*IssueResult
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("GitHub API: issue not found (404)")
-	}
-	if resp.StatusCode == 403 {
-		if resp.Header.Get("Retry-After") != "" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
-		}
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
-		}
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: forbidden (403): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 429 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("GitHub API: rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "issue not found (404)", true)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -342,5 +303,49 @@ func GetIssue(ctx context.Context, owner, repo string, number int) (*IssueResult
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 		IsPR:      isPR,
+	}, nil
+}
+
+// GetPR fetches a single pull request by number via the GitHub REST API
+// (native net/http, not the `gh` CLI subprocess GetPRInfoCtx uses) — a lean
+// existence check sharing GetIssue's auth mechanism and error classification.
+// Returns ErrNotAuthenticated when no token is configured.
+func GetPR(ctx context.Context, owner, repo string, number int) (*PRResult, error) {
+	if getGHToken(ctx) == "" {
+		return nil, ErrNotAuthenticated
+	}
+
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+
+	req, err := newGHRequest(ctx, apiPath)
+	if err != nil {
+		return nil, fmt.Errorf("build PR request: %w", err)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("PR request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "PR not found (404)", true)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read PR response: %w", err)
+	}
+
+	var item ghPRJSON
+	if err := json.Unmarshal(body, &item); err != nil {
+		return nil, fmt.Errorf("parse PR response: %w", err)
+	}
+
+	return &PRResult{
+		Number:  item.Number,
+		Title:   item.Title,
+		State:   item.State,
+		HTMLURL: item.HTMLURL,
 	}, nil
 }

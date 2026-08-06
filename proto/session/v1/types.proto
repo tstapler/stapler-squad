@@ -1134,6 +1134,9 @@ message AnalyticsSummaryProto {
   // Full (program, subcommand) distribution for drill-down analysis.
   // Not truncated to top-N — use to investigate specific programs like "gh" or "sed".
   repeated SubcommandStatProto command_subcommand_stats = 16;
+  // Escalation-reason breakdown: counts per category ("no-match", "explicit-rule",
+  // "domain-age", "secret-scan", "unclassifiable") — see classifier.EscalationCategory.
+  map<string, int32> escalation_reason_counts = 17;
 }
 
 message ToolStatProto {
@@ -1324,6 +1327,15 @@ enum ScanStatus {
   SCAN_STATUS_TIMEOUT     = 2;
   SCAN_STATUS_PERMISSION  = 3;
   SCAN_STATUS_ERROR       = 4;
+}
+
+// SessionSummaryStatus indicates the generation state of a session completion summary.
+enum SessionSummaryStatus {
+  SESSION_SUMMARY_STATUS_UNSPECIFIED = 0;
+  SESSION_SUMMARY_STATUS_PENDING     = 1;
+  SESSION_SUMMARY_STATUS_GENERATING  = 2;
+  SESSION_SUMMARY_STATUS_READY       = 3;
+  SESSION_SUMMARY_STATUS_ERROR       = 4;
 }
 
 // UnfinishedWorktree represents a single git worktree that has unfinished work.

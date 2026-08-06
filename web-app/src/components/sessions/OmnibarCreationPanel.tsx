@@ -18,6 +18,7 @@ import {
 import * as styles from "./OmnibarCreationPanel.css";
 import { FileChipList, type AttachedFile } from "./FileChipList";
 import { RadioGroup } from "@/components/ui/RadioGroup";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
 import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
@@ -489,15 +490,14 @@ export function OmnibarCreationPanel({
               <label className={labelClass} htmlFor="omnibar-parent-dir">
                 Parent Directory *
               </label>
-              <input
+              <RepoPathInput
                 id="omnibar-parent-dir"
-                type="text"
-                className={fieldInput}
                 placeholder="~/Projects"
                 value={parentDir}
-                onChange={(e) => setFormField("parentDir", e.target.value)}
+                onChange={(v) => setFormField("parentDir", v)}
+                required
+                hint="Recent paths below are existing project folders — pick one to use its parent, or type a new directory."
               />
-              <span className={hint}>Directory where the new project folder will be created</span>
             </div>
 
             {/* Project Name */}
@@ -649,13 +649,11 @@ export function OmnibarCreationPanel({
                 ))}
               </select>
             ) : (
-              <input
+              <RepoPathInput
                 id="omnibar-existing-worktree"
-                type="text"
-                className={fieldInput}
                 placeholder="/path/to/existing/worktree"
                 value={existingWorktree}
-                onChange={(e) => setFormField("existingWorktree", e.target.value)}
+                onChange={(v) => setFormField("existingWorktree", v)}
               />
             )}
             <span className={hint}>

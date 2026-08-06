@@ -6,7 +6,7 @@ import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
-import { GitHubBadge } from "./GitHubBadge";
+import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";

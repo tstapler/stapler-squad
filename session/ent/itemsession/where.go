@@ -76,6 +76,11 @@ func EndedAt(v time.Time) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldEndedAt, v))
 }
 
+// EndReason applies equality check predicate on the "end_reason" field. It's identical to EndReasonEQ.
+func EndReason(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldEndReason, v))
+}
+
 // AcSnapshot applies equality check predicate on the "ac_snapshot" field. It's identical to AcSnapshotEQ.
 func AcSnapshot(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldAcSnapshot, v))
@@ -99,6 +104,11 @@ func TriageResult(v string) predicate.ItemSession {
 // VerificationNotes applies equality check predicate on the "verification_notes" field. It's identical to VerificationNotesEQ.
 func VerificationNotes(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldVerificationNotes, v))
+}
+
+// BaseCommitSha applies equality check predicate on the "base_commit_sha" field. It's identical to BaseCommitShaEQ.
+func BaseCommitSha(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldBaseCommitSha, v))
 }
 
 // LastCommitSha applies equality check predicate on the "last_commit_sha" field. It's identical to LastCommitShaEQ.
@@ -369,6 +379,81 @@ func EndedAtIsNil() predicate.ItemSession {
 // EndedAtNotNil applies the NotNil predicate on the "ended_at" field.
 func EndedAtNotNil() predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldNotNull(FieldEndedAt))
+}
+
+// EndReasonEQ applies the EQ predicate on the "end_reason" field.
+func EndReasonEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldEndReason, v))
+}
+
+// EndReasonNEQ applies the NEQ predicate on the "end_reason" field.
+func EndReasonNEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNEQ(FieldEndReason, v))
+}
+
+// EndReasonIn applies the In predicate on the "end_reason" field.
+func EndReasonIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIn(FieldEndReason, vs...))
+}
+
+// EndReasonNotIn applies the NotIn predicate on the "end_reason" field.
+func EndReasonNotIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotIn(FieldEndReason, vs...))
+}
+
+// EndReasonGT applies the GT predicate on the "end_reason" field.
+func EndReasonGT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGT(FieldEndReason, v))
+}
+
+// EndReasonGTE applies the GTE predicate on the "end_reason" field.
+func EndReasonGTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGTE(FieldEndReason, v))
+}
+
+// EndReasonLT applies the LT predicate on the "end_reason" field.
+func EndReasonLT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLT(FieldEndReason, v))
+}
+
+// EndReasonLTE applies the LTE predicate on the "end_reason" field.
+func EndReasonLTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLTE(FieldEndReason, v))
+}
+
+// EndReasonContains applies the Contains predicate on the "end_reason" field.
+func EndReasonContains(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContains(FieldEndReason, v))
+}
+
+// EndReasonHasPrefix applies the HasPrefix predicate on the "end_reason" field.
+func EndReasonHasPrefix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasPrefix(FieldEndReason, v))
+}
+
+// EndReasonHasSuffix applies the HasSuffix predicate on the "end_reason" field.
+func EndReasonHasSuffix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasSuffix(FieldEndReason, v))
+}
+
+// EndReasonIsNil applies the IsNil predicate on the "end_reason" field.
+func EndReasonIsNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIsNull(FieldEndReason))
+}
+
+// EndReasonNotNil applies the NotNil predicate on the "end_reason" field.
+func EndReasonNotNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotNull(FieldEndReason))
+}
+
+// EndReasonEqualFold applies the EqualFold predicate on the "end_reason" field.
+func EndReasonEqualFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEqualFold(FieldEndReason, v))
+}
+
+// EndReasonContainsFold applies the ContainsFold predicate on the "end_reason" field.
+func EndReasonContainsFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContainsFold(FieldEndReason, v))
 }
 
 // AcSnapshotEQ applies the EQ predicate on the "ac_snapshot" field.
@@ -724,6 +809,81 @@ func VerificationNotesEqualFold(v string) predicate.ItemSession {
 // VerificationNotesContainsFold applies the ContainsFold predicate on the "verification_notes" field.
 func VerificationNotesContainsFold(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldContainsFold(FieldVerificationNotes, v))
+}
+
+// BaseCommitShaEQ applies the EQ predicate on the "base_commit_sha" field.
+func BaseCommitShaEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaNEQ applies the NEQ predicate on the "base_commit_sha" field.
+func BaseCommitShaNEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNEQ(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaIn applies the In predicate on the "base_commit_sha" field.
+func BaseCommitShaIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIn(FieldBaseCommitSha, vs...))
+}
+
+// BaseCommitShaNotIn applies the NotIn predicate on the "base_commit_sha" field.
+func BaseCommitShaNotIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotIn(FieldBaseCommitSha, vs...))
+}
+
+// BaseCommitShaGT applies the GT predicate on the "base_commit_sha" field.
+func BaseCommitShaGT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGT(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaGTE applies the GTE predicate on the "base_commit_sha" field.
+func BaseCommitShaGTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGTE(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaLT applies the LT predicate on the "base_commit_sha" field.
+func BaseCommitShaLT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLT(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaLTE applies the LTE predicate on the "base_commit_sha" field.
+func BaseCommitShaLTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLTE(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaContains applies the Contains predicate on the "base_commit_sha" field.
+func BaseCommitShaContains(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContains(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaHasPrefix applies the HasPrefix predicate on the "base_commit_sha" field.
+func BaseCommitShaHasPrefix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasPrefix(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaHasSuffix applies the HasSuffix predicate on the "base_commit_sha" field.
+func BaseCommitShaHasSuffix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasSuffix(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaIsNil applies the IsNil predicate on the "base_commit_sha" field.
+func BaseCommitShaIsNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIsNull(FieldBaseCommitSha))
+}
+
+// BaseCommitShaNotNil applies the NotNil predicate on the "base_commit_sha" field.
+func BaseCommitShaNotNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotNull(FieldBaseCommitSha))
+}
+
+// BaseCommitShaEqualFold applies the EqualFold predicate on the "base_commit_sha" field.
+func BaseCommitShaEqualFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEqualFold(FieldBaseCommitSha, v))
+}
+
+// BaseCommitShaContainsFold applies the ContainsFold predicate on the "base_commit_sha" field.
+func BaseCommitShaContainsFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContainsFold(FieldBaseCommitSha, v))
 }
 
 // LastCommitShaEQ applies the EQ predicate on the "last_commit_sha" field.

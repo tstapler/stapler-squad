@@ -47,6 +47,7 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 		{domain.StuckReasonPushFailed, sessionv1.StuckReason_STUCK_REASON_PUSH_FAILED},
 		{domain.StuckReasonPRPendingNoPR, sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR},
 		{domain.StuckReasonReworkBlockedStale, sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE},
+		{domain.StuckReasonPRNeedsFix, sessionv1.StuckReason_STUCK_REASON_PR_NEEDS_FIX},
 	}
 	for _, c := range cases {
 		t.Run(string(c.reason), func(t *testing.T) {
@@ -411,6 +412,15 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// proceeds without killing the still-running session needs its own
 	// design, not built here).
 	domain.StuckReasonReworkBlockedStale: true,
+	// StuckReasonRespawnBlockedActive: deliberately notify + durably mark +
+	// resolve-once-the-guard-passes only, mirroring StuckReasonReworkBlockedStale
+	// above — a single reason spans three different triggering statuses/
+	// functions (AutoRespawnAutonomousWork/in_progress, AutoReopenForPRFix/
+	// pr_pending, AutoRespawnReview/review), so there is no single unambiguous
+	// "retry now" action to wire, and re-invoking any of the three while the
+	// blocking session is still active would just re-mark the same row —
+	// exactly what the next reconcile tick already does for free.
+	domain.StuckReasonRespawnBlockedActive: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

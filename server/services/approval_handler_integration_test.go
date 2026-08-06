@@ -421,14 +421,14 @@ func (c *capturingClassifier) BuildContext(_ string) classifier.ClassificationCo
 	return classifier.ClassificationContext{}
 }
 
-// fakeLiveInstanceFinder is a test double for LiveInstanceFinder: GitHubCheckConclusion/
+// fakeApprovalLiveInstanceFinder is a test double for LiveInstanceFinder: GitHubCheckConclusion/
 // LastPRStatusCheck are not persisted (see Storage.UpdateInstancePRStatus), so
 // ApprovalHandler reads them through this live-registry seam instead of *session.Storage.
-type fakeLiveInstanceFinder struct {
+type fakeApprovalLiveInstanceFinder struct {
 	inst *session.Instance
 }
 
-func (f *fakeLiveInstanceFinder) FindLiveInstance(id string) *session.Instance {
+func (f *fakeApprovalLiveInstanceFinder) FindLiveInstance(id string) *session.Instance {
 	if f.inst != nil && (f.inst.UUID == id || f.inst.Title == id) {
 		return f.inst
 	}
@@ -462,7 +462,7 @@ func TestHandlePermissionRequest_StaleCIStatus_TreatedAsUnknown(t *testing.T) {
 		LastPRStatusCheck:     now.Add(-3 * time.Minute), // > 2x pollInterval (120s)
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	h.SetLiveInstanceFinder(&fakeLiveInstanceFinder{inst: inst})
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
 
 	payload := map[string]interface{}{
 		"tool_name":  "Bash",
@@ -505,7 +505,7 @@ func TestHandlePermissionRequest_FreshCIStatus_Populated(t *testing.T) {
 		LastPRStatusCheck:     now, // fresh
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	h.SetLiveInstanceFinder(&fakeLiveInstanceFinder{inst: inst})
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
 
 	payload := map[string]interface{}{
 		"tool_name":  "Bash",

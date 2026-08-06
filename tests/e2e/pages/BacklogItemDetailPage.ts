@@ -48,6 +48,13 @@ export class BacklogItemDetailPage {
     }
   }
 
+  async collapseSection(sectionKey: string) {
+    const header = this.sectionHeader(sectionKey);
+    if ((await header.getAttribute("aria-expanded")) === "true") {
+      await header.click();
+    }
+  }
+
   /**
    * Locates a synthetic session row's own Collapsible header inside the
    * Sessions section by its accessible name (the session id text rendered

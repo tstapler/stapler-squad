@@ -115,6 +115,17 @@ func (i *Instance) RegisterLifecycleListener(l LifecycleListener) {
 	i.lifecycleListeners = append(i.lifecycleListeners, l)
 }
 
+// hasLifecycleListeners reports whether any listener is currently registered
+// for this instance. Used to skip paying for expensive event-only work (e.g.
+// UpdateDiffStats' subprocess git-diff call in instanceOnExitCallback/Destroy)
+// when nothing is wired to consume it — e.g. deployments where
+// SessionSummaryGenerator is nil and no listener was ever registered.
+func (i *Instance) hasLifecycleListeners() bool {
+	i.lifecycleListenersMu.Lock()
+	defer i.lifecycleListenersMu.Unlock()
+	return len(i.lifecycleListeners) > 0
+}
+
 // fireLifecycleEvent notifies all registered listeners of a lifecycle event.
 func (i *Instance) fireLifecycleEvent(event LifecycleEvent, reason string) {
 	i.lifecycleListenersMu.Lock()

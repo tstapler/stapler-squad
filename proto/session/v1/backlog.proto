@@ -148,6 +148,17 @@ message BacklogItem {
   // frontend uses to pre-fill sane automation-toggle defaults at creation
   // time. Unset/empty means uncategorized.
   optional string category = 29;
+  // external_url is the source tracker's own URL for this item (e.g. a
+  // GitHub issue's html_url), populated for imported items only.
+  optional string external_url = 30;
+  // labels mirrors the source tracker's labels (e.g. a GitHub issue's label
+  // names), populated for imported items only.
+  repeated string labels = 31;
+  // allowed_transitions is the server's WorkflowEngine.AllowedTransitions(status)
+  // for this item's current status — the authoritative set of target statuses
+  // a manual status override may choose from. The frontend must render this
+  // list verbatim rather than re-encoding the transition graph client-side.
+  repeated string allowed_transitions = 32;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -161,6 +172,9 @@ message ItemSource {
   bool token_configured = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  bool forward_sync_enabled = 9;
+  bool backward_sync_enabled = 10;
+  string forward_sync_close_label = 11;
 }
 
 // PipelineMode is a named, slug-addressed, user-creatable definition of which
@@ -365,6 +379,14 @@ message UpdateBacklogItemRequest {
   // "leave the item's stored category untouched", a non-nil pointer
   // (including one pointing at "") explicitly sets/clears it.
   optional string category = 16;
+  // pr_url/pr_number are presence-gated (optional on the wire) and must be
+  // set together or not at all: setting exactly one is rejected with
+  // CodeInvalidArgument. When both are set, the server validates pr_url
+  // parses as a GitHub PR URL whose embedded PR number matches pr_number,
+  // then writes through the shared SetBacklogItemPRAndTransition primitive
+  // (requires the item to currently be in "review" status).
+  optional string pr_url = 17;
+  optional int32 pr_number = 18;
 }
 
 message UpdateBacklogItemResponse {
@@ -511,6 +533,9 @@ message UpdateItemSourceRequest {
   string display_name = 2;
   bool enabled = 3;
   string token = 4;
+  bool forward_sync_enabled = 5;
+  bool backward_sync_enabled = 6;
+  string forward_sync_close_label = 7;
 }
 
 message UpdateItemSourceResponse {
@@ -532,6 +557,27 @@ message GetSyncHistoryResponse {
   // True when the history was capped (see maxSourceSyncEventsHistory server-side) and older
   // events beyond this response exist but are not returned — no pagination API exists yet.
   bool truncated = 2;
+}
+
+message PreviewBackwardSyncImpactRequest {
+  string source_id = 1;
+}
+
+message PreviewBackwardSyncImpactResponse {
+  // Count of already-imported items in idea/refining/ready/queued whose
+  // linked GitHub issue is currently closed — i.e. exactly the items
+  // determineBackwardSyncTarget would immediately archive if backward sync
+  // were enabled right now.
+  int32 item_count = 1;
+  // Up to 5 titles from the eligible set, for display in the confirmation
+  // dialog. Not necessarily all N items when item_count > 5.
+  repeated string sample_titles = 2;
+  // True if the underlying fetch hit its page cap while the last page was
+  // still full — meaning there may be more matching items beyond what was
+  // counted, so item_count/sample_titles must be treated as a lower bound
+  // rather than an exhaustive count. Only ever true on repos with an
+  // unusually large issue history (see maxPreviewFetchPages).
+  bool possibly_incomplete = 3;
 }
 
 message CreatePipelineModeRequest {
@@ -793,6 +839,13 @@ service BacklogService {
   // GetSyncHistory returns the sync event history for an item source.
   rpc GetSyncHistory(GetSyncHistoryRequest) returns (GetSyncHistoryResponse) {}
 
+  // PreviewBackwardSyncImpact reports how many already-imported items for a
+  // source would immediately transition (per ADR-002's determineBackwardSyncTarget)
+  // if backward sync were enabled right now — used to gate the Settings UI's
+  // first-enable confirmation dialog (Epic 4.4) so a user can see the blast
+  // radius of already-closed linked issues before opting in.
+  rpc PreviewBackwardSyncImpact(PreviewBackwardSyncImpactRequest) returns (PreviewBackwardSyncImpactResponse) {}
+
   // CreatePipelineMode registers a new runtime-definable pipeline mode.
   rpc CreatePipelineMode(CreatePipelineModeRequest) returns (CreatePipelineModeResponse) {}
 
@@ -1015,6 +1068,17 @@ enum StuckReason {
   // (session/domain/backlog.go) — a review-status item's rework attempt is
   // blocked by a still-alive-but-stale prior work session.
   STUCK_REASON_REWORK_BLOCKED_STALE = 12;
+  // STUCK_REASON_PR_NEEDS_FIX: see domain.StuckReasonPRNeedsFix
+  // (session/domain/backlog.go) — a pr_pending item's PR has failing CI, a
+  // blocking review, a merge conflict, or unaddressed comment feedback, and
+  // ReconcilePRPending's comment-feedback-driven fix attempts have exhausted
+  // the shared rework cap.
+  STUCK_REASON_PR_NEEDS_FIX = 13;
+  // STUCK_REASON_RESPAWN_BLOCKED_ACTIVE: see domain.StuckReasonRespawnBlockedActive
+  // (session/domain/backlog.go) — an automated respawn attempt
+  // (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview) was
+  // skipped because the item already has an active work or review session.
+  STUCK_REASON_RESPAWN_BLOCKED_ACTIVE = 14;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

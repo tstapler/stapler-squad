@@ -8,6 +8,8 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { ResolveApprovalRequestSchema } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
+import { useAppSelector } from "@/lib/store";
+import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { formatRelativeTime } from "@/lib/utils/datetime";
@@ -111,6 +113,14 @@ export function NotificationsPage() {
   } = useNotifications();
 
   const auditLog = useAuditLog();
+
+  // Epic 3.3 (session-completion-summary), Story 3.3.2: a notification's
+  // sessionId may reference a session that's since been deleted from the
+  // live list (e.g. after DeleteSession). In that case "View Session" falls
+  // back to the durable standalone summary route instead of a dead/no-op
+  // `/?session=<id>` link.
+  const liveSessions = useAppSelector(selectAllSessions);
+  const liveSessionIds = useMemo(() => new Set(liveSessions.map((s) => s.id)), [liveSessions]);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const getClient = useCallback(() => {
@@ -443,7 +453,11 @@ export function NotificationsPage() {
                       )}
                       {!notification.metadata?.["item_id"] && notification.sessionId && (
                         <Link
-                          href={`/?session=${encodeURIComponent(notification.sessionId)}`}
+                          href={
+                            liveSessionIds.has(notification.sessionId)
+                              ? `/?session=${encodeURIComponent(notification.sessionId)}`
+                              : `/sessions/summary?sessionId=${encodeURIComponent(notification.sessionId)}`
+                          }
                           className={viewButton}
                           onClick={() => handleNotificationClick(group.allIds, notification.onView, notification.sessionId)}
                         >

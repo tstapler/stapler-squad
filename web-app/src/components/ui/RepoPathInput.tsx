@@ -132,12 +132,27 @@ export function RepoPathInput({
           }
           break;
         case "Escape":
+          if (showDropdown) {
+            // Both calls are required: `e.stopPropagation()` sets React's own
+            // `isPropagationStopped` flag, which is what stops the synthetic bubble
+            // from reaching an ancestor's own `onKeyDown` (e.g. Omnibar's modal div);
+            // `e.nativeEvent.stopImmediatePropagation()` additionally stops the raw
+            // native event from reaching a real `document.addEventListener("keydown", ...)`
+            // ancestor (e.g. NewShellDialog's cancel-on-Escape listener). Neither call
+            // alone covers both ancestor shapes — see RepoPathInput.test.tsx's
+            // "does not bubble to a parent's own keydown handler" case. Note:
+            // stopImmediatePropagation also blocks any OTHER listener on this same
+            // input for this event, not just ancestors — fine today (only one keydown
+            // listener lives on this node) but worth remembering before adding a second.
+            e.stopPropagation();
+            e.nativeEvent.stopImmediatePropagation();
+          }
           setOpen(false);
           setSelectedIndex(-1);
           break;
       }
     },
-    [open, allEntries, selectedIndex, handleSelect]
+    [open, allEntries, selectedIndex, handleSelect, showDropdown]
   );
 
   useEffect(() => {
@@ -170,6 +185,9 @@ export function RepoPathInput({
         required={required}
         aria-required={required || undefined}
         aria-invalid={error ? true : undefined}
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={showDropdown}
         aria-autocomplete="list"
         aria-controls={showDropdown ? listboxId : undefined}
         aria-activedescendant={
