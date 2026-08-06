@@ -165,6 +165,68 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToRevie
 	require.NotNil(t, fetchedIS.EndedAt)
 }
 
+// TestBacklogLifecycleListener_OnSessionExited_WorkSession_SkipsTransition_WhenAlreadyEndedByOtherPath
+// is the regression test for BUG-063: RemediateStaleWorkSession
+// (server/services/backlog_service_triage.go) ends a stale work session's
+// ItemSession row via UpdateItemSessionEnded and then kills its tmux pane
+// before calling AutoRespawnAutonomousWork to give the item a fresh
+// work-session turn. Killing the pane fires this exact onSessionExited path
+// asynchronously (instanceBacklogListener.OnLifecycleEvent), which — before
+// this fix — unconditionally flipped the still-in_progress item straight to
+// "review" merely because the (already-ended) work session it looked up had
+// SessionRole == work, racing and defeating AutoRespawnAutonomousWork's own
+// "already moved on" guard. Live repro: item 2d7fac56, 2026-08-06T00:44:12.
+//
+// Simulates the race deterministically by ending the ItemSession (mirroring
+// RemediateStaleWorkSession's own UpdateItemSessionEnded call) BEFORE
+// invoking onSessionExited, and asserts the item stays in_progress —
+// leaving the respawn decision to whoever already closed the session out.
+func TestBacklogLifecycleListener_OnSessionExited_WorkSession_SkipsTransition_WhenAlreadyEndedByOtherPath(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	createdItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Test Item",
+		Description:        "A test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		SkipReviewGate:     false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, createdItem)
+
+	sessionUUID := uuid.New().String()
+	createdIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, createdIS)
+
+	// Simulate RemediateStaleWorkSession's own UpdateItemSessionEnded call —
+	// this session was already deliberately closed out by another code path
+	// before the (racing) exit event reaches onSessionExited.
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, createdIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
+
+	// The item must stay in_progress — onSessionExited must not race
+	// whatever already-in-flight remediation is deciding what happens next.
+	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusInProgress), fetchedItem.Status)
+}
+
 // fakeQueueDequeuer is a test double implementing QueueDequeuer, recording every
 // call and signaling on a channel so async callers (onSessionExited invokes it
 // in a goroutine) can be synchronized with in tests.
