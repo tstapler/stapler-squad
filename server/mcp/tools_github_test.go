@@ -12,13 +12,9 @@ import (
 	gh "github.com/tstapler/stapler-squad/github"
 )
 
-// resetGhBaseURL overrides gh.GhBaseURL for a test and returns a restore
-// func. Same pattern as server/services/backlog_github_rpc_test.go's helper
-// of the same name.
-func resetGhBaseURL(ts *httptest.Server) func() {
-	gh.GhBaseURL = ts.URL + "/"
-	return func() { gh.GhBaseURL = "https://api.github.com/" }
-}
+// resetGhBaseURL is defined once for the package in tools_backlog_test.go
+// (it overrides githubpkg.GhBaseURL — same package as gh here, aliased
+// differently per file) and reused here rather than redeclared.
 
 // --- NewPRVerification (gap: plan.md Task 2.1 describes this behavior but
 // names no dedicated test for it — see validation.md) ---

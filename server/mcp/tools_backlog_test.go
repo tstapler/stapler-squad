@@ -3528,10 +3528,12 @@ func TestReportDuplicate_RejectsThirdCall_AfterSequentialReportPRCreatedThenRepo
 	item, sessionUUID := setupReportDuplicateFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage:               storage,
-		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) { return true, nil },
-		verifyGitHubRef:       func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
 	}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
 
