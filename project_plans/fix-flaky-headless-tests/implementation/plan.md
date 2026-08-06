@@ -395,6 +395,21 @@ branch is no longer just "any non-nil error."
   ```
 - Files: `session/unfinished/gogitstore/trunc_fault_signal_test.go`
 
+##### Task 3.1.1c: Add direct unit tests for isExpectedFaultSignal (~3 min)
+- Per `architecture-review.md`'s Concerns (Story 3.1.1/3.1.2): the helper had
+  no direct unit test, only indirect coverage through the platform-dependent
+  mmap test. `validation.md`'s Requirement → Test Mapping already specifies
+  these two tests; this task is the corresponding implementation task so the
+  plan's task list doesn't silently omit work `validation.md` assumes exists.
+- In `session/unfinished/gogitstore/trunc_fault_signal_test.go`, add:
+  - `TestIsExpectedFaultSignal_should_ReturnTrueAndBusError_When_ProcessKilledBySIGBUS`:
+    run `exec.Command("sh", "-c", "kill -SIGBUS $$").Run()`, assert
+    `isExpectedFaultSignal(err) == (true, "bus error")`.
+  - `TestIsExpectedFaultSignal_should_ReturnFalse_When_ProcessExitsNonZeroWithoutSignal`:
+    run `exec.Command("sh", "-c", "exit 1").Run()`, assert
+    `isExpectedFaultSignal(err) == (false, "process did not exit via a signal")`.
+- Files: `session/unfinished/gogitstore/trunc_fault_signal_test.go`
+
 ##### Task 3.1.1b: Create the windows stub (~2 min)
 - Create `session/unfinished/gogitstore/trunc_fault_signal_windows_test.go`:
   ```go
@@ -576,6 +591,17 @@ the platform it occurs on.
     specifically, per `research/stack.md` §3)." The PR is not described as
     "fixes the macOS flake," only as "hardens against the identified failure
     mode; macOS confirmation pending."
+  - **(P1 fix, pre-mortem Failure #2)** *Given* this repo's own
+    reconciliation automation has repeatedly closed items without a human
+    following up on a documented "needs external verification" caveat left
+    only as PR-body prose, *When* this PR is opened (before merge, not
+    after), *Then* a second, explicitly-linked backlog item is created via
+    `mcp__stapler-squad__create_backlog_item` titled "Confirm
+    fix-flaky-headless-tests clusters 1+2 fix on macOS" containing the same
+    verification command and `xattr` fallback step, and the PR description
+    links to it by ID — so the macOS confirmation is a durable, queryable
+    artifact this parent item's resolution does not silently depend on PR
+    text no automation reads.
 **Files**: none (PR description text, not a repo file — produced during
 `sdd:7-ship`, not this planning phase).
 
@@ -584,3 +610,13 @@ the platform it occurs on.
   `github:pr-ship`), include the checklist text from Story 5.1.1's
   acceptance criterion verbatim (or equivalent) in the PR description.
 - Files: none — output lands in the PR description, not a repo file.
+
+##### Task 5.1.1b: Create the linked macOS-verification backlog item before opening the PR (~2 min)
+- Not a code task. Before (or at) PR-open time, call
+  `mcp__stapler-squad__create_backlog_item` to file "Confirm
+  fix-flaky-headless-tests clusters 1+2 fix on macOS" with the verification
+  command and `xattr -l <fixture-path>` fallback from Task 5.1.1a, and link
+  its ID in the PR description. Resolves pre-mortem.md Failure #2 (P1): the
+  macOS caveat must be a durable, separately-trackable artifact, not only
+  prose in a PR that automation doesn't read.
+- Files: none — output is a backlog item, not a repo file.
