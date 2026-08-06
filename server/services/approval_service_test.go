@@ -338,6 +338,7 @@ func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
 	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
 

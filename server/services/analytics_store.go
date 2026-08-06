@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -123,6 +124,10 @@ type AnalyticsStore struct {
 	storage *session.Storage
 	ch      chan AnalyticsEntry
 	dropped int64 // atomic counter for dropped entries
+
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 const analyticsBufferSize = 1000
@@ -137,9 +142,27 @@ func NewAnalyticsStore(storage *session.Storage) *AnalyticsStore {
 }
 
 // Start launches the background goroutine that flushes entries to disk.
-// It stops when ctx is canceled.
-func (s *AnalyticsStore) Start(ctx interface{ Done() <-chan struct{} }) {
-	go s.flush(ctx)
+// It stops when Stop is called or ctx is canceled.
+func (s *AnalyticsStore) Start(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.done = make(chan struct{})
+	go func() {
+		defer close(s.done)
+		s.flush(ctx)
+	}()
+}
+
+// Stop cancels the background flush goroutine and waits for it to drain and
+// exit. Idempotent — safe to call multiple times or before Start.
+func (s *AnalyticsStore) Stop() {
+	s.stopOnce.Do(func() {
+		if s.cancel == nil {
+			return
+		}
+		s.cancel()
+		<-s.done
+	})
 }
 
 // Record enqueues an analytics entry for async write. Non-blocking.

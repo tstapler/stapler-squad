@@ -16,6 +16,7 @@ import (
 func newPromptTestService(t *testing.T) *SessionService {
 	t.Helper()
 	svc := NewSessionService(createTestStorage(t), events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 	svc.promptStore = prompts.NewPromptStore(t.TempDir() + "/prompts.json")
 	return svc
 }
