@@ -863,7 +863,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// Snapshot before this call's own bookkeeping (below) overwrites it: a
 	// non-nil EndedAt here means some OTHER code path already deliberately
 	// closed this session out before this exit event even arrived, and that
-	// path — not this one — owns whatever should happen next. See BUG-063:
+	// path — not this one — owns whatever should happen next. See BUG-064:
 	// RemediateStaleWorkSession ends a stale work session's ItemSession row
 	// and kills its tmux pane (KillTmuxPaneOnly -> Instance.KillSession) before
 	// calling AutoRespawnAutonomousWork to give the item a fresh work-session
@@ -911,7 +911,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		// Whoever closed this session out ahead of this exit event already
 		// owns the follow-up (e.g. AutoRespawnAutonomousWork deciding whether
 		// to spawn a fresh work session) — driving our own status transition
-		// here would race it and, per BUG-063, reliably win, silently
+		// here would race it and, per BUG-064, reliably win, silently
 		// discarding that follow-up. Nothing further to do.
 		log.DebugLog.Printf("[BacklogLifecycle] onSessionExited item=%s session=%s: already ended by another code path before this exit event; skipping status transition", is.BacklogItemID, sessionUUID)
 		return

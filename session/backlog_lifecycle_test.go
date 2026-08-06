@@ -166,7 +166,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToRevie
 }
 
 // TestBacklogLifecycleListener_OnSessionExited_WorkSession_SkipsTransition_WhenAlreadyEndedByOtherPath
-// is the regression test for BUG-063: RemediateStaleWorkSession
+// is the regression test for BUG-064: RemediateStaleWorkSession
 // (server/services/backlog_service_triage.go) ends a stale work session's
 // ItemSession row via UpdateItemSessionEnded and then kills its tmux pane
 // before calling AutoRespawnAutonomousWork to give the item a fresh

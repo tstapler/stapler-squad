@@ -175,7 +175,7 @@ type mockSessionStopper struct {
 	// onKillTmuxPaneOnly, if set, is invoked synchronously from
 	// KillTmuxPaneOnly before it records the call — lets a test observe
 	// storage state at the exact moment the pane would be killed in
-	// production (BUG-063: RemediateStaleWorkSession must end the
+	// production (BUG-064: RemediateStaleWorkSession must end the
 	// ItemSession row before calling KillTmuxPaneOnly, not after, so that
 	// onSessionExited's already-ended guard has something to observe once
 	// the (real) tmux kill asynchronously fires the exit event).
@@ -1584,7 +1584,7 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 }
 
 // TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_ActiveWorkSessionIsStale
-// is a regression test for BUG-063: killing the stale session's tmux pane
+// is a regression test for BUG-064: killing the stale session's tmux pane
 // (KillTmuxPaneOnly -> Instance.KillSession) fires the Instance's exit event
 // asynchronously, which session.BacklogLifecycleListener.onSessionExited
 // handles in its own goroutine — and, before this fix, unconditionally

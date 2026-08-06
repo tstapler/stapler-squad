@@ -1660,7 +1660,7 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 // backlog_remediation.go) is tighter, never solely by a rework cap an
 // operator may have set to 0 (unlimited) for a different reason.
 //
-// BUG-063: UpdateItemSessionEnded runs BEFORE KillTmuxPaneOnly, deliberately
+// BUG-064: UpdateItemSessionEnded runs BEFORE KillTmuxPaneOnly, deliberately
 // — not just cosmetically — ordered this way. Killing the tmux pane fires
 // the Instance's EventStopped lifecycle notification, which
 // session.BacklogLifecycleListener.onSessionExited (session/
@@ -1714,7 +1714,7 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 		return s.AutoRespawnAutonomousWork(ctx, itemID)
 	}
 
-	// End the ItemSession row BEFORE killing the pane (BUG-063 — see doc
+	// End the ItemSession row BEFORE killing the pane (BUG-064 — see doc
 	// comment above): this ordering is what lets onSessionExited's
 	// already-ended guard close the race with AutoRespawnAutonomousWork below.
 	now := time.Now()

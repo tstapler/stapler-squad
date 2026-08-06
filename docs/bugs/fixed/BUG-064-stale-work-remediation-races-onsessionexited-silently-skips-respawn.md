@@ -1,4 +1,4 @@
-# BUG-063: Stale-Work Remediation Races `onSessionExited`, Silently Discarding the Intended Fresh Work-Session Respawn [SEVERITY: High]
+# BUG-064: Stale-Work Remediation Races `onSessionExited`, Silently Discarding the Intended Fresh Work-Session Respawn [SEVERITY: High]
 
 **Status**: ✅ Fixed
 **Discovered**: 2026-08-06, live in this repo's own deployed instance — backlog item `2d7fac56-4b86-46d6-9d4b-b318a595d372` bounced back to `in_progress` after a `PARTIAL` review verdict, sat with no live tmux session for ~1h42m, then — instead of getting a fresh work session to fix the reviewer's noted gaps — was silently pushed straight into a *third* review cycle against the exact same stale, already-twice-rejected diff.
