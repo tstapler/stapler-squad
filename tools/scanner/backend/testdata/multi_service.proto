@@ -2,6 +2,9 @@ syntax = "proto3";
 
 package multi.v1;
 
+// OrphanMethod is intentionally declared outside any `service {}` block —
+// not valid protobuf, but ScanProto is a regex line-scanner (not a proto
+// parser), and this exercises its pre-service default of "SessionService".
 rpc OrphanMethod(OrphanRequest) returns (OrphanResponse) {}
 
 message OrphanRequest {}
