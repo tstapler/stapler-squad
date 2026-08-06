@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -140,6 +141,16 @@ type backlogHandlers struct {
 	// mirrors verifyPRMatchesBranch/resolveSessionBranch's existing shape.
 	listItemSessionsFn func(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
 
+	// autoReopener backs submit_review_verdict's eager review->in_progress
+	// transition on FAIL/PARTIAL/UNVERIFIABLE verdicts (BUG-047: a reviewer
+	// that submits a verdict and then idles without exiting used to leave the
+	// item wedged in "review" forever — see submitReviewVerdict). Optional;
+	// nil means the eager transition is skipped and the item falls back to
+	// the pre-existing session-exit/sweep paths. The same
+	// session.AutoReopenSpawner *services.BacklogService already implements
+	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
+	autoReopener session.AutoReopenSpawner
+
 	// verifyGitHubRef backs report_duplicate's GitHub existence check for
 	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists
 	// when nil; overridable in tests to avoid making real GitHub API calls —
@@ -265,6 +276,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Check each AC criterion against the implementation\n")
 		sb.WriteString("2. Call submit_review_verdict with per-criterion verdicts (PASS/FAIL/PARTIAL) + evidence\n")
 		sb.WriteString("   PASS → item transitions to done. FAIL → item sent back for rework.\n")
+		sb.WriteString("3. End your session immediately after calling submit_review_verdict. Do not wait, poll, or do further work — an idle-but-alive reviewer session leaves the item stuck.\n")
 	default:
 		sb.WriteString("## Available MCP Tools\n")
 		sb.WriteString("- report_progress — mark an AC criterion pass/fail/in_progress (role: work)\n")
@@ -650,14 +662,50 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("save review verdict: %v", saveErr), ""), nil
 	}
 
-	// Deliberately no status transition here: BacklogLifecycleListener.
-	// handleReviewSessionExited (session/backlog_lifecycle.go) is the sole place
-	// that decides what happens next once this review session exits — on PASS it
-	// pushes the branch, creates a PR, and transitions to pr_pending
-	// (pushAndCreatePR); on FAIL/PARTIAL/UNVERIFIABLE it triggers auto-reopen.
-	// Transitioning straight to done here would race that handler: its own
-	// precondition (ExpectedStatus: review) would then fail once the session
-	// actually exits, silently skipping PR creation.
+	// PASS: no status transition here. BacklogLifecycleListener.
+	// handleReviewSessionExited (session/backlog_lifecycle.go) is still the
+	// sole place that decides what happens on PASS once this review session
+	// exits — it pushes the branch, creates a PR, and transitions to
+	// pr_pending (pushAndCreatePR). Transitioning straight to done here would
+	// race that handler: its own precondition (ExpectedStatus: review) would
+	// then fail once the session actually exits, silently skipping PR
+	// creation.
+	//
+	// FAIL/PARTIAL/UNVERIFIABLE: unlike PASS, drive the review->in_progress
+	// transition eagerly, right here, instead of only waiting for
+	// handleReviewSessionExited or the reconcileUnprocessedReviewVerdicts
+	// sweep. Before this, a reviewer that submitted a reject verdict and then
+	// simply never exited (process alive, no further output) was invisible to
+	// both of those paths — the sweep's dead-check requires the session to be
+	// confirmed *dead*, not just idle — so the item stayed wedged in "review"
+	// forever (BUG-047, live repro: item 4c71d3a3). AutoReopenAfterFailedReview
+	// is CAS-guarded on ExpectedStatus: review, so if the review session does
+	// go on to exit normally moments later, handleReviewSessionExited's own
+	// (duplicate) AutoReopenAfterFailedReview call simply fails its CAS and
+	// logs — no double-transition, no error surfaced to either caller.
+	if overallOutcome == session.ReviewVerdictFail || overallOutcome == session.ReviewVerdictPartial || overallOutcome == session.ReviewVerdictUnverifiable {
+		if h.autoReopener != nil {
+			// Detached from the request ctx (context.WithoutCancel) and
+			// explicitly time-bounded: AutoReopenAfterFailedReview's only
+			// other callers (session/backlog_lifecycle.go) run on long-lived
+			// background contexts, but this call runs on the live
+			// submit_review_verdict request's ctx, which a client-side
+			// disconnect/timeout can cancel mid-call. AutoReopenAfterFailedReview's
+			// own rollback-on-spawn-failure path reuses whatever ctx it's
+			// given, so an inherited cancellation could take out both the
+			// transition attempt and its own safety-net rollback together —
+			// exactly the "stranded in_progress with no active session" case
+			// its rollback exists to prevent. The verdict itself is already
+			// durably persisted above, so this transition must be allowed to
+			// finish (or cleanly roll back) independent of the caller's
+			// connection.
+			reopenCtx, reopenCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			if reopenErr := h.autoReopener.AutoReopenAfterFailedReview(reopenCtx, itemID); reopenErr != nil {
+				log.WarningLog.Printf("[submitReviewVerdict] AutoReopenAfterFailedReview item=%s: %v", itemID, reopenErr)
+			}
+			reopenCancel()
+		}
+	}
 
 	// Stop the AutonomousDriver for this review session (belt-and-suspenders).
 	// The verdict is already persisted; a subsequent Stuck fireCompletion is harmless

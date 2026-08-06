@@ -2,6 +2,11 @@
 // +feature: backlog:item-card
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+// lucide-react (this repo's pinned v1.14) ships no brand "Github" glyph —
+// CircleDot is the closest available icon to GitHub's own issue-tracker
+// mark and is used here instead (plan.md's snippet assumed `Github` exists;
+// it doesn't in the installed version).
+import { CircleDot } from "lucide-react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
@@ -135,6 +140,12 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ignore keydowns that bubbled up from a nested focusable child (the
+    // provenance badge link, the action button) — otherwise Enter on those
+    // elements both triggers their own behavior AND this card's onClick,
+    // and for the badge `<a>` specifically, this handler's preventDefault()
+    // stops the anchor from navigating at all.
+    if (e.target !== e.currentTarget) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onClick(item.id);
@@ -183,6 +194,20 @@ export const BacklogItemCard = memo(function BacklogItemCard({
 
       <div className={styles.cardFooter}>
         <AcSummary item={item} />
+        {item.externalUrl && item.externalId && (
+          <a
+            href={item.externalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.provenanceBadge}
+            aria-label={`Imported from GitHub issue #${item.externalId}`}
+            data-action-button="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <CircleDot aria-hidden="true" size={12} />
+            #{item.externalId}
+          </a>
+        )}
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
           disabled={actionSpec.disabled || isTriageRunning || pendingAction !== null}

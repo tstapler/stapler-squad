@@ -45,4 +45,56 @@ export class SessionDetailPage {
   getConnectionIndicators(): Locator {
     return this.page.getByTestId(/connection-indicator|live-indicator/);
   }
+
+  // ---------------------------------------------------------------------
+  // Terminal tab — added for session-completion-summary.spec.ts, which
+  // types `exit` into a plain-shell one-off session's terminal to end it
+  // naturally (EventExited) and trigger session-summary generation.
+  // ---------------------------------------------------------------------
+
+  getTerminalTab(): Locator {
+    return this.page.getByRole("tab", { name: /terminal/i });
+  }
+
+  /** The active tab's `role="tabpanel"` region — SessionDetailView.tsx sets
+   * `aria-labelledby="tab-terminal"` on it, which resolves its accessible
+   * name to the Terminal tab's label ("Terminal"). Click this to focus
+   * xterm's hidden input before sending keystrokes via `page.keyboard`. */
+  getTerminalPanel(): Locator {
+    return this.page.getByRole("tabpanel", { name: /terminal/i });
+  }
+
+  /** Terminal toolbar toggle — visible once the terminal has attached and
+   * is ready for input (established readiness signal, see terminal-resize.spec.ts). */
+  getTerminalToolbarToggle(): Locator {
+    return this.page.getByTestId("toolbar-toggle");
+  }
+
+  // ---------------------------------------------------------------------
+  // Summary tab — SessionDetailView.tsx gates it on `isSessionTerminal`
+  // (status === STOPPED); SessionSummaryPanel.tsx renders the content once
+  // generation reaches READY.
+  // ---------------------------------------------------------------------
+
+  getSummaryTab(): Locator {
+    return this.page.getByRole("tab", { name: "Summary" });
+  }
+
+  getSummaryPanel(): Locator {
+    return this.page.getByTestId("session-summary-panel");
+  }
+
+  getSummaryMarkdownBody(): Locator {
+    return this.page.getByTestId("summary-markdown-body");
+  }
+
+  getSummaryCopyButton(): Locator {
+    return this.page.getByRole("button", { name: "Copy summary as Markdown" });
+  }
+
+  /** Shared `aria-live="polite"` status region SessionSummaryPanel.tsx uses
+   * to announce phase transitions and the copy result. */
+  getSummaryLiveRegion(): Locator {
+    return this.page.getByRole("status");
+  }
 }

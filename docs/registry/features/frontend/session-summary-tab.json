@@ -1,0 +1,16 @@
+{
+  "id": "session-summary-tab",
+  "type": "frontend",
+  "component": "SessionSummaryPanel",
+  "path": "web-app/src/components/sessions/SessionSummaryPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "SessionDetailView — Summary tab (Epic 3.2, Story 3.2.1) > is disabled with the terminal-only tooltip for a non-terminal (Active) session",
+    "SessionDetailView — Summary tab (Epic 3.2, Story 3.2.1) > is enabled and clickable for a terminal (Stopped) session",
+    "SessionDetailView — Summary tab (Epic 3.2, Story 3.2.1) > does not switch tabs when clicked while disabled (Active session)",
+    "SessionDetailView — Summary tab (Epic 3.2, Story 3.2.1) > renders SessionSummaryPanel with the session's id once the tab is active",
+    "SessionDetailView — Summary tab (Epic 3.2, Story 3.2.1) > renders SessionSummaryPanel immediately when starting on the summary tab (terminal session)"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}

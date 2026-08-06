@@ -1,0 +1,17 @@
+{
+  "id": "GetSessionSummary",
+  "type": "backend",
+  "service": "SessionSummaryService",
+  "method": "GetSessionSummary",
+  "protoFile": "proto/session/v1/session_summary.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_summary_service.go",
+  "tested": true,
+  "testIds": [
+    "TestGetSessionSummary_should_ReturnNilSummary_When_NoRowExists",
+    "TestGetSessionSummary_should_ReturnRow_When_Found",
+    "TestGetSessionSummary_should_ReconcileStaleGeneratingRowToError_When_GuardNotHeld",
+    "TestGetSessionSummary_should_LeaveStaleGeneratingRowUnchanged_When_GuardHeld"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}
