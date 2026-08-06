@@ -2470,6 +2470,23 @@ func latestTriageSession(sessions []ItemSessionSummary) *ItemSessionSummary {
 	return latest
 }
 
+// triageEndReasonOrUnknown formats a persisted ItemSession.EndReason (the
+// errType bucket TriggerTriage's classifyHeadlessCallError writes via
+// UpdateItemSessionEndedWithReason — server/services/backlog_service_triage.go)
+// for a human-facing stuck-reason message. Falls back to "unknown" rather than
+// rendering an empty parenthetical: a session can also end via the plain
+// UpdateItemSessionEnded path (no errType classification recorded — e.g. a
+// legacy row predating classifyHeadlessCallError, or the shutdown-respawn
+// carve-out having already routed the "shutdown" bucket away before this is
+// ever reached), and "ended () without..." would read as a rendering bug
+// rather than a genuinely uncategorized failure.
+func triageEndReasonOrUnknown(endReason string) string {
+	if endReason == "" {
+		return "unknown"
+	}
+	return endReason
+}
+
 // reconcileOrphanedTriageItems flags items gated on plan approval (no
 // SkipPlanning, no PlanApproved) whose most recent triage-role ItemSession
 // never left a usable plan behind. Originally scoped to idea-status items
@@ -2625,7 +2642,14 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			if isIdea {
 				// Shape 2: already ended, item still in idea. Nothing to tombstone —
 				// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
-				reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
+				// EndReason carries classifyHeadlessCallError's bucket
+				// (server/services/backlog_service_triage.go) — surface it so the
+				// operator (and any future automated remediation) sees the actual
+				// failure category instead of a generic "ended" message with no
+				// diagnostic value. See triageEndReasonOrUnknown's doc comment for
+				// why an empty EndReason still renders instead of being omitted.
+				reasonDetail = fmt.Sprintf("triage session %s ended (%s) without moving the item out of idea",
+					latestTriage.SessionUUID, triageEndReasonOrUnknown(latestTriage.EndReason))
 			} else {
 				// Shape 3 (generalized): item advanced past idea (queued) but is
 				// still gated on plan approval, and its most recent triage session
@@ -2636,7 +2660,8 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				if item.SkipPlanning || item.PlanApproved || latestTriage.TriageResult != "" {
 					continue
 				}
-				reasonDetail = fmt.Sprintf("triage session %s ended with no usable plan while item was gated on plan approval (status=%s)", latestTriage.SessionUUID, item.Status)
+				reasonDetail = fmt.Sprintf("triage session %s ended (%s) with no usable plan while item was gated on plan approval (status=%s)",
+					latestTriage.SessionUUID, triageEndReasonOrUnknown(latestTriage.EndReason), item.Status)
 			}
 		}
 
