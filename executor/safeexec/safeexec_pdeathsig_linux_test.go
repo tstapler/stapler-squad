@@ -120,3 +120,37 @@ func processAlive(pid int) bool {
 	}
 	return stat[i+2] != 'Z'
 }
+
+// TestProcessAlive_ReturnsFalseForZombie is a regression guard for the exact
+// ambiguity processAlive exists to close: kill(pid,0) alone reports a zombie
+// (exited, awaiting reap) as "alive" indistinguishably from a genuinely
+// running process, which would make the flake-hardening above a no-op.
+func TestProcessAlive_ReturnsFalseForZombie(t *testing.T) {
+	cmd := exec.Command("true")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pid := cmd.Process.Pid
+	t.Cleanup(func() { _ = cmd.Wait() })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err == nil {
+			if i := bytes.LastIndexByte(stat, ')'); i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z' {
+				break // process has exited but we haven't reaped it — genuine zombie
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d never reached zombie state before reaping", pid)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	if syscall.Kill(pid, 0) != nil {
+		t.Fatalf("pid %d not observed as a zombie by kill(pid,0) — test setup is broken", pid)
+	}
+	if processAlive(pid) {
+		t.Fatalf("processAlive(%d) reported a zombie as alive", pid)
+	}
+}

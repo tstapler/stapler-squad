@@ -31,13 +31,25 @@ This is 10x the original AC's 300-iteration minimum and covers both "same machin
 
 **Conclusion: not a production defect.**
 
-**Zombie-reap-latency hypothesis: answered analytically only.** No repro was captured despite the 3,000-iteration campaign, so there is no live `/proc/<pid>/stat` or wall-clock-delta evidence to instrument — this half of AC1 could not be empirically resolved. What is independently verifiable (real Linux `kill(2)`/`wait(2)` behavior, not speculative) is that the test's only liveness check, `syscall.Kill(pid, 0)`, cannot distinguish a zombie awaiting reap from a genuinely running process — the kernel keeps a zombie's PID table entry until something calls `wait()` on it, and signal-0 delivery succeeds for both. This is a real gap in the test's assertion correctness regardless of whether it caused the historical flake.
+**Zombie-reap-latency hypothesis: mechanism empirically confirmed; historical trigger unconfirmed.** The 3,000-iteration campaign never reproduced the original flake, so there's no wall-clock-delta evidence tying reap latency to *that specific* historical failure — that half remains genuinely open. But the hypothesis's necessary precondition — that `syscall.Kill(pid, 0)` cannot distinguish a zombie awaiting reap from a live process — is not just documented `kill(2)`/`wait(2)` behavior, it was verified directly on this environment's exact kernel (Linux 6.6.128) and Go version (1.26.4) with a standalone minimal repro:
+
+```
+$ go run main.go   # spawns `true`, lets it exit without reaping, then checks it
+pid=2876013 /proc/stat-state="Z"  kill(pid,0) result=<nil>
+CONFIRMED: kill(pid,0) returns success (nil) for a zombie process -- cannot distinguish
+zombie-awaiting-reap from a live process.
+after cmd.Wait() (reaped): kill(pid,0) result=no such process (expect ESRCH/'no such process')
+```
+
+This confirms, empirically rather than by citation alone, that had the original `processAlive` (`kill(pid,0)`-only) observed the grandchild in zombie state during its 3s poll window, it would have reported "still alive" — a false positive for "Pdeathsig did not fire," identical in shape to the test's actual failure message at line 98. Whether a zombie state was ever actually reached during the *historical* flake's specific window is unconfirmed and, given the campaign's non-repro, likely unconfirmable without instrumenting the exact original failure as it happens — but the mechanism that would produce that symptom is now a verified fact on this system, not a hypothesis.
 
 ## Resolution
 
 Hardened `processAlive` (`executor/safeexec/safeexec_pdeathsig_linux_test.go`) to read `/proc/<pid>/stat` and treat zombie state (`Z`) as dead, rather than relying solely on `kill(pid, 0)`. `Pdeathsig`'s contract is "the kernel terminates the child" — a zombie already satisfies that; how promptly some other process (init/subreaper) gets around to reaping the corpse is a separate, unbounded-latency concern this test shouldn't be sensitive to. This closes a real (if not empirically confirmed as the historical trigger) ambiguity per the investigation's own research recommendation against closing bare with no concrete change.
 
-Verified: 500 further iterations of the hardened test under renewed background `go test ./...` contention, 0 failures; full `go test -short ./executor/...` and `golangci-lint run ./executor/safeexec/...` clean.
+Added `TestProcessAlive_ReturnsFalseForZombie` as a permanent regression guard — it deliberately creates a real zombie (spawns `true`, doesn't `Wait()` it until the process has exited), confirms `kill(pid,0)` alone would misreport it as alive, then asserts `processAlive` correctly reports it as dead. This is the committed, durable form of the standalone empirical check from the AC1 analysis above, so the fix (not just the diagnosis) has its own coverage rather than relying only on the flake-repro test happening to exercise the zombie path.
+
+Verified: 500 further iterations of the flake-repro test under renewed background `go test ./...` contention (0 failures), `TestProcessAlive_ReturnsFalseForZombie` run 100x in isolation (0 failures), full `go test -short ./executor/...` and `golangci-lint run ./executor/safeexec/...` clean.
 
 ## Related
 
