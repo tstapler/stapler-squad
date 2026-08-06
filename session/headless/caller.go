@@ -16,7 +16,14 @@ import (
 
 // CallOptions configures an individual pool call with overrides.
 type CallOptions struct {
-	// WorkDir sets the subprocess working directory (for git operations).
+	// WorkDir sets the subprocess working directory (for git operations). Callers
+	// MUST validate this is an absolute, existing directory before passing it here —
+	// os/exec.Cmd.Dir has a well-documented quirk where a non-existent Dir makes the
+	// resulting fork/exec error name the EXECUTABLE path, not the directory (e.g.
+	// "fork/exec /home/user/.local/bin/claude: no such file or directory"), which
+	// looks exactly like the binary is missing even though the real problem is a bad
+	// working directory. See BUG-062 (server/services/backlog_service_triage.go's
+	// TriggerTriage) for a live incident this caused and the validation added there.
 	WorkDir string
 	// Model overrides the pool's DefaultModel for this call only.
 	Model string

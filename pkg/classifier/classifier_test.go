@@ -3346,9 +3346,10 @@ func TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch(t *testing.T)
 	c := NewRuleBasedClassifier()
 	c.ReplaceRules([]Rule{
 		{
-			ID:               "test-npm-publish-ci-gated",
-			Name:             "Allow npm publish only with green CI",
-			ToolName:         "Bash",
+			ID:       "test-npm-publish-ci-gated",
+			Name:     "Allow npm publish only with green CI",
+			ToolName: "Bash",
+			//nolint:commandpattern this test deliberately exercises the CommandPattern+RequireCIPassing AND combination (AC6); Criteria matching is not what's under test here
 			CommandPattern:   regexp.MustCompile(`^npm publish`),
 			RequireCIPassing: true,
 			Decision:         AutoAllow,
