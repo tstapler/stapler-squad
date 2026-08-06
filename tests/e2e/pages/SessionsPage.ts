@@ -21,7 +21,7 @@ export class SessionsPage {
   }
 
   async waitForSessionList() {
-    await this.page.waitForSelector('[data-testid="session-list"], .session-list, [class="sessionList"]', { timeout: 10000 });
+    await this.page.waitForSelector('[data-testid="session-list"], .session-list', { timeout: 10000 });
   }
 
   getSessionCard(title: string): Locator {
