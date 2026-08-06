@@ -1191,6 +1191,98 @@ func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgr
 	assert.Equal(t, 1, workCount, "must not spawn a second work session when one is already active")
 }
 
+// TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarmlessly
+// is the regression guard for BUG-047 acceptance criterion 1: submit_review_verdict's
+// eager review->in_progress transition (server/mcp/tools_backlog.go) and
+// BacklogLifecycleListener.handleReviewSessionExited both call into
+// AutoReopenAfterFailedReview for the same item — the eager path fires first, at
+// verdict-submission time, and if the review session goes on to exit normally
+// moments later, handleReviewSessionExited fires this exact same call a second
+// time. The second call's own ExpectedStatus: review CAS precondition must fail
+// (the item already left review after the first call succeeded) — surfaced as an
+// error to that second caller only, never corrupting the item's state or
+// double-transitioning it. Both submitReviewVerdict and autoReopenWithBackoffGate
+// already treat this error as log-only, not propagated to any end user — this test
+// covers the CAS behavior itself, one level below that error-swallowing.
+func TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarmlessly(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose reviewer submits FAIL then exits normally moments later",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// An active work session so the first call reuses it instead of spawning a
+	// new one (spawning needs a real repo_path/worktree, irrelevant to what
+	// this test is verifying — the CAS behavior across two calls).
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "still-alive-work-session",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	firstErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, firstErr, "the first call (the eager submit_review_verdict path) must succeed")
+
+	afterFirst, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), afterFirst.Status)
+
+	secondErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	assert.Error(t, secondErr, "the second call (handleReviewSessionExited racing in afterward) must fail its own CAS — the item is no longer in review")
+
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), final.Status,
+		"the failed second call must not corrupt or revert the state the first call already established")
+}
+
+// TestAutoReopenAfterFailedReview_NoActiveWorkSession_SpawnsNewOne is
+// acceptance criterion 2's core regression guard: when submit_review_verdict's
+// eager transition (server/mcp/tools_backlog.go) fires for a FAIL/PARTIAL/
+// UNVERIFIABLE verdict and no work session is currently active for the item —
+// e.g. the original work session already exited after calling request_review —
+// AutoReopenAfterFailedReview must both transition the item back to
+// in_progress AND spawn a fresh work session, so the item is never left
+// in_progress with nothing acting on it.
+func TestAutoReopenAfterFailedReview_NoActiveWorkSession_SpawnsNewOne(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Item whose work session already exited before the reviewer's FAIL verdict",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// The original work session already ended — nothing is active for this item.
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "ended-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), sessions[0].ID, time.Now()))
+
+	require.NoError(t, svc.AutoReopenAfterFailedReview(context.Background(), item.ID))
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+	assert.Len(t, creator.calls, 1, "a fresh work session must be spawned when nothing is active")
+}
+
 // --- Stale-but-alive blocking work session: closes the "zero operator signal" gap ---
 //
 // hasActiveWorkSession's guard (above) is purely liveness-based (EndedAt == nil) and
@@ -3892,4 +3984,105 @@ func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRec
 	open, err = storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "the periodic tick must resolve the row once the session recovers")
+}
+
+// ─── BUG-062: repo_path must be validated before it reaches the headless
+// subprocess's WorkDir ──────────────────────────────────────────────────────
+//
+// A bare relative slug (e.g. "stapler-squad", a caller mistake filing a
+// backlog item via the create_backlog_item/import_github_issue MCP tools) was
+// previously passed straight through to headless.CallOptions.WorkDir with no
+// validation. os/exec.Cmd.Dir has a well-documented quirk: when Dir doesn't
+// exist, the fork/exec error names the EXECUTABLE path, not the directory —
+// e.g. "fork/exec /home/user/.local/bin/claude: no such file or directory" —
+// which looks exactly like the claude binary is missing even though the real
+// problem is the bogus working directory. These three tests cover: reject a
+// relative path, reject a non-existent absolute path, and the happy-path
+// regression guard (a valid absolute existing directory must still work).
+
+func TestTriggerTriage_should_RejectRelativeRepoPath_Before_CreatingAnyItemSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "bare-slug repo_path item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: "stapler-squad", // caller mistake: bare slug, not an absolute path
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(trigErr))
+	assert.Contains(t, trigErr.Error(), "stapler-squad")
+	assert.Contains(t, trigErr.Error(), "not an absolute path")
+
+	// No doomed ItemSession/goroutine should have been created at all — the
+	// rejection must be synchronous, before step 3a's ItemSession creation.
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	assert.Empty(t, sessions, "a relative repo_path must be rejected before any ItemSession is created")
+	assert.Equal(t, 0, pool.callCount(), "the headless pool must never be called for a rejected repo_path")
+}
+
+func TestTriggerTriage_should_RejectNonExistentAbsoluteRepoPath_Before_CreatingAnyItemSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	missingPath := filepath.Join(t.TempDir(), "does-not-exist")
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "nonexistent absolute repo_path item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: missingPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(trigErr))
+	assert.Contains(t, trigErr.Error(), "does not exist or is not a directory")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	assert.Empty(t, sessions, "a non-existent absolute repo_path must be rejected before any ItemSession is created")
+	assert.Equal(t, 0, pool.callCount(), "the headless pool must never be called for a rejected repo_path")
+}
+
+func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirectory(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "valid absolute repo_path item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(), // valid: absolute, existing directory
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr, "a valid absolute existing repo_path must not be rejected")
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call for a valid repo_path")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1, "a valid repo_path must still create the triage ItemSession")
+	assert.Equal(t, string(session.SessionRoleTriage), sessions[0].Role)
 }

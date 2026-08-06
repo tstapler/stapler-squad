@@ -110,6 +110,34 @@ export const statusLabel = style({
   letterSpacing: "0.05em",
 });
 
+// Provenance badge (Epic 4.1, backlog-github-two-way-sync): "imported from
+// GitHub" indicator + link. Neutral surface/text/border tokens, not a
+// GitHub-brand color — ux.md flags brand colors here as unaudited for
+// contrast in both themes.
+export const provenanceBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  borderRadius: vars.radii.sm,
+  padding: `0 ${vars.space["1"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  height: "20px",
+  background: vars.color.surfaceMuted,
+  // textMuted on surfaceMuted fails WCAG AA in the dark theme (2.99:1) and
+  // clean theme (was 3.10:1, and textSecondary itself was marginal at
+  // 4.02:1 before the theme.css.ts fix) — textSecondary now clears 4.5:1
+  // against surfaceMuted in every theme.
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderMuted}`,
+  textDecoration: "none",
+  flexShrink: 0,
+  ":hover": {
+    color: vars.color.textPrimary,
+    borderColor: vars.color.borderHover,
+  },
+});
+
 export const cardFooter = style({
   display: "flex",
   alignItems: "center",

@@ -4543,9 +4543,12 @@ type ResolveApprovalRequest struct {
 	// User's decision: "allow" or "deny".
 	Decision string `protobuf:"bytes,2,opt,name=decision,proto3" json:"decision,omitempty"`
 	// Optional reason shown to Claude when denying.
-	Message       *string `protobuf:"bytes,3,opt,name=message,proto3,oneof" json:"message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Message *string `protobuf:"bytes,3,opt,name=message,proto3,oneof" json:"message,omitempty"`
+	// When true, the caller explicitly acknowledges failing CI and re-submits an
+	// already-blocked approval; the server skips the CI-red guard for this request only.
+	OverrideCiBlock bool `protobuf:"varint,4,opt,name=override_ci_block,json=overrideCiBlock,proto3" json:"override_ci_block,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ResolveApprovalRequest) Reset() {
@@ -4597,6 +4600,13 @@ func (x *ResolveApprovalRequest) GetMessage() string {
 		return *x.Message
 	}
 	return ""
+}
+
+func (x *ResolveApprovalRequest) GetOverrideCiBlock() bool {
+	if x != nil {
+		return x.OverrideCiBlock
+	}
+	return false
 }
 
 // ResolveApprovalResponse confirms the decision was received.
@@ -15480,12 +15490,13 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x06target\x18\x03 \x01(\tR\x06target\x12C\n" +
 	"\x0fchange_strategy\x18\x04 \x01(\x0e2\x1a.session.v1.ChangeStrategyR\x0echangeStrategy\x12*\n" +
 	"\x11create_if_missing\x18\x05 \x01(\bR\x0fcreateIfMissing\x12#\n" +
-	"\rbase_revision\x18\x06 \x01(\tR\fbaseRevision\"\x80\x01\n" +
+	"\rbase_revision\x18\x06 \x01(\tR\fbaseRevision\"\xac\x01\n" +
 	"\x16ResolveApprovalRequest\x12\x1f\n" +
 	"\vapproval_id\x18\x01 \x01(\tR\n" +
 	"approvalId\x12\x1a\n" +
 	"\bdecision\x18\x02 \x01(\tR\bdecision\x12\x1d\n" +
-	"\amessage\x18\x03 \x01(\tH\x00R\amessage\x88\x01\x01B\n" +
+	"\amessage\x18\x03 \x01(\tH\x00R\amessage\x88\x01\x01\x12*\n" +
+	"\x11override_ci_block\x18\x04 \x01(\bR\x0foverrideCiBlockB\n" +
 	"\n" +
 	"\b_message\"M\n" +
 	"\x17ResolveApprovalResponse\x12\x18\n" +

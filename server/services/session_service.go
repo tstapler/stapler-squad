@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
@@ -158,6 +159,13 @@ type SessionService struct {
 	// backlogLifecycleListener is wired to each newly created session so that
 	// backlog item state transitions fire when the session exits.
 	backlogLifecycleListener *session.BacklogLifecycleListener
+
+	// sessionSummaryGenerator is wired to each newly created session (alongside
+	// backlogLifecycleListener, at the same call sites) so that session-completion-
+	// summary generation fires on exit/stop. Nil until SetSessionSummaryGenerator is
+	// called (session/session_summary_service.go's ent-client/headless-pool wiring
+	// happens after SessionService construction).
+	sessionSummaryGenerator *session.SessionSummaryGenerator
 
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
@@ -376,6 +384,10 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
 	workspaceSvc.SetLiveFinder(svc)
+	// Wire the live-instance lookup into ApprovalService's block-on-red-CI guard (AC5).
+	// GitHubCheckConclusion is not persisted (see plan.md's Implementation Deviations),
+	// so this must be the live registry, not storage.
+	approvalSvc.SetLiveInstanceFinder(svc)
 	// Wire the live-instance provider so ListClaudeHistory can populate
 	// session_status on history entries without a separate storage call.
 	svc.searchSvc.SetInstanceProvider(svc.allInstances)
@@ -587,7 +599,8 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	name := stapleSquadTmuxName(title)
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", name)
+	args := tmux.ResolveSocket("").Args("kill-session", "-t", name)
+	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		combined := strings.ToLower(string(out))
@@ -802,6 +815,14 @@ func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycle
 	return s.backlogLifecycleListener
 }
 
+// SetSessionSummaryGenerator wires the generator to all sessions created via
+// CreateSession/CreateDirectorySession/CreateWorktreeSession after this call,
+// mirroring SetBacklogLifecycleListener's wiring pattern (see the WireToInstance
+// call sites alongside session.WireSessionSummaryListener below).
+func (s *SessionService) SetSessionSummaryGenerator(g *session.SessionSummaryGenerator) {
+	s.sessionSummaryGenerator = g
+}
+
 // SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
 // service so that completed work sessions immediately kick off headless review.
 func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
@@ -880,6 +901,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	}
 	return instance, nil
 }
 
@@ -928,6 +952,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
+	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 	}
 	return instance, nil
 }
@@ -1284,20 +1311,31 @@ func (s *SessionService) CreateSession(
 			"fork_at_message", req.Msg.ForkAtMessage)
 	}
 
-	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/github.com/owner/repo)
+	// Load config once; used by the GitHub URL resolution below as well as the
+	// one-off path and the defaults/alias path further down.
+	cfg := config.LoadConfig()
+
+	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
 	resolvedPath := expandTildePath(req.Msg.Path)
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
 
-	if session.IsGitHubURL(req.Msg.Path) {
+	enterpriseHosts := make([]string, 0, len(cfg.GetGitHubEnterpriseHosts()))
+	for _, h := range cfg.GetGitHubEnterpriseHosts() {
+		enterpriseHosts = append(enterpriseHosts, h.Host)
+	}
+
+	if session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
 
-		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// ResolveGitHubInputCtxWithHosts threads ctx down to the underlying git
 		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
 		// timeout genuinely cancels the subprocess instead of abandoning it
-		// to keep running in the background after the RPC returns.
-		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
+		// to keep running in the background after the RPC returns. It also
+		// recognizes URLs against any configured GitHub Enterprise hosts, not
+		// just github.com.
+		localPath, ref, err := session.ResolveGitHubInputCtxWithHosts(ctx, req.Msg.Path, enterpriseHosts)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
@@ -1315,9 +1353,6 @@ func (s *SessionService) CreateSession(
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
 	}
-
-	// Load config once; used by both the one-off path and the defaults/alias path below.
-	cfg := config.LoadConfig()
 
 	// One-off session: generate a fresh directory and override resolvedPath.
 	// Autonomous sessions created without an explicit path (the omnibar's normal
@@ -1565,6 +1600,9 @@ func (s *SessionService) CreateSession(
 
 		if s.backlogLifecycleListener != nil {
 			s.backlogLifecycleListener.WireToInstance(instance)
+		}
+		if s.sessionSummaryGenerator != nil {
+			session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 		}
 
 		// Wire the status manager and start the controller AFTER Start() returns so the

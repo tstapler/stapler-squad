@@ -1836,9 +1836,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						// External sessions: Use tmux commands (best effort)
 						// External sessions may be attached to other terminals which control the actual size
 						rwCtx, rwCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						rwErr := runTmuxGatedErr(rwCtx, "", func() error {
-							return safeexec.CommandContext(rwCtx, "tmux", "resize-window", "-t", tmuxSessionName,
-								"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows)).Run()
+						rwArgs := tmux.ResolveSocket(snap.TmuxServerSocket).Args("resize-window", "-t", tmuxSessionName,
+							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
+						rwErr := runTmuxGatedErr(rwCtx, snap.TmuxServerSocket, func() error {
+							return safeexec.CommandContext(rwCtx, tmux.Binary(), rwArgs...).Run()
 						})
 						if rwErr != nil {
 							log.Warn("[streamViaTmuxCapture] failed to resize tmux window for external session", "tmux_session", tmuxSessionName, "err", rwErr)
@@ -1847,9 +1848,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 						// Also try to resize the pane
 						rpCtx, rpCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						rpErr := runTmuxGatedErr(rpCtx, "", func() error {
-							return safeexec.CommandContext(rpCtx, "tmux", "resize-pane", "-t", tmuxSessionName,
-								"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows)).Run()
+						rpArgs := tmux.ResolveSocket(snap.TmuxServerSocket).Args("resize-pane", "-t", tmuxSessionName,
+							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
+						rpErr := runTmuxGatedErr(rpCtx, snap.TmuxServerSocket, func() error {
+							return safeexec.CommandContext(rpCtx, tmux.Binary(), rpArgs...).Run()
 						})
 						if rpErr != nil {
 							log.Warn("[streamViaTmuxCapture] failed to resize tmux pane for external session", "tmux_session", tmuxSessionName, "err", rpErr)

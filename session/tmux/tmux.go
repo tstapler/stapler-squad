@@ -424,6 +424,76 @@ func startServerSucceededDespiteError(isNotRunning func() bool) bool {
 	return !isNotRunning()
 }
 
+// serverStartAttempts/serverStartBackoffStart/serverStartBackoffMax bound how
+// long EnsureServerRunning retries a failed start-server call before
+// surfacing the error. A single recheck-after-failure (the original fix)
+// assumed the transient "server exited unexpectedly" condition clears in one
+// shot; a full `make test` run proved that assumption wrong -- under
+// sustained heavy system load (many concurrent tmux servers spawned across
+// the whole suite) the condition can outlast a short fixed retry window, and
+// the underlying start-server invocation can also genuinely need re-issuing,
+// not just re-checked. So each attempt below re-runs start-server itself
+// (not just the recheck), with exponential backoff between attempts --
+// mirroring exec_gate.go's doubling-backoff pattern for the same class of
+// system-load-dependent contention.
+//
+// A first version of these constants (5 attempts, 50ms-400ms backoff, ~750ms
+// total wait) still failed under a real `make build && make test` run:
+// isolated/targeted runs of this exact retry path passed repeatedly, but the
+// contention window under genuine full-suite load (many packages spawning
+// tmux servers concurrently) outlasted 750ms. These wider bounds (8 attempts,
+// 100ms-3s backoff, ~9.1s worst-case total wait) trade a longer failure path
+// for actually riding out that contention -- this function is only on the
+// hot path when a server genuinely isn't running yet, so extra latency here
+// is paid rarely and only in the case that used to fail outright.
+const (
+	serverStartAttempts     = 8
+	serverStartBackoffStart = 100 * time.Millisecond
+	serverStartBackoffMax   = 3 * time.Second
+)
+
+// serverStartAttempt runs one start-server invocation and reports whether the
+// server ended up running -- either because the call itself succeeded, or
+// because a follow-up check shows the server is now (or still) actually up
+// despite a reported error (see EnsureServerRunning's doc comment on the
+// check-race this recovers from). startServer and isNotRunning are injected
+// so tests can simulate this deterministically instead of depending on real
+// tmux subprocess timing.
+func serverStartAttempt(startServer func() ([]byte, error), isNotRunning func() bool) (ok bool, out []byte, err error) {
+	out, err = startServer()
+	if err == nil {
+		return true, out, nil
+	}
+	if startServerSucceededDespiteError(isNotRunning) {
+		return true, out, err
+	}
+	return false, out, err
+}
+
+// ensureServerRunningWithRetry retries serverStartAttempt up to attempts
+// times with exponential backoff (capped at backoffMax) between tries, to
+// ride out a transient start-server failure that outlasts a single retry
+// under sustained heavy system load. Returns the last attempt's output/error
+// when every attempt fails.
+func ensureServerRunningWithRetry(startServer func() ([]byte, error), isNotRunning func() bool, attempts int, backoffStart, backoffMax time.Duration) (out []byte, err error) {
+	backoff := backoffStart
+	for i := 0; i < attempts; i++ {
+		ok, o, e := serverStartAttempt(startServer, isNotRunning)
+		out, err = o, e
+		if ok {
+			return out, nil
+		}
+		if i < attempts-1 {
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > backoffMax {
+				backoff = backoffMax
+			}
+		}
+	}
+	return out, err
+}
+
 // EnsureServerRunning starts the tmux server if it is not already running.
 // Uses exec.Command directly so it always runs regardless of circuit breaker state.
 // Returns a TmuxServerReady token that callers must pass to BuildRuntimeDeps.
@@ -432,25 +502,24 @@ func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
 		return TmuxServerReady{}, nil // server is already running
 	}
 	args := prependSocket(serverSocket, []string{"start-server"})
-	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer startCancel()
-	out, err := runGated(startCtx, serverSocket, func() ([]byte, error) {
-		return safeexec.CommandContext(startCtx, Binary(), args...).CombinedOutput()
-	})
+	startServer := func() ([]byte, error) {
+		startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer startCancel()
+		return runGated(startCtx, serverSocket, func() ([]byte, error) {
+			return safeexec.CommandContext(startCtx, Binary(), args...).CombinedOutput()
+		})
+	}
+	// Under heavy concurrent tmux usage, the list-sessions check above can itself
+	// transiently report "server exited unexpectedly" against a socket that
+	// actually has a live server (a racy connect, not a real absence) -- which
+	// sends us down this path to start a server that's already running, and the
+	// start-server call then hits the same transient failure. Since this
+	// function's actual contract is "a server is running when this returns", not
+	// "this call is the one that started it", each retry re-checks before
+	// surfacing an error: if a server is now (or still) up, that's success.
+	out, err := ensureServerRunningWithRetry(startServer, func() bool { return checkServerNotRunning(serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
 	if err != nil {
-		// Under heavy concurrent tmux usage, the list-sessions check above can itself
-		// transiently report "server exited unexpectedly" against a socket that
-		// actually has a live server (a racy connect, not a real absence) -- which
-		// sends us down this path to start a server that's already running, and the
-		// start-server call then hits the same transient failure. Since this
-		// function's actual contract is "a server is running when this returns", not
-		// "this call is the one that started it", re-check before surfacing the
-		// error: if a server is now (or still) up, that's success.
-		if startServerSucceededDespiteError(func() bool { return checkServerNotRunning(serverSocket) }) {
-			log.Info("[tmux] start-server reported failure but server is now running (transient check race)", "err", err, "output", string(out))
-			return TmuxServerReady{}, nil
-		}
-		return TmuxServerReady{}, fmt.Errorf("tmux start-server failed: %w (output: %s)", err, out)
+		return TmuxServerReady{}, fmt.Errorf("tmux start-server failed after %d attempts: %w (output: %s)", serverStartAttempts, err, out)
 	}
 	log.Info("[tmux] server started successfully")
 

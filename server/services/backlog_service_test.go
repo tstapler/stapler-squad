@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -171,6 +172,14 @@ type mockSessionStopper struct {
 	// must still handle the disagreement gracefully rather than assume it. Nil
 	// (the default) preserves the old coupled behavior for every other test.
 	tslmoOverrideNotLive map[string]bool
+	// onKillTmuxPaneOnly, if set, is invoked synchronously from
+	// KillTmuxPaneOnly before it records the call — lets a test observe
+	// storage state at the exact moment the pane would be killed in
+	// production (BUG-064: RemediateStaleWorkSession must end the
+	// ItemSession row before calling KillTmuxPaneOnly, not after, so that
+	// onSessionExited's already-ended guard has something to observe once
+	// the (real) tmux kill asynchronously fires the exit event).
+	onKillTmuxPaneOnly func(uuid string)
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -191,6 +200,9 @@ func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string)
 }
 
 func (m *mockSessionStopper) KillTmuxPaneOnly(_ context.Context, uuid string) error {
+	if m.onKillTmuxPaneOnly != nil {
+		m.onKillTmuxPaneOnly(uuid)
+	}
 	m.killedPaneUUIDs = append(m.killedPaneUUIDs, uuid)
 	return nil
 }
@@ -471,6 +483,60 @@ func TestUpdateBacklogItem_GitHubResolveError_ReturnsInvalidArgument(t *testing.
 	require.ErrorAs(t, err, &connErr)
 	assert.Equal(t, connect.CodeInvalidArgument, connErr.Code())
 	assert.Contains(t, connErr.Error(), "https://github.com/owner/does-not-exist")
+}
+
+// TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit is the Epic 0.3
+// prerequisite test (plan.md Task 0.3.2c): a genuinely different Title
+// populates the item's UserModifiedFields with "title".
+func TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "Original Title",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId: created.Msg.Item.Id,
+		Title:  "New Title",
+	}))
+	require.NoError(t, err)
+
+	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "New Title", refetched.Title)
+	assert.True(t, session.ContainsModifiedField(session.ParseUserModifiedFields(refetched.UserModifiedFields), "title"),
+		"UserModifiedFields must contain \"title\" after a genuine title edit, got %q", refetched.UserModifiedFields)
+}
+
+// TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged is the
+// regression test for the pre-mortem P1 #2 value-diff correction (plan.md
+// Task 0.3.2b/0.3.2c): the frontend edit form always resubmits the current
+// Title verbatim, so a presence-only check would falsely mark it as
+// user-modified on nearly every edit. Resubmitting the unchanged Title
+// alongside a genuinely different Priority must mark only "priority".
+func TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "Unchanged Title",
+		Priority: 3,
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:   created.Msg.Item.Id,
+		Title:    "Unchanged Title", // resubmitted verbatim, mirroring the real edit form
+		Priority: 5,                 // genuinely changed
+	}))
+	require.NoError(t, err)
+
+	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 5, refetched.Priority)
+	modified := session.ParseUserModifiedFields(refetched.UserModifiedFields)
+	assert.True(t, session.ContainsModifiedField(modified, "priority"), "priority genuinely changed, must be marked modified")
+	assert.False(t, session.ContainsModifiedField(modified, "title"), "title was resubmitted unchanged, must NOT be marked modified")
 }
 
 // ─── ListBacklogItems ─────────────────────────────────────────────────────────
@@ -1515,6 +1581,73 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	}
 	assert.True(t, staleEnded, "the stale session must be tombstoned (EndedAt set)")
 	assert.True(t, newOpen, "the newly-spawned work session must be open")
+}
+
+// TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_ActiveWorkSessionIsStale
+// is a regression test for BUG-064: killing the stale session's tmux pane
+// (KillTmuxPaneOnly -> Instance.KillSession) fires the Instance's exit event
+// asynchronously, which session.BacklogLifecycleListener.onSessionExited
+// handles in its own goroutine — and, before this fix, unconditionally
+// transitioned the (still in_progress) item straight to "review" the moment
+// it observed the work session's EndedAt set, racing ahead of this
+// function's own AutoRespawnAutonomousWork call and silently discarding the
+// intended fresh work-session respawn (live repro: item 2d7fac56,
+// 2026-08-06). Ending the ItemSession row before killing the pane turns that
+// race into a guaranteed happens-before: onSessionExited's own "already
+// ended by another path" guard (session/backlog_lifecycle.go) can only work
+// if EndedAt is already non-nil by the time it reads the row, which requires
+// this ordering. Verifies the ordering directly via a hook on
+// KillTmuxPaneOnly that inspects storage at the exact moment the pane would
+// be killed in production.
+func TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_ActiveWorkSessionIsStale(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with stale-but-alive work session")
+
+	createdIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "stale-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	var (
+		firstKillObserved     bool
+		endedAtWhenKillCalled *time.Time
+	)
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"stale-work-session-uuid": true},
+		onKillTmuxPaneOnly: func(uuid string) {
+			if uuid != "stale-work-session-uuid" || firstKillObserved {
+				// Only the first kill matters here: a real Instance.KillSession
+				// no-ops (HasSession() check) on an already-dead pane and never
+				// re-fires the exit event, but killEndedWorkSessionPanes
+				// (called later, right before AutoRespawnAutonomousWork spawns
+				// the replacement) legitimately re-invokes KillTmuxPaneOnly on
+				// the now-ended session too — that later, redundant call is not
+				// the one racing onSessionExited and must not overwrite what
+				// this test is actually checking.
+				return
+			}
+			firstKillObserved = true
+			is, getErr := storage.GetItemSession(t.Context(), createdIS.ID)
+			require.NoError(t, getErr)
+			endedAtWhenKillCalled = is.EndedAt
+		},
+	}
+	svc.SetSessionStopper(stopper)
+
+	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
+	require.NoError(t, remediateErr)
+
+	require.Contains(t, stopper.killedPaneUUIDs, "stale-work-session-uuid")
+	require.NotNil(t, endedAtWhenKillCalled, "the ItemSession row must already have EndedAt set by the time KillTmuxPaneOnly is called — killing the pane fires onSessionExited asynchronously, which needs to observe EndedAt already non-nil to correctly skip its own status transition")
 }
 
 // TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress verifies
@@ -3401,4 +3534,128 @@ func TestBacklogService_ScrollbackManager_ConcurrentSetAndGet_NoRace(t *testing.
 		}()
 	}
 	wg.Wait()
+}
+
+// ─── Epic 0.5: per-source sync-direction settings (ForwardSyncEnabled,
+// BackwardSyncEnabled, ForwardSyncCloseLabel) ──────────────────────────────
+
+// TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled verifies the
+// three new sync-direction fields flow all the way from the UpdateItemSource
+// RPC through storage and back out via ListItemSources, mirroring how the
+// pre-existing Enabled field already round-trips.
+func TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	created, err := svc.CreateItemSource(context.Background(), &connect.Request[sessionv1.CreateItemSourceRequest]{
+		Msg: &sessionv1.CreateItemSourceRequest{
+			PluginId:    "github_issues",
+			DisplayName: "My GitHub",
+		},
+	})
+	require.NoError(t, err)
+	sourceID := created.Msg.Source.Id
+
+	// Newly created sources default to both directions disabled and no close label.
+	require.False(t, created.Msg.Source.ForwardSyncEnabled)
+	require.False(t, created.Msg.Source.BackwardSyncEnabled)
+	require.Equal(t, "", created.Msg.Source.ForwardSyncCloseLabel)
+
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			Enabled:               true,
+			ForwardSyncEnabled:    true,
+			BackwardSyncEnabled:   true,
+			ForwardSyncCloseLabel: "wontfix",
+		},
+	})
+	require.NoError(t, err)
+
+	listResp, err := svc.ListItemSources(context.Background(), &connect.Request[sessionv1.ListItemSourcesRequest]{})
+	require.NoError(t, err)
+
+	var found *sessionv1.ItemSource
+	for _, s := range listResp.Msg.Sources {
+		if s.Id == sourceID {
+			found = s
+			break
+		}
+	}
+	require.NotNil(t, found, "updated source not found in ListItemSources")
+	assert.True(t, found.ForwardSyncEnabled)
+	assert.True(t, found.BackwardSyncEnabled)
+	assert.Equal(t, "wontfix", found.ForwardSyncCloseLabel)
+}
+
+// TestUpdateItemSource_ClearsForwardSyncCloseLabel verifies that sending an
+// empty ForwardSyncCloseLabel actually clears a previously-set label.
+// UpdateItemSource is a full-state overwrite (see the frontend's
+// useBacklogSourcesService.ts comment), so guarding the write on a non-empty
+// string — as the handler previously did — silently ignored a user's attempt
+// to clear the field via blur-triggered updates in BacklogSourcesSettings.tsx.
+func TestUpdateItemSource_ClearsForwardSyncCloseLabel(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	created, err := svc.CreateItemSource(context.Background(), &connect.Request[sessionv1.CreateItemSourceRequest]{
+		Msg: &sessionv1.CreateItemSourceRequest{
+			PluginId:    "github_issues",
+			DisplayName: "My GitHub",
+		},
+	})
+	require.NoError(t, err)
+	sourceID := created.Msg.Source.Id
+
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			ForwardSyncCloseLabel: "wontfix",
+		},
+	})
+	require.NoError(t, err)
+
+	// Now clear it — this must actually persist as empty, not be silently
+	// ignored because the RPC field is the empty string.
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			ForwardSyncCloseLabel: "",
+		},
+	})
+	require.NoError(t, err)
+
+	listResp, err := svc.ListItemSources(context.Background(), &connect.Request[sessionv1.ListItemSourcesRequest]{})
+	require.NoError(t, err)
+
+	var found *sessionv1.ItemSource
+	for _, s := range listResp.Msg.Sources {
+		if s.Id == sourceID {
+			found = s
+			break
+		}
+	}
+	require.NotNil(t, found, "updated source not found in ListItemSources")
+	assert.Equal(t, "", found.ForwardSyncCloseLabel, "close label should have been cleared, not left unchanged")
+}
+
+// TestUpdateItemSource_ReturnsErrorForUnknownSourceId verifies UpdateItemSource
+// surfaces a NotFound error (rather than silently succeeding) when the target
+// source id does not exist — the error path counterpart to the round-trip test.
+func TestUpdateItemSource_ReturnsErrorForUnknownSourceId(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	_, err := svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:           uuid.NewString(),
+			DisplayName:        "Nonexistent",
+			ForwardSyncEnabled: true,
+		},
+	})
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }

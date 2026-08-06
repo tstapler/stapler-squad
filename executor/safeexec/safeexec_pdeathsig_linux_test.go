@@ -4,6 +4,7 @@ package safeexec
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -98,8 +99,58 @@ func TestEnsurePdeathsig_GrandchildDiesWhenMiddleIsSigkilled(t *testing.T) {
 	t.Fatalf("grandchild pid %d still alive 3s after its parent was SIGKILLed — Pdeathsig did not fire", grandchildPID)
 }
 
-// processAlive checks whether pid exists by sending signal 0, which the
-// kernel validates without actually delivering a signal.
+// processAlive reports whether pid is still running. Signal-0 delivery alone
+// can't tell a zombie (dead, awaiting reap by its ambient parent/subreaper)
+// from a live process — the kernel keeps a zombie's PID entry until
+// something calls wait() on it, so kill(pid,0) succeeds for both. Pdeathsig's
+// contract is "the kernel terminates the child," which a zombie already
+// satisfies; how promptly some other process gets around to reaping the
+// corpse is an unrelated, unbounded-latency concern this test shouldn't be
+// sensitive to.
 func processAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false // already fully reaped
+	}
+	// Format: "pid (comm) state ...". comm may itself contain ')', so the
+	// state field is the first byte after the *last* ')'.
+	i := bytes.LastIndexByte(stat, ')')
+	if i < 0 || i+2 >= len(stat) {
+		return false
+	}
+	return stat[i+2] != 'Z'
+}
+
+// TestProcessAlive_ReturnsFalseForZombie is a regression guard for the exact
+// ambiguity processAlive exists to close: kill(pid,0) alone reports a zombie
+// (exited, awaiting reap) as "alive" indistinguishably from a genuinely
+// running process, which would make the flake-hardening above a no-op.
+func TestProcessAlive_ReturnsFalseForZombie(t *testing.T) {
+	cmd := exec.Command("true")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pid := cmd.Process.Pid
+	t.Cleanup(func() { _ = cmd.Wait() })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err == nil {
+			if i := bytes.LastIndexByte(stat, ')'); i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z' {
+				break // process has exited but we haven't reaped it — genuine zombie
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d never reached zombie state before reaping", pid)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	if syscall.Kill(pid, 0) != nil {
+		t.Fatalf("pid %d not observed as a zombie by kill(pid,0) — test setup is broken", pid)
+	}
+	if processAlive(pid) {
+		t.Fatalf("processAlive(%d) reported a zombie as alive", pid)
+	}
 }

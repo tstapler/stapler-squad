@@ -19,12 +19,21 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
 
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 )
 
 // TestMain runs before all tests to set up the test environment
 func TestMain(m *testing.M) {
 	log.InitializeForTests(log.ERROR, log.ERROR)
 	defer log.Close()
+
+	// Switch go-keyring to its in-memory mock provider so backlog_plugin_github*
+	// tests (which call github.GetKeychainTokenForHost through Fetch/FetchAll/
+	// CloseIssue/PostIssueComment) never touch the real OS keychain. Without
+	// this, a machine with real GitHub accounts already connected (e.g. via
+	// Settings > GitHub Accounts) returns a real token instead of "", making
+	// those tests fail non-deterministically depending on local machine state.
+	keyring.MockInit()
 
 	tmuxreap.ReapLeakedTestServers()
 	tmuxreap.StartTestServerWatchdog(os.Getpid())

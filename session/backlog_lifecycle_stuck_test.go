@@ -478,23 +478,116 @@ func TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewS
 
 // TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStillAlive
 // verifies a review session that hasn't ended yet and isn't confirmed dead is left
-// alone — it may simply be doing its own post-verdict cleanup.
+// alone — it may simply be doing its own post-verdict cleanup — unless its
+// verdict has aged past reviewVerdictIdleThreshold, in which case the sweep
+// must act regardless of what SessionLivenessChecker reports (BUG-047: a
+// reviewer that submits a verdict and then never exits reads as alive
+// forever, so a pure liveness check can never catch it).
 func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStillAlive(t *testing.T) {
-	storage, cleanup := createTestStorage(t)
-	defer cleanup()
-	ctx := context.Background()
+	t.Run("verdict younger than idle threshold: still no-act", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
 
-	item := newStuckReviewTestItem(t, storage, ReviewVerdictPass, false, false)
+		item := newStuckReviewTestItem(t, storage, ReviewVerdictPass, false, false)
 
-	listener := NewBacklogLifecycleListener(storage)
-	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
 
-	er := storage.repo.(*EntRepository)
-	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+		er := storage.repo.(*EntRepository)
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
-	fetched, err := storage.GetBacklogItem(ctx, item.ID)
-	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a still-alive review session must not be acted on")
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a still-alive review session with a fresh verdict must not be acted on")
+	})
+
+	t.Run("verdict older than idle threshold: now acts", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		er := storage.repo.(*EntRepository)
+		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold+time.Hour)
+
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive — only the verdict age should trigger action
+		reopener := newFakeAutoReopenSpawner()
+		listener.SetAutoReopener(reopener)
+
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+		select {
+		case gotItemID := <-reopener.called:
+			assert.Equal(t, item.ID, gotItemID,
+				"an idle-but-alive review session whose verdict has aged past reviewVerdictIdleThreshold must still reach the auto-reopener (forcePush path)")
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+		}
+
+		sessions, err := storage.ListItemSessions(ctx, item.ID)
+		require.NoError(t, err)
+		for _, is := range sessions {
+			if is.Role == string(SessionRoleReview) {
+				assert.NotNil(t, is.EndedAt, "the idle review session must be tombstoned even though the liveness checker reported it alive")
+			}
+		}
+	})
+
+	t.Run("verdict just under idle threshold: still no-act", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		er := storage.repo.(*EntRepository)
+		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold-time.Minute)
+
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
+
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, string(BacklogStatusReview), fetched.Status,
+			"a verdict just under reviewVerdictIdleThreshold must not be swept yet — only the (older, exercised above) case should trigger")
+	})
+
+	// PASS is deferred to session-exit by design, so it never gets the eager
+	// transition submitReviewVerdict drives for FAIL/PARTIAL/UNVERIFIABLE
+	// (server/mcp/tools_backlog.go) — this idle-timeout branch is PASS's
+	// *only* path back out of "review" once its reviewer session goes idle
+	// without exiting, so it needs its own direct coverage rather than
+	// inheriting confidence from the FAIL case above.
+	t.Run("PASS verdict older than idle threshold: now acts even though session reports alive", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		er := storage.repo.(*EntRepository)
+		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictPass, reviewVerdictIdleThreshold+time.Hour)
+
+		// A work session so the PASS verdict has something to ship — mirrors
+		// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive's
+		// setup; no worktree recorded, so this exercises the same pre-existing
+		// fallbackToDone("no worktree") branch that test does.
+		_, err := storage.CreateItemSession(ctx, ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: uuid.New().String(),
+			SessionRole: SessionRoleWork,
+		})
+		require.NoError(t, err)
+
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive — only the verdict age should trigger action
+
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+			"a PASS verdict aged past reviewVerdictIdleThreshold must still ship even though SessionLivenessChecker reports the review session alive")
+	})
 }
 
 // TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemReenteredReviewAfterAlreadyShipping
@@ -1363,6 +1456,82 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	// open-and-stale shape's identical guarantee.
 	listener.reconcileOrphanedTriageItems(ctx, er)
 	assert.Len(t, notifier.calls, 1)
+}
+
+// TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_TriageSessionEndedWithClassifiedError
+// guards the fix threading TriggerTriage's persisted classifyHeadlessCallError
+// bucket (server/services/backlog_service_triage.go's EndReason, written via
+// UpdateItemSessionEndedWithReason) into this detector's reasonDetail. Before
+// this fix, shape 2's reasonDetail was a hardcoded generic string — "triage
+// session %s ended without moving the item out of idea" — that discarded the
+// EndReason column even though it was one query away and already read
+// elsewhere in this same function (the "shutdown" carve-out just above). The
+// resulting backlog_stuck_states.context an operator actually sees carried no
+// hint of *why* the triage session died. Confirmed live: a real orphaned_triage
+// row for a process_error-classified failure showed the same generic message
+// as every other failure category.
+func TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_TriageSessionEndedWithClassifiedError(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Process-error-ended triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), "process_error"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "process_error",
+		"stuck-state context must surface the persisted EndReason, not a generic template")
+	assert.NotContains(t, open[0].Context, "ended without moving the item out of idea",
+		"the pre-fix generic-only template must no longer be emitted verbatim once an EndReason is known")
+}
+
+// TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNeverClassified
+// guards the empty-EndReason path (triageEndReasonOrUnknown): a session ended
+// via the plain UpdateItemSessionEnded (no errType ever recorded) must still
+// render a well-formed message rather than a blank/empty parenthetical.
+func TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNeverClassified(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er) // ends via UpdateItemSessionEnded, no reason recorded
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "unknown",
+		"an EndReason-less session must fall back to an explicit 'unknown' marker, not a blank parenthetical")
 }
 
 // TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_When_EndedByGracefulShutdown
@@ -2291,6 +2460,67 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	// Repeat tick must not re-notify.
 	listener.reconcileBouncingItems(ctx, er)
 	assert.Len(t, notifier.calls, 1)
+}
+
+// TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_When_BouncingWithFailedVerdict
+// is the regression test for BUG-060: reconcileBouncingItems fetched the
+// item's most recent review verdict via GetMostRecentReviewVerdictForItem but
+// collapsed it to a bare hasPass bool before building the stuck-state
+// context, so an operator only ever saw "bounced ... with no PASS verdict"
+// with no indication of which verdict (PARTIAL/FAIL) or why. This is the same
+// discard-after-fetch shape BUG-059 fixed for reconcileOrphanedTriageItems'
+// EndReason. This test attaches a FAIL verdict with a distinctive summary to
+// the item's most recent review ItemSession, then asserts both the persisted
+// BacklogStuckState.Context and the operator notification body contain the
+// verdict's outcome and summary text, not just the generic bounce message.
+func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_When_BouncingWithFailedVerdict(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bouncing item with failed verdict",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	// Attach a FAIL verdict, with a distinctive summary, to a review
+	// ItemSession for this item — this is the diagnostic detail the fix must
+	// thread through into the stuck-state context instead of discarding.
+	const wantSummary = "AC3 not implemented: rate limiting missing from the new endpoint"
+	_, err = storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-review-" + uuid.New().String(),
+		SessionRole: SessionRoleReview,
+	}, ReviewVerdictData{
+		OverallOutcome: ReviewOutcomeFail,
+		Summary:        wantSummary,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason)
+	assert.Contains(t, open[0].Context, string(ReviewOutcomeFail), "context must surface which verdict (FAIL), not just that no PASS was recorded")
+	assert.Contains(t, open[0].Context, wantSummary, "context must surface the reviewer's actual summary, not a generic message")
+
+	require.Len(t, notifier.calls, 1)
+	assert.Contains(t, notifier.calls[0].Message, string(ReviewOutcomeFail))
+	assert.Contains(t, notifier.calls[0].Message, wantSummary)
 }
 
 // TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass verifies

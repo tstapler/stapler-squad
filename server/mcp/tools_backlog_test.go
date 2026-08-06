@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // newTestBacklogStorage creates a temporary Storage for testing.
@@ -362,6 +363,47 @@ func TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap(t
 	require.Contains(t, text, "/backlog/ship")
 	require.Contains(t, text, fmt.Sprintf("%d cycles", session.MaxSameSessionReviewAttempts))
 	require.NotContains(t, text, "you're finished", "a PASS verdict must no longer read as the end of the task")
+}
+
+// TestGetBacklogItem_ReviewRoleGuidance_InstructsEndingSessionAfterVerdict is
+// the regression guard for BUG-047 (a reviewer that submits a verdict and
+// then never exits leaves the item wedged in "review" forever). Symmetric to
+// TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap's
+// coverage of the work role's "Do NOT end your session" instruction.
+func TestGetBacklogItem_ReviewRoleGuidance_InstructsEndingSessionAfterVerdict(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusReview),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+	})
+
+	result, err := handler.getBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	text := tc.Text
+
+	require.Contains(t, text, "Your Role: Review")
+	require.Contains(t, text, "End your session immediately after calling submit_review_verdict")
 }
 
 // TestGetBacklogItem_ReturnsNotFoundError verifies that getBacklogItem
@@ -1774,6 +1816,271 @@ func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testin
 	assert.Contains(t, fetched.PrURL, fmt.Sprintf("/pull/%d", winnerPRNumber))
 }
 
+// TestCreateBacklogItem_should_PersistItem_When_TitleProvided verifies the
+// happy path: a plain title-only call creates an idea-status item with
+// default priority, discoverable afterward via GetBacklogItem.
+func TestCreateBacklogItem_should_PersistItem_When_TitleProvided(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	req := makeToolReq(map[string]interface{}{
+		"title":               "Fix the thing",
+		"description":         "It's broken because of X.",
+		"acceptance_criteria": []interface{}{"Given X, when Y, then Z"},
+		"priority":            float64(1),
+		"category":            "bugfix",
+	})
+
+	result, err := handler.createBacklogItem(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Fix the thing")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Created backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, "Fix the thing", fetched.Title)
+	assert.Equal(t, string(session.BacklogStatusIdea), fetched.Status)
+	assert.Equal(t, 1, fetched.Priority)
+	assert.Equal(t, "bugfix", fetched.Category)
+	ac, parseErr := session.ParseAcCriteria(fetched.AcceptanceCriteria)
+	require.NoError(t, parseErr)
+	require.Len(t, ac, 1)
+	assert.Equal(t, "Given X, when Y, then Z", ac[0].Text)
+	assert.Equal(t, session.AcStatusPending, ac[0].Status)
+}
+
+// TestCreateBacklogItem_should_ReturnError_When_TitleMissing verifies the
+// tool refuses an empty title rather than persisting an untitled item.
+func TestCreateBacklogItem_should_ReturnError_When_TitleMissing(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"description": "No title here.",
+	}))
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "create_backlog_item must reject a missing title")
+}
+
+// TestCreateBacklogItem_should_ReturnError_When_PriorityOutOfRange verifies
+// the 1-5 priority bound (matching the web UI's BacklogItemForm P1-P5 select)
+// is enforced here too, not just at the proto/UI layer.
+func TestCreateBacklogItem_should_ReturnError_When_PriorityOutOfRange(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title":    "Bad priority",
+		"priority": float64(9),
+	}))
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "create_backlog_item must reject an out-of-range priority")
+}
+
+// TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds verifies
+// the happy path against a stubbed GitHub API — title/body land on the new
+// item and Notes records the source issue URL, mirroring
+// BacklogService.ImportGitHubIssue's own behavior (backlog_service_sync.go).
+func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"number": 316, "title": "bug: something is broken", "body": "Steps to reproduce...",
+			"html_url": "https://github.com/tstapler/stapler-squad/issues/316",
+			"user": {"login": "tstapler"}, "state": "open"
+		}`))
+	}))
+	defer srv.Close()
+	prevBaseURL := githubpkg.GhBaseURL
+	githubpkg.GhBaseURL = srv.URL + "/"
+	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/issues/316",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "bug: something is broken")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Imported backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, "bug: something is broken", fetched.Title)
+	assert.Equal(t, "Steps to reproduce...", fetched.Description)
+	assert.Contains(t, fetched.Notes, "https://github.com/tstapler/stapler-squad/issues/316")
+}
+
+// TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet
+// is import_github_issue's half of the BUG-061 regression coverage — see
+// TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet's
+// doc comment for the full root-cause explanation. ImportGitHubIssue (RPC)
+// already triggered triage before this fix; only the MCP tool bypassed it.
+func TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"number": 317, "title": "needs triage via import", "body": "...",
+			"html_url": "https://github.com/tstapler/stapler-squad/issues/317",
+			"user": {"login": "tstapler"}, "state": "open"
+		}`))
+	}))
+	defer srv.Close()
+	prevBaseURL := githubpkg.GhBaseURL
+	githubpkg.GhBaseURL = srv.URL + "/"
+	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+
+	storage := newTestBacklogStorage(t)
+	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	backlogSvc.SetHeadlessPool(&fakeTriageHeadlessPool{})
+	t.Cleanup(backlogSvc.Shutdown)
+
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/issues/317",
+		"repo_path": t.TempDir(),
+	}))
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Auto-triage started.")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Imported backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	sessions, err := storage.ListItemSessions(context.Background(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1, "expected exactly one ItemSession created by TriggerTriage")
+	assert.Equal(t, session.SessionRoleTriage, sessions[0].Role)
+}
+
+// TestImportGitHubIssue_should_ReturnError_When_URLNotAnIssue verifies a
+// non-issue GitHub URL (e.g. a PR) is rejected before any network call.
+func TestImportGitHubIssue_should_ReturnError_When_URLNotAnIssue(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/pull/320",
+	}))
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "import_github_issue must reject a non-issue URL")
+}
+
+// fakeTriageHeadlessPool is a minimal headless.PoolClient stub used only to
+// prove MaybeTriggerTriage actually reaches TriggerTriage's headless-pool gate
+// — it does not need to exercise the full triage parse/persist pipeline in
+// any detail, just return a syntactically valid HeadlessTriageResult so the
+// background goroutine TriggerTriage launches completes cleanly instead of
+// racing this test's t.Cleanup (which closes the ent repo and removes its
+// temp dir).
+type fakeTriageHeadlessPool struct{}
+
+func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions) (string, float64, error) {
+	return `{"title":"t","summary":"s","suggestions":[]}`, 0, nil
+}
+
+// TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet
+// is the regression test for BUG-061: create_backlog_item used to call
+// h.storage.CreateBacklogItem directly with no post-create auto-triage step,
+// unlike BacklogService.CreateBacklogItem (the RPC handler backing the web
+// UI's "New Idea" form), which does trigger triage. An item self-filed by an
+// agent session via this MCP tool sat in "idea" with zero triage attempts
+// forever — reconcileOrphanedTriageItems (session/backlog_lifecycle.go) only
+// ever detects items that already have a prior triage-role ItemSession, so it
+// can never originate the first attempt for an item created this way.
+func TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	backlogSvc.SetHeadlessPool(&fakeTriageHeadlessPool{})
+	t.Cleanup(backlogSvc.Shutdown)
+
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title":     "Needs triage",
+		"repo_path": t.TempDir(),
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Auto-triage started.",
+		"create_backlog_item must trigger auto-triage when a BacklogService and repo_path are available")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Created backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	sessions, err := storage.ListItemSessions(context.Background(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1, "expected exactly one ItemSession created by TriggerTriage")
+	assert.Equal(t, session.SessionRoleTriage, sessions[0].Role)
+}
+
+// TestCreateBacklogItem_should_NotTriggerTriage_When_BacklogSvcNil verifies
+// the pre-fix behavior is preserved when no BacklogService is wired (e.g. the
+// stdio MCP fallback path, which has no *services.BacklogService available —
+// see RunServer's doc comment): item creation still succeeds, just without
+// auto-triage, rather than panicking on a nil backlogSvc.
+func TestCreateBacklogItem_should_NotTriggerTriage_When_BacklogSvcNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage} // backlogSvc left nil
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title":     "No backlog service wired",
+		"repo_path": t.TempDir(),
+	}))
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Auto-triage not triggered")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Created backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	sessions, err := storage.ListItemSessions(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Empty(t, sessions, "no ItemSession should be created when backlogSvc is nil")
+}
+
 // TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement
 // verifies that the request_review tool description (and its verification_notes
 // field description) instruct the agent to cite an exact file path and
@@ -3038,4 +3345,203 @@ func TestRegisterBacklogTools_ReportDuplicate_DescribesRetryGuidance(t *testing.
 		"report_duplicate's description must give explicit retry guidance for INTERNAL_ERROR results (FR10)")
 	assert.Contains(t, content, "no configured GitHub credentials",
 		"report_duplicate's description must escalate the no-credentials case as non-retryable, distinct from ordinary retry guidance")
+}
+
+// --- BUG-047: submit_review_verdict eager review->in_progress transition ---
+
+// fakeAutoReopenSpawner is a minimal session.AutoReopenSpawner test double —
+// records every itemID it's called with, so tests can assert the eager
+// transition path was (or wasn't) invoked without needing a real
+// *services.BacklogService (heavy setup: SessionService, worktrees, etc.).
+type fakeAutoReopenSpawner struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+}
+
+func (f *fakeAutoReopenSpawner) AutoReopenAfterFailedReview(ctx context.Context, itemID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, itemID)
+	return f.err
+}
+
+func (f *fakeAutoReopenSpawner) calledWith() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// setupReviewSession creates a review-status BacklogItem with a linked
+// review-role ItemSession for sessionUUID, mirroring the setup shape used by
+// TestRequestReview_TransitionsItemToReview for the work role.
+func setupReviewSession(t *testing.T, storage *session.Storage) (itemID, sessionUUID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	sessUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	return item.ID, sessUUID
+}
+
+func verdictsArg(outcome string) []interface{} {
+	return []interface{}{
+		map[string]interface{}{
+			"criterion_index": float64(0),
+			"outcome":         outcome,
+			"evidence":        "clear evidence from the diff",
+		},
+	}
+}
+
+// TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsFail is
+// acceptance criterion 0/2's core regression guard: a FAIL verdict must drive
+// the review->in_progress transition (via AutoReopenSpawner, which owns
+// spawning a new work session when none is active) immediately, in the same
+// call, rather than waiting for the review session to exit or the sweep to fire.
+func TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsFail(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+
+	reopener := &fakeAutoReopenSpawner{}
+	handler := &backlogHandlers{storage: storage, autoReopener: reopener}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Blocked by security check.",
+		"verdicts": verdictsArg("FAIL"),
+	})
+
+	_, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{itemID}, reopener.calledWith(),
+		"a FAIL verdict must eagerly call AutoReopenAfterFailedReview exactly once")
+}
+
+// TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsPartialOrUnverifiable
+// extends the FAIL coverage above to the other two reject outcomes.
+func TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsPartialOrUnverifiable(t *testing.T) {
+	for _, outcome := range []string{"PARTIAL", "UNVERIFIABLE"} {
+		t.Run(outcome, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			itemID, sessUUID := setupReviewSession(t, storage)
+
+			reopener := &fakeAutoReopenSpawner{}
+			handler := &backlogHandlers{storage: storage, autoReopener: reopener}
+			ctx := WithSessionUUID(context.Background(), sessUUID)
+
+			req := makeToolReq(map[string]interface{}{
+				"item_id":  itemID,
+				"summary":  "Needs more work.",
+				"verdicts": verdictsArg(outcome),
+			})
+
+			_, err := handler.submitReviewVerdict(ctx, req)
+			require.NoError(t, err)
+
+			assert.Equal(t, []string{itemID}, reopener.calledWith())
+		})
+	}
+}
+
+// TestSubmitReviewVerdict_should_NotInvokeAutoReopener_When_OutcomeIsPass is
+// acceptance criterion 5: PASS stays deferred to handleReviewSessionExited
+// (which pushes the branch and creates the PR) — the eager path must not
+// fire for it.
+func TestSubmitReviewVerdict_should_NotInvokeAutoReopener_When_OutcomeIsPass(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+
+	reopener := &fakeAutoReopenSpawner{}
+	handler := &backlogHandlers{storage: storage, autoReopener: reopener}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "All good.",
+		"verdicts": verdictsArg("PASS"),
+	})
+
+	_, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+
+	assert.Empty(t, reopener.calledWith(), "a PASS verdict must not trigger the eager auto-reopen path")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"PASS must leave the item in review — only handleReviewSessionExited transitions it, on session exit")
+}
+
+// TestSubmitReviewVerdict_should_NotError_When_AutoReopenerNil verifies the
+// eager transition is optional/nil-safe (the stdio MCP fallback path has no
+// BacklogService to wire — see RunServer's doc comment) rather than a hard
+// dependency that would break submit_review_verdict wherever it isn't wired.
+func TestSubmitReviewVerdict_should_NotError_When_AutoReopenerNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+
+	handler := &backlogHandlers{storage: storage} // autoReopener left nil
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Blocked.",
+		"verdicts": verdictsArg("FAIL"),
+	})
+
+	result, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"with autoReopener nil, the eager transition must be skipped entirely — the item stays in review for the session-exit/sweep paths to handle, not silently left in some other state")
+}
+
+// TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails
+// verifies acceptance criterion 1's CAS-harmless-failure contract from the
+// caller's side: if AutoReopenAfterFailedReview's own CAS precondition fails
+// (e.g. handleReviewSessionExited already raced ahead of it), the error is
+// swallowed (logged only) — the review session's submit_review_verdict call
+// must not itself fail or surface that as an error to the caller.
+func TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+
+	reopener := &fakeAutoReopenSpawner{err: errors.New("concurrent modification detected: expected status review, got in_progress")}
+	handler := &backlogHandlers{storage: storage, autoReopener: reopener}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Blocked.",
+		"verdicts": verdictsArg("FAIL"),
+	})
+
+	result, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Review verdict submitted",
+		"AutoReopenAfterFailedReview's CAS failure must not surface as a tool error — the normal success text must still be returned")
+	assert.Equal(t, []string{itemID}, reopener.calledWith())
 }

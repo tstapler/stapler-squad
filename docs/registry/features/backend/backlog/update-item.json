@@ -12,7 +12,14 @@
     "TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmittedFromRequest",
     "TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted",
     "TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet",
-    "TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided"
+    "TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided",
+    "TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit",
+    "TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged",
+    "TestUpdateBacklogItem_should_RejectPrFields_When_OnlyOneOfPairSet",
+    "TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL",
+    "TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl",
+    "TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemInReview",
+    "TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview"
   ],
-  "lastModified": "2026-07-29T00:00:00-07:00"
+  "lastModified": "2026-08-04T00:00:00-07:00"
 }

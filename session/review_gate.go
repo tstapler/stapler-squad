@@ -169,7 +169,18 @@ func (r *ReviewGateRunner) Run(
 		}
 	} else {
 		var diffErr error
-		diff, truncated, diffErr = GetGitDiff(ctx, item.RepoPath, is.LastCommitSha)
+		// Directory-mode session (no worktree row): the diff BASE is the session's
+		// spawn-time HEAD. Read BaseCommitSha, falling back to LastCommitSha only
+		// for rows written before the two were split — on those legacy rows the
+		// bug being fixed meant both held the same base value. Using
+		// LastCommitSha unconditionally here would now diff the session's tip
+		// against itself and always produce an empty review diff, since that
+		// field is live-refreshed (BUG-047).
+		diffBase := is.BaseCommitSha
+		if diffBase == "" {
+			diffBase = is.LastCommitSha
+		}
+		diff, truncated, diffErr = GetGitDiff(ctx, item.RepoPath, diffBase)
 		if diffErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff item=%s: %v", item.ID, diffErr)
 			worktreeDiffErr = diffErr

@@ -57,6 +57,12 @@ const (
 	// GitHubUserServiceAddGitHubAccountWithTokenProcedure is the fully-qualified name of the
 	// GitHubUserService's AddGitHubAccountWithToken RPC.
 	GitHubUserServiceAddGitHubAccountWithTokenProcedure = "/session.v1.GitHubUserService/AddGitHubAccountWithToken"
+	// GitHubUserServiceListGitHubCLIHostsProcedure is the fully-qualified name of the
+	// GitHubUserService's ListGitHubCLIHosts RPC.
+	GitHubUserServiceListGitHubCLIHostsProcedure = "/session.v1.GitHubUserService/ListGitHubCLIHosts"
+	// GitHubUserServiceAddGitHubAccountFromCLIProcedure is the fully-qualified name of the
+	// GitHubUserService's AddGitHubAccountFromCLI RPC.
+	GitHubUserServiceAddGitHubAccountFromCLIProcedure = "/session.v1.GitHubUserService/AddGitHubAccountFromCLI"
 )
 
 // GitHubUserServiceClient is a client for the session.v1.GitHubUserService service.
@@ -88,6 +94,15 @@ type GitHubUserServiceClient interface {
 	// host's /user endpoint and stores it in the keychain on success. Use this
 	// for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
 	AddGitHubAccountWithToken(context.Context, *connect.Request[v1.AddGitHubAccountWithTokenRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error)
+	// ListGitHubCLIHosts discovers hosts the local `gh` CLI is already
+	// authenticated to (via its hosts.yml config), so the UI can offer them as
+	// one-click imports instead of requiring the user to paste a token.
+	ListGitHubCLIHosts(context.Context, *connect.Request[v1.ListGitHubCLIHostsRequest]) (*connect.Response[v1.ListGitHubCLIHostsResponse], error)
+	// AddGitHubAccountFromCLI fetches the token gh CLI already holds for host
+	// (via `gh auth token --hostname <host>`), validates it, and stores it in
+	// the keychain on success — the same outcome as AddGitHubAccountWithToken
+	// but without the user needing to locate/paste the token by hand.
+	AddGitHubAccountFromCLI(context.Context, *connect.Request[v1.AddGitHubAccountFromCLIRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error)
 }
 
 // NewGitHubUserServiceClient constructs a client for the session.v1.GitHubUserService service. By
@@ -149,6 +164,18 @@ func NewGitHubUserServiceClient(httpClient connect.HTTPClient, baseURL string, o
 			connect.WithSchema(gitHubUserServiceMethods.ByName("AddGitHubAccountWithToken")),
 			connect.WithClientOptions(opts...),
 		),
+		listGitHubCLIHosts: connect.NewClient[v1.ListGitHubCLIHostsRequest, v1.ListGitHubCLIHostsResponse](
+			httpClient,
+			baseURL+GitHubUserServiceListGitHubCLIHostsProcedure,
+			connect.WithSchema(gitHubUserServiceMethods.ByName("ListGitHubCLIHosts")),
+			connect.WithClientOptions(opts...),
+		),
+		addGitHubAccountFromCLI: connect.NewClient[v1.AddGitHubAccountFromCLIRequest, v1.AddGitHubAccountWithTokenResponse](
+			httpClient,
+			baseURL+GitHubUserServiceAddGitHubAccountFromCLIProcedure,
+			connect.WithSchema(gitHubUserServiceMethods.ByName("AddGitHubAccountFromCLI")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -162,6 +189,8 @@ type gitHubUserServiceClient struct {
 	revokeGitHubToken         *connect.Client[v1.RevokeGitHubTokenRequest, v1.RevokeGitHubTokenResponse]
 	listGitHubAccounts        *connect.Client[v1.ListGitHubAccountsRequest, v1.ListGitHubAccountsResponse]
 	addGitHubAccountWithToken *connect.Client[v1.AddGitHubAccountWithTokenRequest, v1.AddGitHubAccountWithTokenResponse]
+	listGitHubCLIHosts        *connect.Client[v1.ListGitHubCLIHostsRequest, v1.ListGitHubCLIHostsResponse]
+	addGitHubAccountFromCLI   *connect.Client[v1.AddGitHubAccountFromCLIRequest, v1.AddGitHubAccountWithTokenResponse]
 }
 
 // ListUserPRs calls session.v1.GitHubUserService.ListUserPRs.
@@ -204,6 +233,16 @@ func (c *gitHubUserServiceClient) AddGitHubAccountWithToken(ctx context.Context,
 	return c.addGitHubAccountWithToken.CallUnary(ctx, req)
 }
 
+// ListGitHubCLIHosts calls session.v1.GitHubUserService.ListGitHubCLIHosts.
+func (c *gitHubUserServiceClient) ListGitHubCLIHosts(ctx context.Context, req *connect.Request[v1.ListGitHubCLIHostsRequest]) (*connect.Response[v1.ListGitHubCLIHostsResponse], error) {
+	return c.listGitHubCLIHosts.CallUnary(ctx, req)
+}
+
+// AddGitHubAccountFromCLI calls session.v1.GitHubUserService.AddGitHubAccountFromCLI.
+func (c *gitHubUserServiceClient) AddGitHubAccountFromCLI(ctx context.Context, req *connect.Request[v1.AddGitHubAccountFromCLIRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error) {
+	return c.addGitHubAccountFromCLI.CallUnary(ctx, req)
+}
+
 // GitHubUserServiceHandler is an implementation of the session.v1.GitHubUserService service.
 type GitHubUserServiceHandler interface {
 	// ListUserPRs returns all open PRs authored by the authenticated user,
@@ -233,6 +272,15 @@ type GitHubUserServiceHandler interface {
 	// host's /user endpoint and stores it in the keychain on success. Use this
 	// for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
 	AddGitHubAccountWithToken(context.Context, *connect.Request[v1.AddGitHubAccountWithTokenRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error)
+	// ListGitHubCLIHosts discovers hosts the local `gh` CLI is already
+	// authenticated to (via its hosts.yml config), so the UI can offer them as
+	// one-click imports instead of requiring the user to paste a token.
+	ListGitHubCLIHosts(context.Context, *connect.Request[v1.ListGitHubCLIHostsRequest]) (*connect.Response[v1.ListGitHubCLIHostsResponse], error)
+	// AddGitHubAccountFromCLI fetches the token gh CLI already holds for host
+	// (via `gh auth token --hostname <host>`), validates it, and stores it in
+	// the keychain on success — the same outcome as AddGitHubAccountWithToken
+	// but without the user needing to locate/paste the token by hand.
+	AddGitHubAccountFromCLI(context.Context, *connect.Request[v1.AddGitHubAccountFromCLIRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error)
 }
 
 // NewGitHubUserServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -290,6 +338,18 @@ func NewGitHubUserServiceHandler(svc GitHubUserServiceHandler, opts ...connect.H
 		connect.WithSchema(gitHubUserServiceMethods.ByName("AddGitHubAccountWithToken")),
 		connect.WithHandlerOptions(opts...),
 	)
+	gitHubUserServiceListGitHubCLIHostsHandler := connect.NewUnaryHandler(
+		GitHubUserServiceListGitHubCLIHostsProcedure,
+		svc.ListGitHubCLIHosts,
+		connect.WithSchema(gitHubUserServiceMethods.ByName("ListGitHubCLIHosts")),
+		connect.WithHandlerOptions(opts...),
+	)
+	gitHubUserServiceAddGitHubAccountFromCLIHandler := connect.NewUnaryHandler(
+		GitHubUserServiceAddGitHubAccountFromCLIProcedure,
+		svc.AddGitHubAccountFromCLI,
+		connect.WithSchema(gitHubUserServiceMethods.ByName("AddGitHubAccountFromCLI")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.GitHubUserService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case GitHubUserServiceListUserPRsProcedure:
@@ -308,6 +368,10 @@ func NewGitHubUserServiceHandler(svc GitHubUserServiceHandler, opts ...connect.H
 			gitHubUserServiceListGitHubAccountsHandler.ServeHTTP(w, r)
 		case GitHubUserServiceAddGitHubAccountWithTokenProcedure:
 			gitHubUserServiceAddGitHubAccountWithTokenHandler.ServeHTTP(w, r)
+		case GitHubUserServiceListGitHubCLIHostsProcedure:
+			gitHubUserServiceListGitHubCLIHostsHandler.ServeHTTP(w, r)
+		case GitHubUserServiceAddGitHubAccountFromCLIProcedure:
+			gitHubUserServiceAddGitHubAccountFromCLIHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -347,4 +411,12 @@ func (UnimplementedGitHubUserServiceHandler) ListGitHubAccounts(context.Context,
 
 func (UnimplementedGitHubUserServiceHandler) AddGitHubAccountWithToken(context.Context, *connect.Request[v1.AddGitHubAccountWithTokenRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.GitHubUserService.AddGitHubAccountWithToken is not implemented"))
+}
+
+func (UnimplementedGitHubUserServiceHandler) ListGitHubCLIHosts(context.Context, *connect.Request[v1.ListGitHubCLIHostsRequest]) (*connect.Response[v1.ListGitHubCLIHostsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.GitHubUserService.ListGitHubCLIHosts is not implemented"))
+}
+
+func (UnimplementedGitHubUserServiceHandler) AddGitHubAccountFromCLI(context.Context, *connect.Request[v1.AddGitHubAccountFromCLIRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.GitHubUserService.AddGitHubAccountFromCLI is not implemented"))
 }

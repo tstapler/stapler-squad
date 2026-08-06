@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -121,6 +122,20 @@ type backlogHandlers struct {
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
 	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
 
+	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create
+	// auto-triage trigger (BUG-061: these two MCP tools used to call
+	// h.storage.CreateBacklogItem directly and skip triage entirely, unlike
+	// the RPC handlers of the same name — see BacklogService.MaybeTriggerTriage's
+	// doc comment). Held as the concrete type (not a narrower interface) to
+	// match this package's existing pattern for *services.SessionService
+	// (svc field on workflowHandlers/rulesHandlers/lifecycleHandlers) — a
+	// single-purpose interface here would have exactly one implementation and
+	// no near-term second one. Optional; nil means auto-triage is skipped and
+	// the item is created exactly as before this fix (matches enabledCheck's
+	// "nil means always-enabled (tests)" convention for other optional deps
+	// on this struct).
+	backlogSvc *services.BacklogService
+
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
@@ -139,6 +154,16 @@ type backlogHandlers struct {
 	// so it has no swappable-Repository test seam of its own. This field
 	// mirrors verifyPRMatchesBranch/resolveSessionBranch's existing shape.
 	listItemSessionsFn func(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
+
+	// autoReopener backs submit_review_verdict's eager review->in_progress
+	// transition on FAIL/PARTIAL/UNVERIFIABLE verdicts (BUG-047: a reviewer
+	// that submits a verdict and then idles without exiting used to leave the
+	// item wedged in "review" forever — see submitReviewVerdict). Optional;
+	// nil means the eager transition is skipped and the item falls back to
+	// the pre-existing session-exit/sweep paths. The same
+	// session.AutoReopenSpawner *services.BacklogService already implements
+	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
+	autoReopener session.AutoReopenSpawner
 
 	// verifyGitHubRef backs report_duplicate's GitHub existence check for
 	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists
@@ -265,6 +290,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Check each AC criterion against the implementation\n")
 		sb.WriteString("2. Call submit_review_verdict with per-criterion verdicts (PASS/FAIL/PARTIAL) + evidence\n")
 		sb.WriteString("   PASS → item transitions to done. FAIL → item sent back for rework.\n")
+		sb.WriteString("3. End your session immediately after calling submit_review_verdict. Do not wait, poll, or do further work — an idle-but-alive reviewer session leaves the item stuck.\n")
 	default:
 		sb.WriteString("## Available MCP Tools\n")
 		sb.WriteString("- report_progress — mark an AC criterion pass/fail/in_progress (role: work)\n")
@@ -650,14 +676,50 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("save review verdict: %v", saveErr), ""), nil
 	}
 
-	// Deliberately no status transition here: BacklogLifecycleListener.
-	// handleReviewSessionExited (session/backlog_lifecycle.go) is the sole place
-	// that decides what happens next once this review session exits — on PASS it
-	// pushes the branch, creates a PR, and transitions to pr_pending
-	// (pushAndCreatePR); on FAIL/PARTIAL/UNVERIFIABLE it triggers auto-reopen.
-	// Transitioning straight to done here would race that handler: its own
-	// precondition (ExpectedStatus: review) would then fail once the session
-	// actually exits, silently skipping PR creation.
+	// PASS: no status transition here. BacklogLifecycleListener.
+	// handleReviewSessionExited (session/backlog_lifecycle.go) is still the
+	// sole place that decides what happens on PASS once this review session
+	// exits — it pushes the branch, creates a PR, and transitions to
+	// pr_pending (pushAndCreatePR). Transitioning straight to done here would
+	// race that handler: its own precondition (ExpectedStatus: review) would
+	// then fail once the session actually exits, silently skipping PR
+	// creation.
+	//
+	// FAIL/PARTIAL/UNVERIFIABLE: unlike PASS, drive the review->in_progress
+	// transition eagerly, right here, instead of only waiting for
+	// handleReviewSessionExited or the reconcileUnprocessedReviewVerdicts
+	// sweep. Before this, a reviewer that submitted a reject verdict and then
+	// simply never exited (process alive, no further output) was invisible to
+	// both of those paths — the sweep's dead-check requires the session to be
+	// confirmed *dead*, not just idle — so the item stayed wedged in "review"
+	// forever (BUG-047, live repro: item 4c71d3a3). AutoReopenAfterFailedReview
+	// is CAS-guarded on ExpectedStatus: review, so if the review session does
+	// go on to exit normally moments later, handleReviewSessionExited's own
+	// (duplicate) AutoReopenAfterFailedReview call simply fails its CAS and
+	// logs — no double-transition, no error surfaced to either caller.
+	if overallOutcome == session.ReviewVerdictFail || overallOutcome == session.ReviewVerdictPartial || overallOutcome == session.ReviewVerdictUnverifiable {
+		if h.autoReopener != nil {
+			// Detached from the request ctx (context.WithoutCancel) and
+			// explicitly time-bounded: AutoReopenAfterFailedReview's only
+			// other callers (session/backlog_lifecycle.go) run on long-lived
+			// background contexts, but this call runs on the live
+			// submit_review_verdict request's ctx, which a client-side
+			// disconnect/timeout can cancel mid-call. AutoReopenAfterFailedReview's
+			// own rollback-on-spawn-failure path reuses whatever ctx it's
+			// given, so an inherited cancellation could take out both the
+			// transition attempt and its own safety-net rollback together —
+			// exactly the "stranded in_progress with no active session" case
+			// its rollback exists to prevent. The verdict itself is already
+			// durably persisted above, so this transition must be allowed to
+			// finish (or cleanly roll back) independent of the caller's
+			// connection.
+			reopenCtx, reopenCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			if reopenErr := h.autoReopener.AutoReopenAfterFailedReview(reopenCtx, itemID); reopenErr != nil {
+				log.WarningLog.Printf("[submitReviewVerdict] AutoReopenAfterFailedReview item=%s: %v", itemID, reopenErr)
+			}
+			reopenCancel()
+		}
+	}
 
 	// Stop the AutonomousDriver for this review session (belt-and-suspenders).
 	// The verdict is already persisted; a subsequent Stuck fireCompletion is harmless
@@ -827,6 +889,171 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"PR #%d recorded for item %s. Item transitioned to pr_pending.", prNumber, itemID,
+	)), nil
+}
+
+// --- create_backlog_item / import_github_issue ---
+
+// acCriteriaFromStrings builds AcCriteriaJSON from a plain list of criterion
+// texts, assigning sequential indices and AcStatusPending — the shape a
+// brand-new item's criteria always start in. Mirrors acCriteriaToJSON
+// (server/services/backlog_service_lifecycle.go), which starts from proto
+// AcCriterion instead of plain strings.
+func acCriteriaFromStrings(lines []string) (session.AcCriteriaJSON, error) {
+	if len(lines) == 0 {
+		return "", nil
+	}
+	criteria := make([]session.AcCriterion, len(lines))
+	for i, text := range lines {
+		criteria[i] = session.AcCriterion{Index: i, Text: text, Status: session.AcStatusPending}
+	}
+	b, err := json.Marshal(criteria)
+	if err != nil {
+		return "", err
+	}
+	return session.AcCriteriaJSON(b), nil
+}
+
+// createBacklogItem adds a brand-new item to the backlog, same as a human
+// filling out the "New Idea" form in the web UI. No item link/role is
+// required — there is no item yet — only a valid caller session, for the
+// audit-trail log line.
+func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+
+	title, ok := args["title"].(string)
+	if !ok || title == "" {
+		return errResult(ErrInvalidArgument, "title is required", ""), nil
+	}
+
+	description, _ := args["description"].(string)
+	repoPath, _ := args["repo_path"].(string)
+	notes, _ := args["notes"].(string)
+	category, _ := args["category"].(string)
+	if category != "" && !session.IsValidBacklogCategory(category) {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid category %q", category), ""), nil
+	}
+
+	priority := session.DefaultBacklogPriority
+	if pf, ok := args["priority"].(float64); ok && pf != 0 {
+		priority = int(pf)
+		if priority < 1 || priority > 5 {
+			return errResult(ErrInvalidArgument, "priority must be between 1 and 5", ""), nil
+		}
+	}
+	skipTriage, _ := args["skip_triage"].(bool)
+
+	var acLines []string
+	if raw, ok := args["acceptance_criteria"].([]any); ok {
+		for _, v := range raw {
+			if s, ok := v.(string); ok && s != "" {
+				acLines = append(acLines, s)
+			}
+		}
+	}
+	acJSON, err := acCriteriaFromStrings(acLines)
+	if err != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid acceptance_criteria: %v", err), ""), nil
+	}
+
+	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:              title,
+		Description:        description,
+		AcceptanceCriteria: acJSON,
+		Priority:           priority,
+		Status:             string(session.BacklogStatusIdea),
+		RepoPath:           repoPath,
+		Category:           category,
+		Notes:              notes,
+	})
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil
+	}
+
+	log.InfoLog.Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
+
+	triageTriggered := false
+	if h.backlogSvc != nil {
+		triageTriggered = h.backlogSvc.MaybeTriggerTriage(ctx, created.ID, skipTriage, created.RepoPath)
+	}
+
+	triageNote := " Auto-triage not triggered (no repo_path, skip_triage set, or triage unavailable)."
+	if triageTriggered {
+		triageNote = " Auto-triage started."
+	}
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Created backlog item %s: %q (status: idea, priority: P%d).%s", created.ID, created.Title, created.Priority, triageNote,
+	)), nil
+}
+
+// importGitHubIssue creates a backlog item pre-populated from a GitHub issue,
+// the MCP-tool equivalent of the web UI's "Import from GitHub" action
+// (BacklogService.ImportGitHubIssue, server/services/backlog_service_sync.go)
+// — same storage.CreateBacklogItem call, but issue title/body/URL come from
+// the GitHub API instead of being typed in by hand. GitHub Enterprise hosts
+// are intentionally not supported here (pass a plain github.com URL) — that
+// config lives on BacklogService, which this package-level handler has no
+// access to; use the web UI's importer for a GHES issue.
+func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+	issueURL, ok := args["issue_url"].(string)
+	if !ok || issueURL == "" {
+		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
+	}
+	repoPath, _ := args["repo_path"].(string)
+	skipTriage, _ := args["skip_triage"].(bool)
+
+	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(issueURL, nil)
+	if parseErr != nil || ref.Type != githubpkg.RefTypeIssue {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", parseErr), ""), nil
+	}
+
+	issue, fetchErr := githubpkg.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+	if fetchErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
+	}
+
+	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:       issue.Title,
+		Description: issue.Body,
+		Priority:    session.DefaultBacklogPriority,
+		Status:      string(session.BacklogStatusIdea),
+		RepoPath:    repoPath,
+		Notes:       fmt.Sprintf("Imported from %s", issue.URL),
+	})
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil
+	}
+
+	log.InfoLog.Printf("[mcp:import_github_issue] session=%s item=%s issue=%s", callerUUID, created.ID, issue.URL)
+
+	triageTriggered := false
+	if h.backlogSvc != nil {
+		triageTriggered = h.backlogSvc.MaybeTriggerTriage(ctx, created.ID, skipTriage, created.RepoPath)
+	}
+
+	triageNote := " Auto-triage not triggered (no repo_path, skip_triage set, or triage unavailable)."
+	if triageTriggered {
+		triageNote = " Auto-triage started."
+	}
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Imported backlog item %s: %q from %s (status: idea, priority: P%d).%s", created.ID, created.Title, issue.URL, created.Priority, triageNote,
 	)), nil
 }
 
@@ -1383,6 +1610,59 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.reportPRCreated,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("create_backlog_item",
+			mcpgo.WithDescription("Create a new backlog item — same effect as filling out the \"New Idea\" form in the web UI. Not role/item-gated (there is no item yet); any Stapler Squad session may call this. Returns the new item's UUID."),
+			mcpgo.WithString("title",
+				mcpgo.Description("Short title for the item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("description",
+				mcpgo.Description("Full description: summary, context, steps to reproduce (for a bug), suggested fix, etc."),
+			),
+			mcpgo.WithArray("acceptance_criteria",
+				mcpgo.Description("Plain list of acceptance criterion strings, e.g. [\"Given X, when Y, then Z\"]. All start as pending."),
+				mcpgo.Items(map[string]any{"type": "string"}),
+			),
+			mcpgo.WithNumber("priority",
+				mcpgo.Description("1 (critical) to 5 (trivial). Default 3."),
+				mcpgo.Min(1),
+				mcpgo.Max(5),
+			),
+			mcpgo.WithString("category",
+				mcpgo.Description("Coarse classification, one of: bugfix, feature, chore, refactor. Omit if unsure."),
+				mcpgo.Enum("bugfix", "feature", "chore", "refactor"),
+			),
+			mcpgo.WithString("repo_path",
+				mcpgo.Description("Absolute local filesystem path this item targets, e.g. /home/user/Programming/my-repo — NOT a bare repo name or owner/repo shorthand (triage will reject those with a clear error). Omit for a repo-less item."),
+			),
+			mcpgo.WithString("notes",
+				mcpgo.Description("Freeform operator notes, e.g. where this request came from."),
+			),
+			mcpgo.WithBoolean("skip_triage",
+				mcpgo.Description("Skip auto-triage on creation (default false: an item with a repo_path is triaged automatically, same as the web UI's \"New Idea\" form). Set true to leave the item in idea status untouched, e.g. when filing several related items you intend to triage together later."),
+			),
+		),
+		h.createBacklogItem,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("import_github_issue",
+			mcpgo.WithDescription("Create a backlog item pre-populated from a GitHub issue (title, body, and a link back to the issue as Notes) — same effect as the web UI's \"Import from GitHub\" action. GitHub Enterprise hosts are not supported here; use the web UI for a GHES issue."),
+			mcpgo.WithString("issue_url",
+				mcpgo.Description("GitHub issue URL, e.g. https://github.com/owner/repo/issues/123"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("repo_path",
+				mcpgo.Description("Absolute local filesystem path this item targets, e.g. /home/user/Programming/my-repo — NOT a bare repo name or owner/repo shorthand (triage will reject those with a clear error). Omit for a repo-less item."),
+			),
+			mcpgo.WithBoolean("skip_triage",
+				mcpgo.Description("Skip auto-triage on creation (default false: an item with a repo_path is triaged automatically, same as the web UI's \"Import from GitHub\" action). Set true to leave the item in idea status untouched."),
+			),
+		),
+		h.importGitHubIssue,
 	)
 
 	s.AddTool(

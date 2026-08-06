@@ -6,7 +6,10 @@
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
   "handlerFile": "server/services/backlog_service_lifecycle.go",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+  "tested": true,
+  "testIds": [
+    "TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled",
+    "TestUpdateItemSource_ReturnsErrorForUnknownSourceId"
+  ],
+  "lastModified": "2026-08-03T00:00:00-07:00"
 }
