@@ -4827,6 +4827,31 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	if lastCommitSha == "" || lastCommitSha == lastWork.BaseCommitSha {
 		return false
 	}
+	// BUG-065: the guard above only fires when BaseCommitSha is a real,
+	// non-empty value. BaseCommitSha reads "" both for ItemSession rows written
+	// before BaseCommitSha/LastCommitSha were split into separate fields, and
+	// for any session that spawned and died/was retried before its base commit
+	// was ever seeded — GetBaseCommitSHAsForSessions (storage_backlog.go)
+	// already documents and works around this exact legacy-row shape. When
+	// BaseCommitSha is unknown, fall back to this session's own bookkeeping of
+	// whether it ever authored anything: CommitCountSinceSpawn is written
+	// alongside LastCommitSha every reconciliation tick
+	// (refreshWorkSessionGitActivity) and is 0 for a session that has made no
+	// commits since spawn, regardless of what lastCommitSha resolves to. A
+	// resolved commit from a session with zero commits since spawn is, by
+	// construction, that session's own pre-work snapshot — not real authored
+	// work — the same conclusion the BaseCommitSha check above reaches when it
+	// has the data to reach it at all.
+	//
+	// Live incident 2026-08-06: this exact gap closed PR #307 (a real,
+	// reviewed, CI-green "user-extensible agent detection plugins" feature,
+	// commit c64d94cf8) as "superseded" against 32f504c803 — that session's own
+	// spawn-time base, resolved fresh from a worktree that had never advanced —
+	// because BaseCommitSha read empty for that row, letting the base commit
+	// slip straight through the equality guard with no fallback to catch it.
+	if lastWork.BaseCommitSha == "" && lastWork.CommitCountSinceSpawn == 0 {
+		return false
+	}
 
 	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, bounceMainBranch, lastCommitSha)
 	if mainErr != nil {
