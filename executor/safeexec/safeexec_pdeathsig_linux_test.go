@@ -4,6 +4,7 @@ package safeexec
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -98,8 +99,24 @@ func TestEnsurePdeathsig_GrandchildDiesWhenMiddleIsSigkilled(t *testing.T) {
 	t.Fatalf("grandchild pid %d still alive 3s after its parent was SIGKILLed — Pdeathsig did not fire", grandchildPID)
 }
 
-// processAlive checks whether pid exists by sending signal 0, which the
-// kernel validates without actually delivering a signal.
+// processAlive reports whether pid is still running. Signal-0 delivery alone
+// can't tell a zombie (dead, awaiting reap by its ambient parent/subreaper)
+// from a live process — the kernel keeps a zombie's PID entry until
+// something calls wait() on it, so kill(pid,0) succeeds for both. Pdeathsig's
+// contract is "the kernel terminates the child," which a zombie already
+// satisfies; how promptly some other process gets around to reaping the
+// corpse is an unrelated, unbounded-latency concern this test shouldn't be
+// sensitive to.
 func processAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false // already fully reaped
+	}
+	// Format: "pid (comm) state ...". comm may itself contain ')', so the
+	// state field is the first byte after the *last* ')'.
+	i := bytes.LastIndexByte(stat, ')')
+	if i < 0 || i+2 >= len(stat) {
+		return false
+	}
+	return stat[i+2] != 'Z'
 }
