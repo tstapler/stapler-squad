@@ -96,9 +96,10 @@ var (
 				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
 				// No BacklogService on this stdio fallback path (buildMCPDeps only
 				// builds Phase 1 CoreDeps) — submit_review_verdict's eager
-				// review->in_progress transition is skipped here; see RunServer's
-				// doc comment.
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil)
+				// review->in_progress transition is skipped here, and
+				// create_backlog_item/import_github_issue skip auto-triage; see
+				// RunServer's doc comment.
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil)
 			}
 
 			// Enable test mode if flag is set
