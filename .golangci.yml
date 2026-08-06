@@ -21,6 +21,34 @@ linters:
   settings:
     exhaustive:
       default-signifies-exhaustive: false
+    # Hotspot-analysis follow-up (2026-08-06, session/backlog_lifecycle.go split into
+    # backlog_lifecycle_{review,pr,triage,stale,archive}.go): gocyclo/gocognit/funlen/
+    # revive(file-length-limit) catch the exact shape that let backlog_lifecycle.go grow
+    # to 4930 lines / 91 methods before anyone flagged it — a giant file, a giant function,
+    # or a deeply-branching function. Deliberately NOT in the `enable:` list above: the repo
+    # already has ~100 pre-existing violations in files this change didn't touch (top
+    # offenders: server/services/session_service.go, session/tmux/tmux.go,
+    # session/ent_repository.go, pkg/classifier/classifier.go — several are already on the
+    # code-hotspot-analysis skill's radar). Enabling them here would fail `make lint` for
+    # everyone immediately on unrelated code. Instead, .github/workflows/lint.yml enables
+    # them via `--enable` scoped to `only-new-issues: true`, so only NEW violations in
+    # changed code fail CI — these settings just configure the thresholds for that step.
+    # `make lint` / `make ci` / `make pre-commit` are intentionally unaffected.
+    gocyclo:
+      min-complexity: 25
+    gocognit:
+      min-complexity: 40
+    funlen:
+      lines: 150
+      statements: 100
+      ignore-comments: true
+    revive:
+      rules:
+        - name: file-length-limit
+          arguments:
+            - max: 1000
+              skipComments: true
+              skipBlankLines: true
     depguard:
       rules:
         no_server_in_core:
@@ -80,6 +108,22 @@ linters:
       - \.stapler-squad
       - \.claude-squad
     rules:
+      # ──────────────────────────────────────────────────────────────────────────
+      # gocyclo/gocognit/funlen/revive(file-length-limit): table-driven tests and
+      # generated code naturally run long/branchy without being a maintenance smell —
+      # exclude them the same way this file already exempts _test.go from SA5011 and
+      # forbidigo above.
+      # ──────────────────────────────────────────────────────────────────────────
+      - path: "_test\\.go"
+        linters: [gocyclo, gocognit, funlen, revive]
+      - path: "^gen/"
+        linters: [gocyclo, gocognit, funlen, revive]
+      - path: "\\.pb\\.go"
+        linters: [gocyclo, gocognit, funlen, revive]
+      - path: "\\.connect\\.go"
+        linters: [gocyclo, gocognit, funlen, revive]
+      - path: "session/ent/"
+        linters: [gocyclo, gocognit, funlen, revive]
       # exhaustive enforces DetectedStatus switch coverage in session/detection/ only.
       # All other packages use iota types with intentional default: clauses.
       - path: "^server/"
