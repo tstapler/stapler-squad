@@ -120,6 +120,10 @@ func init() {
 	approvalruleDescSafePythonImportsOnly := approvalruleFields[23].Descriptor()
 	// approvalrule.DefaultSafePythonImportsOnly holds the default value on creation for the safe_python_imports_only field.
 	approvalrule.DefaultSafePythonImportsOnly = approvalruleDescSafePythonImportsOnly.Default.(bool)
+	// approvalruleDescRequireCiPassing is the schema descriptor for require_ci_passing field.
+	approvalruleDescRequireCiPassing := approvalruleFields[24].Descriptor()
+	// approvalrule.DefaultRequireCiPassing holds the default value on creation for the require_ci_passing field.
+	approvalrule.DefaultRequireCiPassing = approvalruleDescRequireCiPassing.Default.(bool)
 	backlogitemFields := schema.BacklogItem{}.Fields()
 	_ = backlogitemFields
 	// backlogitemDescTitle is the schema descriptor for title field.

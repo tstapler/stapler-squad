@@ -1458,6 +1458,82 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	assert.Len(t, notifier.calls, 1)
 }
 
+// TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_TriageSessionEndedWithClassifiedError
+// guards the fix threading TriggerTriage's persisted classifyHeadlessCallError
+// bucket (server/services/backlog_service_triage.go's EndReason, written via
+// UpdateItemSessionEndedWithReason) into this detector's reasonDetail. Before
+// this fix, shape 2's reasonDetail was a hardcoded generic string — "triage
+// session %s ended without moving the item out of idea" — that discarded the
+// EndReason column even though it was one query away and already read
+// elsewhere in this same function (the "shutdown" carve-out just above). The
+// resulting backlog_stuck_states.context an operator actually sees carried no
+// hint of *why* the triage session died. Confirmed live: a real orphaned_triage
+// row for a process_error-classified failure showed the same generic message
+// as every other failure category.
+func TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_TriageSessionEndedWithClassifiedError(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Process-error-ended triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), "process_error"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "process_error",
+		"stuck-state context must surface the persisted EndReason, not a generic template")
+	assert.NotContains(t, open[0].Context, "ended without moving the item out of idea",
+		"the pre-fix generic-only template must no longer be emitted verbatim once an EndReason is known")
+}
+
+// TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNeverClassified
+// guards the empty-EndReason path (triageEndReasonOrUnknown): a session ended
+// via the plain UpdateItemSessionEnded (no errType ever recorded) must still
+// render a well-formed message rather than a blank/empty parenthetical.
+func TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNeverClassified(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er) // ends via UpdateItemSessionEnded, no reason recorded
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "unknown",
+		"an EndReason-less session must fall back to an explicit 'unknown' marker, not a blank parenthetical")
+}
+
 // TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_When_EndedByGracefulShutdown
 // guards the fix for the 2026-08-01 live incident (docs/bugs/fixed/BUG-053): a
 // routine service restart (e.g. `make install-service`) cancels shutdownCtx,

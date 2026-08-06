@@ -77,6 +77,8 @@ func (ApprovalRule) Fields() []ent.Field {
 			Default([]string{}),
 		field.Bool("safe_python_imports_only").
 			Default(false),
+		field.Bool("require_ci_passing").
+			Default(false),
 	}
 }
 

@@ -130,3 +130,16 @@ export function notificationTypeFilter(
       return types;
   }
 }
+
+/**
+ * ApprovalService appends a trailing " https://.../checks" URL to the CI-block error
+ * message (AC5/AC6) — split it out so approval UIs can render it as a "View CI run"
+ * link instead of a raw URL in the warning text.
+ */
+export function splitCIBlockMessage(message: string): { text: string; checksUrl?: string } {
+  const match = message.match(/\s(https?:\/\/\S+)$/);
+  if (!match) {
+    return { text: message };
+  }
+  return { text: message.slice(0, match.index), checksUrl: match[1] };
+}
