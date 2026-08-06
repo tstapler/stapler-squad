@@ -5,7 +5,7 @@ import { timestampDate, type Timestamp } from "@bufbuild/protobuf/wkt";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import {
   badge, prBadge, prBadgeReady, prBadgeBlocking, prBadgePending, prBadgeUnknown, icon, text,
-} from "./GitHubBadge.css";
+} from "@/components/shared/GitHubBadge.css";
 
 interface CIStatusBadgeProps {
   checkConclusion?: string;
