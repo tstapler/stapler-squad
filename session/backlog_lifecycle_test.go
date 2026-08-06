@@ -2164,6 +2164,12 @@ type fakePRCreator struct {
 	pushCalled          bool
 	createCalled        bool
 	copilotReviewCalled bool
+	// noCommitsAheadOfMain simulates a genuinely empty diff (BUG-063): the
+	// zero value (false) preserves every existing test's assumption that
+	// there ARE commits to ship, so only tests exercising the new zero-diff
+	// pre-flight path need to set this explicitly.
+	noCommitsAheadOfMain     bool
+	hasCommitsAheadOfMainErr error
 }
 
 func (f *fakePRCreator) CommitChanges(commitMessage string) error { return nil }
@@ -2179,6 +2185,12 @@ func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return f.autoMer
 func (f *fakePRCreator) RequestCopilotReview(prNumber int) error {
 	f.copilotReviewCalled = true
 	return f.copilotReviewErr
+}
+func (f *fakePRCreator) HasCommitsAheadOfMain(mainBranch string) (bool, error) {
+	if f.hasCommitsAheadOfMainErr != nil {
+		return true, f.hasCommitsAheadOfMainErr
+	}
+	return !f.noCommitsAheadOfMain, nil
 }
 
 // fakeOneShotShipRunnerCall records a single RunOneShotForSession invocation's
@@ -2588,6 +2600,66 @@ func TestPushAndCreatePR_NoWorktree_FallsBackToDone(t *testing.T) {
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusDone), fetched.Status)
+}
+
+// TestPushAndCreatePR_ZeroDiffBranch_FallsBackToDone is the regression test for
+// BUG-063: a PASS-verdict item whose worktree branch has zero commits ahead of
+// main (the work was already fully shipped by some earlier, unrelated PR, so
+// there is genuinely nothing left to ship) must resolve to done, the same
+// terminal state pushAndCreatePR's pre-existing "no worktree" case reaches —
+// not fall through to CreatePR, fail with gh's "No commits between X and Y",
+// and get stuck in review forever behind an unresolvable push_failed row (no
+// future retry of an unchanged zero-diff branch would ever succeed). CreatePR
+// must never even be attempted once the pre-flight check reports no commits.
+func TestPushAndCreatePR_ZeroDiffBranch_FallsBackToDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{noCommitsAheadOfMain: true}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+
+	listener.pushAndCreatePR(context.Background(), item, is)
+
+	assert.True(t, fakeCreator.pushCalled, "push is still attempted before the zero-diff check")
+	assert.False(t, fakeCreator.createCalled, "CreatePR must never be attempted once the pre-flight check reports zero commits ahead of main")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status, "a genuinely empty diff must resolve to done, not get stuck in review or silently land in pr_pending")
+}
+
+// TestPushAndCreatePR_AheadOfMainCheckErrors_StillAttemptsPRCreation verifies
+// that an inconclusive HasCommitsAheadOfMain result (e.g. the check itself
+// failed to open the repo) never blocks a real PR creation attempt — only a
+// confirmed zero-commit result should route to fallbackToDone.
+func TestPushAndCreatePR_AheadOfMainCheckErrors_StillAttemptsPRCreation(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{
+		hasCommitsAheadOfMainErr: errors.New("failed to open git repo"),
+		createURL:                "https://github.com/tstapler/stapler-squad/pull/77",
+		createNumber:             77,
+	}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+
+	listener.pushAndCreatePR(context.Background(), item, is)
+
+	assert.True(t, fakeCreator.createCalled, "an inconclusive ahead-of-main check must not block PR creation")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
 }
 
 // ─── RecordPRCreatedOutOfBand ──────────────────────────────────────────────────
@@ -3322,6 +3394,55 @@ func TestShipViaAgentOrFallback_WorktreeGoneOnDisk_NotifiesOperator_DoesNotSilen
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "PASS verdict must not be silently dropped — item stays in review, not done, when nothing could actually be shipped")
 	assert.Contains(t, notifier.titles(), "PR creation failed", "operator must be notified rather than the verdict silently vanishing")
+}
+
+// TestShipViaAgentOrFallback_OneShotReturnsUnparseablePRURL_StaysInReview_DoesNotTransitionToPRPending
+// is the regression test for BUG-063: RunOneShotForSession can return a
+// non-empty prURL that does not parse into a usable PR reference — e.g. the
+// agent's final /backlog/ship output happened to mention some other,
+// unrelated PR (explaining the work was already shipped elsewhere) rather
+// than a PR it just created. Previously this fell through to an
+// unconditional resolveToPRPending call regardless of whether prNumber was
+// ever validated or persisted, landing the item in pr_pending with
+// pr_number still 0 — permanently invisible to every downstream
+// reconciler's PrNumberGT(0) filter (the live incident this bug traces:
+// backlog item 2668d886-197c-4b26-9c28-ca6731f5070a). The item must instead
+// stay in review, mirroring pushAndCreatePR's own BUG-040 persist-failure
+// handling, and must never call CreatePR (a real PR may already exist from
+// the agent's own run, so blindly retrying risks a duplicate).
+func TestShipViaAgentOrFallback_OneShotReturnsUnparseablePRURL_StaysInReview_DoesNotTransitionToPRPending(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/9", createNumber: 9}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{prURL: "not-a-valid-pr-reference"}
+	listener.SetOneShotShipRunner(runner)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1)
+	assert.False(t, fakeCreator.pushCalled, "an unparseable PR reference must not trigger the mechanical fallback — a real PR may already exist from the agent's run")
+	assert.False(t, fakeCreator.createCalled, "CreatePR must never be attempted for an unparseable one-shot PR reference")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "must stay in review, not silently transition to pr_pending with an unpersisted/invalid PR number")
+	assert.Equal(t, 0, fetched.PrNumber, "must never persist a bogus PR number")
+	assert.Contains(t, notifier.titles(), "PR creation failed", "operator must be notified rather than the verdict silently vanishing into an invisible pr_pending/pr_number=0 dead end")
 }
 
 // TestHandleReviewSessionExited_Pass_LiveWorkSession_DoesNotInvokePushAndCreatePR

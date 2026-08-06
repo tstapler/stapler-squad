@@ -249,6 +249,7 @@ type prCreator interface {
 	CreatePR(title, body string) (prURL string, prNumber int, err error)
 	EnablePRAutoMerge(prNumber int) error
 	RequestCopilotReview(prNumber int) error
+	HasCommitsAheadOfMain(mainBranch string) (bool, error)
 }
 
 // defaultPRCreatorFactory constructs the push/PR-creation client for a given
@@ -3499,14 +3500,34 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 	if ref, parseErr := ParseGitHubURL(prURL); parseErr == nil {
 		prNumber = ref.PRNumber
 	}
-	if prNumber > 0 {
-		prURLCopy, prNumCopy := prURL, prNumber
-		if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-			PrURL:    &prURLCopy,
-			PrNumber: &prNumCopy,
-		}, nil); updateErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback store PR fields item=%s: %v", item.ID, updateErr)
-		}
+	// BUG-063: prNumber<=0 (an unparseable/irrelevant prURL — e.g. the agent's
+	// final output happened to mention an unrelated existing PR rather than
+	// one it just created) must NOT fall through to the unconditional
+	// resolveToPRPending below. Doing so was the exact mechanism that landed
+	// an item in pr_pending with pr_number still 0: permanently invisible to
+	// every downstream reconciler's PrNumberGT(0) filter, with nothing left
+	// to retry. This mirrors the identical BUG-040 shape pushAndCreatePR was
+	// already fixed for (see its own PR-field-persist-failure handling below)
+	// — that fix was never propagated to this sibling call site until now.
+	// We can't tell whether the agent's one-shot actually created a real PR
+	// we simply failed to parse, so — like pushAndCreatePR's own persist
+	// failure — the safe choice is to stay in review and let a human (or the
+	// next TriggerReReview) sort it out, not silently retry PR creation and
+	// risk a duplicate.
+	if prNumber <= 0 {
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
+			fmt.Sprintf("agent-driven ship via one-shot /backlog/ship produced an unusable PR reference (%q)", prURL),
+			fmt.Errorf("could not parse a PR number from the one-shot ship output"))
+		return
+	}
+	prURLCopy, prNumCopy := prURL, prNumber
+	if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURLCopy,
+		PrNumber: &prNumCopy,
+	}, nil); updateErr != nil {
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
+			fmt.Sprintf("failed to persist PR #%d fields from agent-driven ship", prNumber), updateErr)
+		return
 	}
 	if transErr := l.resolveToPRPending(ctx, item.ID, "agent-driven ship via one-shot /backlog/ship", "shipViaAgentOrFallback"); transErr != nil {
 		// May just be a harmless race with RunOneShot's own RecordPRCreatedOutOfBand
@@ -3541,60 +3562,6 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		}
 	}
 
-	// stayInReviewAndNotify handles push/PR-creation failures. Unlike fallbackToDone,
-	// this must NOT transition the item to done: code was committed to the worktree but
-	// never reached GitHub, so marking it done would silently discard that fact. The
-	// item stays in review — a human can retry via TriggerReReview, or fix the underlying
-	// issue (auth, network, branch protection) and let the next review pass retry.
-	stayInReviewAndNotify := func(reason string, err error) {
-		log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s: %s: %v — leaving in review, code is committed but not shipped", item.ID, reason, err)
-
-		notifyToast := func() {
-			l.notify(item.ID,
-				"PR creation failed",
-				fmt.Sprintf("%s — %s: %v. Code is committed locally but not pushed; retry or investigate manually.", item.Title, reason, err),
-				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-			)
-		}
-
-		// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
-		// toast's dedup key below — without a durable repo to gate on, fall back
-		// to the old always-notify behavior rather than silently dropping the toast.
-		er, ok := l.storage.repo.(*EntRepository)
-		if !ok {
-			notifyToast()
-			return
-		}
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
-			fmt.Sprintf("%s: %v", reason, err))
-		if markErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR MarkStuck(push_failed) item=%s: %v", item.ID, markErr)
-			return
-		}
-		if !applied {
-			return
-		}
-
-		// Notify-once dedup (same pattern as markAbandonedReview and the other
-		// stuck reasons): MarkStuckNotified only flips notified_at nil -> now
-		// once per open stuck-state row, so repeated calls for the same
-		// still-open failure (e.g. a non-fast-forward push retried every
-		// reconciliation tick) skip the ephemeral ERROR toast after the first —
-		// this is what was previously firing a fresh "PR creation failed" toast
-		// every few seconds with no dedup. The toast fires again only once the
-		// row is resolved (push/PR succeeds) and later reopens on a new failure.
-		notifiedNow, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPushFailed)
-		if notifyErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR MarkStuckNotified(push_failed) item=%s: %v", item.ID, notifyErr)
-			return
-		}
-		if !notifiedNow {
-			return
-		}
-		notifyToast()
-	}
-
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
 	if wtErr != nil || wt.WorktreePath == "" {
 		fallbackToDone("no worktree")
@@ -3611,7 +3578,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 
 	// Push branch to origin.
 	if pushErr := g.PushBranch(); pushErr != nil {
-		stayInReviewAndNotify("push failed", pushErr)
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title, "push failed", pushErr)
 		return
 	}
 
@@ -3624,6 +3591,23 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		prNumber = item.PrNumber
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s reusing existing PR #%d", item.ID, prNumber)
 	} else {
+		// Pre-flight (BUG-063): a branch with zero commits ahead of main has
+		// genuinely nothing to ship — CreatePR below would fail with gh's "No
+		// commits between X and Y" error, which is not a retryable push/PR
+		// failure. A PASS verdict already confirmed the work (it's often
+		// already shipped by an earlier, unrelated PR), so route this case
+		// through fallbackToDone exactly like the "no worktree at all" case
+		// above, rather than leaving the item stuck in review forever behind
+		// an unresolvable push_failed row. Any error from the check itself is
+		// treated as inconclusive (HasCommitsAheadOfMain returns true), so a
+		// broken check never blocks a real PR creation attempt.
+		if hasCommits, aheadErr := g.HasCommitsAheadOfMain(bounceMainBranch); aheadErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR HasCommitsAheadOfMain item=%s: %v; proceeding with PR creation attempt", item.ID, aheadErr)
+		} else if !hasCommits {
+			fallbackToDone(fmt.Sprintf("branch %s has no commits ahead of %s — nothing to ship", wt.BranchName, bounceMainBranch))
+			return
+		}
+
 		prTitle := item.Title
 		prBody := buildFallbackPRBody(item)
 		if pool := l.getHeadlessPool(); pool != nil {
@@ -3639,7 +3623,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		var prErr error
 		prURL, prNumber, prErr = g.CreatePR(prTitle, prBody)
 		if prErr != nil {
-			stayInReviewAndNotify("PR creation failed", prErr)
+			l.stayInReviewAndNotify(ctx, item.ID, item.Title, "PR creation failed", prErr)
 			return
 		}
 		// Cache PR URL + number on the item so the reconciler and UI can use
@@ -3661,7 +3645,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			PrURL:    &prURLCopy,
 			PrNumber: &prNumCopy,
 		}, nil); updateErr != nil {
-			stayInReviewAndNotify(fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
+			l.stayInReviewAndNotify(ctx, item.ID, item.Title, fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
 			return
 		}
 	}
@@ -3707,6 +3691,66 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		return
 	}
 	log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
+}
+
+// stayInReviewAndNotify handles push/PR-creation failures for both
+// pushAndCreatePR and shipViaAgentOrFallback (BUG-063). Unlike fallbackToDone,
+// this must NOT transition the item: pushAndCreatePR's callers may have
+// committed code to the worktree that never reached GitHub, and
+// shipViaAgentOrFallback's caller cannot tell whether the agent-driven
+// one-shot actually created a real PR it just failed to parse/persist a
+// reference to — in both cases marking the item done or pr_pending would
+// risk silently discarding real work or duplicating a PR. The item stays in
+// review — a human can retry via TriggerReReview, or fix the underlying
+// issue (auth, network, branch protection, a storage error) and let the next
+// review pass retry.
+func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, itemID, itemTitle, reason string, err error) {
+	log.WarningLog.Printf("[BacklogLifecycle] item=%s: %s: %v — leaving in review", itemID, reason, err)
+
+	notifyToast := func() {
+		l.notify(itemID,
+			"PR creation failed",
+			fmt.Sprintf("%s — %s: %v. Retry or investigate manually.", itemTitle, reason, err),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+
+	// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
+	// toast's dedup key below — without a durable repo to gate on, fall back
+	// to the old always-notify behavior rather than silently dropping the toast.
+	er, ok := l.storage.repo.(*EntRepository)
+	if !ok {
+		notifyToast()
+		return
+	}
+	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		fmt.Sprintf("%s: %v", reason, err))
+	if markErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] MarkStuck(push_failed) item=%s: %v", itemID, markErr)
+		return
+	}
+	if !applied {
+		return
+	}
+
+	// Notify-once dedup (same pattern as markAbandonedReview and the other
+	// stuck reasons): MarkStuckNotified only flips notified_at nil -> now
+	// once per open stuck-state row, so repeated calls for the same
+	// still-open failure (e.g. a non-fast-forward push retried every
+	// reconciliation tick) skip the ephemeral ERROR toast after the first —
+	// this is what was previously firing a fresh "PR creation failed" toast
+	// every few seconds with no dedup. The toast fires again only once the
+	// row is resolved (push/PR succeeds) and later reopens on a new failure.
+	notifiedNow, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonPushFailed)
+	if notifyErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] MarkStuckNotified(push_failed) item=%s: %v", itemID, notifyErr)
+		return
+	}
+	if !notifiedNow {
+		return
+	}
+	notifyToast()
 }
 
 // resolveToPRPending performs the transition+resolve tail shared by every
