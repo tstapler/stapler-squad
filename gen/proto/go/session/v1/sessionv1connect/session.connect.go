@@ -222,6 +222,9 @@ const (
 	// SessionServiceResolveDefaultsProcedure is the fully-qualified name of the SessionService's
 	// ResolveDefaults RPC.
 	SessionServiceResolveDefaultsProcedure = "/session.v1.SessionService/ResolveDefaults"
+	// SessionServicePreviewDestinationPathProcedure is the fully-qualified name of the SessionService's
+	// PreviewDestinationPath RPC.
+	SessionServicePreviewDestinationPathProcedure = "/session.v1.SessionService/PreviewDestinationPath"
 	// SessionServiceUpdateGlobalDefaultsProcedure is the fully-qualified name of the SessionService's
 	// UpdateGlobalDefaults RPC.
 	SessionServiceUpdateGlobalDefaultsProcedure = "/session.v1.SessionService/UpdateGlobalDefaults"
@@ -547,6 +550,10 @@ type SessionServiceClient interface {
 	// ResolveDefaults merges all default layers for a given working directory and optional profile.
 	// Returns the resolved values plus source metadata for per-field badges in the UI.
 	ResolveDefaults(context.Context, *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error)
+	// PreviewDestinationPath computes where a session's checkout/worktree would land,
+	// without performing any git or filesystem mutation. Used by the Omnibar to show a
+	// live destination hint before the user submits session creation.
+	PreviewDestinationPath(context.Context, *connect.Request[v1.PreviewDestinationPathRequest]) (*connect.Response[v1.PreviewDestinationPathResponse], error)
 	// UpdateGlobalDefaults replaces the global default fields.
 	UpdateGlobalDefaults(context.Context, *connect.Request[v1.UpdateGlobalDefaultsRequest]) (*connect.Response[v1.UpdateGlobalDefaultsResponse], error)
 	// UpsertProfile creates or updates a named profile.
@@ -1062,6 +1069,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("ResolveDefaults")),
 			connect.WithClientOptions(opts...),
 		),
+		previewDestinationPath: connect.NewClient[v1.PreviewDestinationPathRequest, v1.PreviewDestinationPathResponse](
+			httpClient,
+			baseURL+SessionServicePreviewDestinationPathProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("PreviewDestinationPath")),
+			connect.WithClientOptions(opts...),
+		),
 		updateGlobalDefaults: connect.NewClient[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse](
 			httpClient,
 			baseURL+SessionServiceUpdateGlobalDefaultsProcedure,
@@ -1425,6 +1438,7 @@ type sessionServiceClient struct {
 	listPathCompletions          *connect.Client[v1.ListPathCompletionsRequest, v1.ListPathCompletionsResponse]
 	getSessionDefaults           *connect.Client[v1.GetSessionDefaultsRequest, v1.GetSessionDefaultsResponse]
 	resolveDefaults              *connect.Client[v1.ResolveDefaultsRequest, v1.ResolveDefaultsResponse]
+	previewDestinationPath       *connect.Client[v1.PreviewDestinationPathRequest, v1.PreviewDestinationPathResponse]
 	updateGlobalDefaults         *connect.Client[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse]
 	upsertProfile                *connect.Client[v1.UpsertProfileRequest, v1.UpsertProfileResponse]
 	deleteProfile                *connect.Client[v1.DeleteProfileRequest, v1.DeleteProfileResponse]
@@ -1794,6 +1808,11 @@ func (c *sessionServiceClient) GetSessionDefaults(ctx context.Context, req *conn
 // ResolveDefaults calls session.v1.SessionService.ResolveDefaults.
 func (c *sessionServiceClient) ResolveDefaults(ctx context.Context, req *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error) {
 	return c.resolveDefaults.CallUnary(ctx, req)
+}
+
+// PreviewDestinationPath calls session.v1.SessionService.PreviewDestinationPath.
+func (c *sessionServiceClient) PreviewDestinationPath(ctx context.Context, req *connect.Request[v1.PreviewDestinationPathRequest]) (*connect.Response[v1.PreviewDestinationPathResponse], error) {
+	return c.previewDestinationPath.CallUnary(ctx, req)
 }
 
 // UpdateGlobalDefaults calls session.v1.SessionService.UpdateGlobalDefaults.
@@ -2217,6 +2236,10 @@ type SessionServiceHandler interface {
 	// ResolveDefaults merges all default layers for a given working directory and optional profile.
 	// Returns the resolved values plus source metadata for per-field badges in the UI.
 	ResolveDefaults(context.Context, *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error)
+	// PreviewDestinationPath computes where a session's checkout/worktree would land,
+	// without performing any git or filesystem mutation. Used by the Omnibar to show a
+	// live destination hint before the user submits session creation.
+	PreviewDestinationPath(context.Context, *connect.Request[v1.PreviewDestinationPathRequest]) (*connect.Response[v1.PreviewDestinationPathResponse], error)
 	// UpdateGlobalDefaults replaces the global default fields.
 	UpdateGlobalDefaults(context.Context, *connect.Request[v1.UpdateGlobalDefaultsRequest]) (*connect.Response[v1.UpdateGlobalDefaultsResponse], error)
 	// UpsertProfile creates or updates a named profile.
@@ -2728,6 +2751,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("ResolveDefaults")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServicePreviewDestinationPathHandler := connect.NewUnaryHandler(
+		SessionServicePreviewDestinationPathProcedure,
+		svc.PreviewDestinationPath,
+		connect.WithSchema(sessionServiceMethods.ByName("PreviewDestinationPath")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceUpdateGlobalDefaultsHandler := connect.NewUnaryHandler(
 		SessionServiceUpdateGlobalDefaultsProcedure,
 		svc.UpdateGlobalDefaults,
@@ -3152,6 +3181,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceGetSessionDefaultsHandler.ServeHTTP(w, r)
 		case SessionServiceResolveDefaultsProcedure:
 			sessionServiceResolveDefaultsHandler.ServeHTTP(w, r)
+		case SessionServicePreviewDestinationPathProcedure:
+			sessionServicePreviewDestinationPathHandler.ServeHTTP(w, r)
 		case SessionServiceUpdateGlobalDefaultsProcedure:
 			sessionServiceUpdateGlobalDefaultsHandler.ServeHTTP(w, r)
 		case SessionServiceUpsertProfileProcedure:
@@ -3513,6 +3544,10 @@ func (UnimplementedSessionServiceHandler) GetSessionDefaults(context.Context, *c
 
 func (UnimplementedSessionServiceHandler) ResolveDefaults(context.Context, *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ResolveDefaults is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) PreviewDestinationPath(context.Context, *connect.Request[v1.PreviewDestinationPathRequest]) (*connect.Response[v1.PreviewDestinationPathResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.PreviewDestinationPath is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) UpdateGlobalDefaults(context.Context, *connect.Request[v1.UpdateGlobalDefaultsRequest]) (*connect.Response[v1.UpdateGlobalDefaultsResponse], error) {

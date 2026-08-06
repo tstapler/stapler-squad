@@ -1347,27 +1347,7 @@ func (s *SessionService) CreateSession(
 	// accounts (gh CLI import, device auth) — mirrors ListGitHubAccounts'
 	// host union in github_user_service.go so CreateSession recognizes the
 	// same enterprise URLs the omnibar's detector does.
-	configuredHosts := cfg.GetGitHubEnterpriseHosts()
-	var cachedAccounts []githubpkg.CachedAccount
-	if s.userPRCache != nil {
-		cachedAccounts = s.userPRCache.GetCachedAccounts()
-	}
-	seenHosts := make(map[string]bool, len(configuredHosts)+len(cachedAccounts))
-	enterpriseHosts := make([]string, 0, len(configuredHosts)+len(cachedAccounts))
-	addEnterpriseHost := func(host string) {
-		host = githubpkg.NormalizeHost(host)
-		if host == "" || githubpkg.IsGitHubCom(host) || seenHosts[host] {
-			return
-		}
-		seenHosts[host] = true
-		enterpriseHosts = append(enterpriseHosts, host)
-	}
-	for _, h := range configuredHosts {
-		addEnterpriseHost(h.Host)
-	}
-	for _, a := range cachedAccounts {
-		addEnterpriseHost(a.Host)
-	}
+	enterpriseHosts := s.enterpriseHosts(cfg)
 
 	if session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
@@ -1715,6 +1695,82 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) sess
 		return session.SessionTypeNewWorktree
 	}
 	return session.SessionTypeDirectory
+}
+
+// enterpriseHosts unions statically-configured GitHub Enterprise hosts with hosts
+// from dynamically-added accounts (gh CLI import, device auth) — mirrors
+// ListGitHubAccounts' host union in github_user_service.go so every caller
+// recognizes the same enterprise URLs the omnibar's detector does. CreateSession
+// and PreviewDestinationPath both call this so the two never diverge.
+func (s *SessionService) enterpriseHosts(cfg *config.Config) []string {
+	configuredHosts := cfg.GetGitHubEnterpriseHosts()
+	var cachedAccounts []githubpkg.CachedAccount
+	if s.userPRCache != nil {
+		cachedAccounts = s.userPRCache.GetCachedAccounts()
+	}
+	seenHosts := make(map[string]bool, len(configuredHosts)+len(cachedAccounts))
+	hosts := make([]string, 0, len(configuredHosts)+len(cachedAccounts))
+	addHost := func(host string) {
+		host = githubpkg.NormalizeHost(host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seenHosts[host] {
+			return
+		}
+		seenHosts[host] = true
+		hosts = append(hosts, host)
+	}
+	for _, h := range configuredHosts {
+		addHost(h.Host)
+	}
+	for _, a := range cachedAccounts {
+		addHost(a.Host)
+	}
+	return hosts
+}
+
+// PreviewDestinationPath computes where a session's checkout/worktree would land
+// without performing any git or filesystem mutation. Used by the Omnibar to show a
+// live destination hint before the user submits session creation.
+// +api: session:preview-destination-path
+func (s *SessionService) PreviewDestinationPath(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PreviewDestinationPathRequest],
+) (*connect.Response[sessionv1.PreviewDestinationPathResponse], error) {
+	cfg := config.LoadConfig()
+
+	switch req.Msg.Mode {
+	case "github_url":
+		ref, err := session.ParseGitHubURLWithHosts(req.Msg.Input, s.enterpriseHosts(cfg))
+		if err != nil {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: "not a recognized GitHub URL",
+			}), nil
+		}
+		path := session.DefaultRepoPathManager.GetRepoPath(ref)
+		return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+			Path:    path,
+			IsExact: true,
+		}), nil
+
+	case "new_worktree":
+		if req.Msg.RepoPath == "" || req.Msg.SessionName == "" {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: "repo_path and session_name are required",
+			}), nil
+		}
+		prefix, err := git.PreviewWorktreePath(req.Msg.RepoPath, req.Msg.SessionName)
+		if err != nil {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: fmt.Sprintf("could not resolve repo path: %v", err),
+			}), nil
+		}
+		return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+			Path:    prefix,
+			IsExact: false,
+		}), nil
+
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown mode: %q", req.Msg.Mode))
+	}
 }
 
 // classifyPauseResumeErr maps a Pause()/Resume() error to the appropriate connect

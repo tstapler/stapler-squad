@@ -137,6 +137,12 @@ export interface OmnibarCreationPanelProps {
   pathDoesNotExist?: boolean;
   /** Name prefix from alias detection (e.g. "ssq-"). Used to hint that the user should type a label after it. */
   namePrefix?: string;
+  /** Live preview of the destination checkout path (github_url or new_worktree mode). */
+  destinationPreviewPath?: string | null;
+  /** True when destinationPreviewPath is the exact clone destination (github_url mode only). */
+  destinationPreviewIsExact?: boolean;
+  /** True while the destination path preview request is in flight. */
+  isDestinationPreviewLoading?: boolean;
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -168,6 +174,9 @@ export function OmnibarCreationPanel({
   onAttachedImagesChange,
   pathDoesNotExist,
   namePrefix = "",
+  destinationPreviewPath = null,
+  destinationPreviewIsExact = false,
+  isDestinationPreviewLoading = false,
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes,
@@ -451,6 +460,14 @@ export function OmnibarCreationPanel({
           )}
         </div>
 
+        {/* GitHub URL destination preview — exact clone destination, shown before the
+            mode selector since it applies regardless of which session type is chosen. */}
+        {destinationPreviewIsExact && destinationPreviewPath && (
+          <div className={hint} style={{ marginTop: 0 }}>
+            Will check out to: <code>{destinationPreviewPath}</code>
+          </div>
+        )}
+
         {/* Session Type — ARIA radio group (ADR-003: arrow keys cycle) */}
         <div className={field}>
           <SessionTypeRadioGroup
@@ -620,6 +637,11 @@ export function OmnibarCreationPanel({
                   ? `Branch name will be: ${sessionName || "(enter session name)"}`
                   : "Branch to create for the new worktree"}
               </span>
+              {!isDestinationPreviewLoading && destinationPreviewPath && !destinationPreviewIsExact && (
+                <span className={hint}>
+                  Will be created under: <code>{destinationPreviewPath}_&lt;unique-id&gt;</code>
+                </span>
+              )}
             </div>
           </>
         )}

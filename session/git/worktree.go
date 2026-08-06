@@ -3,11 +3,13 @@ package git
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -210,6 +212,57 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 		worktreePath: worktreePath,
 		cmdExec:      cmdExec,
 	}, branchName, nil
+}
+
+// PreviewWorktreePath returns the directory PREFIX a new worktree would be created
+// under - the same filepath.Join(worktreeDir, sanitizeBranchName(sessionName)) that
+// NewGitWorktreeWithBranchAndExecutor computes, WITHOUT the "_<random-suffix>" it
+// appends at actual creation time (that suffix can't be predicted ahead of the call).
+// Performs no git subprocess calls (deliberately skips the existing-worktree-for-branch
+// lookup, which shells out to "git worktree list") and, unlike findGitRepoRoot, never
+// mutates the filesystem: it only walks up from repoPath looking for an existing git
+// repo. A preview is called on every Omnibar keystroke, so it must be a pure read - it
+// must not create directories, run `git init`, or create commits the way
+// findGitRepoRoot's create-if-missing fallback does for the real creation path.
+func PreviewWorktreePath(repoPath, sessionName string) (string, error) {
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+
+	if _, err := findExistingGitRepoRootReadOnly(absPath); err != nil {
+		return "", err
+	}
+
+	worktreeDir, err := getWorktreeDirectory()
+	if err != nil {
+		return "", err
+	}
+
+	sanitizedName := sanitizeBranchName(sessionName)
+	return filepath.Join(worktreeDir, sanitizedName), nil
+}
+
+// findExistingGitRepoRootReadOnly walks up from path looking for an existing git
+// repository, without creating or modifying anything on disk. Unlike findGitRepoRoot,
+// it errors on a missing directory and does not require the repo to have any commits.
+func findExistingGitRepoRootReadOnly(path string) (string, error) {
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("path does not exist: %s", path)
+	}
+
+	currentPath := path
+	for {
+		if _, err := git.PlainOpen(currentPath); err == nil {
+			return currentPath, nil
+		}
+
+		parent := filepath.Dir(currentPath)
+		if parent == currentPath {
+			return "", fmt.Errorf("failed to find Git repository root from path: %s", path)
+		}
+		currentPath = parent
+	}
 }
 
 // GetWorktreePath returns the path to the worktree
