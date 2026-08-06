@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -139,7 +140,7 @@ type backlogHandlers struct {
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
-	verifyPRMatchesBranch func(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (bool, error)
+	verifyPRMatchesBranch func(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error)
 	// resolveSessionBranch resolves the git branch a session UUID is working
 	// on, used by report_pr_created to determine "this item's own branch"
 	// before trusting a self-reported PR against it. Defaults to
@@ -179,6 +180,13 @@ type backlogHandlers struct {
 	// two concurrent request_review calls — mirrors listItemSessionsFn's
 	// existing shape.
 	getBacklogItemFn func(ctx context.Context, itemID string) (*session.BacklogItemData, error)
+
+	// resolveCallerGitHubLogin resolves the GitHub login of the identity this
+	// server is authenticated as, used by report_pr_created's override path
+	// to confirm the self-reported PR was authored by the same identity
+	// making the call. Defaults to githubpkg.GetCurrentUserLogin when nil;
+	// overridable in tests to avoid making a real GitHub API call.
+	resolveCallerGitHubLogin func(ctx context.Context) (string, error)
 }
 
 // --- get_backlog_item ---
@@ -282,7 +290,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
 		fmt.Fprintf(&sb, "4. Do NOT end your session after request_review. Wait a bit, then call get_backlog_item again — once a verdict lands it appears under \"Latest Review Verdict\" above. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again. Track how many times you've called request_review in this session (count your own calls in this conversation) — after %d cycles without a PASS, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
-		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator.\n")
+		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
 		sb.WriteString("Verify each acceptance criterion is met. Do NOT modify source code or call report_progress.\n\n")
@@ -769,11 +777,68 @@ func (h *backlogHandlers) sessionBranch(ctx context.Context, sessionUUID string)
 
 // verifyPR runs the GitHub cross-check via the overridable verifyPRMatchesBranch
 // seam when set, otherwise the real VerifyPRMatchesBranch (tools_github.go).
-func (h *backlogHandlers) verifyPR(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (bool, error) {
+func (h *backlogHandlers) verifyPR(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error) {
 	if h.verifyPRMatchesBranch != nil {
 		return h.verifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
 	}
 	return VerifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
+}
+
+// callerGitHubLogin resolves the GitHub login this server is authenticated
+// as, via the overridable resolveCallerGitHubLogin seam when set, otherwise
+// the real githubpkg.GetCurrentUserLogin.
+func (h *backlogHandlers) callerGitHubLogin(ctx context.Context) (string, error) {
+	if h.resolveCallerGitHubLogin != nil {
+		return h.resolveCallerGitHubLogin(ctx)
+	}
+	return githubpkg.GetCurrentUserLogin(ctx)
+}
+
+// decideOverridePolicy is the pure decision function behind
+// report_pr_created's fallback-branch override path. It takes the
+// GitHub-verified PRVerification plus the caller's override_reason and
+// resolved GitHub identity, and decides whether the self-reported PR may be
+// recorded even though its head branch (per GitHub) doesn't match this
+// item's tracked branch. It is a pure function of its three inputs (no ctx,
+// no I/O) so the branching itself — the part architecture-review.md flagged
+// as needing isolation from reportPRCreated's storage/item/session
+// machinery — is directly unit-testable (see TestDecideOverridePolicy).
+//
+// Every accept==false outcome here ends up surfaced by reportPRCreated as
+// ErrInvalidArgument; code is not that MCP-level code but an internal
+// discriminator distinguishing *which* of the four rejection reasons fired,
+// since reportPRCreated needs to build a different, prNumber/branch-specific
+// message for each and none of that request context is available inside
+// this function. msg carries whatever case-specific text decideOverridePolicy
+// *can* build from v/overrideReason/callerLogin alone; reportPRCreated
+// composes the final, exact message around it.
+//
+// Check ordering — exists, then matched (fast path), then reason, then
+// author, then state — is load-bearing: existence can never be overridden,
+// so it's checked first regardless of everything else. Author-match is
+// checked before the state gate so a PR failing both surfaces the more
+// fundamental "this isn't your PR" reason rather than a "not open/merged,
+// try again later" reason that invites a misleading retry.
+func decideOverridePolicy(v PRVerification, overrideReason, callerLogin string) (accept bool, code connect.Code, msg string) {
+	if !v.Exists {
+		return false, connect.CodeNotFound, "PR does not exist"
+	}
+	if v.Matched {
+		return true, connect.Code(0), ""
+	}
+	if overrideReason == "" {
+		return false, connect.CodeInvalidArgument, "override_reason is required when the PR's head branch does not match this item's tracked branch"
+	}
+	if callerLogin == "" || v.Author == "" || v.Author != callerLogin {
+		return false, connect.CodePermissionDenied, fmt.Sprintf(
+			"PR was authored by %q, not your own GitHub identity (%q) — the override path can only attach PRs you authored yourself. Refusing to record it.",
+			v.Author, callerLogin)
+	}
+	if v.State != githubpkg.PRStateOpen && v.State != githubpkg.PRStateMerged {
+		return false, connect.CodeFailedPrecondition, fmt.Sprintf(
+			"PR is %s (not open or merged) — refusing to record it even with override_reason.", v.State)
+	}
+	return true, connect.Code(0), ""
 }
 
 // reportPRCreated records a PR the calling work session created itself
@@ -825,6 +890,15 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInvalidArgument, "summary must be <= 1000 characters", ""), nil
 	}
 
+	// override_reason is optional — only required when GitHub's view of the
+	// PR's head branch doesn't match this item's tracked branch. See
+	// decideOverridePolicy below.
+	overrideReason, _ := args["override_reason"].(string)
+	overrideReason = strings.TrimSpace(overrideReason)
+	if len(overrideReason) > 500 {
+		return errResult(ErrInvalidArgument, "override_reason must be <= 500 characters", ""), nil
+	}
+
 	// Verify session is linked to item with role=work.
 	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
 	if linkErr != nil {
@@ -871,14 +945,52 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInternalError, "could not resolve this session's git branch to verify the reported PR", ""), nil
 	}
 
-	matched, verifyErr := h.verifyPR(ctx, ref.Owner, ref.Repo, prNumber, branch)
+	verification, verifyErr := h.verifyPR(ctx, ref.Owner, ref.Repo, prNumber, branch)
 	if verifyErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("could not verify PR #%d against GitHub — retry: %v", prNumber, verifyErr), ""), nil
 	}
-	if !matched {
-		return errResult(ErrInvalidArgument, fmt.Sprintf(
-			"PR #%d does not match this item's branch %q on GitHub — refusing to record it. Double-check the PR number/URL.",
-			prNumber, branch), ""), nil
+
+	// Only resolve the caller's own GitHub identity when we're actually on a
+	// path decideOverridePolicy could accept: never on the fast path (no
+	// identity lookup needed — the item's own tracked branch is already
+	// trusted), never when the PR doesn't exist (existence can never be
+	// overridden regardless of authorship), and never when override_reason
+	// is empty (a call already doomed to reject for a missing reason
+	// shouldn't pay for a GitHub API call it doesn't need).
+	var callerLogin string
+	if verification.Exists && !verification.Matched && overrideReason != "" {
+		login, loginErr := h.callerGitHubLogin(ctx)
+		if loginErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("could not resolve your GitHub identity to verify the override — retry: %v", loginErr), ""), nil
+		}
+		callerLogin = login
+	}
+
+	accept, code, _ := decideOverridePolicy(verification, overrideReason, callerLogin)
+	if !accept {
+		var msg string
+		switch code {
+		case connect.CodeNotFound:
+			msg = fmt.Sprintf("PR #%d does not exist in %s/%s on GitHub — refusing to record it. Double-check the PR number/URL.",
+				prNumber, ref.Owner, ref.Repo)
+		case connect.CodePermissionDenied:
+			msg = fmt.Sprintf(
+				"PR #%d was authored by %q, not your own GitHub identity (%q) — the override path can only attach PRs you authored yourself. Refusing to record it.",
+				prNumber, verification.Author, callerLogin)
+		case connect.CodeFailedPrecondition:
+			msg = fmt.Sprintf("PR #%d is %s (not open or merged) — refusing to record it even with override_reason.",
+				prNumber, verification.State)
+		default: // connect.CodeInvalidArgument — missing override_reason (AC3)
+			msg = fmt.Sprintf(
+				"PR #%d's head branch on GitHub is %q, not this item's tracked branch %q — refusing to record it. "+
+					"If %q was polluted (e.g. by another session sharing this worktree) and you opened this PR from a clean fallback branch instead, "+
+					"retry this exact call with an additional override_reason argument explaining why, e.g. "+
+					"override_reason=\"tracked branch had unrelated commits from a shared worktree; opened PR from a clean branch instead\". "+
+					"The override path additionally requires that PR #%d was authored by your own GitHub identity — it cannot be used to attach a PR someone/something else opened. "+
+					"If PR #%d is unrelated to this item, do not retry — find and report the correct PR instead.",
+				prNumber, verification.ActualHeadBranch, branch, branch, prNumber, prNumber)
+		}
+		return errResult(ErrInvalidArgument, msg, ""), nil
 	}
 
 	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, itemID, prURL, prNumber, summary); setErr != nil {
@@ -886,6 +998,20 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	}
 
 	log.InfoLog.Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
+
+	if !verification.Matched {
+		// The override path was actually taken (not the fast path) — audit
+		// it, since this path has no technical human gate.
+		log.Warn("report_pr_created: recording PR via override (head branch differs from tracked branch)",
+			"session", callerUUID,
+			"item", itemID,
+			"pr_number", prNumber,
+			"actual_head_branch", verification.ActualHeadBranch,
+			"tracked_branch", branch,
+			"pr_author", verification.Author,
+			"override_reason", overrideReason,
+		)
+	}
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"PR #%d recorded for item %s. Item transitioned to pr_pending.", prNumber, itemID,
@@ -1588,8 +1714,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("report_pr_created",
-			mcpgo.WithDescription("Report a pull request YOU created (e.g. via /backlog:ship or a manual `gh pr create`) back onto this backlog item. Role: work only. Call this as the final step any time you create a PR yourself instead of letting the system create one for you — otherwise the item never shows the PR and stays invisible to the reviewer and the operator. "+
+			mcpgo.WithDescription("Report a pull request YOU created (e.g. via /backlog/ship or a manual `gh pr create`) back onto this backlog item. Role: work only. Call this as the final step any time you create a PR yourself instead of letting the system create one for you — otherwise the item never shows the PR and stays invisible to the reviewer and the operator. "+
 				"The reported PR is verified against GitHub (it must exist and its head branch must match this session's own branch) before being trusted — a mismatched or invalid PR is rejected, not silently recorded. "+
+				"If the PR's head branch doesn't match this item's tracked branch (e.g. the tracked branch was polluted by another session sharing this worktree, so you opened the PR from a clean branch instead), pass override_reason to record it anyway — gated by an explicit reason AND by the PR having been authored by this same GitHub identity; it cannot be used to attach a PR someone/something else opened. "+
 				"On success, the item transitions from review to pr_pending. Calling this again with the same PR after it already succeeded is safe (no-op)."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
@@ -1607,6 +1734,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			mcpgo.WithString("summary",
 				mcpgo.Description("What changed and why (max 1000 chars) — shown to the reviewer/operator alongside the PR link so they see why the PR exists, not just a bare link"),
 				mcpgo.Required(),
+			),
+			mcpgo.WithString("override_reason",
+				mcpgo.Description("Only required when the PR's actual head branch (per GitHub) differs from this item's tracked branch — e.g. the tracked branch was polluted by another session sharing this worktree, so you opened the PR from a clean branch instead. Explain why in one sentence; it is recorded in the server log as an audit trail. Omit when the PR's head branch matches the tracked branch. The PR must also have been authored by this same GitHub identity — the override path cannot attach a PR someone/something else opened, even with a reason."),
 			),
 		),
 		h.reportPRCreated,
