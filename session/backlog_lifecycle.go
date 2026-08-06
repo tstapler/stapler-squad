@@ -861,6 +861,30 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		return
 	}
 
+	// Snapshot before this call's own bookkeeping (below) overwrites it: a
+	// non-nil EndedAt here means some OTHER code path already deliberately
+	// closed this session out before this exit event even arrived, and that
+	// path — not this one — owns whatever should happen next. See BUG-064:
+	// RemediateStaleWorkSession ends a stale work session's ItemSession row
+	// and kills its tmux pane (KillTmuxPaneOnly -> Instance.KillSession) before
+	// calling AutoRespawnAutonomousWork to give the item a fresh work-session
+	// turn. Killing the pane fires this exact onSessionExited path
+	// asynchronously, in its own goroutine (instanceBacklogListener.
+	// OnLifecycleEvent), racing AutoRespawnAutonomousWork's synchronous
+	// respawn. This handler's DB-only work is reliably faster than
+	// AutoRespawnAutonomousWork's (GetBacklogItem + ListItemSessions +
+	// tombstone + SpawnSessionFromItem), so without this guard it wins nearly
+	// every time — flipping status to review out from under
+	// AutoRespawnAutonomousWork, whose own "already moved on" guard then
+	// silently no-ops (no error, no log line), permanently discarding the
+	// intended fresh work session and instead re-reviewing the exact same
+	// stale, already-rejected diff. Confirmed live (item 2d7fac56,
+	// 2026-08-06T00:44:12): staplersquad.log shows "ended stale work
+	// session=...respawning" immediately followed by "transitioned to review"
+	// for the very same session, with no AutoRespawnAutonomousWork log line
+	// ever appearing.
+	alreadyEndedByOtherPath := is.EndedAt != nil
+
 	// Record end time for all session roles (triage, review, work).
 	now := time.Now()
 	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition bookkeeping timestamp; the zombie-session detector (reconcileStuckReviewItems) falls back to SessionLivenessChecker rather than relying solely on EndedAt, so a failed write here doesn't fully hide a dead session
@@ -881,6 +905,16 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	case SessionRoleWork:
 		// fall through to the in_progress→review/done logic below.
 	default:
+		return
+	}
+
+	if alreadyEndedByOtherPath {
+		// Whoever closed this session out ahead of this exit event already
+		// owns the follow-up (e.g. AutoRespawnAutonomousWork deciding whether
+		// to spawn a fresh work session) — driving our own status transition
+		// here would race it and, per BUG-064, reliably win, silently
+		// discarding that follow-up. Nothing further to do.
+		log.DebugLog.Printf("[BacklogLifecycle] onSessionExited item=%s session=%s: already ended by another code path before this exit event; skipping status transition", is.BacklogItemID, sessionUUID)
 		return
 	}
 

@@ -1659,6 +1659,26 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 // by whichever of the rework cap or MaxRemediationAttempts (session/
 // backlog_remediation.go) is tighter, never solely by a rework cap an
 // operator may have set to 0 (unlimited) for a different reason.
+//
+// BUG-064: UpdateItemSessionEnded runs BEFORE KillTmuxPaneOnly, deliberately
+// — not just cosmetically — ordered this way. Killing the tmux pane fires
+// the Instance's EventStopped lifecycle notification, which
+// session.BacklogLifecycleListener.onSessionExited (session/
+// backlog_lifecycle.go) handles in its own goroutine by unconditionally
+// transitioning any in_progress item straight to "review" the moment a work
+// ItemSession's EndedAt is observed set. Live evidence (backlog item
+// 2d7fac56, 2026-08-06): that goroutine's transition raced ahead of this
+// function's own AutoRespawnAutonomousWork call below — which no-ops once
+// item.Status is no longer in_progress ("already moved on ... nothing to
+// do") — so the stale session was killed but no fresh work session was ever
+// spawned, and the item silently went straight back into review carrying the
+// exact same (already twice-PARTIAL) diff instead of getting a fresh turn
+// budget. Ending the session here first, before the kill, guarantees
+// (program-order happens-before, not a race) that whenever onSessionExited's
+// goroutine eventually runs, it observes EndedAt already non-nil for this
+// session and skips its own transition (see onSessionExited's own guard),
+// leaving this function's AutoRespawnAutonomousWork call as the sole decider
+// of what happens next.
 func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID string) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
@@ -1694,21 +1714,23 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 		return s.AutoRespawnAutonomousWork(ctx, itemID)
 	}
 
+	// End the ItemSession row BEFORE killing the pane (BUG-064 — see doc
+	// comment above): this ordering is what lets onSessionExited's
+	// already-ended guard close the race with AutoRespawnAutonomousWork below.
+	now := time.Now()
+	if endErr := s.storage.UpdateItemSessionEnded(ctx, active.ID, now); endErr != nil {
+		return fmt.Errorf("end stale work session %s: %w", active.ID, endErr)
+	}
+
 	// Kill the stale tmux pane only (Instance.KillSession, NOT Instance.Kill),
 	// keeping the worktree intact so any in-progress but uncommitted work
 	// survives for the next work session to pick up. Best-effort: even if the
-	// kill fails (session already gone, tmux server hiccup), still tombstone
-	// the DB row and respawn below rather than leaving the item stranded on a
-	// pure kill failure.
+	// kill fails (session already gone, tmux server hiccup), still respawn
+	// below rather than leaving the item stranded on a pure kill failure.
 	if s.sessionStopper != nil {
 		if killErr := s.sessionStopper.KillTmuxPaneOnly(ctx, active.SessionUUID); killErr != nil {
 			log.WarningLog.Printf("[RemediateStaleWorkSession] item=%s session=%s: kill failed (continuing): %v", itemID, active.SessionUUID, killErr)
 		}
-	}
-
-	now := time.Now()
-	if endErr := s.storage.UpdateItemSessionEnded(ctx, active.ID, now); endErr != nil {
-		return fmt.Errorf("end stale work session %s: %w", active.ID, endErr)
 	}
 	log.InfoLog.Printf("[RemediateStaleWorkSession] item=%s ended stale work session=%s (session_uuid=%s), respawning", itemID, active.ID, active.SessionUUID)
 
