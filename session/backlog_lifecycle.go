@@ -3204,18 +3204,41 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems CountReviewCyclesSince item=%s: %v", item.ID, countErr)
 			continue
 		}
-		outcome, verdictErr := er.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+		// Fetch the full most-recent verdict (outcome + reviewer summary), not
+		// just the outcome, so a bouncing item's stuck-state context can
+		// surface *why* the last attempt failed instead of only that it did
+		// (BUG-060, the same discard-after-fetch shape BUG-059 fixed for
+		// orphaned_triage's EndReason). Across a multi-cycle bounce there may
+		// be several different verdicts; only the single most recent one is
+		// surfaced here — proportional to a diagnostic string, not a full
+		// verdict history. GetRecentReviewVerdictSummaries runs the identical
+		// "most recent ItemSession with a verdict" query
+		// GetMostRecentReviewVerdictForItem uses, so limit 1 returns the same
+		// verdict either would.
+		recentVerdicts, verdictErr := er.GetRecentReviewVerdictSummaries(ctx, item.ID, 1)
 		if verdictErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems GetMostRecentReviewVerdictForItem item=%s: %v", item.ID, verdictErr)
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems GetRecentReviewVerdictSummaries item=%s: %v", item.ID, verdictErr)
 		}
-		hasPass := outcome == ReviewOutcomePass
+		var latestOutcome, latestSummary string
+		if len(recentVerdicts) > 0 {
+			latestOutcome = recentVerdicts[0].OverallOutcome
+			latestSummary = recentVerdicts[0].Summary
+		}
+		hasPass := latestOutcome == string(ReviewOutcomePass)
 
 		if !isBouncing(count, hasPass) {
 			continue
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatus(item.Status),
-			fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, bounceLookback))
+		reasonDetail := fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, bounceLookback)
+		if latestOutcome != "" {
+			// sanitizeField at 500 matches the existing convention for
+			// rendering a ReviewVerdict.Summary into operator/agent-facing
+			// text (see backlog_context.go, backlog_review.go).
+			reasonDetail = fmt.Sprintf("%s (most recent verdict: %s — %s)", reasonDetail, latestOutcome, sanitizeField(latestSummary, 500))
+		}
+
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems MarkStuck item=%s: %v", item.ID, markErr)
 			continue
@@ -3233,9 +3256,13 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			continue
 		}
 		log.WarningLog.Printf("[BacklogLifecycle] item %s bouncing (%d cycles in %s, no PASS)", item.ID, count, bounceLookback)
+		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, bounceLookback)
+		if latestOutcome != "" {
+			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, sanitizeField(latestSummary, 500))
+		}
 		l.notify(item.ID,
 			"Item is thrashing between work and review",
-			fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, bounceLookback),
+			notifyBody,
 			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)
