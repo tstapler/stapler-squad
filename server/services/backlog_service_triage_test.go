@@ -3985,3 +3985,104 @@ func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRec
 	require.NoError(t, err)
 	assert.Empty(t, open, "the periodic tick must resolve the row once the session recovers")
 }
+
+// ─── BUG-062: repo_path must be validated before it reaches the headless
+// subprocess's WorkDir ──────────────────────────────────────────────────────
+//
+// A bare relative slug (e.g. "stapler-squad", a caller mistake filing a
+// backlog item via the create_backlog_item/import_github_issue MCP tools) was
+// previously passed straight through to headless.CallOptions.WorkDir with no
+// validation. os/exec.Cmd.Dir has a well-documented quirk: when Dir doesn't
+// exist, the fork/exec error names the EXECUTABLE path, not the directory —
+// e.g. "fork/exec /home/user/.local/bin/claude: no such file or directory" —
+// which looks exactly like the claude binary is missing even though the real
+// problem is the bogus working directory. These three tests cover: reject a
+// relative path, reject a non-existent absolute path, and the happy-path
+// regression guard (a valid absolute existing directory must still work).
+
+func TestTriggerTriage_should_RejectRelativeRepoPath_Before_CreatingAnyItemSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "bare-slug repo_path item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: "stapler-squad", // caller mistake: bare slug, not an absolute path
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(trigErr))
+	assert.Contains(t, trigErr.Error(), "stapler-squad")
+	assert.Contains(t, trigErr.Error(), "not an absolute path")
+
+	// No doomed ItemSession/goroutine should have been created at all — the
+	// rejection must be synchronous, before step 3a's ItemSession creation.
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	assert.Empty(t, sessions, "a relative repo_path must be rejected before any ItemSession is created")
+	assert.Equal(t, 0, pool.callCount(), "the headless pool must never be called for a rejected repo_path")
+}
+
+func TestTriggerTriage_should_RejectNonExistentAbsoluteRepoPath_Before_CreatingAnyItemSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	missingPath := filepath.Join(t.TempDir(), "does-not-exist")
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "nonexistent absolute repo_path item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: missingPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(trigErr))
+	assert.Contains(t, trigErr.Error(), "does not exist or is not a directory")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	assert.Empty(t, sessions, "a non-existent absolute repo_path must be rejected before any ItemSession is created")
+	assert.Equal(t, 0, pool.callCount(), "the headless pool must never be called for a rejected repo_path")
+}
+
+func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirectory(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "valid absolute repo_path item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(), // valid: absolute, existing directory
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr, "a valid absolute existing repo_path must not be rejected")
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call for a valid repo_path")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1, "a valid repo_path must still create the triage ItemSession")
+	assert.Equal(t, string(session.SessionRoleTriage), sessions[0].Role)
+}
