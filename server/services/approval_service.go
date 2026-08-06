@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -94,17 +95,17 @@ func (as *ApprovalService) ResolveApproval(
 			// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
 			// fields on its own goroutine under inst.mu (session/instance.go's mu doc
 			// comment mandates Snapshot() for reads outside the actor).
-			github := inst.Snapshot().GitHub
-			blocked := github.GitHubPRNumber > 0 && github.GitHubCheckConclusion == ciConclusionFailure
+			ghInfo := inst.Snapshot().GitHub
+			blocked := ghInfo.GitHubPRNumber > 0 && ghInfo.GitHubCheckConclusion == ciConclusionFailure
 			if blocked && req.Msg.OverrideCiBlock {
 				log.Info("[ApprovalService] approved despite failing CI (override)",
-					"approval_id", req.Msg.ApprovalId, "session_id", sessionID, "ci_conclusion", github.GitHubCheckConclusion)
+					"approval_id", req.Msg.ApprovalId, "session_id", sessionID, "ci_conclusion", ghInfo.GitHubCheckConclusion)
 			} else if blocked {
 				msg := "Approval blocked: CI is failing on this branch — review before approving."
-				if github.GitHubPRURL != "" {
-					msg += " " + github.GitHubPRURL + "/checks"
+				if ghInfo.GitHubPRURL != "" {
+					msg += " " + ghInfo.GitHubPRURL + "/checks"
 				}
-				return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s", msg))
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New(msg))
 			}
 		}
 		// inst == nil (session not found/not live): fail open — an infrastructure lookup

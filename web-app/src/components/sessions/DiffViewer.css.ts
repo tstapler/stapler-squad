@@ -1,7 +1,8 @@
 import { style } from "@vanilla-extract/css";
+import { vars } from "@/styles/theme.css";
 
 export const diffHeader = style({
   display: "flex",
   alignItems: "center",
-  padding: "8px 12px",
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
 });

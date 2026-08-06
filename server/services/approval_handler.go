@@ -78,7 +78,7 @@ type ApprovalHandler struct {
 	timeout             time.Duration               // default 4m; overridable in tests
 	headlessPool        headlessPoolApprover        // optional: LLM approval for autonomous sessions
 	autonomousChecker   func(string) bool           // optional: returns true if sessionID is an autonomous session
-	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness
+	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
 	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
 }
 
@@ -303,14 +303,14 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
 				// fields on its own goroutine under inst.mu (session/instance.go's mu
 				// doc comment mandates Snapshot() for reads outside the actor).
-				github := inst.Snapshot().GitHub
-				if github.GitHubPRNumber > 0 {
-					classCtx.CIStatus = github.GitHubCheckConclusion
+				ghInfo := inst.Snapshot().GitHub
+				if ghInfo.GitHubPRNumber > 0 {
+					classCtx.CIStatus = ghInfo.GitHubCheckConclusion
 					// Staleness guard (Task 1.1.2b): a cached conclusion older than 2x the
 					// poller's configured interval may no longer reflect the branch's real CI
 					// state. Treat it as unknown rather than risk gating an irreversible
 					// auto-approve (RequireCIPassing) on stale data.
-					if time.Since(github.LastPRStatusCheck) > 2*h.pollInterval {
+					if time.Since(ghInfo.LastPRStatusCheck) > 2*h.pollInterval {
 						classCtx.CIStatus = ""
 					}
 				}

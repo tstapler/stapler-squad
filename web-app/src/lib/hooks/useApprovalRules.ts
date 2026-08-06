@@ -138,7 +138,7 @@ export function useApprovalRules(
           requiredFlagPrefixes: ruleData.requiredFlagPrefixes ?? [],
           pythonModes: ruleData.pythonModes ?? [],
           safePythonImportsOnly: ruleData.safePythonImportsOnly ?? false,
-        requireCiPassing: ruleData.requireCiPassing ?? false,
+          requireCiPassing: ruleData.requireCiPassing ?? false,
           decision: ruleData.decision ?? AutoDecision.ESCALATE,
           riskLevel: ruleData.riskLevel ?? "",
           reason: ruleData.reason ?? "",
