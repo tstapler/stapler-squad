@@ -259,21 +259,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create backlog item: %w", err))
 	}
 
-	triageTriggered := false
-	if !req.Msg.SkipPlanning && created.RepoPath != "" && s.headlessPool != nil {
-		// 30s gates only the synchronous path (item lookup + ItemSession creation).
-		// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
-		triageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		_, triageErr := s.TriggerTriage(triageCtx,
-			connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: created.ID}))
-		if triageErr != nil {
-			log.WarningLog.Printf("[ImportGitHubIssue] auto-triage failed for item %s: %v", created.ID, triageErr)
-			// Do not fail the import; log and continue.
-		} else {
-			triageTriggered = true
-		}
-	}
+	triageTriggered := s.MaybeTriggerTriage(ctx, created.ID, req.Msg.SkipPlanning, created.RepoPath)
 
 	return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
 		Item:            backlogItemToProto(created, s.buildCostLookup()),

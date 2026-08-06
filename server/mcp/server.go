@@ -28,7 +28,10 @@ import (
 // autoReopener is optional — when nil, submit_review_verdict skips its eager
 // review->in_progress transition on FAIL/PARTIAL/UNVERIFIABLE verdicts and
 // falls back to the pre-existing session-exit/sweep paths.
-func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner) *mcpserver.MCPServer {
+// backlogSvc is optional — when nil, create_backlog_item/import_github_issue
+// skip the post-create auto-triage trigger (BUG-061) and create the item
+// exactly as before that fix; see BacklogService.MaybeTriggerTriage.
+func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"stapler-squad",
 		"1.0.0",
@@ -58,7 +61,7 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 		registerRulesTools(s, &rulesHandlers{svc: svc})
 	}
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
-		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener})
+		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc})
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
 	}
 	if prCache != nil {
@@ -74,11 +77,12 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 // eventBus is optional — pass nil to disable triage-complete notifications.
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
-func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner) *mcpserver.StreamableHTTPServer {
+// backlogSvc is optional — see NewCore.
+func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService) *mcpserver.StreamableHTTPServer {
 	// Stateless mode: accept any session ID rather than tracking them in memory.
 	// This allows Claude Code sessions to survive server restarts without needing
 	// to re-initialize the MCP connection (which would require restarting the agent).
-	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener), mcpserver.WithStateLess(true))
+	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc), mcpserver.WithStateLess(true))
 }
 
 // RunServer initializes and starts the MCP stdio server.
@@ -94,7 +98,10 @@ func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, s
 // which has no *services.BacklogService, so callers on that path pass nil
 // and submit_review_verdict's eager transition is skipped there — the
 // session-exit/sweep paths still apply.
-func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner) error {
+// backlogSvc is optional — see NewCore. Same Phase-1-only caveat as
+// autoReopener above: the stdio fallback path has no *services.BacklogService
+// to pass, so create_backlog_item/import_github_issue skip auto-triage there.
+func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService) error {
 	log.Info("mcp server starting on stdio transport")
 
 	// Inject session UUID from environment into the root context so that
@@ -104,7 +111,7 @@ func RunServer(ctx context.Context, store session.InstanceStore, svc *services.S
 		log.InfoLog.Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
-	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener))
+	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc))
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // newTestBacklogStorage creates a temporary Storage for testing.
@@ -1934,6 +1935,54 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 	assert.Contains(t, fetched.Notes, "https://github.com/tstapler/stapler-squad/issues/316")
 }
 
+// TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet
+// is import_github_issue's half of the BUG-061 regression coverage — see
+// TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet's
+// doc comment for the full root-cause explanation. ImportGitHubIssue (RPC)
+// already triggered triage before this fix; only the MCP tool bypassed it.
+func TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"number": 317, "title": "needs triage via import", "body": "...",
+			"html_url": "https://github.com/tstapler/stapler-squad/issues/317",
+			"user": {"login": "tstapler"}, "state": "open"
+		}`))
+	}))
+	defer srv.Close()
+	prevBaseURL := githubpkg.GhBaseURL
+	githubpkg.GhBaseURL = srv.URL + "/"
+	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+
+	storage := newTestBacklogStorage(t)
+	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	backlogSvc.SetHeadlessPool(&fakeTriageHeadlessPool{})
+	t.Cleanup(backlogSvc.Shutdown)
+
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/issues/317",
+		"repo_path": t.TempDir(),
+	}))
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Auto-triage started.")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Imported backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	sessions, err := storage.ListItemSessions(context.Background(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1, "expected exactly one ItemSession created by TriggerTriage")
+	assert.Equal(t, session.SessionRoleTriage, sessions[0].Role)
+}
+
 // TestImportGitHubIssue_should_ReturnError_When_URLNotAnIssue verifies a
 // non-issue GitHub URL (e.g. a PR) is rejected before any network call.
 func TestImportGitHubIssue_should_ReturnError_When_URLNotAnIssue(t *testing.T) {
@@ -1948,6 +1997,88 @@ func TestImportGitHubIssue_should_ReturnError_When_URLNotAnIssue(t *testing.T) {
 
 	m := parseResult(t, result)
 	require.False(t, m["success"].(bool), "import_github_issue must reject a non-issue URL")
+}
+
+// fakeTriageHeadlessPool is a minimal headless.PoolClient stub used only to
+// prove MaybeTriggerTriage actually reaches TriggerTriage's headless-pool gate
+// — it does not need to exercise the full triage parse/persist pipeline in
+// any detail, just return a syntactically valid HeadlessTriageResult so the
+// background goroutine TriggerTriage launches completes cleanly instead of
+// racing this test's t.Cleanup (which closes the ent repo and removes its
+// temp dir).
+type fakeTriageHeadlessPool struct{}
+
+func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions) (string, float64, error) {
+	return `{"title":"t","summary":"s","suggestions":[]}`, 0, nil
+}
+
+// TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet
+// is the regression test for BUG-061: create_backlog_item used to call
+// h.storage.CreateBacklogItem directly with no post-create auto-triage step,
+// unlike BacklogService.CreateBacklogItem (the RPC handler backing the web
+// UI's "New Idea" form), which does trigger triage. An item self-filed by an
+// agent session via this MCP tool sat in "idea" with zero triage attempts
+// forever — reconcileOrphanedTriageItems (session/backlog_lifecycle.go) only
+// ever detects items that already have a prior triage-role ItemSession, so it
+// can never originate the first attempt for an item created this way.
+func TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	backlogSvc.SetHeadlessPool(&fakeTriageHeadlessPool{})
+	t.Cleanup(backlogSvc.Shutdown)
+
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title":     "Needs triage",
+		"repo_path": t.TempDir(),
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Auto-triage started.",
+		"create_backlog_item must trigger auto-triage when a BacklogService and repo_path are available")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Created backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	sessions, err := storage.ListItemSessions(context.Background(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1, "expected exactly one ItemSession created by TriggerTriage")
+	assert.Equal(t, session.SessionRoleTriage, sessions[0].Role)
+}
+
+// TestCreateBacklogItem_should_NotTriggerTriage_When_BacklogSvcNil verifies
+// the pre-fix behavior is preserved when no BacklogService is wired (e.g. the
+// stdio MCP fallback path, which has no *services.BacklogService available —
+// see RunServer's doc comment): item creation still succeeds, just without
+// auto-triage, rather than panicking on a nil backlogSvc.
+func TestCreateBacklogItem_should_NotTriggerTriage_When_BacklogSvcNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage} // backlogSvc left nil
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title":     "No backlog service wired",
+		"repo_path": t.TempDir(),
+	}))
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Auto-triage not triggered")
+
+	var itemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Created backlog item %s", &itemID)
+	require.NoError(t, scanErr)
+	itemID = strings.TrimSuffix(itemID, ":")
+
+	sessions, err := storage.ListItemSessions(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Empty(t, sessions, "no ItemSession should be created when backlogSvc is nil")
 }
 
 // TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement

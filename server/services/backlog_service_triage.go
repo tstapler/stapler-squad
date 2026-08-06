@@ -2067,6 +2067,40 @@ func classifyHeadlessCallError(err error, elapsed time.Duration) string {
 	}
 }
 
+// MaybeTriggerTriage is the single "should this newly created item get
+// auto-triaged" decision, shared by every backlog-item creation entry point:
+// RPC CreateBacklogItem and ImportGitHubIssue (backlog_service_lifecycle.go,
+// backlog_service_sync.go), and the create_backlog_item/import_github_issue
+// MCP tools (server/mcp/tools_backlog.go). Before this helper existed, the
+// MCP tools called storage.CreateBacklogItem directly and skipped this gate
+// entirely — every backlog item self-filed by an agent session via those
+// tools sat in "idea" with zero triage attempts until (at best) a human
+// noticed and manually re-triggered triage, since reconcileOrphanedTriageItems
+// (session/backlog_lifecycle.go) only ever detects items that already have a
+// prior triage-role ItemSession and cannot originate the first attempt.
+//
+// Mirrors the RPC handlers' existing inline gate exactly: skip if the caller
+// asked to, if the item has no repo_path (nothing to run triage against), or
+// if no headless pool is wired (e.g. claude binary unavailable). Best-effort
+// — a failure to trigger is logged and never fails item creation. Returns
+// whether triage was actually triggered, for callers that surface it back to
+// the client (e.g. CreateBacklogItemResponse.TriageTriggered).
+func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, skipTriage bool, repoPath string) bool {
+	if skipTriage || repoPath == "" || s.headlessPool == nil {
+		return false
+	}
+	// 30s gates only the synchronous path (item lookup + ItemSession creation).
+	// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
+	triageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	_, err := s.TriggerTriage(triageCtx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
+	if err != nil {
+		log.WarningLog.Printf("[MaybeTriggerTriage] auto-triage failed for item %s: %v", itemID, err)
+		return false
+	}
+	return true
+}
+
 // TriggerTriage kicks off a headless triage planning call for a backlog item.
 // Returns immediately after creating an ItemSession; actual triage runs in a goroutine.
 // +api: backlog:trigger-triage
