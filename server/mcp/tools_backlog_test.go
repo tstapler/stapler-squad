@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
@@ -1441,9 +1443,11 @@ func TestReportPRCreated_should_TransitionToPRPending_When_ValidPR(t *testing.T)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage:               storage,
-		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) { return true, nil },
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
 	}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
 
@@ -1493,9 +1497,11 @@ func TestReportPRCreated_should_ReturnError_When_PersistFails(t *testing.T) {
 	require.NoError(t, repo.Close())
 
 	handler := &backlogHandlers{
-		storage:               storage,
-		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) { return true, nil },
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
 	}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
 
@@ -1542,9 +1548,9 @@ func TestReportPRCreated_should_NoOp_When_AlreadyPRPendingSamePR(t *testing.T) {
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) {
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
 			verifyCalled = true
-			return true, nil
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
 	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
@@ -1616,9 +1622,10 @@ func TestReportPRCreated_should_RejectCall_When_BranchMismatch(t *testing.T) {
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, _ int, expectedBranch string) (bool, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, _ int, expectedBranch string) (PRVerification, error) {
 			assert.Equal(t, "backlog/ship-it", expectedBranch)
-			return false, nil // definitive mismatch — a real PR exists, but for a different branch/number
+			// definitive mismatch — a real PR exists, but for a different branch/number
+			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
@@ -1657,8 +1664,8 @@ func TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientl
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) {
-			return false, fmt.Errorf("GitHub API: rate limited (403)")
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return PRVerification{}, fmt.Errorf("GitHub API: rate limited (403)")
 		},
 	}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
@@ -1746,10 +1753,12 @@ func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testin
 	}
 
 	handler := &backlogHandlers{
-		storage:               storage,
-		getBacklogItemFn:      getBacklogItemFn,
-		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) { return true, nil },
+		storage:              storage,
+		getBacklogItemFn:     getBacklogItemFn,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
 	}
 	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
 
@@ -1997,6 +2006,395 @@ func TestImportGitHubIssue_should_ReturnError_When_URLNotAnIssue(t *testing.T) {
 
 	m := parseResult(t, result)
 	require.False(t, m["success"].(bool), "import_github_issue must reject a non-issue URL")
+}
+
+// --- decideOverridePolicy (Task 4.0) ---
+
+// TestDecideOverridePolicy is a table-driven unit test directly against
+// decideOverridePolicy — no mock storage, no item/session fixtures. This is
+// the authoritative place the override-path decision logic is pinned; the
+// TestReportPRCreated_* tests below only confirm reportPRCreated wires this
+// function's outcome into the right handler behavior.
+func TestDecideOverridePolicy(t *testing.T) {
+	tests := []struct {
+		name           string
+		v              PRVerification
+		overrideReason string
+		callerLogin    string
+		wantAccept     bool
+		wantCode       connect.Code
+	}{
+		{
+			name:           "not-exists rejects regardless of override_reason (empty)",
+			v:              NewPRVerification(false, false, "", "", ""),
+			overrideReason: "",
+			callerLogin:    "tstapler",
+			wantAccept:     false,
+			wantCode:       connect.CodeNotFound,
+		},
+		{
+			name:           "not-exists rejects regardless of override_reason (non-empty)",
+			v:              NewPRVerification(false, false, "", "", ""),
+			overrideReason: "here's why",
+			callerLogin:    "tstapler",
+			wantAccept:     false,
+			wantCode:       connect.CodeNotFound,
+		},
+		{
+			name:           "matched accepts regardless of override_reason/callerLogin (fast path)",
+			v:              NewPRVerification(true, true, "backlog/x", githubpkg.PRStateOpen, "tstapler"),
+			overrideReason: "",
+			callerLogin:    "",
+			wantAccept:     true,
+		},
+		{
+			name:           "mismatch, empty override_reason rejects even when author would match",
+			v:              NewPRVerification(true, false, "feature/y", githubpkg.PRStateOpen, "tstapler"),
+			overrideReason: "",
+			callerLogin:    "tstapler",
+			wantAccept:     false,
+			wantCode:       connect.CodeInvalidArgument,
+		},
+		{
+			name:           "mismatch, reason given, open state, author mismatch rejects",
+			v:              NewPRVerification(true, false, "feature/y", githubpkg.PRStateOpen, "someone-else"),
+			overrideReason: "here's why",
+			callerLogin:    "tstapler",
+			wantAccept:     false,
+			wantCode:       connect.CodePermissionDenied,
+		},
+		{
+			name:           "mismatch, reason given, closed state AND author mismatch rejects on author, not state",
+			v:              NewPRVerification(true, false, "feature/y", githubpkg.PRStateClosed, "someone-else"),
+			overrideReason: "here's why",
+			callerLogin:    "tstapler",
+			wantAccept:     false,
+			wantCode:       connect.CodePermissionDenied,
+		},
+		{
+			name:           "mismatch, reason given, author matches, closed state rejects on state",
+			v:              NewPRVerification(true, false, "feature/y", githubpkg.PRStateClosed, "tstapler"),
+			overrideReason: "here's why",
+			callerLogin:    "tstapler",
+			wantAccept:     false,
+			wantCode:       connect.CodeFailedPrecondition,
+		},
+		{
+			name:           "mismatch, reason given, author matches, open state accepts",
+			v:              NewPRVerification(true, false, "feature/y", githubpkg.PRStateOpen, "tstapler"),
+			overrideReason: "here's why",
+			callerLogin:    "tstapler",
+			wantAccept:     true,
+		},
+		{
+			name:           "mismatch, reason given, author matches, merged state accepts (confirmed AC1 repro shape)",
+			v:              NewPRVerification(true, false, "feature/y", githubpkg.PRStateMerged, "tstapler"),
+			overrideReason: "here's why",
+			callerLogin:    "tstapler",
+			wantAccept:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			accept, code, _ := decideOverridePolicy(tt.v, tt.overrideReason, tt.callerLogin)
+			assert.Equal(t, tt.wantAccept, accept)
+			if !tt.wantAccept {
+				assert.Equal(t, tt.wantCode, code)
+			}
+		})
+	}
+}
+
+// --- report_pr_created fallback/override path (Story 3/4) ---
+
+// TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOverrideReason
+// is the confirmed real repro shape (AC1/AC2): a work session's PR was opened
+// from a clean fallback branch because the tracked branch was polluted by
+// another session sharing the worktree. With a matching self-authored PR and
+// a non-empty override_reason, the item must still transition to pr_pending,
+// and the override use must be audited via a structured log.Warn line.
+func TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOverrideReason(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	var buf strings.Builder
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	handler := &backlogHandlers{
+		storage: storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) {
+			return "backlog/stapler-squad-ci-status-diff-viewer", nil
+		},
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/326",
+		"pr_number":       float64(326),
+		"summary":         "Shipped the fix from a clean fallback branch.",
+		"override_reason": "tracked branch had unrelated commits from a shared worktree; opened PR from a clean branch instead",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "pr_pending")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, 326, fetched.PrNumber)
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "recording PR via override")
+	assert.Contains(t, logOutput, sessionUUID)
+	assert.Contains(t, logOutput, item.ID)
+	assert.Contains(t, logOutput, "pr_number=326")
+	assert.Contains(t, logOutput, "actual_head_branch=feature/ci-status-diff-viewer")
+	assert.Contains(t, logOutput, "tracked_branch=backlog/stapler-squad-ci-status-diff-viewer")
+	assert.Contains(t, logOutput, "pr_author=tstapler")
+	assert.Contains(t, logOutput, "override_reason=")
+}
+
+// TestReportPRCreated_should_RejectCall_When_FallbackBranchMissingOverrideReason
+// confirms reportPRCreated actually wires decideOverridePolicy's reject into
+// an untouched item (not a decision-logic re-check — that's TestDecideOverridePolicy's
+// job) and that resolveCallerGitHubLogin is never called when override_reason
+// is missing — a call already doomed to reject for a missing reason must not
+// pay for a GitHub identity lookup it doesn't need.
+func TestReportPRCreated_should_RejectCall_When_FallbackBranchMissingOverrideReason(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	loginCalled := false
+	handler := &backlogHandlers{
+		storage: storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) {
+			return "backlog/stapler-squad-ci-status-diff-viewer", nil
+		},
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) {
+			loginCalled = true
+			return "tstapler", nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/326",
+		"pr_number": float64(326),
+		"summary":   "Shipped the fix from a clean fallback branch.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	assert.False(t, loginCalled, "resolveCallerGitHubLogin must not be called when override_reason is missing")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestReportPRCreated_should_DocumentOverrideWorkaround_When_BranchMismatchRejected
+// (AC3): the rejection message when override_reason is missing must document
+// the workaround concretely — naming the actual head branch, the tracked
+// branch, the override_reason argument, and the authorship requirement — not
+// just say "it failed."
+func TestReportPRCreated_should_DocumentOverrideWorkaround_When_BranchMismatchRejected(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	handler := &backlogHandlers{
+		storage: storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) {
+			return "backlog/stapler-squad-ci-status-diff-viewer", nil
+		},
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/326",
+		"pr_number": float64(326),
+		"summary":   "Shipped the fix from a clean fallback branch.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	msg := errObj["message"].(string)
+	assert.Contains(t, msg, "override_reason")
+	assert.Contains(t, msg, "feature/ci-status-diff-viewer")
+	assert.Contains(t, msg, "backlog/stapler-squad-ci-status-diff-viewer")
+	assert.Contains(t, msg, "authored by your own GitHub identity")
+}
+
+// TestReportPRCreated_should_RejectCall_When_UnrelatedClosedPRWithOverrideReason
+// confirms wiring only (decision logic is pinned by TestDecideOverridePolicy):
+// a real, closed, self-authored PR is still rejected by the state gate even
+// with a matching author and an override_reason.
+func TestReportPRCreated_should_RejectCall_When_UnrelatedClosedPRWithOverrideReason(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	handler := &backlogHandlers{
+		storage: storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) {
+			return "backlog/stapler-squad-ci-status-diff-viewer", nil
+		},
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateClosed, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/999",
+		"pr_number":       float64(999),
+		"summary":         "Unrelated PR.",
+		"override_reason": "trying anyway",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestReportPRCreated_should_RejectCall_When_UnrelatedPRAuthorMismatch
+// confirms wiring only (decision logic is pinned by TestDecideOverridePolicy):
+// a real, open, correct-repo PR — everything the pre-repair design required
+// for acceptance — but authored by someone else must still be rejected, and
+// the message must name both the PR's actual author and the caller's own
+// resolved identity.
+func TestReportPRCreated_should_RejectCall_When_UnrelatedPRAuthorMismatch(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	handler := &backlogHandlers{
+		storage: storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) {
+			return "backlog/stapler-squad-ci-status-diff-viewer", nil
+		},
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateOpen, "a-different-github-user"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/999",
+		"pr_number":       float64(999),
+		"summary":         "Unrelated PR.",
+		"override_reason": "trying anyway",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	msg := errObj["message"].(string)
+	assert.Contains(t, msg, "a-different-github-user")
+	assert.Contains(t, msg, "tstapler")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestReportPRCreated_should_RejectCall_When_PRNumberDoesNotExist confirms
+// wiring only (decision logic pinned by TestDecideOverridePolicy's not-exists
+// case): existence can never be overridden, and resolveCallerGitHubLogin must
+// never be called since decideOverridePolicy's guard requires Exists, which
+// is false here.
+func TestReportPRCreated_should_RejectCall_When_PRNumberDoesNotExist(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	loginCalled := false
+	handler := &backlogHandlers{
+		storage: storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) {
+			return "backlog/stapler-squad-ci-status-diff-viewer", nil
+		},
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(false, false, "", "", ""), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) {
+			loginCalled = true
+			return "tstapler", nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/99999",
+		"pr_number":       float64(99999),
+		"summary":         "Nonexistent PR.",
+		"override_reason": "trying anyway",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "does not exist")
+	assert.False(t, loginCalled, "resolveCallerGitHubLogin must not be called when the PR does not exist")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	assert.Equal(t, 0, fetched.PrNumber)
 }
 
 // fakeTriageHeadlessPool is a minimal headless.PoolClient stub used only to
@@ -3261,10 +3659,12 @@ func TestReportDuplicate_RejectsThirdCall_AfterSequentialReportPRCreatedThenRepo
 	item, sessionUUID := setupReportDuplicateFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage:               storage,
-		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) { return true, nil },
-		verifyGitHubRef:       func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
 	}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
 
