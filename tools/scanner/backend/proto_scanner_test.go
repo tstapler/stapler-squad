@@ -127,6 +127,40 @@ func TestScanProto_NoUnmappedMethods(t *testing.T) {
 	}
 }
 
+// TestScanProto_MultipleServices verifies each RPC's Service field matches its own
+// enclosing `service X {}` block, not the first/only one — regression coverage for the
+// bug where Service was hard-coded to "SessionService" for every RPC.
+func TestScanProto_MultipleServices(t *testing.T) {
+	features, err := ScanProto(testdataPath("multi_service.proto"))
+	if err != nil {
+		t.Fatalf("ScanProto error: %v", err)
+	}
+
+	byMethod := map[string]BackendFeature{}
+	for _, f := range features {
+		byMethod[f.Method] = f
+	}
+
+	tests := []struct {
+		method  string
+		service string
+	}{
+		{"OrphanMethod", "SessionService"}, // before any service block: defaults to SessionService
+		{"Foo", "Alpha"},
+		{"Bar", "Beta"},
+	}
+	for _, tt := range tests {
+		f, ok := byMethod[tt.method]
+		if !ok {
+			t.Errorf("expected method %q in features, got %v", tt.method, byMethod)
+			continue
+		}
+		if f.Service != tt.service {
+			t.Errorf("method %q: expected Service=%q, got %q", tt.method, tt.service, f.Service)
+		}
+	}
+}
+
 func writeFile(path, content string) error {
 	f, err := openFileCreate(path)
 	if err != nil {
