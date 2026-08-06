@@ -18,6 +18,7 @@ func TestCreateSession_ThreadsEnvVars_WhenSetInRequest(t *testing.T) {
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire poller so FindLiveInstance works immediately after CreateSession.
 	queue := session.NewReviewQueue()

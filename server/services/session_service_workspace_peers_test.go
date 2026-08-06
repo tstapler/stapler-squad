@@ -19,6 +19,7 @@ func TestSessionServiceWorkspacePeersBlockFor_should_IncludePeerNudge_When_Anoth
 
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	peer := &session.Instance{
 		Title: "peer-session", UUID: "peer-uuid", Path: repoPath, Branch: "main",
@@ -42,6 +43,7 @@ func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExi
 
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	assert.Empty(t, svc.workspacePeersBlockFor(t.Context(), repoPath))
 }
@@ -49,6 +51,7 @@ func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExi
 func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_RepoPathIsEmpty(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	assert.Empty(t, svc.workspacePeersBlockFor(t.Context(), ""))
 }

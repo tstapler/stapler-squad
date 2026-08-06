@@ -83,6 +83,7 @@ func TestDeleteSession_RemovesFromReviewQueue(t *testing.T) {
 
 	// Create session service
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Create and add a test instance to storage.
 	// Must use Status=Paused: LoadInstances calls FromInstanceData which calls
@@ -154,6 +155,7 @@ func TestDeleteSession_NonExistentSession(t *testing.T) {
 	eventBus := events.NewEventBus(100)
 
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	req := connect.NewRequest(&sessionv1.DeleteSessionRequest{
 		Id: "non-existent-session",
@@ -180,6 +182,7 @@ func TestDeleteSession_EmptyId(t *testing.T) {
 	eventBus := events.NewEventBus(100)
 
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	req := connect.NewRequest(&sessionv1.DeleteSessionRequest{
 		Id: "",
@@ -208,6 +211,7 @@ func TestDeleteSession_ByUUID(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const sessionUUID = "550e8400-e29b-41d4-a716-446655440000"
 	testInstance := &session.Instance{
@@ -245,6 +249,7 @@ func TestDeleteSession_PublishesDeletedEvent(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "evt-session",
@@ -283,6 +288,7 @@ func TestDeleteSession_ListInstanceDataExcludesDeleted(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	for _, title := range []string{"keep-me", "delete-me"} {
 		require.NoError(t, storage.AddInstance(&session.Instance{
@@ -327,6 +333,7 @@ func TestDeleteSession_DestroyFailureIsNonFatal(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Add a paused session to storage so DeleteSession can find it.
 	testInst := &session.Instance{
@@ -362,6 +369,7 @@ func TestDeleteSession_StorageDeletedBeforeResponse(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "timing-session",
@@ -405,6 +413,7 @@ func TestSessionExitedPublisher_PublishesUpdatedEvent(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Use Status=Paused so FromInstanceData marks the instance as started=true,
 	// matching what the real lifecycle does for an instance that was once Active.
@@ -449,6 +458,7 @@ func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "thinking-session-2",
@@ -1158,6 +1168,7 @@ func TestDeleteSession_CancelsPendingApprovals(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const sessionUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	testInstance := &session.Instance{
@@ -1203,6 +1214,7 @@ func TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "clean-session",
@@ -1350,6 +1362,7 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(8)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	newHiddenInstance := func(title string) *session.Instance {
 		inst := &session.Instance{
@@ -1403,6 +1416,7 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(8)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	newHiddenInstance := func(title string) *session.Instance {
 		inst := &session.Instance{
@@ -1468,6 +1482,7 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	ctx := context.Background()
 	eventBus := events.NewEventBus(8)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "rl-metadata-test"
 	inst := &session.Instance{
@@ -1506,4 +1521,36 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	require.NotNil(t, notifs[0].NotificationMetadata, "metadata must not be nil so downstream consumers can correlate the notification to its item")
 	assert.Equal(t, item.ID, notifs[0].NotificationMetadata[events.MetadataKeyItemID])
 	assert.Equal(t, "true", notifs[0].NotificationMetadata[events.MetadataKeySessionScoped])
+}
+
+// TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine confirms Shutdown() calls
+// through to AnalyticsStore.Stop(), is idempotent, and leaves Record() as a safe no-op
+// afterward. Shutdown() joins the flush goroutine synchronously (AnalyticsStore.Stop
+// blocks on <-s.done), so a hung flush loop would make this test time out rather than
+// silently pass — no goleak/process-wide check needed to catch that regression.
+func TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(10)
+	svc := NewSessionService(storage, eventBus)
+
+	store := svc.GetAnalyticsStore()
+	require.NotNil(t, store, "NewSessionService must wire an AnalyticsStore")
+
+	done := make(chan struct{})
+	go func() {
+		svc.Shutdown()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown() did not return within 2s — AnalyticsStore.Stop is likely blocked")
+	}
+
+	require.NotPanics(t, svc.Shutdown, "a second Shutdown() call must be idempotent")
+
+	require.NotPanics(t, func() {
+		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
+	}, "Record() after Shutdown() must stay a silent no-op, not panic")
 }
