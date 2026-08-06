@@ -64,7 +64,9 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
   const handleCreateClick = () => {
     Promise.resolve()
       .then(onCreateItem)
-      .catch(() => {});
+      .catch((err) => {
+        console.error("[BacklogEmptyState] onCreateItem failed:", err);
+      });
   };
 
   return (

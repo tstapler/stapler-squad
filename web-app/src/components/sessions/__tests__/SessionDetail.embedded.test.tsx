@@ -90,6 +90,28 @@ jest.mock("@/lib/constants/programs", () => ({
 jest.mock("@/lib/store", () => ({ useAppSelector: jest.fn(() => []) }));
 jest.mock("@/lib/store/sessionsSlice", () => ({ selectAllSessions: jest.fn() }));
 
+// useShells otherwise fires a real ConnectRPC listShells call on mount, and
+// useAvailablePrograms fires a real fetch("/api/server-info") — both land outside this
+// test's act() scope and produce noisy "not wrapped in act(...)" warnings plus real
+// network attempts. Stub them to keep runs deterministic (mirrors
+// SessionDetailView.summary-tab.test.tsx's useShells mock and Omnibar.alias.test.tsx's
+// useAvailablePrograms mock).
+jest.mock("@/lib/hooks/useShells", () => ({
+  useShells: () => ({
+    shells: [],
+    isLoading: false,
+    spawnShell: jest.fn(),
+    stopShell: jest.fn(),
+    restartShell: jest.fn(),
+    deleteShell: jest.fn(),
+    updateShellStatus: jest.fn(),
+    refetch: jest.fn(),
+  }),
+}));
+jest.mock("@/lib/hooks/useAvailablePrograms", () => ({
+  useAvailablePrograms: jest.fn(() => []),
+}));
+
 // --- Minimal session fixture ---
 
 const makeSession = (): Session =>
