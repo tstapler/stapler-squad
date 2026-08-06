@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -112,6 +113,11 @@ type SessionService struct {
 	// evict a shell's streamer on close instead of letting a stale/degraded one
 	// persist across shell restarts.
 	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+
+	// userPRCache supplies enterprise hosts from dynamically-added GitHub
+	// accounts (gh CLI import, device auth) for CreateSession's GitHub URL
+	// detection — mirrors ListGitHubAccounts' host union in github_user_service.go.
+	userPRCache *githubpkg.UserPRCache
 
 	// fileSvc handles file tree browsing RPCs (ListFiles, GetFileContent).
 	fileSvc *FileService
@@ -1077,6 +1083,13 @@ func (s *SessionService) SetTmuxStreamerManager(mgr *session.ExternalTmuxStreame
 	s.tmuxStreamerManager = mgr
 }
 
+// SetUserPRCache wires the shared UserPRCache so CreateSession's GitHub URL
+// detection recognizes enterprise hosts from dynamically-added accounts, not
+// just hosts with a statically configured OAuth App in config.json.
+func (s *SessionService) SetUserPRCache(cache *githubpkg.UserPRCache) {
+	s.userPRCache = cache
+}
+
 // SetNotificationStore sets the notification history store for the notification history RPCs
 // and wires it into the approval service so resolved approvals are stamped with their decision.
 func (s *SessionService) SetNotificationStore(store *notifications.NotificationHistoryStore) {
@@ -1330,9 +1343,30 @@ func (s *SessionService) CreateSession(
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
 
-	enterpriseHosts := make([]string, 0, len(cfg.GetGitHubEnterpriseHosts()))
-	for _, h := range cfg.GetGitHubEnterpriseHosts() {
-		enterpriseHosts = append(enterpriseHosts, h.Host)
+	// Union statically-configured hosts with hosts from dynamically-added
+	// accounts (gh CLI import, device auth) — mirrors ListGitHubAccounts'
+	// host union in github_user_service.go so CreateSession recognizes the
+	// same enterprise URLs the omnibar's detector does.
+	configuredHosts := cfg.GetGitHubEnterpriseHosts()
+	var cachedAccounts []githubpkg.CachedAccount
+	if s.userPRCache != nil {
+		cachedAccounts = s.userPRCache.GetCachedAccounts()
+	}
+	seenHosts := make(map[string]bool, len(configuredHosts)+len(cachedAccounts))
+	enterpriseHosts := make([]string, 0, len(configuredHosts)+len(cachedAccounts))
+	addEnterpriseHost := func(host string) {
+		host = githubpkg.NormalizeHost(host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seenHosts[host] {
+			return
+		}
+		seenHosts[host] = true
+		enterpriseHosts = append(enterpriseHosts, host)
+	}
+	for _, h := range configuredHosts {
+		addEnterpriseHost(h.Host)
+	}
+	for _, a := range cachedAccounts {
+		addEnterpriseHost(a.Host)
 	}
 
 	if session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts) {
