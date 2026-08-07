@@ -111,10 +111,20 @@ func entWorkflowToProto(w *ent.Workflow) *sessionv1.WorkflowProto {
 // once — e.g. a row that is simultaneously a valid cron entry AND has a webhook_slug
 // set (Task 1.1.1e, pre-mortem P1 #2). Called with the *effective* (already-defaulted
 // and, for updates, already-merged-with-the-existing-row) values.
-func validateTriggerTypeFieldConsistency(triggerType string, cronEnabled bool, webhookSlug, githubRepo string) error {
-	if triggerType != "cron" && cronEnabled {
-		return fmt.Errorf("cron_enabled requires trigger_type=%q, got trigger_type=%q", "cron", triggerType)
-	}
+//
+// cronEnabled is intentionally NOT checked against triggerType here: Phase 2's webhook
+// handlers and Phase 7's TriggersPanel toggle both independently settled on reusing
+// CronEnabled as the generic per-trigger "is this trigger enabled" flag across every
+// trigger type (see GenericWebhookHandler.Handle's !wf.CronEnabled check), not something
+// exclusive to trigger_type=="cron". An earlier version of this function rejected
+// cron_enabled=true for any non-cron trigger_type, which made it impossible to ever
+// enable a webhook/github_push trigger through CreateWorkflow/UpdateWorkflow — found via
+// TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification's real end-to-end
+// path. Dual-registration (the original concern this function guards against) is still
+// prevented independently: Scheduler.addCronEntry/Reload only ever register a row as a
+// cron entry when BOTH cronEnabled AND triggerType=="cron" hold (scheduler.go:206,404),
+// so a cron_enabled=true webhook row can never register as a cron entry regardless.
+func validateTriggerTypeFieldConsistency(triggerType string, webhookSlug, githubRepo string) error {
 	if triggerType != "webhook" && webhookSlug != "" {
 		return fmt.Errorf("webhook_slug requires trigger_type=%q, got trigger_type=%q", "webhook", triggerType)
 	}
@@ -194,11 +204,6 @@ func (s *WorkflowService) CreateWorkflow(
 	if err := validateTargetDirectory(req.Msg.TargetDirectory); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	// Validate cron fields.
-	if req.Msg.CronEnabled && req.Msg.CronExpression == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			errors.New("cron_expression is required when cron_enabled is true"))
-	}
 	if req.Msg.CronExpression != "" {
 		if err := workflows.ValidateCronExpression(req.Msg.CronExpression); err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid cron expression: %w", err))
@@ -209,8 +214,16 @@ func (s *WorkflowService) CreateWorkflow(
 	// backward-compat cron-only clients that never send it) and reject any request
 	// whose populated match-criteria fields don't match the declared trigger_type.
 	triggerType := resolveTriggerType(req.Msg.TriggerType, req.Msg.CronEnabled)
-	if err := validateTriggerTypeFieldConsistency(triggerType, req.Msg.CronEnabled, req.Msg.WebhookSlug, req.Msg.GithubRepo); err != nil {
+	if err := validateTriggerTypeFieldConsistency(triggerType, req.Msg.WebhookSlug, req.Msg.GithubRepo); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	// cron_expression is only meaningful (and required) for an actual cron trigger — a
+	// webhook/github_push row with cron_enabled=true (the reused generic "enabled" flag,
+	// see validateTriggerTypeFieldConsistency's doc comment) has no cron schedule to
+	// validate.
+	if triggerType == "cron" && req.Msg.CronEnabled && req.Msg.CronExpression == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("cron_expression is required when cron_enabled is true"))
 	}
 
 	// Parse-time prompt_template validation (Task 3.1.1b): catch an operator's
@@ -303,12 +316,6 @@ func (s *WorkflowService) UpdateWorkflow(
 		}
 	}
 	// Validate cron fields if being updated.
-	// If cron_enabled is being set true while cron_expression is being set to empty, reject.
-	if req.Msg.CronEnabled != nil && *req.Msg.CronEnabled &&
-		req.Msg.CronExpression != nil && *req.Msg.CronExpression == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			errors.New("cron_expression is required when cron_enabled is true"))
-	}
 	if req.Msg.CronExpression != nil && *req.Msg.CronExpression != "" {
 		if err := workflows.ValidateCronExpression(*req.Msg.CronExpression); err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid cron expression: %w", err))
@@ -345,8 +352,19 @@ func (s *WorkflowService) UpdateWorkflow(
 		effectiveTriggerType = *req.Msg.TriggerType
 	}
 	effectiveTriggerType = resolveTriggerType(effectiveTriggerType, effectiveCronEnabled)
-	if err := validateTriggerTypeFieldConsistency(effectiveTriggerType, effectiveCronEnabled, effectiveWebhookSlug, effectiveGitHubRepo); err != nil {
+	if err := validateTriggerTypeFieldConsistency(effectiveTriggerType, effectiveWebhookSlug, effectiveGitHubRepo); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	// cron_expression is only required for an actual cron trigger (see CreateWorkflow's
+	// identical guard for why this is gated on the *effective* trigger_type rather than
+	// cron_enabled alone — cron_enabled doubles as the generic per-trigger enabled flag).
+	effectiveCronExpression := existing.CronExpression
+	if req.Msg.CronExpression != nil {
+		effectiveCronExpression = *req.Msg.CronExpression
+	}
+	if effectiveTriggerType == "cron" && effectiveCronEnabled && effectiveCronExpression == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("cron_expression is required when cron_enabled is true"))
 	}
 
 	// Parse-time prompt_template validation (Task 3.1.1b) — same as CreateWorkflow.
