@@ -1,8 +1,10 @@
 package workflows
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // fakeSessionService is a test double for SessionServiceInterface that records
@@ -428,4 +431,150 @@ func TestFireTrigger_NeverSetsAutoApproveFlag(t *testing.T) {
 	assert.False(t, req.GetSkipDefaults(), "trigger-fired sessions must not skip normal session defaults")
 	assert.False(t, req.GetOneShot())
 	assert.Equal(t, wf.ID.String(), req.GetWorkflowId(), "WorkflowId (attribution) is the intentional difference from a manual create")
+}
+
+// captureWarnLog temporarily redirects the slog default logger (which log.Warn writes
+// through) to a buffer, mirroring server/services/session_service_client_log_test.go's
+// captureInfoLog. Returns a function that restores the original default logger and
+// returns everything captured.
+func captureWarnLog() func() string {
+	var buf bytes.Buffer
+	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	original := slog.Default()
+	slog.SetDefault(slog.New(h))
+	return func() string {
+		slog.SetDefault(original)
+		return buf.String()
+	}
+}
+
+// TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsStale verifies Task 4.1.1c /
+// AC2's straddled-restart scenario: a workflow whose daily 09:00 cron occurrence has
+// passed, but whose last_fired_at is a full day stale (yesterday's fire, never updated
+// since), gets a missed-fire warning logged — and checkMissedCronFire never calls
+// FireTrigger/CreateSession at all (it has no session-service dependency), which is what
+// structurally guarantees detection never turns into a replay-fire.
+func TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsStale(t *testing.T) {
+	now := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	staleLastFired := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC) // yesterday's fire
+
+	wf := &ent.Workflow{
+		Slug:           "missed-fire-wf",
+		CronExpression: "0 9 * * *", // daily at 09:00
+		CronEnabled:    true,
+		TriggerType:    "cron",
+		CreatedAt:      createdAt,
+		LastFiredAt:    &staleLastFired,
+	}
+
+	restore := captureWarnLog()
+	checkMissedCronFire(wf, now)
+	logged := restore()
+
+	assert.Contains(t, logged, "missed cron fire")
+	assert.Contains(t, logged, "missed-fire-wf")
+}
+
+// TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsNil is the nil-LastFiredAt sibling
+// of the stale case above — a workflow that has never fired but whose schedule has an
+// occurrence due in the past also gets flagged.
+func TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsNil(t *testing.T) {
+	now := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+
+	wf := &ent.Workflow{
+		Slug:           "never-fired-wf",
+		CronExpression: "0 9 * * *",
+		CronEnabled:    true,
+		TriggerType:    "cron",
+		CreatedAt:      createdAt,
+		LastFiredAt:    nil,
+	}
+
+	restore := captureWarnLog()
+	checkMissedCronFire(wf, now)
+	logged := restore()
+
+	assert.Contains(t, logged, "missed cron fire")
+	assert.Contains(t, logged, "never-fired-wf")
+}
+
+// TestCheckMissedCronFire_DoesNotLog_When_WorkflowIsFreshAndNeverFired verifies the
+// false-positive guard: a workflow created 30 minutes ago, before its first scheduled
+// (09:00) occurrence has even come due, must not be flagged just because it has never
+// fired. Bounding the occurrence search by CreatedAt (rather than e.g. treating a nil
+// last_fired_at as "always overdue") is what prevents this false positive.
+func TestCheckMissedCronFire_DoesNotLog_When_WorkflowIsFreshAndNeverFired(t *testing.T) {
+	now := time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC) // created 30 min ago
+
+	wf := &ent.Workflow{
+		Slug:           "fresh-wf",
+		CronExpression: "0 9 * * *", // today's occurrence (09:00) hasn't happened yet
+		CronEnabled:    true,
+		TriggerType:    "cron",
+		CreatedAt:      createdAt,
+		LastFiredAt:    nil,
+	}
+
+	restore := captureWarnLog()
+	checkMissedCronFire(wf, now)
+	logged := restore()
+
+	assert.NotContains(t, logged, "missed cron fire", "a workflow whose schedule has not come due since creation must not be flagged")
+}
+
+// TestCheckMissedCronFire_DoesNotLog_When_FiredOnTime is the control case: last_fired_at
+// reflects the most recent expected occurrence (fired shortly after it), so no warning is
+// logged.
+func TestCheckMissedCronFire_DoesNotLog_When_FiredOnTime(t *testing.T) {
+	now := time.Date(2026, 1, 2, 9, 30, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	onTimeLastFired := time.Date(2026, 1, 2, 9, 0, 1, 0, time.UTC) // fired 1s after today's 09:00
+
+	wf := &ent.Workflow{
+		Slug:           "on-time-wf",
+		CronExpression: "0 9 * * *",
+		CronEnabled:    true,
+		TriggerType:    "cron",
+		CreatedAt:      createdAt,
+		LastFiredAt:    &onTimeLastFired,
+	}
+
+	restore := captureWarnLog()
+	checkMissedCronFire(wf, now)
+	logged := restore()
+
+	assert.NotContains(t, logged, "missed cron fire", "a workflow that fired on time must not be flagged")
+}
+
+// TestMostRecentCronOccurrence_ReturnsFalse_When_NoOccurrenceSinceLowerBound directly
+// exercises the exponential-search helper (rather than going through checkMissedCronFire)
+// to confirm it terminates and correctly reports "no occurrence" rather than looping
+// forever when notBefore and now are both inside the same gap between occurrences.
+func TestMostRecentCronOccurrence_ReturnsFalse_When_NoOccurrenceSinceLowerBound(t *testing.T) {
+	schedule, err := missedFireCronParser.Parse("0 9 * * *")
+	require.NoError(t, err)
+
+	notBefore := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC)
+
+	_, found := mostRecentCronOccurrence(schedule, notBefore, now)
+	assert.False(t, found)
+}
+
+// TestMostRecentCronOccurrence_FindsOccurrence_AcrossALargeGap verifies the search
+// correctly finds a far-in-the-past-relative-to-now occurrence (exercising several
+// window-doubling iterations) rather than only working for a small/recent gap.
+func TestMostRecentCronOccurrence_FindsOccurrence_AcrossALargeGap(t *testing.T) {
+	schedule, err := missedFireCronParser.Parse("0 9 * * *")
+	require.NoError(t, err)
+
+	notBefore := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
+
+	occ, found := mostRecentCronOccurrence(schedule, notBefore, now)
+	require.True(t, found)
+	assert.Equal(t, time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC), occ)
 }
