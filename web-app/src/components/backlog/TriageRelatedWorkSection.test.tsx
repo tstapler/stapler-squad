@@ -62,7 +62,6 @@ describe("TriageRelatedWorkSection", () => {
       query: "Add dark mode toggle to settings page",
       project: "/repo",
       groupBySession: true,
-      includeContext: true,
       excludeAutomationSessions: true,
       limit: 5,
     });
@@ -78,7 +77,19 @@ describe("TriageRelatedWorkSection", () => {
     expect(mockSearch).not.toHaveBeenCalled();
     const input = screen.getByTestId("triage-related-work-input");
     expect(input).toHaveValue("");
-    expect(input).not.toHaveFocus();
+  });
+
+  it("does not move focus into the input or results on mount or after auto-search resolves", () => {
+    const activeElementBeforeMount = document.activeElement;
+    mockState = { results: [makeHit()], loading: false, error: null };
+    render(<TriageRelatedWorkSection itemTitle="Add dark mode toggle" repoPath="/repo" />);
+
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
+
+    expect(screen.getByTestId("triage-related-work-results")).toBeInTheDocument();
+    expect(document.activeElement).toBe(activeElementBeforeMount);
   });
 
   it("shows reassuring copy when zero matches found", () => {
@@ -119,7 +130,6 @@ describe("TriageRelatedWorkSection", () => {
       query: "Add dark mode toggle",
       project: "/repo",
       groupBySession: true,
-      includeContext: true,
       excludeAutomationSessions: true,
       limit: 5,
     });

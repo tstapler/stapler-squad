@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -324,7 +325,11 @@ func TestGetClaudeHistoryMessages_AnchorIndexCentersWindow(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	msgs := make([]testConvMsg, 40)
 	for i := range msgs {
-		msgs[i] = testConvMsg{role: "user", content: "m", time: base.Add(time.Duration(i) * time.Minute)}
+		// Unique, checkable content per message so this test actually proves
+		// the window is centered at the right position — not just the right
+		// length (which would also pass if AnchorIndex were silently ignored
+		// and offset defaulted to 0, since len(messages[0:10]) == 10 too).
+		msgs[i] = testConvMsg{role: "user", content: fmt.Sprintf("m%d", i), time: base.Add(time.Duration(i) * time.Minute)}
 	}
 	seedClaudeHome(t, map[string]testConvSession{
 		"a3f5c8d2": {project: "/repo", messages: msgs},
@@ -340,6 +345,9 @@ func TestGetClaudeHistoryMessages_AnchorIndexCentersWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Messages, 10)
 	assert.Equal(t, int32(40), resp.Msg.TotalCount)
+	// offset = max(0, anchor - limit/2) = max(0, 20-5) = 15, so the window is messages[15:25].
+	assert.Equal(t, "m15", resp.Msg.Messages[0].Content, "window must start at anchor-limit/2, not offset 0")
+	assert.Equal(t, "m24", resp.Msg.Messages[9].Content, "window must end 10 messages after the start")
 }
 
 func TestGetClaudeHistoryMessages_OffsetLimitUnchanged_When_AnchorIndexUnset(t *testing.T) {

@@ -202,3 +202,43 @@ func TestListClaudeHistory_ExcludesAutomationSessionsWhenRequested(t *testing.T)
 	require.Len(t, resp.Msg.Entries, 1)
 	assert.Equal(t, "visible-session", resp.Msg.Entries[0].Id)
 }
+
+// --- Validation guards ---------------------------------------------------
+
+func TestSearchClaudeHistory_RejectsOffsetCombinedWithPostProcessing(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	seedClaudeHome(t, map[string]testConvSession{
+		"s1": {project: "/repo", messages: []testConvMsg{{role: "user", content: "hello", time: base}}},
+	})
+	svc := setupSearchService()
+
+	_, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
+		Query:          "hello",
+		Offset:         5,
+		GroupBySession: boolPtr(true),
+	}))
+
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+func TestGetClaudeHistoryMessages_RejectsAnchorIndexCombinedWithTail(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	seedClaudeHome(t, map[string]testConvSession{
+		"s1": {project: "/repo", messages: []testConvMsg{{role: "user", content: "hello", time: base}}},
+	})
+	svc := setupSearchService()
+
+	_, err := svc.GetClaudeHistoryMessages(t.Context(), connect.NewRequest(&sessionv1.GetClaudeHistoryMessagesRequest{
+		Id:          "s1",
+		AnchorIndex: anchorInt32(0),
+		Tail:        true,
+	}))
+
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}

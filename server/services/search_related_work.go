@@ -1,7 +1,10 @@
 package services
 
 import (
+	"sync"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -78,6 +81,25 @@ func contextWindowAndBookends(messages []session.ClaudeConversationMessage, hitI
 	return window, bookendFirst, bookendLast
 }
 
+// filterInPlace removes every element for which exclude returns true,
+// keeping the rest in their original relative order. The returned slice
+// aliases items' backing array (the items[:0] idiom) — callers must not use
+// items after this call. Shared by filterHistoryEntriesByAutomation,
+// filterAutomationSessions, and filterByProject, which differ only in
+// element type and predicate — per this repo's own
+// .claude/rules/interface-pollution-checklist.md rule 5 ("generalize once
+// 2+ real call sites need identical logic"), now satisfied by three.
+func filterInPlace[T any](items []T, exclude func(T) bool) []T {
+	out := items[:0]
+	for _, item := range items {
+		if exclude(item) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 // findInstanceBySessionID returns the live Instance whose Claude conversation
 // UUID matches sessionID, or nil if none is currently tracked. Shared by
 // isAutomationSession and resolvedProject, which each need this lookup for a
@@ -108,28 +130,18 @@ func isAutomationSession(sessionID string, instances []*session.Instance) bool {
 // predicate. The returned slice aliases entries' backing array (entries[:0]
 // idiom) — callers must not use entries after this call.
 func filterHistoryEntriesByAutomation(entries []session.ClaudeHistoryEntry, instances []*session.Instance) []session.ClaudeHistoryEntry {
-	out := entries[:0]
-	for _, e := range entries {
-		if isAutomationSession(e.ID, instances) {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
+	return filterInPlace(entries, func(e session.ClaudeHistoryEntry) bool {
+		return isAutomationSession(e.ID, instances)
+	})
 }
 
 // filterAutomationSessions removes results whose session is a live,
 // Hidden=true Instance. The returned slice aliases results' backing array
 // (results[:0] idiom) — callers must not use results after this call.
 func filterAutomationSessions(results []*sessionv1.SearchResult, instances []*session.Instance) []*sessionv1.SearchResult {
-	out := results[:0]
-	for _, r := range results {
-		if isAutomationSession(r.SessionId, instances) {
-			continue
-		}
-		out = append(out, r)
-	}
-	return out
+	return filterInPlace(results, func(r *sessionv1.SearchResult) bool {
+		return isAutomationSession(r.SessionId, instances)
+	})
 }
 
 // resolvedProject returns the main-repo path for a session's rawProject
@@ -162,11 +174,80 @@ func filterByProject(results []*sessionv1.SearchResult, project string, instance
 	if project == "" {
 		return results
 	}
-	out := results[:0]
-	for _, r := range results {
-		if resolvedProject(r.SessionId, r.Project, instances) == project {
-			out = append(out, r)
+	return filterInPlace(results, func(r *sessionv1.SearchResult) bool {
+		return resolvedProject(r.SessionId, r.Project, instances) != project
+	})
+}
+
+// applyResultPostProcessing runs SearchClaudeHistory's project → automation
+// → dedup → truncate → context-enrich pipeline on raw search results, in
+// that specific order: project scoping is the broadest filter and narrows
+// the candidate set first, then automation-session filtering, then dedup —
+// so an out-of-project or excluded-automation hit never contributes to
+// MoreMatchesInSessionCount on a kept result. Context/bookends are computed
+// only for the final, post-truncation result set, not wastefully on raw
+// hits discarded above. Isolated from the RPC handler so the pipeline is
+// unit-testable without a ConnectRPC round-trip.
+func (ss *SearchService) applyResultPostProcessing(
+	protoResults []*sessionv1.SearchResult,
+	req *sessionv1.SearchClaudeHistoryRequest,
+	hist *session.ClaudeSessionHistory,
+	requestedLimit int,
+	needsPostProcessing bool,
+) []*sessionv1.SearchResult {
+	var instances []*session.Instance
+	if ss.getInstances != nil && (req.GetProject() != "" || req.GetExcludeAutomationSessions()) {
+		instances = ss.getInstances()
+	}
+
+	if project := req.GetProject(); project != "" {
+		protoResults = filterByProject(protoResults, project, instances)
+	}
+
+	if req.GetExcludeAutomationSessions() {
+		excludedBefore := len(protoResults)
+		protoResults = filterAutomationSessions(protoResults, instances)
+		if excluded := excludedBefore - len(protoResults); excluded > 0 {
+			log.Info("search: excluded automation sessions", "count", excluded)
 		}
 	}
-	return out
+
+	if req.GetGroupBySession() {
+		protoResults = groupResultsBySession(protoResults)
+	}
+
+	if needsPostProcessing && len(protoResults) > requestedLimit {
+		protoResults = protoResults[:requestedLimit]
+	}
+
+	if req.GetIncludeContext() {
+		enrichWithContext(protoResults, hist)
+	}
+
+	return protoResults
+}
+
+// enrichWithContext populates ContextWindow/BookendFirst/BookendLast on each
+// result concurrently — each result requires its own conversation-file read
+// (session/history.go's GetMessagesFromConversationFile with limit=0 does a
+// full-file parse), so a serial loop would multiply per-request latency by
+// len(results). Each goroutine writes only to its own *SearchResult, so no
+// synchronization beyond the WaitGroup is needed.
+func enrichWithContext(results []*sessionv1.SearchResult, hist *session.ClaudeSessionHistory) {
+	var wg sync.WaitGroup
+	for _, r := range results {
+		wg.Add(1)
+		go func(r *sessionv1.SearchResult) {
+			defer wg.Done()
+			msgs, err := hist.GetMessagesFromConversationFile(r.SessionId, 0)
+			if err != nil {
+				return // best-effort: leave context fields empty rather than failing the whole search
+			}
+			window, first, last := contextWindowAndBookends(msgs, int(r.MessageIndex))
+			r.ContextWindow = toProtoClaudeMessages(window)
+			r.BookendFirst = toProtoClaudeMessages(first)
+			r.BookendLast = toProtoClaudeMessages(last)
+		}(r)
+	}
+	wg.Wait()
 }

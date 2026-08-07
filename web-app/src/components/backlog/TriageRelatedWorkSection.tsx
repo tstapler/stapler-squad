@@ -55,11 +55,17 @@ export function TriageRelatedWorkSection({ itemTitle, repoPath }: TriageRelatedW
   const debouncedQuery = useDebounce(query, 300);
 
   const runSearch = (q: string) => {
+    // includeContext is deliberately omitted: v1 ships snippet-only cards
+    // (see project_plans/session-search-fts5/design/ux.md's fallback
+    // recommendation) — SessionHitCard never renders contextWindow/
+    // bookendFirst/bookendLast, so requesting it would only cost the server
+    // an extra full-conversation-file read per hit on every debounced
+    // keystroke for data nothing displays. Re-add if a future card design
+    // actually surfaces the context window.
     search({
       query: q,
       project: repoPath,
       groupBySession: true,
-      includeContext: true,
       excludeAutomationSessions: true,
       limit: 5,
     });
