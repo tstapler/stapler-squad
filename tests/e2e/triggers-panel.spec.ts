@@ -89,6 +89,22 @@ test.describe("callback-settings", () => {
 
   test("callback-settings_should_roundTripMaskedConfiguredBadge_When_validUrlSaved", async ({ page }) => {
     const fieldTestId = "callback-on-session-complete";
+
+    // The callback config is global, process-wide server state (not per-browser-
+    // context) — a prior run of this same spec against the same test-server
+    // instance (e.g. the chromium-dom project running after chromium already
+    // exercised this exact field) would otherwise leave this field "Configured"
+    // before this test even starts, failing the assertion below. Reset it first
+    // if needed so the test is self-contained regardless of run order/project.
+    // The masked URL input's DOM value is always "" regardless of configured
+    // state (the real URL never round-trips), so fill("") on it is always a
+    // no-op — use the dedicated "Clear" affordance (only rendered when
+    // configured) instead, which calls setEdit directly.
+    if ((await triggersPage.callbackStatusBadge(fieldTestId).textContent()) === "Configured") {
+      await triggersPage.clearCallbackUrl(fieldTestId);
+      await triggersPage.saveCallbackSettings();
+      await expect(triggersPage.callbackStatusBadge(fieldTestId)).toHaveText("Not configured");
+    }
     await expect(triggersPage.callbackStatusBadge(fieldTestId)).toHaveText("Not configured");
 
     await triggersPage.fillCallbackUrl(fieldTestId, "https://example.com/hooks/session-complete");

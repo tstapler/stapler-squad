@@ -97,6 +97,13 @@ export class TriggersPage {
     await this.page.getByTestId(fieldTestId).fill(url);
   }
 
+  // The masked URL input's DOM value is always "" (the real URL never round-
+  // trips), so a configured field can't be reset via fillCallbackUrl("") — use
+  // the dedicated "Clear" affordance instead (only rendered when configured).
+  async clearCallbackUrl(fieldTestId: string) {
+    await this.page.getByTestId(`${fieldTestId}-clear`).click();
+  }
+
   async saveCallbackSettings() {
     await this.page.getByTestId("callback-settings-save").click();
   }
