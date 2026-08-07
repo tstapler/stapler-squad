@@ -91,6 +91,11 @@ type ServerDependencies struct {
 	// WorkflowScheduler manages cron-based workflow execution.
 	WorkflowScheduler *workflows.Scheduler
 
+	// TriggerFireEventRepo persists the trigger-fire audit trail (webhook-triggers
+	// Epic 1.2), shared by Scheduler, WorkflowService, and the inbound webhook
+	// handlers (Epic 2.2/2.3). Nil when storage is not ent-backed.
+	TriggerFireEventRepo session.TriggerFireEventRepository
+
 	// Registry is the live-handle map for all running sessions.
 	Registry *session.Registry
 
@@ -136,6 +141,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		HeadlessPool:            rt.HeadlessPool,
 		WorkflowRepo:            rt.WorkflowRepo,
 		WorkflowScheduler:       rt.WorkflowScheduler,
+		TriggerFireEventRepo:    rt.TriggerFireEventRepo,
 		Registry:                rt.Registry,
 		SessionSummaryGenerator: rt.SessionSummaryGenerator,
 	}
@@ -429,6 +435,11 @@ type RuntimeDeps struct {
 
 	// WorkflowScheduler manages cron-based workflow execution.
 	WorkflowScheduler *workflows.Scheduler
+
+	// TriggerFireEventRepo persists the trigger-fire audit trail (webhook-triggers
+	// Epic 1.2), shared by Scheduler, WorkflowService, and the inbound webhook
+	// handlers (Epic 2.2/2.3). Nil when storage is not ent-backed.
+	TriggerFireEventRepo session.TriggerFireEventRepository
 
 	// Registry is the live-handle map for all running sessions.
 	Registry *session.Registry
@@ -1236,6 +1247,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Initialize WorkflowScheduler and WorkflowService with deferred injection.
 	// Order: SessionService → WorkflowScheduler → WorkflowService → SessionService.SetWorkflowService
 	var workflowScheduler *workflows.Scheduler
+	// triggerFireEventRepo is hoisted out of the block below (rather than declared
+	// inline) so it's available to RuntimeDeps for the inbound webhook handlers
+	// (webhook-triggers Epic 2.2/2.3), which are wired later in server.go independently
+	// of the Scheduler/WorkflowService construction above.
+	var triggerFireEventRepo session.TriggerFireEventRepository
 	if workflowRepo != nil {
 		workflowScheduler = workflows.NewScheduler(workflowRepo, sessionService, eventBus)
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
@@ -1246,10 +1262,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// enforces. backlogSvc is constructed earlier in this function (see
 		// services.NewBacklogService above).
 		workflowScheduler.SetAdmissionGate(backlogSvc)
+		// Per-Workflow rate limit (webhook-triggers Epic 2.4.2) — shared across cron
+		// fires (FireNow) and the inbound webhook handlers' stubbed fire path, both of
+		// which route through FireNow today.
+		workflowScheduler.SetRateLimiter(services.NewTriggerRateLimiter())
 		if entClient := storage.GetEntClient(); entClient != nil {
 			fireEventRepo := session.NewEntTriggerFireEventRepository(entClient)
 			workflowScheduler.SetTriggerFireEventRepo(fireEventRepo)
 			workflowSvc.SetTriggerFireEventRepo(fireEventRepo)
+			triggerFireEventRepo = fireEventRepo
 		}
 		log.Info("WorkflowService and WorkflowScheduler initialized")
 	} else {
@@ -1295,6 +1316,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		CDPDeps:                 cdpDeps,
 		WorkflowRepo:            workflowRepo,
 		WorkflowScheduler:       workflowScheduler,
+		TriggerFireEventRepo:    triggerFireEventRepo,
 		Registry:                svc.Registry,
 		SessionSummaryGenerator: sessionSummaryGenerator,
 	}, nil

@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -273,4 +275,56 @@ func TestScheduler_Start_RegistersValidCronTrigger(t *testing.T) {
 	_, registered := sched.entryMap[wf.ID.String()]
 	sched.mu.Unlock()
 	assert.True(t, registered, "a self-consistent trigger_type=cron row should still be registered")
+}
+
+// fakeRateLimiter is a test double for triggerRateLimiterGate backed by a single
+// shared golang.org/x/time/rate.Limiter (ignoring workflowID) — sufficient for a
+// single-workflow rate-limit test (Task 2.4.2b). Defined locally rather than importing
+// *services.TriggerRateLimiter: server/services already imports server/workflows, so
+// importing it back from this file (same `package workflows`) would be a cycle.
+type fakeRateLimiter struct {
+	lim *rate.Limiter
+}
+
+func (f *fakeRateLimiter) Allow(_ uuid.UUID) bool {
+	return f.lim.Allow()
+}
+
+// TestFireNow_RateLimited_RejectsExcessFiresInTightLoop verifies Task 2.4.2b: firing
+// the same trigger repeatedly in a tight loop only lets burst-sized calls through in
+// that same instant; the rest are rejected (fired_failed, not silently dropped).
+func TestFireNow_RateLimited_RejectsExcessFiresInTightLoop(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+
+	const burst = 10
+	sched.SetRateLimiter(&fakeRateLimiter{lim: rate.NewLimiter(rate.Limit(10.0/60.0), burst)})
+	recorder := &fakeFireEventRecorder{}
+	sched.SetTriggerFireEventRepo(recorder)
+
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug:            "rate-limited-wf",
+		Name:            "Rate Limited",
+		Command:         "do the thing",
+		TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	const attempts = 15
+	successCount := 0
+	for i := 0; i < attempts; i++ {
+		if _, fireErr := sched.FireNow(context.Background(), wf, ""); fireErr == nil {
+			successCount++
+		}
+	}
+
+	assert.Equal(t, burst, successCount, "exactly burst-sized fires should succeed in a tight loop")
+
+	rejected := 0
+	for _, ev := range recorder.events {
+		if ev.Outcome == "fired_failed" && ev.ErrorMessage == "rate limit exceeded" {
+			rejected++
+		}
+	}
+	assert.Equal(t, attempts-burst, rejected, "excess fires must be recorded as fired_failed, not silently dropped")
 }

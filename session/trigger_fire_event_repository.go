@@ -38,6 +38,13 @@ type TriggerFireEventRepository interface {
 	// ListByWorkflow returns the most recent TriggerFireEvent rows for workflowID,
 	// newest first, capped at limit.
 	ListByWorkflow(ctx context.Context, workflowID uuid.UUID, limit int) ([]*ent.TriggerFireEvent, error)
+	// UpdateOutcome transitions an existing row — identified by its (workflow_id,
+	// delivery_id) composite key, the same key Create claims atomically — to a final
+	// outcome, optionally setting sessionID/errMsg (empty strings leave those fields
+	// untouched). Used by the webhook handlers (Epic 2.2/2.3) to move a freshly-claimed
+	// "pending" row to "fired_success"/"fired_failed" after the fire attempt completes.
+	// Returns an error if no row matches the key.
+	UpdateOutcome(ctx context.Context, workflowID uuid.UUID, deliveryID, outcome, sessionID, errMsg string) error
 }
 
 // EntTriggerFireEventRepository implements TriggerFireEventRepository using the ent ORM.
@@ -92,4 +99,30 @@ func (r *EntTriggerFireEventRepository) ListByWorkflow(ctx context.Context, work
 		return nil, fmt.Errorf("list trigger fire events for workflow %s: %w", workflowID, err)
 	}
 	return events, nil
+}
+
+// UpdateOutcome transitions the TriggerFireEvent row matching (workflowID, deliveryID)
+// to outcome, optionally setting sessionID/errMsg.
+func (r *EntTriggerFireEventRepository) UpdateOutcome(ctx context.Context, workflowID uuid.UUID, deliveryID, outcome, sessionID, errMsg string) error {
+	u := r.client.TriggerFireEvent.Update().
+		Where(
+			triggerfireevent.WorkflowID(workflowID),
+			triggerfireevent.DeliveryID(deliveryID),
+		).
+		SetOutcome(outcome)
+	if sessionID != "" {
+		u.SetSessionID(sessionID)
+	}
+	if errMsg != "" {
+		u.SetErrorMessage(errMsg)
+	}
+
+	n, err := u.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("update trigger fire event outcome (workflow_id=%s delivery_id=%q): %w", workflowID, deliveryID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("update trigger fire event outcome: no row found for workflow_id=%s delivery_id=%q", workflowID, deliveryID)
+	}
+	return nil
 }

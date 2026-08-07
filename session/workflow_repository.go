@@ -20,6 +20,12 @@ type WorkflowRepository interface {
 	GetByWebhookSlug(ctx context.Context, slug string) (*ent.Workflow, error)
 	ListAll(ctx context.Context) ([]*ent.Workflow, error)
 	ListEnabled(ctx context.Context) ([]*ent.Workflow, error) // cron_enabled=true
+	// ListByTriggerType returns all workflows with the given trigger_type, regardless
+	// of cron_enabled — callers (e.g. GitHubWebhookHandler) filter further by
+	// repo/branch/enabled in application code. Narrowing by trigger_type at the DB
+	// layer first avoids a linear decrypt-and-check over every workflow in the system
+	// (webhook-triggers Task 2.2.1b).
+	ListByTriggerType(ctx context.Context, triggerType string) ([]*ent.Workflow, error)
 }
 
 // WorkflowCreateInput holds the fields for creating a new workflow.
