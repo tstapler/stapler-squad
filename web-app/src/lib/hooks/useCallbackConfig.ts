@@ -33,7 +33,10 @@ interface UseCallbackConfigReturn {
  */
 export function useCallbackConfig(): UseCallbackConfigReturn {
   const [config, setConfig] = useState<CallbackConfigProto | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Starts true: the mount effect below fetches unconditionally, so initializing to
+  // false produced a one-frame flash of the "not configured" UI before the real
+  // fetch landed.
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);

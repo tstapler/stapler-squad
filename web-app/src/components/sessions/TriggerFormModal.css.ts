@@ -6,6 +6,32 @@ import { vars } from "@/styles/theme.css";
 // already uses for ruleModalContent/modalHeader/modalBody/modalCloseButton. This file only
 // holds styles genuinely new to the trigger-type-conditional form.
 
+// Shared "sr-only" style for aria-live announcer spans — see a11y.css.ts.
+export { visuallyHidden } from "@/styles/a11y.css";
+
+// ── Inline-layout replacements (css-architecture.md: no `style={{ ... }}` for
+// static layout) ────────────────────────────────────────────────────────────
+
+export const checkboxLabel = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  fontSize: 13,
+});
+
+export const promptTextarea = style({
+  resize: "vertical",
+  fontFamily: vars.font.mono,
+});
+
+export const formActionsSpaced = style({
+  marginTop: vars.space["4"],
+});
+
+export const secretBoxLegend = style({
+  padding: 0,
+});
+
 export const typeSelector = style({
   display: "flex",
   gap: 8,
@@ -130,4 +156,9 @@ export const secretWarning = style({
 export const secretCopiedNotice = style({
   fontSize: 11,
   color: vars.color.success,
+});
+
+export const secretCopyErrorNotice = style({
+  fontSize: 11,
+  color: vars.color.errorText,
 });

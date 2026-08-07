@@ -80,4 +80,33 @@ describe("CallbackSettings", () => {
     await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledTimes(1));
     expect(mockUpdateConfig).toHaveBeenCalledWith({ onSessionCompleteUrl: "" });
   });
+
+  // ─── aria-live save announcement (Fix 3) ──────────────────────────────────
+
+  it("CallbackSettings_should_announceSaveSuccess_When_saved", async () => {
+    render(<CallbackSettings />);
+    fireEvent.change(screen.getByTestId("callback-on-session-stale"), {
+      target: { value: "https://example.com/stale" },
+    });
+    fireEvent.click(screen.getByTestId("callback-settings-save"));
+
+    await waitFor(() => {
+      const liveRegion = document.querySelector('[aria-live="polite"]');
+      expect(liveRegion).toHaveTextContent("Callback settings saved.");
+    });
+  });
+
+  it("CallbackSettings_should_announceSaveFailure_When_saveRejects", async () => {
+    mockUpdateConfig.mockRejectedValueOnce(new Error("network error"));
+    render(<CallbackSettings />);
+    fireEvent.change(screen.getByTestId("callback-on-session-stale"), {
+      target: { value: "https://example.com/stale" },
+    });
+    fireEvent.click(screen.getByTestId("callback-settings-save"));
+
+    await waitFor(() => {
+      const liveRegion = document.querySelector('[aria-live="polite"]');
+      expect(liveRegion).toHaveTextContent(/Failed to save callback settings: network error/);
+    });
+  });
 });

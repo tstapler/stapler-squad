@@ -25,7 +25,10 @@ interface UseTriggerFireEventsReturn {
  */
 export function useTriggerFireEvents(workflowId: string, limit = 100): UseTriggerFireEventsReturn {
   const [events, setEvents] = useState<TriggerFireEventProto[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Starts true: the mount effect below fetches unconditionally (once workflowId is
+  // set), so initializing to false produced a one-frame flash of the empty-history
+  // UI before the real fetch landed.
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -35,8 +38,16 @@ export function useTriggerFireEvents(workflowId: string, limit = 100): UseTrigge
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!clientRef.current || !workflowId) {
+    if (!workflowId) {
+      // No-op case (see doc comment above) — not an in-flight fetch, so don't leave
+      // `loading` stuck true.
       setEvents([]);
+      setLoading(false);
+      return;
+    }
+    if (!clientRef.current) {
+      // Client not constructed yet (effect ordering edge case) — leave `loading` as
+      // whatever it currently is rather than flipping it off prematurely.
       return;
     }
     setLoading(true);
