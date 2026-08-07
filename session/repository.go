@@ -544,6 +544,19 @@ type BacklogItemFilter struct {
 	Limit int
 	// Offset skips the first N results (for pagination). Only applied when Limit > 0.
 	Offset int
+	// ChainFired, when non-nil, restricts results to items whose chain_fired
+	// column equals *ChainFired. Added so TriggerChainReconciler.ReconcileChains
+	// (session/chain_firer.go) can push its "unfired pending chain" filter into
+	// SQL instead of scanning every "done" item up to the default 1000-row
+	// safety cap and filtering in Go — past 1000 done items, a pending unfired
+	// chain outside that window was silently never reconciled (sdd:6-verify
+	// finding). Backed by index.Fields("status", "chain_fired")
+	// (session/ent/schema/backlog_item.go).
+	ChainFired *bool
+	// NextWorkflowIDSet, when non-nil, restricts results to items where
+	// next_workflow_id IS NOT NULL (true) or IS NULL (false). See ChainFired's
+	// doc comment — the two are combined by ReconcileChains's query.
+	NextWorkflowIDSet *bool
 }
 
 // BacklogItemUpdate carries the mutable fields for UpdateBacklogItem.

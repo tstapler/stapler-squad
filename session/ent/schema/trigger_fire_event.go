@@ -59,5 +59,13 @@ func (TriggerFireEvent) Indexes() []ent.Index {
 		// make the second trigger's Create collide with the first trigger's row and
 		// silently never fire, inverting AC12's intent (pre-mortem P1 #1 correction).
 		index.Fields("workflow_id", "delivery_id").Unique(),
+		// EntTriggerFireEventRepository.ListByWorkflow queries
+		// Where(WorkflowID(...)).Order(Desc(FieldCreatedAt)) — the bare
+		// created_at index above doesn't cover a workflow_id-scoped lookup
+		// (it would still require a full scan filtered by workflow_id), and
+		// the (workflow_id, delivery_id) unique index above is keyed for
+		// dedup lookups, not for an ordered per-workflow scan. This composite
+		// matches ListByWorkflow's actual query shape (sdd:6-verify finding).
+		index.Fields("workflow_id", "created_at"),
 	}
 }

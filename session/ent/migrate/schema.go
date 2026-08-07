@@ -991,6 +991,11 @@ var (
 				Unique:  true,
 				Columns: []*schema.Column{TriggerFireEventsColumns[1], TriggerFireEventsColumns[3]},
 			},
+			{
+				Name:    "triggerfireevent_workflow_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TriggerFireEventsColumns[1], TriggerFireEventsColumns[6]},
+			},
 		},
 	}
 	// WorkflowsColumns holds the columns for the "workflows" table.

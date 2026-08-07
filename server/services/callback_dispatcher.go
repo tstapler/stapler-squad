@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -52,8 +53,18 @@ const callbackRetryBackoff = 500 * time.Millisecond
 // never the target URL — per the redaction requirement (a URL can carry embedded
 // credentials in its userinfo component).
 type CallbackDispatcher struct {
-	client   *http.Client
-	cfg      *config.Config
+	client *http.Client
+	cfg    *config.Config
+
+	// cfgMu guards concurrent reads of cfg.Callbacks (via resolveURL) against
+	// CallbackConfigService.UpdateCallbackConfig's writes to that SAME
+	// *config.Config instance — wired via ConfigMu()/server/dependencies.go's
+	// SetSharedCallbackConfig call. Mirrors BacklogService.cfgMu (PR #199 review
+	// F1) applied to the identical stale-pointer bug: cfg here was a snapshot
+	// loaded once at process start with no writer ever touching it, so a saved
+	// callback URL had zero runtime effect on Dispatch until a process restart.
+	cfgMu sync.RWMutex
+
 	inFlight chan struct{}
 
 	// validateURL performs the send-time SSRF check (Task 5.2.1f). Always
@@ -108,8 +119,12 @@ func (d *CallbackDispatcher) Dispatch(eventType string, payload any) {
 }
 
 // resolveURL maps eventType to its configured callback URL ("" if unset or
-// eventType is unrecognized).
+// eventType is unrecognized). Reads cfg.Callbacks under cfgMu's read lock so a
+// concurrent CallbackConfigService.UpdateCallbackConfig write is always either
+// fully visible or not yet applied — never torn.
 func (d *CallbackDispatcher) resolveURL(eventType string) string {
+	d.cfgMu.RLock()
+	defer d.cfgMu.RUnlock()
 	switch eventType {
 	case "session_complete":
 		return d.cfg.Callbacks.OnSessionCompleteURL
@@ -120,6 +135,15 @@ func (d *CallbackDispatcher) resolveURL(eventType string) string {
 	default:
 		return ""
 	}
+}
+
+// ConfigMu exposes the mutex guarding cfg.Callbacks so
+// CallbackConfigService.UpdateCallbackConfig can write a saved callback URL
+// directly into this dispatcher's live *config.Config instance without a
+// process restart — wired via SetSharedCallbackConfig/server/dependencies.go.
+// See cfgMu's doc comment.
+func (d *CallbackDispatcher) ConfigMu() *sync.RWMutex {
+	return &d.cfgMu
 }
 
 // deliver runs in its own goroutine (launched by Dispatch after the semaphore

@@ -426,6 +426,17 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
 
+	if filter.ChainFired != nil {
+		q = q.Where(backlogitem.ChainFiredEQ(*filter.ChainFired))
+	}
+	if filter.NextWorkflowIDSet != nil {
+		if *filter.NextWorkflowIDSet {
+			q = q.Where(backlogitem.NextWorkflowIDNotNil())
+		} else {
+			q = q.Where(backlogitem.NextWorkflowIDIsNil())
+		}
+	}
+
 	switch filter.SortBy {
 	case "priority":
 		q = q.Order(ent.Asc(backlogitem.FieldPriority), ent.Desc(backlogitem.FieldUpdatedAt))
@@ -470,6 +481,16 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	}
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
+	}
+	if filter.ChainFired != nil {
+		q = q.Where(backlogitem.ChainFiredEQ(*filter.ChainFired))
+	}
+	if filter.NextWorkflowIDSet != nil {
+		if *filter.NextWorkflowIDSet {
+			q = q.Where(backlogitem.NextWorkflowIDNotNil())
+		} else {
+			q = q.Where(backlogitem.NextWorkflowIDIsNil())
+		}
 	}
 	switch filter.SortBy {
 	case "priority":
@@ -1309,11 +1330,13 @@ func (r *EntRepository) SetChainFirer(f *ChainFirer) {
 // non-blocking: bounded semaphore + go, see ChainFirer.Dispatch) must never
 // propagate into TransitionBacklogItemStatus's own return path.
 //
-// Deliberately uses context.Background() rather than the caller's ctx: by the
-// time the dispatched goroutine's CreateSession call actually runs, the
-// caller's own ctx (e.g. an RPC handler's request-scoped context) may already
-// be cancelled — AC9 requires this fire to survive past the transition
-// call's own lifetime, not be tied to it.
+// ChainFirer.Dispatch itself takes no ctx (see its doc comment) — it always
+// derives its own context.WithTimeout(context.Background(), chainFireTimeout)
+// for the goroutine it spawns, because by the time that goroutine's
+// CreateSession call actually runs, the caller's own ctx (e.g. an RPC
+// handler's request-scoped context) may already be cancelled — AC9 requires
+// this fire to survive past the transition call's own lifetime, not be tied
+// to it.
 func (r *EntRepository) dispatchChainFire(item *BacklogItemData) {
 	if r.chainFirer == nil {
 		return
@@ -1323,7 +1346,7 @@ func (r *EntRepository) dispatchChainFire(item *BacklogItemData) {
 			log.WarningLog.Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
 		}
 	}()
-	r.chainFirer.Dispatch(context.Background(), item)
+	r.chainFirer.Dispatch(item)
 }
 
 // attachItemSessionsForPublish best-effort loads and attaches this item's
