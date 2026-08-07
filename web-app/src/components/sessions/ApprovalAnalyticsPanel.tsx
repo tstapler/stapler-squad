@@ -8,6 +8,7 @@ import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { DailyBucketProto, SubcommandStatProto, AutoDecision, SuggestionSource } from "@/gen/session/v1/types_pb";
 import { ProgramDetailPanel } from "./ProgramDetailPanel";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
+import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
 import {
   panel, titleRow, title, refreshButton,
   windowSelector, windowBtn, windowBtnActive,
@@ -90,6 +91,19 @@ const WINDOW_OPTIONS = [
   { label: "90 days", value: 90 },
 ];
 
+// Maps `escalation_category` values (see EscalationCategory in the backend classifier) to the
+// human-readable labels shown in the "Escalation Reasons" table. Callers must fall back to the
+// raw category string for unmapped keys — see the `?? category` usage below — so an unrecognized
+// category never renders the literal string "undefined".
+const ESCALATION_CATEGORY_LABELS: Record<EscalationCategory, string> = {
+  "no-match": "No auto-approval rule matched",
+  "explicit-rule": "Rule explicitly flagged for review",
+  "domain-age": "Newly-registered domain",
+  "secret-scan": "Plaintext secret detected",
+  "unclassifiable": "Shell expansion — couldn't classify",
+  "unexpected": "Internal classification error",
+};
+
 /**
  * ApprovalAnalyticsPanel displays time-series and aggregate data for
  * auto-approval classification decisions.
@@ -124,6 +138,15 @@ export function ApprovalAnalyticsPanel() {
 
   // Max total across days — used to scale inline bars.
   const maxDayTotal = dailyBuckets.reduce((m, b) => Math.max(m, b.total), 0);
+
+  // Non-zero escalation-category counts, sorted descending — drives the "Escalation Reasons" table.
+  const escalationReasonRows = useMemo(() => {
+    const counts = summary?.escalationReasonCounts ?? {};
+    return Object.entries(counts)
+      .filter(([, count]) => count > 0)
+      .sort((a, b) => b[1] - a[1]);
+  }, [summary?.escalationReasonCounts]);
+  const escalationReasonMaxCount = escalationReasonRows[0]?.[1] ?? 1;
 
   return (
     <div className={panel}>
@@ -301,6 +324,39 @@ export function ApprovalAnalyticsPanel() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ── Escalation Reasons ── */}
+      {summary && (
+        escalationReasonRows.length > 0 ? (
+          <div className={tableSection}>
+            <h3 className={sectionTitle}>Escalation Reasons</h3>
+            <div className={tableWrapper}>
+              <table className={table}>
+                <thead>
+                  <tr>
+                    <th className={th}>Reason</th>
+                    <th className={`${th} ${thRight}`}>Count</th>
+                    <th className={th}>Frequency</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {escalationReasonRows.map(([category, count]) => (
+                    <tr key={category} className={row}>
+                      <td className={td}>{ESCALATION_CATEGORY_LABELS[category as EscalationCategory] ?? category}</td>
+                      <td className={`${td} ${tdRight}`}>{count}</td>
+                      <td className={`${td} ${tdBar}`}>
+                        <Bar value={count} max={escalationReasonMaxCount} className={barRule} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className={empty}>No escalations in this window.</div>
+        )
       )}
 
       {/* ── Top Python imports ── */}

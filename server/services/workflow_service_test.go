@@ -54,6 +54,7 @@ func createTestWorkflowService(t *testing.T) (*SessionService, *WorkflowService)
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	sessSvc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { sessSvc.Shutdown() })
 
 	repo := createTestEntClient(t)
 	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())

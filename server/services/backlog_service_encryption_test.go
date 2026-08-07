@@ -316,7 +316,7 @@ func TestSyncLoopDecryptsToken(t *testing.T) {
 	})
 
 	// Test decryption
-	decrypted, err := syncLoop.TestDecryptConfigToken(string(encryptedConfigJSON))
+	decrypted, err := syncLoop.DecryptConfigToken(string(encryptedConfigJSON))
 	if err != nil {
 		t.Fatalf("decryptConfigToken: %v", err)
 	}

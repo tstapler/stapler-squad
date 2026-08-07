@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -258,7 +259,7 @@ func TestEnsureServerRunning_NoOp(t *testing.T) {
 	t.Cleanup(func() {
 		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel()
-		_ = safeexec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killCtx, Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the isolated server and keep it alive with a detached session.
@@ -266,7 +267,7 @@ func TestEnsureServerRunning_NoOp(t *testing.T) {
 	// the follow-up check in EnsureServerRunning to falsely report the server as dead.
 	newSessionCtx, newSessionCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer newSessionCancel()
-	require.NoError(t, safeexec.CommandContext(newSessionCtx, "tmux", "-L", socketName, "new-session", "-d", "-s", "keepalive").Run())
+	require.NoError(t, safeexec.CommandContext(newSessionCtx, Binary(), "-L", socketName, "new-session", "-d", "-s", "keepalive").Run())
 
 	// With the server running and a live session, EnsureServerRunning should be a no-op.
 	_, err := EnsureServerRunning(socketName)
@@ -286,7 +287,7 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 	t.Cleanup(func() {
 		killCtx2, killCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel2()
-		_ = safeexec.CommandContext(killCtx2, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killCtx2, Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Confirm no server is running on this socket yet.
@@ -300,7 +301,7 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 	// On macOS, tmux's default exit-empty=on causes the server to exit immediately
 	// when there are no sessions. Create a session to keep the server alive and
 	// verify the server is functional by confirming the session can be created.
-	createCmd := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "verify-alive")
+	createCmd := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "new-session", "-d", "-s", "verify-alive")
 	require.NoError(t, createCmd.Run(),
 		"should be able to create a session on the newly started server — server must be running")
 }
@@ -326,6 +327,84 @@ func TestStartServerSucceededDespiteError(t *testing.T) {
 	})
 }
 
+// TestServerStartAttempt covers the single-attempt decision: did start-server
+// actually succeed, or did it fail but a recheck shows the server running
+// anyway (the check-race startServerSucceededDespiteError recovers from)?
+func TestServerStartAttempt(t *testing.T) {
+	t.Run("succeeds when start-server itself succeeds", func(t *testing.T) {
+		calls := 0
+		startServer := func() ([]byte, error) {
+			calls++
+			return []byte("ok"), nil
+		}
+		isNotRunning := func() bool { t.Fatal("should not need a recheck when start-server succeeded"); return true }
+		ok, out, err := serverStartAttempt(startServer, isNotRunning)
+		require.True(t, ok)
+		require.NoError(t, err)
+		require.Equal(t, []byte("ok"), out)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("recovers when start-server errors but a recheck shows the server running", func(t *testing.T) {
+		startServer := func() ([]byte, error) { return []byte("server exited unexpectedly"), errors.New("exit status 1") }
+		isNotRunning := func() bool { return false } // running
+		ok, _, err := serverStartAttempt(startServer, isNotRunning)
+		require.True(t, ok, "a start-server error should be swallowed when the server is actually up")
+		require.Error(t, err, "the underlying error is still returned for logging even on recovery")
+	})
+
+	t.Run("fails when start-server errors and the server genuinely is not running", func(t *testing.T) {
+		startServer := func() ([]byte, error) { return nil, errors.New("exit status 1") }
+		isNotRunning := func() bool { return true } // not running
+		ok, _, err := serverStartAttempt(startServer, isNotRunning)
+		require.False(t, ok)
+		require.Error(t, err)
+	})
+}
+
+// TestEnsureServerRunningWithRetry covers the retry wrapper added around
+// serverStartAttempt to survive start-server failures (transient check-races
+// or genuine start failures) that outlast a single attempt under sustained
+// heavy system load -- see TestEnsureServerRunning_NoOp's original failure
+// and the doc comment above ensureServerRunningWithRetry in tmux.go.
+func TestEnsureServerRunningWithRetry(t *testing.T) {
+	t.Run("succeeds on the first attempt", func(t *testing.T) {
+		calls := 0
+		startServer := func() ([]byte, error) { calls++; return nil, nil }
+		isNotRunning := func() bool { return true }
+		_, err := ensureServerRunningWithRetry(startServer, isNotRunning, 5, time.Millisecond, 4*time.Millisecond)
+		require.NoError(t, err)
+		require.Equal(t, 1, calls, "should not retry once the first attempt succeeds")
+	})
+
+	t.Run("recovers after a couple of failed start-server calls", func(t *testing.T) {
+		calls := 0
+		startServer := func() ([]byte, error) {
+			calls++
+			if calls < 3 {
+				return nil, errors.New("exit status 1")
+			}
+			return nil, nil
+		}
+		isNotRunning := func() bool { return true } // never recovers via recheck alone
+		_, err := ensureServerRunningWithRetry(startServer, isNotRunning, 5, time.Millisecond, 4*time.Millisecond)
+		require.NoError(t, err, "should recover once a later attempt actually starts the server")
+		require.Equal(t, 3, calls)
+	})
+
+	t.Run("gives up once the attempt budget is exhausted", func(t *testing.T) {
+		calls := 0
+		startServer := func() ([]byte, error) {
+			calls++
+			return []byte("server exited unexpectedly"), errors.New("exit status 1")
+		}
+		isNotRunning := func() bool { return true } // never running
+		_, err := ensureServerRunningWithRetry(startServer, isNotRunning, 3, time.Millisecond, 4*time.Millisecond)
+		require.Error(t, err, "must still surface the error if the server genuinely never comes up")
+		require.Equal(t, 3, calls, "should attempt exactly the configured number of times")
+	})
+}
+
 // TestCreateKeepaliveSession verifies that a keepalive session is created and
 // that calling it again is idempotent.
 func TestCreateKeepaliveSession(t *testing.T) {
@@ -337,12 +416,12 @@ func TestCreateKeepaliveSession(t *testing.T) {
 	}
 	socketName := fmt.Sprintf("test_keepalive_%d_%d", os.Getpid(), rand.Int63())
 	t.Cleanup(func() {
-		_ = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the server with an anchor session to keep it alive while we test.
 	// (new-session -d is equivalent to start-server + create session atomically)
-	require.NoError(t, safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
+	require.NoError(t, safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
 
 	// Create keepalive session.
 	err := CreateKeepaliveSession(socketName)
@@ -350,7 +429,7 @@ func TestCreateKeepaliveSession(t *testing.T) {
 
 	// Verify the keepalive session exists.
 	keepaliveName := TmuxPrefix + "keepalive"
-	out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "has-session", "-t", keepaliveName).CombinedOutput()
+	out, err := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "has-session", "-t", keepaliveName).CombinedOutput()
 	require.NoError(t, err, "keepalive session should exist after CreateKeepaliveSession; output: %s", out)
 
 	// Calling it again should be idempotent (no error).
@@ -368,20 +447,20 @@ func TestSetExitEmpty(t *testing.T) {
 	}
 	socketName := fmt.Sprintf("test_exit_empty_%d_%d", os.Getpid(), rand.Int63())
 	t.Cleanup(func() {
-		_ = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the server WITH a detached session to prevent the server from exiting
 	// immediately due to exit-empty=on (the default). Using new-session -d starts
 	// both the server and an anchor session in one step.
-	require.NoError(t, safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
+	require.NoError(t, safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
 
 	// Set exit-empty off.
 	err := SetExitEmpty(socketName, false)
 	require.NoError(t, err, "SetExitEmpty(false) should succeed")
 
 	// Verify the option was set.
-	out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
+	out, err := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
 	require.NoError(t, err)
 	require.Contains(t, strings.ToLower(string(out)), "off",
 		"exit-empty should be off after SetExitEmpty(false)")
@@ -390,7 +469,7 @@ func TestSetExitEmpty(t *testing.T) {
 	err = SetExitEmpty(socketName, true)
 	require.NoError(t, err, "SetExitEmpty(true) should succeed")
 
-	out, err = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
+	out, err = safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
 	require.NoError(t, err)
 	require.Contains(t, strings.ToLower(string(out)), "on",
 		"exit-empty should be on after SetExitEmpty(true)")

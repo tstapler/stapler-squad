@@ -23,6 +23,8 @@ const (
 	FieldStartedAt = "started_at"
 	// FieldEndedAt holds the string denoting the ended_at field in the database.
 	FieldEndedAt = "ended_at"
+	// FieldEndReason holds the string denoting the end_reason field in the database.
+	FieldEndReason = "end_reason"
 	// FieldAcSnapshot holds the string denoting the ac_snapshot field in the database.
 	FieldAcSnapshot = "ac_snapshot"
 	// FieldPipelineModeSnapshot holds the string denoting the pipeline_mode_snapshot field in the database.
@@ -33,6 +35,8 @@ const (
 	FieldTriageResult = "triage_result"
 	// FieldVerificationNotes holds the string denoting the verification_notes field in the database.
 	FieldVerificationNotes = "verification_notes"
+	// FieldBaseCommitSha holds the string denoting the base_commit_sha field in the database.
+	FieldBaseCommitSha = "base_commit_sha"
 	// FieldLastCommitSha holds the string denoting the last_commit_sha field in the database.
 	FieldLastCommitSha = "last_commit_sha"
 	// FieldLastCommitAt holds the string denoting the last_commit_at field in the database.
@@ -78,11 +82,13 @@ var Columns = []string{
 	FieldSessionRole,
 	FieldStartedAt,
 	FieldEndedAt,
+	FieldEndReason,
 	FieldAcSnapshot,
 	FieldPipelineModeSnapshot,
 	FieldPipelineModeSnapshotHash,
 	FieldTriageResult,
 	FieldVerificationNotes,
+	FieldBaseCommitSha,
 	FieldLastCommitSha,
 	FieldLastCommitAt,
 	FieldLastCommitMessage,
@@ -115,10 +121,14 @@ func ValidColumn(column string) bool {
 }
 
 var (
+	// DefaultEndReason holds the default value on creation for the "end_reason" field.
+	DefaultEndReason string
 	// DefaultPipelineModeSnapshot holds the default value on creation for the "pipeline_mode_snapshot" field.
 	DefaultPipelineModeSnapshot string
 	// DefaultPipelineModeSnapshotHash holds the default value on creation for the "pipeline_mode_snapshot_hash" field.
 	DefaultPipelineModeSnapshotHash string
+	// DefaultBaseCommitSha holds the default value on creation for the "base_commit_sha" field.
+	DefaultBaseCommitSha string
 	// DefaultCommitCountSinceSpawn holds the default value on creation for the "commit_count_since_spawn" field.
 	DefaultCommitCountSinceSpawn int
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
@@ -157,6 +167,11 @@ func ByEndedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEndedAt, opts...).ToFunc()
 }
 
+// ByEndReason orders the results by the end_reason field.
+func ByEndReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEndReason, opts...).ToFunc()
+}
+
 // ByAcSnapshot orders the results by the ac_snapshot field.
 func ByAcSnapshot(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAcSnapshot, opts...).ToFunc()
@@ -180,6 +195,11 @@ func ByTriageResult(opts ...sql.OrderTermOption) OrderOption {
 // ByVerificationNotes orders the results by the verification_notes field.
 func ByVerificationNotes(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldVerificationNotes, opts...).ToFunc()
+}
+
+// ByBaseCommitSha orders the results by the base_commit_sha field.
+func ByBaseCommitSha(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBaseCommitSha, opts...).ToFunc()
 }
 
 // ByLastCommitSha orders the results by the last_commit_sha field.

@@ -25,6 +25,7 @@ func TestRestartSession_EmptyID(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.RestartSession(context.Background(), connect.NewRequest(&sessionv1.RestartSessionRequest{
 		Id: "",
@@ -41,6 +42,7 @@ func TestRestartSession_SessionNotFound(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.RestartSession(context.Background(), connect.NewRequest(&sessionv1.RestartSessionRequest{
 		Id: "does-not-exist",
@@ -61,6 +63,7 @@ func TestClearConversationState_EmptyID(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.ClearConversationState(context.Background(), connect.NewRequest(&sessionv1.ClearConversationStateRequest{
 		Id: "",
@@ -77,6 +80,7 @@ func TestClearConversationState_SessionNotFound(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.ClearConversationState(context.Background(), connect.NewRequest(&sessionv1.ClearConversationStateRequest{
 		Id: "ghost-session",
@@ -122,6 +126,7 @@ func TestListBranches_EmptyPath(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.ListBranches(context.Background(), connect.NewRequest(&sessionv1.ListBranchesRequest{
 		RepoPath: "",
@@ -138,6 +143,7 @@ func TestListBranches_PathOutsideHome(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// /proc exists on Linux but is never inside the user home directory.
 	_, err := svc.ListBranches(context.Background(), connect.NewRequest(&sessionv1.ListBranchesRequest{
@@ -155,6 +161,7 @@ func TestListBranches_NonExistentPath(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -179,6 +186,7 @@ func TestGetTerminalSnapshot_EmptyID(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.GetTerminalSnapshot(context.Background(), connect.NewRequest(&sessionv1.GetTerminalSnapshotRequest{
 		SessionId: "",
@@ -195,6 +203,7 @@ func TestGetTerminalSnapshot_SessionNotFound(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.GetTerminalSnapshot(context.Background(), connect.NewRequest(&sessionv1.GetTerminalSnapshotRequest{
 		SessionId: "no-such-session",

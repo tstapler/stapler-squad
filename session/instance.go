@@ -808,6 +808,17 @@ func instanceOnExitCallback(i *Instance) func(string) {
 				}
 			}
 		})
+		// Capture the diff snapshot before firing EventExited so listeners (e.g.
+		// sessionSummaryListener) can read a fresh i.GetDiffStats() synchronously
+		// from the callback — see ADR-002 / plan.md's "Diff-stat capture timing"
+		// row. Best-effort: error intentionally discarded, matching
+		// computeDirDiffStats's existing "returns nil on any error" convention.
+		// Skipped entirely when no listener is registered (e.g.
+		// SessionSummaryGenerator not wired) — UpdateDiffStats shells out to git
+		// diff and paying that cost on every exit for nobody is wasteful.
+		if i.hasLifecycleListeners() {
+			_ = i.UpdateDiffStats()
+		}
 		i.fireLifecycleEvent(EventExited, reason)
 	}
 }
@@ -1265,6 +1276,17 @@ func (i *Instance) Destroy() error {
 	// Clean up tmux session first since it's using the git worktree
 	if err := i.KillSession(); err != nil {
 		errs = append(errs, err)
+	}
+
+	// Capture the diff snapshot before CleanupWorktree deletes the worktree
+	// directory, so sessionSummaryListener's synchronous i.GetDiffStats() read
+	// (dispatched off the EventStopped fire below) never sees an empty/errored
+	// diff due to the teardown race — see ADR-002. Best-effort: error
+	// intentionally discarded, matching computeDirDiffStats's existing
+	// "returns nil on any error" convention. Skipped entirely when no listener
+	// is registered — see instanceOnExitCallback's matching guard.
+	if i.hasLifecycleListeners() {
+		_ = i.UpdateDiffStats()
 	}
 
 	// Then clean up git worktree

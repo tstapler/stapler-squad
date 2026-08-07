@@ -609,7 +609,7 @@ export const wh40kTheme = createTheme(vars, {
 export const cleanTheme = createTheme(vars, {
   color: {
     textPrimary: "#e2e8f0",
-    textSecondary: "#94a3b8",
+    textSecondary: "#a0aec0", /* was #94a3b8 — 4.02:1 on surfaceMuted fails WCAG AA; #a0aec0 = 4.57:1 ✅ */
     textMuted: "#7d8ea8",
     textDisabled: "#475569",
     textTertiary: "#808080",

@@ -24,6 +24,7 @@ import {
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
+  "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },
 };
 
 export default function FeaturesPage() {

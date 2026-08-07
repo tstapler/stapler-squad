@@ -81,7 +81,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 	// locked (initializing) by an interrupted `worktree add` — the exact state
 	// worktreeAlreadyRegisteredForBranch just rejected above — otherwise refuses
 	// `remove` regardless of -f, leaving the broken checkout stuck forever.
-	_, _ = g.runGitCommand(g.repoPath, "worktree", "unlock", g.worktreePath)     // Ignore error if not locked
+	_, _ = g.runGitCommand(g.repoPath, "worktree", "unlock", g.worktreePath)       // Ignore error if not locked
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 
 	// Create a new worktree from the existing branch

@@ -60,14 +60,15 @@
   gating anything. `server_integration_test.go` (the file under investigation) does
   **not** carry this tag today — it's a plain file in the `server` package, so it's part
   of the main gating `-race` + `-coverprofile` invocation.
-- **No `Eventually`/retry helper library is used anywhere** (no `testify/require.Eventually`
-  import in the repo — confirmed via grep across `server/`, `session/`, `config/`). The
-  established idiom instead is a hand-rolled `for time.Now().Before(deadline) { ...;
-  time.Sleep(N) }` polling loop with a `t.Fatalf` on timeout — exactly the pattern already
-  used by `waitForResolvedAddr`, `waitForLiveInstance`, `waitForPermissionRequestHookCommand`,
-  and `waitForTmuxTeardown` in `server_integration_test.go` itself. Any fix should keep this
-  idiom rather than introducing a new dependency (e.g. `testify/require.Eventually`), which
-  would also violate the "no new dependencies" constraint.
+- **Correction**: this line previously claimed no `Eventually`/retry helper library is used
+  anywhere in the repo. That's wrong — `github.com/stretchr/testify` is already a direct
+  dependency (`go.mod`) and `require.Eventually` is already used in 6+ other test files (see
+  `research/build-vs-buy.md` §Option 1 for the full list). `server_integration_test.go`
+  itself, however, uses a hand-rolled `for time.Now().Before(deadline) { ...; time.Sleep(N) }`
+  polling loop with a `t.Fatalf` on timeout — the pattern used by `waitForResolvedAddr`,
+  `waitForLiveInstance`, `waitForPermissionRequestHookCommand`, and `waitForTmuxTeardown` in
+  that file specifically. Either idiom is available; `build-vs-buy.md` is the source of truth
+  on which one this plan chose and why.
 - **Shared-state contention is already a named, documented problem in this exact file**:
   `waitForTmuxTeardown`'s comment (lines 503-526) documents that *every* integration test
   in the `server` package shares one process-scoped, PID-keyed tmux server socket
@@ -79,7 +80,7 @@
   and cross-test resource accumulation within this one package's test binary, which
   isolating the file into its own `go test` invocation would only partially address (see
   Edge Cases below).
-- **`-race` is layered consistently everywhere it matters**: `make race-test` (Makefile
+- **`-race` is layered consistently everywhere it matters**: `make test-race` (Makefile
   line 495: `go test -race -short ./...`), `make ci` (line 541: `go test -race ./...`),
   and the CI `test` job all use `-race`, so any fix must preserve `-race` on whatever
   invocation ends up running these two tests — there is no precedent in this repo for a
@@ -162,7 +163,7 @@
 - `server/server_integration_test.go` — the two flaky tests + all wait helpers
 - `.github/workflows/build.yml` lines 119-260 — `test` job: coverage-gated `-race` run
   (line 155), advisory `-tags integration` run (line 251), coverage gate config (161-166)
-- `Makefile` lines 436-441, 495, 541 — `make test` (`-short`, no `-race`), `make race-test`,
+- `Makefile` lines 436-441, 495, 541 — `make test` (`-short`, no `-race`), `make test-race`,
   `make ci`
 - `session/tmux/server_registry_integration_test.go`,
   `server/mcp/server_integration_test.go`, `session/mcp_integration_test.go`,

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { LucideIcon } from "lucide-react";
-import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package } from "lucide-react";
+import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package, FileText } from "lucide-react";
 import dynamic from "next/dynamic";
 import { Session, InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
@@ -13,6 +13,7 @@ import { SessionLogsTab } from "./SessionLogsTab";
 import { FilesTab } from "./FilesTab";
 import { BrowserTab } from "./BrowserTab";
 import { ArtifactsTab } from "./ArtifactsTab";
+import { SessionSummaryPanel } from "./SessionSummaryPanel";
 import { VNCStatus } from "@/gen/session/v1/types_pb";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
@@ -78,6 +79,13 @@ export interface SessionDetailViewProps {
   canGoBack?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
+}
+
+// Terminal per the SessionStatus doc comment: "Session has been stopped
+// (terminal state, cannot transition further)." Used to gate the Summary
+// tab, which only has content once the session has ended.
+function isSessionTerminal(status: SessionStatus): boolean {
+  return status === SessionStatus.STOPPED;
 }
 
 function getStatusLabel(status: SessionStatus): string {
@@ -289,6 +297,7 @@ export function SessionDetailView({
     { id: "info", label: "Info", icon: Info },
     { id: "browser", label: "Browser", icon: Globe, disabled: !isBrowserAvailable },
     { id: "artifacts", label: "Artifacts", icon: Package },
+    { id: "summary", label: "Summary", icon: FileText, disabled: !isSessionTerminal(session.status) },
   ];
 
   const handleTabChange = (tabId: string) => {
@@ -582,7 +591,13 @@ export function SessionDetailView({
               aria-disabled={tab.disabled}
               className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""} ${tab.disabled ? tabDisabled : ""}`}
               onClick={() => { if (!tab.disabled) handleTabChange(tab.id); }}
-              title={tab.disabled && tab.id === "browser" ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool" : undefined}
+              title={
+                tab.disabled && tab.id === "browser"
+                  ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
+                  : tab.disabled && tab.id === "summary"
+                    ? "Summary is generated after the session ends."
+                    : undefined
+              }
             >
               <span className={styles.tabIcon}><Icon size={16} /></span>
               <span className={styles.tabLabel}>{tab.label}</span>
@@ -789,7 +804,7 @@ export function SessionDetailView({
 
         {activeTab === "diff" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-diff">
-            <DiffViewer />
+            <DiffViewer session={session} />
           </div>
         )}
         {activeTab === "vcs" && (
@@ -1239,6 +1254,11 @@ export function SessionDetailView({
         {activeTab === "artifacts" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-artifacts">
             <ArtifactsTab session={session} />
+          </div>
+        )}
+        {activeTab === "summary" && (
+          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-summary">
+            <SessionSummaryPanel sessionId={session.id} />
           </div>
         )}
       </div>

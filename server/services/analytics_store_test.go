@@ -1,12 +1,14 @@
 package services
 
 import (
+	"context"
 	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"go.uber.org/goleak"
 )
 
 func TestClassify_DailyBucketAutoApproveRate(t *testing.T) {
@@ -277,4 +279,74 @@ func TestComputeSummary_should_showFewerGaps_After_ReclassifyGaps(t *testing.T) 
 	reclassified := ReclassifyGaps(entries, c)
 	s := ComputeSummary(reclassified)
 	assert.Equal(t, 1, s.CoverageGapCount, "TC-G-21: 2 of 3 gaps covered by rule; 1 should remain")
+}
+
+func TestComputeSummary_EscalationReasonCounts(t *testing.T) {
+	// AC4: escalate/secret-scan-auto_deny entries bucket into the 5 escalation
+	// categories; non-escalation, non-secret-scan-deny entries contribute to none.
+	entries := []AnalyticsEntry{
+		{Decision: "escalate", RuleID: ""},
+		{Decision: "escalate", RuleID: ""},
+		{Decision: "escalate", RuleID: "new-domain-check"},
+		{Decision: "auto_deny", RuleID: "secret-scan"},
+		{Decision: "escalate", RuleID: "shell-expansion-program"},
+		{Decision: "escalate", RuleID: "seed-escalate-git-branch-safe-delete"},
+		{Decision: "auto_allow", RuleID: "some-rule"},
+	}
+
+	s := ComputeSummary(entries)
+	assert.Equal(t, map[string]int{
+		"no-match":       2,
+		"domain-age":     1,
+		"secret-scan":    1,
+		"unclassifiable": 1,
+		"explicit-rule":  1,
+	}, s.EscalationReasonCounts, "AC4: EscalationReasonCounts must bucket every escalate decision plus the secret-scan auto_deny special case, excluding the unrelated auto_allow entry")
+}
+
+// TestAnalyticsStore_Stop_JoinsFlushGoroutine confirms Stop() actually waits for the
+// flush goroutine to exit rather than just signaling it — goleak.VerifyNone must see
+// nothing new relative to the pre-Start baseline immediately after Stop() returns,
+// with no polling/sleep needed.
+func TestAnalyticsStore_Stop_JoinsFlushGoroutine(t *testing.T) {
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+
+	baseline := goleak.IgnoreCurrent()
+	store.Start(context.Background())
+	store.Stop()
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestAnalyticsStore_Stop_Idempotent confirms Stop() can be called multiple times
+// (e.g. once via t.Cleanup and once explicitly) without panicking.
+func TestAnalyticsStore_Stop_Idempotent(t *testing.T) {
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+	store.Start(context.Background())
+
+	require.NotPanics(t, store.Stop)
+	require.NotPanics(t, store.Stop, "a second Stop() call must be a no-op, not a double-close panic")
+}
+
+// TestAnalyticsStore_Stop_BeforeStart_NoPanic confirms Stop() is safe to call on a
+// store that was never Start()ed (cancel is nil).
+func TestAnalyticsStore_Stop_BeforeStart_NoPanic(t *testing.T) {
+	store := NewAnalyticsStore(nil)
+	require.NotPanics(t, store.Stop)
+}
+
+// TestAnalyticsStore_Record_AfterStop_NoPanic confirms Record() after Stop() stays a
+// silent no-op (matching the existing buffer-full drop behavior) instead of panicking
+// on a send to a goroutine that is no longer draining the channel.
+func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+	store.Start(context.Background())
+	store.Stop()
+
+	require.NotPanics(t, func() {
+		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
+	})
 }

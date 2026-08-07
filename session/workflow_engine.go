@@ -62,3 +62,15 @@ func (e *DefaultWorkflowEngine) AllowedTransitions(from BacklogStatus) []Backlog
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
 }
+
+// GuardedTransitionAllowed evaluates whether a transition is both structurally
+// valid (CanTransition) and passes business-rule gates (ValidateGates),
+// WITHOUT executing it — the read-only counterpart to transitionWithGuard
+// (server/services/backlog_service_triage.go), for callers in package
+// session (like SyncOne) that cannot import server/services.
+func GuardedTransitionAllowed(engine WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) bool {
+	if !engine.CanTransition(item.Status, to) {
+		return false
+	}
+	return engine.ValidateGates(item, to) == nil
+}

@@ -10,11 +10,30 @@
     "BacklogSourcesSettings shows empty state when no sources",
     "BacklogSourcesSettings add button is disabled until required fields are filled",
     "BacklogSourcesSettings calls createItemSource with the correct payload on submit",
-    "BacklogSourcesSettings toggles enabled state via updateItemSource",
     "BacklogSourcesSettings shows an error message when createItemSource fails",
+    "BacklogSourcesSettings clears a stale error banner once a later listItemSources call succeeds",
+    "BacklogSourcesSettings clears schema-driven field values when switching plugin type",
+    "BacklogSourcesSettings toggles enabled state via updateItemSource",
     "BacklogSourcesSettings calls deleteItemSource when remove is clicked",
     "BacklogSourcesSettings calls triggerSync when Sync now is clicked",
-    "BacklogSourcesSettings fetches and renders sync history on View history click"
+    "BacklogSourcesSettings fetches and renders sync history on View history click",
+    "BacklogSourcesSettings shows a truncation notice when sync history is capped",
+    "BacklogSourcesSettings_should_RenderTogglesWithFetchedState_When_SourceLoaded",
+    "BacklogSourcesSettings_should_CallSetForwardSyncEnabled_When_ForwardToggleClicked",
+    "BacklogSourcesSettings calls setBackwardSyncEnabled directly when disabling an already-enabled backward toggle",
+    "BacklogSourcesSettings shows the close-label input only while forward sync is enabled",
+    "BacklogSourcesSettings_should_ShowBothDirectionsWarning_When_BothTogglesEnabled",
+    "BacklogSourcesSettings does not show the both-directions warning when only one direction is enabled",
+    "TestBacklogSourcesSettings_ShowsConfirmDialogWithPreviewCount_WhenEnablingBackwardSync",
+    "TestBacklogSourcesSettings_SkipsDialogWhenPreviewCountIsZero",
+    "TestBacklogSourcesSettings_CancelLeavesToggleOffAndMakesNoRPCCall",
+    "TestBacklogSourcesSettings_ConfirmFlipsToggleAndCallsSetBackwardSyncEnabled",
+    "TestBacklogSourcesSettings_TogglePendingWhilePreviewInFlight",
+    "TestBacklogSourcesSettings_ShowsInlineErrorWhenPreviewFails_NoDialog",
+    "TestBacklogSourcesSettings_ConfirmDialogTrapsFocusAndReturnsFocusOnClose",
+    "BacklogSourcesSettings_should_ShowRowLevelWarning_When_RecentSyncHasAuthError",
+    "BacklogSourcesSettings_should_ShowWarningForForwardSyncFailure_When_MostRecentEventIsACloseFailure",
+    "BacklogSourcesSettings does not show the row-level warning for a transient (non-auth) failure"
   ],
-  "lastModified": "2026-07-02T00:00:00Z"
+  "lastModified": "2026-08-03T00:00:00Z"
 }

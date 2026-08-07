@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -414,8 +415,83 @@ func (g *GitWorktree) findExistingPR() (string, int, error) {
 	return url, num, nil
 }
 
+// HasCommitsAheadOfMain reports whether this worktree's branch has at least
+// one commit not present on mainBranch — i.e. whether there is genuinely
+// anything to ship. Used as a pre-flight check before attempting CreatePR: a
+// branch with zero commits ahead of main makes `gh pr create` fail with "No
+// commits between X and Y", which is not a retryable push/PR failure (see
+// BUG-063) but a signal that the item was already fully addressed elsewhere.
+// Returns true (the safe, existing default: attempt PR creation as before) if
+// the check itself is inconclusive — an error opening the repo, or the branch
+// not existing locally — so a check failure never causes a caller to skip PR
+// creation for a branch that may well need it.
+func (g *GitWorktree) HasCommitsAheadOfMain(mainBranch string) (bool, error) {
+	status, err := BranchAheadBehind(g.repoPath, g.branchName, mainBranch)
+	if err != nil {
+		return true, err
+	}
+	if !status.BranchExists {
+		return true, nil
+	}
+	return status.AheadOfMain > 0, nil
+}
+
 // reviewInfo captures the blocking review that tripped HasBlockingReviews.
 type reviewInfo struct{ author, body string }
+
+// prFeedbackItem captures one piece of substantive PR feedback (a COMMENTED
+// review or a plain comment) along with the GitHub-assigned timestamp it
+// carries, so callers can compute a max-timestamp watermark for dedup.
+type prFeedbackItem struct {
+	author, body string
+	at           time.Time
+}
+
+// substantiveFeedbackMinLen is the minimum trimmed-rune length a review/comment
+// body must have to count as substantive feedback (filters bare "LGTM"-style
+// noise out of the HasReviewFeedback signal).
+const substantiveFeedbackMinLen = 10
+
+// isSubstantiveFeedback reports whether body is long enough to be considered
+// actionable feedback rather than noise (a bare "lgtm", empty, or whitespace-only
+// body).
+func isSubstantiveFeedback(body string) bool {
+	return utf8.RuneCountInString(strings.TrimSpace(body)) >= substantiveFeedbackMinLen
+}
+
+// copilotReviewerLogin is the GitHub Copilot code-review bot account's login
+// — the one "[bot]" account whose feedback IS meant to count toward
+// HasReviewFeedback (it's this feature's motivating example). Mirrors the
+// literal login RequestCopilotReview requests a review from.
+const copilotReviewerLogin = "copilot-pull-request-reviewer[bot]"
+
+// isExcludedBotAuthor reports whether login belongs to an automated bot
+// account (GitHub's convention: a "[bot]" suffix, e.g. github-actions[bot],
+// codecov[bot], dependabot[bot]) OTHER than Copilot's own review account.
+// Without this exclusion, a long-enough recurring bot comment (a coverage
+// report, a CI status summary) would pass isSubstantiveFeedback and
+// repeatedly re-trigger a fix session on every push, burning the shared
+// rework-cap budget on non-actionable text (pre-mortem.md #5).
+func isExcludedBotAuthor(login string) bool {
+	return login != copilotReviewerLogin && strings.HasSuffix(login, "[bot]")
+}
+
+// parseFeedbackTimestamp parses raw as an RFC3339 timestamp (GitHub's
+// submittedAt/createdAt format), falling back to time.Now() on failure. A
+// zero-valued fallback could lose to an already-persisted, later watermark
+// and silently suppress detection of genuinely new feedback; time.Now() is
+// guaranteed no earlier than any watermark this process could have already
+// persisted, so it can only ever push LatestFeedbackAt later, never mask a
+// real later item under an earlier one. fieldLabel names the source field,
+// for the warning log.
+func parseFeedbackTimestamp(raw, fieldLabel string) time.Time {
+	at, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		log.Warn("parsePRStatusPayload: failed to parse feedback timestamp", "field", fieldLabel, "value", raw, "err", err)
+		return time.Now()
+	}
+	return at
+}
 
 // PRStatus holds the CI, review, and conflict state for a pull request.
 type PRStatus struct {
@@ -452,6 +528,17 @@ type PRStatus struct {
 	// HasBlockingReviews — exposed as a count so callers building a
 	// github.PRInfo-shaped value don't need to re-derive it from the bool).
 	ChangesRequestedCount int
+	// HasReviewFeedback is true when at least one substantive COMMENTED-state
+	// review or substantive plain PR comment exists (Copilot's typical review
+	// posture is COMMENTED, not CHANGES_REQUESTED, so this is a distinct signal
+	// from HasBlockingReviews). Non-substantive feedback (bare "lgtm", empty,
+	// or whitespace-only bodies) never sets this.
+	HasReviewFeedback bool
+	// LatestFeedbackAt is the newest GitHub-assigned submittedAt/createdAt
+	// timestamp among all substantive feedback captured this call; the zero
+	// value when HasReviewFeedback is false. Callers use this as the dedup
+	// watermark comparison point (see ReconcilePRPending's hasNewFeedback).
+	LatestFeedbackAt time.Time
 	// FeedbackText is a combined human-readable summary for the fix agent.
 	FeedbackText string
 
@@ -463,7 +550,10 @@ type PRStatus struct {
 	// single source of truth for "is there a conflict" — render() branches on
 	// HasConflicts, not on this field's zero-ness.
 	conflictMergeStateStatus string
-	generalComments          []string // unexported; existing "general comments" section content (unchanged behavior, just relocated)
+	// commentReviews holds substantive COMMENTED-state reviews — today silently
+	// dropped since only CHANGES_REQUESTED feeds blockingReviews.
+	commentReviews  []prFeedbackItem
+	generalComments []prFeedbackItem // unexported; existing "general comments" section content, retyped to carry timestamps
 }
 
 // render assembles FeedbackText from the fields captured during evaluation,
@@ -513,14 +603,55 @@ func (s *PRStatus) render() string {
 		}
 	}
 
+	if len(s.commentReviews) > 0 {
+		sb.WriteString("## Reviewer comments\n")
+		for _, cr := range s.commentReviews {
+			sb.WriteString("@" + cr.author + ": " + cr.body + "\n\n")
+		}
+	}
+
 	if len(s.generalComments) > 0 {
 		sb.WriteString("## PR comments\n")
 		for _, c := range s.generalComments {
-			sb.WriteString(c + "\n\n")
+			sb.WriteString("@" + c.author + ": " + c.body + "\n\n")
 		}
 	}
 
 	return sb.String()
+}
+
+// countableGeneralComments returns the subset of generalComments that count
+// toward HasReviewFeedback/LatestFeedbackAt/FeedbackAuthors: substantive
+// bodies from non-excluded-bot authors. commentReviews needs no equivalent
+// filter here — it's already filtered to eligible entries at append time
+// (see the COMMENTED case in parsePRStatusPayload).
+func (s *PRStatus) countableGeneralComments() []prFeedbackItem {
+	out := make([]prFeedbackItem, 0, len(s.generalComments))
+	for _, gc := range s.generalComments {
+		if !isSubstantiveFeedback(gc.body) || isExcludedBotAuthor(gc.author) {
+			continue
+		}
+		out = append(out, gc)
+	}
+	return out
+}
+
+// FeedbackAuthors returns one author login per countable feedback item
+// (COMMENTED reviews plus countableGeneralComments) captured this call — NOT
+// deduplicated, so the same login appears once per item they authored.
+// Callers use len() of this slice as an item count and the logins as an
+// author list for a single hasNewFeedback-triggered dispatch, since a
+// partially-addressed multi-item batch is otherwise silently unresolved
+// forever once the dedup watermark advances past the whole batch.
+func (s *PRStatus) FeedbackAuthors() []string {
+	authors := make([]string, 0, len(s.commentReviews)+len(s.generalComments))
+	for _, cr := range s.commentReviews {
+		authors = append(authors, cr.author)
+	}
+	for _, gc := range s.countableGeneralComments() {
+		authors = append(authors, gc.author)
+	}
+	return authors
 }
 
 // GetPRStatus fetches the combined CI check status, reviewer decisions,
@@ -540,6 +671,16 @@ func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
 		return nil, fmt.Errorf("gh pr view failed: %s (%w)", raw, err)
 	}
 
+	return parsePRStatusPayload(raw)
+}
+
+// ParsePRStatusPayload parses gh pr view's combined JSON output into a
+// PRStatus. Exported so callers outside this package (e.g.
+// session/backlog_lifecycle_test.go's ReconcilePRPending fixtures) can build
+// a *PRStatus with commentReviews/generalComments genuinely populated —
+// FeedbackAuthors() depends on those unexported fields, which a struct
+// literal from another package cannot set directly.
+func ParsePRStatusPayload(raw []byte) (*PRStatus, error) {
 	return parsePRStatusPayload(raw)
 }
 
@@ -564,12 +705,14 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 			Author struct {
 				Login string `json:"login"`
 			} `json:"author"`
+			SubmittedAt string `json:"submittedAt"`
 		} `json:"reviews"`
 		Comments []struct {
 			Body   string `json:"body"`
 			Author struct {
 				Login string `json:"login"`
 			} `json:"author"`
+			CreatedAt string `json:"createdAt"`
 		} `json:"comments"`
 		Mergeable        string `json:"mergeable"`
 		MergeStateStatus string `json:"mergeStateStatus"`
@@ -632,12 +775,41 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 			status.blockingReviews = append(status.blockingReviews, reviewInfo{author: r.Author.Login, body: r.Body})
 		case "APPROVED":
 			status.ApprovedCount++
+		case "COMMENTED":
+			// Excluded-bot check alongside substantiveness: without it, a
+			// long-enough recurring bot COMMENTED review would repeatedly
+			// re-trigger a fix session, burning the shared rework-cap budget
+			// on non-actionable text (pre-mortem.md #5). Copilot's own
+			// review account is explicitly exempted — it's this feature's
+			// motivating example.
+			if !isSubstantiveFeedback(r.Body) || isExcludedBotAuthor(r.Author.Login) {
+				continue
+			}
+			at := parseFeedbackTimestamp(r.SubmittedAt, "submittedAt")
+			status.commentReviews = append(status.commentReviews, prFeedbackItem{author: r.Author.Login, body: r.Body, at: at})
 		}
 	}
 
-	// Include general PR comments as context.
+	// Include general PR comments as context. Every comment is captured
+	// unconditionally (unchanged behavior) — substantiveness/bot filtering
+	// only affects what counts toward HasReviewFeedback (below), not what
+	// renders in FeedbackText.
 	for _, c := range payload.Comments {
-		status.generalComments = append(status.generalComments, "@"+c.Author.Login+": "+c.Body)
+		at := parseFeedbackTimestamp(c.CreatedAt, "createdAt")
+		status.generalComments = append(status.generalComments, prFeedbackItem{author: c.Author.Login, body: c.Body, at: at})
+	}
+
+	for _, cr := range status.commentReviews {
+		status.HasReviewFeedback = true
+		if cr.at.After(status.LatestFeedbackAt) {
+			status.LatestFeedbackAt = cr.at
+		}
+	}
+	for _, gc := range status.countableGeneralComments() {
+		status.HasReviewFeedback = true
+		if gc.at.After(status.LatestFeedbackAt) {
+			status.LatestFeedbackAt = gc.at
+		}
 	}
 
 	status.FeedbackText = status.render()
@@ -658,6 +830,28 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 	out, err := g.runCombinedOutput(cmd)
 	if err != nil {
 		return fmt.Errorf("gh pr merge --auto failed: %s (%w)", out, err)
+	}
+	return nil
+}
+
+// RequestCopilotReview requests a GitHub Copilot code review on prNumber.
+// Best-effort: fails when Copilot code review isn't enabled for the org/repo,
+// or on any other gh error — callers must not fail PR creation on this error.
+// Uses the legacy bot-login form (copilot-pull-request-reviewer[bot]) via
+// --add-reviewer rather than the newer @copilot alias, since the literal
+// login is accepted by every gh version this repo targets while the alias is
+// version-gated (see plan.md's Pattern Decisions table).
+func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
+	if err := checkGHCLI(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "gh", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
+	cmd.Dir = g.worktreePath
+	out, err := g.runCombinedOutput(cmd)
+	if err != nil {
+		return fmt.Errorf("gh pr edit --add-reviewer copilot failed: %s (%w)", out, err)
 	}
 	return nil
 }

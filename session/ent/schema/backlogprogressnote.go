@@ -24,8 +24,12 @@ func (BacklogProgressNote) Fields() []ent.Field {
 		field.UUID("id", uuid.UUID{}).
 			Default(uuid.New),
 		field.UUID("item_id", uuid.UUID{}),
+		// criterion_index is Min(-1), not Min(0): -1 is the sentinel used by
+		// item-level (not per-criterion) progress notes — e.g.
+		// SetBacklogItemPRAndTransition's "pr_created" note and manual status
+		// overrides — where there is no single AC this note is about.
 		field.Int("criterion_index").
-			Min(0),
+			Min(-1),
 		field.String("note").
 			Optional().
 			Comment("Freeform note text reported via report_progress. Rendered call sites are responsible for truncation (see sanitizeField); stored unbounded here."),

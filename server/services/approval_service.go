@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -13,11 +15,17 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// ciConclusionFailure is the GitHub CI check conclusion value the CI-red guard blocks
+// on. Mirrors ciConclusionSuccess in pkg/classifier/classifier.go (Task 1.1.1d) — kept
+// as a separate unexported copy since the two packages don't share this constant.
+const ciConclusionFailure = "failure"
+
 // ApprovalService handles Claude Code hook approval RPCs.
 type ApprovalService struct {
 	approvalStore     *ApprovalStore
 	notificationStore approvalNotificationStamper // optional; nil-safe
 	eventBus          *events.EventBus            // optional; nil-safe; broadcasts resolution to connected clients
+	liveFinder        LiveInstanceFinder          // optional; nil-safe — CI status for the block-on-red guard (not persisted, see plan.md's Implementation Deviations)
 }
 
 // NewApprovalService creates an ApprovalService with the given ApprovalStore.
@@ -36,6 +44,13 @@ func (as *ApprovalService) SetNotificationStore(store approvalNotificationStampe
 // real-time signal when Device A resolves an approval.
 func (as *ApprovalService) SetEventBus(bus *events.EventBus) {
 	as.eventBus = bus
+}
+
+// SetLiveInstanceFinder wires the live in-memory instance lookup used by the
+// block-on-red-CI guard (AC5). See ApprovalHandler.SetLiveInstanceFinder for why this
+// must be the live registry rather than *session.Storage.
+func (as *ApprovalService) SetLiveInstanceFinder(f LiveInstanceFinder) {
+	as.liveFinder = f
 }
 
 // ---------------------------------------------------------------------------
@@ -64,10 +79,37 @@ func (as *ApprovalService) ResolveApproval(
 		Message:  message,
 	}
 
-	// Fetch session ID before removing from store (needed for event broadcast below).
+	// Fetch session ID before removing from store (needed below for both the CI-red
+	// guard and the event broadcast).
 	sessionID := ""
 	if a, ok := as.approvalStore.Get(req.Msg.ApprovalId); ok {
 		sessionID = a.SessionID
+	}
+
+	// AC5: block manual Approve when the session's branch has failing CI, unless the
+	// reviewer explicitly overrides (Story 2.2.4). The lookup itself always runs (its
+	// result is what the override log line reports); only the early-return decision is
+	// conditional on OverrideCiBlock.
+	if req.Msg.Decision == "allow" && config.LoadConfig().GetFeatureFlag(blockApprovalOnCIFailureFlagName) && as.liveFinder != nil {
+		if inst := as.liveFinder.FindLiveInstance(sessionID); inst != nil {
+			// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
+			// fields on its own goroutine under inst.mu (session/instance.go's mu doc
+			// comment mandates Snapshot() for reads outside the actor).
+			ghInfo := inst.Snapshot().GitHub
+			blocked := ghInfo.GitHubPRNumber > 0 && ghInfo.GitHubCheckConclusion == ciConclusionFailure
+			if blocked && req.Msg.OverrideCiBlock {
+				log.Info("[ApprovalService] approved despite failing CI (override)",
+					"approval_id", req.Msg.ApprovalId, "session_id", sessionID, "ci_conclusion", ghInfo.GitHubCheckConclusion)
+			} else if blocked {
+				msg := "Approval blocked: CI is failing on this branch — review before approving."
+				if ghInfo.GitHubPRURL != "" {
+					msg += " " + ghInfo.GitHubPRURL + "/checks"
+				}
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New(msg))
+			}
+		}
+		// inst == nil (session not found/not live): fail open — an infrastructure lookup
+		// miss should never hard-fail a human's explicit "Approve" click.
 	}
 
 	if err := as.approvalStore.Resolve(req.Msg.ApprovalId, decision); err != nil {

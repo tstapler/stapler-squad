@@ -764,17 +764,30 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, itemID, prU
 		return nil // already recorded — idempotent no-op
 	}
 
-	prURLCopy, prNumCopy := prURL, prNumber
-	if _, err := s.UpdateBacklogItem(ctx, itemID, BacklogItemUpdate{
-		PrURL:    &prURLCopy,
-		PrNumber: &prNumCopy,
-	}, nil); err != nil {
-		return fmt.Errorf("persist PR fields: %w", err)
+	// The status transition (review -> pr_pending) and the PrURL/PrNumber
+	// field write must land as a single atomic UPDATE, not two separate
+	// calls — even with the transition ordered first (closing the original
+	// lost-update race: two racing callers with different PR numbers both
+	// unconditionally passing a field-write precondition before either
+	// transitioned), two separate calls still leave a narrower gap between
+	// them where a concurrent reader can observe status=pr_pending with
+	// PrNumber==0. That exact shape is what the pr_pending_no_pr / BUG-040
+	// stuck detector (reconcilePRPendingWithoutPRItems,
+	// session/backlog_lifecycle.go) exists to flag as a HIGH-priority,
+	// non-auto-recoverable alert — and its resolution condition is anchored
+	// on the item leaving pr_pending entirely, so a reconcile tick landing in
+	// that window could raise a spurious alert that stays open for days.
+	// TransitionBacklogItemStatusWithPRFields folds both writes into one
+	// UPDATE ... WHERE statement guarded by the same CAS precondition, so
+	// they always commit together — no reader can ever observe one without
+	// the other.
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("SetBacklogItemPRAndTransition requires an *EntRepository backend, got %T", s.repo)
 	}
-
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: summary}
-	if _, err := s.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); err != nil {
-		return fmt.Errorf("transition to pr_pending: %w", err)
+	if _, err := er.TransitionBacklogItemStatusWithPRFields(ctx, itemID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
 	// Best-effort from here: the primary contract (PR fields persisted, item
@@ -889,6 +902,24 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 	return s.repo.DeleteItemSource(ctx, id)
 }
 
+// GetItemSourceByID retrieves a single item source's domain data by UUID
+// string. Used by the GitHub forward-sync EventBus subscriber (see
+// server/services/backlog_github_forward_sync.go) to look up a backlog item's
+// source (ForwardSyncEnabled, ForwardSyncCloseLabel, PluginID, Config) without
+// needing an *EntRepository handle of its own.
+func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*ItemSourceData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	src, err := er.GetItemSourceByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	data := itemSourceToData(src)
+	return &data, nil
+}
+
 // ListSourceSyncEvents returns sync history events for an item source, most
 // recent first. Direct EntRepository delegation, like GetItemSession below.
 func (s *Storage) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]SourceSyncEventData, bool, error) {
@@ -907,6 +938,17 @@ func (s *Storage) CreateSourceSyncEvent(ctx context.Context, sourceID, cursorAft
 		return ErrNotFound
 	}
 	return er.CreateSourceSyncEvent(ctx, sourceID, cursorAfter, created, updated, skipped, errored, errMsg, startedAt, finishedAt)
+}
+
+// RecordSourceSyncFailure records a forward-sync failure (e.g. CloseIssue
+// erroring) as a queryable sync-history row. Direct EntRepository delegation,
+// like CreateSourceSyncEvent above.
+func (s *Storage) RecordSourceSyncFailure(ctx context.Context, sourceID, message string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ErrNotFound
+	}
+	return er.RecordSourceSyncFailure(ctx, sourceID, message)
 }
 
 // --- ItemSession (direct EntRepository delegation) ---
@@ -977,7 +1019,19 @@ func (s *Storage) UpdateItemSessionStarted(ctx context.Context, id string, start
 	return er.UpdateItemSessionStarted(ctx, id, startedAt)
 }
 
-// UpdateItemSessionGitActivity records the latest commit SHA and related fields on an ItemSession.
+// SetItemSessionBaseCommit records the pre-work base commit SHA on an ItemSession.
+// See the EntRepository method for why this is separate from git activity.
+func (s *Storage) SetItemSessionBaseCommit(ctx context.Context, id, sha string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.SetItemSessionBaseCommit(ctx, id, sha)
+}
+
+// UpdateItemSessionGitActivity records the session's current tip commit and
+// related fields on an ItemSession. For the spawn-time baseline, use
+// SetItemSessionBaseCommit.
 func (s *Storage) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
@@ -993,6 +1047,16 @@ func (s *Storage) UpdateItemSessionEnded(ctx context.Context, id string, endedAt
 		return fmt.Errorf("item session updates not supported by this storage backend")
 	}
 	return er.UpdateItemSessionEnded(ctx, id, endedAt)
+}
+
+// UpdateItemSessionEndedWithReason records the end time for an ItemSession alongside
+// classifyHeadlessCallError's bucket (or "" for a successful end).
+func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
 }
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.

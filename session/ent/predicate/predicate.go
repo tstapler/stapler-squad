@@ -63,6 +63,9 @@ type Session func(*sql.Selector)
 // SessionGoal is the predicate function for sessiongoal builders.
 type SessionGoal func(*sql.Selector)
 
+// SessionSummary is the predicate function for sessionsummary builders.
+type SessionSummary func(*sql.Selector)
+
 // Shell is the predicate function for shell builders.
 type Shell func(*sql.Selector)
 

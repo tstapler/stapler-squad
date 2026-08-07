@@ -26,6 +26,8 @@ import { useAppSelector } from "@/lib/store";
 import { selectDetectedStatusMap } from "@/lib/store/sessionsSlice";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { computeRangeIds } from "@/lib/utils/rangeSelect";
+import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
+import { compareSessionsByCost } from "./sessionCostSort";
 import {
   container,
   header,
@@ -94,7 +96,7 @@ interface SessionListProps {
   viewMode?: "card" | "row";
 }
 
-type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt';
+type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt' | 'tokenCost';
 type SortDir = 'asc' | 'desc';
 
 // Stable-callback prop types for SessionRowWrapper.
@@ -582,10 +584,26 @@ export function SessionList({
     });
   }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, showArchived, pendingDeleteIds]);
 
+  // AC-2: per-session cost data, joined by session_id, for the "Sort: Cost" option.
+  const { summary: insightsSummary } = useInsightsSummary({ includeOrphans: true });
+  const costById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of insightsSummary?.sessions ?? []) {
+      if (s.sessionId) m.set(s.sessionId, s.estimatedCostUsd);
+    }
+    return m;
+  }, [insightsSummary]);
+
   // Sort filtered sessions
   const sortedSessions = useMemo(() => {
     const sorted = [...filteredSessions];
     sorted.sort((a, b) => {
+      if (sortField === 'tokenCost') {
+        // compareSessionsByCost already applies sortDir internally (to keep
+        // unloaded/unpriced rows last in BOTH directions) — return directly,
+        // skipping the shared sortDir flip below.
+        return compareSessionsByCost(a, b, costById, sortDir);
+      }
       let cmp = 0;
       switch (sortField) {
         case 'name':
@@ -609,7 +627,7 @@ export function SessionList({
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return sorted;
-  }, [filteredSessions, sortField, sortDir]);
+  }, [filteredSessions, sortField, sortDir, costById]);
 
   // Epic 4.1: filteredSessionIds — for intersecting selectedSessions with visible sessions
   const filteredSessionIds = useMemo(
@@ -1122,6 +1140,7 @@ export function SessionList({
               <option value="name">Sort: Name</option>
               <option value="createdAt">Sort: Created</option>
               <option value="updatedAt">Sort: Updated</option>
+              <option value="tokenCost">Sort: Cost</option>
             </select>
 
             {/* Sort direction toggle */}

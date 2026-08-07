@@ -639,6 +639,48 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 	}
 }
 
+// TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue verifies that a session with
+// ArchivedAt set is skipped by shouldSkipSession and never added to the review queue —
+// even when its cached terminal content would otherwise trigger an approval-pending
+// detection. This is the regression test for the bug where archiveItemWorkSessions
+// (server/services/backlog_service.go) sets Instance.ArchivedAt and kills the tmux pane
+// during a backlog item reopen, but never sets Hidden or transitions Status to Stopped —
+// so shouldSkipSession (which checked only Hidden/Status/Started) never excluded it, and
+// the dead-paned session sat in the queue forever as a false ATTENTION_REASON_STALE entry.
+// See docs/tasks/backlog-feature-improvement.md, 2026-08-02 entry.
+func TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	inst := &Instance{
+		Title:  "archived-session",
+		UUID:   "uuid-archived",
+		Status: Running,
+	}
+	inst.started.Store(true)
+	archivedAt := time.Now().Add(-1 * time.Hour)
+	inst.ArchivedAt = &archivedAt
+
+	// Sanity check the fix directly: shouldSkipSession must report true for an
+	// archived instance regardless of any other state.
+	if !poller.shouldSkipSession(inst) {
+		t.Fatal("shouldSkipSession must return true for an instance with ArchivedAt set")
+	}
+
+	// Pre-populate the content cache with an approval prompt — if the poller did NOT
+	// skip archived sessions, this content would cause it to be added to the queue via
+	// the same no-controller detection path exercised in
+	// TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue.
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	poller.injectCachedContent(inst.Title, approvalContent)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("archived session must never be added to the review queue")
+	}
+}
+
 // TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue verifies that
 // sessions with an active (started) ClaudeController that reports StatusNeedsApproval are
 // added to the review queue via the controller-based detection path (lines 696-828).
@@ -877,5 +919,117 @@ func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffect
 	// must NOT be marked Stopped just because its socket happened to be unreachable.
 	if instCustom.Status != Active {
 		t.Errorf("custom-socket instance: got status %v, want Active (server-down must skip, not falsely mark Stopped)", instCustom.Status)
+	}
+}
+
+// stubApprovalMetadataProvider is a minimal ApprovalMetadataProvider for tests. It records
+// each key it was queried with so tests can assert lookup order.
+type stubApprovalMetadataProvider struct {
+	bySessionID map[string][]ApprovalMetadata
+	queried     []string
+}
+
+func (s *stubApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata {
+	s.queried = append(s.queried, sessionID)
+	return s.bySessionID[sessionID]
+}
+
+// TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID is the regression test for the bug
+// fixed alongside this test: ApprovalHandler.resolveSessionID stores PendingApproval.SessionID
+// keyed by the session's UUID (Title only as a fallback when no UUID exists — see
+// approval_handler.go's stableIDForData), but checkSession's enrichment step queried the
+// provider by snap.Title. That mismatch silently dropped pending_approval_id (and therefore
+// the escalation reason) from every real queue item. This test seeds the stub provider ONLY
+// under the UUID key — pre-fix, the first (and only) lookup by Title would find nothing and
+// the escalation-reason fields would be absent from item.Metadata.
+func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{
+		Title:  "session-title-not-used-as-key",
+		UUID:   "session-uuid-1234",
+		Status: Running,
+	}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.UUID: {{
+				ApprovalID:         "approval-1",
+				ToolName:           "Bash",
+				EscalationReason:   "No matching rule; escalated for manual review.",
+				EscalationCategory: "no-match",
+			}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if got := item.Metadata["pending_approval_id"]; got != "approval-1" {
+		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-1", provider.queried)
+	}
+	if got := item.Metadata["escalation_reason"]; got != "No matching rule; escalated for manual review." {
+		t.Errorf("escalation_reason = %q, want the seeded reason (queried keys: %v)", got, provider.queried)
+	}
+	if got := item.Metadata["escalation_reason_category"]; got != "no-match" {
+		t.Errorf("escalation_reason_category = %q, want %q", got, "no-match")
+	}
+}
+
+// TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback covers the second half of
+// checkSession's UUID-then-Title lookup: when a session has no UUID (or the UUID lookup
+// misses), the provider must still be queried by Title so approvals keyed the old/fallback
+// way are found. Seeds the stub ONLY under the Title key — pre-fix (or if this fallback were
+// ever removed) the UUID-only lookup would miss and no metadata would be attached.
+func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{
+		Title:  "session-with-no-uuid",
+		UUID:   "", // no stable UUID — resolveSessionID would have fallen back to Title too
+		Status: Running,
+	}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.Title: {{
+				ApprovalID:         "approval-title-fallback",
+				EscalationReason:   "No matching rule; escalated for manual review.",
+				EscalationCategory: "no-match",
+			}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if got := item.Metadata["pending_approval_id"]; got != "approval-title-fallback" {
+		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-title-fallback", provider.queried)
 	}
 }

@@ -77,6 +77,14 @@ export const toggleOn = style({
   background: vars.color.primary,
 });
 
+// Pending/disabled visual state while PreviewBackwardSyncImpact is in flight
+// (Epic 4.4, UX round 2: visibility of system status) — matches the existing
+// toggle's disabled cursor convention rather than inventing a new one.
+export const togglePending = style({
+  opacity: 0.5,
+  cursor: "not-allowed",
+});
+
 export const actionRow = style({
   display: "flex",
   gap: vars.space["2"],
@@ -190,4 +198,81 @@ export const errorMessage = style({
   borderRadius: vars.radii.sm,
   padding: `${vars.space["2"]} ${vars.space["3"]}`,
   fontSize: vars.fontSize.sm,
+});
+
+// Row-level persistent warning for a non-transient (auth) sync failure
+// (Story 4.3.2) — same visual weight as errorMessage above, the existing
+// top-level lastError banner, scoped inline to the row instead of a block.
+export const authWarning = style({
+  display: "inline-flex",
+  alignItems: "center",
+  color: vars.color.errorText,
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: vars.radii.sm,
+  padding: `1px ${vars.space["2"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+});
+
+export const syncDirectionGroup = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+  padding: vars.space["2"],
+  background: vars.color.surfaceMuted,
+  borderRadius: vars.radii.sm,
+});
+
+// textMuted on surfaceMuted (this label's ambient background via
+// syncDirectionGroup) fails WCAG AA in the dark theme (2.99:1) and clean
+// theme (3.10:1) — textSecondary clears 4.5:1 against surfaceMuted in
+// every theme (see theme.css.ts for the clean-theme token fix).
+export const subHeading = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.semibold,
+  color: vars.color.textSecondary,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+});
+
+export const syncDirectionRow = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textPrimary,
+});
+
+// Both-directions loop-risk warning (Task 4.3.1c) — reuses the shared
+// warning color tokens rather than inventing a new one (per plan.md).
+export const bothDirectionsWarning = style({
+  color: vars.color.warningText,
+  background: vars.color.warningBg,
+  border: `1px solid ${vars.color.warning}`,
+  borderRadius: vars.radii.sm,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  fontSize: vars.fontSize.xs,
+});
+
+// Epic 4.4: "Checking impact…" label shown next to the backward-sync toggle
+// while PreviewBackwardSyncImpact is in flight. Rendered inside
+// syncDirectionGroup (surfaceMuted background) — textMuted fails WCAG AA
+// there in the dark/clean themes, so use textSecondary (see subHeading
+// above and theme.css.ts for the clean-theme token fix).
+export const previewPendingLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  fontStyle: "italic",
+});
+
+// Epic 4.4: inline error when PreviewBackwardSyncImpact itself fails — same
+// visual weight as the top-level errorMessage banner, scoped to the row.
+export const previewError = style({
+  color: vars.color.errorText,
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: vars.radii.sm,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  fontSize: vars.fontSize.xs,
 });

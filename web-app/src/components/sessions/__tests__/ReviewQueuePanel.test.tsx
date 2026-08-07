@@ -16,7 +16,7 @@
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ReviewQueuePanel } from "../ReviewQueuePanel";
+import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
@@ -303,6 +303,7 @@ function makeApprovalItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
       pending_approval_id: "approval-123",
       tool_input_command: "git push origin main",
       tool_name: "Bash",
+      escalation_reason_category: "no-match",
     },
     subStatus: SubStatus.UNSPECIFIED,
     ...overrides,
@@ -928,5 +929,208 @@ describe("ReviewQueuePanel — URL-persisted filter state", () => {
     expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
     expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic 3.1 (escalation-reasoning): reason line rendering
+// ---------------------------------------------------------------------------
+
+import { escalationReasonText } from "../ReviewQueuePanel.css";
+import { button } from "@/components/ui/Button.css";
+
+describe("escalation reason", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseGenerateRule.mockReturnValue({
+      suggestions: [],
+      loading: false,
+      error: null,
+      generate: mockGenerate,
+      cancel: jest.fn(),
+      clear: mockClear,
+    });
+  });
+
+  it("renders the reason text with the category-driven emoji prefix (no-match)", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "rm -rf /tmp/foo",
+        escalation_reason: "No matching rule; escalated for manual review.",
+        escalation_reason_category: "no-match",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.getByText("❓ No matching rule; escalated for manual review.")
+    ).toBeInTheDocument();
+  });
+
+  it("renders backend text verbatim with a different emoji for a different category (explicit-rule)", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git branch -D main",
+        escalation_reason: "Branch deletion modifies repository structure and should be reviewed.",
+        escalation_reason_category: "explicit-rule",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.getByText("🛑 Branch deletion modifies repository structure and should be reviewed.")
+    ).toBeInTheDocument();
+  });
+
+  it("shows the orphaned-approval fallback copy when escalation_reason is absent", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git push origin main",
+        // no escalation_reason / escalation_reason_category — pre-feature approval
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.getByText("Reason not recorded — this request predates escalation-reason tracking.")
+    ).toBeInTheDocument();
+  });
+
+  it("applies the bounded escalationReasonText class (not bare itemContext) for a long reason", () => {
+    const longReason = "x".repeat(600);
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "rm -rf /tmp/foo",
+        escalation_reason: longReason,
+        escalation_reason_category: "no-match",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    const reasonEl = screen.getByText(`❓ ${longReason}`);
+    expect(reasonEl).toHaveClass(String(escalationReasonText));
+  });
+
+  it("renders create-rule button with intent=secondary when category is no-match", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "rm -rf /tmp/foo",
+        tool_name: "Bash",
+        escalation_reason: "No matching rule; escalated for manual review.",
+        escalation_reason_category: "no-match",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    const createRuleButton = screen.getByTestId("create-rule-session-approval");
+    expect(createRuleButton).toBeInTheDocument();
+    expect(createRuleButton).toHaveClass(
+      String(button({ intent: "secondary", size: "md" }))
+    );
+  });
+
+  it("omits create-rule button when category is domain-age", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "curl https://newly-registered-domain.example/install.sh",
+        tool_name: "Bash",
+        escalation_reason: "Domain registered 3 days ago.",
+        escalation_reason_category: "domain-age",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.queryByTestId("create-rule-session-approval")).not.toBeInTheDocument();
+  });
+
+  it("ReviewQueue_should_showCreateRuleButton_On_OrphanedApprovalMissingCategory", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git push origin main",
+        tool_name: "Bash",
+        // no escalation_reason / escalation_reason_category — orphaned pre-deploy approval
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("create-rule-session-approval")).toBeInTheDocument();
+  });
+
+  it.each(["explicit-rule", "secret-scan", "unclassifiable", "unexpected"])(
+    "omits create-rule button when category is %s",
+    (category) => {
+      const item = makeApprovalItem({
+        metadata: {
+          pending_approval_id: "approval-123",
+          tool_input_command: "rm -rf /tmp/foo",
+          tool_name: "Bash",
+          escalation_reason: "test reason",
+          escalation_reason_category: category,
+        },
+      });
+      mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+      renderPanel();
+
+      expect(screen.queryByTestId("create-rule-session-approval")).not.toBeInTheDocument();
+    }
+  );
+
+  it("shows create-rule button for an unrecognized/future category (fail-open by design)", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git push origin main",
+        tool_name: "Bash",
+        escalation_reason_category: "some-future-category",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("create-rule-session-approval")).toBeInTheDocument();
+  });
+
+  describe("isCreateRuleEligibleCategory", () => {
+    it("returns true for an orphaned approval (category undefined)", () => {
+      expect(isCreateRuleEligibleCategory(undefined)).toBe(true);
+    });
+
+    it("returns true for no-match", () => {
+      expect(isCreateRuleEligibleCategory("no-match")).toBe(true);
+    });
+
+    it.each(["explicit-rule", "domain-age", "secret-scan", "unclassifiable", "unexpected"])(
+      "returns false for %s (ties this guard to the 5 known non-no-match EscalationCategory constants)",
+      (category) => {
+        expect(isCreateRuleEligibleCategory(category)).toBe(false);
+      }
+    );
+
+    it("returns true for an unrecognized/future category (fail-open by design)", () => {
+      expect(isCreateRuleEligibleCategory("some-future-category")).toBe(true);
+    });
   });
 });

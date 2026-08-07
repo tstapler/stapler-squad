@@ -14,6 +14,7 @@ import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
+import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
 import {
   panel,
   header,
@@ -38,6 +39,7 @@ import {
   itemTitle,
   itemBody,
   itemContext,
+  escalationReasonText,
   commandPreview,
   expiredBadge,
   itemPattern,
@@ -132,6 +134,44 @@ const REVIEW_GROUPING_STRATEGIES = [
 ];
 
 const SORT_FIELDS: SortField[] = ["priority", "age", "diffSize", "name"];
+
+// Category -> emoji prefix for the escalation reason line (WCAG 1.4.1 — not color-only).
+// No "secret-scan" entry: that category never reaches a ReviewItem (requirements.md
+// out-of-scope note). An unrecognized/missing category falls through to no emoji via `?? ""`.
+const ESCALATION_REASON_EMOJI: Partial<Record<EscalationCategory, string>> = {
+  "no-match": "❓",
+  "explicit-rule": "🛑",
+  "domain-age": "🌐",
+  "unclassifiable": "⚙️",
+  "unexpected": "⚠️",
+};
+
+// Which EscalationCategory values (PR #315) disqualify the Create Rule button — a Record,
+// not a Set, so TypeScript forces every member of the union to be listed here; adding a 6th
+// category to EscalationCategory (web-app/src/lib/sessions/escalationCategory.ts, which mirrors
+// pkg/classifier/escalation.go) without updating this map is a compile error, not a silent
+// fail-open drift. An orphaned pre-deploy approval (escalation_reason_category key entirely
+// absent because it predates this field) and any wholly unrecognized string are both treated as
+// eligible (fail-open by design) — see backlog 5fb93d9d.
+const CREATE_RULE_INELIGIBLE_CATEGORIES: Record<EscalationCategory, boolean> = {
+  "no-match": false,
+  "explicit-rule": true,
+  "domain-age": true,
+  "secret-scan": true,
+  "unclassifiable": true,
+  "unexpected": true,
+};
+
+function isKnownEscalationCategory(value: string): value is EscalationCategory {
+  return Object.prototype.hasOwnProperty.call(CREATE_RULE_INELIGIBLE_CATEGORIES, value);
+}
+
+export function isCreateRuleEligibleCategory(category: string | undefined): boolean {
+  if (category === undefined || !isKnownEscalationCategory(category)) {
+    return true;
+  }
+  return !CREATE_RULE_INELIGIBLE_CATEGORIES[category];
+}
 
 function joinSet(set: Set<string> | Set<number>): string | undefined {
   return set.size > 0 ? [...set].join(",") : undefined;
@@ -700,6 +740,11 @@ export function ReviewQueuePanel({
         tabIndex={0}
         data-testid={`review-item-${queueItem.sessionId}`}
         data-current={index === currentIndex ? "true" : undefined}
+        aria-describedby={
+          queueItem.metadata?.["pending_approval_id"]
+            ? `escalation-reason-${queueItem.sessionId}`
+            : undefined
+        }
       >
         <div className={itemHeader}>
           <h3 className={itemTitle}>{queueItem.sessionName}</h3>
@@ -725,6 +770,15 @@ export function ReviewQueuePanel({
           )}
           {queueItem.metadata?.["pending_approval_id"] && (
             <>
+              <p
+                className={`${escalationReasonText}`}
+                id={`escalation-reason-${queueItem.sessionId}`}
+                data-testid={`escalation-reason-${queueItem.sessionId}`}
+              >
+                {queueItem.metadata["escalation_reason"]
+                  ? `${ESCALATION_REASON_EMOJI[queueItem.metadata["escalation_reason_category"] as EscalationCategory] ?? ""} ${queueItem.metadata["escalation_reason"]}`.trim()
+                  : "Reason not recorded — this request predates escalation-reason tracking."}
+              </p>
               {(queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]) && (
                 <pre className={commandPreview}>
                   {queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]}
@@ -815,9 +869,10 @@ export function ReviewQueuePanel({
             >
               ✗ Deny
             </Button>
-            {queueItem.metadata?.["tool_input_command"] && (
+            {queueItem.metadata?.["tool_input_command"] &&
+              isCreateRuleEligibleCategory(queueItem.metadata?.["escalation_reason_category"]) && (
               <Button
-                intent="ghost"
+                intent="secondary"
                 size="md"
                 onClick={(e) => {
                   e.stopPropagation();

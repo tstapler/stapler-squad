@@ -42,6 +42,9 @@ const (
 	// InsightsServiceWatchInsightsProcedure is the fully-qualified name of the InsightsService's
 	// WatchInsights RPC.
 	InsightsServiceWatchInsightsProcedure = "/session.v1.InsightsService/WatchInsights"
+	// InsightsServiceGetSessionTurnTimelineProcedure is the fully-qualified name of the
+	// InsightsService's GetSessionTurnTimeline RPC.
+	InsightsServiceGetSessionTurnTimelineProcedure = "/session.v1.InsightsService/GetSessionTurnTimeline"
 )
 
 // InsightsServiceClient is a client for the session.v1.InsightsService service.
@@ -52,6 +55,9 @@ type InsightsServiceClient interface {
 	ListSessionTokens(context.Context, *connect.Request[v1.ListSessionTokensRequest]) (*connect.Response[v1.ListSessionTokensResponse], error)
 	// WatchInsights streams summary updates when new JSONL data is parsed.
 	WatchInsights(context.Context, *connect.Request[v1.WatchInsightsRequest]) (*connect.ServerStreamForClient[v1.InsightsEvent], error)
+	// GetSessionTurnTimeline returns per-turn token stats for one session, fetched
+	// on-demand when the session detail drawer opens (not embedded in list responses).
+	GetSessionTurnTimeline(context.Context, *connect.Request[v1.GetSessionTurnTimelineRequest]) (*connect.Response[v1.GetSessionTurnTimelineResponse], error)
 }
 
 // NewInsightsServiceClient constructs a client for the session.v1.InsightsService service. By
@@ -83,14 +89,21 @@ func NewInsightsServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(insightsServiceMethods.ByName("WatchInsights")),
 			connect.WithClientOptions(opts...),
 		),
+		getSessionTurnTimeline: connect.NewClient[v1.GetSessionTurnTimelineRequest, v1.GetSessionTurnTimelineResponse](
+			httpClient,
+			baseURL+InsightsServiceGetSessionTurnTimelineProcedure,
+			connect.WithSchema(insightsServiceMethods.ByName("GetSessionTurnTimeline")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // insightsServiceClient implements InsightsServiceClient.
 type insightsServiceClient struct {
-	getInsightsSummary *connect.Client[v1.GetInsightsSummaryRequest, v1.GetInsightsSummaryResponse]
-	listSessionTokens  *connect.Client[v1.ListSessionTokensRequest, v1.ListSessionTokensResponse]
-	watchInsights      *connect.Client[v1.WatchInsightsRequest, v1.InsightsEvent]
+	getInsightsSummary     *connect.Client[v1.GetInsightsSummaryRequest, v1.GetInsightsSummaryResponse]
+	listSessionTokens      *connect.Client[v1.ListSessionTokensRequest, v1.ListSessionTokensResponse]
+	watchInsights          *connect.Client[v1.WatchInsightsRequest, v1.InsightsEvent]
+	getSessionTurnTimeline *connect.Client[v1.GetSessionTurnTimelineRequest, v1.GetSessionTurnTimelineResponse]
 }
 
 // GetInsightsSummary calls session.v1.InsightsService.GetInsightsSummary.
@@ -108,6 +121,11 @@ func (c *insightsServiceClient) WatchInsights(ctx context.Context, req *connect.
 	return c.watchInsights.CallServerStream(ctx, req)
 }
 
+// GetSessionTurnTimeline calls session.v1.InsightsService.GetSessionTurnTimeline.
+func (c *insightsServiceClient) GetSessionTurnTimeline(ctx context.Context, req *connect.Request[v1.GetSessionTurnTimelineRequest]) (*connect.Response[v1.GetSessionTurnTimelineResponse], error) {
+	return c.getSessionTurnTimeline.CallUnary(ctx, req)
+}
+
 // InsightsServiceHandler is an implementation of the session.v1.InsightsService service.
 type InsightsServiceHandler interface {
 	// GetInsightsSummary returns aggregated token and cost data for a time range.
@@ -116,6 +134,9 @@ type InsightsServiceHandler interface {
 	ListSessionTokens(context.Context, *connect.Request[v1.ListSessionTokensRequest]) (*connect.Response[v1.ListSessionTokensResponse], error)
 	// WatchInsights streams summary updates when new JSONL data is parsed.
 	WatchInsights(context.Context, *connect.Request[v1.WatchInsightsRequest], *connect.ServerStream[v1.InsightsEvent]) error
+	// GetSessionTurnTimeline returns per-turn token stats for one session, fetched
+	// on-demand when the session detail drawer opens (not embedded in list responses).
+	GetSessionTurnTimeline(context.Context, *connect.Request[v1.GetSessionTurnTimelineRequest]) (*connect.Response[v1.GetSessionTurnTimelineResponse], error)
 }
 
 // NewInsightsServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -143,6 +164,12 @@ func NewInsightsServiceHandler(svc InsightsServiceHandler, opts ...connect.Handl
 		connect.WithSchema(insightsServiceMethods.ByName("WatchInsights")),
 		connect.WithHandlerOptions(opts...),
 	)
+	insightsServiceGetSessionTurnTimelineHandler := connect.NewUnaryHandler(
+		InsightsServiceGetSessionTurnTimelineProcedure,
+		svc.GetSessionTurnTimeline,
+		connect.WithSchema(insightsServiceMethods.ByName("GetSessionTurnTimeline")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.InsightsService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case InsightsServiceGetInsightsSummaryProcedure:
@@ -151,6 +178,8 @@ func NewInsightsServiceHandler(svc InsightsServiceHandler, opts ...connect.Handl
 			insightsServiceListSessionTokensHandler.ServeHTTP(w, r)
 		case InsightsServiceWatchInsightsProcedure:
 			insightsServiceWatchInsightsHandler.ServeHTTP(w, r)
+		case InsightsServiceGetSessionTurnTimelineProcedure:
+			insightsServiceGetSessionTurnTimelineHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -170,4 +199,8 @@ func (UnimplementedInsightsServiceHandler) ListSessionTokens(context.Context, *c
 
 func (UnimplementedInsightsServiceHandler) WatchInsights(context.Context, *connect.Request[v1.WatchInsightsRequest], *connect.ServerStream[v1.InsightsEvent]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.InsightsService.WatchInsights is not implemented"))
+}
+
+func (UnimplementedInsightsServiceHandler) GetSessionTurnTimeline(context.Context, *connect.Request[v1.GetSessionTurnTimelineRequest]) (*connect.Response[v1.GetSessionTurnTimelineResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.InsightsService.GetSessionTurnTimeline is not implemented"))
 }

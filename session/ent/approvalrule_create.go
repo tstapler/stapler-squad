@@ -270,6 +270,20 @@ func (_c *ApprovalRuleCreate) SetNillableSafePythonImportsOnly(v *bool) *Approva
 	return _c
 }
 
+// SetRequireCiPassing sets the "require_ci_passing" field.
+func (_c *ApprovalRuleCreate) SetRequireCiPassing(v bool) *ApprovalRuleCreate {
+	_c.mutation.SetRequireCiPassing(v)
+	return _c
+}
+
+// SetNillableRequireCiPassing sets the "require_ci_passing" field if the given value is not nil.
+func (_c *ApprovalRuleCreate) SetNillableRequireCiPassing(v *bool) *ApprovalRuleCreate {
+	if v != nil {
+		_c.SetRequireCiPassing(*v)
+	}
+	return _c
+}
+
 // Mutation returns the ApprovalRuleMutation object of the builder.
 func (_c *ApprovalRuleCreate) Mutation() *ApprovalRuleMutation {
 	return _c.mutation
@@ -357,6 +371,10 @@ func (_c *ApprovalRuleCreate) defaults() {
 		v := approvalrule.DefaultSafePythonImportsOnly
 		_c.mutation.SetSafePythonImportsOnly(v)
 	}
+	if _, ok := _c.mutation.RequireCiPassing(); !ok {
+		v := approvalrule.DefaultRequireCiPassing
+		_c.mutation.SetRequireCiPassing(v)
+	}
 }
 
 // check runs all checks and user-defined validators on the builder.
@@ -400,6 +418,9 @@ func (_c *ApprovalRuleCreate) check() error {
 	}
 	if _, ok := _c.mutation.SafePythonImportsOnly(); !ok {
 		return &ValidationError{Name: "safe_python_imports_only", err: errors.New(`ent: missing required field "ApprovalRule.safe_python_imports_only"`)}
+	}
+	if _, ok := _c.mutation.RequireCiPassing(); !ok {
+		return &ValidationError{Name: "require_ci_passing", err: errors.New(`ent: missing required field "ApprovalRule.require_ci_passing"`)}
 	}
 	return nil
 }
@@ -523,6 +544,10 @@ func (_c *ApprovalRuleCreate) createSpec() (*ApprovalRule, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.SafePythonImportsOnly(); ok {
 		_spec.SetField(approvalrule.FieldSafePythonImportsOnly, field.TypeBool, value)
 		_node.SafePythonImportsOnly = value
+	}
+	if value, ok := _c.mutation.RequireCiPassing(); ok {
+		_spec.SetField(approvalrule.FieldRequireCiPassing, field.TypeBool, value)
+		_node.RequireCiPassing = value
 	}
 	return _node, _spec
 }
@@ -951,6 +976,18 @@ func (u *ApprovalRuleUpsert) SetSafePythonImportsOnly(v bool) *ApprovalRuleUpser
 // UpdateSafePythonImportsOnly sets the "safe_python_imports_only" field to the value that was provided on create.
 func (u *ApprovalRuleUpsert) UpdateSafePythonImportsOnly() *ApprovalRuleUpsert {
 	u.SetExcluded(approvalrule.FieldSafePythonImportsOnly)
+	return u
+}
+
+// SetRequireCiPassing sets the "require_ci_passing" field.
+func (u *ApprovalRuleUpsert) SetRequireCiPassing(v bool) *ApprovalRuleUpsert {
+	u.Set(approvalrule.FieldRequireCiPassing, v)
+	return u
+}
+
+// UpdateRequireCiPassing sets the "require_ci_passing" field to the value that was provided on create.
+func (u *ApprovalRuleUpsert) UpdateRequireCiPassing() *ApprovalRuleUpsert {
+	u.SetExcluded(approvalrule.FieldRequireCiPassing)
 	return u
 }
 
@@ -1437,6 +1474,20 @@ func (u *ApprovalRuleUpsertOne) SetSafePythonImportsOnly(v bool) *ApprovalRuleUp
 func (u *ApprovalRuleUpsertOne) UpdateSafePythonImportsOnly() *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateSafePythonImportsOnly()
+	})
+}
+
+// SetRequireCiPassing sets the "require_ci_passing" field.
+func (u *ApprovalRuleUpsertOne) SetRequireCiPassing(v bool) *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.SetRequireCiPassing(v)
+	})
+}
+
+// UpdateRequireCiPassing sets the "require_ci_passing" field to the value that was provided on create.
+func (u *ApprovalRuleUpsertOne) UpdateRequireCiPassing() *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.UpdateRequireCiPassing()
 	})
 }
 
@@ -2089,6 +2140,20 @@ func (u *ApprovalRuleUpsertBulk) SetSafePythonImportsOnly(v bool) *ApprovalRuleU
 func (u *ApprovalRuleUpsertBulk) UpdateSafePythonImportsOnly() *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateSafePythonImportsOnly()
+	})
+}
+
+// SetRequireCiPassing sets the "require_ci_passing" field.
+func (u *ApprovalRuleUpsertBulk) SetRequireCiPassing(v bool) *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.SetRequireCiPassing(v)
+	})
+}
+
+// UpdateRequireCiPassing sets the "require_ci_passing" field to the value that was provided on create.
+func (u *ApprovalRuleUpsertBulk) UpdateRequireCiPassing() *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.UpdateRequireCiPassing()
 	})
 }
 

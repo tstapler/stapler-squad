@@ -76,6 +76,21 @@ func Enabled(v bool) predicate.ItemSource {
 	return predicate.ItemSource(sql.FieldEQ(FieldEnabled, v))
 }
 
+// ForwardSyncEnabled applies equality check predicate on the "forward_sync_enabled" field. It's identical to ForwardSyncEnabledEQ.
+func ForwardSyncEnabled(v bool) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldEQ(FieldForwardSyncEnabled, v))
+}
+
+// BackwardSyncEnabled applies equality check predicate on the "backward_sync_enabled" field. It's identical to BackwardSyncEnabledEQ.
+func BackwardSyncEnabled(v bool) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldEQ(FieldBackwardSyncEnabled, v))
+}
+
+// ForwardSyncCloseLabel applies equality check predicate on the "forward_sync_close_label" field. It's identical to ForwardSyncCloseLabelEQ.
+func ForwardSyncCloseLabel(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldEQ(FieldForwardSyncCloseLabel, v))
+}
+
 // SyncCursor applies equality check predicate on the "sync_cursor" field. It's identical to SyncCursorEQ.
 func SyncCursor(v string) predicate.ItemSource {
 	return predicate.ItemSource(sql.FieldEQ(FieldSyncCursor, v))
@@ -309,6 +324,101 @@ func EnabledEQ(v bool) predicate.ItemSource {
 // EnabledNEQ applies the NEQ predicate on the "enabled" field.
 func EnabledNEQ(v bool) predicate.ItemSource {
 	return predicate.ItemSource(sql.FieldNEQ(FieldEnabled, v))
+}
+
+// ForwardSyncEnabledEQ applies the EQ predicate on the "forward_sync_enabled" field.
+func ForwardSyncEnabledEQ(v bool) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldEQ(FieldForwardSyncEnabled, v))
+}
+
+// ForwardSyncEnabledNEQ applies the NEQ predicate on the "forward_sync_enabled" field.
+func ForwardSyncEnabledNEQ(v bool) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldNEQ(FieldForwardSyncEnabled, v))
+}
+
+// BackwardSyncEnabledEQ applies the EQ predicate on the "backward_sync_enabled" field.
+func BackwardSyncEnabledEQ(v bool) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldEQ(FieldBackwardSyncEnabled, v))
+}
+
+// BackwardSyncEnabledNEQ applies the NEQ predicate on the "backward_sync_enabled" field.
+func BackwardSyncEnabledNEQ(v bool) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldNEQ(FieldBackwardSyncEnabled, v))
+}
+
+// ForwardSyncCloseLabelEQ applies the EQ predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelEQ(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldEQ(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelNEQ applies the NEQ predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelNEQ(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldNEQ(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelIn applies the In predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelIn(vs ...string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldIn(FieldForwardSyncCloseLabel, vs...))
+}
+
+// ForwardSyncCloseLabelNotIn applies the NotIn predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelNotIn(vs ...string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldNotIn(FieldForwardSyncCloseLabel, vs...))
+}
+
+// ForwardSyncCloseLabelGT applies the GT predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelGT(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldGT(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelGTE applies the GTE predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelGTE(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldGTE(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelLT applies the LT predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelLT(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldLT(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelLTE applies the LTE predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelLTE(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldLTE(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelContains applies the Contains predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelContains(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldContains(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelHasPrefix applies the HasPrefix predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelHasPrefix(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldHasPrefix(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelHasSuffix applies the HasSuffix predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelHasSuffix(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldHasSuffix(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelIsNil applies the IsNil predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelIsNil() predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldIsNull(FieldForwardSyncCloseLabel))
+}
+
+// ForwardSyncCloseLabelNotNil applies the NotNil predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelNotNil() predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldNotNull(FieldForwardSyncCloseLabel))
+}
+
+// ForwardSyncCloseLabelEqualFold applies the EqualFold predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelEqualFold(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldEqualFold(FieldForwardSyncCloseLabel, v))
+}
+
+// ForwardSyncCloseLabelContainsFold applies the ContainsFold predicate on the "forward_sync_close_label" field.
+func ForwardSyncCloseLabelContainsFold(v string) predicate.ItemSource {
+	return predicate.ItemSource(sql.FieldContainsFold(FieldForwardSyncCloseLabel, v))
 }
 
 // SyncCursorEQ applies the EQ predicate on the "sync_cursor" field.

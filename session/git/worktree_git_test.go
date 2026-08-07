@@ -327,6 +327,9 @@ func TestParsePRStatusPayload_HasBlockingReviews(t *testing.T) {
 		if !strings.Contains(status.FeedbackText, "Fix the null check") {
 			t.Errorf("FeedbackText missing %q; got %q", "Fix the null check", status.FeedbackText)
 		}
+		if status.HasReviewFeedback {
+			t.Errorf("HasReviewFeedback = true; want false — a CHANGES_REQUESTED review must never count toward the new signal, only COMMENTED")
+		}
 	})
 
 	t.Run("APPROVED-only reviews leave HasBlockingReviews false", func(t *testing.T) {
@@ -369,5 +372,251 @@ func TestParsePRStatusPayload_ConflictSectionOrderedFirst(t *testing.T) {
 	}
 	if conflictIdx >= ciIdx {
 		t.Errorf("conflict section index %d not before CI section index %d in FeedbackText: %q", conflictIdx, ciIdx, status.FeedbackText)
+	}
+}
+
+// TestIsSubstantiveFeedback proves the length-only noise filter used to keep
+// bare "LGTM"-style feedback out of the HasReviewFeedback signal.
+func TestIsSubstantiveFeedback(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"empty string", "", false},
+		{"whitespace only", "   ", false},
+		{"bare lgtm", "lgtm", false},
+		{"bare nice", "nice", false},
+		{"exactly 10 runes (boundary)", "1234567890", true},
+		{"9 runes (one below threshold)", "123456789", false},
+		{"substantive feedback", "Consider extracting this into a helper function.", true},
+		{"10 multi-byte runes below byte-length would suggest", "一二三四五六七八九十", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSubstantiveFeedback(tt.body); got != tt.want {
+				t.Errorf("isSubstantiveFeedback(%q) = %v; want %v", tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsExcludedBotAuthor proves automated bot accounts are excluded from
+// the substantive-feedback signal except Copilot's own review account, which
+// this feature exists to capture.
+func TestIsExcludedBotAuthor(t *testing.T) {
+	tests := []struct {
+		name  string
+		login string
+		want  bool
+	}{
+		{"human author", "tstapler", false},
+		{"copilot review bot is exempted", "copilot-pull-request-reviewer[bot]", false},
+		{"github-actions bot is excluded", "github-actions[bot]", true},
+		{"codecov bot is excluded", "codecov[bot]", true},
+		{"dependabot is excluded", "dependabot[bot]", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isExcludedBotAuthor(tt.login); got != tt.want {
+				t.Errorf("isExcludedBotAuthor(%q) = %v; want %v", tt.login, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParsePRStatusPayload_HasReviewFeedback_should_ExcludeNonCopilotBotAuthor
+// is the regression test for pre-mortem.md #5: a long-enough recurring bot
+// comment (coverage report, CI status summary) must never set
+// HasReviewFeedback, even though its body alone would pass
+// isSubstantiveFeedback — only a human or Copilot's own review account
+// counts. The comment must still appear in FeedbackText (existing
+// "include all comments" behavior preserved) without counting toward the
+// signal.
+func TestParsePRStatusPayload_HasReviewFeedback_should_ExcludeNonCopilotBotAuthor(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[],"comments":[{"body":"Coverage decreased (-0.1%) to 95.3% on this pull request.","author":{"login":"codecov[bot]"},"createdAt":"2026-08-02T13:00:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	if status.HasReviewFeedback {
+		t.Errorf("HasReviewFeedback = true; want false — a substantive comment from an excluded bot author must not count toward the signal")
+	}
+	if !status.LatestFeedbackAt.IsZero() {
+		t.Errorf("LatestFeedbackAt = %v; want zero value", status.LatestFeedbackAt)
+	}
+	if !strings.Contains(status.FeedbackText, "@codecov[bot]: Coverage decreased") {
+		t.Errorf("FeedbackText missing the bot comment (existing include-all-comments behavior); got %q", status.FeedbackText)
+	}
+}
+
+// TestParsePRStatusPayload_HasReviewFeedback_should_ExcludeNonCopilotBotCommentedReview
+// is the COMMENTED-review counterpart: a substantive COMMENTED review from a
+// non-Copilot bot must never be captured into commentReviews or count toward
+// HasReviewFeedback.
+func TestParsePRStatusPayload_HasReviewFeedback_should_ExcludeNonCopilotBotCommentedReview(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"This PR increases bundle size by 12%.","author":{"login":"bundlesize-bot[bot]"},"submittedAt":"2026-08-02T14:00:00Z"}],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	if status.HasReviewFeedback {
+		t.Errorf("HasReviewFeedback = true; want false")
+	}
+	if len(status.commentReviews) != 0 {
+		t.Errorf("commentReviews = %v; want empty — a non-Copilot bot's COMMENTED review must not be captured", status.commentReviews)
+	}
+}
+
+// TestParsePRStatusPayload_HasReviewFeedback_CommentedReview proves a
+// substantive COMMENTED-state review (Copilot's typical review posture) sets
+// HasReviewFeedback and captures the review's submittedAt as LatestFeedbackAt.
+func TestParsePRStatusPayload_HasReviewFeedback_CommentedReview(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"Consider extracting this into a helper function.","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:32:07Z"}],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	if !status.HasReviewFeedback {
+		t.Errorf("HasReviewFeedback = false; want true")
+	}
+	want, _ := time.Parse(time.RFC3339, "2026-08-02T14:32:07Z")
+	if !status.LatestFeedbackAt.Equal(want) {
+		t.Errorf("LatestFeedbackAt = %v; want %v", status.LatestFeedbackAt, want)
+	}
+}
+
+// TestParsePRStatusPayload_HasReviewFeedback_PlainComment proves a substantive
+// plain PR comment (no review state at all) also sets HasReviewFeedback.
+func TestParsePRStatusPayload_HasReviewFeedback_PlainComment(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[],"comments":[{"body":"Please rebase onto main.","author":{"login":"tstapler"},"createdAt":"2026-08-02T13:00:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	if !status.HasReviewFeedback {
+		t.Errorf("HasReviewFeedback = false; want true")
+	}
+	want, _ := time.Parse(time.RFC3339, "2026-08-02T13:00:00Z")
+	if !status.LatestFeedbackAt.Equal(want) {
+		t.Errorf("LatestFeedbackAt = %v; want %v", status.LatestFeedbackAt, want)
+	}
+}
+
+// TestParsePRStatusPayload_HasReviewFeedback_NonSubstantiveIgnored proves a
+// bare "lgtm" COMMENTED review never sets HasReviewFeedback, while a bare
+// "lgtm" plain comment still appears in generalComments/FeedbackText
+// (existing "include all comments" behavior preserved) without counting
+// toward the signal.
+func TestParsePRStatusPayload_HasReviewFeedback_NonSubstantiveIgnored(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"lgtm","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:00:00Z"}],"comments":[{"body":"lgtm","author":{"login":"tstapler"},"createdAt":"2026-08-02T13:00:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	if status.HasReviewFeedback {
+		t.Errorf("HasReviewFeedback = true; want false")
+	}
+	if !status.LatestFeedbackAt.IsZero() {
+		t.Errorf("LatestFeedbackAt = %v; want zero value", status.LatestFeedbackAt)
+	}
+	if len(status.commentReviews) != 0 {
+		t.Errorf("commentReviews = %v; want empty — a non-substantive COMMENTED review must not be captured", status.commentReviews)
+	}
+	if !strings.Contains(status.FeedbackText, "@tstapler: lgtm") {
+		t.Errorf("FeedbackText missing bare plain comment %q (existing include-all-comments behavior); got %q", "@tstapler: lgtm", status.FeedbackText)
+	}
+}
+
+// TestParsePRStatusPayload_LatestFeedbackAt_should_ReturnMaxTimestamp_When_MultipleFeedbackItemsPresent
+// proves LatestFeedbackAt is the max across both commentReviews and
+// generalComments, not just one slice.
+func TestParsePRStatusPayload_LatestFeedbackAt_should_ReturnMaxTimestamp_When_MultipleFeedbackItemsPresent(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"Consider extracting this into a helper function.","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:32:07Z"}],"comments":[{"body":"Please rebase.","author":{"login":"tstapler"},"createdAt":"2026-08-02T15:10:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	if !status.HasReviewFeedback {
+		t.Errorf("HasReviewFeedback = false; want true")
+	}
+	want, _ := time.Parse(time.RFC3339, "2026-08-02T15:10:00Z")
+	if !status.LatestFeedbackAt.Equal(want) {
+		t.Errorf("LatestFeedbackAt = %v; want %v (the later of the two feedback items)", status.LatestFeedbackAt, want)
+	}
+}
+
+// TestParsePRStatusPayload_LatestFeedbackAt_should_ReturnZeroValue_When_NoSubstantiveFeedback
+// proves HasReviewFeedback/LatestFeedbackAt stay at their zero values when
+// nothing substantive was captured.
+func TestParsePRStatusPayload_LatestFeedbackAt_should_ReturnZeroValue_When_NoSubstantiveFeedback(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[],"comments":[{"body":"lgtm","author":{"login":"tstapler"},"createdAt":"2026-08-02T13:00:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	if status.HasReviewFeedback {
+		t.Errorf("HasReviewFeedback = true; want false")
+	}
+	if !status.LatestFeedbackAt.IsZero() {
+		t.Errorf("LatestFeedbackAt = %v; want zero value", status.LatestFeedbackAt)
+	}
+}
+
+// TestParsePRStatusPayload_ReviewerCommentsSectionRendered proves render()
+// emits a "## Reviewer comments" section for commentReviews, positioned after
+// the "## Review: changes requested" block(s) and before "## PR comments".
+func TestParsePRStatusPayload_ReviewerCommentsSectionRendered(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"CHANGES_REQUESTED","body":"Fix the null check","author":{"login":"reviewer1"}},{"state":"COMMENTED","body":"Consider extracting this into a helper function.","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:32:07Z"}],"comments":[{"body":"Please rebase.","author":{"login":"tstapler"},"createdAt":"2026-08-02T15:10:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	if !strings.Contains(status.FeedbackText, "## Reviewer comments\n@copilot-pull-request-reviewer[bot]: Consider extracting this into a helper function.\n\n") {
+		t.Errorf("FeedbackText missing expected Reviewer comments section; got %q", status.FeedbackText)
+	}
+
+	reviewIdx := strings.Index(status.FeedbackText, "## Review: changes requested")
+	reviewerCommentsIdx := strings.Index(status.FeedbackText, "## Reviewer comments")
+	prCommentsIdx := strings.Index(status.FeedbackText, "## PR comments")
+	if reviewIdx == -1 || reviewerCommentsIdx == -1 || prCommentsIdx == -1 {
+		t.Fatalf("expected all three sections present; got %q", status.FeedbackText)
+	}
+	if reviewIdx >= reviewerCommentsIdx || reviewerCommentsIdx >= prCommentsIdx {
+		t.Errorf("section order wrong: review=%d, reviewerComments=%d, prComments=%d; want review < reviewerComments < prComments", reviewIdx, reviewerCommentsIdx, prCommentsIdx)
+	}
+}
+
+// TestParsePRStatusPayload_Render_should_ProduceByteIdenticalOutput_When_GeneralCommentsRetyped
+// proves the generalComments []string -> []prFeedbackItem retype alone
+// introduced zero rendering drift: the "## PR comments" block is byte-for-byte
+// identical to what the pre-retype append-time-constructed string produced.
+func TestParsePRStatusPayload_Render_should_ProduceByteIdenticalOutput_When_GeneralCommentsRetyped(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[],"reviews":[],"comments":[{"body":"Please rebase.","author":{"login":"tstapler"},"createdAt":"2026-08-02T15:10:00Z"},{"body":"lgtm","author":{"login":"reviewer2"},"createdAt":"2026-08-02T15:11:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+
+	status, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatalf("parsePRStatusPayload() error = %v", err)
+	}
+
+	want := "## PR comments\n@tstapler: Please rebase.\n\n@reviewer2: lgtm\n\n"
+	if !strings.Contains(status.FeedbackText, want) {
+		t.Errorf("FeedbackText missing byte-identical PR comments block; got %q, want substring %q", status.FeedbackText, want)
 	}
 }

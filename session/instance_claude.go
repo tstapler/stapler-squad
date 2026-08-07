@@ -455,17 +455,24 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 // SetHistoryInfo updates the conversation UUID and history file path.
 // Thread-safe: acquires stateMutex write lock.
 // No-op if the UUID is already set to the same value.
+// Fires the same claudeSessionIDSavedCallback as SetClaudeConversationUUID
+// when the UUID actually changes, so a HistoryLinker-detected UUID is
+// persisted to durable storage immediately rather than waiting on the next
+// incidental full SaveInstances sweep (hibernation sweeper, health check) —
+// a tmux pane killed before that sweep runs would otherwise resume with no
+// conversation UUID to pass to --resume.
 func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	i.claudeSessionMu.Lock()
-	defer i.claudeSessionMu.Unlock()
 
 	currentUUID := ""
 	if i.claudeSession != nil {
 		currentUUID = i.claudeSession.ConversationUUID
 	}
 	if currentUUID == conversationUUID && i.HistoryFilePath == historyFilePath {
+		i.claudeSessionMu.Unlock()
 		return
 	}
+	uuidChanged := currentUUID != conversationUUID
 
 	// See ClearConversationState's comment: nest i.mu inside claudeSessionMu,
 	// around the writes AND the buildSnapshot call, so this is ordered against
@@ -480,5 +487,13 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
+
+	cb := i.claudeSessionIDSavedCallback
+	i.claudeSessionMu.Unlock()
+
+	if uuidChanged && cb != nil {
+		cb()
+	}
+
 	log.ForSession(i.Title).Info("conversation uuid set", "uuid", conversationUUID, "history", historyFilePath)
 }
