@@ -518,6 +518,36 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	hookReceiver.RegisterRoutes(srv.mux)
 	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit,post-tool-use-drift-check}")
 
+	// Register inbound webhook-trigger receivers (webhook-triggers Epic 2.2/2.3) — like
+	// the hook receivers just above, these are external-POST, verify-signature-first,
+	// trust-boundary-adjacent routes, registered near /api/hooks/permission-request per
+	// Task 2.2.1e. Both handlers self-gate on the "webhook_triggers" feature flag as
+	// their own first line (defense in depth); nil-guarded here too so route
+	// registration itself is skipped entirely when there's no workflow repository to
+	// back it, mirroring WorkflowScheduler's own nil guard above.
+	if deps.WorkflowRepo != nil && deps.TriggerFireEventRepo != nil {
+		// config.LoadConfig() (not a threaded deps.Config — ServerDependencies has no
+		// such field) matches this function's own established pattern for feature-flag
+		// reads elsewhere (see the "backlog" flag check above and cfg := config.LoadConfig()
+		// further down in this function).
+		webhookCfg := config.LoadConfig()
+		// Route registration itself is flag-gated (not just each handler's internal
+		// first-line check) so that when webhook_triggers is off, /webhooks/* falls
+		// through to the same catch-all behavior as any other undefined path, rather
+		// than deterministically 404ing from a registered-but-disabled handler — the
+		// latter is a discoverable "feature exists but disabled" signal to an
+		// unauthenticated prober (plan.md Risk Control). This does mean flipping the
+		// flag off requires a restart to stop serving these routes, same limitation the
+		// "backlog" flag already has for its own route-gated pieces.
+		if webhookCfg.GetFeatureFlag("webhook_triggers") {
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			githubWebhookHandler.RegisterRoutes(srv.mux)
+			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			genericWebhookHandler.RegisterRoutes(srv.mux)
+			log.Info("Registered webhook-trigger receivers at POST /webhooks/{github,{slug}}")
+		}
+	}
+
 	// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
 	sessionUploadHandler := services.NewSessionImageUploadHandler(deps.Storage, deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("POST /api/v1/upload-image", sessionUploadHandler.HandleUpload)

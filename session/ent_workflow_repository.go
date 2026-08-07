@@ -246,3 +246,16 @@ func (r *EntWorkflowRepository) ListEnabled(ctx context.Context) ([]*ent.Workflo
 	}
 	return wfs, nil
 }
+
+// ListByTriggerType returns all workflows with the given trigger_type, regardless of
+// cron_enabled (see interface doc comment for why enabled/repo/branch filtering is
+// left to the caller).
+func (r *EntWorkflowRepository) ListByTriggerType(ctx context.Context, triggerType string) ([]*ent.Workflow, error) {
+	wfs, err := r.client.Workflow.Query().
+		Where(workflow.TriggerType(triggerType)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list workflows by trigger_type %q: %w", triggerType, err)
+	}
+	return wfs, nil
+}

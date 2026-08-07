@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -42,6 +43,16 @@ type triggerFireEventRecorder interface {
 	Create(ctx context.Context, input session.TriggerFireEventInput) error
 }
 
+// triggerRateLimiterGate is the narrow interface Scheduler needs for per-Workflow rate
+// limiting (webhook-triggers Epic 2.4.2) — satisfied by *services.TriggerRateLimiter's
+// Allow method. Defined here (consumer-defined), not in server/services, to avoid a
+// server/workflows -> server/services import — per .claude/rules/interface-pollution-
+// checklist.md.
+type triggerRateLimiterGate interface {
+	// Allow reports whether a fire for workflowID is permitted right now.
+	Allow(workflowID uuid.UUID) bool
+}
+
 // Scheduler manages cron-based workflow execution.
 type Scheduler struct {
 	c          *cron.Cron
@@ -59,6 +70,9 @@ type Scheduler struct {
 	// disables audit-row persistence — Scheduler still functions, it just doesn't leave
 	// a durable record. Wired via SetTriggerFireEventRepo.
 	fireEventRepo triggerFireEventRecorder
+	// rateLimiter enforces a per-Workflow fire rate (Epic 2.4.2). nil (the default)
+	// disables rate limiting. Wired via SetRateLimiter.
+	rateLimiter triggerRateLimiterGate
 }
 
 // NewScheduler creates a new WorkflowScheduler.
@@ -87,6 +101,12 @@ func (s *Scheduler) SetAdmissionGate(g AdmissionGate) {
 // the same reason as SetAdmissionGate.
 func (s *Scheduler) SetTriggerFireEventRepo(repo triggerFireEventRecorder) {
 	s.fireEventRepo = repo
+}
+
+// SetRateLimiter wires the per-Workflow fire rate limit (Epic 2.4.2). A setter for the
+// same reason as SetAdmissionGate.
+func (s *Scheduler) SetRateLimiter(limiter triggerRateLimiterGate) {
+	s.rateLimiter = limiter
 }
 
 // recordFireEvent persists a TriggerFireEvent audit row if fireEventRepo is wired.
@@ -202,6 +222,16 @@ func (s *Scheduler) Remove(workflowID string) error {
 func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (string, error) {
 	if s.sessionSvc == nil {
 		return "", fmt.Errorf("session service not available")
+	}
+
+	// Per-Workflow rate limit (Epic 2.4.2): a noisy/malicious trigger source can't spawn
+	// unbounded sessions. Checked before the admission gate so a throttled fire is
+	// distinguishable (in logs/audit) from one rejected by the WIP cap.
+	if s.rateLimiter != nil && !s.rateLimiter.Allow(wf.ID) {
+		reason := "rate limit exceeded"
+		log.Warn("[WorkflowScheduler] FireNow: rate limited", "slug", wf.Slug, "reason", reason)
+		s.recordFireEvent(ctx, wf, "fired_failed", "", "", reason)
+		return "", fmt.Errorf("rate limit exceeded for workflow %q", wf.Slug)
 	}
 
 	// WIP-cap admission check (Epic 1.3): every trigger-fired session must pass the
