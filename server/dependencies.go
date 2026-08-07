@@ -815,6 +815,19 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	reactiveQueueMgr.SetOneShotRunner(sessionService)
 	log.Info("ReactiveQueueManager initialized")
 
+	// CallbackDispatcher (webhook-triggers Phase 5, FR7-FR9): a single shared
+	// instance fires on_session_complete/on_session_stale/on_queue_item_created.
+	// Reads cfg.Callbacks and the webhook_triggers feature flag live on every
+	// Dispatch call, so a CallbackConfigService.UpdateCallbackConfig save takes
+	// effect immediately without a restart — same live-cfg-pointer shape as
+	// SetSharedBacklogConfig below. Wired to both the EntRepository (via
+	// Storage's forwarding setter, for on_session_complete/on_session_stale) and
+	// ReactiveQueueManager (for on_queue_item_created).
+	callbackDispatcher := services.NewCallbackDispatcher(cfg)
+	storage.SetCallbackDispatcher(callbackDispatcher)
+	reactiveQueueMgr.SetCallbackDispatcher(callbackDispatcher)
+	log.Info("CallbackDispatcher initialized")
+
 	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
 	historyLinker := session.NewHistoryLinkerFromRealInspector()

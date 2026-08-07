@@ -996,6 +996,21 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 		NewStatus: string(toStatus),
 	})
 
+	// AC4 (webhook-triggers Phase 5): fire the on_session_complete callback after
+	// the transition has already committed and this function is about to return —
+	// dispatchCallback is itself non-blocking (bounded semaphore + go), so this
+	// adds no latency to the caller and a delivery failure can never roll back or
+	// corrupt the status transition above.
+	if toStatus == BacklogStatusDone {
+		r.dispatchCallback("session_complete", map[string]any{
+			"event":       "session_complete",
+			"item_id":     result.ID,
+			"title":       result.Title,
+			"status":      string(toStatus),
+			"occurred_at": time.Now(),
+		})
+	}
+
 	return &result, nil
 }
 
@@ -1126,6 +1141,35 @@ func (r *EntRepository) publishItemChanged(item *BacklogItemData, change Backlog
 		}
 	}()
 	r.itemChangePublisher.PublishItemChanged(item, change)
+}
+
+// SetCallbackDispatcher wires a CallbackDispatcher into this repository so
+// TransitionBacklogItemStatus (on_session_complete) and
+// BacklogLifecycleListener.reconcileStaleWorkSessions (on_session_stale, which is
+// handed this *EntRepository directly) can fire outbound callbacks
+// (webhook-triggers Phase 5). Called via Storage.SetCallbackDispatcher's
+// forwarding method, the same pattern SetItemChangePublisher uses.
+func (r *EntRepository) SetCallbackDispatcher(d CallbackDispatcher) {
+	r.callbackDispatcher = d
+}
+
+// dispatchCallback is a defense-in-depth wrapper around
+// r.callbackDispatcher.Dispatch: nil-checked (a dispatcher may not be wired, e.g.
+// in tests or before server/dependencies.go calls SetCallbackDispatcher) and
+// recover()-guarded, mirroring publishItemChanged's shape — a panic in Dispatch
+// (or any CallbackDispatcher implementation) must never propagate into a hooked
+// repository method's return path. Dispatch itself is expected to be
+// non-blocking (bounded semaphore + go, per CallbackDispatcher's doc comment).
+func (r *EntRepository) dispatchCallback(eventType string, payload any) {
+	if r.callbackDispatcher == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.WarningLog.Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
+		}
+	}()
+	r.callbackDispatcher.Dispatch(eventType, payload)
 }
 
 // attachItemSessionsForPublish best-effort loads and attaches this item's

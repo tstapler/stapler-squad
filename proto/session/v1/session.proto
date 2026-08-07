@@ -266,6 +266,17 @@ service SessionService {
   // DeleteDirectoryRule removes a directory rule by path.
   rpc DeleteDirectoryRule(DeleteDirectoryRuleRequest) returns (DeleteDirectoryRuleResponse) {}
 
+  // Callback Config RPCs (webhook-triggers Phase 5, FR7)
+
+  // GetCallbackConfig returns whether each of the three outbound-callback URLs is
+  // configured. The URLs themselves are never returned (see CallbackConfigProto).
+  rpc GetCallbackConfig(GetCallbackConfigRequest) returns (GetCallbackConfigResponse) {}
+
+  // UpdateCallbackConfig sets one or more outbound-callback URLs. Each provided URL is
+  // SSRF-validated (ValidateCallbackURL) before being persisted; an unset field leaves
+  // that URL unchanged.
+  rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
+
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
   rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse) {}
@@ -1783,6 +1794,36 @@ message UpdateGlobalDefaultsRequest {
 
 message UpdateGlobalDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
+}
+
+// Callback Config (webhook-triggers Phase 5, FR7)
+//
+// CallbackConfigProto reports booleans only — the raw URL is never echoed back on any
+// read path, matching the masked-boolean-not-value convention used across this project's
+// other secret-bearing config (see Workflow.webhook_secret_encrypted's doc comment above,
+// which is never round-tripped in plaintext by CreateWorkflow/UpdateWorkflow either).
+
+message CallbackConfigProto {
+  bool on_session_complete_configured = 1;
+  bool on_session_stale_configured = 2;
+  bool on_queue_item_created_configured = 3;
+}
+
+message GetCallbackConfigRequest {}
+
+message GetCallbackConfigResponse {
+  CallbackConfigProto config = 1;
+}
+
+message UpdateCallbackConfigRequest {
+  // Unset means "leave unchanged"; empty string "" means "clear/disable".
+  optional string on_session_complete_url = 1;
+  optional string on_session_stale_url = 2;
+  optional string on_queue_item_created_url = 3;
+}
+
+message UpdateCallbackConfigResponse {
+  CallbackConfigProto config = 1;
 }
 
 // UpsertProfile

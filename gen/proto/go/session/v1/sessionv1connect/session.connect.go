@@ -237,6 +237,12 @@ const (
 	// SessionServiceDeleteDirectoryRuleProcedure is the fully-qualified name of the SessionService's
 	// DeleteDirectoryRule RPC.
 	SessionServiceDeleteDirectoryRuleProcedure = "/session.v1.SessionService/DeleteDirectoryRule"
+	// SessionServiceGetCallbackConfigProcedure is the fully-qualified name of the SessionService's
+	// GetCallbackConfig RPC.
+	SessionServiceGetCallbackConfigProcedure = "/session.v1.SessionService/GetCallbackConfig"
+	// SessionServiceUpdateCallbackConfigProcedure is the fully-qualified name of the SessionService's
+	// UpdateCallbackConfig RPC.
+	SessionServiceUpdateCallbackConfigProcedure = "/session.v1.SessionService/UpdateCallbackConfig"
 	// SessionServiceListWorktreesProcedure is the fully-qualified name of the SessionService's
 	// ListWorktrees RPC.
 	SessionServiceListWorktreesProcedure = "/session.v1.SessionService/ListWorktrees"
@@ -560,6 +566,13 @@ type SessionServiceClient interface {
 	UpsertDirectoryRule(context.Context, *connect.Request[v1.UpsertDirectoryRuleRequest]) (*connect.Response[v1.UpsertDirectoryRuleResponse], error)
 	// DeleteDirectoryRule removes a directory rule by path.
 	DeleteDirectoryRule(context.Context, *connect.Request[v1.DeleteDirectoryRuleRequest]) (*connect.Response[v1.DeleteDirectoryRuleResponse], error)
+	// GetCallbackConfig returns whether each of the three outbound-callback URLs is
+	// configured. The URLs themselves are never returned (see CallbackConfigProto).
+	GetCallbackConfig(context.Context, *connect.Request[v1.GetCallbackConfigRequest]) (*connect.Response[v1.GetCallbackConfigResponse], error)
+	// UpdateCallbackConfig sets one or more outbound-callback URLs. Each provided URL is
+	// SSRF-validated (ValidateCallbackURL) before being persisted; an unset field leaves
+	// that URL unchanged.
+	UpdateCallbackConfig(context.Context, *connect.Request[v1.UpdateCallbackConfigRequest]) (*connect.Response[v1.UpdateCallbackConfigResponse], error)
 	// ListWorktrees returns the git worktrees for a given repository path.
 	// Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
 	ListWorktrees(context.Context, *connect.Request[v1.ListWorktreesRequest]) (*connect.Response[v1.ListWorktreesResponse], error)
@@ -1100,6 +1113,18 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("DeleteDirectoryRule")),
 			connect.WithClientOptions(opts...),
 		),
+		getCallbackConfig: connect.NewClient[v1.GetCallbackConfigRequest, v1.GetCallbackConfigResponse](
+			httpClient,
+			baseURL+SessionServiceGetCallbackConfigProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetCallbackConfig")),
+			connect.WithClientOptions(opts...),
+		),
+		updateCallbackConfig: connect.NewClient[v1.UpdateCallbackConfigRequest, v1.UpdateCallbackConfigResponse](
+			httpClient,
+			baseURL+SessionServiceUpdateCallbackConfigProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("UpdateCallbackConfig")),
+			connect.WithClientOptions(opts...),
+		),
 		listWorktrees: connect.NewClient[v1.ListWorktreesRequest, v1.ListWorktreesResponse](
 			httpClient,
 			baseURL+SessionServiceListWorktreesProcedure,
@@ -1444,6 +1469,8 @@ type sessionServiceClient struct {
 	deleteProfile                *connect.Client[v1.DeleteProfileRequest, v1.DeleteProfileResponse]
 	upsertDirectoryRule          *connect.Client[v1.UpsertDirectoryRuleRequest, v1.UpsertDirectoryRuleResponse]
 	deleteDirectoryRule          *connect.Client[v1.DeleteDirectoryRuleRequest, v1.DeleteDirectoryRuleResponse]
+	getCallbackConfig            *connect.Client[v1.GetCallbackConfigRequest, v1.GetCallbackConfigResponse]
+	updateCallbackConfig         *connect.Client[v1.UpdateCallbackConfigRequest, v1.UpdateCallbackConfigResponse]
 	listWorktrees                *connect.Client[v1.ListWorktreesRequest, v1.ListWorktreesResponse]
 	listPromptHistory            *connect.Client[v1.ListPromptHistoryRequest, v1.ListPromptHistoryResponse]
 	deletePromptHistory          *connect.Client[v1.DeletePromptHistoryRequest, v1.DeletePromptHistoryResponse]
@@ -1834,6 +1861,16 @@ func (c *sessionServiceClient) UpsertDirectoryRule(ctx context.Context, req *con
 // DeleteDirectoryRule calls session.v1.SessionService.DeleteDirectoryRule.
 func (c *sessionServiceClient) DeleteDirectoryRule(ctx context.Context, req *connect.Request[v1.DeleteDirectoryRuleRequest]) (*connect.Response[v1.DeleteDirectoryRuleResponse], error) {
 	return c.deleteDirectoryRule.CallUnary(ctx, req)
+}
+
+// GetCallbackConfig calls session.v1.SessionService.GetCallbackConfig.
+func (c *sessionServiceClient) GetCallbackConfig(ctx context.Context, req *connect.Request[v1.GetCallbackConfigRequest]) (*connect.Response[v1.GetCallbackConfigResponse], error) {
+	return c.getCallbackConfig.CallUnary(ctx, req)
+}
+
+// UpdateCallbackConfig calls session.v1.SessionService.UpdateCallbackConfig.
+func (c *sessionServiceClient) UpdateCallbackConfig(ctx context.Context, req *connect.Request[v1.UpdateCallbackConfigRequest]) (*connect.Response[v1.UpdateCallbackConfigResponse], error) {
+	return c.updateCallbackConfig.CallUnary(ctx, req)
 }
 
 // ListWorktrees calls session.v1.SessionService.ListWorktrees.
@@ -2247,6 +2284,13 @@ type SessionServiceHandler interface {
 	UpsertDirectoryRule(context.Context, *connect.Request[v1.UpsertDirectoryRuleRequest]) (*connect.Response[v1.UpsertDirectoryRuleResponse], error)
 	// DeleteDirectoryRule removes a directory rule by path.
 	DeleteDirectoryRule(context.Context, *connect.Request[v1.DeleteDirectoryRuleRequest]) (*connect.Response[v1.DeleteDirectoryRuleResponse], error)
+	// GetCallbackConfig returns whether each of the three outbound-callback URLs is
+	// configured. The URLs themselves are never returned (see CallbackConfigProto).
+	GetCallbackConfig(context.Context, *connect.Request[v1.GetCallbackConfigRequest]) (*connect.Response[v1.GetCallbackConfigResponse], error)
+	// UpdateCallbackConfig sets one or more outbound-callback URLs. Each provided URL is
+	// SSRF-validated (ValidateCallbackURL) before being persisted; an unset field leaves
+	// that URL unchanged.
+	UpdateCallbackConfig(context.Context, *connect.Request[v1.UpdateCallbackConfigRequest]) (*connect.Response[v1.UpdateCallbackConfigResponse], error)
 	// ListWorktrees returns the git worktrees for a given repository path.
 	// Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
 	ListWorktrees(context.Context, *connect.Request[v1.ListWorktreesRequest]) (*connect.Response[v1.ListWorktreesResponse], error)
@@ -2783,6 +2827,18 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("DeleteDirectoryRule")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceGetCallbackConfigHandler := connect.NewUnaryHandler(
+		SessionServiceGetCallbackConfigProcedure,
+		svc.GetCallbackConfig,
+		connect.WithSchema(sessionServiceMethods.ByName("GetCallbackConfig")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceUpdateCallbackConfigHandler := connect.NewUnaryHandler(
+		SessionServiceUpdateCallbackConfigProcedure,
+		svc.UpdateCallbackConfig,
+		connect.WithSchema(sessionServiceMethods.ByName("UpdateCallbackConfig")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceListWorktreesHandler := connect.NewUnaryHandler(
 		SessionServiceListWorktreesProcedure,
 		svc.ListWorktrees,
@@ -3193,6 +3249,10 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceUpsertDirectoryRuleHandler.ServeHTTP(w, r)
 		case SessionServiceDeleteDirectoryRuleProcedure:
 			sessionServiceDeleteDirectoryRuleHandler.ServeHTTP(w, r)
+		case SessionServiceGetCallbackConfigProcedure:
+			sessionServiceGetCallbackConfigHandler.ServeHTTP(w, r)
+		case SessionServiceUpdateCallbackConfigProcedure:
+			sessionServiceUpdateCallbackConfigHandler.ServeHTTP(w, r)
 		case SessionServiceListWorktreesProcedure:
 			sessionServiceListWorktreesHandler.ServeHTTP(w, r)
 		case SessionServiceListPromptHistoryProcedure:
@@ -3566,6 +3626,14 @@ func (UnimplementedSessionServiceHandler) UpsertDirectoryRule(context.Context, *
 
 func (UnimplementedSessionServiceHandler) DeleteDirectoryRule(context.Context, *connect.Request[v1.DeleteDirectoryRuleRequest]) (*connect.Response[v1.DeleteDirectoryRuleResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.DeleteDirectoryRule is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetCallbackConfig(context.Context, *connect.Request[v1.GetCallbackConfigRequest]) (*connect.Response[v1.GetCallbackConfigResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetCallbackConfig is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) UpdateCallbackConfig(context.Context, *connect.Request[v1.UpdateCallbackConfigRequest]) (*connect.Response[v1.UpdateCallbackConfigResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.UpdateCallbackConfig is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) ListWorktrees(context.Context, *connect.Request[v1.ListWorktreesRequest]) (*connect.Response[v1.ListWorktreesResponse], error) {

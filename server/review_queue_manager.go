@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"sync"
@@ -70,6 +71,13 @@ type ReactiveQueueManager struct {
 	// policy (see maybeAutoCreatePR). nil disables the feature entirely — safe
 	// default for tests and any wiring path that doesn't call the setter.
 	oneShotRunner OneShotPRCreator
+
+	// callbackDispatcher is set via SetCallbackDispatcher and fires the
+	// on_queue_item_created outbound callback (webhook-triggers Phase 5). nil
+	// disables the feature entirely (Dispatch is also nil-receiver-safe, but
+	// OnItemAdded nil-checks first to avoid the call entirely) — safe default
+	// for tests and any wiring path that doesn't call the setter.
+	callbackDispatcher *services.CallbackDispatcher
 
 	// autoCreatePRInFlight tracks sessions with an in-progress AutoCreatePR
 	// one-shot run, keyed by stable session UUID. Prevents a second concurrent
@@ -146,6 +154,14 @@ func NewReactiveQueueManager(
 // elsewhere in this file's wiring to break a construction-order cycle.
 func (rqm *ReactiveQueueManager) SetOneShotRunner(r OneShotPRCreator) {
 	rqm.oneShotRunner = r
+}
+
+// SetCallbackDispatcher wires the outbound-callback dispatcher used to fire
+// on_queue_item_created (see OnItemAdded, webhook-triggers Phase 5). Called
+// post-construction from server/dependencies.go, same setter-injection pattern
+// as SetOneShotRunner above.
+func (rqm *ReactiveQueueManager) SetCallbackDispatcher(d *services.CallbackDispatcher) {
+	rqm.callbackDispatcher = d
 }
 
 // Start initializes the reactive queue manager and subscribes to events.
@@ -416,6 +432,22 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	// would otherwise have to click "Create PR" + "Run" for manually. Runs async
 	// so a slow/failing LLM call never blocks queue-add notification delivery.
 	rqm.maybeAutoCreatePR(item)
+
+	// AC4-shaped on_queue_item_created callback (webhook-triggers Phase 5, FR7):
+	// Dispatch is itself non-blocking (bounded semaphore + go), so this adds no
+	// latency here. rqm.callbackDispatcher is nil-checked rather than relying on
+	// a nil *services.CallbackDispatcher receiver, matching this file's existing
+	// nil-safety convention (e.g. oneShotRunner in maybeAutoCreatePR).
+	if rqm.callbackDispatcher != nil {
+		rqm.callbackDispatcher.Dispatch("queue_item_created", map[string]any{
+			"event":       "queue_item_created",
+			"session_id":  resolvedID,
+			"session":     item.SessionName,
+			"reason":      item.Reason.String(),
+			"item_id":     linkedItemID,
+			"occurred_at": time.Now(),
+		})
+	}
 }
 
 // maybeAutoCreatePR implements the opt-in "auto-create PR on Complete" policy

@@ -39,6 +39,15 @@ type EntRepository struct {
 	// typically by Storage.SetItemChangePublisher's forwarding call in
 	// server/dependencies.go.
 	itemChangePublisher ItemChangePublisher
+
+	// callbackDispatcher is nil-safe — dispatchCallback nil-checks before calling
+	// it (dispatch is best-effort and never blocks or fails the underlying
+	// mutation). Wired via SetCallbackDispatcher, typically by
+	// Storage.SetCallbackDispatcher's forwarding call in server/dependencies.go.
+	// Used by TransitionBacklogItemStatus (on_session_complete, webhook-triggers
+	// Phase 5) and by BacklogLifecycleListener.reconcileStaleWorkSessions
+	// (on_session_stale), which is handed this *EntRepository directly.
+	callbackDispatcher CallbackDispatcher
 }
 
 // NewEntRepository creates a new Ent repository with the given options.

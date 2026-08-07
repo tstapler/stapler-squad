@@ -125,6 +125,10 @@ type SessionService struct {
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
 
+	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
+	// (webhook-triggers Phase 5, FR7).
+	callbackConfigSvc *CallbackConfigService
+
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
 
@@ -371,6 +375,7 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 		pathCompletionSvc: NewPathCompletionService(),
 		slashCommandSvc:   NewSlashCommandService(),
 		defaultsSvc:       NewDefaultsService(),
+		callbackConfigSvc: NewCallbackConfigService(),
 		projectSvc:        NewProjectService(concStorage),
 		checkpointSvc:     NewCheckpointService(storage, eventBus),
 		featureFlagSvc:    NewFeatureFlagService(),
@@ -3417,6 +3422,18 @@ func (s *SessionService) UpsertDirectoryRule(ctx context.Context, req *connect.R
 // DeleteDirectoryRule removes a directory rule by path.
 func (s *SessionService) DeleteDirectoryRule(ctx context.Context, req *connect.Request[sessionv1.DeleteDirectoryRuleRequest]) (*connect.Response[sessionv1.DeleteDirectoryRuleResponse], error) {
 	return s.defaultsSvc.DeleteDirectoryRule(ctx, req)
+}
+
+// ─── Callback Config delegates (webhook-triggers Phase 5, FR7) ──────────────
+
+// GetCallbackConfig reports which outbound-callback URLs are configured.
+func (s *SessionService) GetCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.GetCallbackConfigRequest]) (*connect.Response[sessionv1.GetCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.GetCallbackConfig(ctx, req)
+}
+
+// UpdateCallbackConfig sets one or more outbound-callback URLs.
+func (s *SessionService) UpdateCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateCallbackConfigRequest]) (*connect.Response[sessionv1.UpdateCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.UpdateCallbackConfig(ctx, req)
 }
 
 // ListAliases returns all configured alias presets.
