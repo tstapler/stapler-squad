@@ -79,9 +79,25 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
-          args: --timeout=3m --max-issues-per-linter=0 --max-same-issues=0
+          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0
           skip-cache: false
           only-new-issues: false
+
+      # gocyclo/gocognit/funlen/revive(file-length-limit) flag files/functions getting too
+      # big or too complex — the shape that let session/backlog_lifecycle.go grow to 4930
+      # lines before anyone noticed (see the code-hotspot-analysis skill + the split PR that
+      # added this step). Thresholds live in .golangci.yml's settings block. Run as a
+      # separate step (not folded into the block above) because it needs only-new-issues:
+      # true — the repo has ~100 pre-existing violations in files this step doesn't touch,
+      # and failing on those would block unrelated PRs. `make lint`/`make ci` are
+      # deliberately unaffected (these 4 linters are NOT in .golangci.yml's enable: list).
+      - name: golangci-lint (complexity/size gate — new code only)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.4
+          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 --enable=gocyclo,gocognit,funlen,revive
+          skip-cache: false
+          only-new-issues: true
 
       - name: Import cycle check
         run: go build ./...
