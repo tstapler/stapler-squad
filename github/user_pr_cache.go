@@ -122,6 +122,7 @@ type UserPRCache struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	startOnce    sync.Once
+	done         chan struct{}
 }
 
 // NewUserPRCache creates a cache with default configuration.
@@ -133,6 +134,7 @@ func NewUserPRCache() *UserPRCache {
 func NewUserPRCacheWithConfig(cfg UserPRCacheConfig) *UserPRCache {
 	return &UserPRCache{
 		config: cfg,
+		done:   make(chan struct{}),
 	}
 }
 
@@ -145,9 +147,12 @@ func (c *UserPRCache) Start(ctx context.Context) {
 	})
 }
 
-// Stop halts background polling.
+// Stop halts background polling and blocks until the background goroutine has
+// fully exited, so callers (e.g. test cleanup) can rely on no further access
+// to shared/global state (like the keyring package) once Stop returns.
 func (c *UserPRCache) Stop() {
 	c.cancel()
+	<-c.done
 }
 
 // SetOnUpdated atomically registers a callback invoked after every successful
@@ -300,6 +305,7 @@ func (c *UserPRCache) Refresh(ctx context.Context) error {
 
 // loop is the background polling goroutine.
 func (c *UserPRCache) loop() {
+	defer close(c.done)
 	// Fetch immediately on start.
 	if err := c.fetch(); err != nil {
 		log.Warn("UserPRCache: initial fetch failed", "err", err)
