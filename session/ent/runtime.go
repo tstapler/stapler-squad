@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
 	"github.com/tstapler/stapler-squad/session/ent/workflow"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -698,6 +699,20 @@ func init() {
 	tagDescName := tagFields[0].Descriptor()
 	// tag.NameValidator is a validator for the "name" field. It is called by the builders before save.
 	tag.NameValidator = tagDescName.Validators[0].(func(string) error)
+	triggerfireeventFields := schema.TriggerFireEvent{}.Fields()
+	_ = triggerfireeventFields
+	// triggerfireeventDescOutcome is the schema descriptor for outcome field.
+	triggerfireeventDescOutcome := triggerfireeventFields[2].Descriptor()
+	// triggerfireevent.OutcomeValidator is a validator for the "outcome" field. It is called by the builders before save.
+	triggerfireevent.OutcomeValidator = triggerfireeventDescOutcome.Validators[0].(func(string) error)
+	// triggerfireeventDescCreatedAt is the schema descriptor for created_at field.
+	triggerfireeventDescCreatedAt := triggerfireeventFields[6].Descriptor()
+	// triggerfireevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	triggerfireevent.DefaultCreatedAt = triggerfireeventDescCreatedAt.Default.(func() time.Time)
+	// triggerfireeventDescID is the schema descriptor for id field.
+	triggerfireeventDescID := triggerfireeventFields[0].Descriptor()
+	// triggerfireevent.DefaultID holds the default value on creation for the id field.
+	triggerfireevent.DefaultID = triggerfireeventDescID.Default.(func() uuid.UUID)
 	workflowFields := schema.Workflow{}.Fields()
 	_ = workflowFields
 	// workflowDescSlug is the schema descriptor for slug field.
@@ -738,6 +753,10 @@ func init() {
 	workflowDescArchiveAfterHours := workflowFields[15].Descriptor()
 	// workflow.DefaultArchiveAfterHours holds the default value on creation for the archive_after_hours field.
 	workflow.DefaultArchiveAfterHours = workflowDescArchiveAfterHours.Default.(int)
+	// workflowDescTriggerType is the schema descriptor for trigger_type field.
+	workflowDescTriggerType := workflowFields[16].Descriptor()
+	// workflow.DefaultTriggerType holds the default value on creation for the trigger_type field.
+	workflow.DefaultTriggerType = workflowDescTriggerType.Default.(string)
 	// workflowDescID is the schema descriptor for id field.
 	workflowDescID := workflowFields[0].Descriptor()
 	// workflow.DefaultID holds the default value on creation for the id field.

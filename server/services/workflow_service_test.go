@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -308,6 +309,200 @@ func TestRunWorkflow_NotFound(t *testing.T) {
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+// TestCreateWorkflow_TriggerTypeMismatch_Rejected verifies Task 1.1.1e's save-time
+// validation: a request whose populated match-criteria fields don't match the
+// declared trigger_type is rejected with CodeInvalidArgument.
+func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *sessionv1.CreateWorkflowRequest
+	}{
+		{
+			name: "webhook trigger_type with cron_enabled",
+			req: &sessionv1.CreateWorkflowRequest{
+				Slug:            "mismatch-webhook-cron",
+				Name:            "Mismatch",
+				Command:         "cmd",
+				TargetDirectory: "/tmp/test",
+				TriggerType:     "webhook",
+				CronEnabled:     true,
+				CronExpression:  "0 9 * * 1",
+			},
+		},
+		{
+			name: "manual trigger_type with webhook_slug set",
+			req: &sessionv1.CreateWorkflowRequest{
+				Slug:            "mismatch-manual-slug",
+				Name:            "Mismatch",
+				Command:         "cmd",
+				TargetDirectory: "/tmp/test",
+				TriggerType:     "manual",
+				WebhookSlug:     "jira-ticket",
+			},
+		},
+		{
+			name: "cron trigger_type with github_repo set",
+			req: &sessionv1.CreateWorkflowRequest{
+				Slug:            "mismatch-cron-repo",
+				Name:            "Mismatch",
+				Command:         "cmd",
+				TargetDirectory: "/tmp/test",
+				TriggerType:     "cron",
+				CronExpression:  "0 9 * * 1",
+				CronEnabled:     true,
+				GithubRepo:      "owner/repo",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, svc := createTestWorkflowService(t)
+			ctx := context.Background()
+
+			_, err := svc.CreateWorkflow(ctx, connect.NewRequest(tt.req))
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		})
+	}
+}
+
+// TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug verifies Story 1.1.1's
+// acceptance criteria: a Workflow row created with trigger_type="webhook" and a
+// webhook_slug is retrievable via GetByWebhookSlug.
+func TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	resp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "jira-ticket-wf",
+		Name:            "Jira Ticket Trigger",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "webhook",
+		WebhookSlug:     "jira-ticket",
+		EventFilter:     "issue.created",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "webhook", resp.Msg.Workflow.TriggerType)
+	assert.Equal(t, "jira-ticket", resp.Msg.Workflow.WebhookSlug)
+	assert.Empty(t, resp.Msg.Workflow.CronExpression)
+	assert.False(t, resp.Msg.Workflow.CronEnabled)
+
+	wf, err := svc.repo.GetByWebhookSlug(ctx, "jira-ticket")
+	require.NoError(t, err)
+	assert.Equal(t, resp.Msg.Workflow.Id, wf.ID.String())
+}
+
+// TestUpdateWorkflow_TriggerTypeMismatch_Rejected verifies the same validation applies
+// to UpdateWorkflow, evaluated against the *effective* (existing-row-merged-with-
+// request) state — not just the request's own fields in isolation.
+func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "update-mismatch",
+		Name:            "Original",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "webhook",
+		WebhookSlug:     "existing-slug",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+
+	// Flip cron_enabled=true without changing trigger_type away from "webhook" — the
+	// effective state (trigger_type=webhook, webhook_slug=existing-slug,
+	// cron_enabled=true) is invalid on two counts.
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id:             id,
+		CronEnabled:    proto.Bool(true),
+		CronExpression: proto.String("0 9 * * 1"),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected verifies that an
+// UpdateWorkflow call touching only an unrelated field (not any trigger field) is not
+// rejected by the trigger-type consistency check.
+func TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "update-unrelated",
+		Name:            "Original",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "cron",
+		CronEnabled:     true,
+		CronExpression:  "0 9 * * 1",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+
+	updateResp, err := svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id:          id,
+		Description: proto.String("updated description"),
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "cron", updateResp.Msg.Workflow.TriggerType)
+	assert.Equal(t, "updated description", updateResp.Msg.Workflow.Description)
+}
+
+// TestListTriggerFireEvents_ReturnsEventsForWorkflow verifies Task 1.2.1d's minimal
+// query-only RPC round-trips TriggerFireEvent rows recorded against a workflow.
+func TestListTriggerFireEvents_ReturnsEventsForWorkflow(t *testing.T) {
+	sessSvc, workflowSvc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	createResp, err := workflowSvc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "fire-events-wf",
+		Name:            "Fire Events",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+	workflowID, err := uuid.Parse(id)
+	require.NoError(t, err)
+
+	// Fire events are tracked in their own repository (no FK to Workflow), so a
+	// separate ent client is fine here — only workflow_id needs to match by value.
+	entRepo := createTestEntClient(t)
+	fireEventRepo := session.NewEntTriggerFireEventRepository(entRepo.GetEntClient())
+	require.NoError(t, fireEventRepo.Create(ctx, session.TriggerFireEventInput{
+		WorkflowID:   &workflowID,
+		Outcome:      "fired_failed",
+		ErrorMessage: "WIP limit reached",
+	}))
+	workflowSvc.SetTriggerFireEventRepo(fireEventRepo)
+
+	resp, err := sessSvc.ListTriggerFireEvents(ctx, connect.NewRequest(&sessionv1.ListTriggerFireEventsRequest{
+		WorkflowId: id,
+	}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Events, 1)
+	assert.Equal(t, "fired_failed", resp.Msg.Events[0].Outcome)
+	assert.Equal(t, "WIP limit reached", resp.Msg.Events[0].ErrorMessage)
+	assert.Equal(t, id, resp.Msg.Events[0].WorkflowId)
+}
+
+// TestListTriggerFireEvents_NilRepo_ReturnsEmptyList verifies the nil-degradation
+// convention matching this file's other RPCs (e.g. ListWorkflows with a nil repo).
+func TestListTriggerFireEvents_NilRepo_ReturnsEmptyList(t *testing.T) {
+	sessSvc, _ := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	resp, err := sessSvc.ListTriggerFireEvents(ctx, connect.NewRequest(&sessionv1.ListTriggerFireEventsRequest{
+		WorkflowId: uuid.New().String(),
+	}))
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msg.Events)
 }
 
 // TestUpdateWorkflow_MultipleFields verifies that multiple fields can be updated

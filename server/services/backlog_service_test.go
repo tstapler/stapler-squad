@@ -1310,6 +1310,34 @@ func TestSpawnSessionFromItem_RecordsTriggeredByFromAutonomousFlag(t *testing.T)
 // default (cfg=nil in these tests, so the default applies).
 const testWIPCap = 2
 
+// TestBacklogService_Admit_AllowsUnderCapRejectsAtCap verifies Admit (webhook-triggers
+// Task 1.3.1b) implements the same WIP cap SpawnSessionFromItem's own gate enforces —
+// this is the method server/workflows.Scheduler consults before every trigger-fired
+// CreateSession call (Epic 1.3).
+func TestBacklogService_Admit_AllowsUnderCapRejectsAtCap(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	admitted, err := svc.Admit(t.Context())
+	require.NoError(t, err)
+	assert.True(t, admitted, "Admit should allow when no work sessions are live")
+
+	// Fill the WIP cap with successful spawns.
+	for i := 0; i < testWIPCap; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("admit item %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+	}
+
+	admitted, err = svc.Admit(t.Context())
+	require.NoError(t, err)
+	assert.False(t, admitted, "Admit should reject once the WIP cap is reached")
+}
+
 // TestSpawnSessionFromItem_WIPLimit_QueuesInsteadOfRejecting verifies that a
 // fresh spawn is queued (not rejected) once testWIPCap items are already
 // in_progress: the response carries Queued=true with no error, and the item

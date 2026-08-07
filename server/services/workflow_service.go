@@ -37,6 +37,10 @@ type WorkflowService struct {
 	storage session.InstanceStore
 	// poller is wired after construction via SetPoller, forwarded from SessionService.
 	poller *session.ReviewQueuePoller
+	// fireEventRepo backs ListTriggerFireEvents (Epic 1.2, Task 1.2.1d). Optional — nil
+	// makes the RPC return an empty list rather than erroring, matching this file's
+	// other nil-degradation conventions (e.g. ListWorkflows with a nil repo).
+	fireEventRepo session.TriggerFireEventRepository
 }
 
 // NewWorkflowService creates a new WorkflowService.
@@ -50,6 +54,12 @@ func NewWorkflowService(repo session.WorkflowRepository, scheduler WorkflowSched
 // in-memory instance state. Forwarded from SessionService.SetReviewQueuePoller.
 func (ws *WorkflowService) SetPoller(p *session.ReviewQueuePoller) {
 	ws.poller = p
+}
+
+// SetTriggerFireEventRepo wires the trigger-fire audit trail repository used by
+// ListTriggerFireEvents. Optional — see fireEventRepo's doc comment.
+func (ws *WorkflowService) SetTriggerFireEventRepo(repo session.TriggerFireEventRepository) {
+	ws.fireEventRepo = repo
 }
 
 // entWorkflowToProto converts an ent.Workflow to its proto representation.
@@ -79,7 +89,53 @@ func entWorkflowToProto(w *ent.Workflow) *sessionv1.WorkflowProto {
 		v := int32(w.ArchiveAfterHours)
 		proto.ArchiveAfterHours = &v
 	}
+	// Trigger fields (webhook-triggers Epic 1.1). webhook_secret_encrypted is
+	// deliberately never copied onto the proto — never returned in plaintext (or
+	// ciphertext) by any RPC.
+	proto.TriggerType = w.TriggerType
+	proto.GithubRepo = w.GithubRepo
+	proto.GithubBranch = w.GithubBranch
+	proto.WebhookSlug = w.WebhookSlug
+	proto.EventFilter = w.EventFilter
+	proto.LabelFilter = w.LabelFilter
+	proto.PromptTemplate = w.PromptTemplate
+	if w.LastFiredAt != nil {
+		proto.LastFiredAt = timestamppb.New(*w.LastFiredAt)
+	}
 	return proto
+}
+
+// validateTriggerTypeFieldConsistency rejects a trigger_type / populated-match-field
+// combination that would let a Workflow register as more than one trigger mechanism at
+// once — e.g. a row that is simultaneously a valid cron entry AND has a webhook_slug
+// set (Task 1.1.1e, pre-mortem P1 #2). Called with the *effective* (already-defaulted
+// and, for updates, already-merged-with-the-existing-row) values.
+func validateTriggerTypeFieldConsistency(triggerType string, cronEnabled bool, webhookSlug, githubRepo string) error {
+	if triggerType != "cron" && cronEnabled {
+		return fmt.Errorf("cron_enabled requires trigger_type=%q, got trigger_type=%q", "cron", triggerType)
+	}
+	if triggerType != "webhook" && webhookSlug != "" {
+		return fmt.Errorf("webhook_slug requires trigger_type=%q, got trigger_type=%q", "webhook", triggerType)
+	}
+	if triggerType != "github_push" && githubRepo != "" {
+		return fmt.Errorf("github_repo requires trigger_type=%q, got trigger_type=%q", "github_push", triggerType)
+	}
+	return nil
+}
+
+// resolveTriggerType applies the same "cron if cron_enabled else manual" default the
+// Task 1.1.1d backfill uses, for a request that left trigger_type unspecified — so an
+// existing cron-only client that has never heard of trigger_type keeps working exactly
+// as before, with a correctly self-consistent row on disk (not one that relies on the
+// ent schema's own "manual" column default, which would be wrong for a cron-enabled row).
+func resolveTriggerType(triggerType string, cronEnabled bool) string {
+	if triggerType != "" {
+		return triggerType
+	}
+	if cronEnabled {
+		return "cron"
+	}
+	return "manual"
 }
 
 // validateTargetDirectory checks that dir is an absolute path with no traversal components.
@@ -130,6 +186,14 @@ func (s *WorkflowService) CreateWorkflow(
 		}
 	}
 
+	// Trigger-type validation (Task 1.1.1e): resolve trigger_type (defaulting for
+	// backward-compat cron-only clients that never send it) and reject any request
+	// whose populated match-criteria fields don't match the declared trigger_type.
+	triggerType := resolveTriggerType(req.Msg.TriggerType, req.Msg.CronEnabled)
+	if err := validateTriggerTypeFieldConsistency(triggerType, req.Msg.CronEnabled, req.Msg.WebhookSlug, req.Msg.GithubRepo); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
 	createInput := session.WorkflowCreateInput{
 		Slug:            req.Msg.Slug,
 		Name:            req.Msg.Name,
@@ -142,6 +206,13 @@ func (s *WorkflowService) CreateWorkflow(
 		AgentType:       req.Msg.AgentType,
 		CronExpression:  req.Msg.CronExpression,
 		CronEnabled:     req.Msg.CronEnabled,
+		TriggerType:     triggerType,
+		GitHubRepo:      req.Msg.GithubRepo,
+		GitHubBranch:    req.Msg.GithubBranch,
+		WebhookSlug:     req.Msg.WebhookSlug,
+		EventFilter:     req.Msg.EventFilter,
+		LabelFilter:     req.Msg.LabelFilter,
+		PromptTemplate:  req.Msg.PromptTemplate,
 	}
 	if req.Msg.KeepSessions != nil {
 		v := int(*req.Msg.KeepSessions)
@@ -207,6 +278,40 @@ func (s *WorkflowService) UpdateWorkflow(
 		}
 	}
 
+	// Trigger-type validation (Task 1.1.1e): UpdateWorkflow is a partial update, so
+	// validate the *effective* post-update state — the existing row's values merged
+	// with whatever this request is actually changing — not just the request's own
+	// (possibly-nil) fields in isolation. Without fetching the existing row first, a
+	// request that only changes an unrelated field (e.g. description) could either be
+	// spuriously rejected or, worse, let a mismatched combination through unnoticed.
+	existing, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get workflow: %w", err))
+	}
+	effectiveCronEnabled := existing.CronEnabled
+	if req.Msg.CronEnabled != nil {
+		effectiveCronEnabled = *req.Msg.CronEnabled
+	}
+	effectiveWebhookSlug := existing.WebhookSlug
+	if req.Msg.WebhookSlug != nil {
+		effectiveWebhookSlug = *req.Msg.WebhookSlug
+	}
+	effectiveGitHubRepo := existing.GithubRepo
+	if req.Msg.GithubRepo != nil {
+		effectiveGitHubRepo = *req.Msg.GithubRepo
+	}
+	effectiveTriggerType := existing.TriggerType
+	if req.Msg.TriggerType != nil {
+		effectiveTriggerType = *req.Msg.TriggerType
+	}
+	effectiveTriggerType = resolveTriggerType(effectiveTriggerType, effectiveCronEnabled)
+	if err := validateTriggerTypeFieldConsistency(effectiveTriggerType, effectiveCronEnabled, effectiveWebhookSlug, effectiveGitHubRepo); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
 	update := session.WorkflowUpdateInput{
 		Name:            req.Msg.Name,
 		Description:     req.Msg.Description,
@@ -218,6 +323,13 @@ func (s *WorkflowService) UpdateWorkflow(
 		AgentType:       req.Msg.AgentType,
 		CronExpression:  req.Msg.CronExpression,
 		CronEnabled:     req.Msg.CronEnabled,
+		TriggerType:     &effectiveTriggerType,
+		GitHubRepo:      req.Msg.GithubRepo,
+		GitHubBranch:    req.Msg.GithubBranch,
+		WebhookSlug:     req.Msg.WebhookSlug,
+		EventFilter:     req.Msg.EventFilter,
+		LabelFilter:     req.Msg.LabelFilter,
+		PromptTemplate:  req.Msg.PromptTemplate,
 	}
 	if req.Msg.KeepSessions != nil {
 		v := int(*req.Msg.KeepSessions)
@@ -338,6 +450,54 @@ func (s *WorkflowService) RunWorkflow(
 
 	return connect.NewResponse(&sessionv1.RunWorkflowResponse{
 		SessionId: sessionID,
+	}), nil
+}
+
+// +api: workflow:list-trigger-fire-events
+// ListTriggerFireEvents returns the trigger-fire audit trail for a workflow, newest
+// first (Epic 1.2, Task 1.2.1d). Query-only, shipped ahead of the Phase 7 UI so
+// existing cron-workflow users can observe fired_failed rejections from the Epic 1.3
+// admission-gate fix.
+func (s *WorkflowService) ListTriggerFireEvents(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListTriggerFireEventsRequest],
+) (*connect.Response[sessionv1.ListTriggerFireEventsResponse], error) {
+	if s.fireEventRepo == nil {
+		return connect.NewResponse(&sessionv1.ListTriggerFireEventsResponse{
+			Events: []*sessionv1.TriggerFireEventProto{},
+		}), nil
+	}
+	if req.Msg.WorkflowId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("workflow_id is required"))
+	}
+	workflowID, err := uuid.Parse(req.Msg.WorkflowId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid workflow_id: %w", err))
+	}
+
+	events, err := s.fireEventRepo.ListByWorkflow(ctx, workflowID, int(req.Msg.Limit))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list trigger fire events: %w", err))
+	}
+
+	protos := make([]*sessionv1.TriggerFireEventProto, len(events))
+	for i, ev := range events {
+		p := &sessionv1.TriggerFireEventProto{
+			Id:           ev.ID.String(),
+			Outcome:      ev.Outcome,
+			DeliveryId:   ev.DeliveryID,
+			SessionId:    ev.SessionID,
+			ErrorMessage: ev.ErrorMessage,
+			CreatedAt:    timestamppb.New(ev.CreatedAt),
+		}
+		if ev.WorkflowID != nil {
+			p.WorkflowId = ev.WorkflowID.String()
+		}
+		protos[i] = p
+	}
+
+	return connect.NewResponse(&sessionv1.ListTriggerFireEventsResponse{
+		Events: protos,
 	}), nil
 }
 

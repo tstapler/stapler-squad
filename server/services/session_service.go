@@ -4240,6 +4240,17 @@ func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[s
 	return s.workflowSvc.RunWorkflow(ctx, req)
 }
 
+// +api: workflow:list-trigger-fire-events
+// ListTriggerFireEvents delegates to WorkflowService.
+func (s *SessionService) ListTriggerFireEvents(ctx context.Context, req *connect.Request[sessionv1.ListTriggerFireEventsRequest]) (*connect.Response[sessionv1.ListTriggerFireEventsResponse], error) {
+	if s.workflowSvc == nil {
+		return connect.NewResponse(&sessionv1.ListTriggerFireEventsResponse{
+			Events: []*sessionv1.TriggerFireEventProto{},
+		}), nil
+	}
+	return s.workflowSvc.ListTriggerFireEvents(ctx, req)
+}
+
 // GetDetectionEvents returns recent status-detection events for a session's Claude controller.
 // Used by the debug panel (FR-8) — returns an empty list when the session has no active controller.
 func (s *SessionService) GetDetectionEvents(ctx context.Context, req *connect.Request[sessionv1.GetDetectionEventsRequest]) (*connect.Response[sessionv1.GetDetectionEventsResponse], error) {

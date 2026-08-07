@@ -375,6 +375,12 @@ service SessionService {
   // RunWorkflow immediately fires a workflow (outside of cron schedule).
   rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
 
+  // ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
+  // rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
+  // the Phase 7 TriggersPanel UI so existing cron-workflow users can observe
+  // fired_failed rejections from the Epic 1.3 admission-gate fix (pre-mortem P1 #3).
+  rpc ListTriggerFireEvents(ListTriggerFireEventsRequest) returns (ListTriggerFireEventsResponse) {}
+
   // GetDetectionEvents returns recent status-detection events for a session.
   // Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
   rpc GetDetectionEvents(GetDetectionEventsRequest) returns (GetDetectionEventsResponse) {}
@@ -2437,6 +2443,21 @@ message WorkflowProto {
   optional int32 keep_sessions = 15;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 16;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1). trigger_type discriminates
+  // which activation mechanism fires this row: "cron" | "github_push" | "webhook" |
+  // "manual". Never populated with the webhook secret — that is write-only and never
+  // round-tripped in plaintext by any RPC (see webhook_secret_encrypted's doc comment
+  // on Workflow's storage layer).
+  string trigger_type = 17;
+  string github_repo = 18;
+  string github_branch = 19;
+  string webhook_slug = 20;
+  string event_filter = 21;
+  string label_filter = 22;
+  string prompt_template = 23;
+  // Last time this trigger successfully fired a session. Unset if never fired.
+  optional google.protobuf.Timestamp last_fired_at = 24;
 }
 
 message CreateWorkflowRequest {
@@ -2455,6 +2476,22 @@ message CreateWorkflowRequest {
   optional int32 keep_sessions = 12;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 13;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1). trigger_type discriminates
+  // which activation mechanism fires this row: "cron" | "github_push" | "webhook" |
+  // "manual" (defaults to "manual", or "cron" when cron_enabled is set and
+  // trigger_type is left unspecified, for backward compatibility with existing
+  // cron-only clients). Populated fields must match the declared trigger_type — e.g.
+  // webhook_slug requires trigger_type="webhook" — or the request is rejected with
+  // CodeInvalidArgument (Task 1.1.1e). webhook_secret_encrypted is deliberately NOT
+  // exposed here — secret creation/rotation is a Phase 7 concern.
+  string trigger_type = 14;
+  string github_repo = 15;
+  string github_branch = 16;
+  string webhook_slug = 17;
+  string event_filter = 18;
+  string label_filter = 19;
+  string prompt_template = 20;
 }
 
 message CreateWorkflowResponse {
@@ -2478,6 +2515,17 @@ message UpdateWorkflowRequest {
   optional int32 keep_sessions = 12;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 13;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1) — see CreateWorkflowRequest's
+  // doc comment for the trigger_type-vs-populated-fields validation contract, applied
+  // here against the *effective* (existing-row-merged-with-request) values.
+  optional string trigger_type = 14;
+  optional string github_repo = 15;
+  optional string github_branch = 16;
+  optional string webhook_slug = 17;
+  optional string event_filter = 18;
+  optional string label_filter = 19;
+  optional string prompt_template = 20;
 }
 
 message UpdateWorkflowResponse {
@@ -2526,6 +2574,30 @@ message ListSlashCommandsResponse {
 
 message RunWorkflowResponse {
   string session_id = 1;
+}
+
+// TriggerFireEventProto is the wire representation of a single trigger evaluation
+// attempt (fired/no-match/rejected) — the durable audit trail behind
+// ListTriggerFireEvents (webhook-triggers Epic 1.2).
+message TriggerFireEventProto {
+  string id = 1;
+  string workflow_id = 2;
+  // "fired_success" | "fired_failed" | "no_match" | "rejected"
+  string outcome = 3;
+  string delivery_id = 4;
+  string session_id = 5;
+  string error_message = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListTriggerFireEventsRequest {
+  string workflow_id = 1;
+  // Max events to return, newest first; 0 means server default (100).
+  int32 limit = 2;
+}
+
+message ListTriggerFireEventsResponse {
+  repeated TriggerFireEventProto events = 1;
 }
 
 // DetectionEventProto is the wire representation of a single status-detection event.

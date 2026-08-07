@@ -1241,6 +1241,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
+		// Close the WIP-gate bypass (webhook-triggers Epic 1.3): every trigger-fired
+		// session must pass the same admission check BacklogService's own spawn path
+		// enforces. backlogSvc is constructed earlier in this function (see
+		// services.NewBacklogService above).
+		workflowScheduler.SetAdmissionGate(backlogSvc)
+		if entClient := storage.GetEntClient(); entClient != nil {
+			fireEventRepo := session.NewEntTriggerFireEventRepository(entClient)
+			workflowScheduler.SetTriggerFireEventRepo(fireEventRepo)
+			workflowSvc.SetTriggerFireEventRepo(fireEventRepo)
+		}
 		log.Info("WorkflowService and WorkflowScheduler initialized")
 	} else {
 		log.Warn("WorkflowScheduler disabled: no workflow repository available")
