@@ -253,6 +253,16 @@ func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
 	}
 }
 
+// SetCallbackDispatcher forwards to the concrete *EntRepository's
+// SetCallbackDispatcher, mirroring SetItemChangePublisher above — same reasoning:
+// server/dependencies.go only has a *Storage value in scope. When the repository
+// is not ent-backed, the dispatcher is simply never wired (no panic).
+func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
+	if er, ok := s.repo.(*EntRepository); ok {
+		er.SetCallbackDispatcher(d)
+	}
+}
+
 // SaveInstances upserts each started instance into the repository.
 func (s *Storage) SaveInstances(instances []*Instance) error {
 	return s.saveInstancesToRepo(instances)

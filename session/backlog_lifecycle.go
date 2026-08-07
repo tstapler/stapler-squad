@@ -2372,6 +2372,17 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonStaleWork); notifyErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileStaleWorkSessions MarkStuckNotified item=%s: %v", item.ID, notifyErr)
 		}
+		// AC4-shaped on_session_stale callback (webhook-triggers Phase 5): fired
+		// exactly once per crossing, reusing MarkStuckNotified's own dedup above
+		// (this branch is only reached on the first sighting — row.NotifiedAt was
+		// nil) rather than adding a second, separate "have we fired" flag.
+		er.dispatchCallback("session_stale", map[string]any{
+			"event":       "session_stale",
+			"item_id":     item.ID,
+			"title":       item.Title,
+			"session_id":  active.SessionUUID,
+			"occurred_at": time.Now(),
+		})
 	}
 
 	// Poll-shaped resolve (else-branch, pre-mortem F2): an in_progress item
