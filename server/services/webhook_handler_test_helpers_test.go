@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -18,20 +19,37 @@ import (
 // fakeTriggerSessionService is a test double for workflows.SessionServiceInterface
 // shared by the GitHub and generic webhook handler tests. callCount is atomic so the
 // concurrency dedup tests (webhook-triggers Task 2.4.1a) can safely assert on it from
-// the main goroutine while many request-handling goroutines race concurrently.
+// the main goroutine while many request-handling goroutines race concurrently. lastReq
+// captures the most recent CreateSessionRequest (Task 3.2.1c — asserting the rendered
+// prompt/WorkflowId reached CreateSession) behind the same mutex so it's safe to read
+// from the concurrency tests too, even though only the single-fire tests assert on it.
 type fakeTriggerSessionService struct {
 	callCount atomic.Int32
 	err       error
+
+	mu      sync.Mutex
+	lastReq *sessionv1.CreateSessionRequest
 }
 
-func (f *fakeTriggerSessionService) CreateSession(_ context.Context, _ *connect.Request[sessionv1.CreateSessionRequest]) (*connect.Response[sessionv1.CreateSessionResponse], error) {
+func (f *fakeTriggerSessionService) CreateSession(_ context.Context, req *connect.Request[sessionv1.CreateSessionRequest]) (*connect.Response[sessionv1.CreateSessionResponse], error) {
 	f.callCount.Add(1)
+	f.mu.Lock()
+	f.lastReq = req.Msg
+	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: &sessionv1.Session{Id: "fake-session-id"},
 	}), nil
+}
+
+// LastRequest returns the most recently captured CreateSessionRequest, safe for
+// concurrent use.
+func (f *fakeTriggerSessionService) LastRequest() *sessionv1.CreateSessionRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReq
 }
 
 // webhookTestInfra bundles the real ent-backed repositories + Scheduler + config a
