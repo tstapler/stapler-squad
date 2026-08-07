@@ -545,6 +545,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
 			genericWebhookHandler.RegisterRoutes(srv.mux)
 			log.Info("Registered webhook-trigger receivers at POST /webhooks/{github,{slug}}")
+		} else {
+			// Pre-mortem P2 #4: route registration is boot-time only, so an operator who
+			// flips this flag on expecting /webhooks/* to work immediately otherwise gets
+			// silent 404s from the mux with zero signal anywhere in the app (no
+			// TriggerFireEvent row is ever created for a request to an unregistered
+			// route). This log line at least makes the boot-time-only nature of the gate
+			// visible in the service log.
+			log.Info("webhook-trigger routes NOT registered (webhook_triggers flag off) — /webhooks/* will 404 until the flag is enabled and the service restarts")
 		}
 	}
 
