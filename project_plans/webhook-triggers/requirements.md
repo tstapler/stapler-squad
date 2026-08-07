@@ -126,6 +126,35 @@ review→merge pipelines).
 - AC8: Malformed or unauthenticated inbound webhook requests are rejected with an
   appropriate HTTP status and do not create sessions.
 
+## Acceptance Criteria (hardening — added when the backlog item grew to 12 ACs)
+
+- AC9: `ChainFirer.FireTrigger` (the pipeline-chaining fire path, FR10) runs
+  asynchronously and must not hold a DB lock/transaction open during
+  `CreateSession`'s tmux+git-worktree cost. **Correction to the original plan**:
+  `implementation/plan.md`'s Task 6.2.1a originally proposed firing the chain
+  *synchronously* inside `TransitionBacklogItemStatus`'s `done` branch — that
+  violates AC9 directly (the status-transition DB write/transaction would be held
+  open across an expensive `CreateSession` call). The chain-fire attempt must be
+  dispatched off the transition's call stack (e.g. `go` dispatch after the
+  transition commits, or reconciler-only — never inside the same DB transaction).
+- AC10: `CallbackDispatcher` bounds concurrent in-flight dispatch goroutines via a
+  semaphore; dispatches beyond the cap are dropped and logged (via the existing
+  `TriggerFireEvent`-style visibility principle), not silently lost or unbounded.
+  Closes a gap in the original plan's Task 5.2.1a, which spawned an unbounded
+  `go func(){...}()` per dispatch call.
+- AC11: Outbound callback URLs (FR7's three URLs) are validated against SSRF
+  targets (loopback/link-local/private-range/cloud-metadata) at both config-save
+  time (`UpdateCallbackConfig`) and at every send-time attempt (DNS can change
+  between save and fire — TOCTOU/DNS-rebinding, per `research/pitfalls.md` §5).
+  Not present as an implementable task in the original plan — pitfalls.md named
+  the risk but no epic implemented the validator.
+- AC12: Duplicate/replayed webhook deliveries (same delivery ID) never create a
+  second session, including under concurrent/simultaneous arrival. The original
+  plan's `ExistsByDeliveryID` check-then-act (Tasks 1.2.1c/2.2.1c/2.3.1b) is a
+  TOCTOU race under truly concurrent identical requests — needs a DB-level unique
+  constraint on `delivery_id` (insert-or-detect-conflict) to be atomic, not just a
+  pre-check.
+
 ## Constraints / Conventions to Follow
 
 - New RPCs/config touch the **feature registry** (`.claude/rules/feature-registry.md`)
