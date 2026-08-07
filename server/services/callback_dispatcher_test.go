@@ -37,7 +37,11 @@ func testDispatcher(cap int, eventType, srvURL string) *CallbackDispatcher {
 		cfg.Callbacks.OnQueueItemCreatedURL = srvURL
 	}
 	return &CallbackDispatcher{
-		client:      &http.Client{},
+		client: &http.Client{
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		cfg:         cfg,
 		inFlight:    make(chan struct{}, cap),
 		validateURL: permissiveValidator,
@@ -142,6 +146,45 @@ func TestCallbackDispatcher_Deliver_RetriesThenSucceeds(t *testing.T) {
 	}
 
 	assert.Equal(t, int32(2), attempts.Load(), "expected exactly one retry before success")
+}
+
+// TestCallbackDispatcher_Deliver_DoesNotFollowRedirect proves the sdd:6-verify
+// security-review fix: a callback target that itself passes SSRF validation cannot
+// bypass it by responding with a 3xx redirect to a different (e.g. internal/
+// metadata) host. Before the fix, the zero-value http.Client transparently
+// followed up to 10 redirects, so the redirect target was never re-validated.
+func TestCallbackDispatcher_Deliver_DoesNotFollowRedirect(t *testing.T) {
+	var finalHits atomic.Int32
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		finalHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer final.Close()
+
+	var frontHits atomic.Int32
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		frontHits.Add(1)
+		http.Redirect(w, r, final.URL, http.StatusFound)
+	}))
+	defer front.Close()
+
+	d := testDispatcher(20, "session_complete", front.URL)
+	d.inFlight <- struct{}{}
+	done := make(chan struct{})
+	go func() {
+		d.deliver("session_complete", front.URL, map[string]any{"event": "session_complete"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deliver did not complete in time")
+	}
+
+	assert.Equal(t, int32(0), finalHits.Load(), "the redirect target must never be reached")
+	assert.Equal(t, int32(callbackRetryAttempts), frontHits.Load(),
+		"the front server (which only 302s) is retried and exhausted since a followed redirect would have succeeded")
 }
 
 // TestCallbackDispatcher_Deliver_RedactsURLOnFailure proves that a delivery failure

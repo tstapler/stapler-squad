@@ -84,7 +84,21 @@ type CallbackDispatcher struct {
 // process restart).
 func NewCallbackDispatcher(cfg *config.Config) *CallbackDispatcher {
 	return &CallbackDispatcher{
-		client:      &http.Client{},
+		client: &http.Client{
+			// SSRF fix (sdd:6-verify Layer 3 security review): the zero-value
+			// http.Client follows up to 10 redirects transparently. Without this
+			// override, a callback target that itself passes ValidateCallbackURL
+			// could respond with a 3xx to a loopback/link-local/metadata address,
+			// and the client would silently follow it — completely bypassing the
+			// send-time SSRF check ValidateCallbackURL performs against the
+			// *original* URL. Refuse redirects outright; a webhook-callback POST
+			// has no legitimate need to follow one, and re-validating each hop
+			// (the alternative) adds complexity for a case that shouldn't occur
+			// in practice.
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		cfg:         cfg,
 		inFlight:    make(chan struct{}, maxInFlightCallbacks),
 		validateURL: ValidateCallbackURL,
