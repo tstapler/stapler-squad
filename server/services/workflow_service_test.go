@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -320,18 +321,6 @@ func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 		req  *sessionv1.CreateWorkflowRequest
 	}{
 		{
-			name: "webhook trigger_type with cron_enabled",
-			req: &sessionv1.CreateWorkflowRequest{
-				Slug:            "mismatch-webhook-cron",
-				Name:            "Mismatch",
-				Command:         "cmd",
-				TargetDirectory: "/tmp/test",
-				TriggerType:     "webhook",
-				CronEnabled:     true,
-				CronExpression:  "0 9 * * 1",
-			},
-		},
-		{
 			name: "manual trigger_type with webhook_slug set",
 			req: &sessionv1.CreateWorkflowRequest{
 				Slug:            "mismatch-manual-slug",
@@ -367,6 +356,34 @@ func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 		})
 	}
+}
+
+// TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted proves the fix for a
+// bug found during Phase 7 review: validateTriggerTypeFieldConsistency originally
+// rejected cron_enabled=true for any non-"cron" trigger_type, but Phase 2's webhook
+// handlers and Phase 7's TriggersPanel toggle both independently reuse CronEnabled as
+// the generic per-trigger "enabled" flag across every trigger type — the old check made
+// it impossible to ever enable a webhook/github_push trigger through this RPC. This must
+// be accepted, and (per TestScheduler_Start_DoesNotRegisterMismatchedTriggerAsCron /
+// TestScheduler_Reload_DoesNotRegisterMismatchedTriggerAsCron in scheduler_test.go)
+// never causes the resulting row to register as a cron entry, since that gate
+// independently requires trigger_type=="cron" too.
+func TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	resp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "enabled-webhook-wf",
+		Name:            "Enabled Webhook Trigger",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "webhook",
+		WebhookSlug:     "enabled-webhook",
+		CronEnabled:     true, // the generic "enabled" flag, not a claim this is a cron trigger
+	}))
+	require.NoError(t, err, "cron_enabled=true must be accepted for a non-cron trigger_type — it is the generic enable flag")
+	assert.True(t, resp.Msg.Workflow.CronEnabled)
+	assert.Equal(t, "webhook", resp.Msg.Workflow.TriggerType)
 }
 
 // TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug verifies Story 1.1.1's
@@ -414,16 +431,47 @@ func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 	require.NoError(t, err)
 	id := createResp.Msg.Workflow.Id
 
-	// Flip cron_enabled=true without changing trigger_type away from "webhook" — the
-	// effective state (trigger_type=webhook, webhook_slug=existing-slug,
-	// cron_enabled=true) is invalid on two counts.
+	// Flip trigger_type to "manual" while leaving the existing webhook_slug populated —
+	// the effective state (trigger_type=manual, webhook_slug=existing-slug) is a genuine
+	// mismatch: a manual trigger has no business retaining a webhook routing slug.
+	// (cron_enabled=true alone is NOT tested here as a mismatch — it's the reused
+	// generic per-trigger enabled flag, valid for any trigger_type; see
+	// TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType below.)
 	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
-		Id:             id,
-		CronEnabled:    proto.Bool(true),
-		CronExpression: proto.String("0 9 * * 1"),
+		Id:          id,
+		TriggerType: proto.String("manual"),
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType is the UpdateWorkflow
+// sibling of TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted: setting
+// cron_enabled=true on an existing non-cron trigger (enabling it) must succeed, not be
+// rejected as a trigger-type mismatch.
+func TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "update-enable-webhook",
+		Name:            "Original",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "webhook",
+		WebhookSlug:     "update-enable-slug",
+		CronEnabled:     false,
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+
+	resp, err := svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id:          id,
+		CronEnabled: proto.Bool(true),
+	}))
+	require.NoError(t, err, "enabling an existing webhook trigger via cron_enabled must be accepted")
+	assert.True(t, resp.Msg.Workflow.CronEnabled)
+	assert.Equal(t, "webhook", resp.Msg.Workflow.TriggerType)
 }
 
 // TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected verifies that an
@@ -603,18 +651,17 @@ func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // encryptWebhookSecret (workflow_service.go) calls config.LoadConfig(), which without
 // that isolation would read/write the developer's real ~/.stapler-squad/config.json.
 //
-// They verify the round trip via decryptWorkflowSecret + VerifyWebhookSecret directly
-// (the exact two functions GenericWebhookHandler.Handle itself calls for HMAC
-// verification — see generic_webhook_handler.go) rather than driving a full HTTP
-// request through GenericWebhookHandler.Handle. That handler also gates on
-// wf.CronEnabled as a generic per-trigger enabled flag, but CreateWorkflow/
-// UpdateWorkflow's own validateTriggerTypeFieldConsistency unconditionally rejects
-// cron_enabled=true for any non-"cron" trigger_type (confirmed by direct test:
-// "cron_enabled requires trigger_type=\"cron\", got trigger_type=\"webhook\"") — a
-// pre-existing gap, independent of this task's webhook_secret wiring, that currently
-// makes it impossible to enable a webhook/github_push trigger through either RPC.
-// Flagged in the PR description as a separate follow-up rather than fixed here, to
-// keep this change's blast radius to the secret field it was scoped to close.
+// The first two tests below verify the round trip via decryptWorkflowSecret +
+// VerifyWebhookSecret directly (the exact two functions GenericWebhookHandler.Handle
+// itself calls for HMAC verification). TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip
+// closes the loop further by driving an actual HTTP request through
+// GenericWebhookHandler.Handle end-to-end — this was blocked until
+// validateTriggerTypeFieldConsistency's cron_enabled/trigger_type conflation bug was
+// fixed (found via this exact gap): the check originally rejected cron_enabled=true for
+// any non-"cron" trigger_type, but GenericWebhookHandler.Handle gates on wf.CronEnabled
+// as the generic per-trigger enabled flag — making it impossible to ever enable (and
+// therefore ever successfully fire) a webhook/github_push trigger created through the
+// real RPC. See validateTriggerTypeFieldConsistency's doc comment for the fix.
 
 // TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification proves the gap
 // closed by CreateWorkflowRequest.webhook_secret: a plaintext secret set via the RPC is
@@ -727,4 +774,48 @@ func TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret(t *testing.T) 
 	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
 	assert.False(t, VerifyWebhookSecret(decrypted, body, sign("old-secret", body)))
 	assert.True(t, VerifyWebhookSecret(decrypted, body, sign("new-secret", body)))
+}
+
+// TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip is the true end-to-end proof: a
+// webhook trigger created and enabled entirely through the public RPC surface
+// (CreateWorkflow with webhook_secret + cron_enabled=true) actually fires when a real
+// HTTP request signed with that secret hits GenericWebhookHandler.Handle — not merely
+// "the secret is stored and the standalone verify function accepts it" (already covered
+// above), but the full stack an operator using TriggerFormModal would exercise.
+func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	svc := NewWorkflowService(infra.workflowRepo, infra.scheduler, nil)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "e2e-webhook-wf",
+		Name:            "End To End Webhook",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "webhook",
+		WebhookSlug:     "e2e-slug",
+		WebhookSecret:   "e2e-plain-secret",
+		EventFilter:     "issue_created",
+		LabelFilter:     "urgent",
+		PromptTemplate:  "Triage {{.issue.key}}: {{.issue.summary}}",
+		CronEnabled:     true, // the generic enabled flag — must be settable and honored
+	}))
+	require.NoError(t, err)
+	assert.True(t, createResp.Msg.Workflow.CronEnabled, "the trigger must come back enabled")
+
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	mux := newGenericWebhookMux(h)
+
+	body := jiraTicketBody(t, "issue_created", []string{"urgent"}, "PROJ-1", "fix it")
+	sig := sign("e2e-plain-secret", body)
+
+	rec := doGenericWebhookRequest(t, mux, "e2e-slug", body, sig)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load(),
+		"a session must have been created via the real handler, not just the direct verify functions")
+
+	req := infra.sessionSvc.LastRequest()
+	require.NotNil(t, req)
+	assert.Contains(t, req.InitialPrompt, "Triage PROJ-1: fix it")
 }
