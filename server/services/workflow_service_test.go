@@ -595,3 +595,136 @@ func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
+
+// ─── webhook_secret (Phase 7 follow-up, Task 7.2) ──────────────────────────────
+//
+// These tests use webhookTestInfra (webhook_handler_test_helpers_test.go) rather than
+// createTestWorkflowService, specifically because it isolates STAPLER_SQUAD_TEST_DIR —
+// encryptWebhookSecret (workflow_service.go) calls config.LoadConfig(), which without
+// that isolation would read/write the developer's real ~/.stapler-squad/config.json.
+//
+// They verify the round trip via decryptWorkflowSecret + VerifyWebhookSecret directly
+// (the exact two functions GenericWebhookHandler.Handle itself calls for HMAC
+// verification — see generic_webhook_handler.go) rather than driving a full HTTP
+// request through GenericWebhookHandler.Handle. That handler also gates on
+// wf.CronEnabled as a generic per-trigger enabled flag, but CreateWorkflow/
+// UpdateWorkflow's own validateTriggerTypeFieldConsistency unconditionally rejects
+// cron_enabled=true for any non-"cron" trigger_type (confirmed by direct test:
+// "cron_enabled requires trigger_type=\"cron\", got trigger_type=\"webhook\"") — a
+// pre-existing gap, independent of this task's webhook_secret wiring, that currently
+// makes it impossible to enable a webhook/github_push trigger through either RPC.
+// Flagged in the PR description as a separate follow-up rather than fixed here, to
+// keep this change's blast radius to the secret field it was scoped to close.
+
+// TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification proves the gap
+// closed by CreateWorkflowRequest.webhook_secret: a plaintext secret set via the RPC is
+// encrypted, stored, and actually usable by the real inbound webhook HMAC verification
+// logic (decryptWorkflowSecret + VerifyWebhookSecret) — not merely persisted in
+// isolation.
+func TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	svc := NewWorkflowService(infra.workflowRepo, nil, nil)
+	ctx := context.Background()
+
+	resp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "secret-rt-wf",
+		Name:            "Secret Round Trip",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "webhook",
+		WebhookSlug:     "secret-rt",
+		WebhookSecret:   "s3cr3t-plain",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "secret-rt", resp.Msg.Workflow.WebhookSlug)
+
+	wf, err := infra.workflowRepo.GetByID(ctx, uuid.MustParse(resp.Msg.Workflow.Id))
+	require.NoError(t, err)
+	require.NotEmpty(t, wf.WebhookSecretEncrypted, "webhook_secret must have been encrypted and stored")
+
+	decrypted, err := decryptWorkflowSecret(infra.cfg, wf)
+	require.NoError(t, err)
+	assert.Equal(t, "s3cr3t-plain", decrypted)
+
+	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+	goodSig := sign("s3cr3t-plain", body)
+	assert.True(t, VerifyWebhookSecret(decrypted, body, goodSig),
+		"a request signed with the plaintext secret sent via CreateWorkflow must verify")
+
+	badSig := sign("wrong-secret", body)
+	assert.False(t, VerifyWebhookSecret(decrypted, body, badSig),
+		"a request signed with a different secret must not verify")
+}
+
+// TestUpdateWorkflow_WebhookSecret_OmittedLeavesExistingSecretUsable proves the "omit
+// means unchanged" contract: an UpdateWorkflow call that changes an unrelated field and
+// leaves webhook_secret empty must not clear the previously-set secret — it must still
+// decrypt to the original value and verify requests signed with it.
+func TestUpdateWorkflow_WebhookSecret_OmittedLeavesExistingSecretUsable(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	svc := NewWorkflowService(infra.workflowRepo, nil, nil)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "secret-upd-wf",
+		Name:            "Secret Update",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "webhook",
+		WebhookSlug:     "secret-upd",
+		WebhookSecret:   "original-secret",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id:          createResp.Msg.Workflow.Id,
+		Description: proto.String("updated description, no secret change"),
+	}))
+	require.NoError(t, err)
+
+	wf, err := infra.workflowRepo.GetByID(ctx, uuid.MustParse(createResp.Msg.Workflow.Id))
+	require.NoError(t, err)
+	decrypted, err := decryptWorkflowSecret(infra.cfg, wf)
+	require.NoError(t, err)
+	assert.Equal(t, "original-secret", decrypted)
+
+	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+	sig := sign("original-secret", body)
+	assert.True(t, VerifyWebhookSecret(decrypted, body, sig))
+}
+
+// TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret proves the complementary
+// case: a non-empty webhook_secret on UpdateWorkflow actually rotates the stored secret
+// — the old secret stops verifying and the new one takes over.
+func TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	svc := NewWorkflowService(infra.workflowRepo, nil, nil)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "secret-rot-wf",
+		Name:            "Secret Rotate",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		TriggerType:     "webhook",
+		WebhookSlug:     "secret-rot",
+		WebhookSecret:   "old-secret",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id:            createResp.Msg.Workflow.Id,
+		WebhookSecret: "new-secret",
+	}))
+	require.NoError(t, err)
+
+	wf, err := infra.workflowRepo.GetByID(ctx, uuid.MustParse(createResp.Msg.Workflow.Id))
+	require.NoError(t, err)
+	decrypted, err := decryptWorkflowSecret(infra.cfg, wf)
+	require.NoError(t, err)
+	assert.Equal(t, "new-secret", decrypted)
+
+	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+	assert.False(t, VerifyWebhookSecret(decrypted, body, sign("old-secret", body)))
+	assert.True(t, VerifyWebhookSecret(decrypted, body, sign("new-secret", body)))
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -261,6 +262,24 @@ func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
 	if er, ok := s.repo.(*EntRepository); ok {
 		er.SetCallbackDispatcher(d)
 	}
+}
+
+// WireChainFirer constructs a ChainFirer bound to the underlying
+// *EntRepository (so its ListItemSessions/UpdateBacklogItem calls share the
+// exact same callbackDispatcher/itemChangePublisher wiring as every other
+// backlog mutation) and wires it as that repository's own chain-fire
+// dispatcher (EntRepository.SetChainFirer — the happy-path caller from
+// TransitionBacklogItemStatus, webhook-triggers Phase 6). Returns nil when
+// the repository is not ent-backed, mirroring GetEntClient's nil-on-mismatch
+// behavior — callers should skip TriggerChainReconciler wiring in that case.
+func (s *Storage) WireChainFirer(workflows WorkflowRepository, fireEvents TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil
+	}
+	cf := NewChainFirer(er, workflows, fireEvents, firer, cfg)
+	er.SetChainFirer(cf)
+	return cf
 }
 
 // SaveInstances upserts each started instance into the repository.

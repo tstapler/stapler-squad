@@ -348,9 +348,15 @@ type CreateSessionRequest struct {
 	CliFlags string `protobuf:"bytes,26,opt,name=cli_flags,json=cliFlags,proto3" json:"cli_flags,omitempty"`
 	// alias_name, when non-empty, resolves session defaults via the named alias preset.
 	// Path and profile are resolved from the alias config; path from req is used as override if non-empty.
-	AliasName     string `protobuf:"bytes,27,opt,name=alias_name,json=aliasName,proto3" json:"alias_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	AliasName string `protobuf:"bytes,27,opt,name=alias_name,json=aliasName,proto3" json:"alias_name,omitempty"`
+	// triggered_by_chain_depth is the pipeline-chain hop count (webhook-triggers Epic 6.3):
+	// set by ChainFirer/Scheduler.FireTriggerChained when this session is a chained fire from
+	// a completed BacklogItem's next_workflow_id, one greater than the completing item's own
+	// TriggeredByChainDepth. 0 for every non-chained session (the default). Attribution only —
+	// not read back by CreateSession itself.
+	TriggeredByChainDepth int32 `protobuf:"varint,28,opt,name=triggered_by_chain_depth,json=triggeredByChainDepth,proto3" json:"triggered_by_chain_depth,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *CreateSessionRequest) Reset() {
@@ -563,6 +569,13 @@ func (x *CreateSessionRequest) GetAliasName() string {
 		return x.AliasName
 	}
 	return ""
+}
+
+func (x *CreateSessionRequest) GetTriggeredByChainDepth() int32 {
+	if x != nil {
+		return x.TriggeredByChainDepth
+	}
+	return 0
 }
 
 type CreateSessionResponse struct {
@@ -13885,8 +13898,7 @@ type CreateWorkflowRequest struct {
 	// trigger_type is left unspecified, for backward compatibility with existing
 	// cron-only clients). Populated fields must match the declared trigger_type — e.g.
 	// webhook_slug requires trigger_type="webhook" — or the request is rejected with
-	// CodeInvalidArgument (Task 1.1.1e). webhook_secret_encrypted is deliberately NOT
-	// exposed here — secret creation/rotation is a Phase 7 concern.
+	// CodeInvalidArgument (Task 1.1.1e).
 	TriggerType    string `protobuf:"bytes,14,opt,name=trigger_type,json=triggerType,proto3" json:"trigger_type,omitempty"`
 	GithubRepo     string `protobuf:"bytes,15,opt,name=github_repo,json=githubRepo,proto3" json:"github_repo,omitempty"`
 	GithubBranch   string `protobuf:"bytes,16,opt,name=github_branch,json=githubBranch,proto3" json:"github_branch,omitempty"`
@@ -13894,8 +13906,13 @@ type CreateWorkflowRequest struct {
 	EventFilter    string `protobuf:"bytes,18,opt,name=event_filter,json=eventFilter,proto3" json:"event_filter,omitempty"`
 	LabelFilter    string `protobuf:"bytes,19,opt,name=label_filter,json=labelFilter,proto3" json:"label_filter,omitempty"`
 	PromptTemplate string `protobuf:"bytes,20,opt,name=prompt_template,json=promptTemplate,proto3" json:"prompt_template,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Write-only plaintext webhook/HMAC shared secret (Phase 7 follow-up to Epic 1.1).
+	// "" means "no secret configured" — the trigger's inbound HMAC verification will
+	// reject every delivery until one is set. Never echoed back by any RPC, matching
+	// WorkflowProto.trigger_type's doc comment on webhook_secret_encrypted above.
+	WebhookSecret string `protobuf:"bytes,21,opt,name=webhook_secret,json=webhookSecret,proto3" json:"webhook_secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateWorkflowRequest) Reset() {
@@ -14068,6 +14085,13 @@ func (x *CreateWorkflowRequest) GetPromptTemplate() string {
 	return ""
 }
 
+func (x *CreateWorkflowRequest) GetWebhookSecret() string {
+	if x != nil {
+		return x.WebhookSecret
+	}
+	return ""
+}
+
 type CreateWorkflowResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Workflow      *WorkflowProto         `protobuf:"bytes,1,opt,name=workflow,proto3" json:"workflow,omitempty"`
@@ -14140,8 +14164,15 @@ type UpdateWorkflowRequest struct {
 	EventFilter    *string `protobuf:"bytes,18,opt,name=event_filter,json=eventFilter,proto3,oneof" json:"event_filter,omitempty"`
 	LabelFilter    *string `protobuf:"bytes,19,opt,name=label_filter,json=labelFilter,proto3,oneof" json:"label_filter,omitempty"`
 	PromptTemplate *string `protobuf:"bytes,20,opt,name=prompt_template,json=promptTemplate,proto3,oneof" json:"prompt_template,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Write-only plaintext webhook/HMAC shared secret. Not `optional` — there is no
+	// "unset" vs "empty" distinction: an empty/omitted value always means "leave the
+	// stored secret unchanged" (never clears it implicitly, matching the "omit means
+	// unchanged" convention UpdateCallbackConfig's masked URLs use for their own
+	// never-cleared-implicitly fields). Only a non-empty value rotates the stored
+	// secret. See CreateWorkflowRequest.webhook_secret's doc comment.
+	WebhookSecret string `protobuf:"bytes,21,opt,name=webhook_secret,json=webhookSecret,proto3" json:"webhook_secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateWorkflowRequest) Reset() {
@@ -14310,6 +14341,13 @@ func (x *UpdateWorkflowRequest) GetLabelFilter() string {
 func (x *UpdateWorkflowRequest) GetPromptTemplate() string {
 	if x != nil && x.PromptTemplate != nil {
 		return *x.PromptTemplate
+	}
+	return ""
+}
+
+func (x *UpdateWorkflowRequest) GetWebhookSecret() string {
+	if x != nil {
+		return x.WebhookSecret
 	}
 	return ""
 }
@@ -15772,7 +15810,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x11GetSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"C\n" +
 	"\x12GetSessionResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xeb\a\n" +
+	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xa4\b\n" +
 	"\x14CreateSessionRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1f\n" +
@@ -15804,7 +15842,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\benv_vars\x18\x19 \x03(\v2-.session.v1.CreateSessionRequest.EnvVarsEntryR\aenvVars\x12\x1b\n" +
 	"\tcli_flags\x18\x1a \x01(\tR\bcliFlags\x12\x1d\n" +
 	"\n" +
-	"alias_name\x18\x1b \x01(\tR\taliasName\x1a:\n" +
+	"alias_name\x18\x1b \x01(\tR\taliasName\x127\n" +
+	"\x18triggered_by_chain_depth\x18\x1c \x01(\x05R\x15triggeredByChainDepth\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x0e\x10\x0fR\aone_off\"F\n" +
@@ -16829,7 +16868,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\rlast_fired_at\x18\x18 \x01(\v2\x1a.google.protobuf.TimestampH\x02R\vlastFiredAt\x88\x01\x01B\x10\n" +
 	"\x0e_keep_sessionsB\x16\n" +
 	"\x14_archive_after_hoursB\x10\n" +
-	"\x0e_last_fired_at\"\xf5\x05\n" +
+	"\x0e_last_fired_at\"\x9c\x06\n" +
 	"\x15CreateWorkflowRequest\x12\x12\n" +
 	"\x04slug\x18\x01 \x01(\tR\x04slug\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -16853,11 +16892,12 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\fwebhook_slug\x18\x11 \x01(\tR\vwebhookSlug\x12!\n" +
 	"\fevent_filter\x18\x12 \x01(\tR\veventFilter\x12!\n" +
 	"\flabel_filter\x18\x13 \x01(\tR\vlabelFilter\x12'\n" +
-	"\x0fprompt_template\x18\x14 \x01(\tR\x0epromptTemplateB\x10\n" +
+	"\x0fprompt_template\x18\x14 \x01(\tR\x0epromptTemplate\x12%\n" +
+	"\x0ewebhook_secret\x18\x15 \x01(\tR\rwebhookSecretB\x10\n" +
 	"\x0e_keep_sessionsB\x16\n" +
 	"\x14_archive_after_hours\"O\n" +
 	"\x16CreateWorkflowResponse\x125\n" +
-	"\bworkflow\x18\x01 \x01(\v2\x19.session.v1.WorkflowProtoR\bworkflow\"\xdc\b\n" +
+	"\bworkflow\x18\x01 \x01(\v2\x19.session.v1.WorkflowProtoR\bworkflow\"\x83\t\n" +
 	"\x15UpdateWorkflowRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12%\n" +
@@ -16882,7 +16922,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\fwebhook_slug\x18\x11 \x01(\tH\x0fR\vwebhookSlug\x88\x01\x01\x12&\n" +
 	"\fevent_filter\x18\x12 \x01(\tH\x10R\veventFilter\x88\x01\x01\x12&\n" +
 	"\flabel_filter\x18\x13 \x01(\tH\x11R\vlabelFilter\x88\x01\x01\x12,\n" +
-	"\x0fprompt_template\x18\x14 \x01(\tH\x12R\x0epromptTemplate\x88\x01\x01B\a\n" +
+	"\x0fprompt_template\x18\x14 \x01(\tH\x12R\x0epromptTemplate\x88\x01\x01\x12%\n" +
+	"\x0ewebhook_secret\x18\x15 \x01(\tR\rwebhookSecretB\a\n" +
 	"\x05_nameB\x0e\n" +
 	"\f_descriptionB\n" +
 	"\n" +

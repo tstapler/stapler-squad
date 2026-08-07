@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -458,8 +459,24 @@ type BacklogItemData struct {
 	// fetch or file-stats computation failed — distinct from
 	// ShippedCheckConclusion, which holds only genuine CI-conclusion values.
 	ShippedSnapshotCaptureFailed bool
-	CreatedAt                    time.Time
-	UpdatedAt                    time.Time
+	// NextWorkflowID is the pipeline-chaining target (webhook-triggers FR10/AC5):
+	// the Workflow ChainFirer fires once this item reaches BacklogStatusDone. Nil
+	// means no chain is configured.
+	NextWorkflowID *uuid.UUID
+	// ChainFired is true once the NextWorkflowID chain-fire has reached a
+	// terminal outcome (fired, depth-capped, or expired) — never retried again
+	// once true. See ChainFirer/TriggerChainReconciler.
+	ChainFired bool
+	// ChainedAt is set atomically with the terminal done transition (when
+	// NextWorkflowID is already configured) — the eligibility timestamp
+	// TriggerChainReconciler's maxChainWaitDuration ceiling measures age
+	// against. Nil until the item has reached done with a chain configured.
+	ChainedAt *time.Time
+	// TriggeredByChainDepth is how many chain hops produced this item —
+	// propagated session->session and hard-capped at maxChainDepth (Epic 6.3).
+	TriggeredByChainDepth int
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 	// ItemSessions holds the eagerly-loaded item sessions for this backlog item.
 	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
 	ItemSessions []ItemSessionSummary
@@ -605,6 +622,23 @@ type BacklogItemUpdate struct {
 	// JSON-encoded set of user-modified field names (e.g. `["title"]`). Build
 	// the value with MergeUserModifiedFields rather than hand-encoding JSON.
 	UserModifiedFields *string
+	// NextWorkflowID/ClearNextWorkflowID follow the same nillable-clear
+	// convention as GitHubSyncedIssueUpdatedAt: nil+false means "leave
+	// untouched", ClearNextWorkflowID=true explicitly clears the chain
+	// configuration back to nil, otherwise a non-nil pointer sets it
+	// (webhook-triggers FR10/AC5 — see BacklogItemData.NextWorkflowID).
+	NextWorkflowID      *uuid.UUID
+	ClearNextWorkflowID bool
+	// ChainFired is a normal presence pointer (no clear semantics needed — it
+	// only ever moves false->true, by ChainFirer/TriggerChainReconciler).
+	ChainFired *bool
+	// ChainedAt/ClearChainedAt follow the same nillable-clear convention as
+	// NextWorkflowID above.
+	ChainedAt      *time.Time
+	ClearChainedAt bool
+	// TriggeredByChainDepth is a normal presence pointer — non-nillable in the
+	// schema (Default 0), so no clear semantics are needed.
+	TriggeredByChainDepth *int
 }
 
 // BacklogItemPrecondition is used for optimistic locking on update/transition.

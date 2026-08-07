@@ -703,6 +703,81 @@ func (_u *BacklogItemUpdate) ClearReworkCapOverride() *BacklogItemUpdate {
 	return _u
 }
 
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (_u *BacklogItemUpdate) SetNextWorkflowID(v uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.SetNextWorkflowID(v)
+	return _u
+}
+
+// SetNillableNextWorkflowID sets the "next_workflow_id" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableNextWorkflowID(v *uuid.UUID) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetNextWorkflowID(*v)
+	}
+	return _u
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (_u *BacklogItemUpdate) ClearNextWorkflowID() *BacklogItemUpdate {
+	_u.mutation.ClearNextWorkflowID()
+	return _u
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (_u *BacklogItemUpdate) SetChainFired(v bool) *BacklogItemUpdate {
+	_u.mutation.SetChainFired(v)
+	return _u
+}
+
+// SetNillableChainFired sets the "chain_fired" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableChainFired(v *bool) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetChainFired(*v)
+	}
+	return _u
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (_u *BacklogItemUpdate) SetChainedAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetChainedAt(v)
+	return _u
+}
+
+// SetNillableChainedAt sets the "chained_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableChainedAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetChainedAt(*v)
+	}
+	return _u
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (_u *BacklogItemUpdate) ClearChainedAt() *BacklogItemUpdate {
+	_u.mutation.ClearChainedAt()
+	return _u
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (_u *BacklogItemUpdate) SetTriggeredByChainDepth(v int) *BacklogItemUpdate {
+	_u.mutation.ResetTriggeredByChainDepth()
+	_u.mutation.SetTriggeredByChainDepth(v)
+	return _u
+}
+
+// SetNillableTriggeredByChainDepth sets the "triggered_by_chain_depth" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableTriggeredByChainDepth(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetTriggeredByChainDepth(*v)
+	}
+	return _u
+}
+
+// AddTriggeredByChainDepth adds value to the "triggered_by_chain_depth" field.
+func (_u *BacklogItemUpdate) AddTriggeredByChainDepth(v int) *BacklogItemUpdate {
+	_u.mutation.AddTriggeredByChainDepth(v)
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdate) SetUpdatedAt(v time.Time) *BacklogItemUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -1178,6 +1253,27 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.ReworkCapOverrideCleared() {
 		_spec.ClearField(backlogitem.FieldReworkCapOverride, field.TypeInt)
+	}
+	if value, ok := _u.mutation.NextWorkflowID(); ok {
+		_spec.SetField(backlogitem.FieldNextWorkflowID, field.TypeUUID, value)
+	}
+	if _u.mutation.NextWorkflowIDCleared() {
+		_spec.ClearField(backlogitem.FieldNextWorkflowID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.ChainFired(); ok {
+		_spec.SetField(backlogitem.FieldChainFired, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ChainedAt(); ok {
+		_spec.SetField(backlogitem.FieldChainedAt, field.TypeTime, value)
+	}
+	if _u.mutation.ChainedAtCleared() {
+		_spec.ClearField(backlogitem.FieldChainedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.TriggeredByChainDepth(); ok {
+		_spec.SetField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTriggeredByChainDepth(); ok {
+		_spec.AddField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)
@@ -2123,6 +2219,81 @@ func (_u *BacklogItemUpdateOne) ClearReworkCapOverride() *BacklogItemUpdateOne {
 	return _u
 }
 
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (_u *BacklogItemUpdateOne) SetNextWorkflowID(v uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.SetNextWorkflowID(v)
+	return _u
+}
+
+// SetNillableNextWorkflowID sets the "next_workflow_id" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableNextWorkflowID(v *uuid.UUID) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetNextWorkflowID(*v)
+	}
+	return _u
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (_u *BacklogItemUpdateOne) ClearNextWorkflowID() *BacklogItemUpdateOne {
+	_u.mutation.ClearNextWorkflowID()
+	return _u
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (_u *BacklogItemUpdateOne) SetChainFired(v bool) *BacklogItemUpdateOne {
+	_u.mutation.SetChainFired(v)
+	return _u
+}
+
+// SetNillableChainFired sets the "chain_fired" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableChainFired(v *bool) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetChainFired(*v)
+	}
+	return _u
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (_u *BacklogItemUpdateOne) SetChainedAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetChainedAt(v)
+	return _u
+}
+
+// SetNillableChainedAt sets the "chained_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableChainedAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetChainedAt(*v)
+	}
+	return _u
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (_u *BacklogItemUpdateOne) ClearChainedAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearChainedAt()
+	return _u
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (_u *BacklogItemUpdateOne) SetTriggeredByChainDepth(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetTriggeredByChainDepth()
+	_u.mutation.SetTriggeredByChainDepth(v)
+	return _u
+}
+
+// SetNillableTriggeredByChainDepth sets the "triggered_by_chain_depth" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableTriggeredByChainDepth(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetTriggeredByChainDepth(*v)
+	}
+	return _u
+}
+
+// AddTriggeredByChainDepth adds value to the "triggered_by_chain_depth" field.
+func (_u *BacklogItemUpdateOne) AddTriggeredByChainDepth(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddTriggeredByChainDepth(v)
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdateOne) SetUpdatedAt(v time.Time) *BacklogItemUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -2628,6 +2799,27 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.ReworkCapOverrideCleared() {
 		_spec.ClearField(backlogitem.FieldReworkCapOverride, field.TypeInt)
+	}
+	if value, ok := _u.mutation.NextWorkflowID(); ok {
+		_spec.SetField(backlogitem.FieldNextWorkflowID, field.TypeUUID, value)
+	}
+	if _u.mutation.NextWorkflowIDCleared() {
+		_spec.ClearField(backlogitem.FieldNextWorkflowID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.ChainFired(); ok {
+		_spec.SetField(backlogitem.FieldChainFired, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ChainedAt(); ok {
+		_spec.SetField(backlogitem.FieldChainedAt, field.TypeTime, value)
+	}
+	if _u.mutation.ChainedAtCleared() {
+		_spec.ClearField(backlogitem.FieldChainedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.TriggeredByChainDepth(); ok {
+		_spec.SetField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTriggeredByChainDepth(); ok {
+		_spec.AddField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)

@@ -48,6 +48,14 @@ type EntRepository struct {
 	// Phase 5) and by BacklogLifecycleListener.reconcileStaleWorkSessions
 	// (on_session_stale), which is handed this *EntRepository directly.
 	callbackDispatcher CallbackDispatcher
+
+	// chainFirer is nil-safe — dispatchChainFire nil-checks before calling it
+	// (dispatch is best-effort and never blocks or fails the underlying
+	// mutation). Wired via SetChainFirer, typically by Storage.WireChainFirer's
+	// forwarding call in server/dependencies.go. Used by
+	// TransitionBacklogItemStatus to fire the pipeline-chain continuation
+	// (webhook-triggers Phase 6, AC5/AC9) once a "done" transition commits.
+	chainFirer *ChainFirer
 }
 
 // NewEntRepository creates a new Ent repository with the given options.

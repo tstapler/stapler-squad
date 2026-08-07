@@ -203,12 +203,20 @@ func init() {
 	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[34].Descriptor()
 	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
 	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
+	// backlogitemDescChainFired is the schema descriptor for chain_fired field.
+	backlogitemDescChainFired := backlogitemFields[37].Descriptor()
+	// backlogitem.DefaultChainFired holds the default value on creation for the chain_fired field.
+	backlogitem.DefaultChainFired = backlogitemDescChainFired.Default.(bool)
+	// backlogitemDescTriggeredByChainDepth is the schema descriptor for triggered_by_chain_depth field.
+	backlogitemDescTriggeredByChainDepth := backlogitemFields[39].Descriptor()
+	// backlogitem.DefaultTriggeredByChainDepth holds the default value on creation for the triggered_by_chain_depth field.
+	backlogitem.DefaultTriggeredByChainDepth = backlogitemDescTriggeredByChainDepth.Default.(int)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[36].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[40].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[37].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[41].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
