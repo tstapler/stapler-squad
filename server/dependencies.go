@@ -826,6 +826,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	callbackDispatcher := services.NewCallbackDispatcher(cfg)
 	storage.SetCallbackDispatcher(callbackDispatcher)
 	reactiveQueueMgr.SetCallbackDispatcher(callbackDispatcher)
+	// Share callbackDispatcher's live *config.Config instance (and its guarding
+	// mutex) with CallbackConfigService so a Settings save of a callback URL
+	// takes effect on the very next Dispatch call instead of requiring a
+	// process restart (sdd:6-verify finding, mirrors PR #199 review F1's
+	// SetSharedBacklogConfig pattern) — see
+	// CallbackConfigService.SetSharedCallbackConfig's doc comment.
+	sessionService.SetSharedCallbackConfig(cfg, callbackDispatcher.ConfigMu())
 	log.Info("CallbackDispatcher initialized")
 
 	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation

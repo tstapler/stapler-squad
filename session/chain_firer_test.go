@@ -341,6 +341,68 @@ func TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHas
 	assert.Equal(t, 1, firer.callCount(), "an already-fired chain must never be re-fired by a later reconcile tick")
 }
 
+// TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneItemsExist
+// covers the sdd:6-verify finding: ReconcileChains used to call
+// ListBacklogItems(BacklogItemFilter{Statuses: []string{"done"}}) with no
+// ChainFired/NextWorkflowIDSet filter pushed into SQL, relying on
+// ListBacklogItems's default 1000-row safety cap plus a Go-side post-filter —
+// past 1000 "done" items, a pending unfired chain outside that window was
+// silently never reconciled. This seeds 1000 "done" noise items (bulk
+// inserted, no chain) with updated_at strictly AFTER the one item that DOES
+// have a pending chain, so under the default sort (priority asc, updated_at
+// desc) all 1000 noise items rank ahead of it — exactly the shape that would
+// have pushed it past the old unfiltered 1000-row cutoff. With the fix
+// (ChainFired/NextWorkflowIDSet pushed into the SQL WHERE clause, no reliance
+// on row position), it must still be found and fired.
+func TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneItemsExist(t *testing.T) {
+	fx, cleanup := newChainTestFixture(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	wf := fx.createWorkflow(t, "beyond-1000-cap")
+	firer := &countingTriggerFirer{}
+	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
+	reconciler := NewTriggerChainReconciler(cf)
+
+	// The one item with a pending, unfired chain — created (and its
+	// NextWorkflowID set) BEFORE the noise batch below, so its updated_at is
+	// the oldest of the bunch.
+	item, err := fx.repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "the pending chain item",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	wfID := wf.ID
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
+	require.NoError(t, err)
+
+	// 1000 "done" items with no pending chain, bulk-inserted (for test speed)
+	// AFTER the item above so they all sort ahead of it under the default
+	// (priority asc, updated_at desc) ordering — same priority, strictly more
+	// recent updated_at.
+	const noise = 1000
+	client := fx.repo.GetEntClient()
+	builders := make([]*ent.BacklogItemCreate, 0, noise)
+	for i := 0; i < noise; i++ {
+		builders = append(builders, client.BacklogItem.Create().
+			SetTitle(fmt.Sprintf("noise done item %d", i)).
+			SetStatus(string(BacklogStatusDone)).
+			SetPriority(3))
+	}
+	_, err = client.BacklogItem.CreateBulk(builders...).Save(ctx)
+	require.NoError(t, err)
+
+	reconciler.ReconcileChains(ctx, fx.repo)
+
+	require.Eventually(t, func() bool {
+		return firer.callCount() == 1
+	}, 5*time.Second, 20*time.Millisecond, "the pending chain item must still be found and fired despite 1000 more-recently-updated done items ranking ahead of it")
+
+	final, err := fx.repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.True(t, final.ChainFired)
+}
+
 // TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameItem
 // is the concurrency-sensitive regression test the plan calls for (Task
 // 6.2.1d): the happy-path async dispatch and TriggerChainReconciler's
@@ -382,7 +444,7 @@ func TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameI
 		itemCopy := *latest
 		go func() {
 			defer wg.Done()
-			cf.Dispatch(ctx, &itemCopy)
+			cf.Dispatch(&itemCopy)
 		}()
 	}
 	wg.Wait()
@@ -426,7 +488,7 @@ func TestChainFirer_Dispatch_should_noOp_When_FeatureFlagDisabled(t *testing.T) 
 	latest, err := fx.repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
-	cf.Dispatch(ctx, latest)
+	cf.Dispatch(latest)
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, 0, firer.callCount())
 

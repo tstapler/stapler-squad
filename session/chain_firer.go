@@ -28,6 +28,20 @@ const maxChainDepth = 5
 // tick, accumulating pending chains without bound.
 const maxChainWaitDuration = time.Hour
 
+// chainReconcileScanLimit bounds ReconcileChains's ListBacklogItems query.
+// Previously ReconcileChains relied on ListBacklogItems's default 1000-row
+// safety cap (no filter pushed into SQL) and filtered NextWorkflowID/ChainFired
+// in a Go loop afterward — past 1000 "done" items, a pending unfired chain
+// outside that window was silently never reconciled, with no error/log signal
+// (sdd:6-verify finding, AC5). Now that the query is narrowed to exactly the
+// crash-recovery access pattern (status=done AND next_workflow_id IS NOT NULL
+// AND chain_fired=false, backed by index.Fields("status", "chain_fired") in
+// session/ent/schema/backlog_item.go), the result set is expected to stay
+// small in steady state — a pending unfired chain is a transient
+// crash-recovery case, not an accumulating backlog. This cap is a safety
+// valve against pathological growth, not a meaningful business limit.
+const chainReconcileScanLimit = 100_000
+
 // maxInFlightChainFires bounds concurrent ChainFirer.Dispatch goroutines —
 // same shape/rationale as server/services/callback_dispatcher.go's
 // maxInFlightCallbacks (Task 5.2.1a): a burst of simultaneous "done"
@@ -114,7 +128,17 @@ func NewChainFirer(repo *EntRepository, workflows WorkflowRepository, fireEvents
 // TriggerChainReconciler retries the item on its next 60s tick. Never blocks
 // the caller. No-op when the webhook_triggers feature flag is off (Task
 // 8.2.1b — defense in depth beyond route-registration gating).
-func (c *ChainFirer) Dispatch(ctx context.Context, item *BacklogItemData) {
+//
+// Takes no ctx parameter — matching CallbackDispatcher.Dispatch's identical
+// signature choice — because the spawned goroutine always derives its own
+// context.WithTimeout(context.Background(), chainFireTimeout) below rather
+// than propagating a caller's ctx: by the time that goroutine's
+// FireTriggerChained (CreateSession) call actually runs, a caller-supplied ctx
+// (e.g. an RPC handler's request-scoped context, or dispatchChainFire's
+// deliberately-Background() context) may already be cancelled or long gone —
+// see dispatchChainFire's doc comment (session/ent_repository_backlog.go) for
+// the same rationale applied one layer up.
+func (c *ChainFirer) Dispatch(item *BacklogItemData) {
 	if c == nil || item == nil {
 		return
 	}
@@ -315,8 +339,13 @@ func (r *TriggerChainReconciler) ReconcileChains(ctx context.Context, er *EntRep
 		// to pay for the scan when every Dispatch call would immediately no-op.
 		return
 	}
+	chainFired := false
+	nextWorkflowSet := true
 	items, err := er.ListBacklogItems(ctx, BacklogItemFilter{
-		Statuses: []string{string(BacklogStatusDone)},
+		Statuses:          []string{string(BacklogStatusDone)},
+		ChainFired:        &chainFired,
+		NextWorkflowIDSet: &nextWorkflowSet,
+		Limit:             chainReconcileScanLimit,
 	})
 	if err != nil {
 		log.WarningLog.Printf("[TriggerChainReconciler] list error: %v", err)
@@ -324,9 +353,14 @@ func (r *TriggerChainReconciler) ReconcileChains(ctx context.Context, er *EntRep
 	}
 	for i := range items {
 		item := items[i]
+		// Defense-in-depth only: the query above already restricts to
+		// next_workflow_id IS NOT NULL AND chain_fired=false, so this should
+		// never trigger — kept in case a future filter regression reintroduces
+		// the bug this replaced (the old code relied on this Go-side check as
+		// its ONLY filter, past a 1000-row cap that silently dropped items).
 		if item.NextWorkflowID == nil || item.ChainFired {
 			continue
 		}
-		r.firer.Dispatch(ctx, &item)
+		r.firer.Dispatch(&item)
 	}
 }

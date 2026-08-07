@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -15,11 +16,37 @@ import (
 // (webhook-triggers Phase 5, FR7). Delegated to from SessionService exactly like
 // DefaultsService — a config-backed handler with no second implementation, so a
 // concrete type per .claude/rules/interface-pollution-checklist.md.
-type CallbackConfigService struct{}
+type CallbackConfigService struct {
+	// sharedCfg and sharedCfgMu, when wired via SetSharedCallbackConfig, are the
+	// SAME *config.Config instance (and guarding mutex) CallbackDispatcher reads
+	// Callbacks from at Dispatch time (server/dependencies.go wires this with
+	// CallbackDispatcher's own cfg pointer and ConfigMu()). Mirrors
+	// DefaultsService.sharedBacklogCfg's doc comment (PR #199 review F1) applied
+	// to the identical bug: without this, UpdateCallbackConfig's own fresh
+	// config.LoadConfig()+SaveConfig() only ever touched a config instance
+	// nobody else read from — CallbackDispatcher's cfg was loaded once at
+	// process start and never observed the save, so a saved callback URL took
+	// effect only after a restart. nil-safe — tests that don't call
+	// SetSharedCallbackConfig keep this handler's pre-existing disk-only
+	// behavior.
+	sharedCfg   *config.Config
+	sharedCfgMu *sync.RWMutex
+}
 
 // NewCallbackConfigService creates a CallbackConfigService.
 func NewCallbackConfigService() *CallbackConfigService {
 	return &CallbackConfigService{}
+}
+
+// SetSharedCallbackConfig wires the live *config.Config instance (and its
+// guarding mutex) that CallbackDispatcher.Dispatch reads callback URLs from —
+// see sharedCfg's doc comment for why this is needed. Called once from
+// server/dependencies.go with the exact same *config.Config pointer and
+// *sync.RWMutex passed to services.NewCallbackDispatcher /
+// CallbackDispatcher.ConfigMu.
+func (c *CallbackConfigService) SetSharedCallbackConfig(cfg *config.Config, mu *sync.RWMutex) {
+	c.sharedCfg = cfg
+	c.sharedCfgMu = mu
 }
 
 // GetCallbackConfig reports which of the three outbound-callback URLs are configured.
@@ -74,6 +101,16 @@ func (c *CallbackConfigService) UpdateCallbackConfig(
 
 	if err := config.SaveConfig(cfg); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	// Propagate the saved URLs onto CallbackDispatcher's live config instance so
+	// the change takes effect on the very next Dispatch call instead of
+	// requiring a process restart — see sharedCfg's doc comment (this bug's
+	// fix, mirroring PR #199 review F1's pattern for BacklogService).
+	if c.sharedCfg != nil {
+		c.sharedCfgMu.Lock()
+		c.sharedCfg.Callbacks = cfg.Callbacks
+		c.sharedCfgMu.Unlock()
 	}
 
 	log.Info("updated callback config",

@@ -140,7 +140,16 @@ func (r *EntWorkflowRepository) Update(ctx context.Context, id uuid.UUID, w Work
 		u.SetGithubBranch(*w.GitHubBranch)
 	}
 	if w.WebhookSlug != nil {
-		u.SetWebhookSlug(*w.WebhookSlug)
+		// webhook_slug is .Optional().Unique() but not .Nillable() (see
+		// session/ent/schema/workflow.go), so an empty string is a real column
+		// value, not NULL — two workflows both cleared to "" would collide on
+		// the unique index. ClearWebhookSlug leaves the column NULL instead,
+		// mirroring Create's `if w.WebhookSlug != ""` guard above.
+		if *w.WebhookSlug == "" {
+			u.ClearWebhookSlug()
+		} else {
+			u.SetWebhookSlug(*w.WebhookSlug)
+		}
 	}
 	if w.WebhookSecretEncrypted != nil {
 		u.SetWebhookSecretEncrypted(*w.WebhookSecretEncrypted)

@@ -3404,6 +3404,15 @@ func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWM
 	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
 }
 
+// SetSharedCallbackConfig wires the *config.Config instance (and its guarding
+// mutex) CallbackDispatcher reads callback URLs from into this SessionService's
+// CallbackConfigService, so UpdateCallbackConfig can propagate a saved URL into
+// CallbackDispatcher's live view without a process restart. See
+// CallbackConfigService.SetSharedCallbackConfig.
+func (s *SessionService) SetSharedCallbackConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.callbackConfigSvc.SetSharedCallbackConfig(cfg, mu)
+}
+
 // UpsertProfile creates or updates a named profile.
 func (s *SessionService) UpsertProfile(ctx context.Context, req *connect.Request[sessionv1.UpsertProfileRequest]) (*connect.Response[sessionv1.UpsertProfileResponse], error) {
 	return s.defaultsSvc.UpsertProfile(ctx, req)
