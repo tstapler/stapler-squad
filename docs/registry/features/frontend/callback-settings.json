@@ -12,7 +12,9 @@
     "CallbackSettings_should_neverDisplayTheActualUrl",
     "CallbackSettings_should_disableSave_When_noFieldsEdited",
     "CallbackSettings_should_callUpdateConfigWithOnlyEditedField_When_saved",
-    "CallbackSettings_should_sendEmptyString_When_clearButtonClicked"
+    "CallbackSettings_should_sendEmptyString_When_clearButtonClicked",
+    "callback-settings_should_roundTripMaskedConfiguredBadge_When_validUrlSaved",
+    "callback-settings_should_rejectSSRFTargetWithVisibleError_When_savingLoopbackUrl"
   ],
   "lastModified": "2026-08-06T00:00:00Z"
 }

@@ -15,7 +15,10 @@
     "TriggersPanel_should_showRowDisabled_When_triggerNotEnabled",
     "TriggersPanel_should_callUpdateWorkflowWithInvertedCronEnabled_When_toggleClicked",
     "TriggersPanel_should_openFormModal_When_addTriggerClicked",
-    "TriggersPanel_should_expandExecutionHistory_When_historyToggleClicked"
+    "TriggersPanel_should_expandExecutionHistory_When_historyToggleClicked",
+    "triggers-panel_should_showNewTriggerInList_When_webhookTriggerCreated",
+    "triggers-panel_should_persistEditedField_When_triggerUpdated",
+    "triggers-panel_should_reflectToggleLive_When_enableDisableClicked"
   ],
   "lastModified": "2026-08-06T00:00:00Z"
 }
