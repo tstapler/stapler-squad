@@ -1262,9 +1262,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// enforces. backlogSvc is constructed earlier in this function (see
 		// services.NewBacklogService above).
 		workflowScheduler.SetAdmissionGate(backlogSvc)
-		// Per-Workflow rate limit (webhook-triggers Epic 2.4.2) — shared across cron
-		// fires (FireNow) and the inbound webhook handlers' stubbed fire path, both of
-		// which route through FireNow today.
+		// Per-Workflow rate limit (webhook-triggers Epic 2.4.2) — shared across cron/
+		// manual fires (FireNow) and the inbound webhook handlers (github_push/generic),
+		// both of which route through the shared Scheduler.FireTrigger (FireNow is a
+		// thin wrapper around it — see server/workflows/scheduler.go).
 		workflowScheduler.SetRateLimiter(services.NewTriggerRateLimiter())
 		if entClient := storage.GetEntClient(); entClient != nil {
 			fireEventRepo := session.NewEntTriggerFireEventRepository(entClient)

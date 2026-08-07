@@ -537,3 +537,61 @@ func TestUpdateWorkflow_MultipleFields(t *testing.T) {
 	assert.Equal(t, "multi-update", updated.Slug)
 	assert.Equal(t, "original desc", updated.Description)
 }
+
+// TestCreateWorkflow_MalformedPromptTemplate_Rejected verifies Task 3.1.1b: a
+// syntactically invalid prompt_template is rejected at save time with
+// CodeInvalidArgument rather than only surfacing at fire time.
+func TestCreateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	_, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "bad-prompt-template",
+		Name:            "Bad Template",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		PromptTemplate:  "Fix {{.issue.key",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestCreateWorkflow_ValidPromptTemplate_Accepted is the control case: a syntactically
+// valid prompt_template is accepted and persisted.
+func TestCreateWorkflow_ValidPromptTemplate_Accepted(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	resp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "good-prompt-template",
+		Name:            "Good Template",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		PromptTemplate:  "Fix {{.issue.key}}",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "Fix {{.issue.key}}", resp.Msg.Workflow.PromptTemplate)
+}
+
+// TestUpdateWorkflow_MalformedPromptTemplate_Rejected is UpdateWorkflow's sibling of
+// TestCreateWorkflow_MalformedPromptTemplate_Rejected.
+func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "update-bad-template",
+		Name:            "Original",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id:             id,
+		PromptTemplate: proto.String("Fix {{.issue.key"),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}

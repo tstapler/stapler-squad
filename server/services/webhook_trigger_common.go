@@ -76,23 +76,16 @@ func claimTriggerFireEvent(ctx context.Context, fireEvents session.TriggerFireEv
 	return false, false
 }
 
-// renderAndFireTrigger renders wf.PromptTemplate against payload and fires it, updating
-// the already-claimed (workflow_id, delivery_id) TriggerFireEvent row (see
+// renderAndFireTrigger renders wf.PromptTemplate against payload (via
+// workflows.RenderTriggerPrompt — real inert-data-block framing + sanitize/truncate,
+// per Task 3.1.1a) and fires it (via scheduler.FireTrigger, Task 3.2.1a), updating the
+// already-claimed (workflow_id, delivery_id) TriggerFireEvent row (see
 // claimTriggerFireEvent) to its final outcome. Callers must have already claimed the
 // row as "pending" before calling this.
-//
-// TODO(Phase 3): replace the scheduler.FireNow call below with
-// scheduler.FireTrigger(ctx, wf, renderedPrompt, deliveryID) once Task 3.2.1b lands.
-// FireNow is Phase 1's cron/manual-fire entry point — it prepends wf.Command (and
-// appends wf.InputTemplate, if set) ahead of the arg it's given, so today the fired
-// session's initial prompt is "wf.Command\n\n<rendered PromptTemplate>", not the
-// rendered template alone. That's an acceptable, clearly-marked stub for this phase:
-// FireNow is still the only method that wires the admission gate + rate limiter, so
-// reusing it (rather than duplicating that logic here) is the safer temporary choice.
 func renderAndFireTrigger(ctx context.Context, fireEvents session.TriggerFireEventRepository, scheduler *workflows.Scheduler, wf *ent.Workflow, deliveryID string, payload map[string]interface{}) {
 	wfID := wf.ID
 
-	renderedPrompt, err := renderTriggerPromptStub(wf.PromptTemplate, payload)
+	renderedPrompt, err := workflows.RenderTriggerPrompt(wf.PromptTemplate, payload)
 	if err != nil {
 		log.Warn("[WebhookReceiver] failed to render prompt template", "slug", wf.Slug, "err", err)
 		if updErr := fireEvents.UpdateOutcome(ctx, wfID, deliveryID, "fired_failed", "", err.Error()); updErr != nil {
@@ -109,7 +102,7 @@ func renderAndFireTrigger(ctx context.Context, fireEvents session.TriggerFireEve
 		return
 	}
 
-	sessionID, fireErr := scheduler.FireNow(ctx, wf, renderedPrompt)
+	sessionID, fireErr := scheduler.FireTrigger(ctx, wf, renderedPrompt, deliveryID)
 	if fireErr != nil {
 		if updErr := fireEvents.UpdateOutcome(ctx, wfID, deliveryID, "fired_failed", "", fireErr.Error()); updErr != nil {
 			log.Warn("[WebhookReceiver] failed to update trigger fire event outcome", "slug", wf.Slug, "err", updErr)

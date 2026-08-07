@@ -3,7 +3,9 @@ package workflows
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -19,14 +21,19 @@ import (
 // fakeSessionService is a test double for SessionServiceInterface that records
 // whether CreateSession was invoked — used to assert that a rejected admission check
 // (Task 1.3.1d) or a dual-registered mismatched trigger (Task 1.1.1f) never reaches
-// session creation.
+// session creation. lastReq is guarded by mu since some tests fire concurrently.
 type fakeSessionService struct {
-	called bool
-	err    error
+	mu      sync.Mutex
+	called  bool
+	err     error
+	lastReq *sessionv1.CreateSessionRequest
 }
 
-func (f *fakeSessionService) CreateSession(_ context.Context, _ *connect.Request[sessionv1.CreateSessionRequest]) (*connect.Response[sessionv1.CreateSessionResponse], error) {
+func (f *fakeSessionService) CreateSession(_ context.Context, req *connect.Request[sessionv1.CreateSessionRequest]) (*connect.Response[sessionv1.CreateSessionResponse], error) {
+	f.mu.Lock()
 	f.called = true
+	f.lastReq = req.Msg
+	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -327,4 +334,98 @@ func TestFireNow_RateLimited_RejectsExcessFiresInTightLoop(t *testing.T) {
 		}
 	}
 	assert.Equal(t, attempts-burst, rejected, "excess fires must be recorded as fired_failed, not silently dropped")
+}
+
+// TestFireTrigger_Success_UpdatesLastFiredAt verifies Task 3.2.1a/4.1.1a: a successful
+// FireTrigger call bumps the Workflow's last_fired_at to (approximately) now.
+func TestFireTrigger_Success_UpdatesLastFiredAt(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug:            "last-fired-wf",
+		Name:            "Last Fired",
+		Command:         "do the thing",
+		TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+	require.Nil(t, wf.LastFiredAt)
+
+	before := time.Now()
+	_, fireErr := sched.FireTrigger(context.Background(), wf, "rendered prompt", "")
+	require.NoError(t, fireErr)
+
+	got, err := wfRepo.GetByID(context.Background(), wf.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.LastFiredAt)
+	assert.True(t, !got.LastFiredAt.Before(before), "last_fired_at should be set to (approximately) now")
+}
+
+// TestFireTrigger_WithDeliveryID_DoesNotDoubleClaimFireEvent verifies FireTrigger's
+// deliveryID-scoped skip: when called with a non-empty deliveryID (the webhook-handler
+// shape, where a "pending" TriggerFireEvent row is already claimed by the caller before
+// FireTrigger runs), a rate-limit/admission rejection inside FireTrigger must not
+// attempt its own Create for that same (workflow_id, delivery_id) — which would either
+// collide with the pending row or (if the fake recorder doesn't enforce uniqueness)
+// silently double-book the audit trail. deliveryID == "" (FireNow's shape) is the
+// control case showing the audit row IS recorded there.
+func TestFireTrigger_WithDeliveryID_DoesNotDoubleClaimFireEvent(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+
+	gate := &fakeAdmissionGate{admitted: false}
+	sched.SetAdmissionGate(gate)
+	recorder := &fakeFireEventRecorder{}
+	sched.SetTriggerFireEventRepo(recorder)
+
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug:            "webhook-shaped-wf",
+		Name:            "Webhook Shaped",
+		Command:         "do the thing",
+		TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	_, fireErr := sched.FireTrigger(context.Background(), wf, "rendered prompt", "delivery-123")
+	require.Error(t, fireErr)
+	assert.Empty(t, recorder.events, "FireTrigger must not record its own audit row when deliveryID is non-empty — the caller already claimed one")
+
+	_, fireErr = sched.FireTrigger(context.Background(), wf, "rendered prompt", "")
+	require.Error(t, fireErr)
+	require.Len(t, recorder.events, 1, "FireTrigger's own audit row IS expected when deliveryID is empty (FireNow's shape)")
+	assert.Equal(t, "fired_failed", recorder.events[0].Outcome)
+}
+
+// TestFireTrigger_NeverSetsAutoApproveFlag is the Task 3.2.1d Goal-4 verification: a
+// trigger-fired CreateSessionRequest must not differ from a manually-created equivalent
+// in any bypass/auto-approve/elevated-permission field. WorkflowId (attribution) is the
+// only intentional difference asserted here.
+func TestFireTrigger_NeverSetsAutoApproveFlag(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug:            "no-bypass-wf",
+		Name:            "No Bypass",
+		Command:         "do the thing",
+		TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	_, fireErr := sched.FireTrigger(context.Background(), wf, "rendered prompt", "")
+	require.NoError(t, fireErr)
+
+	fakeSess.mu.Lock()
+	req := fakeSess.lastReq
+	fakeSess.mu.Unlock()
+	require.NotNil(t, req)
+
+	// A manually-created session request never sets these — a trigger-fired one must
+	// not either. auto_yes is the concrete "bypass approval" flag on
+	// CreateSessionRequest today; skip_defaults is the other field that changes how the
+	// session is provisioned relative to a plain manual create.
+	assert.False(t, req.GetAutoYes(), "trigger-fired sessions must not auto-approve prompts")
+	assert.False(t, req.GetSkipDefaults(), "trigger-fired sessions must not skip normal session defaults")
+	assert.False(t, req.GetOneShot())
+	assert.Equal(t, wf.ID.String(), req.GetWorkflowId(), "WorkflowId (attribution) is the intentional difference from a manual create")
 }

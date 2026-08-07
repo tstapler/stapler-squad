@@ -194,6 +194,15 @@ func (s *WorkflowService) CreateWorkflow(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
+	// Parse-time prompt_template validation (Task 3.1.1b): catch an operator's
+	// template typo at save time rather than only surfacing it as a fired_failed
+	// TriggerFireEvent the next time this trigger fires.
+	if req.Msg.PromptTemplate != "" {
+		if err := workflows.ValidatePromptTemplate(req.Msg.PromptTemplate); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+	}
+
 	createInput := session.WorkflowCreateInput{
 		Slug:            req.Msg.Slug,
 		Name:            req.Msg.Name,
@@ -310,6 +319,13 @@ func (s *WorkflowService) UpdateWorkflow(
 	effectiveTriggerType = resolveTriggerType(effectiveTriggerType, effectiveCronEnabled)
 	if err := validateTriggerTypeFieldConsistency(effectiveTriggerType, effectiveCronEnabled, effectiveWebhookSlug, effectiveGitHubRepo); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	// Parse-time prompt_template validation (Task 3.1.1b) — same as CreateWorkflow.
+	if req.Msg.PromptTemplate != nil && *req.Msg.PromptTemplate != "" {
+		if err := workflows.ValidatePromptTemplate(*req.Msg.PromptTemplate); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
 	}
 
 	update := session.WorkflowUpdateInput{
