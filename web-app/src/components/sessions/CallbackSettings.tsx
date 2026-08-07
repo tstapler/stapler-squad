@@ -107,7 +107,10 @@ export function CallbackSettings() {
               <div className={fieldRow} key={f.key}>
                 <div className={fieldLabelRow}>
                   <label className={fieldLabel} htmlFor={`cb-${f.key}`}>{f.label}</label>
-                  <span className={configured ? configuredBadge : notConfiguredBadge}>
+                  <span
+                    className={configured ? configuredBadge : notConfiguredBadge}
+                    data-testid={`${f.testId}-status`}
+                  >
                     {configured ? "Configured" : "Not configured"}
                   </span>
                 </div>

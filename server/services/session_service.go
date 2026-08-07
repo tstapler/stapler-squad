@@ -3426,11 +3426,13 @@ func (s *SessionService) DeleteDirectoryRule(ctx context.Context, req *connect.R
 
 // ─── Callback Config delegates (webhook-triggers Phase 5, FR7) ──────────────
 
+// +api: callback-config:get
 // GetCallbackConfig reports which outbound-callback URLs are configured.
 func (s *SessionService) GetCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.GetCallbackConfigRequest]) (*connect.Response[sessionv1.GetCallbackConfigResponse], error) {
 	return s.callbackConfigSvc.GetCallbackConfig(ctx, req)
 }
 
+// +api: callback-config:update
 // UpdateCallbackConfig sets one or more outbound-callback URLs.
 func (s *SessionService) UpdateCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateCallbackConfigRequest]) (*connect.Response[sessionv1.UpdateCallbackConfigResponse], error) {
 	return s.callbackConfigSvc.UpdateCallbackConfig(ctx, req)

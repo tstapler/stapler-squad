@@ -206,6 +206,9 @@ var methodToID = map[string]string{
 	"RunWorkflow":    "workflow:run",
 	// Trigger fire audit trail RPC (webhook-triggers Epic 1.2, Task 1.2.1d)
 	"ListTriggerFireEvents": "workflow:list-trigger-fire-events",
+	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
+	"GetCallbackConfig":    "callback-config:get",
+	"UpdateCallbackConfig": "callback-config:update",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
