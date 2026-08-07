@@ -285,6 +285,18 @@ func (f TagFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TagMutation", m)
 }
 
+// The TriggerFireEventFunc type is an adapter to allow the use of ordinary
+// function as TriggerFireEvent mutator.
+type TriggerFireEventFunc func(context.Context, *ent.TriggerFireEventMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TriggerFireEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TriggerFireEventMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TriggerFireEventMutation", m)
+}
+
 // The WorkflowFunc type is an adapter to allow the use of ordinary
 // function as Workflow mutator.
 type WorkflowFunc func(context.Context, *ent.WorkflowMutation) (ent.Value, error)

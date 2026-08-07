@@ -39,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
 	"github.com/tstapler/stapler-squad/session/ent/workflow"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -94,6 +95,8 @@ type Client struct {
 	SourceSyncEvent *SourceSyncEventClient
 	// Tag is the client for interacting with the Tag builders.
 	Tag *TagClient
+	// TriggerFireEvent is the client for interacting with the TriggerFireEvent builders.
+	TriggerFireEvent *TriggerFireEventClient
 	// Workflow is the client for interacting with the Workflow builders.
 	Workflow *WorkflowClient
 	// Worktree is the client for interacting with the Worktree builders.
@@ -132,6 +135,7 @@ func (c *Client) init() {
 	c.Shell = NewShellClient(c.config)
 	c.SourceSyncEvent = NewSourceSyncEventClient(c.config)
 	c.Tag = NewTagClient(c.config)
+	c.TriggerFireEvent = NewTriggerFireEventClient(c.config)
 	c.Workflow = NewWorkflowClient(c.config)
 	c.Worktree = NewWorktreeClient(c.config)
 }
@@ -249,6 +253,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		Shell:                   NewShellClient(cfg),
 		SourceSyncEvent:         NewSourceSyncEventClient(cfg),
 		Tag:                     NewTagClient(cfg),
+		TriggerFireEvent:        NewTriggerFireEventClient(cfg),
 		Workflow:                NewWorkflowClient(cfg),
 		Worktree:                NewWorktreeClient(cfg),
 	}, nil
@@ -293,6 +298,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		Shell:                   NewShellClient(cfg),
 		SourceSyncEvent:         NewSourceSyncEventClient(cfg),
 		Tag:                     NewTagClient(cfg),
+		TriggerFireEvent:        NewTriggerFireEventClient(cfg),
 		Workflow:                NewWorkflowClient(cfg),
 		Worktree:                NewWorktreeClient(cfg),
 	}, nil
@@ -329,7 +335,7 @@ func (c *Client) Use(hooks ...Hook) {
 		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
 		c.ItemSession, c.ItemSource, c.PipelineMode, c.Project, c.ReviewVerdict,
 		c.Session, c.SessionGoal, c.SessionSummary, c.Shell, c.SourceSyncEvent, c.Tag,
-		c.Workflow, c.Worktree,
+		c.TriggerFireEvent, c.Workflow, c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -344,7 +350,7 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
 		c.ItemSession, c.ItemSource, c.PipelineMode, c.Project, c.ReviewVerdict,
 		c.Session, c.SessionGoal, c.SessionSummary, c.Shell, c.SourceSyncEvent, c.Tag,
-		c.Workflow, c.Worktree,
+		c.TriggerFireEvent, c.Workflow, c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -399,6 +405,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.SourceSyncEvent.mutate(ctx, m)
 	case *TagMutation:
 		return c.Tag.mutate(ctx, m)
+	case *TriggerFireEventMutation:
+		return c.TriggerFireEvent.mutate(ctx, m)
 	case *WorkflowMutation:
 		return c.Workflow.mutate(ctx, m)
 	case *WorktreeMutation:
@@ -3931,6 +3939,139 @@ func (c *TagClient) mutate(ctx context.Context, m *TagMutation) (Value, error) {
 	}
 }
 
+// TriggerFireEventClient is a client for the TriggerFireEvent schema.
+type TriggerFireEventClient struct {
+	config
+}
+
+// NewTriggerFireEventClient returns a client for the TriggerFireEvent from the given config.
+func NewTriggerFireEventClient(c config) *TriggerFireEventClient {
+	return &TriggerFireEventClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `triggerfireevent.Hooks(f(g(h())))`.
+func (c *TriggerFireEventClient) Use(hooks ...Hook) {
+	c.hooks.TriggerFireEvent = append(c.hooks.TriggerFireEvent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `triggerfireevent.Intercept(f(g(h())))`.
+func (c *TriggerFireEventClient) Intercept(interceptors ...Interceptor) {
+	c.inters.TriggerFireEvent = append(c.inters.TriggerFireEvent, interceptors...)
+}
+
+// Create returns a builder for creating a TriggerFireEvent entity.
+func (c *TriggerFireEventClient) Create() *TriggerFireEventCreate {
+	mutation := newTriggerFireEventMutation(c.config, OpCreate)
+	return &TriggerFireEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of TriggerFireEvent entities.
+func (c *TriggerFireEventClient) CreateBulk(builders ...*TriggerFireEventCreate) *TriggerFireEventCreateBulk {
+	return &TriggerFireEventCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *TriggerFireEventClient) MapCreateBulk(slice any, setFunc func(*TriggerFireEventCreate, int)) *TriggerFireEventCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &TriggerFireEventCreateBulk{err: fmt.Errorf("calling to TriggerFireEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*TriggerFireEventCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &TriggerFireEventCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for TriggerFireEvent.
+func (c *TriggerFireEventClient) Update() *TriggerFireEventUpdate {
+	mutation := newTriggerFireEventMutation(c.config, OpUpdate)
+	return &TriggerFireEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *TriggerFireEventClient) UpdateOne(_m *TriggerFireEvent) *TriggerFireEventUpdateOne {
+	mutation := newTriggerFireEventMutation(c.config, OpUpdateOne, withTriggerFireEvent(_m))
+	return &TriggerFireEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *TriggerFireEventClient) UpdateOneID(id uuid.UUID) *TriggerFireEventUpdateOne {
+	mutation := newTriggerFireEventMutation(c.config, OpUpdateOne, withTriggerFireEventID(id))
+	return &TriggerFireEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for TriggerFireEvent.
+func (c *TriggerFireEventClient) Delete() *TriggerFireEventDelete {
+	mutation := newTriggerFireEventMutation(c.config, OpDelete)
+	return &TriggerFireEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *TriggerFireEventClient) DeleteOne(_m *TriggerFireEvent) *TriggerFireEventDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *TriggerFireEventClient) DeleteOneID(id uuid.UUID) *TriggerFireEventDeleteOne {
+	builder := c.Delete().Where(triggerfireevent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &TriggerFireEventDeleteOne{builder}
+}
+
+// Query returns a query builder for TriggerFireEvent.
+func (c *TriggerFireEventClient) Query() *TriggerFireEventQuery {
+	return &TriggerFireEventQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeTriggerFireEvent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a TriggerFireEvent entity by its id.
+func (c *TriggerFireEventClient) Get(ctx context.Context, id uuid.UUID) (*TriggerFireEvent, error) {
+	return c.Query().Where(triggerfireevent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *TriggerFireEventClient) GetX(ctx context.Context, id uuid.UUID) *TriggerFireEvent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *TriggerFireEventClient) Hooks() []Hook {
+	return c.hooks.TriggerFireEvent
+}
+
+// Interceptors returns the client interceptors.
+func (c *TriggerFireEventClient) Interceptors() []Interceptor {
+	return c.inters.TriggerFireEvent
+}
+
+func (c *TriggerFireEventClient) mutate(ctx context.Context, m *TriggerFireEventMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&TriggerFireEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&TriggerFireEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&TriggerFireEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&TriggerFireEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown TriggerFireEvent mutation op: %q", m.Op())
+	}
+}
+
 // WorkflowClient is a client for the Workflow schema.
 type WorkflowClient struct {
 	config
@@ -4220,13 +4361,14 @@ type (
 		BacklogStatusEvent, BacklogStuckState, ClassificationAnalytics, ClaudeMetadata,
 		ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource,
 		PipelineMode, Project, ReviewVerdict, Session, SessionGoal, SessionSummary,
-		Shell, SourceSyncEvent, Tag, Workflow, Worktree []ent.Hook
+		Shell, SourceSyncEvent, Tag, TriggerFireEvent, Workflow, Worktree []ent.Hook
 	}
 	inters struct {
 		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogProgressNote,
 		BacklogStatusEvent, BacklogStuckState, ClassificationAnalytics, ClaudeMetadata,
 		ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource,
 		PipelineMode, Project, ReviewVerdict, Session, SessionGoal, SessionSummary,
-		Shell, SourceSyncEvent, Tag, Workflow, Worktree []ent.Interceptor
+		Shell, SourceSyncEvent, Tag, TriggerFireEvent, Workflow,
+		Worktree []ent.Interceptor
 	}
 )

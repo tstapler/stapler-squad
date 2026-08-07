@@ -284,6 +284,186 @@ func (_u *WorkflowUpdate) ClearArchiveAfterHours() *WorkflowUpdate {
 	return _u
 }
 
+// SetTriggerType sets the "trigger_type" field.
+func (_u *WorkflowUpdate) SetTriggerType(v string) *WorkflowUpdate {
+	_u.mutation.SetTriggerType(v)
+	return _u
+}
+
+// SetNillableTriggerType sets the "trigger_type" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableTriggerType(v *string) *WorkflowUpdate {
+	if v != nil {
+		_u.SetTriggerType(*v)
+	}
+	return _u
+}
+
+// ClearTriggerType clears the value of the "trigger_type" field.
+func (_u *WorkflowUpdate) ClearTriggerType() *WorkflowUpdate {
+	_u.mutation.ClearTriggerType()
+	return _u
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (_u *WorkflowUpdate) SetGithubRepo(v string) *WorkflowUpdate {
+	_u.mutation.SetGithubRepo(v)
+	return _u
+}
+
+// SetNillableGithubRepo sets the "github_repo" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableGithubRepo(v *string) *WorkflowUpdate {
+	if v != nil {
+		_u.SetGithubRepo(*v)
+	}
+	return _u
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (_u *WorkflowUpdate) ClearGithubRepo() *WorkflowUpdate {
+	_u.mutation.ClearGithubRepo()
+	return _u
+}
+
+// SetGithubBranch sets the "github_branch" field.
+func (_u *WorkflowUpdate) SetGithubBranch(v string) *WorkflowUpdate {
+	_u.mutation.SetGithubBranch(v)
+	return _u
+}
+
+// SetNillableGithubBranch sets the "github_branch" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableGithubBranch(v *string) *WorkflowUpdate {
+	if v != nil {
+		_u.SetGithubBranch(*v)
+	}
+	return _u
+}
+
+// ClearGithubBranch clears the value of the "github_branch" field.
+func (_u *WorkflowUpdate) ClearGithubBranch() *WorkflowUpdate {
+	_u.mutation.ClearGithubBranch()
+	return _u
+}
+
+// SetWebhookSlug sets the "webhook_slug" field.
+func (_u *WorkflowUpdate) SetWebhookSlug(v string) *WorkflowUpdate {
+	_u.mutation.SetWebhookSlug(v)
+	return _u
+}
+
+// SetNillableWebhookSlug sets the "webhook_slug" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableWebhookSlug(v *string) *WorkflowUpdate {
+	if v != nil {
+		_u.SetWebhookSlug(*v)
+	}
+	return _u
+}
+
+// ClearWebhookSlug clears the value of the "webhook_slug" field.
+func (_u *WorkflowUpdate) ClearWebhookSlug() *WorkflowUpdate {
+	_u.mutation.ClearWebhookSlug()
+	return _u
+}
+
+// SetWebhookSecretEncrypted sets the "webhook_secret_encrypted" field.
+func (_u *WorkflowUpdate) SetWebhookSecretEncrypted(v string) *WorkflowUpdate {
+	_u.mutation.SetWebhookSecretEncrypted(v)
+	return _u
+}
+
+// SetNillableWebhookSecretEncrypted sets the "webhook_secret_encrypted" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableWebhookSecretEncrypted(v *string) *WorkflowUpdate {
+	if v != nil {
+		_u.SetWebhookSecretEncrypted(*v)
+	}
+	return _u
+}
+
+// ClearWebhookSecretEncrypted clears the value of the "webhook_secret_encrypted" field.
+func (_u *WorkflowUpdate) ClearWebhookSecretEncrypted() *WorkflowUpdate {
+	_u.mutation.ClearWebhookSecretEncrypted()
+	return _u
+}
+
+// SetEventFilter sets the "event_filter" field.
+func (_u *WorkflowUpdate) SetEventFilter(v string) *WorkflowUpdate {
+	_u.mutation.SetEventFilter(v)
+	return _u
+}
+
+// SetNillableEventFilter sets the "event_filter" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableEventFilter(v *string) *WorkflowUpdate {
+	if v != nil {
+		_u.SetEventFilter(*v)
+	}
+	return _u
+}
+
+// ClearEventFilter clears the value of the "event_filter" field.
+func (_u *WorkflowUpdate) ClearEventFilter() *WorkflowUpdate {
+	_u.mutation.ClearEventFilter()
+	return _u
+}
+
+// SetLabelFilter sets the "label_filter" field.
+func (_u *WorkflowUpdate) SetLabelFilter(v string) *WorkflowUpdate {
+	_u.mutation.SetLabelFilter(v)
+	return _u
+}
+
+// SetNillableLabelFilter sets the "label_filter" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableLabelFilter(v *string) *WorkflowUpdate {
+	if v != nil {
+		_u.SetLabelFilter(*v)
+	}
+	return _u
+}
+
+// ClearLabelFilter clears the value of the "label_filter" field.
+func (_u *WorkflowUpdate) ClearLabelFilter() *WorkflowUpdate {
+	_u.mutation.ClearLabelFilter()
+	return _u
+}
+
+// SetPromptTemplate sets the "prompt_template" field.
+func (_u *WorkflowUpdate) SetPromptTemplate(v string) *WorkflowUpdate {
+	_u.mutation.SetPromptTemplate(v)
+	return _u
+}
+
+// SetNillablePromptTemplate sets the "prompt_template" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillablePromptTemplate(v *string) *WorkflowUpdate {
+	if v != nil {
+		_u.SetPromptTemplate(*v)
+	}
+	return _u
+}
+
+// ClearPromptTemplate clears the value of the "prompt_template" field.
+func (_u *WorkflowUpdate) ClearPromptTemplate() *WorkflowUpdate {
+	_u.mutation.ClearPromptTemplate()
+	return _u
+}
+
+// SetLastFiredAt sets the "last_fired_at" field.
+func (_u *WorkflowUpdate) SetLastFiredAt(v time.Time) *WorkflowUpdate {
+	_u.mutation.SetLastFiredAt(v)
+	return _u
+}
+
+// SetNillableLastFiredAt sets the "last_fired_at" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableLastFiredAt(v *time.Time) *WorkflowUpdate {
+	if v != nil {
+		_u.SetLastFiredAt(*v)
+	}
+	return _u
+}
+
+// ClearLastFiredAt clears the value of the "last_fired_at" field.
+func (_u *WorkflowUpdate) ClearLastFiredAt() *WorkflowUpdate {
+	_u.mutation.ClearLastFiredAt()
+	return _u
+}
+
 // Mutation returns the WorkflowMutation object of the builder.
 func (_u *WorkflowUpdate) Mutation() *WorkflowMutation {
 	return _u.mutation
@@ -431,6 +611,60 @@ func (_u *WorkflowUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ArchiveAfterHoursCleared() {
 		_spec.ClearField(workflow.FieldArchiveAfterHours, field.TypeInt)
+	}
+	if value, ok := _u.mutation.TriggerType(); ok {
+		_spec.SetField(workflow.FieldTriggerType, field.TypeString, value)
+	}
+	if _u.mutation.TriggerTypeCleared() {
+		_spec.ClearField(workflow.FieldTriggerType, field.TypeString)
+	}
+	if value, ok := _u.mutation.GithubRepo(); ok {
+		_spec.SetField(workflow.FieldGithubRepo, field.TypeString, value)
+	}
+	if _u.mutation.GithubRepoCleared() {
+		_spec.ClearField(workflow.FieldGithubRepo, field.TypeString)
+	}
+	if value, ok := _u.mutation.GithubBranch(); ok {
+		_spec.SetField(workflow.FieldGithubBranch, field.TypeString, value)
+	}
+	if _u.mutation.GithubBranchCleared() {
+		_spec.ClearField(workflow.FieldGithubBranch, field.TypeString)
+	}
+	if value, ok := _u.mutation.WebhookSlug(); ok {
+		_spec.SetField(workflow.FieldWebhookSlug, field.TypeString, value)
+	}
+	if _u.mutation.WebhookSlugCleared() {
+		_spec.ClearField(workflow.FieldWebhookSlug, field.TypeString)
+	}
+	if value, ok := _u.mutation.WebhookSecretEncrypted(); ok {
+		_spec.SetField(workflow.FieldWebhookSecretEncrypted, field.TypeString, value)
+	}
+	if _u.mutation.WebhookSecretEncryptedCleared() {
+		_spec.ClearField(workflow.FieldWebhookSecretEncrypted, field.TypeString)
+	}
+	if value, ok := _u.mutation.EventFilter(); ok {
+		_spec.SetField(workflow.FieldEventFilter, field.TypeString, value)
+	}
+	if _u.mutation.EventFilterCleared() {
+		_spec.ClearField(workflow.FieldEventFilter, field.TypeString)
+	}
+	if value, ok := _u.mutation.LabelFilter(); ok {
+		_spec.SetField(workflow.FieldLabelFilter, field.TypeString, value)
+	}
+	if _u.mutation.LabelFilterCleared() {
+		_spec.ClearField(workflow.FieldLabelFilter, field.TypeString)
+	}
+	if value, ok := _u.mutation.PromptTemplate(); ok {
+		_spec.SetField(workflow.FieldPromptTemplate, field.TypeString, value)
+	}
+	if _u.mutation.PromptTemplateCleared() {
+		_spec.ClearField(workflow.FieldPromptTemplate, field.TypeString)
+	}
+	if value, ok := _u.mutation.LastFiredAt(); ok {
+		_spec.SetField(workflow.FieldLastFiredAt, field.TypeTime, value)
+	}
+	if _u.mutation.LastFiredAtCleared() {
+		_spec.ClearField(workflow.FieldLastFiredAt, field.TypeTime)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -708,6 +942,186 @@ func (_u *WorkflowUpdateOne) ClearArchiveAfterHours() *WorkflowUpdateOne {
 	return _u
 }
 
+// SetTriggerType sets the "trigger_type" field.
+func (_u *WorkflowUpdateOne) SetTriggerType(v string) *WorkflowUpdateOne {
+	_u.mutation.SetTriggerType(v)
+	return _u
+}
+
+// SetNillableTriggerType sets the "trigger_type" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableTriggerType(v *string) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetTriggerType(*v)
+	}
+	return _u
+}
+
+// ClearTriggerType clears the value of the "trigger_type" field.
+func (_u *WorkflowUpdateOne) ClearTriggerType() *WorkflowUpdateOne {
+	_u.mutation.ClearTriggerType()
+	return _u
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (_u *WorkflowUpdateOne) SetGithubRepo(v string) *WorkflowUpdateOne {
+	_u.mutation.SetGithubRepo(v)
+	return _u
+}
+
+// SetNillableGithubRepo sets the "github_repo" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableGithubRepo(v *string) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetGithubRepo(*v)
+	}
+	return _u
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (_u *WorkflowUpdateOne) ClearGithubRepo() *WorkflowUpdateOne {
+	_u.mutation.ClearGithubRepo()
+	return _u
+}
+
+// SetGithubBranch sets the "github_branch" field.
+func (_u *WorkflowUpdateOne) SetGithubBranch(v string) *WorkflowUpdateOne {
+	_u.mutation.SetGithubBranch(v)
+	return _u
+}
+
+// SetNillableGithubBranch sets the "github_branch" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableGithubBranch(v *string) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetGithubBranch(*v)
+	}
+	return _u
+}
+
+// ClearGithubBranch clears the value of the "github_branch" field.
+func (_u *WorkflowUpdateOne) ClearGithubBranch() *WorkflowUpdateOne {
+	_u.mutation.ClearGithubBranch()
+	return _u
+}
+
+// SetWebhookSlug sets the "webhook_slug" field.
+func (_u *WorkflowUpdateOne) SetWebhookSlug(v string) *WorkflowUpdateOne {
+	_u.mutation.SetWebhookSlug(v)
+	return _u
+}
+
+// SetNillableWebhookSlug sets the "webhook_slug" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableWebhookSlug(v *string) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetWebhookSlug(*v)
+	}
+	return _u
+}
+
+// ClearWebhookSlug clears the value of the "webhook_slug" field.
+func (_u *WorkflowUpdateOne) ClearWebhookSlug() *WorkflowUpdateOne {
+	_u.mutation.ClearWebhookSlug()
+	return _u
+}
+
+// SetWebhookSecretEncrypted sets the "webhook_secret_encrypted" field.
+func (_u *WorkflowUpdateOne) SetWebhookSecretEncrypted(v string) *WorkflowUpdateOne {
+	_u.mutation.SetWebhookSecretEncrypted(v)
+	return _u
+}
+
+// SetNillableWebhookSecretEncrypted sets the "webhook_secret_encrypted" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableWebhookSecretEncrypted(v *string) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetWebhookSecretEncrypted(*v)
+	}
+	return _u
+}
+
+// ClearWebhookSecretEncrypted clears the value of the "webhook_secret_encrypted" field.
+func (_u *WorkflowUpdateOne) ClearWebhookSecretEncrypted() *WorkflowUpdateOne {
+	_u.mutation.ClearWebhookSecretEncrypted()
+	return _u
+}
+
+// SetEventFilter sets the "event_filter" field.
+func (_u *WorkflowUpdateOne) SetEventFilter(v string) *WorkflowUpdateOne {
+	_u.mutation.SetEventFilter(v)
+	return _u
+}
+
+// SetNillableEventFilter sets the "event_filter" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableEventFilter(v *string) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetEventFilter(*v)
+	}
+	return _u
+}
+
+// ClearEventFilter clears the value of the "event_filter" field.
+func (_u *WorkflowUpdateOne) ClearEventFilter() *WorkflowUpdateOne {
+	_u.mutation.ClearEventFilter()
+	return _u
+}
+
+// SetLabelFilter sets the "label_filter" field.
+func (_u *WorkflowUpdateOne) SetLabelFilter(v string) *WorkflowUpdateOne {
+	_u.mutation.SetLabelFilter(v)
+	return _u
+}
+
+// SetNillableLabelFilter sets the "label_filter" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableLabelFilter(v *string) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetLabelFilter(*v)
+	}
+	return _u
+}
+
+// ClearLabelFilter clears the value of the "label_filter" field.
+func (_u *WorkflowUpdateOne) ClearLabelFilter() *WorkflowUpdateOne {
+	_u.mutation.ClearLabelFilter()
+	return _u
+}
+
+// SetPromptTemplate sets the "prompt_template" field.
+func (_u *WorkflowUpdateOne) SetPromptTemplate(v string) *WorkflowUpdateOne {
+	_u.mutation.SetPromptTemplate(v)
+	return _u
+}
+
+// SetNillablePromptTemplate sets the "prompt_template" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillablePromptTemplate(v *string) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetPromptTemplate(*v)
+	}
+	return _u
+}
+
+// ClearPromptTemplate clears the value of the "prompt_template" field.
+func (_u *WorkflowUpdateOne) ClearPromptTemplate() *WorkflowUpdateOne {
+	_u.mutation.ClearPromptTemplate()
+	return _u
+}
+
+// SetLastFiredAt sets the "last_fired_at" field.
+func (_u *WorkflowUpdateOne) SetLastFiredAt(v time.Time) *WorkflowUpdateOne {
+	_u.mutation.SetLastFiredAt(v)
+	return _u
+}
+
+// SetNillableLastFiredAt sets the "last_fired_at" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableLastFiredAt(v *time.Time) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetLastFiredAt(*v)
+	}
+	return _u
+}
+
+// ClearLastFiredAt clears the value of the "last_fired_at" field.
+func (_u *WorkflowUpdateOne) ClearLastFiredAt() *WorkflowUpdateOne {
+	_u.mutation.ClearLastFiredAt()
+	return _u
+}
+
 // Mutation returns the WorkflowMutation object of the builder.
 func (_u *WorkflowUpdateOne) Mutation() *WorkflowMutation {
 	return _u.mutation
@@ -885,6 +1299,60 @@ func (_u *WorkflowUpdateOne) sqlSave(ctx context.Context) (_node *Workflow, err 
 	}
 	if _u.mutation.ArchiveAfterHoursCleared() {
 		_spec.ClearField(workflow.FieldArchiveAfterHours, field.TypeInt)
+	}
+	if value, ok := _u.mutation.TriggerType(); ok {
+		_spec.SetField(workflow.FieldTriggerType, field.TypeString, value)
+	}
+	if _u.mutation.TriggerTypeCleared() {
+		_spec.ClearField(workflow.FieldTriggerType, field.TypeString)
+	}
+	if value, ok := _u.mutation.GithubRepo(); ok {
+		_spec.SetField(workflow.FieldGithubRepo, field.TypeString, value)
+	}
+	if _u.mutation.GithubRepoCleared() {
+		_spec.ClearField(workflow.FieldGithubRepo, field.TypeString)
+	}
+	if value, ok := _u.mutation.GithubBranch(); ok {
+		_spec.SetField(workflow.FieldGithubBranch, field.TypeString, value)
+	}
+	if _u.mutation.GithubBranchCleared() {
+		_spec.ClearField(workflow.FieldGithubBranch, field.TypeString)
+	}
+	if value, ok := _u.mutation.WebhookSlug(); ok {
+		_spec.SetField(workflow.FieldWebhookSlug, field.TypeString, value)
+	}
+	if _u.mutation.WebhookSlugCleared() {
+		_spec.ClearField(workflow.FieldWebhookSlug, field.TypeString)
+	}
+	if value, ok := _u.mutation.WebhookSecretEncrypted(); ok {
+		_spec.SetField(workflow.FieldWebhookSecretEncrypted, field.TypeString, value)
+	}
+	if _u.mutation.WebhookSecretEncryptedCleared() {
+		_spec.ClearField(workflow.FieldWebhookSecretEncrypted, field.TypeString)
+	}
+	if value, ok := _u.mutation.EventFilter(); ok {
+		_spec.SetField(workflow.FieldEventFilter, field.TypeString, value)
+	}
+	if _u.mutation.EventFilterCleared() {
+		_spec.ClearField(workflow.FieldEventFilter, field.TypeString)
+	}
+	if value, ok := _u.mutation.LabelFilter(); ok {
+		_spec.SetField(workflow.FieldLabelFilter, field.TypeString, value)
+	}
+	if _u.mutation.LabelFilterCleared() {
+		_spec.ClearField(workflow.FieldLabelFilter, field.TypeString)
+	}
+	if value, ok := _u.mutation.PromptTemplate(); ok {
+		_spec.SetField(workflow.FieldPromptTemplate, field.TypeString, value)
+	}
+	if _u.mutation.PromptTemplateCleared() {
+		_spec.ClearField(workflow.FieldPromptTemplate, field.TypeString)
+	}
+	if value, ok := _u.mutation.LastFiredAt(); ok {
+		_spec.SetField(workflow.FieldLastFiredAt, field.TypeTime, value)
+	}
+	if _u.mutation.LastFiredAtCleared() {
+		_spec.ClearField(workflow.FieldLastFiredAt, field.TypeTime)
 	}
 	_node = &Workflow{config: _u.config}
 	_spec.Assign = _node.assignValues

@@ -55,6 +55,30 @@ func (r *EntWorkflowRepository) Create(ctx context.Context, w WorkflowCreateInpu
 	if w.ArchiveAfterHours != nil {
 		c.SetArchiveAfterHours(*w.ArchiveAfterHours)
 	}
+	if w.TriggerType != "" {
+		c.SetTriggerType(w.TriggerType)
+	}
+	if w.GitHubRepo != "" {
+		c.SetGithubRepo(w.GitHubRepo)
+	}
+	if w.GitHubBranch != "" {
+		c.SetGithubBranch(w.GitHubBranch)
+	}
+	if w.WebhookSlug != "" {
+		c.SetWebhookSlug(w.WebhookSlug)
+	}
+	if w.WebhookSecretEncrypted != "" {
+		c.SetWebhookSecretEncrypted(w.WebhookSecretEncrypted)
+	}
+	if w.EventFilter != "" {
+		c.SetEventFilter(w.EventFilter)
+	}
+	if w.LabelFilter != "" {
+		c.SetLabelFilter(w.LabelFilter)
+	}
+	if w.PromptTemplate != "" {
+		c.SetPromptTemplate(w.PromptTemplate)
+	}
 
 	wf, err := c.Save(ctx)
 	if err != nil {
@@ -106,6 +130,33 @@ func (r *EntWorkflowRepository) Update(ctx context.Context, id uuid.UUID, w Work
 	if w.ArchiveAfterHours != nil {
 		u.SetArchiveAfterHours(*w.ArchiveAfterHours)
 	}
+	if w.TriggerType != nil {
+		u.SetTriggerType(*w.TriggerType)
+	}
+	if w.GitHubRepo != nil {
+		u.SetGithubRepo(*w.GitHubRepo)
+	}
+	if w.GitHubBranch != nil {
+		u.SetGithubBranch(*w.GitHubBranch)
+	}
+	if w.WebhookSlug != nil {
+		u.SetWebhookSlug(*w.WebhookSlug)
+	}
+	if w.WebhookSecretEncrypted != nil {
+		u.SetWebhookSecretEncrypted(*w.WebhookSecretEncrypted)
+	}
+	if w.EventFilter != nil {
+		u.SetEventFilter(*w.EventFilter)
+	}
+	if w.LabelFilter != nil {
+		u.SetLabelFilter(*w.LabelFilter)
+	}
+	if w.PromptTemplate != nil {
+		u.SetPromptTemplate(*w.PromptTemplate)
+	}
+	if w.LastFiredAt != nil {
+		u.SetLastFiredAt(*w.LastFiredAt)
+	}
 
 	wf, err := u.Save(ctx)
 	if err != nil {
@@ -154,6 +205,20 @@ func (r *EntWorkflowRepository) GetBySlug(ctx context.Context, slug string) (*en
 			return nil, fmt.Errorf("%w: workflow with slug %q", ErrNotFound, slug)
 		}
 		return nil, fmt.Errorf("get workflow by slug %q: %w", slug, err)
+	}
+	return wf, nil
+}
+
+// GetByWebhookSlug retrieves a workflow by its webhook_slug.
+func (r *EntWorkflowRepository) GetByWebhookSlug(ctx context.Context, slug string) (*ent.Workflow, error) {
+	wf, err := r.client.Workflow.Query().
+		Where(workflow.WebhookSlug(slug)).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: workflow with webhook_slug %q", ErrNotFound, slug)
+		}
+		return nil, fmt.Errorf("get workflow by webhook_slug %q: %w", slug, err)
 	}
 	return wf, nil
 }

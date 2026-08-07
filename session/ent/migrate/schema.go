@@ -956,6 +956,34 @@ var (
 			},
 		},
 	}
+	// TriggerFireEventsColumns holds the columns for the "trigger_fire_events" table.
+	TriggerFireEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "workflow_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "outcome", Type: field.TypeString},
+		{Name: "delivery_id", Type: field.TypeString, Nullable: true},
+		{Name: "session_id", Type: field.TypeString, Nullable: true},
+		{Name: "error_message", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// TriggerFireEventsTable holds the schema information for the "trigger_fire_events" table.
+	TriggerFireEventsTable = &schema.Table{
+		Name:       "trigger_fire_events",
+		Columns:    TriggerFireEventsColumns,
+		PrimaryKey: []*schema.Column{TriggerFireEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "triggerfireevent_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TriggerFireEventsColumns[6]},
+			},
+			{
+				Name:    "triggerfireevent_workflow_id_delivery_id",
+				Unique:  true,
+				Columns: []*schema.Column{TriggerFireEventsColumns[1], TriggerFireEventsColumns[3]},
+			},
+		},
+	}
 	// WorkflowsColumns holds the columns for the "workflows" table.
 	WorkflowsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -974,6 +1002,15 @@ var (
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "keep_sessions", Type: field.TypeInt, Nullable: true, Default: 0},
 		{Name: "archive_after_hours", Type: field.TypeInt, Nullable: true, Default: 0},
+		{Name: "trigger_type", Type: field.TypeString, Nullable: true, Default: "manual"},
+		{Name: "github_repo", Type: field.TypeString, Nullable: true},
+		{Name: "github_branch", Type: field.TypeString, Nullable: true},
+		{Name: "webhook_slug", Type: field.TypeString, Unique: true, Nullable: true},
+		{Name: "webhook_secret_encrypted", Type: field.TypeString, Nullable: true},
+		{Name: "event_filter", Type: field.TypeString, Nullable: true},
+		{Name: "label_filter", Type: field.TypeString, Nullable: true},
+		{Name: "prompt_template", Type: field.TypeString, Nullable: true},
+		{Name: "last_fired_at", Type: field.TypeTime, Nullable: true},
 	}
 	// WorkflowsTable holds the schema information for the "workflows" table.
 	WorkflowsTable = &schema.Table{
@@ -995,6 +1032,16 @@ var (
 				Name:    "workflow_created_at",
 				Unique:  false,
 				Columns: []*schema.Column{WorkflowsColumns[12]},
+			},
+			{
+				Name:    "workflow_webhook_slug",
+				Unique:  false,
+				Columns: []*schema.Column{WorkflowsColumns[19]},
+			},
+			{
+				Name:    "workflow_trigger_type",
+				Unique:  false,
+				Columns: []*schema.Column{WorkflowsColumns[16]},
 			},
 		},
 	}
@@ -1097,6 +1144,7 @@ var (
 		ShellsTable,
 		SourceSyncEventsTable,
 		TagsTable,
+		TriggerFireEventsTable,
 		WorkflowsTable,
 		WorktreesTable,
 		BacklogItemSessionsTable,

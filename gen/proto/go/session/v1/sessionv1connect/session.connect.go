@@ -333,6 +333,9 @@ const (
 	// SessionServiceRunWorkflowProcedure is the fully-qualified name of the SessionService's
 	// RunWorkflow RPC.
 	SessionServiceRunWorkflowProcedure = "/session.v1.SessionService/RunWorkflow"
+	// SessionServiceListTriggerFireEventsProcedure is the fully-qualified name of the SessionService's
+	// ListTriggerFireEvents RPC.
+	SessionServiceListTriggerFireEventsProcedure = "/session.v1.SessionService/ListTriggerFireEvents"
 	// SessionServiceGetDetectionEventsProcedure is the fully-qualified name of the SessionService's
 	// GetDetectionEvents RPC.
 	SessionServiceGetDetectionEventsProcedure = "/session.v1.SessionService/GetDetectionEvents"
@@ -629,6 +632,11 @@ type SessionServiceClient interface {
 	ListWorkflows(context.Context, *connect.Request[v1.ListWorkflowsRequest]) (*connect.Response[v1.ListWorkflowsResponse], error)
 	// RunWorkflow immediately fires a workflow (outside of cron schedule).
 	RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error)
+	// ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
+	// rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
+	// the Phase 7 TriggersPanel UI so existing cron-workflow users can observe
+	// fired_failed rejections from the Epic 1.3 admission-gate fix (pre-mortem P1 #3).
+	ListTriggerFireEvents(context.Context, *connect.Request[v1.ListTriggerFireEventsRequest]) (*connect.Response[v1.ListTriggerFireEventsResponse], error)
 	// GetDetectionEvents returns recent status-detection events for a session.
 	// Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
 	GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error)
@@ -1284,6 +1292,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("RunWorkflow")),
 			connect.WithClientOptions(opts...),
 		),
+		listTriggerFireEvents: connect.NewClient[v1.ListTriggerFireEventsRequest, v1.ListTriggerFireEventsResponse](
+			httpClient,
+			baseURL+SessionServiceListTriggerFireEventsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ListTriggerFireEvents")),
+			connect.WithClientOptions(opts...),
+		),
 		getDetectionEvents: connect.NewClient[v1.GetDetectionEventsRequest, v1.GetDetectionEventsResponse](
 			httpClient,
 			baseURL+SessionServiceGetDetectionEventsProcedure,
@@ -1462,6 +1476,7 @@ type sessionServiceClient struct {
 	deleteWorkflow               *connect.Client[v1.DeleteWorkflowRequest, v1.DeleteWorkflowResponse]
 	listWorkflows                *connect.Client[v1.ListWorkflowsRequest, v1.ListWorkflowsResponse]
 	runWorkflow                  *connect.Client[v1.RunWorkflowRequest, v1.RunWorkflowResponse]
+	listTriggerFireEvents        *connect.Client[v1.ListTriggerFireEventsRequest, v1.ListTriggerFireEventsResponse]
 	getDetectionEvents           *connect.Client[v1.GetDetectionEventsRequest, v1.GetDetectionEventsResponse]
 	listSlashCommands            *connect.Client[v1.ListSlashCommandsRequest, v1.ListSlashCommandsResponse]
 	listAliases                  *connect.Client[v1.ListAliasesRequest, v1.ListAliasesResponse]
@@ -1981,6 +1996,11 @@ func (c *sessionServiceClient) RunWorkflow(ctx context.Context, req *connect.Req
 	return c.runWorkflow.CallUnary(ctx, req)
 }
 
+// ListTriggerFireEvents calls session.v1.SessionService.ListTriggerFireEvents.
+func (c *sessionServiceClient) ListTriggerFireEvents(ctx context.Context, req *connect.Request[v1.ListTriggerFireEventsRequest]) (*connect.Response[v1.ListTriggerFireEventsResponse], error) {
+	return c.listTriggerFireEvents.CallUnary(ctx, req)
+}
+
 // GetDetectionEvents calls session.v1.SessionService.GetDetectionEvents.
 func (c *sessionServiceClient) GetDetectionEvents(ctx context.Context, req *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error) {
 	return c.getDetectionEvents.CallUnary(ctx, req)
@@ -2299,6 +2319,11 @@ type SessionServiceHandler interface {
 	ListWorkflows(context.Context, *connect.Request[v1.ListWorkflowsRequest]) (*connect.Response[v1.ListWorkflowsResponse], error)
 	// RunWorkflow immediately fires a workflow (outside of cron schedule).
 	RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error)
+	// ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
+	// rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
+	// the Phase 7 TriggersPanel UI so existing cron-workflow users can observe
+	// fired_failed rejections from the Epic 1.3 admission-gate fix (pre-mortem P1 #3).
+	ListTriggerFireEvents(context.Context, *connect.Request[v1.ListTriggerFireEventsRequest]) (*connect.Response[v1.ListTriggerFireEventsResponse], error)
 	// GetDetectionEvents returns recent status-detection events for a session.
 	// Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
 	GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error)
@@ -2950,6 +2975,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("RunWorkflow")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceListTriggerFireEventsHandler := connect.NewUnaryHandler(
+		SessionServiceListTriggerFireEventsProcedure,
+		svc.ListTriggerFireEvents,
+		connect.WithSchema(sessionServiceMethods.ByName("ListTriggerFireEvents")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceGetDetectionEventsHandler := connect.NewUnaryHandler(
 		SessionServiceGetDetectionEventsProcedure,
 		svc.GetDetectionEvents,
@@ -3226,6 +3257,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceListWorkflowsHandler.ServeHTTP(w, r)
 		case SessionServiceRunWorkflowProcedure:
 			sessionServiceRunWorkflowHandler.ServeHTTP(w, r)
+		case SessionServiceListTriggerFireEventsProcedure:
+			sessionServiceListTriggerFireEventsHandler.ServeHTTP(w, r)
 		case SessionServiceGetDetectionEventsProcedure:
 			sessionServiceGetDetectionEventsHandler.ServeHTTP(w, r)
 		case SessionServiceListSlashCommandsProcedure:
@@ -3661,6 +3694,10 @@ func (UnimplementedSessionServiceHandler) ListWorkflows(context.Context, *connec
 
 func (UnimplementedSessionServiceHandler) RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.RunWorkflow is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ListTriggerFireEvents(context.Context, *connect.Request[v1.ListTriggerFireEventsRequest]) (*connect.Response[v1.ListTriggerFireEventsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ListTriggerFireEvents is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error) {
