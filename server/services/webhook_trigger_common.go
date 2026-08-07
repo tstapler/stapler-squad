@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
@@ -115,15 +116,91 @@ func renderAndFireTrigger(ctx context.Context, fireEvents session.TriggerFireEve
 	}
 }
 
-// claimAndFireTrigger composes claimTriggerFireEvent + renderAndFireTrigger — used by
+// claimAndFireTrigger composes claimTriggerFireEvent (synchronous — must resolve
+// before the handler responds, per AC12's dedup contract) + dispatcher.Dispatch
+// (asynchronous — the actual render + CreateSession work). Used by
 // GitHubWebhookHandler, where matching is fully resolved before dedup claiming (repo +
 // branch + signature all checked per candidate first).
-func claimAndFireTrigger(ctx context.Context, fireEvents session.TriggerFireEventRepository, scheduler *workflows.Scheduler, wf *ent.Workflow, deliveryID string, payload map[string]interface{}) {
+func claimAndFireTrigger(ctx context.Context, dispatcher *TriggerFireDispatcher, fireEvents session.TriggerFireEventRepository, scheduler *workflows.Scheduler, wf *ent.Workflow, deliveryID string, payload map[string]interface{}) {
 	ok, _ := claimTriggerFireEvent(ctx, fireEvents, wf, deliveryID)
 	if !ok {
 		return
 	}
-	renderAndFireTrigger(ctx, fireEvents, scheduler, wf, deliveryID, payload)
+	dispatcher.Dispatch(fireEvents, scheduler, wf, deliveryID, payload)
+}
+
+// maxInFlightTriggerFires bounds concurrent async webhook-trigger-fire goroutines
+// (each driving scheduler.FireTrigger's CreateSession call) — same shape/rationale
+// as session/chain_firer.go's maxInFlightChainFires and this package's
+// maxInFlightCallbacks: an inbound webhook handler must respond promptly (GitHub's
+// ~10s delivery timeout) rather than block on CreateSession's tmux+git-worktree
+// provisioning cost, but the resulting goroutine fan-out still needs a cap.
+const maxInFlightTriggerFires = 20
+
+// triggerFireDispatchTimeout bounds a single async trigger-fire goroutine (template
+// render + CreateSession) — matches session/chain_firer.go's chainFireTimeout, since
+// both ultimately drive the same underlying CreateSession call.
+const triggerFireDispatchTimeout = 5 * time.Minute
+
+// TriggerFireDispatcher moves the actual trigger-fire step (template render +
+// scheduler.FireTrigger's CreateSession call) off the inbound-webhook request
+// goroutine, so GitHubWebhookHandler.Handle / GenericWebhookHandler.Handle can
+// respond to the webhook sender before CreateSession's tmux+git-worktree
+// provisioning completes. Shared by both handlers — same non-blocking,
+// semaphore-bounded shape as session/chain_firer.go's ChainFirer and this
+// package's CallbackDispatcher. Concrete type, not an interface — one
+// implementation, per .claude/rules/interface-pollution-checklist.md.
+type TriggerFireDispatcher struct {
+	inFlight chan struct{}
+}
+
+// NewTriggerFireDispatcher constructs a TriggerFireDispatcher.
+func NewTriggerFireDispatcher() *TriggerFireDispatcher {
+	return &TriggerFireDispatcher{inFlight: make(chan struct{}, maxInFlightTriggerFires)}
+}
+
+// Dispatch reserves a semaphore slot and renders+fires wf's trigger in a new
+// goroutine — same non-blocking shape as CallbackDispatcher.Dispatch /
+// ChainFirer.Dispatch (a non-blocking select on a semaphore-sized channel either
+// reserves a slot immediately or drops the dispatch). Never blocks the caller.
+//
+// Callers must already have claimed (workflow_id, delivery_id) as "pending" via
+// claimTriggerFireEvent before calling Dispatch. A dropped dispatch (at capacity)
+// still flips that already-claimed row to "fired_failed" rather than leaving it
+// "pending" forever, so the drop is visible in the TriggerFireEvent audit trail
+// instead of silently vanishing.
+func (d *TriggerFireDispatcher) Dispatch(fireEvents session.TriggerFireEventRepository, scheduler *workflows.Scheduler, wf *ent.Workflow, deliveryID string, payload map[string]interface{}) {
+	if d == nil {
+		return
+	}
+
+	select {
+	case d.inFlight <- struct{}{}:
+	default:
+		log.Warn("[TriggerFireDispatcher] dispatch dropped, at capacity", "slug", wf.Slug, "delivery_id", deliveryID)
+		if updErr := fireEvents.UpdateOutcome(context.Background(), wf.ID, deliveryID, "fired_failed", "", "trigger-fire dispatcher at capacity"); updErr != nil {
+			log.Warn("[TriggerFireDispatcher] failed to update trigger fire event outcome after drop", "slug", wf.Slug, "err", updErr)
+		}
+		return
+	}
+
+	go func() {
+		defer func() { <-d.inFlight }()
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Warn("[TriggerFireDispatcher] fire panicked (recovered)", "slug", wf.Slug, "delivery_id", deliveryID, "recovered", rec)
+			}
+		}()
+		// A fresh context.Background(), not ctx from the request goroutine — by the
+		// time this goroutine's scheduler.FireTrigger (CreateSession) call actually
+		// runs, the inbound HTTP request's context may already be cancelled (response
+		// already sent) or long gone, mirroring session/chain_firer.go's
+		// ChainFirer.Dispatch and its dispatchChainFire doc-comment rationale one
+		// layer up.
+		fireCtx, cancel := context.WithTimeout(context.Background(), triggerFireDispatchTimeout)
+		defer cancel()
+		renderAndFireTrigger(fireCtx, fireEvents, scheduler, wf, deliveryID, payload)
+	}()
 }
 
 // uuidPtr returns a pointer to v — used at call sites persisting a TriggerFireEvent

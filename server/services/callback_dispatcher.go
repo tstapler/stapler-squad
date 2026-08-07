@@ -98,6 +98,21 @@ func NewCallbackDispatcher(cfg *config.Config) *CallbackDispatcher {
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+			// DNS-rebinding fix: without a custom Transport, the zero-value
+			// transport performs its own independent DNS resolution at dial
+			// time, completely disconnected from ValidateCallbackURL's
+			// send-time resolution in deliver(). A DNS-rebinding attacker
+			// (TTL=0 answers) can pass the validation lookup with a public IP
+			// and then have the transport's own dial-time lookup resolve to a
+			// private/loopback/cloud-metadata IP moments later — the validated
+			// IP is never the IP that's actually connected to. pinnedDialer
+			// (webhook_ssrf.go) closes that gap by re-resolving and
+			// re-validating at dial time and dialing the validated IP
+			// directly, never the hostname, so there is exactly one
+			// resolution in the critical path instead of two.
+			Transport: &http.Transport{
+				DialContext: newPinnedDialer().DialContext,
+			},
 		},
 		cfg:         cfg,
 		inFlight:    make(chan struct{}, maxInFlightCallbacks),

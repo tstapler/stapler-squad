@@ -108,6 +108,10 @@ func (Session) Fields() []ent.Field {
 		field.String("workflow_id").
 			Optional().
 			Comment("UUID of the Workflow that spawned this session, if any."),
+		field.Int("triggered_by_chain_depth").
+			Optional().
+			Default(0).
+			Comment("webhook-triggers pipeline chaining (Epic 6.3): the chain-hop depth this session was created at, set by Scheduler.FireTriggerChained. 0 for non-chained sessions. Propagated onto a BacklogItem created from within this session (e.g. via the create_backlog_item MCP tool) so ChainFirer.Fire can enforce maxChainDepth on the next hop."),
 		field.Time("archived_at").
 			Optional().
 			Nillable().

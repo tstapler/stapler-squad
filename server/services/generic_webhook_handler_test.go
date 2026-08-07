@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,7 +74,7 @@ func jiraTicketBody(t *testing.T, event string, labels []string, key, summary st
 func TestGenericWebhookHandler_should_CreateSessionAndRecordFiredSuccess_When_EventAndLabelMatch(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	wf := newGenericWebhookWorkflow(t, infra, "jira-ticket", "s3cr3t", "issue_created", "urgent", "Triage {{.issue.key}}: {{.issue.summary}}")
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	body := jiraTicketBody(t, "issue_created", []string{"urgent"}, "PROJ-1", "fix it")
@@ -82,12 +83,20 @@ func TestGenericWebhookHandler_should_CreateSessionAndRecordFiredSuccess_When_Ev
 	rec := doGenericWebhookRequest(t, mux, "jira-ticket", body, sig)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load())
 
-	events, err := infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
-	require.NoError(t, err)
-	require.Len(t, events, 1)
-	assert.Equal(t, "fired_success", events[0].Outcome)
+	// The actual fire (render + CreateSession) now happens in a background goroutine
+	// dispatched off the request path — poll for it to land rather than asserting
+	// immediately after Handle returns.
+	require.Eventually(t, func() bool {
+		return infra.sessionSvc.callCount.Load() == 1
+	}, 2*time.Second, 10*time.Millisecond, "CreateSession must eventually be called by the async trigger fire")
+
+	var events []*ent.TriggerFireEvent
+	require.Eventually(t, func() bool {
+		var err error
+		events, err = infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
+		return err == nil && len(events) == 1 && events[0].Outcome == "fired_success"
+	}, 2*time.Second, 10*time.Millisecond, "trigger fire event outcome must eventually flip to fired_success")
 
 	// Task 3.2.1c: the real render path (not the Phase 2 stub) reached CreateSession —
 	// the rendered PromptTemplate output is present in InitialPrompt, wrapped in the
@@ -102,7 +111,7 @@ func TestGenericWebhookHandler_should_CreateSessionAndRecordFiredSuccess_When_Ev
 func TestGenericWebhookHandler_should_Return200AndRecordNoMatch_When_EventDoesNotMatch(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	wf := newGenericWebhookWorkflow(t, infra, "jira-ticket-2", "s3cr3t", "issue_created", "urgent", "Triage {{.issue.key}}: {{.issue.summary}}")
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	body := jiraTicketBody(t, "issue_closed", []string{"urgent"}, "PROJ-1", "fix it")
@@ -124,7 +133,7 @@ func TestGenericWebhookHandler_should_Return200AndRecordNoMatch_When_EventDoesNo
 func TestGenericWebhookHandler_should_Return400AndRecordRejected_When_BodyIsMalformedJSON(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	wf := newGenericWebhookWorkflow(t, infra, "jira-ticket-3", "s3cr3t", "issue_created", "", "Triage {{.issue.key}}")
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	rec := doGenericWebhookRequest(t, mux, "jira-ticket-3", []byte("not json"), "sha256=whatever")
@@ -142,7 +151,7 @@ func TestGenericWebhookHandler_should_Return400AndRecordRejected_When_BodyIsMalf
 func TestGenericWebhookHandler_should_Return401_When_SignatureIsInvalid(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGenericWebhookWorkflow(t, infra, "jira-ticket-4", "s3cr3t", "issue_created", "", "Triage {{.issue.key}}")
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
@@ -155,7 +164,7 @@ func TestGenericWebhookHandler_should_Return401_When_SignatureIsInvalid(t *testi
 
 func TestGenericWebhookHandler_should_Return404_When_SlugIsUnknown(t *testing.T) {
 	infra := newWebhookTestInfra(t)
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
@@ -170,7 +179,7 @@ func TestGenericWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *test
 	infra := newWebhookTestInfra(t)
 	infra.cfg.FeatureFlags["webhook_triggers"] = false
 	newGenericWebhookWorkflow(t, infra, "jira-ticket-5", "s3cr3t", "issue_created", "", "Triage {{.issue.key}}")
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
@@ -187,7 +196,7 @@ func TestGenericWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *test
 func TestGenericWebhookHandler_should_NotFireTwice_When_DeliveryIsReplayed(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGenericWebhookWorkflow(t, infra, "jira-ticket-6", "s3cr3t", "issue_created", "", "Triage {{.issue.key}}")
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
@@ -198,6 +207,12 @@ func TestGenericWebhookHandler_should_NotFireTwice_When_DeliveryIsReplayed(t *te
 
 	assert.Equal(t, http.StatusOK, rec1.Code)
 	assert.Equal(t, http.StatusOK, rec2.Code)
+	require.Eventually(t, func() bool {
+		return infra.sessionSvc.callCount.Load() == 1
+	}, 2*time.Second, 10*time.Millisecond, "a replayed delivery must not create a second session")
+	// Give any (incorrect) second async fire a chance to land before asserting it never
+	// does — Eventually above only proves count reached 1, not that it stays there.
+	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load(), "a replayed delivery must not create a second session")
 }
 
@@ -208,7 +223,7 @@ func TestGenericWebhookHandler_should_NotFireTwice_When_DeliveryIsReplayed(t *te
 func TestGenericWebhookHandler_should_FireExactlyOnce_When_ConcurrentRequestsWithSameBodyRace(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGenericWebhookWorkflow(t, infra, "jira-ticket-7", "s3cr3t", "issue_created", "", "Triage {{.issue.key}}")
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
@@ -228,5 +243,9 @@ func TestGenericWebhookHandler_should_FireExactlyOnce_When_ConcurrentRequestsWit
 	close(start)
 	wg.Wait()
 
+	require.Eventually(t, func() bool {
+		return infra.sessionSvc.callCount.Load() == 1
+	}, 2*time.Second, 10*time.Millisecond, "exactly one concurrent delivery must create a session")
+	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load(), "exactly one concurrent delivery must create a session")
 }

@@ -137,6 +137,10 @@ type InstanceData struct {
 	// Empty for manually-created sessions.
 	WorkflowID string `json:"workflow_id,omitempty"`
 
+	// TriggeredByChainDepth is the pipeline-chain hop count (webhook-triggers
+	// Epic 6.3) this session was created at. See Instance.TriggeredByChainDepth.
+	TriggeredByChainDepth int `json:"triggered_by_chain_depth,omitempty"`
+
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }

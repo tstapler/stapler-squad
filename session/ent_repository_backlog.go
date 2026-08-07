@@ -306,7 +306,8 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetLabels(data.Labels).
 		SetNillableArchivedAt(data.ArchivedAt).
 		SetNillableReworkCapOverride(data.ReworkCapOverride).
-		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt)
+		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt).
+		SetTriggeredByChainDepth(data.TriggeredByChainDepth)
 
 	if data.SourceID != "" {
 		sourceUUID, parseErr := uuid.Parse(data.SourceID)

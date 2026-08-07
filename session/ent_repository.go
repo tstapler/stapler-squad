@@ -247,6 +247,15 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.ArchivedAt != nil {
 		sessionCreate.SetArchivedAt(*data.ArchivedAt)
 	}
+	if data.TriggeredByChainDepth != 0 {
+		// Set at Create time (unlike WorkflowID, which is only ever written via
+		// Update) so a chained session's depth is durable from the moment
+		// CreateSession returns — a caller (e.g. the create_backlog_item MCP
+		// tool) reading this back via LoadInstances immediately after session
+		// creation must not see a stale 0 before any later Update/SaveInstances
+		// flush.
+		sessionCreate.SetTriggeredByChainDepth(data.TriggeredByChainDepth)
+	}
 
 	// Link project if specified (look up by name)
 	if data.ProjectID != "" {
@@ -463,6 +472,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		sessionUpdate.SetWorkflowID(data.WorkflowID)
 	} else {
 		sessionUpdate.ClearWorkflowID()
+	}
+	if data.TriggeredByChainDepth != 0 {
+		sessionUpdate.SetTriggeredByChainDepth(data.TriggeredByChainDepth)
+	} else {
+		sessionUpdate.ClearTriggeredByChainDepth()
 	}
 	if data.ArchivedAt != nil {
 		sessionUpdate.SetArchivedAt(*data.ArchivedAt)
@@ -1104,6 +1118,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data.LastPromptSignature = sess.LastPromptSignature
 	data.PauseReason = sess.PauseReason
 	data.WorkflowID = sess.WorkflowID
+	data.TriggeredByChainDepth = sess.TriggeredByChainDepth
 	data.ArchivedAt = sess.ArchivedAt
 	data.GitHubPRURL = sess.GithubPrURL
 	data.GitHubPRNumber = sess.GithubPrNumber

@@ -1516,8 +1516,13 @@ func (s *SessionService) CreateSession(
 		PermissionMode:   req.Msg.PermissionMode,
 		AutonomousMode:   req.Msg.AutonomousMode,
 		WorkflowID:       req.Msg.WorkflowId,
-		EnvVars:          instanceEnvVars,
-		CLIFlags:         instanceCLIFlags,
+		// TriggeredByChainDepth: read from the request rather than discarded
+		// (webhook-triggers Epic 6.3) — see Instance.TriggeredByChainDepth's
+		// doc comment for how this value is later used to enforce
+		// ChainFirer's maxChainDepth backstop on the next chain hop.
+		TriggeredByChainDepth: int(req.Msg.GetTriggeredByChainDepth()),
+		EnvVars:               instanceEnvVars,
+		CLIFlags:              instanceCLIFlags,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL

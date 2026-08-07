@@ -20,13 +20,16 @@ import (
 type GitHubWebhookHandler struct {
 	repo       session.WorkflowRepository
 	scheduler  *workflows.Scheduler
+	dispatcher *TriggerFireDispatcher
 	fireEvents session.TriggerFireEventRepository
 	cfg        *config.Config
 }
 
-// NewGitHubWebhookHandler constructs a GitHubWebhookHandler.
-func NewGitHubWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config) *GitHubWebhookHandler {
-	return &GitHubWebhookHandler{repo: repo, scheduler: scheduler, fireEvents: fireEvents, cfg: cfg}
+// NewGitHubWebhookHandler constructs a GitHubWebhookHandler. dispatcher is typically
+// shared with GenericWebhookHandler so one semaphore bounds trigger-fire fan-out
+// across every inbound webhook route (see TriggerFireDispatcher's doc comment).
+func NewGitHubWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, dispatcher *TriggerFireDispatcher, fireEvents session.TriggerFireEventRepository, cfg *config.Config) *GitHubWebhookHandler {
+	return &GitHubWebhookHandler{repo: repo, scheduler: scheduler, dispatcher: dispatcher, fireEvents: fireEvents, cfg: cfg}
 }
 
 // RegisterRoutes registers the GitHub webhook endpoint on mux.
@@ -145,7 +148,7 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, wf := range matched {
-		claimAndFireTrigger(ctx, h.fireEvents, h.scheduler, wf, deliveryID, payload)
+		claimAndFireTrigger(ctx, h.dispatcher, h.fireEvents, h.scheduler, wf, deliveryID, payload)
 	}
 
 	w.WriteHeader(http.StatusOK)

@@ -118,8 +118,9 @@ func (i *Instance) ToInstanceData() InstanceData {
 		// Pause reason — persisted so it survives restarts
 		PauseReason: snap.PauseReason,
 		// Workflow linkage and archive state
-		WorkflowID: snap.WorkflowID,
-		ArchivedAt: snap.ArchivedAt,
+		WorkflowID:            snap.WorkflowID,
+		TriggeredByChainDepth: i.TriggeredByChainDepth,
+		ArchivedAt:            snap.ArchivedAt,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -289,8 +290,9 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// Pause reason
 		PauseReason: data.PauseReason,
 		// Workflow linkage and archive state
-		WorkflowID: data.WorkflowID,
-		ArchivedAt: data.ArchivedAt,
+		WorkflowID:            data.WorkflowID,
+		TriggeredByChainDepth: data.TriggeredByChainDepth,
+		ArchivedAt:            data.ArchivedAt,
 	}
 
 	// MIGRATION: Assign UUID to existing sessions that pre-date UUID assignment

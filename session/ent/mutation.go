@@ -20372,75 +20372,77 @@ func (m *ReviewVerdictMutation) ResetEdge(name string) error {
 // SessionMutation represents an operation that mutates the Session nodes in the graph.
 type SessionMutation struct {
 	config
-	op                     Op
-	typ                    string
-	id                     *int
-	title                  *string
-	uuid                   *string
-	_path                  *string
-	working_dir            *string
-	branch                 *string
-	status                 *int
-	addstatus              *int
-	height                 *int
-	addheight              *int
-	width                  *int
-	addwidth               *int
-	created_at             *time.Time
-	updated_at             *time.Time
-	auto_yes               *bool
-	autonomous_mode        *bool
-	prompt                 *string
-	program                *string
-	existing_worktree      *string
-	category               *string
-	is_expanded            *bool
-	session_type           *string
-	tmux_prefix            *string
-	last_terminal_update   *time.Time
-	last_meaningful_output *time.Time
-	last_output_signature  *string
-	last_added_to_queue    *time.Time
-	last_viewed            *time.Time
-	last_acknowledged      *time.Time
-	mcp_server_url         *string
-	initial_prompt         *string
-	one_shot               *bool
-	last_user_response     *time.Time
-	processing_grace_until *time.Time
-	last_prompt_detected   *time.Time
-	last_prompt_signature  *string
-	hidden                 *bool
-	pause_reason           *string
-	workflow_id            *string
-	archived_at            *time.Time
-	github_pr_url          *string
-	github_pr_number       *int
-	addgithub_pr_number    *int
-	github_owner           *string
-	github_repo            *string
-	session_artifacts      *string
-	clearedFields          map[string]struct{}
-	worktree               *int
-	clearedworktree        bool
-	diff_stats             *int
-	cleareddiff_stats      bool
-	tags                   map[int]struct{}
-	removedtags            map[int]struct{}
-	clearedtags            bool
-	claude_session         *int
-	clearedclaude_session  bool
-	project                *int
-	clearedproject         bool
-	backlog_items          map[uuid.UUID]struct{}
-	removedbacklog_items   map[uuid.UUID]struct{}
-	clearedbacklog_items   bool
-	shells                 map[string]struct{}
-	removedshells          map[string]struct{}
-	clearedshells          bool
-	done                   bool
-	oldValue               func(context.Context) (*Session, error)
-	predicates             []predicate.Session
+	op                          Op
+	typ                         string
+	id                          *int
+	title                       *string
+	uuid                        *string
+	_path                       *string
+	working_dir                 *string
+	branch                      *string
+	status                      *int
+	addstatus                   *int
+	height                      *int
+	addheight                   *int
+	width                       *int
+	addwidth                    *int
+	created_at                  *time.Time
+	updated_at                  *time.Time
+	auto_yes                    *bool
+	autonomous_mode             *bool
+	prompt                      *string
+	program                     *string
+	existing_worktree           *string
+	category                    *string
+	is_expanded                 *bool
+	session_type                *string
+	tmux_prefix                 *string
+	last_terminal_update        *time.Time
+	last_meaningful_output      *time.Time
+	last_output_signature       *string
+	last_added_to_queue         *time.Time
+	last_viewed                 *time.Time
+	last_acknowledged           *time.Time
+	mcp_server_url              *string
+	initial_prompt              *string
+	one_shot                    *bool
+	last_user_response          *time.Time
+	processing_grace_until      *time.Time
+	last_prompt_detected        *time.Time
+	last_prompt_signature       *string
+	hidden                      *bool
+	pause_reason                *string
+	workflow_id                 *string
+	triggered_by_chain_depth    *int
+	addtriggered_by_chain_depth *int
+	archived_at                 *time.Time
+	github_pr_url               *string
+	github_pr_number            *int
+	addgithub_pr_number         *int
+	github_owner                *string
+	github_repo                 *string
+	session_artifacts           *string
+	clearedFields               map[string]struct{}
+	worktree                    *int
+	clearedworktree             bool
+	diff_stats                  *int
+	cleareddiff_stats           bool
+	tags                        map[int]struct{}
+	removedtags                 map[int]struct{}
+	clearedtags                 bool
+	claude_session              *int
+	clearedclaude_session       bool
+	project                     *int
+	clearedproject              bool
+	backlog_items               map[uuid.UUID]struct{}
+	removedbacklog_items        map[uuid.UUID]struct{}
+	clearedbacklog_items        bool
+	shells                      map[string]struct{}
+	removedshells               map[string]struct{}
+	clearedshells               bool
+	done                        bool
+	oldValue                    func(context.Context) (*Session, error)
+	predicates                  []predicate.Session
 }
 
 var _ ent.Mutation = (*SessionMutation)(nil)
@@ -22175,6 +22177,76 @@ func (m *SessionMutation) ResetWorkflowID() {
 	delete(m.clearedFields, session.FieldWorkflowID)
 }
 
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (m *SessionMutation) SetTriggeredByChainDepth(i int) {
+	m.triggered_by_chain_depth = &i
+	m.addtriggered_by_chain_depth = nil
+}
+
+// TriggeredByChainDepth returns the value of the "triggered_by_chain_depth" field in the mutation.
+func (m *SessionMutation) TriggeredByChainDepth() (r int, exists bool) {
+	v := m.triggered_by_chain_depth
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriggeredByChainDepth returns the old "triggered_by_chain_depth" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldTriggeredByChainDepth(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriggeredByChainDepth is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriggeredByChainDepth requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriggeredByChainDepth: %w", err)
+	}
+	return oldValue.TriggeredByChainDepth, nil
+}
+
+// AddTriggeredByChainDepth adds i to the "triggered_by_chain_depth" field.
+func (m *SessionMutation) AddTriggeredByChainDepth(i int) {
+	if m.addtriggered_by_chain_depth != nil {
+		*m.addtriggered_by_chain_depth += i
+	} else {
+		m.addtriggered_by_chain_depth = &i
+	}
+}
+
+// AddedTriggeredByChainDepth returns the value that was added to the "triggered_by_chain_depth" field in this mutation.
+func (m *SessionMutation) AddedTriggeredByChainDepth() (r int, exists bool) {
+	v := m.addtriggered_by_chain_depth
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearTriggeredByChainDepth clears the value of the "triggered_by_chain_depth" field.
+func (m *SessionMutation) ClearTriggeredByChainDepth() {
+	m.triggered_by_chain_depth = nil
+	m.addtriggered_by_chain_depth = nil
+	m.clearedFields[session.FieldTriggeredByChainDepth] = struct{}{}
+}
+
+// TriggeredByChainDepthCleared returns if the "triggered_by_chain_depth" field was cleared in this mutation.
+func (m *SessionMutation) TriggeredByChainDepthCleared() bool {
+	_, ok := m.clearedFields[session.FieldTriggeredByChainDepth]
+	return ok
+}
+
+// ResetTriggeredByChainDepth resets all changes to the "triggered_by_chain_depth" field.
+func (m *SessionMutation) ResetTriggeredByChainDepth() {
+	m.triggered_by_chain_depth = nil
+	m.addtriggered_by_chain_depth = nil
+	delete(m.clearedFields, session.FieldTriggeredByChainDepth)
+}
+
 // SetArchivedAt sets the "archived_at" field.
 func (m *SessionMutation) SetArchivedAt(t time.Time) {
 	m.archived_at = &t
@@ -22842,7 +22914,7 @@ func (m *SessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SessionMutation) Fields() []string {
-	fields := make([]string, 0, 41)
+	fields := make([]string, 0, 42)
 	if m.title != nil {
 		fields = append(fields, session.FieldTitle)
 	}
@@ -22948,6 +23020,9 @@ func (m *SessionMutation) Fields() []string {
 	if m.workflow_id != nil {
 		fields = append(fields, session.FieldWorkflowID)
 	}
+	if m.triggered_by_chain_depth != nil {
+		fields = append(fields, session.FieldTriggeredByChainDepth)
+	}
 	if m.archived_at != nil {
 		fields = append(fields, session.FieldArchivedAt)
 	}
@@ -23044,6 +23119,8 @@ func (m *SessionMutation) Field(name string) (ent.Value, bool) {
 		return m.PauseReason()
 	case session.FieldWorkflowID:
 		return m.WorkflowID()
+	case session.FieldTriggeredByChainDepth:
+		return m.TriggeredByChainDepth()
 	case session.FieldArchivedAt:
 		return m.ArchivedAt()
 	case session.FieldGithubPrURL:
@@ -23135,6 +23212,8 @@ func (m *SessionMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldPauseReason(ctx)
 	case session.FieldWorkflowID:
 		return m.OldWorkflowID(ctx)
+	case session.FieldTriggeredByChainDepth:
+		return m.OldTriggeredByChainDepth(ctx)
 	case session.FieldArchivedAt:
 		return m.OldArchivedAt(ctx)
 	case session.FieldGithubPrURL:
@@ -23401,6 +23480,13 @@ func (m *SessionMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetWorkflowID(v)
 		return nil
+	case session.FieldTriggeredByChainDepth:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriggeredByChainDepth(v)
+		return nil
 	case session.FieldArchivedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -23460,6 +23546,9 @@ func (m *SessionMutation) AddedFields() []string {
 	if m.addwidth != nil {
 		fields = append(fields, session.FieldWidth)
 	}
+	if m.addtriggered_by_chain_depth != nil {
+		fields = append(fields, session.FieldTriggeredByChainDepth)
+	}
 	if m.addgithub_pr_number != nil {
 		fields = append(fields, session.FieldGithubPrNumber)
 	}
@@ -23477,6 +23566,8 @@ func (m *SessionMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedHeight()
 	case session.FieldWidth:
 		return m.AddedWidth()
+	case session.FieldTriggeredByChainDepth:
+		return m.AddedTriggeredByChainDepth()
 	case session.FieldGithubPrNumber:
 		return m.AddedGithubPrNumber()
 	}
@@ -23508,6 +23599,13 @@ func (m *SessionMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddWidth(v)
+		return nil
+	case session.FieldTriggeredByChainDepth:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTriggeredByChainDepth(v)
 		return nil
 	case session.FieldGithubPrNumber:
 		v, ok := value.(int)
@@ -23595,6 +23693,9 @@ func (m *SessionMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(session.FieldWorkflowID) {
 		fields = append(fields, session.FieldWorkflowID)
+	}
+	if m.FieldCleared(session.FieldTriggeredByChainDepth) {
+		fields = append(fields, session.FieldTriggeredByChainDepth)
 	}
 	if m.FieldCleared(session.FieldArchivedAt) {
 		fields = append(fields, session.FieldArchivedAt)
@@ -23699,6 +23800,9 @@ func (m *SessionMutation) ClearField(name string) error {
 		return nil
 	case session.FieldWorkflowID:
 		m.ClearWorkflowID()
+		return nil
+	case session.FieldTriggeredByChainDepth:
+		m.ClearTriggeredByChainDepth()
 		return nil
 	case session.FieldArchivedAt:
 		m.ClearArchivedAt()
@@ -23830,6 +23934,9 @@ func (m *SessionMutation) ResetField(name string) error {
 		return nil
 	case session.FieldWorkflowID:
 		m.ResetWorkflowID()
+		return nil
+	case session.FieldTriggeredByChainDepth:
+		m.ResetTriggeredByChainDepth()
 		return nil
 	case session.FieldArchivedAt:
 		m.ResetArchivedAt()

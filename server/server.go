@@ -540,9 +540,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// flag off requires a restart to stop serving these routes, same limitation the
 		// "backlog" flag already has for its own route-gated pieces.
 		if webhookCfg.GetFeatureFlag("webhook_triggers") {
-			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			// Shared by both handlers so one semaphore bounds the CreateSession-driving
+			// goroutine fan-out across every inbound webhook route (see
+			// services.TriggerFireDispatcher's doc comment).
+			triggerFireDispatcher := services.NewTriggerFireDispatcher()
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, triggerFireDispatcher, deps.TriggerFireEventRepo, webhookCfg)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
-			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, triggerFireDispatcher, deps.TriggerFireEventRepo, webhookCfg)
 			genericWebhookHandler.RegisterRoutes(srv.mux)
 			log.Info("Registered webhook-trigger receivers at POST /webhooks/{github,{slug}}")
 		} else {

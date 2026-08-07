@@ -61,6 +61,7 @@ type webhookTestInfra struct {
 	workflowRepo session.WorkflowRepository
 	fireEvents   session.TriggerFireEventRepository
 	scheduler    *workflows.Scheduler
+	dispatcher   *TriggerFireDispatcher
 	sessionSvc   *fakeTriggerSessionService
 	cfg          *config.Config
 }
@@ -92,6 +93,7 @@ func newWebhookTestInfra(t *testing.T) *webhookTestInfra {
 		workflowRepo: workflowRepo,
 		fireEvents:   fireEvents,
 		scheduler:    scheduler,
+		dispatcher:   NewTriggerFireDispatcher(),
 		sessionSvc:   sessionSvc,
 		cfg:          cfg,
 	}

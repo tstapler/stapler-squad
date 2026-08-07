@@ -230,6 +230,11 @@ func WorkflowID(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldWorkflowID, v))
 }
 
+// TriggeredByChainDepth applies equality check predicate on the "triggered_by_chain_depth" field. It's identical to TriggeredByChainDepthEQ.
+func TriggeredByChainDepth(v int) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldTriggeredByChainDepth, v))
+}
+
 // ArchivedAt applies equality check predicate on the "archived_at" field. It's identical to ArchivedAtEQ.
 func ArchivedAt(v time.Time) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldArchivedAt, v))
@@ -2173,6 +2178,56 @@ func WorkflowIDEqualFold(v string) predicate.Session {
 // WorkflowIDContainsFold applies the ContainsFold predicate on the "workflow_id" field.
 func WorkflowIDContainsFold(v string) predicate.Session {
 	return predicate.Session(sql.FieldContainsFold(FieldWorkflowID, v))
+}
+
+// TriggeredByChainDepthEQ applies the EQ predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthEQ(v int) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthNEQ applies the NEQ predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthNEQ(v int) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthIn applies the In predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthIn(vs ...int) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldTriggeredByChainDepth, vs...))
+}
+
+// TriggeredByChainDepthNotIn applies the NotIn predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthNotIn(vs ...int) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldTriggeredByChainDepth, vs...))
+}
+
+// TriggeredByChainDepthGT applies the GT predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthGT(v int) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthGTE applies the GTE predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthGTE(v int) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthLT applies the LT predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthLT(v int) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthLTE applies the LTE predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthLTE(v int) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthIsNil applies the IsNil predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldTriggeredByChainDepth))
+}
+
+// TriggeredByChainDepthNotNil applies the NotNil predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldTriggeredByChainDepth))
 }
 
 // ArchivedAtEQ applies the EQ predicate on the "archived_at" field.

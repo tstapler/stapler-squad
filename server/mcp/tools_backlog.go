@@ -45,6 +45,32 @@ func callerSessionUUID(ctx context.Context) (string, error) {
 	return uuid, nil
 }
 
+// callerChainDepth looks up callerUUID's session and returns its
+// TriggeredByChainDepth (webhook-triggers Epic 6.3) — 0 for a manually-created
+// or non-chained session, or when the lookup fails for any reason. Propagating
+// this onto a BacklogItem created here (create_backlog_item) is what lets
+// ChainFirer.Fire enforce maxChainDepth across a pipeline where each hop
+// creates its own new BacklogItem to continue the chain: without this, every
+// such item would read back TriggeredByChainDepth as its ent-schema default
+// (0), and the depth cap would never engage past the first hop. Best-effort,
+// same as every other optional-lookup helper on backlogHandlers — a failed or
+// missing lookup must never block item creation.
+func (h *backlogHandlers) callerChainDepth(callerUUID string) int {
+	if h.store == nil {
+		return 0
+	}
+	instances, err := h.store.ListInstanceData()
+	if err != nil {
+		return 0
+	}
+	for _, inst := range instances {
+		if inst.UUID == callerUUID {
+			return inst.TriggeredByChainDepth
+		}
+	}
+	return 0
+}
+
 // uuidRe validates UUID format (8-4-4-4-12 hex with dashes).
 var uuidRe = regexp.MustCompile(`^[0-9a-f-]{36}$`)
 
@@ -1091,14 +1117,15 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	}
 
 	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:              title,
-		Description:        description,
-		AcceptanceCriteria: acJSON,
-		Priority:           priority,
-		Status:             string(session.BacklogStatusIdea),
-		RepoPath:           repoPath,
-		Category:           category,
-		Notes:              notes,
+		Title:                 title,
+		Description:           description,
+		AcceptanceCriteria:    acJSON,
+		Priority:              priority,
+		Status:                string(session.BacklogStatusIdea),
+		RepoPath:              repoPath,
+		Category:              category,
+		Notes:                 notes,
+		TriggeredByChainDepth: h.callerChainDepth(callerUUID),
 	})
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil

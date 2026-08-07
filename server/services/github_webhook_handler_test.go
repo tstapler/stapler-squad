@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,7 +70,7 @@ func doGitHubWebhookRequest(t *testing.T, h *GitHubWebhookHandler, body []byte, 
 func TestGitHubWebhookHandler_should_CreateSessionAndRecordFiredSuccess_When_SignatureValidAndRepoBranchMatch(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	wf := newGitHubPushWorkflow(t, infra, "gh-push-1", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 	sig := sign("s3cr3t", body)
@@ -77,12 +78,21 @@ func TestGitHubWebhookHandler_should_CreateSessionAndRecordFiredSuccess_When_Sig
 	rec := doGitHubWebhookRequest(t, h, body, "delivery-1", sig)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load())
 
-	events, err := infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
-	require.NoError(t, err)
-	require.Len(t, events, 1)
-	assert.Equal(t, "fired_success", events[0].Outcome)
+	// The actual fire (render + CreateSession) now happens in a background goroutine
+	// dispatched off the request path — poll for it to land rather than asserting
+	// immediately after Handle returns.
+	require.Eventually(t, func() bool {
+		return infra.sessionSvc.callCount.Load() == 1
+	}, 2*time.Second, 10*time.Millisecond, "CreateSession must eventually be called by the async trigger fire")
+
+	var events []*ent.TriggerFireEvent
+	require.Eventually(t, func() bool {
+		var err error
+		events, err = infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
+		return err == nil && len(events) == 1 && events[0].Outcome == "fired_success"
+	}, 2*time.Second, 10*time.Millisecond, "trigger fire event outcome must eventually flip to fired_success")
+
 	assert.Equal(t, "delivery-1", events[0].DeliveryID)
 	assert.NotEmpty(t, events[0].SessionID)
 
@@ -99,7 +109,7 @@ func TestGitHubWebhookHandler_should_CreateSessionAndRecordFiredSuccess_When_Sig
 func TestGitHubWebhookHandler_should_Return401AndRecordRejected_When_SignatureInvalid(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	wf := newGitHubPushWorkflow(t, infra, "gh-push-2", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 
@@ -119,7 +129,7 @@ func TestGitHubWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *testi
 	infra := newWebhookTestInfra(t)
 	infra.cfg.FeatureFlags["webhook_triggers"] = false
 	newGitHubPushWorkflow(t, infra, "gh-push-3", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 	sig := sign("s3cr3t", body)
@@ -132,7 +142,7 @@ func TestGitHubWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *testi
 
 func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_NoWorkflowWatchesRepo(t *testing.T) {
 	infra := newWebhookTestInfra(t)
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 
 	body := githubPushBody(t, "someone/unrelated-repo", "main", "fix the bug")
 
@@ -145,7 +155,7 @@ func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_NoWorkflowWa
 func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_SignatureValidButBranchDoesNotMatch(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGitHubPushWorkflow(t, infra, "gh-push-5", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "feature-branch", "wip")
 	sig := sign("s3cr3t", body)
@@ -158,7 +168,7 @@ func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_SignatureVal
 
 func TestGitHubWebhookHandler_should_Return400_When_BodyIsMalformedJSON(t *testing.T) {
 	infra := newWebhookTestInfra(t)
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 
 	rec := doGitHubWebhookRequest(t, h, []byte("not json"), "delivery-6", "sha256=whatever")
 
@@ -171,7 +181,7 @@ func TestGitHubWebhookHandler_should_Return400_When_BodyIsMalformedJSON(t *testi
 func TestGitHubWebhookHandler_should_NotFireTwice_When_DeliveryIsReplayed(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGitHubPushWorkflow(t, infra, "gh-push-7", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 	sig := sign("s3cr3t", body)
@@ -181,6 +191,12 @@ func TestGitHubWebhookHandler_should_NotFireTwice_When_DeliveryIsReplayed(t *tes
 
 	assert.Equal(t, http.StatusOK, rec1.Code)
 	assert.Equal(t, http.StatusOK, rec2.Code)
+	require.Eventually(t, func() bool {
+		return infra.sessionSvc.callCount.Load() == 1
+	}, 2*time.Second, 10*time.Millisecond, "a replayed delivery must not create a second session")
+	// Give any (incorrect) second async fire a chance to land before asserting it never
+	// does — Eventually above only proves count reached 1, not that it stays there.
+	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load(), "a replayed delivery must not create a second session")
 }
 
@@ -192,7 +208,7 @@ func TestGitHubWebhookHandler_should_NotFireTwice_When_DeliveryIsReplayed(t *tes
 func TestGitHubWebhookHandler_should_FireExactlyOnce_When_ConcurrentRequestsWithSameDeliveryIDRace(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGitHubPushWorkflow(t, infra, "gh-push-8", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 	sig := sign("s3cr3t", body)
@@ -211,5 +227,9 @@ func TestGitHubWebhookHandler_should_FireExactlyOnce_When_ConcurrentRequestsWith
 	close(start)
 	wg.Wait()
 
+	require.Eventually(t, func() bool {
+		return infra.sessionSvc.callCount.Load() == 1
+	}, 2*time.Second, 10*time.Millisecond, "exactly one concurrent delivery must create a session")
+	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load(), "exactly one concurrent delivery must create a session")
 }

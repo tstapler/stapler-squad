@@ -543,12 +543,16 @@ func init() {
 	sessionDescHidden := sessionFields[32].Descriptor()
 	// session.DefaultHidden holds the default value on creation for the hidden field.
 	session.DefaultHidden = sessionDescHidden.Default.(bool)
+	// sessionDescTriggeredByChainDepth is the schema descriptor for triggered_by_chain_depth field.
+	sessionDescTriggeredByChainDepth := sessionFields[35].Descriptor()
+	// session.DefaultTriggeredByChainDepth holds the default value on creation for the triggered_by_chain_depth field.
+	session.DefaultTriggeredByChainDepth = sessionDescTriggeredByChainDepth.Default.(int)
 	// sessionDescGithubPrNumber is the schema descriptor for github_pr_number field.
-	sessionDescGithubPrNumber := sessionFields[37].Descriptor()
+	sessionDescGithubPrNumber := sessionFields[38].Descriptor()
 	// session.DefaultGithubPrNumber holds the default value on creation for the github_pr_number field.
 	session.DefaultGithubPrNumber = sessionDescGithubPrNumber.Default.(int)
 	// sessionDescSessionArtifacts is the schema descriptor for session_artifacts field.
-	sessionDescSessionArtifacts := sessionFields[40].Descriptor()
+	sessionDescSessionArtifacts := sessionFields[41].Descriptor()
 	// session.DefaultSessionArtifacts holds the default value on creation for the session_artifacts field.
 	session.DefaultSessionArtifacts = sessionDescSessionArtifacts.Default.(string)
 	sessiongoalFields := schema.SessionGoal{}.Fields()

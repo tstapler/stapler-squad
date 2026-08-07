@@ -287,6 +287,17 @@ type Instance struct {
 	// Empty for manually-created sessions.
 	WorkflowID string `json:"workflow_id,omitempty"`
 
+	// TriggeredByChainDepth is the pipeline-chain hop count this session was
+	// created at (webhook-triggers Epic 6.3): set by ChainFirer/Scheduler.
+	// FireTriggerChained via CreateSessionRequest.TriggeredByChainDepth, one
+	// greater than the completing BacklogItem's own TriggeredByChainDepth. 0
+	// for every non-chained session. Carried on the session so that a
+	// BacklogItem created from within this session (e.g. the create_backlog_item
+	// MCP tool) can propagate the depth onto that item's own
+	// TriggeredByChainDepth column — the actual value ChainFirer.Fire reads to
+	// enforce maxChainDepth on the next hop.
+	TriggeredByChainDepth int `json:"triggered_by_chain_depth,omitempty"`
+
 	// EnvVars are session-level environment variables injected at tmux session creation.
 	EnvVars map[string]string `json:"env_vars,omitempty"`
 	// CLIFlags are additional CLI flags appended to the program launch command.
@@ -534,6 +545,12 @@ type InstanceOptions struct {
 	// Set by the scheduler; empty for manually-created sessions.
 	WorkflowID string
 
+	// TriggeredByChainDepth is the pipeline-chain hop count (webhook-triggers
+	// Epic 6.3). Set by Scheduler.FireTriggerChained; 0 for every
+	// non-chained session. See the matching field on Instance for how this
+	// value is used downstream.
+	TriggeredByChainDepth int
+
 	// EnvVars are session-level environment variables injected at tmux session creation time.
 	EnvVars map[string]string
 	// CLIFlags are additional CLI flags appended to the program launch command.
@@ -627,15 +644,16 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		GitHubSourceRef: opts.GitHubSourceRef,
 		ClonedRepoPath:  opts.ClonedRepoPath,
 		// One-shot mode, hidden flag, project, and workflow linkage
-		OneShot:            opts.OneShot,
-		Hidden:             opts.Hidden,
-		ProjectID:          opts.ProjectID,
-		WorkflowID:         opts.WorkflowID,
-		MCPServerURL:       opts.MCPServerURL,
-		AppendSystemPrompt: opts.AppendSystemPrompt,
-		AllowedTools:       opts.AllowedTools,
-		PermissionMode:     opts.PermissionMode,
-		AutonomousMode:     opts.AutonomousMode,
+		OneShot:               opts.OneShot,
+		Hidden:                opts.Hidden,
+		ProjectID:             opts.ProjectID,
+		WorkflowID:            opts.WorkflowID,
+		TriggeredByChainDepth: opts.TriggeredByChainDepth,
+		MCPServerURL:          opts.MCPServerURL,
+		AppendSystemPrompt:    opts.AppendSystemPrompt,
+		AllowedTools:          opts.AllowedTools,
+		PermissionMode:        opts.PermissionMode,
+		AutonomousMode:        opts.AutonomousMode,
 		// Directory creation on missing path (R2 confirmation flow)
 		CreateIfMissing: opts.CreateIfMissing,
 		EnvVars:         opts.EnvVars,

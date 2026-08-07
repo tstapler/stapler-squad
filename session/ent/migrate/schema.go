@@ -731,6 +731,7 @@ var (
 		{Name: "hidden", Type: field.TypeBool, Default: false},
 		{Name: "pause_reason", Type: field.TypeString, Nullable: true},
 		{Name: "workflow_id", Type: field.TypeString, Nullable: true},
+		{Name: "triggered_by_chain_depth", Type: field.TypeInt, Nullable: true, Default: 0},
 		{Name: "archived_at", Type: field.TypeTime, Nullable: true},
 		{Name: "github_pr_url", Type: field.TypeString, Nullable: true},
 		{Name: "github_pr_number", Type: field.TypeInt, Nullable: true, Default: 0},
@@ -747,7 +748,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sessions_projects_sessions",
-				Columns:    []*schema.Column{SessionsColumns[42]},
+				Columns:    []*schema.Column{SessionsColumns[43]},
 				RefColumns: []*schema.Column{ProjectsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -791,7 +792,7 @@ var (
 			{
 				Name:    "session_archived_at",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[36]},
+				Columns: []*schema.Column{SessionsColumns[37]},
 			},
 		},
 	}

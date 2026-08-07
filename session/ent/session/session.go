@@ -84,6 +84,8 @@ const (
 	FieldPauseReason = "pause_reason"
 	// FieldWorkflowID holds the string denoting the workflow_id field in the database.
 	FieldWorkflowID = "workflow_id"
+	// FieldTriggeredByChainDepth holds the string denoting the triggered_by_chain_depth field in the database.
+	FieldTriggeredByChainDepth = "triggered_by_chain_depth"
 	// FieldArchivedAt holds the string denoting the archived_at field in the database.
 	FieldArchivedAt = "archived_at"
 	// FieldGithubPrURL holds the string denoting the github_pr_url field in the database.
@@ -197,6 +199,7 @@ var Columns = []string{
 	FieldHidden,
 	FieldPauseReason,
 	FieldWorkflowID,
+	FieldTriggeredByChainDepth,
 	FieldArchivedAt,
 	FieldGithubPrURL,
 	FieldGithubPrNumber,
@@ -260,6 +263,8 @@ var (
 	DefaultOneShot bool
 	// DefaultHidden holds the default value on creation for the "hidden" field.
 	DefaultHidden bool
+	// DefaultTriggeredByChainDepth holds the default value on creation for the "triggered_by_chain_depth" field.
+	DefaultTriggeredByChainDepth int
 	// DefaultGithubPrNumber holds the default value on creation for the "github_pr_number" field.
 	DefaultGithubPrNumber int
 	// DefaultSessionArtifacts holds the default value on creation for the "session_artifacts" field.
@@ -447,6 +452,11 @@ func ByPauseReason(opts ...sql.OrderTermOption) OrderOption {
 // ByWorkflowID orders the results by the workflow_id field.
 func ByWorkflowID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldWorkflowID, opts...).ToFunc()
+}
+
+// ByTriggeredByChainDepth orders the results by the triggered_by_chain_depth field.
+func ByTriggeredByChainDepth(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTriggeredByChainDepth, opts...).ToFunc()
 }
 
 // ByArchivedAt orders the results by the archived_at field.

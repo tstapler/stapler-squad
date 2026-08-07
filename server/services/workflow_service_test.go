@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -803,7 +804,7 @@ func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, createResp.Msg.Workflow.CronEnabled, "the trigger must come back enabled")
 
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.dispatcher, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
 	body := jiraTicketBody(t, "issue_created", []string{"urgent"}, "PROJ-1", "fix it")
@@ -812,7 +813,9 @@ func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
 	rec := doGenericWebhookRequest(t, mux, "e2e-slug", body, sig)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load(),
+	require.Eventually(t, func() bool {
+		return infra.sessionSvc.callCount.Load() == 1
+	}, 2*time.Second, 10*time.Millisecond,
 		"a session must have been created via the real handler, not just the direct verify functions")
 
 	req := infra.sessionSvc.LastRequest()

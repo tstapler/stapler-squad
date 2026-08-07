@@ -21,13 +21,16 @@ import (
 type GenericWebhookHandler struct {
 	repo       session.WorkflowRepository
 	scheduler  *workflows.Scheduler
+	dispatcher *TriggerFireDispatcher
 	fireEvents session.TriggerFireEventRepository
 	cfg        *config.Config
 }
 
-// NewGenericWebhookHandler constructs a GenericWebhookHandler.
-func NewGenericWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config) *GenericWebhookHandler {
-	return &GenericWebhookHandler{repo: repo, scheduler: scheduler, fireEvents: fireEvents, cfg: cfg}
+// NewGenericWebhookHandler constructs a GenericWebhookHandler. dispatcher is typically
+// shared with GitHubWebhookHandler so one semaphore bounds trigger-fire fan-out across
+// every inbound webhook route (see TriggerFireDispatcher's doc comment).
+func NewGenericWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, dispatcher *TriggerFireDispatcher, fireEvents session.TriggerFireEventRepository, cfg *config.Config) *GenericWebhookHandler {
+	return &GenericWebhookHandler{repo: repo, scheduler: scheduler, dispatcher: dispatcher, fireEvents: fireEvents, cfg: cfg}
 }
 
 // RegisterRoutes registers the generic webhook endpoint on mux.
@@ -139,7 +142,7 @@ func (h *GenericWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderAndFireTrigger(ctx, h.fireEvents, h.scheduler, wf, deliveryID, payload)
+	h.dispatcher.Dispatch(h.fireEvents, h.scheduler, wf, deliveryID, payload)
 	w.WriteHeader(http.StatusOK)
 }
 

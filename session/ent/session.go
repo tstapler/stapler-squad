@@ -91,6 +91,8 @@ type Session struct {
 	PauseReason string `json:"pause_reason,omitempty"`
 	// UUID of the Workflow that spawned this session, if any.
 	WorkflowID string `json:"workflow_id,omitempty"`
+	// webhook-triggers pipeline chaining (Epic 6.3): the chain-hop depth this session was created at, set by Scheduler.FireTriggerChained. 0 for non-chained sessions. Propagated onto a BacklogItem created from within this session (e.g. via the create_backlog_item MCP tool) so ChainFirer.Fire can enforce maxChainDepth on the next hop.
+	TriggeredByChainDepth int `json:"triggered_by_chain_depth,omitempty"`
 	// Set when the session is archived; nil = not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 	// Full URL to the GitHub PR associated with this session (e.g. https://github.com/owner/repo/pull/123).
@@ -209,7 +211,7 @@ func (*Session) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case session.FieldAutoYes, session.FieldAutonomousMode, session.FieldIsExpanded, session.FieldOneShot, session.FieldHidden:
 			values[i] = new(sql.NullBool)
-		case session.FieldID, session.FieldStatus, session.FieldHeight, session.FieldWidth, session.FieldGithubPrNumber:
+		case session.FieldID, session.FieldStatus, session.FieldHeight, session.FieldWidth, session.FieldTriggeredByChainDepth, session.FieldGithubPrNumber:
 			values[i] = new(sql.NullInt64)
 		case session.FieldTitle, session.FieldUUID, session.FieldPath, session.FieldWorkingDir, session.FieldBranch, session.FieldPrompt, session.FieldProgram, session.FieldExistingWorktree, session.FieldCategory, session.FieldSessionType, session.FieldTmuxPrefix, session.FieldLastOutputSignature, session.FieldMcpServerURL, session.FieldInitialPrompt, session.FieldLastPromptSignature, session.FieldPauseReason, session.FieldWorkflowID, session.FieldGithubPrURL, session.FieldGithubOwner, session.FieldGithubRepo, session.FieldSessionArtifacts:
 			values[i] = new(sql.NullString)
@@ -456,6 +458,12 @@ func (_m *Session) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.WorkflowID = value.String
 			}
+		case session.FieldTriggeredByChainDepth:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field triggered_by_chain_depth", values[i])
+			} else if value.Valid {
+				_m.TriggeredByChainDepth = int(value.Int64)
+			}
 		case session.FieldArchivedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field archived_at", values[i])
@@ -691,6 +699,9 @@ func (_m *Session) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("workflow_id=")
 	builder.WriteString(_m.WorkflowID)
+	builder.WriteString(", ")
+	builder.WriteString("triggered_by_chain_depth=")
+	builder.WriteString(fmt.Sprintf("%v", _m.TriggeredByChainDepth))
 	builder.WriteString(", ")
 	if v := _m.ArchivedAt; v != nil {
 		builder.WriteString("archived_at=")

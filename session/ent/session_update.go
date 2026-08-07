@@ -669,6 +669,33 @@ func (_u *SessionUpdate) ClearWorkflowID() *SessionUpdate {
 	return _u
 }
 
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (_u *SessionUpdate) SetTriggeredByChainDepth(v int) *SessionUpdate {
+	_u.mutation.ResetTriggeredByChainDepth()
+	_u.mutation.SetTriggeredByChainDepth(v)
+	return _u
+}
+
+// SetNillableTriggeredByChainDepth sets the "triggered_by_chain_depth" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableTriggeredByChainDepth(v *int) *SessionUpdate {
+	if v != nil {
+		_u.SetTriggeredByChainDepth(*v)
+	}
+	return _u
+}
+
+// AddTriggeredByChainDepth adds value to the "triggered_by_chain_depth" field.
+func (_u *SessionUpdate) AddTriggeredByChainDepth(v int) *SessionUpdate {
+	_u.mutation.AddTriggeredByChainDepth(v)
+	return _u
+}
+
+// ClearTriggeredByChainDepth clears the value of the "triggered_by_chain_depth" field.
+func (_u *SessionUpdate) ClearTriggeredByChainDepth() *SessionUpdate {
+	_u.mutation.ClearTriggeredByChainDepth()
+	return _u
+}
+
 // SetArchivedAt sets the "archived_at" field.
 func (_u *SessionUpdate) SetArchivedAt(v time.Time) *SessionUpdate {
 	_u.mutation.SetArchivedAt(v)
@@ -1259,6 +1286,15 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.WorkflowIDCleared() {
 		_spec.ClearField(session.FieldWorkflowID, field.TypeString)
+	}
+	if value, ok := _u.mutation.TriggeredByChainDepth(); ok {
+		_spec.SetField(session.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTriggeredByChainDepth(); ok {
+		_spec.AddField(session.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
+	if _u.mutation.TriggeredByChainDepthCleared() {
+		_spec.ClearField(session.FieldTriggeredByChainDepth, field.TypeInt)
 	}
 	if value, ok := _u.mutation.ArchivedAt(); ok {
 		_spec.SetField(session.FieldArchivedAt, field.TypeTime, value)
@@ -2203,6 +2239,33 @@ func (_u *SessionUpdateOne) ClearWorkflowID() *SessionUpdateOne {
 	return _u
 }
 
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (_u *SessionUpdateOne) SetTriggeredByChainDepth(v int) *SessionUpdateOne {
+	_u.mutation.ResetTriggeredByChainDepth()
+	_u.mutation.SetTriggeredByChainDepth(v)
+	return _u
+}
+
+// SetNillableTriggeredByChainDepth sets the "triggered_by_chain_depth" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableTriggeredByChainDepth(v *int) *SessionUpdateOne {
+	if v != nil {
+		_u.SetTriggeredByChainDepth(*v)
+	}
+	return _u
+}
+
+// AddTriggeredByChainDepth adds value to the "triggered_by_chain_depth" field.
+func (_u *SessionUpdateOne) AddTriggeredByChainDepth(v int) *SessionUpdateOne {
+	_u.mutation.AddTriggeredByChainDepth(v)
+	return _u
+}
+
+// ClearTriggeredByChainDepth clears the value of the "triggered_by_chain_depth" field.
+func (_u *SessionUpdateOne) ClearTriggeredByChainDepth() *SessionUpdateOne {
+	_u.mutation.ClearTriggeredByChainDepth()
+	return _u
+}
+
 // SetArchivedAt sets the "archived_at" field.
 func (_u *SessionUpdateOne) SetArchivedAt(v time.Time) *SessionUpdateOne {
 	_u.mutation.SetArchivedAt(v)
@@ -2823,6 +2886,15 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if _u.mutation.WorkflowIDCleared() {
 		_spec.ClearField(session.FieldWorkflowID, field.TypeString)
+	}
+	if value, ok := _u.mutation.TriggeredByChainDepth(); ok {
+		_spec.SetField(session.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTriggeredByChainDepth(); ok {
+		_spec.AddField(session.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
+	if _u.mutation.TriggeredByChainDepthCleared() {
+		_spec.ClearField(session.FieldTriggeredByChainDepth, field.TypeInt)
 	}
 	if value, ok := _u.mutation.ArchivedAt(); ok {
 		_spec.SetField(session.FieldArchivedAt, field.TypeTime, value)

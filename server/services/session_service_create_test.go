@@ -230,6 +230,56 @@ func TestCreateSession_EmptyTitleAndPath_TitleErrorFirst(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// CreateSession – TriggeredByChainDepth propagation (webhook-triggers Epic 6.3)
+//
+// Regression coverage for the bug where CreateSession accepted
+// TriggeredByChainDepth on the request but never read it: Scheduler.
+// FireTriggerChained set it on the outgoing CreateSessionRequest (see
+// server/workflows/scheduler.go), yet the created session's Instance had no
+// field to carry it, so ChainFirer.Fire's next-hop depth computation
+// (item.TriggeredByChainDepth + 1) always read back 0 — the maxChainDepth
+// runaway-loop backstop never actually engaged past the first hop.
+// ---------------------------------------------------------------------------
+
+func TestCreateSession_TriggeredByChainDepth_PropagatesToInstance(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                 "chained-session",
+		Path:                  t.TempDir(),
+		Program:               "claude",
+		TriggeredByChainDepth: 4,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst, "instance must appear in live poller immediately after CreateSession")
+	assert.Equal(t, 4, inst.TriggeredByChainDepth,
+		"CreateSession must thread req.TriggeredByChainDepth onto the created Instance, not discard it")
+}
+
+func TestCreateSession_TriggeredByChainDepthUnset_DefaultsToZero(t *testing.T) {
+	// A manually-created (non-chained) session must not spuriously report a
+	// nonzero chain depth.
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   "manual-session",
+		Path:    t.TempDir(),
+		Program: "claude",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, 0, inst.TriggeredByChainDepth)
+}
+
+// ---------------------------------------------------------------------------
 // CreateSession – one-off directory creation (observable side-effect before tmux)
 // ---------------------------------------------------------------------------
 

@@ -488,6 +488,20 @@ func (_c *SessionCreate) SetNillableWorkflowID(v *string) *SessionCreate {
 	return _c
 }
 
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (_c *SessionCreate) SetTriggeredByChainDepth(v int) *SessionCreate {
+	_c.mutation.SetTriggeredByChainDepth(v)
+	return _c
+}
+
+// SetNillableTriggeredByChainDepth sets the "triggered_by_chain_depth" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableTriggeredByChainDepth(v *int) *SessionCreate {
+	if v != nil {
+		_c.SetTriggeredByChainDepth(*v)
+	}
+	return _c
+}
+
 // SetArchivedAt sets the "archived_at" field.
 func (_c *SessionCreate) SetArchivedAt(v time.Time) *SessionCreate {
 	_c.mutation.SetArchivedAt(v)
@@ -760,6 +774,10 @@ func (_c *SessionCreate) defaults() {
 		v := session.DefaultHidden
 		_c.mutation.SetHidden(v)
 	}
+	if _, ok := _c.mutation.TriggeredByChainDepth(); !ok {
+		v := session.DefaultTriggeredByChainDepth
+		_c.mutation.SetTriggeredByChainDepth(v)
+	}
 	if _, ok := _c.mutation.GithubPrNumber(); !ok {
 		v := session.DefaultGithubPrNumber
 		_c.mutation.SetGithubPrNumber(v)
@@ -986,6 +1004,10 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.WorkflowID(); ok {
 		_spec.SetField(session.FieldWorkflowID, field.TypeString, value)
 		_node.WorkflowID = value
+	}
+	if value, ok := _c.mutation.TriggeredByChainDepth(); ok {
+		_spec.SetField(session.FieldTriggeredByChainDepth, field.TypeInt, value)
+		_node.TriggeredByChainDepth = value
 	}
 	if value, ok := _c.mutation.ArchivedAt(); ok {
 		_spec.SetField(session.FieldArchivedAt, field.TypeTime, value)
@@ -1743,6 +1765,30 @@ func (u *SessionUpsert) UpdateWorkflowID() *SessionUpsert {
 // ClearWorkflowID clears the value of the "workflow_id" field.
 func (u *SessionUpsert) ClearWorkflowID() *SessionUpsert {
 	u.SetNull(session.FieldWorkflowID)
+	return u
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (u *SessionUpsert) SetTriggeredByChainDepth(v int) *SessionUpsert {
+	u.Set(session.FieldTriggeredByChainDepth, v)
+	return u
+}
+
+// UpdateTriggeredByChainDepth sets the "triggered_by_chain_depth" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateTriggeredByChainDepth() *SessionUpsert {
+	u.SetExcluded(session.FieldTriggeredByChainDepth)
+	return u
+}
+
+// AddTriggeredByChainDepth adds v to the "triggered_by_chain_depth" field.
+func (u *SessionUpsert) AddTriggeredByChainDepth(v int) *SessionUpsert {
+	u.Add(session.FieldTriggeredByChainDepth, v)
+	return u
+}
+
+// ClearTriggeredByChainDepth clears the value of the "triggered_by_chain_depth" field.
+func (u *SessionUpsert) ClearTriggeredByChainDepth() *SessionUpsert {
+	u.SetNull(session.FieldTriggeredByChainDepth)
 	return u
 }
 
@@ -2567,6 +2613,34 @@ func (u *SessionUpsertOne) UpdateWorkflowID() *SessionUpsertOne {
 func (u *SessionUpsertOne) ClearWorkflowID() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearWorkflowID()
+	})
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (u *SessionUpsertOne) SetTriggeredByChainDepth(v int) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetTriggeredByChainDepth(v)
+	})
+}
+
+// AddTriggeredByChainDepth adds v to the "triggered_by_chain_depth" field.
+func (u *SessionUpsertOne) AddTriggeredByChainDepth(v int) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.AddTriggeredByChainDepth(v)
+	})
+}
+
+// UpdateTriggeredByChainDepth sets the "triggered_by_chain_depth" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateTriggeredByChainDepth() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateTriggeredByChainDepth()
+	})
+}
+
+// ClearTriggeredByChainDepth clears the value of the "triggered_by_chain_depth" field.
+func (u *SessionUpsertOne) ClearTriggeredByChainDepth() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearTriggeredByChainDepth()
 	})
 }
 
@@ -3576,6 +3650,34 @@ func (u *SessionUpsertBulk) UpdateWorkflowID() *SessionUpsertBulk {
 func (u *SessionUpsertBulk) ClearWorkflowID() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearWorkflowID()
+	})
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (u *SessionUpsertBulk) SetTriggeredByChainDepth(v int) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetTriggeredByChainDepth(v)
+	})
+}
+
+// AddTriggeredByChainDepth adds v to the "triggered_by_chain_depth" field.
+func (u *SessionUpsertBulk) AddTriggeredByChainDepth(v int) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.AddTriggeredByChainDepth(v)
+	})
+}
+
+// UpdateTriggeredByChainDepth sets the "triggered_by_chain_depth" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateTriggeredByChainDepth() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateTriggeredByChainDepth()
+	})
+}
+
+// ClearTriggeredByChainDepth clears the value of the "triggered_by_chain_depth" field.
+func (u *SessionUpsertBulk) ClearTriggeredByChainDepth() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearTriggeredByChainDepth()
 	})
 }
 
