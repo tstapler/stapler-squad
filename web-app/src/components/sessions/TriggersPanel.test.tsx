@@ -120,6 +120,17 @@ describe("TriggersPanel", () => {
     expect(mockUpdateWorkflow).toHaveBeenCalledWith("wf-1", { cronEnabled: false });
   });
 
+  it("TriggersPanel_should_showVisibleError_When_toggleFails", async () => {
+    mockWorkflows = [makeWorkflow({ id: "wf-1", cronEnabled: true })];
+    mockUpdateWorkflow.mockRejectedValueOnce(new Error("network error"));
+    render(<TriggersPanel />);
+
+    fireEvent.click(screen.getByTestId("trigger-toggle-wf-1"));
+
+    await waitFor(() => expect(screen.getByTestId("trigger-toggle-error")).toBeInTheDocument());
+    expect(screen.getByTestId("trigger-toggle-error")).toHaveTextContent(/Failed to disable/);
+  });
+
   it("TriggersPanel_should_openFormModal_When_addTriggerClicked", () => {
     render(<TriggersPanel />);
     expect(screen.queryByTestId("trigger-form-modal-stub")).not.toBeInTheDocument();

@@ -2,16 +2,17 @@
 
 // +feature: triggers-panel
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkflows, WorkflowFormData } from "@/lib/hooks/useWorkflows";
 import { WorkflowProto } from "@/gen/session/v1/session_pb";
 import { TriggerFormModal } from "./TriggerFormModal";
 import { TriggerExecutionHistory } from "./TriggerExecutionHistory";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
+  headerButtons, visuallyHidden,
   tabs, tab, tabActive,
-  error as errorClass, retryButton,
-  loading as loadingClass, empty,
+  error as errorClass, retryButton, toggleError,
+  loading as loadingClass, empty, emptyStateLink,
   tableWrapper, table, th, td, tdCenter, row, rowDisabled,
   triggerName, triggerSlug,
   typeBadge, typeCron, typeGithubPush, typeWebhook,
@@ -88,6 +89,14 @@ export function TriggersPanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [liveMessage, setLiveMessage] = useState("");
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [toggleErrorMsg, setToggleErrorMsg] = useState<string | null>(null);
+  const toggleErrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (toggleErrorTimeoutRef.current) clearTimeout(toggleErrorTimeoutRef.current);
+    };
+  }, []);
 
   const triggers = useMemo(
     () => workflows.filter((w) => TRIGGER_TYPES.includes(w.triggerType as TriggerFilter)),
@@ -119,12 +128,22 @@ export function TriggersPanel() {
 
   async function handleToggle(w: WorkflowProto) {
     setTogglingId(w.id);
+    setToggleErrorMsg(null);
     try {
       await updateWorkflow(w.id, { cronEnabled: !w.cronEnabled });
       setLiveMessage(`${w.name || w.slug} ${w.cronEnabled ? "disabled" : "enabled"}.`);
     } catch (e) {
       console.error("Failed to toggle trigger:", e);
-      setLiveMessage("Failed to update trigger.");
+      const message = `Failed to ${w.cronEnabled ? "disable" : "enable"} ${w.name || w.slug}.`;
+      setLiveMessage(message);
+      // Visible (not just screen-reader-only) error for sighted users — transient,
+      // clears itself after a few seconds or on the next toggle attempt.
+      setToggleErrorMsg(message);
+      if (toggleErrorTimeoutRef.current) clearTimeout(toggleErrorTimeoutRef.current);
+      toggleErrorTimeoutRef.current = setTimeout(
+        () => setToggleErrorMsg((prev) => (prev === message ? null : prev)),
+        5000
+      );
     } finally {
       setTogglingId(null);
     }
@@ -135,7 +154,7 @@ export function TriggersPanel() {
       <div className={header}>
         <div className={titleRow}>
           <h2 className={title}>Triggers</h2>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className={headerButtons}>
             <button
               className={`${addButton} ${headerButtonsHiddenOnMobile}`}
               onClick={openCreate}
@@ -159,13 +178,15 @@ export function TriggersPanel() {
         </p>
       </div>
 
-      <span
-        aria-live="polite"
-        aria-atomic="true"
-        style={{ position: "absolute", width: 1, height: 1, padding: 0, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}
-      >
+      <span aria-live="polite" aria-atomic="true" className={visuallyHidden}>
         {liveMessage}
       </span>
+
+      {toggleErrorMsg && (
+        <div className={toggleError} role="alert" data-testid="trigger-toggle-error">
+          {toggleErrorMsg}
+        </div>
+      )}
 
       <div className={tabs}>
         {(["all", ...TRIGGER_TYPES] as TriggerFilter[]).map((t) => {
@@ -198,7 +219,7 @@ export function TriggersPanel() {
             <p>No triggers configured{typeFilter !== "all" ? ` for ${typeLabel(typeFilter)}` : ""} yet.</p>
             <p>
               <button
-                style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0 }}
+                className={emptyStateLink}
                 onClick={openCreate}
               >
                 Add Trigger

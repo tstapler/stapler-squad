@@ -81,7 +81,6 @@ export function TriggerExecutionHistory({ workflowId }: TriggerExecutionHistoryP
           <button
             className={showNoMatchToggle}
             onClick={() => setShowNoMatch((v) => !v)}
-            style={{ marginLeft: 8 }}
             data-testid="trigger-history-toggle-no-match"
           >
             {showNoMatch ? "Hide non-matching" : `Show ${noMatchCount} non-matching`}
@@ -91,7 +90,7 @@ export function TriggerExecutionHistory({ workflowId }: TriggerExecutionHistoryP
       {visibleEvents.length === 0 ? (
         <div className={empty}>No matched events yet.</div>
       ) : (
-        <ul className={historyList} style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        <ul className={historyList}>
           {visibleEvents.map((ev) => {
             const date = timestampToDate(ev.createdAt);
             return (

@@ -1,6 +1,9 @@
 import { style, globalStyle } from "@vanilla-extract/css";
 import { vars, zIndex } from "@/styles/theme.css";
 
+// Shared "sr-only" style for aria-live announcer spans — see a11y.css.ts.
+export { visuallyHidden } from "@/styles/a11y.css";
+
 export const panel = style({
   background: vars.color.cardBackground,
   border: `1px solid ${vars.color.borderColor}`,
@@ -22,6 +25,12 @@ export const header = style({
 export const titleRow = style({
   display: "flex",
   justifyContent: "space-between",
+  alignItems: "center",
+});
+
+export const headerButtons = style({
+  display: "flex",
+  gap: vars.space["2"],
   alignItems: "center",
 });
 
@@ -87,6 +96,26 @@ export const empty = style({
   textAlign: "center",
   color: vars.color.textSecondary,
   fontSize: 14,
+});
+
+export const emptyStateLink = style({
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  color: "inherit",
+  textDecoration: "underline",
+  padding: 0,
+  font: "inherit",
+});
+
+// ── Transient, visible toggle-failure error (Fix 9) ───────────────────────
+export const toggleError = style({
+  padding: "8px 12px",
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: 6,
+  color: vars.color.errorText,
+  fontSize: 12,
 });
 
 export const tabs = style({
@@ -298,7 +327,7 @@ export const mobileAddFab = style({
       alignItems: "center",
       justifyContent: "center",
       cursor: "pointer",
-      boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
+      boxShadow: vars.shadow.lg,
       transition: "opacity 0.15s ease",
       selectors: {
         "&:hover": { opacity: 0.85 },
@@ -384,6 +413,9 @@ export const historyList = style({
   display: "flex",
   flexDirection: "column",
   gap: 6,
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
 });
 
 export const historyEntry = style({
@@ -423,6 +455,7 @@ export const showNoMatchToggle = style({
   fontSize: 11,
   color: vars.color.textSecondary,
   cursor: "pointer",
+  marginLeft: vars.space["2"],
   selectors: {
     "&:hover": { background: vars.color.hoverBackground },
   },

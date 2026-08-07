@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { useCallbackConfig, CallbackConfigUpdateData } from "@/lib/hooks/useCallbackConfig";
 import {
-  panel, header, title, subtitle,
+  panel, header, title, subtitle, visuallyHidden,
   fieldRow, fieldLabelRow, fieldLabel, configuredBadge, notConfiguredBadge,
   inputRow, input, clearButton, hint,
   saveRow, saveButton, statusMessage, errorBanner,
@@ -56,6 +56,7 @@ export function CallbackSettings() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const [liveMessage, setLiveMessage] = useState("");
 
   function setEdit(key: string, value: string | undefined) {
     setEdits((prev) => ({ ...prev, [key]: value }));
@@ -77,8 +78,11 @@ export function CallbackSettings() {
       await updateConfig(payload);
       setEdits({});
       setSavedMessage("Callback settings saved.");
+      setLiveMessage("Callback settings saved.");
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save callback settings.");
+      const message = err instanceof Error ? err.message : "Failed to save callback settings.";
+      setSaveError(message);
+      setLiveMessage(`Failed to save callback settings: ${message}`);
     } finally {
       setSaving(false);
     }
@@ -92,6 +96,10 @@ export function CallbackSettings() {
           Global lifecycle-event webhooks. URLs are never displayed once saved — only whether one is configured.
         </p>
       </div>
+
+      <span aria-live="polite" aria-atomic="true" className={visuallyHidden}>
+        {liveMessage}
+      </span>
 
       {error && <div className={errorBanner}>Failed to load callback settings: {error.message}</div>}
       {saveError && <div className={errorBanner} role="alert">{saveError}</div>}

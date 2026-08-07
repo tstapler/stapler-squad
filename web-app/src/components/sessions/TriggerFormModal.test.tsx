@@ -249,4 +249,102 @@ describe("TriggerFormModal", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ webhookSecret: generated }));
   });
+
+  // ─── clipboard-copy correctness (Fix 1) ───────────────────────────────────
+
+  it("TriggerFormModal_should_showCopiedOnlyOnGenuineSuccess_When_clipboardWriteSucceeds", async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    render(<TriggerFormModal open={true} onSave={jest.fn()} onClose={jest.fn()} />);
+    fireEvent.click(screen.getByTestId("trigger-type-webhook"));
+    fireEvent.click(screen.getByTestId("trigger-secret-generate"));
+
+    fireEvent.click(screen.getByTestId("trigger-secret-copy"));
+
+    await waitFor(() => expect(screen.getByTestId("trigger-secret-copy")).toHaveTextContent("Copied ✓"));
+    expect(screen.queryByTestId("trigger-secret-copy-error")).not.toBeInTheDocument();
+  });
+
+  it("TriggerFormModal_should_notReportCopiedAndShowFallback_When_clipboardWriteFails", async () => {
+    const writeText = jest.fn().mockRejectedValue(new Error("permission denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    render(<TriggerFormModal open={true} onSave={jest.fn()} onClose={jest.fn()} />);
+    fireEvent.click(screen.getByTestId("trigger-type-webhook"));
+    fireEvent.click(screen.getByTestId("trigger-secret-generate"));
+
+    fireEvent.click(screen.getByTestId("trigger-secret-copy"));
+
+    await waitFor(() => expect(screen.getByTestId("trigger-secret-copy-error")).toBeInTheDocument());
+    // Never reports success when the write actually failed.
+    expect(screen.getByTestId("trigger-secret-copy")).not.toHaveTextContent("Copied ✓");
+    // Secret text remains visible/focusable for manual copy.
+    expect(screen.getByTestId("trigger-secret-value")).toHaveAttribute("tabIndex", "0");
+  });
+
+  it("TriggerFormModal_should_notReportCopiedAndShowFallback_When_clipboardApiUnavailable", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+
+    render(<TriggerFormModal open={true} onSave={jest.fn()} onClose={jest.fn()} />);
+    fireEvent.click(screen.getByTestId("trigger-type-webhook"));
+    fireEvent.click(screen.getByTestId("trigger-secret-generate"));
+
+    fireEvent.click(screen.getByTestId("trigger-secret-copy"));
+
+    await waitFor(() => expect(screen.getByTestId("trigger-secret-copy-error")).toBeInTheDocument());
+    expect(screen.getByTestId("trigger-secret-copy")).not.toHaveTextContent("Copied ✓");
+  });
+
+  // ─── rotate-without-secret validation (Fix 8) ─────────────────────────────
+
+  it("TriggerFormModal_should_blockSubmitWithValidationError_When_rotatingWithoutGeneratingSecret", async () => {
+    const existing = makeWorkflow({ triggerType: "webhook" });
+    const onSave = jest.fn();
+    render(<TriggerFormModal open={true} editTrigger={existing} onSave={onSave} onClose={jest.fn()} />);
+
+    fireEvent.click(screen.getByTestId("trigger-secret-rotate"));
+    fireEvent.click(screen.getByTestId("trigger-form-submit"));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByTestId("trigger-secret-field-error")).toHaveTextContent(
+      "Generate a secret before saving."
+    );
+  });
+
+  it("TriggerFormModal_should_clearRotateValidationError_When_secretGeneratedAfterFailedSubmit", async () => {
+    const existing = makeWorkflow({ triggerType: "webhook" });
+    const onSave = jest.fn().mockResolvedValue(undefined);
+    render(<TriggerFormModal open={true} editTrigger={existing} onSave={onSave} onClose={jest.fn()} />);
+
+    fireEvent.click(screen.getByTestId("trigger-secret-rotate"));
+    fireEvent.click(screen.getByTestId("trigger-form-submit"));
+    expect(screen.getByTestId("trigger-secret-field-error")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("trigger-secret-generate"));
+    expect(screen.queryByTestId("trigger-secret-field-error")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("trigger-form-submit"));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  });
+
+  // ─── secret-generation availability (Fix 6) ───────────────────────────────
+
+  it("TriggerFormModal_should_disableGenerateAndShowMessage_When_webCryptoUnavailable", () => {
+    const originalCrypto = globalThis.crypto;
+    // @ts-expect-error - simulating an environment without the Web Crypto API
+    delete globalThis.crypto;
+
+    try {
+      render(<TriggerFormModal open={true} onSave={jest.fn()} onClose={jest.fn()} />);
+      fireEvent.click(screen.getByTestId("trigger-type-webhook"));
+      fireEvent.click(screen.getByTestId("trigger-secret-generate"));
+
+      expect(screen.getByTestId("trigger-secret-generate")).toBeDisabled();
+      expect(screen.queryByTestId("trigger-secret-value")).not.toBeInTheDocument();
+      expect(screen.getByText(/requires a modern browser/)).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(globalThis, "crypto", { value: originalCrypto, configurable: true });
+    }
+  });
 });

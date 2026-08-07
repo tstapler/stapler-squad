@@ -1,6 +1,9 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
+// Shared "sr-only" style for aria-live announcer spans — see a11y.css.ts.
+export { visuallyHidden } from "@/styles/a11y.css";
+
 export const panel = style({
   background: vars.color.cardBackground,
   border: `1px solid ${vars.color.borderColor}`,

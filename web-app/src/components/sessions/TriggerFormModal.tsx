@@ -14,6 +14,7 @@ import {
 import {
   typeSelector, typeOption, typeOptionActive, fieldset, legend, fieldError, fieldHint,
   secretBox, secretRow, secretValue, secretMasked, secretButton, secretWarning, secretCopiedNotice,
+  secretCopyErrorNotice, visuallyHidden, checkboxLabel, promptTextarea, formActionsSpaced, secretBoxLegend,
 } from "./TriggerFormModal.css";
 
 export type TriggerType = "cron" | "github_push" | "webhook";
@@ -104,13 +105,20 @@ function isFieldVisible(field: string, triggerType: TriggerType): boolean {
   return COMMON_FIELDS.has(field) || TYPE_SPECIFIC_FIELDS[triggerType].includes(field);
 }
 
-function generateClientSecret(): string {
-  const bytes = new Uint8Array(32);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+/**
+ * Generates a cryptographically-random 32-byte hex secret via the Web Crypto API.
+ * Returns null when `crypto.getRandomValues` isn't available — this is unreachable
+ * in any evergreen browser, but a security-critical secret must never silently fall
+ * back to `Math.random()` (not cryptographically secure) when it isn't. Callers
+ * must disable secret generation and surface a message instead of calling this in
+ * a loop or otherwise papering over a null result.
+ */
+function generateClientSecret(): string | null {
+  if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
+    return null;
   }
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -130,6 +138,8 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
   // generate/copy UI — editing a trigger defaults to leaving the stored secret alone.
   const [generatedSecret, setGeneratedSecret] = useState<string | null>(null);
   const [secretCopied, setSecretCopied] = useState(false);
+  const [secretCopyError, setSecretCopyError] = useState(false);
+  const [secretGenerationUnsupported, setSecretGenerationUnsupported] = useState(false);
   const [rotatingSecret, setRotatingSecret] = useState(false);
 
   useEffect(() => {
@@ -139,8 +149,38 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
     setFieldErrors({});
     setGeneratedSecret(null);
     setSecretCopied(false);
+    setSecretCopyError(false);
+    setSecretGenerationUnsupported(false);
     setRotatingSecret(false);
   }, [open, editTrigger]);
+
+  function handleGenerateSecret() {
+    const secret = generateClientSecret();
+    if (secret === null) {
+      setSecretGenerationUnsupported(true);
+      return;
+    }
+    setGeneratedSecret(secret);
+    setSecretCopied(false);
+    setSecretCopyError(false);
+    setFieldErrors((prev) => ({ ...prev, secret: undefined }));
+  }
+
+  async function handleCopySecret(value: string) {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(value);
+      setSecretCopied(true);
+      setSecretCopyError(false);
+    } catch {
+      // Clipboard write failed (denied permission, insecure context, unfocused
+      // window, etc.) — never report success for a value shown exactly once.
+      setSecretCopied(false);
+      setSecretCopyError(true);
+    }
+  }
 
   function setField<K extends keyof WorkflowFormData>(key: K, value: WorkflowFormData[K]) {
     setFormData((prev) => ({ ...prev, [key]: value }));
@@ -179,6 +219,17 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
     }
     if (formData.triggerType === "webhook" && !formData.webhookSlug?.trim()) {
       errs.webhookSlug = "Webhook slug is required.";
+    }
+    // Rotate mode entered but no new secret generated yet: webhookSecret would end
+    // up "" on submit, which the wire contract treats as "no change" — safe, but
+    // silently not what the user asked for by clicking "Rotate secret".
+    if (
+      isEdit &&
+      rotatingSecret &&
+      !generatedSecret &&
+      (formData.triggerType === "webhook" || formData.triggerType === "github_push")
+    ) {
+      errs.secret = "Generate a secret before saving.";
     }
     return errs;
   }
@@ -238,11 +289,7 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
           <ModalClose className={modalCloseButton} aria-label="Close dialog">×</ModalClose>
         </div>
         <div className={modalBody}>
-          <span
-            aria-live="polite"
-            aria-atomic="true"
-            style={{ position: "absolute", width: 1, height: 1, padding: 0, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}
-          >
+          <span aria-live="polite" aria-atomic="true" className={visuallyHidden}>
             {liveMessage}
           </span>
 
@@ -321,7 +368,7 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
                   {fieldErrors.command && <span className={fieldError}>{fieldErrors.command}</span>}
                 </label>
               </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+              <label className={checkboxLabel}>
                 <input
                   type="checkbox"
                   checked={formData.cronEnabled}
@@ -363,13 +410,12 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
                 <label className={labelClass}>
                   Prompt template
                   <textarea
-                    className={inputClass}
+                    className={`${inputClass} ${promptTextarea}`}
                     data-testid="trigger-prompt-template-input"
                     rows={3}
                     value={formData.promptTemplate ?? ""}
                     onChange={(e) => setField("promptTemplate", e.target.value)}
                     placeholder={"Review {{.head_commit.message}}"}
-                    style={{ resize: "vertical", fontFamily: "monospace" }}
                   />
                   <span className={fieldHint}>Go text/template, rendered against the inbound push payload.</span>
                   {fieldErrors.promptTemplate && <span className={fieldError}>{fieldErrors.promptTemplate}</span>}
@@ -380,9 +426,12 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
                   rotating={rotatingSecret}
                   generatedSecret={generatedSecret}
                   secretCopied={secretCopied}
+                  secretCopyError={secretCopyError}
+                  generationUnsupported={secretGenerationUnsupported}
+                  error={fieldErrors.secret}
                   onStartRotate={() => setRotatingSecret(true)}
-                  onGenerate={() => { setGeneratedSecret(generateClientSecret()); setSecretCopied(false); }}
-                  onCopy={(v) => { void navigator.clipboard?.writeText(v); setSecretCopied(true); }}
+                  onGenerate={handleGenerateSecret}
+                  onCopy={(v) => { void handleCopySecret(v); }}
                 />
               </fieldset>
             )}
@@ -446,13 +495,12 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
                 <label className={labelClass}>
                   Prompt template
                   <textarea
-                    className={inputClass}
+                    className={`${inputClass} ${promptTextarea}`}
                     data-testid="trigger-prompt-template-input"
                     rows={3}
                     value={formData.promptTemplate ?? ""}
                     onChange={(e) => setField("promptTemplate", e.target.value)}
                     placeholder={"Triage {{.issue.key}}: {{.issue.summary}}"}
-                    style={{ resize: "vertical", fontFamily: "monospace" }}
                   />
                   <span className={fieldHint}>Go text/template, rendered against the inbound JSON payload.</span>
                   {fieldErrors.promptTemplate && <span className={fieldError}>{fieldErrors.promptTemplate}</span>}
@@ -463,14 +511,17 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
                   rotating={rotatingSecret}
                   generatedSecret={generatedSecret}
                   secretCopied={secretCopied}
+                  secretCopyError={secretCopyError}
+                  generationUnsupported={secretGenerationUnsupported}
+                  error={fieldErrors.secret}
                   onStartRotate={() => setRotatingSecret(true)}
-                  onGenerate={() => { setGeneratedSecret(generateClientSecret()); setSecretCopied(false); }}
-                  onCopy={(v) => { void navigator.clipboard?.writeText(v); setSecretCopied(true); }}
+                  onGenerate={handleGenerateSecret}
+                  onCopy={(v) => { void handleCopySecret(v); }}
                 />
               </fieldset>
             )}
 
-            <div className={formActions} style={{ marginTop: 14 }}>
+            <div className={`${formActions} ${formActionsSpaced}`}>
               <button type="submit" className={saveButton} disabled={saving} data-testid="trigger-form-submit">
                 {saving ? "Saving…" : isEdit ? "Save Changes" : "Create Trigger"}
               </button>
@@ -492,6 +543,12 @@ interface SecretFieldProps {
   rotating: boolean;
   generatedSecret: string | null;
   secretCopied: boolean;
+  /** True when the last clipboard write attempt genuinely failed. */
+  secretCopyError: boolean;
+  /** True when `crypto.getRandomValues` isn't available — disables generation. */
+  generationUnsupported: boolean;
+  /** Client-side validation error for this field group (e.g. rotate-with-no-secret). */
+  error?: string;
   onStartRotate: () => void;
   onGenerate: () => void;
   onCopy: (value: string) => void;
@@ -506,11 +563,14 @@ interface SecretFieldProps {
  * WorkflowFormData.webhookSecret on submit (see TriggerFormModal.handleSubmit) and is
  * never re-read from the server afterward.
  */
-function SecretField({ isEdit, rotating, generatedSecret, secretCopied, onStartRotate, onGenerate, onCopy }: SecretFieldProps) {
+function SecretField({
+  isEdit, rotating, generatedSecret, secretCopied, secretCopyError, generationUnsupported, error,
+  onStartRotate, onGenerate, onCopy,
+}: SecretFieldProps) {
   const showGenerateUI = !isEdit || rotating;
   return (
     <div className={secretBox}>
-      <span className={legend} style={{ padding: 0 }}>Shared secret</span>
+      <span className={`${legend} ${secretBoxLegend}`}>Shared secret</span>
       {!showGenerateUI ? (
         <div className={secretRow}>
           <span className={secretMasked} data-testid="trigger-secret-masked">•••• (unchanged)</span>
@@ -521,11 +581,25 @@ function SecretField({ isEdit, rotating, generatedSecret, secretCopied, onStartR
       ) : (
         <div className={secretRow}>
           {generatedSecret ? (
-            <span className={secretValue} data-testid="trigger-secret-value">{generatedSecret}</span>
+            // Selectable + focusable so a failed clipboard write still has a manual
+            // fallback — this value is shown exactly once and never re-fetchable.
+            <span className={secretValue} data-testid="trigger-secret-value" tabIndex={0}>
+              {generatedSecret}
+            </span>
           ) : (
-            <span className={fieldHint}>Generate a secret to verify inbound requests (HMAC).</span>
+            <span className={fieldHint}>
+              {generationUnsupported
+                ? "Secret generation requires a modern browser with the Web Crypto API."
+                : "Generate a secret to verify inbound requests (HMAC)."}
+            </span>
           )}
-          <button type="button" className={secretButton} onClick={onGenerate} data-testid="trigger-secret-generate">
+          <button
+            type="button"
+            className={secretButton}
+            onClick={onGenerate}
+            disabled={generationUnsupported}
+            data-testid="trigger-secret-generate"
+          >
             {generatedSecret ? "Regenerate" : "Generate secret"}
           </button>
           {generatedSecret && (
@@ -535,12 +609,18 @@ function SecretField({ isEdit, rotating, generatedSecret, secretCopied, onStartR
           )}
         </div>
       )}
-      {showGenerateUI && (
+      {showGenerateUI && !generationUnsupported && (
         <span className={secretWarning}>
           Copy this now — it won&apos;t be shown again after you save.
         </span>
       )}
       {secretCopied && <span className={secretCopiedNotice}>Copied to clipboard.</span>}
+      {secretCopyError && (
+        <span className={secretCopyErrorNotice} role="alert" data-testid="trigger-secret-copy-error">
+          Copy failed — select the text above to copy manually.
+        </span>
+      )}
+      {error && <span className={fieldError} data-testid="trigger-secret-field-error">{error}</span>}
     </div>
   );
 }
