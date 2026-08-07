@@ -518,6 +518,96 @@ func InitPlugins(ctx context.Context) error {
 	return nil
 }
 
+// pluginTOMLFileNames returns the .toml filenames in dir among entries (an
+// os.ReadDir result), skipping subdirectories, non-.toml files, and symlinks
+// (symlinks are logged — see ADR-004 on why they are never followed). A file
+// that vanishes between ReadDir and this Lstat is silently skipped; there's
+// nothing useful to report about a file that's already gone. Extracted from
+// LoadPluginDir to keep that function's cognitive complexity under the CI
+// gate — this preamble has no interaction with the per-file load/validate
+// pipeline below.
+func pluginTOMLFileNames(dir string, entries []os.DirEntry) []string {
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".toml") {
+			continue
+		}
+
+		fullPath := filepath.Join(dir, name)
+		info, lstatErr := os.Lstat(fullPath)
+		if lstatErr != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			log.Warn("detector plugin skipped: symlinks are not followed", "path", fullPath)
+			continue
+		}
+
+		names = append(names, name)
+	}
+	return names
+}
+
+// loadPluginFile stats, reads, parses, validates, and compiles fullPath into
+// a pluginFile plus its StatusPatterns and compiled PatternSet. The PatternSet
+// is compiled exactly once, here, and the returned pointer is shared across
+// every PluginDetector the caller builds from this file's binary_names — see
+// CompiledPatternSet's doc comment on why that sharing matters. On any
+// failure, the returned pluginFile/StatusPatterns/PatternSet are the zero
+// value and the returned errs is non-empty; callers must check len(errs)
+// rather than any single return value. Extracted from LoadPluginDir to keep
+// that function's cognitive complexity under the CI gate — the per-file
+// pipeline below has no interaction with the directory-level dedupe logic
+// that remains in LoadPluginDir.
+func loadPluginFile(fullPath string) (*pluginFile, dtypes.StatusPatterns, *PatternSet, []PluginLoadError) {
+	fi, statErr := os.Stat(fullPath)
+	if statErr != nil {
+		return nil, dtypes.StatusPatterns{}, nil, []PluginLoadError{{Path: fullPath, Field: "file", Err: statErr}}
+	}
+	if fi.Size() > maxPluginFileSize {
+		return nil, dtypes.StatusPatterns{}, nil, []PluginLoadError{{
+			Path:  fullPath,
+			Field: "file",
+			Err:   fmt.Errorf("file size %d exceeds the limit of %d bytes", fi.Size(), maxPluginFileSize),
+		}}
+	}
+
+	data, readErr := os.ReadFile(fullPath)
+	if readErr != nil {
+		return nil, dtypes.StatusPatterns{}, nil, []PluginLoadError{{Path: fullPath, Field: "file", Err: readErr}}
+	}
+
+	pf, parseErr := parsePluginFile(fullPath, data)
+	if parseErr != nil {
+		return nil, dtypes.StatusPatterns{}, nil, []PluginLoadError{{Path: fullPath, Field: "file", Err: parseErr}}
+	}
+
+	if fieldErrs := validatePluginFile(fullPath, pf); len(fieldErrs) > 0 {
+		return nil, dtypes.StatusPatterns{}, nil, fieldErrs
+	}
+
+	sp, spErr := toStatusPatterns(pf)
+	if spErr != nil {
+		return nil, dtypes.StatusPatterns{}, nil, []PluginLoadError{{Path: fullPath, Field: "patterns", Err: spErr}}
+	}
+
+	// This should be unreachable in practice: validatePluginFile already
+	// compiled every one of these same regex strings successfully (that's
+	// how a file gets past the fieldErrs check above). Handled defensively
+	// anyway, the same way buildSnapshot treats an analogous "can't happen"
+	// compile failure — a rejection here, not a panic.
+	ps, psErr := NewPatternSet(sp)
+	if psErr != nil {
+		return nil, dtypes.StatusPatterns{}, nil, []PluginLoadError{{Path: fullPath, Field: "patterns", Err: psErr}}
+	}
+
+	return pf, sp, ps, nil
+}
+
 // LoadPluginDir scans dir for *.toml detector plugin files, parses and
 // validates each, and returns the resulting detectors plus a list of
 // per-file/per-pattern rejections. One invalid file is reported and skipped;
@@ -549,29 +639,7 @@ func LoadPluginDir(ctx context.Context, dir string) ([]*PluginDetector, []Plugin
 
 	// os.ReadDir returns entries sorted by filename; this is what makes
 	// collision winners below deterministic across repeated scans.
-	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".toml") {
-			continue
-		}
-
-		fullPath := filepath.Join(dir, name)
-		info, lstatErr := os.Lstat(fullPath)
-		if lstatErr != nil {
-			// Vanished between ReadDir and Lstat; nothing useful to report.
-			continue
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			log.Warn("detector plugin skipped: symlinks are not followed", "path", fullPath)
-			continue
-		}
-
-		names = append(names, name)
-	}
+	names := pluginTOMLFileNames(dir, entries)
 
 	var detectors []*PluginDetector
 	var loadErrs []PluginLoadError
@@ -596,54 +664,9 @@ func LoadPluginDir(ctx context.Context, dir string) ([]*PluginDetector, []Plugin
 
 		fullPath := filepath.Join(dir, name)
 
-		fi, statErr := os.Stat(fullPath)
-		if statErr != nil {
-			loadErrs = append(loadErrs, PluginLoadError{Path: fullPath, Field: "file", Err: statErr})
-			continue
-		}
-		if fi.Size() > maxPluginFileSize {
-			loadErrs = append(loadErrs, PluginLoadError{
-				Path:  fullPath,
-				Field: "file",
-				Err:   fmt.Errorf("file size %d exceeds the limit of %d bytes", fi.Size(), maxPluginFileSize),
-			})
-			continue
-		}
-
-		data, readErr := os.ReadFile(fullPath)
-		if readErr != nil {
-			loadErrs = append(loadErrs, PluginLoadError{Path: fullPath, Field: "file", Err: readErr})
-			continue
-		}
-
-		pf, parseErr := parsePluginFile(fullPath, data)
-		if parseErr != nil {
-			loadErrs = append(loadErrs, PluginLoadError{Path: fullPath, Field: "file", Err: parseErr})
-			continue
-		}
-
-		if fieldErrs := validatePluginFile(fullPath, pf); len(fieldErrs) > 0 {
-			loadErrs = append(loadErrs, fieldErrs...)
-			continue
-		}
-
-		sp, spErr := toStatusPatterns(pf)
-		if spErr != nil {
-			loadErrs = append(loadErrs, PluginLoadError{Path: fullPath, Field: "patterns", Err: spErr})
-			continue
-		}
-
-		// Compile this file's PatternSet exactly once, here, and share the
-		// resulting pointer across every PluginDetector created below for its
-		// binary_names — see CompiledPatternSet's doc comment. This should be
-		// unreachable in practice: validatePluginFile already compiled every
-		// one of these same regex strings successfully (that's how a file
-		// gets past the fieldErrs check above). Handled defensively anyway,
-		// the same way buildSnapshot treats an analogous "can't happen" compile
-		// failure — a rejection here, not a panic.
-		ps, psErr := NewPatternSet(sp)
-		if psErr != nil {
-			loadErrs = append(loadErrs, PluginLoadError{Path: fullPath, Field: "patterns", Err: psErr})
+		pf, sp, ps, fileErrs := loadPluginFile(fullPath)
+		if len(fileErrs) > 0 {
+			loadErrs = append(loadErrs, fileErrs...)
 			continue
 		}
 
