@@ -555,6 +555,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Bind server lifecycle context so autonomous driver goroutines exit on shutdown.
 	deps.SessionService.SetLifecycleContext(serverCtx)
 
+	// Register SessionService shutdown so the AnalyticsStore flush goroutine
+	// exits cleanly instead of leaking for the life of the process.
+	srv.shutdownHooks = append(srv.shutdownHooks, deps.SessionService.Shutdown)
+
 	// Start background expiration cleanup for pending approvals
 	services.StartExpirationCleanup(context.Background(), deps.SessionService.GetApprovalStore())
 

@@ -675,6 +675,15 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 	return s.rulesSvc.analyticsStore
 }
 
+// Shutdown stops background goroutines owned by SessionService (currently the
+// AnalyticsStore flush loop started in NewSessionService). Idempotent — safe
+// to call multiple times (AnalyticsStore.Stop is itself sync.Once-guarded).
+func (s *SessionService) Shutdown() {
+	if store := s.GetAnalyticsStore(); store != nil {
+		store.Stop()
+	}
+}
+
 // SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
 // AcknowledgeError RPCs.  Must be called before the first RPC request.
 func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {

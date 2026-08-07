@@ -78,6 +78,7 @@ func benchmarkServiceSetup(b *testing.B) *benchServiceFixture {
 	)
 
 	cleanup := func() {
+		svc.Shutdown()
 		srv.Close()
 		bus.Close()
 		_ = repo.Close()

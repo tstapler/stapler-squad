@@ -214,6 +214,93 @@ func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIs
 	assert.Equal(t, string(BacklogStatusDone), fetched.Status)
 }
 
+// TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommitShaWasNeverRecorded
+// is the regression test for BUG-065: a live incident where closeIfSupersededByMain
+// closed PR #307 — a real, reviewed, CI-green "user-extensible agent detection
+// plugins" feature — as "superseded", using its own work session's spawn-time
+// base commit as if it were real authored work.
+//
+// The BUG-047 guard (`lastCommitSha == lastWork.BaseCommitSha`) only fires when
+// BaseCommitSha is a real, non-empty value. GetBaseCommitSHAsForSessions
+// (storage_backlog.go) already documents that BaseCommitSha reads "" both for
+// legacy pre-split rows and for any session that spawned without it ever being
+// seeded — and falls back to LastCommitSha in that case. closeIfSupersededByMain's
+// guard was never given the same fallback: an empty BaseCommitSha can never equal
+// a real SHA, so the comparison silently no-ops and a session's own untouched
+// spawn-time base slides straight through as if it were the session's real,
+// later work.
+//
+// This fixture reproduces exactly that shape: the work session's worktree is
+// still checked out at its own base commit (it never advanced — the resolveLatestWorkCommit
+// primary path successfully resolves that base commit fresh, so this is not the
+// "HEAD cannot be resolved" case the sibling test above covers), BaseCommitSha
+// was never recorded (empty), and LastCommitSha holds the same base value (the
+// only value it was ever seeded with).
+func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommitShaWasNeverRecorded(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoPath, mainSHA := setupBounceMainRepo(t)
+	branch := "backlog/stapler-squad-detector-plugins"
+	runGitTestCmd(t, repoPath, "checkout", "-b", branch)
+	// Deliberately no further commit: this worktree never advanced past its own
+	// base — mirroring a session that was spawned and then retried/abandoned
+	// before authoring any real work, while a *different* (now-untraceable)
+	// session or worktree went on to do the real, reviewed work on this same
+	// branch name.
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "feat: user-extensible agent detection plugins",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusPRPending),
+		RepoPath:           repoPath,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/tstapler/stapler-squad/pull/307"
+	prNumber := 307
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID: item.ID,
+		// Must match attachWorktree's hardcoded instance UUID below so
+		// GetWorktreeDataBySessionUUID actually finds this session's worktree.
+		SessionUUID: "bug047-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// BaseCommitSha intentionally left unset (empty) — the exact gap this test
+	// guards; SetItemSessionBaseCommit is deliberately never called. LastCommitSha
+	// is seeded with the base value only, matching GetBaseCommitSHAsForSessions'
+	// documented legacy-row shape.
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, mainSHA, "", time.Now(), 0))
+	attachWorktree(t, storage, repoPath, branch, mainSHA)
+
+	listener := NewBacklogLifecycleListener(storage)
+	checker := failingCIChecker()
+	overridePRPendingChecker(t, listener, checker)
+	spawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(spawner)
+	// Stub the Story 6 head-branch-match guard to pass so this test isolates
+	// the BaseCommitSha guard under test — without this, the head-branch
+	// finder's default (no stub) fails closed on its own and the assertion
+	// below would pass for the wrong reason even without BUG-065's fix.
+	stubMatchingPRByNumberFinder(listener, branch)
+
+	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+
+	assert.False(t, checker.closeCalled,
+		"an empty BaseCommitSha must not let the session's own spawn-time base slip through as if it were real work")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status,
+		"the item must stay in pr_pending, not be marked done against a base commit no session ever advanced past")
+	assert.Equal(t, 307, fetched.PrNumber, "the PR reference must not be cleared")
+}
+
 // TestRefreshWorkSessionGitActivity_should_ReplaceSpawnTimeBaseWithSessionsRealTip
 // covers the other half of the fix: the field itself. LastCommitSha only ever
 // held the spawn-time base because nothing refreshed it; this sweep — wired

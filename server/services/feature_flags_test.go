@@ -49,7 +49,9 @@ func newFeatureFlagService(t *testing.T) *SessionService {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
-	return NewSessionService(storage, eventBus)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	return svc
 }
 
 // --------------------------------------------------------------------------

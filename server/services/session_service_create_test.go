@@ -403,6 +403,7 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire a status manager AND a poller so FindLiveInstance resolves the live pointer.
 	statusMgr := session.NewInstanceStatusManager()
@@ -460,6 +461,7 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
 	return svc
 }
 
