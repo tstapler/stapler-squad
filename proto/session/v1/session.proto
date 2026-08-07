@@ -587,6 +587,13 @@ message CreateSessionRequest {
   // alias_name, when non-empty, resolves session defaults via the named alias preset.
   // Path and profile are resolved from the alias config; path from req is used as override if non-empty.
   string alias_name = 27;
+
+  // triggered_by_chain_depth is the pipeline-chain hop count (webhook-triggers Epic 6.3):
+  // set by ChainFirer/Scheduler.FireTriggerChained when this session is a chained fire from
+  // a completed BacklogItem's next_workflow_id, one greater than the completing item's own
+  // TriggeredByChainDepth. 0 for every non-chained session (the default). Attribution only —
+  // not read back by CreateSession itself.
+  int32 triggered_by_chain_depth = 28;
 }
 
 message CreateSessionResponse {
@@ -2524,8 +2531,7 @@ message CreateWorkflowRequest {
   // trigger_type is left unspecified, for backward compatibility with existing
   // cron-only clients). Populated fields must match the declared trigger_type — e.g.
   // webhook_slug requires trigger_type="webhook" — or the request is rejected with
-  // CodeInvalidArgument (Task 1.1.1e). webhook_secret_encrypted is deliberately NOT
-  // exposed here — secret creation/rotation is a Phase 7 concern.
+  // CodeInvalidArgument (Task 1.1.1e).
   string trigger_type = 14;
   string github_repo = 15;
   string github_branch = 16;
@@ -2533,6 +2539,11 @@ message CreateWorkflowRequest {
   string event_filter = 18;
   string label_filter = 19;
   string prompt_template = 20;
+  // Write-only plaintext webhook/HMAC shared secret (Phase 7 follow-up to Epic 1.1).
+  // "" means "no secret configured" — the trigger's inbound HMAC verification will
+  // reject every delivery until one is set. Never echoed back by any RPC, matching
+  // WorkflowProto.trigger_type's doc comment on webhook_secret_encrypted above.
+  string webhook_secret = 21;
 }
 
 message CreateWorkflowResponse {
@@ -2567,6 +2578,13 @@ message UpdateWorkflowRequest {
   optional string event_filter = 18;
   optional string label_filter = 19;
   optional string prompt_template = 20;
+  // Write-only plaintext webhook/HMAC shared secret. Not `optional` — there is no
+  // "unset" vs "empty" distinction: an empty/omitted value always means "leave the
+  // stored secret unchanged" (never clears it implicitly, matching the "omit means
+  // unchanged" convention UpdateCallbackConfig's masked URLs use for their own
+  // never-cleared-implicitly fields). Only a non-empty value rotates the stored
+  // secret. See CreateWorkflowRequest.webhook_secret's doc comment.
+  string webhook_secret = 21;
 }
 
 message UpdateWorkflowResponse {

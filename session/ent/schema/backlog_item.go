@@ -122,6 +122,20 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value."),
+		field.UUID("next_workflow_id", uuid.UUID{}).
+			Optional().
+			Nillable().
+			Comment("webhook-triggers pipeline chaining (FR10/AC5): the Workflow to fire when this item reaches BacklogStatusDone. Set at chain-configuration time, not computed reactively at completion."),
+		field.Bool("chain_fired").
+			Default(false).
+			Comment("webhook-triggers pipeline chaining: true once the NextWorkflowID chain-fire has been attempted to a terminal outcome (fired, depth-capped, or expired) — never retried again once true. Crash-consistency marker: TriggerChainReconciler scans for status=done AND next_workflow_id != nil AND chain_fired=false."),
+		field.Time("chained_at").
+			Optional().
+			Nillable().
+			Comment("webhook-triggers pipeline chaining: set atomically with the terminal status transition (same UPDATE as the done transition) when NextWorkflowID is already configured — the eligibility timestamp TriggerChainReconciler's maxChainWaitDuration ceiling measures age against, independent of whether/when the fire itself later succeeds."),
+		field.Int("triggered_by_chain_depth").
+			Default(0).
+			Comment("webhook-triggers pipeline chaining (Epic 6.3): how many chain hops produced this item, propagated session->session and hard-capped at maxChainDepth as a runaway-loop backstop independent of the WIP-limit gate."),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),
@@ -173,5 +187,6 @@ func (BacklogItem) Indexes() []ent.Index {
 		index.Fields("status", "queued_at"),
 		index.Fields("external_id"),
 		index.Fields("status"),
+		index.Fields("status", "chain_fired"),
 	}
 }

@@ -445,6 +445,15 @@ type BacklogLifecycleListener struct {
 	// construction and forwarded unchanged into runner — never mutated afterward.
 	pipelineEngine PipelineEngine
 
+	// chainReconcilerMu guards chainReconciler for concurrent Set/get access.
+	chainReconcilerMu sync.RWMutex
+	// chainReconciler completes pipeline chain-fires interrupted by a crash
+	// (webhook-triggers Phase 6, AC5's restart-recovery scenario). nil (the
+	// default) makes reconcileTriggerChains a no-op — matches every other
+	// optional-dependency detector's nil-safe convention in this file. Wired
+	// via SetChainReconciler.
+	chainReconciler *TriggerChainReconciler
+
 	enabled atomic.Bool
 }
 
@@ -604,6 +613,34 @@ func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
 	if err := d.DequeueNextQueuedItems(ctx); err != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] DequeueNextQueuedItems error: %v", err)
 	}
+}
+
+// SetChainReconciler wires in the pipeline-chain restart-recovery reconciler
+// (webhook-triggers Phase 6). Called via server/dependencies.go once a
+// ChainFirer has been constructed (see Storage.WireChainFirer).
+func (l *BacklogLifecycleListener) SetChainReconciler(r *TriggerChainReconciler) {
+	l.chainReconcilerMu.Lock()
+	defer l.chainReconcilerMu.Unlock()
+	l.chainReconciler = r
+}
+
+// getChainReconciler returns the current chain reconciler under a read lock.
+func (l *BacklogLifecycleListener) getChainReconciler() *TriggerChainReconciler {
+	l.chainReconcilerMu.RLock()
+	defer l.chainReconcilerMu.RUnlock()
+	return l.chainReconciler
+}
+
+// reconcileTriggerChains delegates to TriggerChainReconciler.ReconcileChains
+// — the periodic counterpart to EntRepository.dispatchChainFire's happy-path
+// fire, both funneling through the same ChainFirer.Fire so "fire exactly
+// once" logic lives in one place. No-op when no reconciler is wired.
+func (l *BacklogLifecycleListener) reconcileTriggerChains(ctx context.Context, er *EntRepository) {
+	r := l.getChainReconciler()
+	if r == nil {
+		return
+	}
+	r.ReconcileChains(ctx, er)
 }
 
 // SetOneShotShipRunner wires in the runner used by shipViaAgentOrFallback to
@@ -1751,6 +1788,13 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// exit, so onSessionExited never fires for it).
 	l.runStuckDetector("dequeue_backlog_items", &okNames, &panickedNames, func() {
 		l.triggerDequeue(ctx)
+	})
+
+	// Restart-recovery for pipeline chain-fires interrupted by a crash between
+	// the "done" transition committing and the chained session actually being
+	// created (webhook-triggers AC5). See reconcileTriggerChains' doc comment.
+	l.runStuckDetector("trigger_chain_reconcile", &okNames, &panickedNames, func() {
+		l.reconcileTriggerChains(ctx, er)
 	})
 
 	openRows, countErr := er.FindOpenStuckStates(ctx)

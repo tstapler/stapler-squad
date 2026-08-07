@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/workflows"
@@ -138,6 +139,24 @@ func resolveTriggerType(triggerType string, cronEnabled bool) string {
 	return "manual"
 }
 
+// encryptWebhookSecret encrypts a plaintext webhook/HMAC shared secret with the same
+// machine encryption key decryptWorkflowSecret (webhook_trigger_common.go) later
+// decrypts with — closing the gap left by Phase 1/2/3, which wrote/read
+// WebhookSecretEncrypted only via direct repository calls in tests, never via an RPC
+// (Phase 7 follow-up, Task 7.2).
+func encryptWebhookSecret(secret string) (string, error) {
+	cfg := config.LoadConfig()
+	key, err := cfg.GetOrCreateEncryptionKey()
+	if err != nil {
+		return "", fmt.Errorf("get encryption key: %w", err)
+	}
+	encrypted, err := session.EncryptToken(key, secret)
+	if err != nil {
+		return "", fmt.Errorf("encrypt webhook secret: %w", err)
+	}
+	return encrypted, nil
+}
+
 // validateTargetDirectory checks that dir is an absolute path with no traversal components.
 func validateTargetDirectory(dir string) error {
 	if !filepath.IsAbs(dir) {
@@ -230,6 +249,15 @@ func (s *WorkflowService) CreateWorkflow(
 	if req.Msg.ArchiveAfterHours != nil {
 		v := int(*req.Msg.ArchiveAfterHours)
 		createInput.ArchiveAfterHours = &v
+	}
+	// Write-only webhook secret (Task 7.2): "" means no secret configured, matching
+	// decryptWorkflowSecret's existing "has no webhook secret configured" error path.
+	if req.Msg.WebhookSecret != "" {
+		encrypted, err := encryptWebhookSecret(req.Msg.WebhookSecret)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		createInput.WebhookSecretEncrypted = encrypted
 	}
 	wf, err := s.repo.Create(ctx, createInput)
 	if err != nil {
@@ -354,6 +382,15 @@ func (s *WorkflowService) UpdateWorkflow(
 	if req.Msg.ArchiveAfterHours != nil {
 		v := int(*req.Msg.ArchiveAfterHours)
 		update.ArchiveAfterHours = &v
+	}
+	// Write-only webhook secret (Task 7.2): empty/omitted leaves the existing stored
+	// secret unchanged (never cleared implicitly) — only a non-empty value rotates it.
+	if req.Msg.WebhookSecret != "" {
+		encrypted, err := encryptWebhookSecret(req.Msg.WebhookSecret)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		update.WebhookSecretEncrypted = &encrypted
 	}
 
 	wf, err := s.repo.Update(ctx, id, update)

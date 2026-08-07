@@ -3082,6 +3082,11 @@ type BacklogItemMutation struct {
 	shipped_snapshot_capture_failed *bool
 	rework_cap_override             *int
 	addrework_cap_override          *int
+	next_workflow_id                *uuid.UUID
+	chain_fired                     *bool
+	chained_at                      *time.Time
+	triggered_by_chain_depth        *int
+	addtriggered_by_chain_depth     *int
 	created_at                      *time.Time
 	updated_at                      *time.Time
 	clearedFields                   map[string]struct{}
@@ -4903,6 +4908,196 @@ func (m *BacklogItemMutation) ResetReworkCapOverride() {
 	delete(m.clearedFields, backlogitem.FieldReworkCapOverride)
 }
 
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (m *BacklogItemMutation) SetNextWorkflowID(u uuid.UUID) {
+	m.next_workflow_id = &u
+}
+
+// NextWorkflowID returns the value of the "next_workflow_id" field in the mutation.
+func (m *BacklogItemMutation) NextWorkflowID() (r uuid.UUID, exists bool) {
+	v := m.next_workflow_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNextWorkflowID returns the old "next_workflow_id" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldNextWorkflowID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNextWorkflowID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNextWorkflowID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNextWorkflowID: %w", err)
+	}
+	return oldValue.NextWorkflowID, nil
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (m *BacklogItemMutation) ClearNextWorkflowID() {
+	m.next_workflow_id = nil
+	m.clearedFields[backlogitem.FieldNextWorkflowID] = struct{}{}
+}
+
+// NextWorkflowIDCleared returns if the "next_workflow_id" field was cleared in this mutation.
+func (m *BacklogItemMutation) NextWorkflowIDCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldNextWorkflowID]
+	return ok
+}
+
+// ResetNextWorkflowID resets all changes to the "next_workflow_id" field.
+func (m *BacklogItemMutation) ResetNextWorkflowID() {
+	m.next_workflow_id = nil
+	delete(m.clearedFields, backlogitem.FieldNextWorkflowID)
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (m *BacklogItemMutation) SetChainFired(b bool) {
+	m.chain_fired = &b
+}
+
+// ChainFired returns the value of the "chain_fired" field in the mutation.
+func (m *BacklogItemMutation) ChainFired() (r bool, exists bool) {
+	v := m.chain_fired
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldChainFired returns the old "chain_fired" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldChainFired(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldChainFired is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldChainFired requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldChainFired: %w", err)
+	}
+	return oldValue.ChainFired, nil
+}
+
+// ResetChainFired resets all changes to the "chain_fired" field.
+func (m *BacklogItemMutation) ResetChainFired() {
+	m.chain_fired = nil
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (m *BacklogItemMutation) SetChainedAt(t time.Time) {
+	m.chained_at = &t
+}
+
+// ChainedAt returns the value of the "chained_at" field in the mutation.
+func (m *BacklogItemMutation) ChainedAt() (r time.Time, exists bool) {
+	v := m.chained_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldChainedAt returns the old "chained_at" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldChainedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldChainedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldChainedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldChainedAt: %w", err)
+	}
+	return oldValue.ChainedAt, nil
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (m *BacklogItemMutation) ClearChainedAt() {
+	m.chained_at = nil
+	m.clearedFields[backlogitem.FieldChainedAt] = struct{}{}
+}
+
+// ChainedAtCleared returns if the "chained_at" field was cleared in this mutation.
+func (m *BacklogItemMutation) ChainedAtCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldChainedAt]
+	return ok
+}
+
+// ResetChainedAt resets all changes to the "chained_at" field.
+func (m *BacklogItemMutation) ResetChainedAt() {
+	m.chained_at = nil
+	delete(m.clearedFields, backlogitem.FieldChainedAt)
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (m *BacklogItemMutation) SetTriggeredByChainDepth(i int) {
+	m.triggered_by_chain_depth = &i
+	m.addtriggered_by_chain_depth = nil
+}
+
+// TriggeredByChainDepth returns the value of the "triggered_by_chain_depth" field in the mutation.
+func (m *BacklogItemMutation) TriggeredByChainDepth() (r int, exists bool) {
+	v := m.triggered_by_chain_depth
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriggeredByChainDepth returns the old "triggered_by_chain_depth" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldTriggeredByChainDepth(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriggeredByChainDepth is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriggeredByChainDepth requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriggeredByChainDepth: %w", err)
+	}
+	return oldValue.TriggeredByChainDepth, nil
+}
+
+// AddTriggeredByChainDepth adds i to the "triggered_by_chain_depth" field.
+func (m *BacklogItemMutation) AddTriggeredByChainDepth(i int) {
+	if m.addtriggered_by_chain_depth != nil {
+		*m.addtriggered_by_chain_depth += i
+	} else {
+		m.addtriggered_by_chain_depth = &i
+	}
+}
+
+// AddedTriggeredByChainDepth returns the value that was added to the "triggered_by_chain_depth" field in this mutation.
+func (m *BacklogItemMutation) AddedTriggeredByChainDepth() (r int, exists bool) {
+	v := m.addtriggered_by_chain_depth
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetTriggeredByChainDepth resets all changes to the "triggered_by_chain_depth" field.
+func (m *BacklogItemMutation) ResetTriggeredByChainDepth() {
+	m.triggered_by_chain_depth = nil
+	m.addtriggered_by_chain_depth = nil
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *BacklogItemMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -5318,7 +5513,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 37)
+	fields := make([]string, 0, 41)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -5424,6 +5619,18 @@ func (m *BacklogItemMutation) Fields() []string {
 	if m.rework_cap_override != nil {
 		fields = append(fields, backlogitem.FieldReworkCapOverride)
 	}
+	if m.next_workflow_id != nil {
+		fields = append(fields, backlogitem.FieldNextWorkflowID)
+	}
+	if m.chain_fired != nil {
+		fields = append(fields, backlogitem.FieldChainFired)
+	}
+	if m.chained_at != nil {
+		fields = append(fields, backlogitem.FieldChainedAt)
+	}
+	if m.triggered_by_chain_depth != nil {
+		fields = append(fields, backlogitem.FieldTriggeredByChainDepth)
+	}
 	if m.created_at != nil {
 		fields = append(fields, backlogitem.FieldCreatedAt)
 	}
@@ -5508,6 +5715,14 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.ShippedSnapshotCaptureFailed()
 	case backlogitem.FieldReworkCapOverride:
 		return m.ReworkCapOverride()
+	case backlogitem.FieldNextWorkflowID:
+		return m.NextWorkflowID()
+	case backlogitem.FieldChainFired:
+		return m.ChainFired()
+	case backlogitem.FieldChainedAt:
+		return m.ChainedAt()
+	case backlogitem.FieldTriggeredByChainDepth:
+		return m.TriggeredByChainDepth()
 	case backlogitem.FieldCreatedAt:
 		return m.CreatedAt()
 	case backlogitem.FieldUpdatedAt:
@@ -5591,6 +5806,14 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldShippedSnapshotCaptureFailed(ctx)
 	case backlogitem.FieldReworkCapOverride:
 		return m.OldReworkCapOverride(ctx)
+	case backlogitem.FieldNextWorkflowID:
+		return m.OldNextWorkflowID(ctx)
+	case backlogitem.FieldChainFired:
+		return m.OldChainFired(ctx)
+	case backlogitem.FieldChainedAt:
+		return m.OldChainedAt(ctx)
+	case backlogitem.FieldTriggeredByChainDepth:
+		return m.OldTriggeredByChainDepth(ctx)
 	case backlogitem.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case backlogitem.FieldUpdatedAt:
@@ -5849,6 +6072,34 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetReworkCapOverride(v)
 		return nil
+	case backlogitem.FieldNextWorkflowID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNextWorkflowID(v)
+		return nil
+	case backlogitem.FieldChainFired:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetChainFired(v)
+		return nil
+	case backlogitem.FieldChainedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetChainedAt(v)
+		return nil
+	case backlogitem.FieldTriggeredByChainDepth:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriggeredByChainDepth(v)
+		return nil
 	case backlogitem.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -5886,6 +6137,9 @@ func (m *BacklogItemMutation) AddedFields() []string {
 	if m.addrework_cap_override != nil {
 		fields = append(fields, backlogitem.FieldReworkCapOverride)
 	}
+	if m.addtriggered_by_chain_depth != nil {
+		fields = append(fields, backlogitem.FieldTriggeredByChainDepth)
+	}
 	return fields
 }
 
@@ -5904,6 +6158,8 @@ func (m *BacklogItemMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedShippedChangesReqCount()
 	case backlogitem.FieldReworkCapOverride:
 		return m.AddedReworkCapOverride()
+	case backlogitem.FieldTriggeredByChainDepth:
+		return m.AddedTriggeredByChainDepth()
 	}
 	return nil, false
 }
@@ -5947,6 +6203,13 @@ func (m *BacklogItemMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddReworkCapOverride(v)
+		return nil
+	case backlogitem.FieldTriggeredByChainDepth:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTriggeredByChainDepth(v)
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem numeric field %s", name)
@@ -6027,6 +6290,12 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(backlogitem.FieldReworkCapOverride) {
 		fields = append(fields, backlogitem.FieldReworkCapOverride)
+	}
+	if m.FieldCleared(backlogitem.FieldNextWorkflowID) {
+		fields = append(fields, backlogitem.FieldNextWorkflowID)
+	}
+	if m.FieldCleared(backlogitem.FieldChainedAt) {
+		fields = append(fields, backlogitem.FieldChainedAt)
 	}
 	return fields
 }
@@ -6113,6 +6382,12 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 		return nil
 	case backlogitem.FieldReworkCapOverride:
 		m.ClearReworkCapOverride()
+		return nil
+	case backlogitem.FieldNextWorkflowID:
+		m.ClearNextWorkflowID()
+		return nil
+	case backlogitem.FieldChainedAt:
+		m.ClearChainedAt()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem nullable field %s", name)
@@ -6226,6 +6501,18 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldReworkCapOverride:
 		m.ResetReworkCapOverride()
+		return nil
+	case backlogitem.FieldNextWorkflowID:
+		m.ResetNextWorkflowID()
+		return nil
+	case backlogitem.FieldChainFired:
+		m.ResetChainFired()
+		return nil
+	case backlogitem.FieldChainedAt:
+		m.ResetChainedAt()
+		return nil
+	case backlogitem.FieldTriggeredByChainDepth:
+		m.ResetTriggeredByChainDepth()
 		return nil
 	case backlogitem.FieldCreatedAt:
 		m.ResetCreatedAt()

@@ -231,9 +231,19 @@ func (s *Scheduler) Remove(workflowID string) error {
 // admission/rate-limit/CreateSession/audit logic to FireTrigger with deliveryID=""
 // (FireNow's manual/cron callers have no webhook delivery to attribute the fire to).
 func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (string, error) {
-	// Build prompt: command is the primary instruction (required). If inputTemplate is
-	// set it is appended after interpolation. If only arg is present and command has no
-	// {{input}} placeholder, append the arg as additional context.
+	prompt := buildTemplatedPrompt(wf, arg)
+	return s.FireTrigger(ctx, wf, prompt, "")
+}
+
+// buildTemplatedPrompt renders wf.Command/wf.InputTemplate with arg substituted
+// for {{input}}, the same interpolation FireNow has always used: command is the
+// primary instruction (required), inputTemplate is appended after interpolation
+// if set, and if only arg is present with no {{input}} placeholder anywhere it's
+// appended as additional context. Factored out of FireNow so
+// FireTriggerChained (webhook-triggers Phase 6) can reuse it for chain-fire's
+// "arg" (the completed prior item's summary) without duplicating the
+// {{input}} substitution rules.
+func buildTemplatedPrompt(wf *ent.Workflow, arg string) string {
 	var parts []string
 	if wf.Command != "" {
 		cmdPart := wf.Command
@@ -252,9 +262,7 @@ func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (
 	} else if arg != "" && !argInjectedIntoCommand {
 		parts = append(parts, arg)
 	}
-	prompt := strings.Join(parts, "\n\n")
-
-	return s.FireTrigger(ctx, wf, prompt, "")
+	return strings.Join(parts, "\n\n")
 }
 
 // FireTrigger fires wf with an already-constructed prompt (renderedPrompt), running the
@@ -275,6 +283,27 @@ func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (
 // only place a rate-limit/admission-gate rejection ever gets an audit trail — preserved
 // unchanged from FireNow's pre-Phase-3 behavior.
 func (s *Scheduler) FireTrigger(ctx context.Context, wf *ent.Workflow, renderedPrompt string, deliveryID string) (string, error) {
+	return s.fireTrigger(ctx, wf, renderedPrompt, deliveryID, 0)
+}
+
+// FireTriggerChained fires wf as the next hop in a pipeline chain (webhook-
+// triggers Phase 6, FR10/AC5): priorItemSummary (typically built via
+// session.BuildSessionInitialPrompt over the just-completed BacklogItem) is
+// interpolated into wf's own prompt template the same way FireNow's arg is
+// (see buildTemplatedPrompt), and chainDepth is threaded onto the created
+// session's TriggeredByChainDepth attribution field (Epic 6.3). Never claims
+// a TriggerFireEvent row itself (deliveryID=""), same as FireNow — a
+// rate-limit/admission-gate rejection still gets its own audit row via
+// fireTrigger's recordGateRejection.
+func (s *Scheduler) FireTriggerChained(ctx context.Context, wf *ent.Workflow, priorItemSummary string, chainDepth int32) (string, error) {
+	prompt := buildTemplatedPrompt(wf, priorItemSummary)
+	return s.fireTrigger(ctx, wf, prompt, "", chainDepth)
+}
+
+// fireTrigger is FireTrigger/FireTriggerChained's shared implementation —
+// chainDepth is 0 for every non-chained caller (FireTrigger/FireNow) and
+// item.TriggeredByChainDepth+1 for FireTriggerChained.
+func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, renderedPrompt string, deliveryID string, chainDepth int32) (string, error) {
 	if s.sessionSvc == nil {
 		return "", fmt.Errorf("session service not available")
 	}
@@ -327,17 +356,19 @@ func (s *Scheduler) FireTrigger(ctx context.Context, wf *ent.Workflow, renderedP
 	}
 
 	// Deliberately mirrors a manually-created CreateSessionRequest field-for-field
-	// aside from WorkflowId (attribution): no auto_yes/skip_defaults or other
-	// bypass/elevated-permission field is set here, so a trigger-fired session goes
-	// through the exact same approval/review path a manually-created one does (Goal 4 —
-	// see TestFireTrigger_NeverSetsAutoApproveFlag).
+	// aside from WorkflowId/TriggeredByChainDepth (attribution only, webhook-triggers
+	// Epic 6.3): no auto_yes/skip_defaults or other bypass/elevated-permission field
+	// is set here, so a trigger-fired session goes through the exact same
+	// approval/review path a manually-created one does (Goal 4 — see
+	// TestFireTrigger_NeverSetsAutoApproveFlag).
 	req := connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:         title,
-		Path:          wf.TargetDirectory,
-		Program:       program,
-		InitialPrompt: renderedPrompt,
-		SessionType:   sessionType,
-		WorkflowId:    wf.ID.String(),
+		Title:                 title,
+		Path:                  wf.TargetDirectory,
+		Program:               program,
+		InitialPrompt:         renderedPrompt,
+		SessionType:           sessionType,
+		WorkflowId:            wf.ID.String(),
+		TriggeredByChainDepth: chainDepth,
 	})
 	resp, err := s.sessionSvc.CreateSession(ctx, req)
 	if err != nil {

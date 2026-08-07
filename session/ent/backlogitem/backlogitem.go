@@ -85,6 +85,14 @@ const (
 	FieldShippedSnapshotCaptureFailed = "shipped_snapshot_capture_failed"
 	// FieldReworkCapOverride holds the string denoting the rework_cap_override field in the database.
 	FieldReworkCapOverride = "rework_cap_override"
+	// FieldNextWorkflowID holds the string denoting the next_workflow_id field in the database.
+	FieldNextWorkflowID = "next_workflow_id"
+	// FieldChainFired holds the string denoting the chain_fired field in the database.
+	FieldChainFired = "chain_fired"
+	// FieldChainedAt holds the string denoting the chained_at field in the database.
+	FieldChainedAt = "chained_at"
+	// FieldTriggeredByChainDepth holds the string denoting the triggered_by_chain_depth field in the database.
+	FieldTriggeredByChainDepth = "triggered_by_chain_depth"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -183,6 +191,10 @@ var Columns = []string{
 	FieldShippedFileStats,
 	FieldShippedSnapshotCaptureFailed,
 	FieldReworkCapOverride,
+	FieldNextWorkflowID,
+	FieldChainFired,
+	FieldChainedAt,
+	FieldTriggeredByChainDepth,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -247,6 +259,10 @@ var (
 	DefaultShippedChangesReqCount int
 	// DefaultShippedSnapshotCaptureFailed holds the default value on creation for the "shipped_snapshot_capture_failed" field.
 	DefaultShippedSnapshotCaptureFailed bool
+	// DefaultChainFired holds the default value on creation for the "chain_fired" field.
+	DefaultChainFired bool
+	// DefaultTriggeredByChainDepth holds the default value on creation for the "triggered_by_chain_depth" field.
+	DefaultTriggeredByChainDepth int
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -433,6 +449,26 @@ func ByShippedSnapshotCaptureFailed(opts ...sql.OrderTermOption) OrderOption {
 // ByReworkCapOverride orders the results by the rework_cap_override field.
 func ByReworkCapOverride(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldReworkCapOverride, opts...).ToFunc()
+}
+
+// ByNextWorkflowID orders the results by the next_workflow_id field.
+func ByNextWorkflowID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNextWorkflowID, opts...).ToFunc()
+}
+
+// ByChainFired orders the results by the chain_fired field.
+func ByChainFired(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldChainFired, opts...).ToFunc()
+}
+
+// ByChainedAt orders the results by the chained_at field.
+func ByChainedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldChainedAt, opts...).ToFunc()
+}
+
+// ByTriggeredByChainDepth orders the results by the triggered_by_chain_depth field.
+func ByTriggeredByChainDepth(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTriggeredByChainDepth, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

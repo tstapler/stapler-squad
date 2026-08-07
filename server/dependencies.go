@@ -1287,6 +1287,22 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			triggerFireEventRepo = fireEventRepo
 		}
 		log.Info("WorkflowService and WorkflowScheduler initialized")
+
+		// ChainFirer + TriggerChainReconciler (webhook-triggers Phase 6, Epic 6.2/
+		// 6.3): pipeline chaining needs the same three collaborators as the
+		// Scheduler itself (workflowRepo to resolve NextWorkflowID,
+		// triggerFireEventRepo for the audit trail, workflowScheduler.
+		// FireTriggerChained as the actual fire path), so it can only be wired
+		// once all three exist above. Wired to both EntRepository (the happy-path
+		// dispatcher, called from TransitionBacklogItemStatus right after a
+		// "done" transition commits — AC9) and BacklogLifecycleListener (the
+		// restart-recovery reconciler, running on the existing 60s tick).
+		if triggerFireEventRepo != nil {
+			if chainFirer := storage.WireChainFirer(workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
+				backlogLifecycleListener.SetChainReconciler(session.NewTriggerChainReconciler(chainFirer))
+				log.Info("ChainFirer and TriggerChainReconciler initialized")
+			}
+		}
 	} else {
 		log.Warn("WorkflowScheduler disabled: no workflow repository available")
 	}

@@ -143,6 +143,10 @@ var (
 		{Name: "shipped_file_stats", Type: field.TypeString, Nullable: true},
 		{Name: "shipped_snapshot_capture_failed", Type: field.TypeBool, Nullable: true, Default: false},
 		{Name: "rework_cap_override", Type: field.TypeInt, Nullable: true},
+		{Name: "next_workflow_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "chain_fired", Type: field.TypeBool, Default: false},
+		{Name: "chained_at", Type: field.TypeTime, Nullable: true},
+		{Name: "triggered_by_chain_depth", Type: field.TypeInt, Default: 0},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "item_source_backlog_items", Type: field.TypeUUID, Nullable: true},
@@ -155,7 +159,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_items_item_sources_backlog_items",
-				Columns:    []*schema.Column{BacklogItemsColumns[38]},
+				Columns:    []*schema.Column{BacklogItemsColumns[42]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -169,7 +173,7 @@ var (
 			{
 				Name:    "backlogitem_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[37]},
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[41]},
 			},
 			{
 				Name:    "backlogitem_status_queued_at",
@@ -185,6 +189,11 @@ var (
 				Name:    "backlogitem_status",
 				Unique:  false,
 				Columns: []*schema.Column{BacklogItemsColumns[5]},
+			},
+			{
+				Name:    "backlogitem_status_chain_fired",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[37]},
 			},
 		},
 	}
