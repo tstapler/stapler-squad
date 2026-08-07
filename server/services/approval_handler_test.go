@@ -337,6 +337,7 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	storage := createTestStorage(t)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 
 	store := NewApprovalStore("")
 	bus := events.NewEventBus(10)

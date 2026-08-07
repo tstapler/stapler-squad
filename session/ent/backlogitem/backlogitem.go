@@ -55,6 +55,10 @@ const (
 	FieldNotes = "notes"
 	// FieldExternalID holds the string denoting the external_id field in the database.
 	FieldExternalID = "external_id"
+	// FieldExternalURL holds the string denoting the external_url field in the database.
+	FieldExternalURL = "external_url"
+	// FieldLabels holds the string denoting the labels field in the database.
+	FieldLabels = "labels"
 	// FieldUserModifiedStatusAt holds the string denoting the user_modified_status_at field in the database.
 	FieldUserModifiedStatusAt = "user_modified_status_at"
 	// FieldArchivedAt holds the string denoting the archived_at field in the database.
@@ -73,6 +77,8 @@ const (
 	FieldShippedSnapshotAt = "shipped_snapshot_at"
 	// FieldPrFeedbackAddressedAt holds the string denoting the pr_feedback_addressed_at field in the database.
 	FieldPrFeedbackAddressedAt = "pr_feedback_addressed_at"
+	// FieldGithubSyncedIssueUpdatedAt holds the string denoting the github_synced_issue_updated_at field in the database.
+	FieldGithubSyncedIssueUpdatedAt = "github_synced_issue_updated_at"
 	// FieldShippedFileStats holds the string denoting the shipped_file_stats field in the database.
 	FieldShippedFileStats = "shipped_file_stats"
 	// FieldShippedSnapshotCaptureFailed holds the string denoting the shipped_snapshot_capture_failed field in the database.
@@ -162,6 +168,8 @@ var Columns = []string{
 	FieldUserModifiedFields,
 	FieldNotes,
 	FieldExternalID,
+	FieldExternalURL,
+	FieldLabels,
 	FieldUserModifiedStatusAt,
 	FieldArchivedAt,
 	FieldPrURL,
@@ -171,6 +179,7 @@ var Columns = []string{
 	FieldShippedChangesReqCount,
 	FieldShippedSnapshotAt,
 	FieldPrFeedbackAddressedAt,
+	FieldGithubSyncedIssueUpdatedAt,
 	FieldShippedFileStats,
 	FieldShippedSnapshotCaptureFailed,
 	FieldReworkCapOverride,
@@ -356,6 +365,11 @@ func ByExternalID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldExternalID, opts...).ToFunc()
 }
 
+// ByExternalURL orders the results by the external_url field.
+func ByExternalURL(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldExternalURL, opts...).ToFunc()
+}
+
 // ByUserModifiedStatusAt orders the results by the user_modified_status_at field.
 func ByUserModifiedStatusAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUserModifiedStatusAt, opts...).ToFunc()
@@ -399,6 +413,11 @@ func ByShippedSnapshotAt(opts ...sql.OrderTermOption) OrderOption {
 // ByPrFeedbackAddressedAt orders the results by the pr_feedback_addressed_at field.
 func ByPrFeedbackAddressedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPrFeedbackAddressedAt, opts...).ToFunc()
+}
+
+// ByGithubSyncedIssueUpdatedAt orders the results by the github_synced_issue_updated_at field.
+func ByGithubSyncedIssueUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGithubSyncedIssueUpdatedAt, opts...).ToFunc()
 }
 
 // ByShippedFileStats orders the results by the shipped_file_stats field.

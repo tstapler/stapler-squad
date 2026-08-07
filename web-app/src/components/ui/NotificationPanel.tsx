@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createClient } from "@connectrpc/connect";
+import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { ResolveApprovalRequest, ResolveApprovalRequestSchema } from "@/gen/session/v1/session_pb";
@@ -18,6 +18,7 @@ import {
   notificationTypeLabel,
   priorityColor,
   notificationTypeFilter,
+  splitCIBlockMessage,
 } from "@/lib/utils/notificationMapping";
 import {
   overlay,
@@ -65,6 +66,9 @@ import {
   resolvedBadge,
   approveButton,
   denyButton,
+  ciBlockedRow,
+  ciBlockedText,
+  ciBlockedLink,
   focusButton,
   viewButton,
   loadMore,
@@ -136,6 +140,9 @@ export function NotificationPanel() {
   const [resolvedApprovals, setResolvedApprovals] = useState<Record<string, "allow" | "deny" | "expired">>({});
   // Track which approval IDs have an in-flight RPC so we can disable buttons while waiting.
   const [pendingApprovals, setPendingApprovals] = useState<Record<string, boolean>>({});
+  // Track approvals blocked by the CI-red guard (AC5) so we can show the inline
+  // explanation + "Approve anyway" affordance instead of the generic "expired" state.
+  const [blockedApprovals, setBlockedApprovals] = useState<Record<string, string>>({});
 
   // Seed resolvedApprovals from persisted metadata when history loads or updates.
   // The server stamps "approval_decision" on the notification record when an approval
@@ -159,14 +166,21 @@ export function NotificationPanel() {
     }
   }, [notificationHistory]);
 
-  const resolveApproval = useCallback(async (approvalId: string, decision: "allow" | "deny", notificationIds: string | string[]) => {
+  const resolveApproval = useCallback(async (approvalId: string, decision: "allow" | "deny", notificationIds: string | string[], overrideCiBlock?: boolean) => {
     setPendingApprovals(prev => ({ ...prev, [approvalId]: true }));
     try {
-      await getClient().resolveApproval(create(ResolveApprovalRequestSchema, { approvalId, decision }));
+      await getClient().resolveApproval(create(ResolveApprovalRequestSchema, { approvalId, decision, overrideCiBlock }));
       setResolvedApprovals(prev => ({ ...prev, [approvalId]: decision }));
+      setBlockedApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });
       // Single call: marks as read in history AND closes the active toast
       acknowledgeNotification(notificationIds);
     } catch (err) {
+      // AC5: CI-red block — show an inline explanation next to Approve/Deny instead of
+      // collapsing into the generic "expired" state (not a silent no-op).
+      if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
+        setBlockedApprovals(prev => ({ ...prev, [approvalId]: err.rawMessage || err.message }));
+        return;
+      }
       console.error("Failed to resolve approval:", err);
       // Approval already timed out or was resolved elsewhere — mark as expired.
       setResolvedApprovals(prev => ({ ...prev, [approvalId]: "expired" }));
@@ -448,6 +462,7 @@ export function NotificationPanel() {
                           const approvalId = notification.metadata!.approval_id;
                           const resolved = resolvedApprovals[approvalId];
                           const isPending = !!pendingApprovals[approvalId];
+                          const blockedMessage = blockedApprovals[approvalId];
 
                           if (resolved === "allow") {
                             return <span className={resolvedBadge} data-decision="allow">✓ Approved</span>;
@@ -457,6 +472,45 @@ export function NotificationPanel() {
                           }
                           if (resolved === "expired") {
                             return <span className={resolvedBadge} data-decision="expired">Expired</span>;
+                          }
+                          if (blockedMessage) {
+                            // AC5/Story 2.2.4: visible inline explanation (not a silent no-op or
+                            // disabled button) plus an audited "Approve anyway" override.
+                            const { text: blockedText, checksUrl } = splitCIBlockMessage(blockedMessage);
+                            return (
+                              <div className={ciBlockedRow} data-testid="ci-block-message">
+                                <span className={ciBlockedText}>⚠️ {blockedText}</span>
+                                {checksUrl && (
+                                  <a
+                                    href={checksUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={ciBlockedLink}
+                                    data-testid="ci-block-view-run-link"
+                                  >
+                                    View CI run
+                                  </a>
+                                )}
+                                <div className={itemActions}>
+                                  <button
+                                    className={approveButton}
+                                    onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)}
+                                    disabled={isPending}
+                                    title="Approve despite failing CI"
+                                  >
+                                    {isPending ? "…" : "Approve anyway"}
+                                  </button>
+                                  <button
+                                    className={denyButton}
+                                    onClick={() => resolveApproval(approvalId, "deny", group.allIds)}
+                                    disabled={isPending}
+                                    title="Deny this tool use"
+                                  >
+                                    {isPending ? "…" : "✗ Deny"}
+                                  </button>
+                                </div>
+                              </div>
+                            );
                           }
                           return (
                             <>

@@ -1193,3 +1193,38 @@ describe("BacklogItemDetail — regression: Collapsible's defaultExpanded-in-gro
     warnSpy.mockRestore();
   });
 });
+
+describe("BacklogItemDetail — Epic 4.2 (backlog-github-two-way-sync): Source section", () => {
+  it("BacklogItemDetail_should_OmitSourceSection_When_ExternalUrlEmpty", async () => {
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("collapsible-header-source")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderSourceSection_When_ExternalUrlPresent", async () => {
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([session]),
+      externalUrl: "https://github.com/acme/widget/issues/42",
+      externalId: "42",
+      labels: ["bug"],
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("collapsible-header-source")).toBeInTheDocument();
+  });
+});

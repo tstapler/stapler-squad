@@ -36,6 +36,10 @@ var testSocketPrefixes = []string{
 	"test_exit_empty_",
 	"test_keepalive_",
 	"test_recovery_",
+	"test_killcm_",
+	"test_restart_cm_",
+	"test_cmdlen_repro_",
+	"test_cmdlen_fixed_",
 	"integration_",
 	"test-isolated-",
 }
@@ -67,9 +71,22 @@ func ReapLeakedTestServers() {
 			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = safeexec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, tmuxBinary(), "-L", name, "kill-server").Run()
 		cancel()
 	}
+}
+
+// tmuxBinary mirrors session/tmux's Binary() env-var check (TMUX_BIN) without
+// importing that package, which would reintroduce the import cycle this
+// package exists to avoid. Keeps kill-server on the same TMUX_BIN-pinned
+// binary that created the socket, consistent with the convention commit
+// dccee742a applied to the rest of the test suite for the same reason
+// (avoiding cross-version protocol mismatches against a pinned test build).
+func tmuxBinary() string {
+	if bin := os.Getenv("TMUX_BIN"); bin != "" {
+		return bin
+	}
+	return "tmux"
 }
 
 // extractTestSocketPID finds the PID embedded in a test socket name.
@@ -126,7 +143,7 @@ if [ -d "$SOCKDIR" ]; then
         [ -S "$f" ] || continue
         name=$(basename "$f")
         case "$name" in
-            *_${PID}_*|*-${PID}) tmux -L "$name" kill-server 2>/dev/null; true ;;
+            *_${PID}_*|*-${PID}) "${TMUX_BIN:-tmux}" -L "$name" kill-server 2>/dev/null; true ;;
         esac
     done
 fi

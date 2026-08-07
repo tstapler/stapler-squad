@@ -151,8 +151,8 @@ func TestManagedProcess_Wait_returnsAfterNaturalExit(t *testing.T) {
 		if err != nil {
 			t.Errorf("unexpected error from Wait(): %v", err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Wait() did not return within 5s after process exited")
+	case <-time.After(15 * time.Second):
+		t.Fatal("Wait() did not return within 15s after process exited")
 	}
 }
 

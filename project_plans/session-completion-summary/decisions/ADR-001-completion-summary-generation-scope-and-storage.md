@@ -1,7 +1,20 @@
 # ADR-001: Completion Summary — Generation Scope and Storage Independence from the Session Row
 
-**Status**: Accepted
+**Status**: Superseded by [ADR-002](./ADR-002-generation-trigger-scope-both-events-via-precleanup-snapshot.md) (2026-08-03)
 **Date**: 2026-08-02
+
+> **2026-08-03 update**: A later SDD pass re-ran ideation against the actual
+> backlog item (`59bbff11-ee8b-418c-8484-64307cb14244`) and produced
+> `requirements.md`/AC-1/AC-7, which explicitly require both `EventExited`
+> *and* `EventStopped` to produce a full, retrievable, LLM-narrated summary —
+> directly reversing this ADR's Decision §1 and §3 (EventExited-only,
+> deterministic-only-on-stop). ADR-002 records the updated decision and the
+> concrete pre-cleanup snapshot mechanism (`Instance.UpdateDiffStats()` called
+> before `CleanupWorktree()`/`fireLifecycleEvent`) that makes full-fidelity
+> generation on the `Destroy()` path safe despite the storage-deletion race
+> documented below, which is still accurate and still the reason a naive
+> "just also handle EventStopped" change would be wrong. Read this ADR for
+> that race's evidence; read ADR-002 for the resolution actually implemented.
 
 ## Context
 

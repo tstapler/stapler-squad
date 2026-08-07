@@ -106,6 +106,7 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
   const [requiredFlagPrefixes, setRequiredFlagPrefixes] = useState<string[]>([]);
   const [pythonModes, setPythonModes] = useState<string[]>([]);
   const [safePythonImportsOnly, setSafePythonImportsOnly] = useState(false);
+  const [requireCiPassing, setRequireCiPassing] = useState(false);
   const [commandPattern, setCommandPattern] = useState("");
   const [filePattern, setFilePattern] = useState("");
   const [decision, setDecision] = useState<AutoDecision>(AutoDecision.ALLOW);
@@ -159,6 +160,7 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
     setForbiddenFlags(templateSeed.forbiddenFlags ?? []);
     setPythonModes(templateSeed.pythonModes ?? []);
     setSafePythonImportsOnly(templateSeed.safePythonImportsOnly ?? false);
+    setRequireCiPassing(templateSeed.requireCiPassing ?? false);
     setDecision(templateSeed.decision);
     setRiskLevel(templateSeed.riskLevel);
     setPriority(templateSeed.priority);
@@ -224,6 +226,7 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
     setRequiredFlagPrefixes(editRule.requiredFlagPrefixes ?? []);
     setPythonModes(editRule.pythonModes ?? []);
     setSafePythonImportsOnly(editRule.safePythonImportsOnly ?? false);
+    setRequireCiPassing(editRule.requireCiPassing ?? false);
     setCommandPattern(editRule.commandPattern ?? "");
     setFilePattern(editRule.filePattern ?? "");
     setDecision(editRule.decision ?? AutoDecision.ESCALATE);
@@ -313,6 +316,7 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
         requiredFlagPrefixes: mode === "structured" ? requiredFlagPrefixes : [],
         pythonModes: mode === "structured" ? pythonModes : [],
         safePythonImportsOnly: mode === "structured" ? safePythonImportsOnly : false,
+        requireCiPassing,
       };
       if (destination === "config" && onSaveToConfig && !editRule) {
         await onSaveToConfig(rulePayload);
@@ -556,6 +560,10 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
           <label className={checkboxRow}>
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
             Rule enabled
+          </label>
+          <label className={checkboxRow} data-testid="require-ci-passing-checkbox">
+            <input type="checkbox" checked={requireCiPassing} onChange={(e) => setRequireCiPassing(e.target.checked)} />
+            Require CI passing on this branch
           </label>
         </div>
       </div>

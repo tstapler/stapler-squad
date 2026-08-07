@@ -249,6 +249,7 @@ type prCreator interface {
 	CreatePR(title, body string) (prURL string, prNumber int, err error)
 	EnablePRAutoMerge(prNumber int) error
 	RequestCopilotReview(prNumber int) error
+	HasCommitsAheadOfMain(mainBranch string) (bool, error)
 }
 
 // defaultPRCreatorFactory constructs the push/PR-creation client for a given
@@ -278,6 +279,22 @@ func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*git
 		return nil, fmt.Errorf("could not resolve a GitHub owner/repo from the git remote at %s", repoPath)
 	}
 	return github.GetPRForBranch(ctx, ref.Owner(), ref.Repo(), branch)
+}
+
+// defaultPRByNumberFinder resolves repoPath's GitHub owner/repo from its git
+// remote, then looks up prNumber directly (immutable-number-keyed, not
+// branch-name-keyed — see github.GetPRByNumber's doc comment). This is the
+// production default installed by newListenerBase for
+// verifyPRHeadBranchMatchesTracked's live-GitHub re-check.
+func defaultPRByNumberFinder(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
+	ref, err := github.GetOwnerRepoFromRemote(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	if !ref.IsValid() {
+		return nil, fmt.Errorf("could not resolve a GitHub owner/repo from the git remote at %s", repoPath)
+	}
+	return github.GetPRByNumber(ctx, ref.Owner(), ref.Repo(), prNumber)
 }
 
 // maxConcurrentReviewGates is the maximum number of review gates that can run
@@ -367,6 +384,19 @@ type BacklogLifecycleListener struct {
 	// repoPath's git remote, then queries GitHub); overridable in tests to
 	// avoid real GitHub API calls or needing a real git remote on disk.
 	orphanedPRFinder func(ctx context.Context, repoPath, branch string) (*github.PRInfo, error)
+
+	// prByNumberFinderMu guards prByNumberFinder for concurrent Set/get access.
+	prByNumberFinderMu sync.RWMutex
+	// prByNumberFinder looks up a PR by its immutable number — used by
+	// verifyPRHeadBranchMatchesTracked to re-verify, via a live GitHub lookup,
+	// that item.PrNumber's real head branch still matches the item's
+	// currently-tracked branch before an automated reconciliation call site
+	// treats that PR number as ground truth (Story 6, adversarial-review.md's
+	// Blocker). Defaults to defaultPRByNumberFinder via newListenerBase
+	// (resolves owner/repo from repoPath's git remote, then queries GitHub by
+	// PR number); overridable in tests to avoid real GitHub API calls or
+	// needing a real git remote on disk.
+	prByNumberFinder func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error)
 
 	// branchReconcilerMu guards branchReconciler for concurrent Set/get access.
 	branchReconcilerMu sync.RWMutex
@@ -645,6 +675,24 @@ func (l *BacklogLifecycleListener) getOrphanedPRFinder() func(ctx context.Contex
 	return l.orphanedPRFinder
 }
 
+// SetPRByNumberFinder overrides the function used to look up a PR by its
+// immutable number, used by verifyPRHeadBranchMatchesTracked (Story 6).
+// Overridable in tests to avoid real GitHub API calls or needing a real git
+// remote on disk; production code never needs to call this, since
+// newListenerBase installs defaultPRByNumberFinder.
+func (l *BacklogLifecycleListener) SetPRByNumberFinder(f func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error)) {
+	l.prByNumberFinderMu.Lock()
+	defer l.prByNumberFinderMu.Unlock()
+	l.prByNumberFinder = f
+}
+
+// getPRByNumberFinder returns the current PR-by-number finder under a read lock.
+func (l *BacklogLifecycleListener) getPRByNumberFinder() func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
+	l.prByNumberFinderMu.RLock()
+	defer l.prByNumberFinderMu.RUnlock()
+	return l.prByNumberFinder
+}
+
 // SetBranchReconciler overrides the function used to fetch+merge a branch's
 // remote ref into its worktree for push_failed remediation
 // (attemptPushRemediation). Overridable in tests to avoid needing a real git
@@ -769,6 +817,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 		prCreatorFactory:        defaultPRCreatorFactory,
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,
+		prByNumberFinder:        defaultPRByNumberFinder,
 	}
 	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
@@ -860,6 +909,30 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		return
 	}
 
+	// Snapshot before this call's own bookkeeping (below) overwrites it: a
+	// non-nil EndedAt here means some OTHER code path already deliberately
+	// closed this session out before this exit event even arrived, and that
+	// path — not this one — owns whatever should happen next. See BUG-064:
+	// RemediateStaleWorkSession ends a stale work session's ItemSession row
+	// and kills its tmux pane (KillTmuxPaneOnly -> Instance.KillSession) before
+	// calling AutoRespawnAutonomousWork to give the item a fresh work-session
+	// turn. Killing the pane fires this exact onSessionExited path
+	// asynchronously, in its own goroutine (instanceBacklogListener.
+	// OnLifecycleEvent), racing AutoRespawnAutonomousWork's synchronous
+	// respawn. This handler's DB-only work is reliably faster than
+	// AutoRespawnAutonomousWork's (GetBacklogItem + ListItemSessions +
+	// tombstone + SpawnSessionFromItem), so without this guard it wins nearly
+	// every time — flipping status to review out from under
+	// AutoRespawnAutonomousWork, whose own "already moved on" guard then
+	// silently no-ops (no error, no log line), permanently discarding the
+	// intended fresh work session and instead re-reviewing the exact same
+	// stale, already-rejected diff. Confirmed live (item 2d7fac56,
+	// 2026-08-06T00:44:12): staplersquad.log shows "ended stale work
+	// session=...respawning" immediately followed by "transitioned to review"
+	// for the very same session, with no AutoRespawnAutonomousWork log line
+	// ever appearing.
+	alreadyEndedByOtherPath := is.EndedAt != nil
+
 	// Record end time for all session roles (triage, review, work).
 	now := time.Now()
 	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition bookkeeping timestamp; the zombie-session detector (reconcileStuckReviewItems) falls back to SessionLivenessChecker rather than relying solely on EndedAt, so a failed write here doesn't fully hide a dead session
@@ -880,6 +953,16 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	case SessionRoleWork:
 		// fall through to the in_progress→review/done logic below.
 	default:
+		return
+	}
+
+	if alreadyEndedByOtherPath {
+		// Whoever closed this session out ahead of this exit event already
+		// owns the follow-up (e.g. AutoRespawnAutonomousWork deciding whether
+		// to spawn a fresh work session) — driving our own status transition
+		// here would race it and, per BUG-064, reliably win, silently
+		// discarding that follow-up. Nothing further to do.
+		log.DebugLog.Printf("[BacklogLifecycle] onSessionExited item=%s session=%s: already ended by another code path before this exit event; skipping status transition", is.BacklogItemID, sessionUUID)
 		return
 	}
 
@@ -1504,6 +1587,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// detector's panic cannot skip the others or merge detection below.
 	var okNames, panickedNames []string
 
+	// Re-read each live work session's actual HEAD into its ItemSession row, so
+	// LastCommitSha means "the session's latest commit" rather than the value it
+	// was seeded with at spawn. Registered first so every detector below in this
+	// same tick — notably pr_ready+merge_detection's closeIfSupersededByMain —
+	// sees fresh data rather than lagging a full tick behind (BUG-047).
+	l.runStuckDetector("work_commit_refresh", &okNames, &panickedNames, func() {
+		l.refreshWorkSessionGitActivity(ctx)
+	})
+
 	// Flag in_progress work sessions that have gone quiet for too long. Detection +
 	// notification only — a slow-but-alive agent should not be force-stopped.
 	l.runStuckDetector("stale_work", &okNames, &panickedNames, func() {
@@ -1517,6 +1609,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// resolve half for the structurally similar in_progress case.
 	l.runStuckDetector("rework_blocked_stale", &okNames, &panickedNames, func() {
 		l.reconcileReworkBlockedStaleResolution(ctx, er)
+	})
+
+	// Resolve-only pass for respawn_blocked_active: load-bearing (not merely
+	// convenient) for AutoRespawnReview, whose only caller gates the respawn
+	// behind a backoff that eventually parks and stops re-invoking it — see
+	// reconcileRespawnBlockedActiveResolution's doc comment for the full
+	// orphaned-row scenario this closes.
+	l.runStuckDetector("respawn_blocked_active", &okNames, &panickedNames, func() {
+		l.reconcileRespawnBlockedActiveResolution(ctx, er)
 	})
 
 	// Flag review-status items that already have a review verdict but nothing
@@ -1801,6 +1902,21 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		if !dead && checker != nil {
 			dead = !checker(latest.SessionUUID)
 		}
+		if !dead && latest.Edges.ReviewVerdict != nil && time.Since(latest.Edges.ReviewVerdict.CreatedAt) > reviewVerdictIdleThreshold {
+			// A reviewer that submitted a verdict and then simply never exited
+			// (process alive, no further output) reads as alive forever per the
+			// checks above — submitReviewVerdict's eager review->in_progress
+			// transition (server/mcp/tools_backlog.go) is the primary fix for
+			// this shape on FAIL/PARTIAL/UNVERIFIABLE, but this sweep is what
+			// still needs to catch PASS verdicts (deferred to session-exit by
+			// design) and any case the eager path didn't reach (e.g. no
+			// AutoReopenSpawner wired, or the process crashed between saving
+			// the verdict and running the eager transition). Age the verdict
+			// itself instead of the session, independent of whatever the
+			// liveness checker (or its absence, see getSessionLivenessChecker's
+			// doc comment) reports.
+			dead = true
+		}
 		if !dead {
 			continue // still plausibly wrapping up on its own — leave it alone
 		}
@@ -2029,6 +2145,16 @@ func findOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason doma
 // magnitude of maxTriageSessionAge (server/services/backlog_service_triage.go).
 const maxWorkSessionStaleness = 2 * time.Hour
 
+// reviewVerdictIdleThreshold bounds how long reconcileUnprocessedReviewVerdicts
+// trusts SessionLivenessChecker's "alive" verdict once a review session has
+// actually saved a verdict. Set to maxWorkSessionStaleness's value rather than
+// abandonedReview's much shorter 15-minute grace: a reviewer doing legitimately
+// slow verification (large diff, running a full test suite) must not be reaped
+// mid-review, so this errs conservative — same order of magnitude as the other
+// "is this session still doing real work" threshold in this file, not the much
+// tighter "did anything ever start" grace period abandonedReview enforces.
+const reviewVerdictIdleThreshold = maxWorkSessionStaleness
+
 // headlessTriageSessionUUIDPrefix mirrors server/services/backlog_service_triage.go's
 // headlessTriageUUIDPrefix constant (duplicated here rather than imported: server/services
 // imports this package, so the reverse import would cycle). Headless triage sessions have
@@ -2075,6 +2201,96 @@ const maxHeadlessTriageSessionStaleness = 35 * time.Minute
 // same lag autoReopenWithBackoffGate/retryPushFailedWithBackoffGate get for
 // free from being invoked out-of-band from their reason's own MarkStuck call
 // site.
+// refreshWorkSessionGitActivity re-reads the real current tip commit of each
+// non-terminal item's most recent work session and writes it back to that
+// session's LastCommitSha/LastCommitMessage/LastCommitAt/CommitCountSinceSpawn.
+//
+// Before this existed, LastCommitSha was written exactly once — at spawn, with
+// the worktree's pre-work base HEAD (see SetItemSessionBaseCommit) — and never
+// again, so a field named "last commit" permanently held a commit the session
+// had not authored. Every consumer that asked "has this session's work landed
+// on main?" therefore got an unconditional yes, because a branch's own base
+// commit is by construction already an ancestor of main. That is how
+// closeIfSupersededByMain closed PR #342 — a real, reviewed, CI-green fix — as
+// "superseded" and marked its item done (BUG-047).
+//
+// Deliberately reuses the sweep loop every other stuck detector already runs on
+// rather than adding a poller of its own; it is registered first in that sweep
+// so same-tick consumers read fresh values.
+//
+// Best-effort throughout: an unresolvable HEAD leaves the stored value alone
+// rather than clearing it, because the last known real tip is still the most
+// accurate answer available once a merged branch has been deleted. Writes are
+// skipped entirely when the tip has not moved, so an idle session costs one
+// HEAD read per tick and no DB write or change event.
+func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Context) {
+	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
+		Statuses: []string{
+			string(BacklogStatusInProgress),
+			string(BacklogStatusReview),
+			string(BacklogStatusPRPending),
+		},
+	})
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity list error: %v", err)
+		return
+	}
+
+	for _, item := range items {
+		if item.RepoPath == "" {
+			continue
+		}
+		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListItemSessions item=%s: %v", item.ID, sessErr)
+			continue
+		}
+		var lastWork *ItemSessionSummary
+		for i := range sessions {
+			// Ascending by CreatedAt (ListItemSessions' query order) — keep
+			// overwriting so this ends up holding the *most recent* work session.
+			if sessions[i].Role == SessionRoleWork {
+				lastWork = &sessions[i]
+			}
+		}
+		if lastWork == nil {
+			continue
+		}
+
+		head := l.resolveLatestWorkCommit(ctx, lastWork.SessionUUID, item.RepoPath)
+		if head == "" || head == lastWork.LastCommitSha {
+			continue
+		}
+		// The base commit is not a commit this session authored — recording it
+		// as the latest is precisely the bug this function exists to prevent.
+		if head == lastWork.BaseCommitSha {
+			continue
+		}
+
+		info, infoErr := git.CommitInfo(item.RepoPath, head)
+		if infoErr != nil {
+			log.DebugLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity CommitInfo item=%s sha=%s: %v", item.ID, head, infoErr)
+			continue
+		}
+
+		commitCount := lastWork.CommitCountSinceSpawn
+		if lastWork.BaseCommitSha != "" {
+			if shipped, listErr := git.ListShippedCommits(item.RepoPath, lastWork.BaseCommitSha, head); listErr == nil {
+				commitCount = len(shipped)
+			} else {
+				log.DebugLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListShippedCommits item=%s: %v", item.ID, listErr)
+			}
+		}
+
+		if updErr := l.storage.UpdateItemSessionGitActivity(ctx, lastWork.ID, head, info.Summary, info.AuthorAt, commitCount); updErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity update item=%s session=%s: %v", item.ID, lastWork.SessionUUID, updErr)
+			continue
+		}
+		log.DebugLog.Printf("[BacklogLifecycle] refreshWorkSessionGitActivity item=%s session=%s: last commit %s → %s (%d since base)",
+			item.ID, lastWork.SessionUUID, lastWork.LastCommitSha, head, commitCount)
+	}
+}
+
 func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
 		Statuses: []string{string(BacklogStatusInProgress)},
@@ -2215,6 +2431,57 @@ func (l *BacklogLifecycleListener) reconcileReworkBlockedStaleResolution(ctx con
 	}
 }
 
+// reconcileRespawnBlockedActiveResolution is the resolve-only counterpart to
+// notifyRespawnBlockedByActiveSession (server/services/backlog_service_triage.go),
+// which marks StuckReasonRespawnBlockedActive but has no periodic tick of its
+// own guaranteed to notice when the blocking session ends. Unlike
+// reconcileReworkBlockedStaleResolution above, this closes a gap that is not
+// merely "convenient" but load-bearing for one of the three guarding
+// functions: AutoRespawnReview's only caller, markAbandonedReview, gates the
+// respawn attempt behind Storage.RemediationDue(StuckReasonAbandonedReview)
+// — once that gate exhausts its attempts and parks, markAbandonedReview never
+// calls AutoRespawnReview again for that item, so MarkStuck's own
+// guard-passing resolve path (the resolveRespawnBlockedActiveLogged call at
+// the top of AutoRespawnAutonomousWork/AutoReopenForPRFix/AutoRespawnReview)
+// would never re-run and the row would be permanently orphaned — reproducing
+// the exact "silently stuck forever" bug class this whole reason exists to
+// surface. AutoRespawnAutonomousWork and AutoReopenForPRFix don't strictly
+// need this sweep (both are re-invoked on every reconcile tick regardless of
+// backoff/parking), but StuckReasonRespawnBlockedActive is a single shared
+// reason across all three call sites, so one unconditional sweep covering all
+// of them is simpler and more robust than trying to prove each caller's retry
+// path is unconditional.
+//
+// Unlike reconcileReworkBlockedStaleResolution, this needs no
+// SessionStopper-backed liveness/staleness check (no Resolver interface
+// indirection) — StuckReasonRespawnBlockedActive only cares whether the
+// blocking work/review ItemSession has ended, a plain EndedAt-nil check
+// already available in-package via hasActiveSession (see its doc comment:
+// "package-local equivalent of server/services' hasActiveWorkSession/
+// hasActiveReviewSession"). Best-effort: query errors are logged, never
+// returned, so one item's failure can't skip the rest.
+func (l *BacklogLifecycleListener) reconcileRespawnBlockedActiveResolution(ctx context.Context, er *EntRepository) {
+	open, openErr := er.FindOpenStuckStates(ctx)
+	if openErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileRespawnBlockedActiveResolution FindOpenStuckStates error: %v", openErr)
+		return
+	}
+	for _, row := range open {
+		if row.Reason != domain.StuckReasonRespawnBlockedActive {
+			continue
+		}
+		sessions, sessErr := l.storage.ListItemSessions(ctx, row.ItemID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileRespawnBlockedActiveResolution ListItemSessions item=%s: %v", row.ItemID, sessErr)
+			continue
+		}
+		if hasActiveSession(sessions) {
+			continue // still genuinely blocked — leave the row open
+		}
+		l.resolveStuckLogged(ctx, er, row.ItemID, domain.StuckReasonRespawnBlockedActive, "reconcileRespawnBlockedActiveResolution")
+	}
+}
+
 // remediateStaleWorkWithBackoffGate dispatches StaleWorkRemediator.
 // RemediateStaleWorkSession through the shared remediation backoff gate
 // (Storage.RemediationDue, session/backlog_remediation.go) — the
@@ -2268,13 +2535,73 @@ func (l *BacklogLifecycleListener) remediateStaleWorkWithBackoffGate(ctx context
 	}()
 }
 
-// reconcileOrphanedTriageItems flags idea-status items whose most recent triage-role
-// ItemSession never got the item to "ready". Two distinct shapes share this one
-// detector and StuckReason:
+// latestTriageSession returns the most recent triage-role ItemSession (by
+// CreatedAt), regardless of whether it has ended yet, or nil if none exists.
+// Shared by reconcileOrphanedTriageItems (which needs both the open-and-stale
+// and already-ended cases) and reconcilePlanNotApprovedItems (which only
+// needs to check whether the latest attempt left a usable result behind).
+func latestTriageSession(sessions []ItemSessionSummary) *ItemSessionSummary {
+	var latest *ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role != SessionRoleTriage {
+			continue
+		}
+		if latest == nil || sessions[i].CreatedAt.After(latest.CreatedAt) {
+			latest = &sessions[i]
+		}
+	}
+	return latest
+}
+
+// triageEndReasonOrUnknown formats a persisted ItemSession.EndReason (the
+// errType bucket TriggerTriage's classifyHeadlessCallError writes via
+// UpdateItemSessionEndedWithReason — server/services/backlog_service_triage.go)
+// for a human-facing stuck-reason message. Falls back to "unknown" rather than
+// rendering an empty parenthetical: a session can also end via the plain
+// UpdateItemSessionEnded path (no errType classification recorded — e.g. a
+// legacy row predating classifyHeadlessCallError, or the shutdown-respawn
+// carve-out having already routed the "shutdown" bucket away before this is
+// ever reached), and "ended () without..." would read as a rendering bug
+// rather than a genuinely uncategorized failure.
+func triageEndReasonOrUnknown(endReason string) string {
+	if endReason == "" {
+		return "unknown"
+	}
+	return endReason
+}
+
+// reconcileOrphanedTriageItems flags items gated on plan approval (no
+// SkipPlanning, no PlanApproved) whose most recent triage-role ItemSession
+// never left a usable plan behind. Originally scoped to idea-status items
+// only; generalized 2026-08-03 (docs/tasks/backlog-feature-improvement.md)
+// after item be676dab sat 22h+ stuck with a null triageResult: its triage
+// session ran 8h52m and produced nothing usable, but the item had already
+// advanced from idea to queued (via the WIP cap) before that mattered, which
+// put it entirely outside this detector's old status==idea-only scope —
+// reconcilePlanNotApprovedItems flagged it too, but treated it identically to
+// the normal "plan generated, awaiting your review" wait, with no
+// distinction and no automated retry path. The key generalization: this
+// detector now keys off "item lacks an approved/skippable plan and lacks a
+// usable triage result" rather than "item status == idea" — a superset that
+// still covers the original idea-status shapes unchanged.
 //
-//  1. Still open and stale — the triage process crashed, was killed, or a server
-//     restart happened mid-triage before the completion goroutine ever ran.
-//     Previously this class of failure was only caught by
+// Deliberately NOT generalized to "ready" status: TriggerTriage only ever
+// transitions idea->ready immediately after a successful *parse* of the
+// headless call's output (see its cleanupCtx block) — that transition is
+// NOT additionally gated on the subsequent TriageResult persist write also
+// succeeding (persistFailures there only drives a one-time notification, not
+// a rollback), so a transient persist failure can in principle still leave a
+// ready item with an empty TriageResult on its latest session. That's a
+// real, pre-existing gap (nothing today detects "ready" items at all), but
+// one step further down the pipeline than this generalization's scope —
+// tracked separately rather than folded in here. idea and queued are the two
+// statuses this detector understands today.
+//
+// Three shapes share this one detector and StuckReason:
+//
+//  1. Still open and stale (idea only) — the triage process crashed, was
+//     killed, or a server restart happened mid-triage before the completion
+//     goroutine ever ran. Previously this class of failure was only caught by
 //     tombstoneOrphanTriageSessions (same package, server/services/
 //     backlog_service_triage.go), and only when a human manually re-triggered
 //     triage on the item; this is the standing-sweep equivalent. Pure staleness
@@ -2285,24 +2612,30 @@ func (l *BacklogLifecycleListener) remediateStaleWorkWithBackoffGate(ctx context
 //     common case) get the much shorter maxHeadlessTriageSessionStaleness (30m)
 //     rather than the general-purpose maxWorkSessionStaleness (2h): an open
 //     headless row found later reliably means dead, not slow (see that constant's
-//     doc comment).
-//  2. Already ended, but the item never left idea — the headless call errored, or
-//     returned output ParseHeadlessTriageResult rejected (e.g. a premature-
+//     doc comment). Not generalized beyond idea: nothing in this codebase creates
+//     a new triage-role session while an item is queued, so an open session found
+//     on a queued item would be an unmodeled anomaly, not this shape.
+//  2. Already ended, idea-status item never left idea — the headless call errored,
+//     or returned output ParseHeadlessTriageResult rejected (e.g. a premature-
 //     completion status message instead of the final JSON block — see
 //     docs/tasks/backlog-feature-improvement.md's 2026-07-30 entry for the live
 //     incident, item 04089969, this shape was added for). Unlike shape 1, no
 //     staleness wait is needed: TriggerTriage always attempts the idea->ready
-//     transition immediately after a successful parse (see its cleanupCtx block),
-//     so a triage session with EndedAt set while the item is still in idea is an
-//     unambiguous "triage did not succeed" signal, not a race with an in-flight
-//     write. Before this shape existed, a session in this state had no detector at
-//     all: it doesn't match shape 1 (EndedAt is non-nil), and nothing else flags an
-//     idea-status item whose triage session simply exited without transitioning it.
+//     transition immediately after a successful parse, so a triage session with
+//     EndedAt set while the item is still in idea is an unambiguous "triage did
+//     not succeed" signal, not a race with an in-flight write.
+//  3. Already ended, item advanced past idea (queued) while still gated (no
+//     SkipPlanning, no PlanApproved) and the ended session left no usable
+//     TriageResult — the 2026-08-03 generalized shape. Unlike shape 2, "ended"
+//     alone isn't the signal (a queued item legitimately has an ended,
+//     SUCCESSFUL triage session behind it in the common case — that's a normal,
+//     working-as-designed wait for human plan approval, not a failure): this
+//     shape additionally requires the latest session's TriageResult be empty.
 //
 // Best-effort: query/notify failures are logged, never returned.
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
-		Statuses: []string{string(BacklogStatusIdea)},
+		Statuses: []string{string(BacklogStatusIdea), string(BacklogStatusQueued)},
 	})
 	if err != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems list error: %v", err)
@@ -2316,26 +2649,24 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			continue
 		}
 		// Find the most recent triage-role session regardless of whether it has
-		// ended yet — shape 1 above needs the open-and-stale case, shape 2 needs
-		// the already-ended case, and both only ever care about the single latest
-		// attempt (an older, already-superseded session should never re-trigger
-		// this detector).
-		var latestTriage *ItemSessionSummary
-		for i := range sessions {
-			if sessions[i].Role != SessionRoleTriage {
-				continue
-			}
-			if latestTriage == nil || sessions[i].CreatedAt.After(latestTriage.CreatedAt) {
-				latestTriage = &sessions[i]
-			}
-		}
+		// ended yet — shape 1 above needs the open-and-stale case, shapes 2/3 need
+		// the already-ended case, and all three only ever care about the single
+		// latest attempt (an older, already-superseded session should never
+		// re-trigger this detector).
+		latestTriage := latestTriageSession(sessions)
 		if latestTriage == nil {
 			continue // no triage session has ever run for this item
 		}
 
+		isIdea := item.Status == string(BacklogStatusIdea)
+
 		var reasonDetail string
 		if latestTriage.EndedAt == nil {
-			// Shape 1: still open. Staleness gate as before.
+			// Shape 1: still open. Staleness gate as before — idea only, see doc
+			// comment above for why this isn't generalized to queued.
+			if !isIdea {
+				continue
+			}
 			isHeadless := strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix)
 			staleness := maxWorkSessionStaleness
 			if isHeadless {
@@ -2367,8 +2698,9 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			}
 			reasonDetail = fmt.Sprintf("triage session %s still open after %s", latestTriage.SessionUUID, staleness)
 		} else {
-			// Shape 2: already ended, item still in idea. Nothing to tombstone —
-			// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
+			// Already ended. The shutdown carve-out applies to both shape 2 (idea)
+			// and shape 3 (queued) identically — a self-inflicted, zero-evidence
+			// event either way.
 			if latestTriage.EndReason == "shutdown" { // must match classifyHeadlessCallError's bucket name (server/services/backlog_service_triage.go)
 				// The prior attempt was killed by our OWN graceful shutdown (a routine
 				// deploy restart cancelling s.shutdownCtx mid-call, not a failure of
@@ -2389,10 +2721,34 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				}
 				continue
 			}
-			reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
+
+			if isIdea {
+				// Shape 2: already ended, item still in idea. Nothing to tombstone —
+				// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
+				// EndReason carries classifyHeadlessCallError's bucket
+				// (server/services/backlog_service_triage.go) — surface it so the
+				// operator (and any future automated remediation) sees the actual
+				// failure category instead of a generic "ended" message with no
+				// diagnostic value. See triageEndReasonOrUnknown's doc comment for
+				// why an empty EndReason still renders instead of being omitted.
+				reasonDetail = fmt.Sprintf("triage session %s ended (%s) without moving the item out of idea",
+					latestTriage.SessionUUID, triageEndReasonOrUnknown(latestTriage.EndReason))
+			} else {
+				// Shape 3 (generalized): item advanced past idea (queued) but is
+				// still gated on plan approval, and its most recent triage session
+				// left no usable plan. An item that IS gated but DOES have a real
+				// plan (or has SkipPlanning/PlanApproved set) is
+				// reconcilePlanNotApprovedItems' normal "awaiting human review"
+				// case, not this detector's concern.
+				if item.SkipPlanning || item.PlanApproved || latestTriage.TriageResult != "" {
+					continue
+				}
+				reasonDetail = fmt.Sprintf("triage session %s ended (%s) with no usable plan while item was gated on plan approval (status=%s)",
+					latestTriage.SessionUUID, triageEndReasonOrUnknown(latestTriage.EndReason), item.Status)
+			}
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, reasonDetail)
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuck item=%s: %v", item.ID, markErr)
 			continue
@@ -2413,7 +2769,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		log.WarningLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned (%s)", item.ID, latestTriage.SessionUUID, reasonDetail)
 		l.notify(item.ID,
 			"Triage may be stuck",
-			fmt.Sprintf("%s — its triage session ended without moving the item to Ready and nothing is running. Re-trigger triage or investigate.", item.Title),
+			fmt.Sprintf("%s — its triage session ended without producing a usable plan and nothing is running. Re-trigger triage or investigate.", item.Title),
 			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)
@@ -2422,7 +2778,8 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		}
 	}
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
-	// reason once the item leaves 'idea' — i.e. once triage is re-triggered and succeeds.
+	// reason once the item leaves idea/queued — i.e. once triage is
+	// re-triggered and succeeds (idea->ready), or the item is otherwise resolved.
 }
 
 // reconcileOrphanedTriageRemediation retries triage for every open
@@ -2447,8 +2804,8 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx contex
 		if row.Reason != domain.StuckReasonOrphanedTriage {
 			continue
 		}
-		if row.ItemStatus != BacklogStatusIdea {
-			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea
+		if row.ItemStatus != BacklogStatusIdea && row.ItemStatus != BacklogStatusQueued {
+			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea/queued
 		}
 		l.retryOrphanedTriageWithBackoffGate(ctx, row.ItemID, row.ItemTitle)
 	}
@@ -2536,6 +2893,21 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		}
 		if item.QueuedAt == nil || time.Since(*item.QueuedAt) <= planApprovalStaleness {
 			continue // still plausibly about to be approved/dequeued
+		}
+
+		// An item whose most recent triage session never left a usable plan
+		// behind isn't "awaiting human review of a real plan" — it's the
+		// generalized orphaned-triage shape reconcileOrphanedTriageItems now
+		// also covers (docs/tasks/backlog-feature-improvement.md's 2026-08-03
+		// entry, item be676dab). Defer to that detector instead of flagging the
+		// same item under two differently-worded stuck reasons at once.
+		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems ListItemSessions item=%s: %v", item.ID, sessErr)
+			// Fail open (still flag as plan-not-approved below) — losing session
+			// visibility for one tick shouldn't suppress the pre-existing signal.
+		} else if latest := latestTriageSession(sessions); latest != nil && latest.EndedAt != nil && latest.TriageResult == "" {
+			continue
 		}
 
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, BacklogStatusQueued,
@@ -2702,6 +3074,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 			continue
 		}
 
+		// NOTE: this still looks up by branch name (github.GetPRForBranch via getOrphanedPRFinder), so it has the same blind spot report_pr_created had before the number-keyed fix in tools_github.go's VerifyPRMatchesBranch — a PR opened from a fallback branch is invisible here too. Not fixed here (out of scope per project_plans/report-pr-created-branch-mismatch/requirements.md); a future fast-follow could reuse VerifyPRMatchesBranch/GetPRByNumber's shape.
 		info, prErr := l.getOrphanedPRFinder()(ctx, item.RepoPath, wt.BranchName)
 		if prErr != nil {
 			if !errors.Is(prErr, github.ErrNoPR) {
@@ -2869,6 +3242,16 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			if mergedErr != nil {
 				log.DebugLog.Printf("[BacklogLifecycle] reconcileBouncingItems IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
 			} else if merged {
+				// Story 6 guard (adversarial-review.md's Blocker): re-verify,
+				// via a live GitHub lookup, that PR #item.PrNumber's head
+				// branch still matches this item's currently-tracked branch
+				// before auto-completing it on the strength of item.PrNumber
+				// alone. Fails closed identically to
+				// verifyPRAssociationForFixSpawn's own contract.
+				if !l.verifyPRAssociationForFixSpawn(ctx, item.ID, item.RepoPath, item.PrNumber) {
+					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+					continue
+				}
 				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
 				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition item=%s: %v", item.ID, transErr)
@@ -2915,18 +3298,41 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems CountReviewCyclesSince item=%s: %v", item.ID, countErr)
 			continue
 		}
-		outcome, verdictErr := er.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+		// Fetch the full most-recent verdict (outcome + reviewer summary), not
+		// just the outcome, so a bouncing item's stuck-state context can
+		// surface *why* the last attempt failed instead of only that it did
+		// (BUG-060, the same discard-after-fetch shape BUG-059 fixed for
+		// orphaned_triage's EndReason). Across a multi-cycle bounce there may
+		// be several different verdicts; only the single most recent one is
+		// surfaced here — proportional to a diagnostic string, not a full
+		// verdict history. GetRecentReviewVerdictSummaries runs the identical
+		// "most recent ItemSession with a verdict" query
+		// GetMostRecentReviewVerdictForItem uses, so limit 1 returns the same
+		// verdict either would.
+		recentVerdicts, verdictErr := er.GetRecentReviewVerdictSummaries(ctx, item.ID, 1)
 		if verdictErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems GetMostRecentReviewVerdictForItem item=%s: %v", item.ID, verdictErr)
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems GetRecentReviewVerdictSummaries item=%s: %v", item.ID, verdictErr)
 		}
-		hasPass := outcome == ReviewOutcomePass
+		var latestOutcome, latestSummary string
+		if len(recentVerdicts) > 0 {
+			latestOutcome = recentVerdicts[0].OverallOutcome
+			latestSummary = recentVerdicts[0].Summary
+		}
+		hasPass := latestOutcome == string(ReviewOutcomePass)
 
 		if !isBouncing(count, hasPass) {
 			continue
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatus(item.Status),
-			fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, bounceLookback))
+		reasonDetail := fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, bounceLookback)
+		if latestOutcome != "" {
+			// sanitizeField at 500 matches the existing convention for
+			// rendering a ReviewVerdict.Summary into operator/agent-facing
+			// text (see backlog_context.go, backlog_review.go).
+			reasonDetail = fmt.Sprintf("%s (most recent verdict: %s — %s)", reasonDetail, latestOutcome, sanitizeField(latestSummary, 500))
+		}
+
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems MarkStuck item=%s: %v", item.ID, markErr)
 			continue
@@ -2944,9 +3350,13 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			continue
 		}
 		log.WarningLog.Printf("[BacklogLifecycle] item %s bouncing (%d cycles in %s, no PASS)", item.ID, count, bounceLookback)
+		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, bounceLookback)
+		if latestOutcome != "" {
+			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, sanitizeField(latestSummary, 500))
+		}
 		l.notify(item.ID,
 			"Item is thrashing between work and review",
-			fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, bounceLookback),
+			notifyBody,
 			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)
@@ -3051,7 +3461,14 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		case domain.StuckReasonBouncing:
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
-			resolve = row.ItemStatus != BacklogStatusIdea
+			// Generalized 2026-08-03 to also anchor at queued (see
+			// reconcileOrphanedTriageItems' doc comment): a retry that
+			// successfully re-triages moves the item queued->idea->ready,
+			// landing outside both anchor statuses, so this still resolves
+			// correctly on genuine success. A retry still in flight (queued
+			// reset to idea) or a repeat failure (back to idea) keeps the row
+			// open, matching the pre-existing idea-only behavior.
+			resolve = row.ItemStatus != BacklogStatusIdea && row.ItemStatus != BacklogStatusQueued
 		case domain.StuckReasonPlanNotApproved:
 			resolve = row.ItemStatus != BacklogStatusQueued
 		case domain.StuckReasonPRPendingNoPR:
@@ -3176,14 +3593,34 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 	if ref, parseErr := ParseGitHubURL(prURL); parseErr == nil {
 		prNumber = ref.PRNumber
 	}
-	if prNumber > 0 {
-		prURLCopy, prNumCopy := prURL, prNumber
-		if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-			PrURL:    &prURLCopy,
-			PrNumber: &prNumCopy,
-		}, nil); updateErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback store PR fields item=%s: %v", item.ID, updateErr)
-		}
+	// BUG-063: prNumber<=0 (an unparseable/irrelevant prURL — e.g. the agent's
+	// final output happened to mention an unrelated existing PR rather than
+	// one it just created) must NOT fall through to the unconditional
+	// resolveToPRPending below. Doing so was the exact mechanism that landed
+	// an item in pr_pending with pr_number still 0: permanently invisible to
+	// every downstream reconciler's PrNumberGT(0) filter, with nothing left
+	// to retry. This mirrors the identical BUG-040 shape pushAndCreatePR was
+	// already fixed for (see its own PR-field-persist-failure handling below)
+	// — that fix was never propagated to this sibling call site until now.
+	// We can't tell whether the agent's one-shot actually created a real PR
+	// we simply failed to parse, so — like pushAndCreatePR's own persist
+	// failure — the safe choice is to stay in review and let a human (or the
+	// next TriggerReReview) sort it out, not silently retry PR creation and
+	// risk a duplicate.
+	if prNumber <= 0 {
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
+			fmt.Sprintf("agent-driven ship via one-shot /backlog/ship produced an unusable PR reference (%q)", prURL),
+			fmt.Errorf("could not parse a PR number from the one-shot ship output"))
+		return
+	}
+	prURLCopy, prNumCopy := prURL, prNumber
+	if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURLCopy,
+		PrNumber: &prNumCopy,
+	}, nil); updateErr != nil {
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
+			fmt.Sprintf("failed to persist PR #%d fields from agent-driven ship", prNumber), updateErr)
+		return
 	}
 	if transErr := l.resolveToPRPending(ctx, item.ID, "agent-driven ship via one-shot /backlog/ship", "shipViaAgentOrFallback"); transErr != nil {
 		// May just be a harmless race with RunOneShot's own RecordPRCreatedOutOfBand
@@ -3218,60 +3655,6 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		}
 	}
 
-	// stayInReviewAndNotify handles push/PR-creation failures. Unlike fallbackToDone,
-	// this must NOT transition the item to done: code was committed to the worktree but
-	// never reached GitHub, so marking it done would silently discard that fact. The
-	// item stays in review — a human can retry via TriggerReReview, or fix the underlying
-	// issue (auth, network, branch protection) and let the next review pass retry.
-	stayInReviewAndNotify := func(reason string, err error) {
-		log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s: %s: %v — leaving in review, code is committed but not shipped", item.ID, reason, err)
-
-		notifyToast := func() {
-			l.notify(item.ID,
-				"PR creation failed",
-				fmt.Sprintf("%s — %s: %v. Code is committed locally but not pushed; retry or investigate manually.", item.Title, reason, err),
-				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-			)
-		}
-
-		// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
-		// toast's dedup key below — without a durable repo to gate on, fall back
-		// to the old always-notify behavior rather than silently dropping the toast.
-		er, ok := l.storage.repo.(*EntRepository)
-		if !ok {
-			notifyToast()
-			return
-		}
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
-			fmt.Sprintf("%s: %v", reason, err))
-		if markErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR MarkStuck(push_failed) item=%s: %v", item.ID, markErr)
-			return
-		}
-		if !applied {
-			return
-		}
-
-		// Notify-once dedup (same pattern as markAbandonedReview and the other
-		// stuck reasons): MarkStuckNotified only flips notified_at nil -> now
-		// once per open stuck-state row, so repeated calls for the same
-		// still-open failure (e.g. a non-fast-forward push retried every
-		// reconciliation tick) skip the ephemeral ERROR toast after the first —
-		// this is what was previously firing a fresh "PR creation failed" toast
-		// every few seconds with no dedup. The toast fires again only once the
-		// row is resolved (push/PR succeeds) and later reopens on a new failure.
-		notifiedNow, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPushFailed)
-		if notifyErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR MarkStuckNotified(push_failed) item=%s: %v", item.ID, notifyErr)
-			return
-		}
-		if !notifiedNow {
-			return
-		}
-		notifyToast()
-	}
-
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
 	if wtErr != nil || wt.WorktreePath == "" {
 		fallbackToDone("no worktree")
@@ -3288,7 +3671,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 
 	// Push branch to origin.
 	if pushErr := g.PushBranch(); pushErr != nil {
-		stayInReviewAndNotify("push failed", pushErr)
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title, "push failed", pushErr)
 		return
 	}
 
@@ -3301,6 +3684,23 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		prNumber = item.PrNumber
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s reusing existing PR #%d", item.ID, prNumber)
 	} else {
+		// Pre-flight (BUG-063): a branch with zero commits ahead of main has
+		// genuinely nothing to ship — CreatePR below would fail with gh's "No
+		// commits between X and Y" error, which is not a retryable push/PR
+		// failure. A PASS verdict already confirmed the work (it's often
+		// already shipped by an earlier, unrelated PR), so route this case
+		// through fallbackToDone exactly like the "no worktree at all" case
+		// above, rather than leaving the item stuck in review forever behind
+		// an unresolvable push_failed row. Any error from the check itself is
+		// treated as inconclusive (HasCommitsAheadOfMain returns true), so a
+		// broken check never blocks a real PR creation attempt.
+		if hasCommits, aheadErr := g.HasCommitsAheadOfMain(bounceMainBranch); aheadErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR HasCommitsAheadOfMain item=%s: %v; proceeding with PR creation attempt", item.ID, aheadErr)
+		} else if !hasCommits {
+			fallbackToDone(fmt.Sprintf("branch %s has no commits ahead of %s — nothing to ship", wt.BranchName, bounceMainBranch))
+			return
+		}
+
 		prTitle := item.Title
 		prBody := buildFallbackPRBody(item)
 		if pool := l.getHeadlessPool(); pool != nil {
@@ -3316,7 +3716,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		var prErr error
 		prURL, prNumber, prErr = g.CreatePR(prTitle, prBody)
 		if prErr != nil {
-			stayInReviewAndNotify("PR creation failed", prErr)
+			l.stayInReviewAndNotify(ctx, item.ID, item.Title, "PR creation failed", prErr)
 			return
 		}
 		// Cache PR URL + number on the item so the reconciler and UI can use
@@ -3338,7 +3738,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			PrURL:    &prURLCopy,
 			PrNumber: &prNumCopy,
 		}, nil); updateErr != nil {
-			stayInReviewAndNotify(fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
+			l.stayInReviewAndNotify(ctx, item.ID, item.Title, fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
 			return
 		}
 	}
@@ -3384,6 +3784,66 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		return
 	}
 	log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
+}
+
+// stayInReviewAndNotify handles push/PR-creation failures for both
+// pushAndCreatePR and shipViaAgentOrFallback (BUG-063). Unlike fallbackToDone,
+// this must NOT transition the item: pushAndCreatePR's callers may have
+// committed code to the worktree that never reached GitHub, and
+// shipViaAgentOrFallback's caller cannot tell whether the agent-driven
+// one-shot actually created a real PR it just failed to parse/persist a
+// reference to — in both cases marking the item done or pr_pending would
+// risk silently discarding real work or duplicating a PR. The item stays in
+// review — a human can retry via TriggerReReview, or fix the underlying
+// issue (auth, network, branch protection, a storage error) and let the next
+// review pass retry.
+func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, itemID, itemTitle, reason string, err error) {
+	log.WarningLog.Printf("[BacklogLifecycle] item=%s: %s: %v — leaving in review", itemID, reason, err)
+
+	notifyToast := func() {
+		l.notify(itemID,
+			"PR creation failed",
+			fmt.Sprintf("%s — %s: %v. Retry or investigate manually.", itemTitle, reason, err),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+
+	// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
+	// toast's dedup key below — without a durable repo to gate on, fall back
+	// to the old always-notify behavior rather than silently dropping the toast.
+	er, ok := l.storage.repo.(*EntRepository)
+	if !ok {
+		notifyToast()
+		return
+	}
+	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		fmt.Sprintf("%s: %v", reason, err))
+	if markErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] MarkStuck(push_failed) item=%s: %v", itemID, markErr)
+		return
+	}
+	if !applied {
+		return
+	}
+
+	// Notify-once dedup (same pattern as markAbandonedReview and the other
+	// stuck reasons): MarkStuckNotified only flips notified_at nil -> now
+	// once per open stuck-state row, so repeated calls for the same
+	// still-open failure (e.g. a non-fast-forward push retried every
+	// reconciliation tick) skip the ephemeral ERROR toast after the first —
+	// this is what was previously firing a fresh "PR creation failed" toast
+	// every few seconds with no dedup. The toast fires again only once the
+	// row is resolved (push/PR succeeds) and later reopens on a new failure.
+	notifiedNow, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonPushFailed)
+	if notifyErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] MarkStuckNotified(push_failed) item=%s: %v", itemID, notifyErr)
+		return
+	}
+	if !notifiedNow {
+		return
+	}
+	notifyToast()
 }
 
 // resolveToPRPending performs the transition+resolve tail shared by every
@@ -3976,6 +4436,21 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 				}
 			}
 
+			// Story 6 guard (adversarial-review.md's Blocker): re-verify, via a
+			// live GitHub lookup, that PR #item.PrNumber's head branch still
+			// matches this item's currently-tracked branch before treating the
+			// merge as this item's own and auto-completing it. wt == nil (no
+			// work session, or a GetWorktreeDataBySessionUUID failure above) is
+			// treated identically to a definitive mismatch — fail closed.
+			var trackedBranch string
+			if wt != nil {
+				trackedBranch = wt.BranchName
+			}
+			if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, trackedBranch, item.PrNumber); verifyErr != nil || !matches {
+				log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+				continue
+			}
+
 			if capErr := CaptureShipSnapshot(ctx, l.storage, &itemData, snapshotPRStatus, lastWork, wt); capErr != nil {
 				// CaptureShipSnapshot always returns nil today; this branch
 				// exists defensively in case that contract ever changes, and
@@ -4059,6 +4534,9 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 				continue
 			}
 			fixCtx := fmt.Sprintf("PR #%d (%s) was closed without merging. Investigate why, address any concerns, and open a fresh PR.", closedPrNum, closedPrURL)
+			if !l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, closedPrNum) {
+				fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
+			}
 			log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
 			attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
 			if !attempted {
@@ -4177,6 +4655,9 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			continue
 		}
 		fixCtx := fmt.Sprintf("PR #%d (%s) needs fixes:\n\n%s", item.PrNumber, item.PrURL, prStatus.FeedbackText)
+		if !l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, item.PrNumber) {
+			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
+		}
 		log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v, feedback=%v)",
 			item.ID, prStatus.CIFailing, prStatus.HasBlockingReviews, prStatus.HasConflicts, hasNewFeedback)
 
@@ -4217,6 +4698,73 @@ func logFeedbackBatchCoverage(itemID string, prStatus *git.PRStatus) {
 		itemID, len(authors), strings.Join(authors, ", "), prStatus.LatestFeedbackAt.Format(time.RFC3339))
 }
 
+// verifyPRHeadBranchMatchesTracked re-verifies, via a live GitHub lookup,
+// that prNumber's real head branch still equals the item's currently-tracked
+// branch (trackedBranch) — the guard Story 6 adds in response to
+// adversarial-review.md's Blocker, called immediately before any of
+// closeIfSupersededByMain/ReconcilePRPending/reconcileBouncingItems treats
+// item.PrNumber as ground truth for an automated GitHub-mutating or
+// completing action. Fails closed in both directions: an empty
+// trackedBranch (the caller couldn't resolve the item's own tracked branch)
+// returns false without even calling the finder, and a finder error (e.g. a
+// transient GitHub failure) also returns false — neither is ever read as a
+// verified match.
+func (l *BacklogLifecycleListener) verifyPRHeadBranchMatchesTracked(ctx context.Context, repoPath, trackedBranch string, prNumber int) (bool, error) {
+	if trackedBranch == "" {
+		return false, fmt.Errorf("verifyPRHeadBranchMatchesTracked: no tracked branch to verify PR #%d against", prNumber)
+	}
+	info, err := l.getPRByNumberFinder()(ctx, repoPath, prNumber)
+	if err != nil {
+		return false, err
+	}
+	return info.HeadRef == trackedBranch, nil
+}
+
+// unverifiedPRAssociationDisclaimer is prepended (Task 6.3a) to a spawned
+// fix session's context whenever verifyPRAssociationForFixSpawn can't
+// confirm a PR's head branch still matches the item's tracked branch —
+// disclosing that the association is unverified rather than briefing the
+// spawned session to investigate/fix it as established fact.
+const unverifiedPRAssociationDisclaimer = "NOTE: this PR's association with this backlog item could not be verified (its head branch does not match — or no longer matches — the item's tracked branch, possibly because it was linked via report_pr_created's override_reason path). Confirm this PR is actually relevant to this item's work before investigating or commenting on it. "
+
+// verifyPRAssociationForFixSpawn independently resolves itemIDStr's
+// currently-tracked branch (its most recent work session's worktree data,
+// mirroring closeIfSupersededByMain's identical session-lookup loop) and
+// re-runs verifyPRHeadBranchMatchesTracked against prNumber. Used at Task
+// 6.3a's two fixCtx-building call sites in ReconcilePRPending and Task 6.5's
+// reconcileBouncingItems done-transition guard — deliberately re-run rather
+// than threaded through closeIfSupersededByMain's return value, since that
+// function returns false for several reasons unrelated to branch
+// verification and its return value alone can't distinguish "guard tripped"
+// from "nothing to verify yet" (see plan.md's Task 6.3a rationale). Fails
+// closed identically to verifyPRHeadBranchMatchesTracked's own contract: no
+// work session, a GetWorktreeDataBySessionUUID error, or the guard itself
+// erroring all count as "unverified", never "verified".
+func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Context, itemIDStr, repoPath string, prNumber int) bool {
+	sessions, sessErr := l.storage.ListItemSessions(ctx, itemIDStr)
+	if sessErr != nil {
+		return false
+	}
+	var lastWork *ItemSessionSummary
+	for i := range sessions {
+		// Ascending by CreatedAt (ListItemSessions' query order) — keep
+		// overwriting so this ends up holding the *most recent* work
+		// session, mirroring the identical pattern elsewhere in this file.
+		if sessions[i].Role == SessionRoleWork {
+			lastWork = &sessions[i]
+		}
+	}
+	if lastWork == nil {
+		return false
+	}
+	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
+	if wtErr != nil {
+		return false
+	}
+	matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, repoPath, wt.BranchName, prNumber)
+	return verifyErr == nil && matches
+}
+
 // closeIfSupersededByMain checks whether item's last known work-session commit
 // has already landed on mainBranch through some other path (BUG-032: live
 // incident where a PR kept failing CI/showing conflicts purely because it had
@@ -4232,7 +4780,21 @@ func logFeedbackBatchCoverage(itemID string, prStatus *git.PRStatus) {
 // own CI-fix-spawn handling for this item this tick). Returns false — the
 // caller proceeds with its normal path — whenever this can't be determined:
 // no work session, no recorded commit SHA, an IsCommitOnMain error, or the
-// commit genuinely isn't on main yet. Best-effort throughout: secondary
+// commit genuinely isn't on main yet.
+//
+// BUG-047: this check must never run against the session's pre-work base
+// commit. That commit is by construction already an ancestor of main, so
+// IsCommitOnMain on it is unconditionally true — and until LastCommitSha was
+// split from BaseCommitSha and given a live refresh
+// (refreshWorkSessionGitActivity), the base SHA was the only value the field
+// ever held. Confirmed live 2026-08-05: item d6ddbef3's real fix on branch
+// backlog/stapler-squad-fix-idle-reviewer-wedge (PR #342, reviewed and
+// CI-green) was closed unmerged as "superseded" against base SHA 1a751723 — an
+// unrelated commit from ~24h before that work even started. Hence both the
+// resolveLatestWorkCommit call and the explicit BaseCommitSha guard below: the
+// guard is the belt to the refresh's braces, so a session whose HEAD cannot be
+// resolved this tick can never fall back onto its own base commit and close a
+// live PR. Best-effort throughout: secondary
 // failures (the GitHub close call, the field clear) are logged, never block
 // the done transition, which is the one write that actually matters once the
 // commit is confirmed shipped.
@@ -4251,13 +4813,49 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 			lastWork = &sessions[i]
 		}
 	}
-	if lastWork == nil || lastWork.LastCommitSha == "" {
+	if lastWork == nil {
 		return false
 	}
 
-	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, bounceMainBranch, lastWork.LastCommitSha)
+	// Resolve the session's real current tip rather than trusting a stored
+	// field, and refuse to act on the pre-work base commit under any
+	// circumstances — see this function's doc comment (BUG-047).
+	lastCommitSha := l.resolveLatestWorkCommit(ctx, lastWork.SessionUUID, item.RepoPath)
+	if lastCommitSha == "" {
+		lastCommitSha = lastWork.LastCommitSha
+	}
+	if lastCommitSha == "" || lastCommitSha == lastWork.BaseCommitSha {
+		return false
+	}
+	// BUG-065: the guard above only fires when BaseCommitSha is a real,
+	// non-empty value. BaseCommitSha reads "" both for ItemSession rows written
+	// before BaseCommitSha/LastCommitSha were split into separate fields, and
+	// for any session that spawned and died/was retried before its base commit
+	// was ever seeded — GetBaseCommitSHAsForSessions (storage_backlog.go)
+	// already documents and works around this exact legacy-row shape. When
+	// BaseCommitSha is unknown, fall back to this session's own bookkeeping of
+	// whether it ever authored anything: CommitCountSinceSpawn is written
+	// alongside LastCommitSha every reconciliation tick
+	// (refreshWorkSessionGitActivity) and is 0 for a session that has made no
+	// commits since spawn, regardless of what lastCommitSha resolves to. A
+	// resolved commit from a session with zero commits since spawn is, by
+	// construction, that session's own pre-work snapshot — not real authored
+	// work — the same conclusion the BaseCommitSha check above reaches when it
+	// has the data to reach it at all.
+	//
+	// Live incident 2026-08-06: this exact gap closed PR #307 (a real,
+	// reviewed, CI-green "user-extensible agent detection plugins" feature,
+	// commit c64d94cf8) as "superseded" against 32f504c803 — that session's own
+	// spawn-time base, resolved fresh from a worktree that had never advanced —
+	// because BaseCommitSha read empty for that row, letting the base commit
+	// slip straight through the equality guard with no fallback to catch it.
+	if lastWork.BaseCommitSha == "" && lastWork.CommitCountSinceSpawn == 0 {
+		return false
+	}
+
+	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, bounceMainBranch, lastCommitSha)
 	if mainErr != nil {
-		log.DebugLog.Printf("[BacklogLifecycle] closeIfSupersededByMain IsCommitOnMain item=%s sha=%s: %v", item.ID, lastWork.LastCommitSha, mainErr)
+		log.DebugLog.Printf("[BacklogLifecycle] closeIfSupersededByMain IsCommitOnMain item=%s sha=%s: %v", item.ID, lastCommitSha, mainErr)
 		return false
 	}
 	if !onMain {
@@ -4265,11 +4863,27 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	}
 
 	log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: last commit %s is already on %s — PR #%d is superseded, closing instead of spawning another fix cycle",
-		item.ID, lastWork.LastCommitSha, bounceMainBranch, item.PrNumber)
+		item.ID, lastCommitSha, bounceMainBranch, item.PrNumber)
+
+	// Story 6 guard (adversarial-review.md's Blocker): re-verify, via a live
+	// GitHub lookup, that PR #item.PrNumber's head branch still matches this
+	// item's currently-tracked branch before auto-closing it. Without this,
+	// a PR attached via report_pr_created's override_reason path (by
+	// construction, a head-branch mismatch) could be auto-closed on the
+	// strength of item.PrNumber alone.
+	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
+	if wtErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-close (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+		return false
+	}
+	if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, wt.BranchName, item.PrNumber); verifyErr != nil || !matches {
+		log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-close (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+		return false
+	}
 
 	closeComment := fmt.Sprintf(
 		"Closing as superseded: this branch's last known commit (%s) is already present on %s, so this item's work has already shipped through another path. No further fix is needed here.",
-		lastWork.LastCommitSha, bounceMainBranch)
+		lastCommitSha, bounceMainBranch)
 	if closeErr := checker.ClosePR(item.PrNumber, closeComment); closeErr != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] closeIfSupersededByMain ClosePR item=%s pr=%d: %v", item.ID, item.PrNumber, closeErr)
 		// Still proceed — the item's code is on main regardless of whether the
@@ -4288,7 +4902,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	precondition := &BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusPRPending),
 		Note: fmt.Sprintf("self-heal: PR #%d closed as superseded — commit %s already on %s",
-			closedPrNum, lastWork.LastCommitSha, bounceMainBranch),
+			closedPrNum, lastCommitSha, bounceMainBranch),
 	}
 	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] closeIfSupersededByMain done transition item=%s: %v", item.ID, transErr)

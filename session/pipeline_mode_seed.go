@@ -315,7 +315,8 @@ spot-check anything you cannot confirm by reading. Then call submit_review_verdi
 with item_id={{item_id}}, a concise overall summary, and a verdicts array of
 criterion_index, outcome, and evidence for every criterion, using outcome values PASS,
 FAIL, PARTIAL, or UNVERIFIABLE, with evidence as a direct quote or reference from what
-you read.
+you read. End your session immediately after calling submit_review_verdict - do not
+wait, poll, or do further work.
 
 If you do NOT have tool access in this session (a headless, text-only call): evaluate
 what you can from the item description and acceptance criteria above alone, and output

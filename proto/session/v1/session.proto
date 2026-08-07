@@ -1282,6 +1282,10 @@ message ResolveApprovalRequest {
 
   // Optional reason shown to Claude when denying.
   optional string message = 3;
+
+  // When true, the caller explicitly acknowledges failing CI and re-submits an
+  // already-blocked approval; the server skips the CI-red guard for this request only.
+  bool override_ci_block = 4;
 }
 
 // ResolveApprovalResponse confirms the decision was received.
