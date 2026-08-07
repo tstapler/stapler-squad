@@ -295,6 +295,100 @@ func TestDetectorForProgram_should_returnIndependentDetector_When_calledTwice(t 
 	}
 }
 
+// TestResolveDetectorForProgram_should_normalizeToBinaryName_When_programIsFullCommandOrPath
+// is the regression guard for the BLOCKER found in pre-ship review: Instance.Program
+// is frequently not a bare binary name — it can be a resolved absolute path
+// (config.GetClaudeCommand()) or a full command string with arguments — and an
+// unnormalized exact-string map lookup silently missed the registered "claude"
+// entry for both shapes, falling back to the (formerly-identical, now-guaranteed
+// worse if this regresses) generic detector.
+func TestResolveDetectorForProgram_should_normalizeToBinaryName_When_programIsFullCommandOrPath(t *testing.T) {
+	cases := []string{
+		"claude",
+		"/usr/local/bin/claude",
+		"claude --dangerously-skip-permissions",
+		"  claude --foo bar  ",
+	}
+	for _, program := range cases {
+		sd, ok := ResolveDetectorForProgram(program)
+		if !ok {
+			t.Errorf("ResolveDetectorForProgram(%q) = _, false; want true", program)
+			continue
+		}
+		status := sd.Detect([]byte("esc to interrupt"))
+		if status != StatusExecuting {
+			t.Errorf("ResolveDetectorForProgram(%q): Detect(\"esc to interrupt\") = %v, want %v", program, status, StatusExecuting)
+		}
+	}
+}
+
+// TestProgramBinaryName_should_extractBareName_When_programHasArgsOrIsAbsolutePath
+// is a direct unit test of the normalization helper.
+func TestProgramBinaryName_should_extractBareName_When_programHasArgsOrIsAbsolutePath(t *testing.T) {
+	cases := []struct {
+		program string
+		want    string
+	}{
+		{"claude", "claude"},
+		{"/usr/local/bin/claude", "claude"},
+		{"claude --dangerously-skip-permissions", "claude"},
+		{"aider --model ollama_chat/gemma3:1b", "aider"},
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, c := range cases {
+		if got := programBinaryName(c.program); got != c.want {
+			t.Errorf("programBinaryName(%q) = %q, want %q", c.program, got, c.want)
+		}
+	}
+}
+
+// TestClaudeBuiltinDetector_should_matchGetDefaultPatterns_When_resolvedFromSnapshot
+// is the regression guard for the second half of the BLOCKER: the built-in
+// "claude" registry entry (binaries.ClaudeDetector) must stay at parity with
+// getDefaultPatterns(), the generic fallback — historically it was a stale,
+// hand-copied, materially thinner subset (missing the entire WaitingForAgent
+// category, among others). Spot-checks the categories/patterns that were
+// previously missing, plus an aggregate pattern count so any future drift
+// (in either direction) fails loudly instead of silently.
+func TestClaudeBuiltinDetector_should_matchGetDefaultPatterns_When_resolvedFromSnapshot(t *testing.T) {
+	sd, ok := ResolveDetectorForProgram("claude")
+	if !ok {
+		t.Fatal(`ResolveDetectorForProgram("claude") = _, false; want true`)
+	}
+
+	countPatterns := func(p StatusPatterns) int {
+		return len(p.Ready) + len(p.Processing) + len(p.NeedsApproval) + len(p.InputRequired) +
+			len(p.Error) + len(p.TestsFailing) + len(p.Idle) + len(p.Active) + len(p.Success) + len(p.WaitingForAgent)
+	}
+
+	builtin := sd.patternSet.Load().Patterns()
+	def := getDefaultPatterns()
+
+	if got, want := countPatterns(builtin), countPatterns(def); got != want {
+		t.Errorf("built-in claude detector has %d total patterns, want %d (parity with getDefaultPatterns())", got, want)
+	}
+
+	if len(builtin.WaitingForAgent) == 0 {
+		t.Error("built-in claude detector has no WaitingForAgent patterns — must have parity with getDefaultPatterns()")
+	}
+
+	hasName := func(patterns []StatusPattern, name string) bool {
+		for _, p := range patterns {
+			if p.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasName(builtin.Idle, "claude_accept_edits") {
+		t.Error("built-in claude detector missing Idle pattern \"claude_accept_edits\"")
+	}
+	if !hasName(builtin.Ready, "gemini_ready") {
+		t.Error("built-in claude detector missing cross-tool Ready pattern \"gemini_ready\"")
+	}
+}
+
 // TestBuildSnapshot_should_skipUnresolvableEntry_When_registryLookupMiss is a
 // defensive-path regression guard: buildSnapshot must not panic or drop the
 // whole snapshot if a name in reg.Names() somehow fails reg.Lookup (can't

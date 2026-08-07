@@ -330,13 +330,15 @@ func validatePluginFile(path string, pf *pluginFile) []PluginLoadError {
 
 // PluginDetector implements dtypes.BinaryDetector from a validated plugin
 // file: one instance per (file × binary name), sharing that file's compiled
-// patterns. See ADR-003 on why id and binary_names are separate concepts —
-// id is provenance/collision identity, binary_names are the registry keys.
+// PatternSet (built once in LoadPluginDir — see CompiledPatternSet). See
+// ADR-003 on why id and binary_names are separate concepts — id is
+// provenance/collision identity, binary_names are the registry keys.
 type PluginDetector struct {
 	id         string
 	sourcePath string
 	binaryName string
 	patterns   dtypes.StatusPatterns
+	patternSet *PatternSet
 }
 
 var _ dtypes.BinaryDetector = (*PluginDetector)(nil)
@@ -346,6 +348,15 @@ func (d *PluginDetector) Name() string { return d.binaryName }
 
 // Patterns returns the status patterns compiled from the plugin file.
 func (d *PluginDetector) Patterns() dtypes.StatusPatterns { return d.patterns }
+
+// CompiledPatternSet returns the *PatternSet LoadPluginDir already compiled
+// for this file, shared unchanged across every PluginDetector built from the
+// same file's binary_names. buildSnapshot (detector_snapshot.go) type-asserts
+// for this to avoid re-compiling the same regex strings once per binary
+// name — a plugin file declaring N binary_names previously paid N redundant
+// NewPatternSet compiles on every rebuild (including every periodic
+// safety-net tick) for identical patterns.
+func (d *PluginDetector) CompiledPatternSet() *PatternSet { return d.patternSet }
 
 // FilterContent is the identity function: schema v1 plugin content carries
 // no binary-specific content filtering (ADR-004 — plugin content is regex
@@ -514,7 +525,20 @@ func InitPlugins(ctx context.Context) error {
 // not an error — it simply yields no plugins, since most users never create
 // one. Non-.toml entries, subdirectories, and symlinks are skipped without
 // error (symlinks are logged — see ADR-004 on why they are never followed).
-func LoadPluginDir(dir string) ([]*PluginDetector, []PluginLoadError) {
+//
+// ctx is checked once per file in the parse/validate loop (not more finely
+// than that — a single file's compile is already time-bounded by
+// maxPluginCompileTime, see validatePluginFile). Without this, a cancelled
+// context is only observed by the caller (rebuildSnapshot) once, at entry,
+// before this function is even called — worst case that delays a graceful
+// shutdown or the next legitimate reload by up to maxPluginFiles *
+// maxPluginCompileTime (200 * 500ms = 100s). On cancellation, the loop stops
+// immediately and returns a fatal "directory"-field PluginLoadError wrapping
+// ctx.Err(), the same shape a directory-read failure produces — the caller's
+// existing fatal-error handling (rebuildSnapshot) already treats that as
+// "leave the previously published snapshot live" (ADR-002), which is exactly
+// what a shutdown-in-progress rebuild should do.
+func LoadPluginDir(ctx context.Context, dir string) ([]*PluginDetector, []PluginLoadError) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -565,6 +589,11 @@ func LoadPluginDir(dir string) ([]*PluginDetector, []PluginLoadError) {
 	seenBinaries := make(map[string]string) // binary name -> winning filename
 
 	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			loadErrs = append(loadErrs, PluginLoadError{Path: dir, Field: "directory", Err: err})
+			return detectors, loadErrs
+		}
+
 		fullPath := filepath.Join(dir, name)
 
 		fi, statErr := os.Stat(fullPath)
@@ -604,6 +633,20 @@ func LoadPluginDir(dir string) ([]*PluginDetector, []PluginLoadError) {
 			continue
 		}
 
+		// Compile this file's PatternSet exactly once, here, and share the
+		// resulting pointer across every PluginDetector created below for its
+		// binary_names — see CompiledPatternSet's doc comment. This should be
+		// unreachable in practice: validatePluginFile already compiled every
+		// one of these same regex strings successfully (that's how a file
+		// gets past the fieldErrs check above). Handled defensively anyway,
+		// the same way buildSnapshot treats an analogous "can't happen" compile
+		// failure — a rejection here, not a panic.
+		ps, psErr := NewPatternSet(sp)
+		if psErr != nil {
+			loadErrs = append(loadErrs, PluginLoadError{Path: fullPath, Field: "patterns", Err: psErr})
+			continue
+		}
+
 		if winner, ok := seenIDs[pf.ID]; ok {
 			loadErrs = append(loadErrs, PluginLoadError{
 				Path:  fullPath,
@@ -637,6 +680,7 @@ func LoadPluginDir(dir string) ([]*PluginDetector, []PluginLoadError) {
 				sourcePath: fullPath,
 				binaryName: binName,
 				patterns:   sp,
+				patternSet: ps,
 			})
 		}
 	}

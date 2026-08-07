@@ -2,7 +2,10 @@ package detection
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -39,6 +42,46 @@ type PluginWatcher struct {
 // exited (context cancellation or a closed Events channel).
 func (w *PluginWatcher) Stopped() <-chan struct{} {
 	return w.stopped
+}
+
+// pluginDirFingerprint returns a cheap, comparable fingerprint of dir's
+// *.toml entries (name, size, modification time) without opening or reading
+// any file's content. The periodic safety-net rescan (pluginRescanInterval)
+// uses this to skip a full rebuildSnapshot — and therefore every plugin
+// file's regex recompilation — when nothing has changed since the last
+// rebuild: fsnotify already handles the fast path, so the ticker only needs
+// to catch genuinely missed events, not unconditionally reload on every tick
+// (project_plans/detector-plugins/research/pitfalls.md's "diff directory
+// listing against loaded plugin set" recommendation).
+//
+// A single os.Stat on the directory's own mtime would miss an in-place edit
+// to an existing file's content (directory mtime only changes when entries
+// are added/removed/renamed, not when a file already inside it is
+// overwritten) — this is exactly the case a missed fsnotify Write event
+// needs the safety net for, so this fingerprint reads the full entry list
+// instead. Still just one os.ReadDir syscall, no file content is read and no
+// regex is compiled, so it costs nothing close to a rebuild even at
+// maxPluginFiles.
+func pluginDirFingerprint(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".toml" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			// Vanished between ReadDir and Info (e.g. deleted mid-scan) — skip
+			// it for fingerprint purposes; LoadPluginDir's own Lstat/Stat calls
+			// handle this same race during the real load.
+			continue
+		}
+		fmt.Fprintf(&sb, "%s:%d:%d;", e.Name(), info.Size(), info.ModTime().UnixNano())
+	}
+	return sb.String(), nil
 }
 
 // StartPluginWatcher begins watching dir for detector plugin changes and
@@ -105,6 +148,14 @@ func (w *PluginWatcher) watchLoop(ctx context.Context) {
 		errs = w.watcher.Errors
 	}
 
+	// lastFingerprint tracks the plugin directory's *.toml listing as of the
+	// most recent rebuild, so the periodic safety-net tick (below) can skip a
+	// full rebuildSnapshot when nothing has changed. A read error here just
+	// means the first tick always attempts a rebuild — the same behavior as
+	// before this fingerprint check existed — and rebuildSnapshot's own error
+	// handling takes it from there.
+	lastFingerprint, _ := pluginDirFingerprint(w.dir)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -138,9 +189,18 @@ func (w *PluginWatcher) watchLoop(ctx context.Context) {
 
 		case <-debounce.C:
 			_ = rebuildSnapshot(ctx, w.dir)
+			lastFingerprint, _ = pluginDirFingerprint(w.dir)
 
 		case <-ticker.C:
+			// Safety-net tick: only pay for a full rebuild (and every plugin
+			// file's regex recompilation) when the directory listing actually
+			// changed since the last rebuild — fsnotify already handles the
+			// fast path, this ticker exists purely to catch missed events.
+			if fp, err := pluginDirFingerprint(w.dir); err == nil && fp == lastFingerprint {
+				continue
+			}
 			_ = rebuildSnapshot(ctx, w.dir)
+			lastFingerprint, _ = pluginDirFingerprint(w.dir)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package detection
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -464,7 +465,7 @@ regex = "Thinking(\\.\\.\\."
 status = "processing"
 `)
 
-		detectors, errs := LoadPluginDir(dir)
+		detectors, errs := LoadPluginDir(context.Background(), dir)
 
 		if len(detectors) != 1 {
 			t.Fatalf("LoadPluginDir() detectors = %+v, want exactly 1", detectors)
@@ -484,7 +485,7 @@ status = "processing"
 		dir := t.TempDir()
 		path := writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent", "my-agent-beta"}))
 
-		detectors, errs := LoadPluginDir(dir)
+		detectors, errs := LoadPluginDir(context.Background(), dir)
 
 		if len(errs) != 0 {
 			t.Fatalf("LoadPluginDir() errs = %+v, want none", errs)
@@ -515,7 +516,7 @@ status = "processing"
 		writePluginFile(t, dir, "a.toml", validPluginTOML("my-agent", []string{"a-bin"}))
 		writePluginFile(t, dir, "b.toml", validPluginTOML("my-agent", []string{"b-bin"}))
 
-		detectors, errs := LoadPluginDir(dir)
+		detectors, errs := LoadPluginDir(context.Background(), dir)
 
 		if len(detectors) != 1 || detectors[0].Name() != "a-bin" {
 			t.Fatalf("LoadPluginDir() detectors = %+v, want exactly 1 named \"a-bin\"", detectors)
@@ -538,7 +539,7 @@ status = "processing"
 		writePluginFile(t, dir, "a.toml", validPluginTOML("id-a", []string{"my-agent"}))
 		writePluginFile(t, dir, "z.toml", validPluginTOML("id-z", []string{"my-agent"}))
 
-		detectors, errs := LoadPluginDir(dir)
+		detectors, errs := LoadPluginDir(context.Background(), dir)
 
 		if len(detectors) != 1 || detectors[0].Name() != "my-agent" {
 			t.Fatalf("LoadPluginDir() detectors = %+v, want exactly 1 named \"my-agent\"", detectors)
@@ -565,7 +566,7 @@ status = "processing"
 		writePluginFile(t, dir, "z.toml", validPluginTOML("id-z", []string{"my-agent"}))
 
 		for i := 0; i < 10; i++ {
-			detectors, _ := LoadPluginDir(dir)
+			detectors, _ := LoadPluginDir(context.Background(), dir)
 			if len(detectors) != 1 {
 				t.Fatalf("iteration %d: LoadPluginDir() detectors = %+v, want exactly 1", i, detectors)
 			}
@@ -592,7 +593,7 @@ status = "processing"
 			_ = os.Remove(target)
 		}
 
-		detectors, errs := LoadPluginDir(dir)
+		detectors, errs := LoadPluginDir(context.Background(), dir)
 
 		if len(detectors) != 0 {
 			t.Fatalf("LoadPluginDir() detectors = %+v, want none", detectors)
@@ -603,7 +604,7 @@ status = "processing"
 	})
 
 	t.Run("LoadPluginDir_should_returnNilNil_When_directoryDoesNotExist", func(t *testing.T) {
-		detectors, errs := LoadPluginDir(filepath.Join(t.TempDir(), "does-not-exist"))
+		detectors, errs := LoadPluginDir(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"))
 		if detectors != nil {
 			t.Errorf("LoadPluginDir() detectors = %+v, want nil", detectors)
 		}
@@ -620,7 +621,7 @@ status = "processing"
 			writePluginFile(t, dir, fmt.Sprintf("p%03d.toml", i), validPluginTOML(id, []string{id}))
 		}
 
-		detectors, errs := LoadPluginDir(dir)
+		detectors, errs := LoadPluginDir(context.Background(), dir)
 
 		if len(detectors) != maxPluginFiles {
 			t.Fatalf("LoadPluginDir() returned %d detectors, want exactly %d", len(detectors), maxPluginFiles)
@@ -632,6 +633,39 @@ status = "processing"
 		want := fmt.Sprintf("more than %d .toml files", maxPluginFiles)
 		if !strings.Contains(got.Error(), want) {
 			t.Errorf("Error() = %q, want it to contain %q", got.Error(), want)
+		}
+	})
+
+	// LoadPluginDir_should_stopEarlyAndReportFatal_When_contextCancelledMidLoop
+	// is the regression guard for the MAJOR finding in pre-ship review: the
+	// per-file parse/validate loop never checked ctx, so a cancelled context
+	// (e.g. shutdown) was only observed by rebuildSnapshot's single check at
+	// entry, up to maxPluginFiles * maxPluginCompileTime later in the worst
+	// case. An already-cancelled context must stop the loop before processing
+	// any file and report a fatal "directory"-field error — the same shape a
+	// directory-read failure produces, so rebuildSnapshot's existing fatal
+	// handling (keep the previous snapshot live) applies unchanged.
+	t.Run("LoadPluginDir_should_stopEarlyAndReportFatal_When_contextCancelledMidLoop", func(t *testing.T) {
+		dir := t.TempDir()
+		for i := 0; i < 5; i++ {
+			id := fmt.Sprintf("agent-%d", i)
+			writePluginFile(t, dir, fmt.Sprintf("p%d.toml", i), validPluginTOML(id, []string{id}))
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		detectors, errs := LoadPluginDir(ctx, dir)
+
+		if len(detectors) != 0 {
+			t.Errorf("LoadPluginDir(cancelled ctx) detectors = %+v, want none — cancellation must be observed before the first file is processed", detectors)
+		}
+		e, ok := findErrByField(errs, "directory")
+		if !ok {
+			t.Fatalf("LoadPluginDir(cancelled ctx) errs = %+v, want one with Field \"directory\"", errs)
+		}
+		if !errors.Is(e, context.Canceled) {
+			t.Errorf("LoadPluginDir(cancelled ctx) directory error = %v, want it to wrap context.Canceled", e)
 		}
 	})
 }
@@ -706,7 +740,7 @@ func Test_EnsurePluginDir(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EnsurePluginDir() unexpected error = %v", err)
 		}
-		detectors, errs := LoadPluginDir(dir)
+		detectors, errs := LoadPluginDir(context.Background(), dir)
 		if len(detectors) != 0 {
 			t.Errorf("LoadPluginDir(%q) detectors = %+v, want none (example.toml.sample must not be treated as a plugin)", dir, detectors)
 		}
@@ -779,7 +813,7 @@ func Test_EnsurePluginDir(t *testing.T) {
 			t.Fatalf("example.toml.sample stat err = %v, want IsNotExist (the write should have failed, not silently succeeded)", statErr)
 		}
 
-		detectors, errs := LoadPluginDir(gotDir)
+		detectors, errs := LoadPluginDir(context.Background(), gotDir)
 		if len(errs) != 0 {
 			t.Errorf("LoadPluginDir(%q) errs = %+v, want none", gotDir, errs)
 		}

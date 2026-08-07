@@ -3,6 +3,8 @@ package detection
 import (
 	"context"
 	"maps"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -44,16 +46,31 @@ var (
 // pluginReloadDebounce.
 var rebuildCount atomic.Int64
 
+// compiledPatternSetProvider is satisfied by any BinaryDetector that has
+// already compiled its patterns into a *PatternSet — currently *PluginDetector
+// only, whose PatternSet is compiled once by LoadPluginDir and shared across
+// every binary_names entry for that file (see PluginDetector.CompiledPatternSet's
+// doc comment). buildSnapshot type-asserts for this to avoid recompiling the
+// same regex strings from their string DTOs on every rebuild: without it, a
+// plugin file declaring N binary_names paid N redundant NewPatternSet compiles
+// per rebuild for identical patterns, including on every periodic safety-net
+// tick (see plugin_watcher.go's pluginRescanInterval).
+type compiledPatternSetProvider interface {
+	CompiledPatternSet() *PatternSet
+}
+
 // buildSnapshot constructs a detectorSnapshot from every detector in reg. For
-// each registered binary name it compiles that detector's patterns into a
-// PatternSet and wraps it in a fresh *StatusDetector, mirroring the
-// construction shape formerly inlined in detector.go's old package-level
-// built-in-detectors cache var. A compile failure is logged and that binary
-// name is skipped
-// rather than failing the whole snapshot — in practice this can't happen
-// (built-in patterns are code-defined and always valid; plugin patterns were
-// already regexp-compiled during LoadPluginDir validation) but the snapshot
-// must not become unusable for every other binary over one entry.
+// each registered binary name it reuses an already-compiled PatternSet if the
+// detector provides one (compiledPatternSetProvider — plugin detectors), or
+// else compiles bd.Patterns() into a fresh PatternSet (built-in detectors,
+// whose Patterns() is cheap, code-defined data), wrapping either in a fresh
+// *StatusDetector — mirroring the construction shape formerly inlined in
+// detector.go's old package-level built-in-detectors cache var. A compile
+// failure is logged and that binary name is skipped rather than failing the
+// whole snapshot — in practice this can't happen (built-in patterns are
+// code-defined and always valid; plugin patterns were already
+// regexp-compiled during LoadPluginDir validation) but the snapshot must not
+// become unusable for every other binary over one entry.
 //
 // If provenance is nil, it is built as name -> "" (built-in) for every entry
 // in reg — the shape needed when reg is builtins-only, e.g. from init().
@@ -71,11 +88,20 @@ func buildSnapshot(reg *DetectorRegistry, provenance map[string]string) *detecto
 		if !ok {
 			continue
 		}
-		ps, err := NewPatternSet(bd.Patterns())
-		if err != nil {
-			log.Warn("detector snapshot: skipping binary, pattern compile failed", "binary", name, "error", err)
-			continue
+
+		var ps *PatternSet
+		if provider, ok := bd.(compiledPatternSetProvider); ok {
+			ps = provider.CompiledPatternSet()
 		}
+		if ps == nil {
+			var err error
+			ps, err = NewPatternSet(bd.Patterns())
+			if err != nil {
+				log.Warn("detector snapshot: skipping binary, pattern compile failed", "binary", name, "error", err)
+				continue
+			}
+		}
+
 		sd := &StatusDetector{}
 		sd.patternSet.Store(ps)
 		byBinary[name] = sd
@@ -96,6 +122,27 @@ func init() {
 	activeSnapshot.Store(buildSnapshot(DefaultRegistry(), nil))
 }
 
+// programBinaryName extracts the bare binary name lookupBinaryDetector keys
+// its registry lookup on. In real deployments Instance.Program is often not
+// a bare binary name: it can be a full command string with arguments (e.g.
+// "aider --model ollama_chat/gemma3:1b") or a resolved absolute path (e.g.
+// "/usr/local/bin/claude" — see config.GetClaudeCommand()). Both would miss
+// an exact-string map lookup keyed by "aider"/"claude", silently falling
+// back to the generic detector for every such session.
+//
+// This mirrors session/instance_tmux.go's isClaude/classifyProgram
+// tokenization (split on whitespace, take the first token, filepath.Base()
+// it) rather than importing it: package session already imports
+// session/detection (see session/claude_controller.go), so the reverse
+// import here would create a cycle.
+func programBinaryName(program string) string {
+	fields := strings.Fields(program)
+	if len(fields) == 0 {
+		return ""
+	}
+	return filepath.Base(fields[0])
+}
+
 // lookupBinaryDetector returns the *StatusDetector currently published for
 // program, and whether one exists. This is the read path DetectForProgram
 // uses in place of the old package-level built-in-detectors map index.
@@ -104,7 +151,7 @@ func lookupBinaryDetector(program string) (*StatusDetector, bool) {
 	if snap == nil {
 		return nil, false
 	}
-	sd, ok := snap.byBinary[program]
+	sd, ok := snap.byBinary[programBinaryName(program)]
 	return sd, ok
 }
 
@@ -166,10 +213,11 @@ func asBinaryDetectors(pds []*PluginDetector) []BinaryDetector {
 // correctly requires seeing every file in the directory at once, which a
 // per-file patch cannot do.
 func rebuildSnapshot(ctx context.Context, dir string) error {
-	// Coarse-grained shutdown check only — not mid-file cancellation. A
-	// single file's compile is already time-bounded by plugins.go's
-	// maxPluginCompileTime, so it can't block shutdown indefinitely on its
-	// own; there is no need (or safe place) to re-check ctx mid-scan.
+	// Cheap up-front check: skip acquiring the write lock and scanning at all
+	// if ctx is already cancelled. LoadPluginDir also re-checks ctx once per
+	// file in its parse/validate loop (see its doc comment) so a cancellation
+	// that lands mid-scan is observed within one file's compile budget rather
+	// than only after the whole directory has been processed.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -177,7 +225,7 @@ func rebuildSnapshot(ctx context.Context, dir string) error {
 	snapshotWriteMu.Lock()
 	defer snapshotWriteMu.Unlock()
 
-	detectors, errs := LoadPluginDir(dir)
+	detectors, errs := LoadPluginDir(ctx, dir)
 
 	for _, e := range errs {
 		if e.Field == "directory" {
