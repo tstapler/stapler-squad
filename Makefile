@@ -57,7 +57,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard checklocks
+.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks
 
 # Default target
 help: ## Show this help message
@@ -746,7 +746,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
@@ -768,6 +768,20 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	    exit 1; \
 	fi
 	@echo "✅ actor-field-guard: no direct Instance field writes"
+
+ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdWaitOnce are touched outside the ptmxMu helpers
+	@echo "ptmx-field-guard: scanning session/tmux/*.go for direct PTY-triple field access..."
+	@if grep -nE '\b[A-Za-z_][A-Za-z0-9_]*\.(ptmx|attachCmd|attachCmdWaitOnce)\b' session/tmux/*.go \
+	    | grep -v '^session/tmux/shell_handle.go:' \
+	    `# shell_handle.go declares its own unrelated ShellTmuxHandle.ptmx/attachCmd fields` \
+	    `# (receiver "h", guarded by spawnMu, not ptmxMu) -- excluded by file, not by line marker,` \
+	    `# because none of that file's lines ever legitimately touch the PTY triple this guards` \
+	    | grep -vE ':[0-9]+:[[:space:]]*//' \
+	    | grep -v 'allow-direct-ptmx-access' ; then \
+	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/setPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
+	    exit 1; \
+	fi
+	@echo "✅ ptmx-field-guard: no direct PTY-triple field access outside the guarded helpers"
 
 # Debugging and profiling
 profile-cpu: ensure-tools ## Run benchmarks with CPU profiling
