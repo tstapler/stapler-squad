@@ -34,6 +34,7 @@ lifecycle callbacks, and completion-triggered pipeline chaining — all reusing 
 | `ChainFired` | New bool field on `ent.BacklogItem`, set atomically (same `TransitionBacklogItemStatus` call) with the terminal status transition. | Crash-consistency marker — a restart-safe reconciler scans for `status=done AND next_workflow_id != nil AND chain_fired=false`. |
 | `TriggeredByChainDepth` | New int field on `ent.BacklogItem` (and `CreateSessionRequest`/`CreateBacklogItemRequest`), propagated session→session, hard-capped at `maxChainDepth` (default 5, configurable). | Independent backstop against runaway chaining loops (pitfalls §3), separate from the WIP-limit gate. |
 | `TriggerChainReconciler` | New periodic scan (modeled on `reconcileStaleWorkSessions`, `session/backlog_lifecycle.go:2294`) that completes interrupted chain-fires after a restart. | Runs on the existing 60s reconcile ticker (`server/dependencies.go`), not a new goroutine. |
+| `ChainFirer` | New concrete type (`session/backlog_lifecycle.go`) wrapping the chain-depth check + prompt build + `Scheduler.FireTrigger` call + `ChainFired` write, dispatched via `go` (semaphore-bounded like `CallbackDispatcher`) strictly *after* `TransitionBacklogItemStatus` returns — never inside its transaction (AC9). | Both `TriggerChainReconciler` (restart recovery) and the post-transition async dispatch (happy path) call the same `ChainFirer.FireTrigger` method, so the "fire exactly once" logic lives in one place. |
 | `MaxWebhookBodyBytes` | Constant bounding `http.MaxBytesReader` for both webhook handlers (a few MB) — DoS guard (pitfalls §1.3). | |
 
 ---
@@ -159,7 +160,11 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 
 ##### Task 1.2.1a: Create `session/ent/schema/trigger_fire_event.go` (~4 min)
 - Model on `session/ent/schema/source_sync_event.go`: `field.UUID("id")`, `field.UUID("workflow_id").Optional().Nillable()` (nil when slug unknown — rejected before a `Workflow` is resolved), `field.String("outcome").NotEmpty()`, `field.String("delivery_id").Optional()`, `field.String("session_id").Optional()`, `field.String("error_message").Optional()`, `field.Time("created_at").Default(time.Now).Immutable()`.
-- Add `index.Fields("workflow_id")`, `index.Fields("delivery_id")` (for dedup lookups), `index.Fields("created_at")`.
+- Add `index.Fields("workflow_id")`, `index.Fields("created_at")`, and
+  `index.Fields("delivery_id").Unique()` on a **non-empty** `delivery_id` (AC12 —
+  a plain existence-check-then-insert is a TOCTOU race under concurrent identical
+  deliveries; the unique index makes the second concurrent `Create` fail with a
+  constraint-violation error instead of silently racing past a prior read).
 - Files: `session/ent/schema/trigger_fire_event.go`.
 
 ##### Task 1.2.1b: ent codegen (~2 min)
@@ -167,7 +172,7 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 - Files: `session/ent/*` (generated).
 
 ##### Task 1.2.1c: Repository methods (~4 min)
-- New `session/trigger_fire_event_repository.go`: `Create(ctx, TriggerFireEventInput) error`, `ListByWorkflow(ctx, workflowID uuid.UUID, limit int) ([]*ent.TriggerFireEvent, error)`, `ExistsByDeliveryID(ctx, deliveryID string) (bool, error)` (dedup check, Epic 2.4).
+- New `session/trigger_fire_event_repository.go`: `Create(ctx, TriggerFireEventInput) error` returning a typed `ErrDuplicateDelivery` when the unique `delivery_id` constraint is violated (ent's `sqlgraph.IsConstraintError`/driver-specific unique-violation check — do not pre-check-then-insert, per AC12), `ListByWorkflow(ctx, workflowID uuid.UUID, limit int) ([]*ent.TriggerFireEvent, error)`. Callers attempt `Create` first (atomic insert-or-conflict) rather than calling a separate `ExistsByDeliveryID` pre-check (Epic 2.4 updated accordingly).
 - Files: `session/trigger_fire_event_repository.go`.
 
 ### Epic 1.3: Close the WIP-gate bypass (collateral debt)
@@ -242,8 +247,8 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 - Decrypt each enabled `github_push` `Workflow`'s `WebhookSecretEncrypted` and call `VerifyGitHubSignature` against the raw bytes (not re-marshaled JSON, per pitfalls §1.1) — iterate candidates matching the push's repo before verifying secrets, to avoid a linear decrypt-and-check over every workflow in the system.
 - Files: `server/services/github_webhook_handler.go`.
 
-##### Task 2.2.1c: Delivery-ID dedup check (before any session-creation work) (~4 min)
-- Read `X-GitHub-Delivery` header; call `fireEvents.ExistsByDeliveryID(ctx, deliveryID)` — if true, return 200 immediately ("already processed") without re-firing (pitfalls §2.2).
+##### Task 2.2.1c: Delivery-ID dedup via atomic insert (before any session-creation work) (~4 min)
+- Read `X-GitHub-Delivery` header; call `fireEvents.Create(ctx, TriggerFireEventInput{DeliveryID: deliveryID, Outcome: "pending", WorkflowID: wf.ID})` immediately — a `session.ErrDuplicateDelivery` return means a concurrent or replayed request already claimed this delivery ID (unique-constraint conflict, AC12), so return 200 immediately ("already processed") without re-firing. On success, update this same row's `Outcome` after the fire attempt completes rather than inserting a second row (pitfalls §2.2).
 - Files: `server/services/github_webhook_handler.go`.
 
 ##### Task 2.2.1d: Parse push event, match repo/branch, render + fire (~5 min)
@@ -277,7 +282,7 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 - Files: `server/services/generic_webhook_handler.go`.
 
 ##### Task 2.3.1b: Body-size cap, JSON parse, secret verification, delivery-ID dedup (~5 min)
-- `http.MaxBytesReader`, `json.Unmarshal` into `map[string]interface{}` (400 on parse error), `VerifyWebhookSecret` against raw bytes (401 on mismatch), delivery-ID = SHA-256 digest of raw body (no provider-assigned ID for generic webhooks — pitfalls §1.4) checked via `ExistsByDeliveryID`.
+- `http.MaxBytesReader`, `json.Unmarshal` into `map[string]interface{}` (400 on parse error), `VerifyWebhookSecret` against raw bytes (401 on mismatch), delivery-ID = SHA-256 digest of raw body (no provider-assigned ID for generic webhooks — pitfalls §1.4), claimed via the same atomic `fireEvents.Create`-first pattern as Task 2.2.1c (`ErrDuplicateDelivery` → 200 "already processed," AC12).
 - Files: `server/services/generic_webhook_handler.go`.
 
 ##### Task 2.3.1c: `event`/`label_filter` match logic (~4 min)
@@ -297,14 +302,17 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 ### Epic 2.4: Dedup cache + per-trigger rate limiting
 **Goal**: Duplicate/replayed deliveries don't double-fire (§2.2/§1.4 pitfalls); a noisy/malicious sender can't spawn unbounded sessions (§2.3/§ "Rate limiting a noisy webhook source" pitfalls).
 
-#### Story 2.4.1: Delivery-ID dedup is enforced via the durable `TriggerFireEvent` table
+#### Story 2.4.1: Delivery-ID dedup is enforced atomically via the `TriggerFireEvent` table's unique index
 **Acceptance Criteria**:
-- A replayed GitHub delivery (same `X-GitHub-Delivery`) does not create a second session.
-  - *Given* a `TriggerFireEvent{DeliveryID: "abc-123", Outcome: "fired_success"}` already persisted, *When* a second `POST /webhooks/github` arrives with `X-GitHub-Delivery: abc-123`, *Then* `ExistsByDeliveryID` returns true, the handler returns 200 immediately, and no second `CreateSession` call occurs.
+- AC12: A replayed GitHub delivery (same `X-GitHub-Delivery`), including two truly
+  concurrent/simultaneous deliveries with the same ID, never creates a second
+  session.
+  - *Given* a `TriggerFireEvent{DeliveryID: "abc-123", Outcome: "fired_success"}` already persisted, *When* a second `POST /webhooks/github` arrives with `X-GitHub-Delivery: abc-123`, *Then* `fireEvents.Create` returns `ErrDuplicateDelivery` (unique-index conflict), the handler returns 200 immediately, and no second `CreateSession` call occurs.
+  - *Given* two requests with the same `X-GitHub-Delivery` arrive at the same instant (goroutine-level race, not just sequential), *When* both handlers call `fireEvents.Create` concurrently, *Then* exactly one `Create` succeeds (DB unique-constraint arbitrates, not application-level state) and the other observes `ErrDuplicateDelivery` — a plain `SELECT`-then-`INSERT` pre-check cannot guarantee this under true concurrency, which is why Epic 1.2/2.2.1c/2.3.1b moved to insert-first.
 **Files**: covered by Tasks 1.2.1c, 2.2.1c, 2.3.1b (already implemented above) — this story is the cross-cutting AC verification, not new code.
 
-##### Task 2.4.1a: Integration test proving dedup across both handler types (~5 min)
-- One test per handler asserting `SessionService.CreateSession` call count stays at 1 after two identical (same delivery-ID) requests.
+##### Task 2.4.1a: Concurrency test proving dedup across both handler types under real goroutine races (~5 min)
+- One test per handler firing N goroutines (e.g. 10) with the identical delivery-ID request simultaneously (`sync.WaitGroup`, all released via a shared start channel to maximize actual overlap) and asserting `SessionService.CreateSession` call count stays at exactly 1.
 - Files: `server/services/github_webhook_handler_test.go`, `server/services/generic_webhook_handler_test.go`.
 
 #### Story 2.4.2: Per-trigger rate limit via `golang.org/x/time/rate`
@@ -400,7 +408,12 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 #### Story 5.1.1: `CallbackConfig` struct + masked view/update RPC
 **Acceptance Criteria**:
 - AC4 (partial — config side): An operator can set `on_session_complete_url` without it being echoed back in plaintext on subsequent reads.
-**Files**: `config/types.go`, `config/config.go`, `proto/session/v1/session.proto`, `server/services/callback_config_service.go` (new).
+- AC11 (config-save half): `UpdateCallbackConfig` rejects a URL that resolves to a
+  loopback/link-local/private-range/cloud-metadata target at save time (the
+  send-time half is Task 5.2.1f — both are required since DNS can change between
+  save and fire).
+  - *Given* `UpdateCallbackConfig{OnSessionCompleteUrl: "http://169.254.169.254/"}`, *When* the RPC handler runs, *Then* it calls `ValidateCallbackURL` (Task 5.2.1f's function, so the check is defined once and shared, not duplicated) and returns `connect.CodeInvalidArgument` without persisting the URL.
+**Files**: `config/types.go`, `config/config.go`, `proto/session/v1/session.proto`, `server/services/callback_config_service.go` (new), `server/services/webhook_ssrf.go` (Task 5.2.1f, consumed here too).
 
 ##### Task 5.1.1a: Add `CallbackConfig` struct + `Callbacks` field on `Config` (~3 min)
 - `type CallbackConfig struct { OnSessionCompleteURL string \`json:"on_session_complete_url,omitempty"\`; OnSessionStaleURL string \`json:"on_session_stale_url,omitempty"\`; OnQueueItemCreatedURL string \`json:"on_queue_item_created_url,omitempty"\` }`; embed as `Callbacks CallbackConfig \`json:"callbacks,omitempty"\`` on `Config` near the existing nested-config block (`config/config.go:331-343`).
@@ -414,9 +427,9 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 - Regenerates `session/gen/session/v1/*.go` and `web-app/src/gen/session/v1/*_pb.ts`.
 - Files: generated, do not hand-edit.
 
-##### Task 5.1.1d: Implement `CallbackConfigService` (~5 min)
-- New concrete type `server/services/callback_config_service.go`, delegated to from `SessionService` exactly like `DefaultsService` (per SlackConfig precedent's `SlackConfigService`).
-- Files: `server/services/callback_config_service.go`, `server/services/session_service.go` (delegation wiring).
+##### Task 5.1.1d: Implement `CallbackConfigService`, validating each URL via `ValidateCallbackURL` before persisting (~6 min)
+- New concrete type `server/services/callback_config_service.go`, delegated to from `SessionService` exactly like `DefaultsService` (per SlackConfig precedent's `SlackConfigService`). Implement `server/services/webhook_ssrf.go`'s `ValidateCallbackURL` (Task 5.2.1f) first if doing Phase 5 in doc order — it's a small standalone stdlib function with no dependency on the dispatcher, safe to build early and reuse here (AC11's config-save half).
+- Files: `server/services/callback_config_service.go`, `server/services/session_service.go` (delegation wiring), `server/services/webhook_ssrf.go`.
 
 ### Epic 5.2: `CallbackDispatcher` + three call sites
 **Goal**: FR7-FR9 — async, bounded-retry, non-blocking dispatch from the three known lifecycle-event producer sites.
@@ -425,11 +438,23 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 **Acceptance Criteria**:
 - AC4: On session completion, a configured `on_session_complete` URL receives a POST with session outcome data; delivery failure does not block or corrupt the session's own state transition.
   - *Given* `cfg.Callbacks.OnSessionCompleteURL = "https://example.com/hook"` and a `BacklogItem` transitions to `BacklogStatusDone` via `TransitionBacklogItemStatus`, *When* the transition commits, *Then* the transition call returns successfully *before* the callback POST is attempted (dispatched via `go`), and if `https://example.com/hook` never responds, the `BacklogItem`'s status remains `done` (not rolled back) and a `log.Warn` records the delivery failure without the URL in the log line.
+- AC10: `CallbackDispatcher` bounds concurrent in-flight dispatch goroutines; a
+  dispatch beyond the cap is dropped and logged, not queued unboundedly or silently
+  discarded.
+  - *Given* the dispatcher's semaphore is sized N and N dispatches are already in flight (each blocked on a hanging test server), *When* one more `Dispatch` call arrives, *Then* it does not spawn an (N+1)th in-flight goroutine — it either blocks briefly then drops with a logged `"[CallbackDispatcher] dispatch dropped, at capacity"` warning (non-blocking `select`/`default` on the semaphore channel, since FR8 forbids blocking the caller), and the drop is observable (log line), not silent.
 **Files**: `server/services/callback_dispatcher.go`, `server/review_queue_manager.go`, `session/ent_repository_backlog.go` (or wherever `TransitionBacklogItemStatus`'s done-transition hook belongs), `session/backlog_lifecycle.go`.
 
-##### Task 5.2.1a: Implement `CallbackDispatcher` (~5 min)
-- `type CallbackDispatcher struct { client *http.Client; cfg *config.Config }`; `func (d *CallbackDispatcher) Dispatch(eventType string, payload any)`: `go func() { for attempt := 0; attempt < 3; attempt++ { ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second); ... POST ...; cancel(); if success { return }; time.Sleep(backoff) }; log.Warn("[CallbackDispatcher] delivery failed after retries", "event", eventType) /* URL never logged */ }()`.
+##### Task 5.2.1a: Implement `CallbackDispatcher` with a semaphore-capped in-flight limit (~6 min)
+- `type CallbackDispatcher struct { client *http.Client; cfg *config.Config; inFlight chan struct{} }` — `inFlight` sized via `make(chan struct{}, maxInFlightCallbacks)` (const, default e.g. 20 — ponytail: fixed cap, revisit if a real deployment needs it configurable).
+- `func (d *CallbackDispatcher) Dispatch(eventType string, payload any)`: non-blocking `select { case d.inFlight <- struct{}{}: default: log.Warn("[CallbackDispatcher] dispatch dropped, at capacity", "event", eventType); return }` (AC10 — caller never blocks, over-cap dispatches are dropped+logged, not queued) then `go func() { defer func() { <-d.inFlight }(); for attempt := 0; attempt < 3; attempt++ { ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second); ... POST ...; cancel(); if success { return }; time.Sleep(backoff) }; log.Warn("[CallbackDispatcher] delivery failed after retries", "event", eventType) /* URL never logged */ }()`.
 - Files: `server/services/callback_dispatcher.go`.
+
+##### Task 5.2.1f: SSRF-validate the target URL before every POST attempt (~5 min)
+- `func ValidateCallbackURL(rawURL string) error` (`server/services/webhook_ssrf.go`, new): parse URL, require `http`/`https` scheme, resolve host via `net.LookupIP` (or `net.Resolver.LookupIPAddr` with the request's context so it's cancellable), reject if any resolved IP is loopback (`IsLoopback`), link-local (`IsLinkLocalUnicast`/`IsLinkLocalMulticast`), or private-range (`IsPrivate`) per stdlib `net.IP` methods, and explicitly reject the cloud-metadata address `169.254.169.254` (already covered by `IsLinkLocalUnicast` but call it out per AC11's wording). Call this function inside `Dispatch`'s per-attempt loop (send-time, not just once at dispatch entry) since DNS can change between attempts (pitfalls §5 TOCTOU/DNS-rebinding) — abort the attempt (no `time.Sleep` retry) and log if validation fails.
+- Files: `server/services/webhook_ssrf.go`, `server/services/callback_dispatcher.go`.
+
+##### Task 5.2.1g: Tests — semaphore cap drops+logs, SSRF validator rejects loopback/link-local/private/metadata, accepts public (~6 min)
+- Files: `server/services/callback_dispatcher_test.go`, `server/services/webhook_ssrf_test.go`.
 
 ##### Task 5.2.1b: Wire `on_queue_item_created` at `ReactiveQueueManager.OnItemAdded` (~3 min)
 - Add `if rqm.cfg.Callbacks.OnQueueItemCreatedURL != "" { rqm.callbackDispatcher.Dispatch("queue_item_created", payload) }` next to the existing `rqm.eventBus.Publish(...)` call (`server/review_queue_manager.go` ~line 411) — **pending resolution of the Unresolved Question about whether this is the FR7-intended event**.
@@ -469,16 +494,20 @@ Phase 8: Flag, Registry, E2E  <────────────────�
 ### Epic 6.2: Chain-fire logic + restart-safe reconciler
 **Goal**: FR10/AC5 — completing session's output flows into the next session's prompt; a crash between "marked done" and "next session created" is recoverable.
 
-#### Story 6.2.1: Chain fires atomically with the done transition; a `TriggerChainReconciler` catches interrupted chains
+#### Story 6.2.1: Chain fires asynchronously after the done transition commits; a `TriggerChainReconciler` catches interrupted chains
 **Acceptance Criteria**:
 - AC5: A session can be configured to trigger a follow-up session on its own completion, with the prior session's output available to the new session's prompt.
-  - *Given* `BacklogItem{ID: "A", NextWorkflowID: <plan-review-workflow>, TriggeredByChainDepth: 0}` transitions to `BacklogStatusDone` with an `ItemSessionSummary` already captured (per `session/session_summary_types.go`), *When* `TransitionBacklogItemStatus` commits the `done` write, *Then* in the same call (or the reconciler on next tick if the process crashes first), a new session is created via `FireTrigger` with `TriggeredByChainDepth: 1` and a prompt built from `BuildSessionInitialPrompt(item, priorSessions)`-style summary interpolation, and `ChainFired` is set `true`.
+  - *Given* `BacklogItem{ID: "A", NextWorkflowID: <plan-review-workflow>, TriggeredByChainDepth: 0}` transitions to `BacklogStatusDone` with an `ItemSessionSummary` already captured (per `session/session_summary_types.go`), *When* `TransitionBacklogItemStatus` commits the `done` write, *Then* shortly after (dispatched off the transition's call stack, not inside it — see AC9 below) a new session is created via `FireTrigger` with `TriggeredByChainDepth: 1` and a prompt built from `BuildSessionInitialPrompt(item, priorSessions)`-style summary interpolation, and `ChainFired` is set `true` in a follow-up write.
   - *Given* the process crashes after the `done` write but before the chained session is created, *When* the process restarts and the 60s reconcile ticker runs, *Then* `TriggerChainReconciler` finds the row (`status=done AND next_workflow_id IS NOT NULL AND chain_fired=false`) and completes the chain exactly once.
+- AC9: `ChainFirer.FireTrigger` runs asynchronously and does not hold a DB
+  lock/transaction open during `CreateSession`'s tmux+git-worktree cost.
+  - *Given* `TransitionBacklogItemStatus`'s DB write/transaction for the `done` status change, *When* the write commits, *Then* the function returns to its caller (releasing any DB transaction/connection) *before* `ChainFirer.FireTrigger`'s `CreateSession` call begins — the chain-fire is dispatched via `go` (or a bounded work-queue, matching the `CallbackDispatcher`/`inFlight` semaphore shape from Task 5.2.1a, to avoid an unbounded goroutine fan-out if many items complete in the same tick) strictly after the transition's DB call returns, never inside the same `ent.Tx`/query call that performs the status write.
 **Files**: `session/ent_repository_backlog.go`, `session/backlog_lifecycle.go`, `server/workflows/scheduler.go`.
 
-##### Task 6.2.1a: Chain-fire attempt inside `TransitionBacklogItemStatus`'s done branch (~5 min)
-- After the CAS succeeds and `NextWorkflowID != nil`, attempt the chain fire synchronously (best-effort, same request) — on success set `ChainFired = true` in a follow-up update; on any error, leave `ChainFired = false` (the reconciler will retry).
-- Files: `session/ent_repository_backlog.go`.
+##### Task 6.2.1a: Async chain-fire dispatched immediately after `TransitionBacklogItemStatus` returns (~6 min)
+- **Not** inside the transition's own DB call/transaction (AC9 — the original draft of this task proposed firing synchronously inside the `done` branch, which would hold the transition's DB work open across `CreateSession`'s expensive tmux+worktree setup; corrected here). Instead: the transition's *caller* (or a small wrapper `ChainFirer` type consulted right after `TransitionBacklogItemStatus` returns successfully) checks `NextWorkflowID != nil && !ChainFired` and dispatches `go chainFirer.FireTrigger(context.Background(), item)` through the same bounded-semaphore pattern as `CallbackDispatcher` (Task 5.2.1a) so a burst of simultaneous completions can't spawn unbounded goroutines.
+- `ChainFirer.FireTrigger` itself performs the chain-depth check (Epic 6.3), builds the prompt, calls `Scheduler.FireTrigger`, and on success persists `ChainFired = true` via a **separate**, later `repo.Update` call (not part of the original transition's transaction) — on error, `ChainFired` stays `false` and `TriggerChainReconciler` (Task 6.2.1b) retries on its next tick.
+- Files: `session/ent_repository_backlog.go`, `session/backlog_lifecycle.go` (new `ChainFirer` type).
 
 ##### Task 6.2.1b: `TriggerChainReconciler.ReconcileChains` on the existing 60s ticker (~5 min)
 - Modeled on `reconcileStaleWorkSessions` (`session/backlog_lifecycle.go:2294`): `ListBacklogItems(ctx, BacklogItemFilter{Statuses: [done]})`, filter `NextWorkflowID != nil && !ChainFired`, attempt chain-fire for each, set `ChainFired = true` on success.
