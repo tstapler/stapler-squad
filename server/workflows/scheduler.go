@@ -151,11 +151,17 @@ func (s *Scheduler) Start(ctx context.Context) {
 	if err != nil {
 		log.Error("[WorkflowScheduler] failed to load enabled workflows on start", "err", err)
 	} else {
+		now := time.Now()
 		s.mu.Lock()
 		for _, wf := range wfs {
 			if err := s.addCronEntry(wf); err != nil {
 				log.Warn("[WorkflowScheduler] failed to register cron entry on start", "slug", wf.Slug, "err", err)
+				continue
 			}
+			// Missed-fire detection (Task 4.1.1b): only meaningful for workflows that
+			// just successfully registered as cron entries — addCronEntry already
+			// applies the trigger_type=="cron" + non-empty cron_expression gate.
+			checkMissedCronFire(wf, now)
 		}
 		s.mu.Unlock()
 		log.Info("[WorkflowScheduler] loaded enabled workflows", "count", len(wfs))
@@ -385,6 +391,94 @@ func (s *Scheduler) addCronEntry(wf *ent.Workflow) error {
 	}
 	s.entryMap[wf.ID.String()] = entryID
 	return nil
+}
+
+// missedFireCronParser parses cron expressions for checkMissedCronFire (Task 4.1.1b),
+// mirroring the field mask NewScheduler/ValidateCronExpression use (minute hour dom month
+// dow, no seconds field).
+var missedFireCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+// checkMissedCronFire logs a warning if wf's cron schedule has an occurrence between its
+// CreatedAt and now that last_fired_at doesn't account for — i.e. the process was down
+// (or otherwise failed to fire) across an expected cron occurrence. Detection/logging
+// only: it never replay-fires the missed occurrence (Task 4.1.1b / AC2's straddled-
+// restart scenario).
+func checkMissedCronFire(wf *ent.Workflow, now time.Time) {
+	schedule, err := missedFireCronParser.Parse(wf.CronExpression)
+	if err != nil {
+		log.Warn("[WorkflowScheduler] missed-fire check: failed to parse cron expression", "slug", wf.Slug, "err", err)
+		return
+	}
+
+	expected, found := mostRecentCronOccurrence(schedule, wf.CreatedAt, now)
+	if !found {
+		// No scheduled occurrence has fallen due since the workflow was created —
+		// either it's brand new, or its schedule genuinely hasn't come around yet.
+		// Bounding the search by CreatedAt (rather than e.g. epoch or a fixed
+		// lookback) is what prevents a false positive here: there is nothing to
+		// compare last_fired_at against.
+		return
+	}
+
+	if wf.LastFiredAt == nil || wf.LastFiredAt.Before(expected) {
+		log.Warn("[WorkflowScheduler] missed cron fire", "slug", wf.Slug, "expected_at", expected)
+	}
+}
+
+// mostRecentCronOccurrence returns the latest scheduled occurrence of schedule in
+// (notBefore, now], or found=false if no such occurrence exists.
+//
+// robfig/cron's Schedule interface exposes only Next(t) — the next occurrence strictly
+// after t — with no "previous occurrence" method. Naively walking forward one occurrence
+// at a time from notBefore would work but costs one Schedule.Next call per occurrence
+// since notBefore, which is unbounded for an old workflow with a frequent schedule (e.g.
+// a workflow created a year ago on a per-minute cron would take ~525,600 calls just to
+// reach the present). Instead this searches backward from `now` with an exponentially
+// widening window: try the most recent minute, then the most recent 2 minutes, 4, 8, ...
+// — at each width, latestOccurrenceInRange does a cheap forward Next-walk confined to
+// that window only. This costs O(log(gap)) probes to find the right window, plus a walk
+// bounded by the occurrences inside the true (small, since Phase 3 bumps last_fired_at on
+// every successful fire) gap rather than the workflow's entire lifetime. The search is
+// bounded below by notBefore (the workflow's CreatedAt at the only call site) — see
+// checkMissedCronFire's comment for why that also solves the "don't false-positive on a
+// brand-new workflow" requirement without separate period arithmetic.
+func mostRecentCronOccurrence(schedule cron.Schedule, notBefore, now time.Time) (occurrence time.Time, found bool) {
+	if !notBefore.Before(now) {
+		return time.Time{}, false
+	}
+
+	for window := time.Minute; ; window *= 2 {
+		lowerBound := now.Add(-window)
+		if !lowerBound.After(notBefore) {
+			lowerBound = notBefore
+		}
+
+		if occ, ok := latestOccurrenceInRange(schedule, lowerBound, now); ok {
+			return occ, true
+		}
+		if !lowerBound.After(notBefore) {
+			// Already searched the full permitted range (lowerBound was clamped to
+			// notBefore this iteration) and found nothing — no occurrence exists.
+			return time.Time{}, false
+		}
+	}
+}
+
+// latestOccurrenceInRange returns the latest occurrence of schedule in (from, upTo], or
+// found=false if none exists.
+func latestOccurrenceInRange(schedule cron.Schedule, from, upTo time.Time) (occurrence time.Time, found bool) {
+	next := schedule.Next(from)
+	if next.After(upTo) {
+		return time.Time{}, false
+	}
+	last := next
+	for {
+		n := schedule.Next(last)
+		if n.After(upTo) {
+			return last, true
+		}
+		last = n
+	}
 }
 
 // ValidateCronExpression validates a 5-field cron expression.
