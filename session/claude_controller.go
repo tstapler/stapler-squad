@@ -33,6 +33,7 @@ type InstanceContext interface {
 	SetLastMeaningfulOutput(t time.Time)
 	GetStatus() int
 	WriteToPTY(data []byte) (int, error)
+	GetProgram() string
 }
 
 // statusCacheEntry holds the result of the last successful status detection
@@ -220,8 +221,19 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		// used everywhere else in the app (session selectors, RPCs, etc.).
 		rs.SetStableSessionID(cc.instance.GetStableID())
 
-		// Create status detector and tag it with the session name for detection event attribution.
-		sd := detection.NewStatusDetector()
+		// Create status detector: prefer the per-program detector (built-in
+		// override or user plugin) registered in the live detector snapshot
+		// for this instance's program, falling back to the hardcoded Claude
+		// pattern set when none is registered. This lookup happens once,
+		// here, at Start() time — a later plugin hot-reload only affects
+		// sessions started after the reload; a session already running keeps
+		// whatever detector it was constructed with (see
+		// detection.ResolveDetectorForProgram).
+		sd, ok := detection.ResolveDetectorForProgram(cc.instance.GetProgram())
+		if !ok {
+			sd = detection.NewStatusDetector()
+		}
+		// Tag it with the session name for detection event attribution.
 		sd.SetSessionID(cc.sessionName)
 
 		// Create idle detector — inject sd so both components share one ring buffer.
