@@ -169,6 +169,18 @@ warrants a Domain Model — it's Transaction Script territory (see Pattern Decis
    `s.storage.DeleteInstance(...)` call removes the whole row, `note` included, automatically —
    no new cleanup code needed. Documented here explicitly so an adversarial reviewer doesn't
    re-flag the `SessionGoal` gap as applying to this feature too.
+6. **MCP tool surface (`get_session`/`update_session`) does not expose `note` in this iteration —
+   deliberate v1 scope cut, not a silent omission.** Pre-mortem P1 flagged that this repo's
+   primary "session juggler" is frequently an agent operating through
+   `mcp__stapler-squad__update_session`/`get_session` (`server/mcp/tools_lifecycle.go`), not a
+   human in the web UI, so a note that's invisible/unwritable from that path only partially
+   serves the requirements doc's stated JTBD ("leave yourself a reminder while juggling
+   sessions"). Requirements.md explicitly scopes this to "editable from the session detail
+   view," so the web-only surface satisfies the letter of the ACs; this entry names the known
+   gap rather than leaving it undiscovered. **Fast-follow**: add `note` (read + write) to the
+   `get_session`/`update_session` MCP tool schemas once the web UI ships and usage confirms the
+   JTBD needs agent-side access too — not blocking for this plan's 4 acceptance criteria, all of
+   which are UI-scoped.
 
 ## Dependency Visualization
 
@@ -239,7 +251,7 @@ from Stories 1.4/2.3, and its e2e spec exercises the full stack.
 3. **`session/instance_actor_setters.go`**: add a `---- Note ----` section mirroring `---- Category ----` (lines 356-372): `setNoteLocked(s *instanceState, note string)` + `func (i *Instance) SetNote(note string)`, following the exact `setCategoryLocked`/`SetCategory` shape. *1 file.*
 4. **`session/instance_serialization.go`**: add `Note: snap.Note,` to `ToInstanceData()`'s `InstanceData{...}` literal (near `Category: snap.Category,` at line 65) and add `Note: data.Note,` to `FromInstanceData`'s `Instance{...}` literal (near `Category: data.Category,` at line 229). *1 file.*
 5. **`session/storage.go`**: add `Note string \`json:"note,omitempty"\`` to the `InstanceData` struct, grouped near `Category string \`json:"category,omitempty"\`` (line 40). *1 file.*
-6. **`session/ent_repository.go`**: three edits in one file — (a) in the `Create` path, add `if data.Note != "" { sessionCreate.SetNote(data.Note) }` near the `Category` block (~line 179-181); (b) in the `Update` path, add the equivalent `sessionUpdate.SetNote(data.Note)` guard near ~line 391-393; (c) in `sessionToInstanceData`, add `Note: sess.Note,` to the `InstanceData{...}` literal near `Category: sess.Category,` (~line 1053). *1 file, 3 edit points.*
+6. **`session/ent_repository.go`**: three edits in one file — (a) in the `Create` path, add `if data.Note != "" { sessionCreate.SetNote(data.Note) }` near the `Category` block (~line 179-181); (b) in the `Update` path, call `sessionUpdate.SetNote(data.Note)` **unconditionally** — not guarded by `if data.Note != ""` — near ~line 391-393, with a one-line comment (`// Note is set unconditionally, unlike sibling optional string fields: an empty note is a meaningful, intentionally-reachable state ("cleared"), not an "unset" sentinel, so the guarded-update convention would silently prevent a user from ever clearing it.`); (c) in `sessionToInstanceData`, add `Note: sess.Note,` to the `InstanceData{...}` literal near `Category: sess.Category,` (~line 1053). *1 file, 3 edit points.*
 
 ---
 
@@ -284,10 +296,14 @@ from Stories 1.4/2.3, and its e2e spec exercises the full stack.
   - **Given** the existing `TestUpdateSession_TagsUpdate` fixture pattern (`setupForkTestFixture` + `addPausedSession`).
   - **When** `TestUpdateSession_NoteUpdate` calls `UpdateSession` with a `note`, then reloads via `fix.storage.LoadInstances()`.
   - **Then** the reloaded instance's `Note` field matches what was sent, proving persistence through the full ent round trip, not just the in-memory response.
+- AC: clearing a note (set to `""`) persists as empty across a reload, not the stale prior value.
+  - **Given** a paused session whose `Note` is already `"stale reminder"` (seeded directly, or via a prior `UpdateSession` call).
+  - **When** `TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload` calls `UpdateSession` with `Note: proto.String("")`, then reloads via `fix.storage.LoadInstances()`.
+  - **Then** both the response's `session.note` and the storage-reloaded instance's `Note` are `""` — this is the regression test for the ent `Update` path's guard-vs-unconditional `SetNote` fix in Task 1.2.6(b); it must fail against the guarded (`if data.Note != ""`) version and pass against the unconditional version.
 
 **Tasks:**
 
-1. **`server/services/session_service_test.go`**: add `TestUpdateSession_NoteUpdate` (mirrors `TestUpdateSession_TagsUpdate`, lines 505-536: seed a paused session, call `UpdateSession` with `Note: proto.String("left this waiting on CI")`, assert the response and the storage-reloaded instance both carry it) and `TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument` (send a 10,001-char note, assert `connect.CodeInvalidArgument` and that storage is unchanged). *1 file.*
+1. **`server/services/session_service_test.go`**: add `TestUpdateSession_NoteUpdate` (mirrors `TestUpdateSession_TagsUpdate`, lines 505-536: seed a paused session, call `UpdateSession` with `Note: proto.String("left this waiting on CI")`, assert the response and the storage-reloaded instance both carry it), `TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument` (send a 10,001-char note, assert `connect.CodeInvalidArgument` and that storage is unchanged), and `TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload` (seed a session with a non-empty `Note` — e.g. `"stale reminder"` — call `UpdateSession` with `Note: proto.String("")`, then reload via `fix.storage.LoadInstances()` and assert the reloaded instance's `Note == ""`, not the stale prior value; this is the direct regression test for the Task 1.2.6(b) unconditional-`SetNote` fix). *1 file.*
 2. **`session/instance_test.go`** (or the closest existing setter-test file, e.g. wherever `SetCategory` is tested — confirm at implementation time, none was found via grep so this may be a new small test block): add a round-trip test asserting `Instance.Note` → `SetNote` → `ToInstanceData()` → `FromInstanceData()` → `Instance.Note` equality, directly exercising the Risk Control mitigation for the "missing touchpoint" risk. *1 file.*
 
 ---
