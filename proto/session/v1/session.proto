@@ -2180,13 +2180,21 @@ message GetHookStatusResponse {
   bool rules_available = 3;
   // True when the ssq-hook-handler is available to install the notification hooks.
   bool notifications_available = 4;
+  // True when the Antigravity CLI rule-enforcement hook (ssq-hooks check --antigravity) is installed.
+  bool agy_rules_installed = 5;
+  // True when the Gemini CLI rule-enforcement hook (ssq-hooks check --gemini) is installed.
+  bool gemini_rules_installed = 6;
 }
 
 message InstallHooksRequest {
-  // Install the PreToolUse rule-enforcement hook.
+  // Install the PreToolUse rule-enforcement hook for Claude Code.
   bool install_rules = 1;
   // Install the Notification/Stop notification hooks.
   bool install_notifications = 2;
+  // Install the PreToolUse rule-enforcement hook for Antigravity CLI (agy).
+  bool install_agy_rules = 3;
+  // Install the BeforeTool rule-enforcement hook for Gemini CLI.
+  bool install_gemini_rules = 4;
 }
 
 message InstallHooksResponse {

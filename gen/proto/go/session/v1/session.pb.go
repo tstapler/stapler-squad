@@ -11343,8 +11343,12 @@ type GetHookStatusResponse struct {
 	RulesAvailable bool `protobuf:"varint,3,opt,name=rules_available,json=rulesAvailable,proto3" json:"rules_available,omitempty"`
 	// True when the ssq-hook-handler is available to install the notification hooks.
 	NotificationsAvailable bool `protobuf:"varint,4,opt,name=notifications_available,json=notificationsAvailable,proto3" json:"notifications_available,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// True when the Antigravity CLI rule-enforcement hook (ssq-hooks check --antigravity) is installed.
+	AgyRulesInstalled bool `protobuf:"varint,5,opt,name=agy_rules_installed,json=agyRulesInstalled,proto3" json:"agy_rules_installed,omitempty"`
+	// True when the Gemini CLI rule-enforcement hook (ssq-hooks check --gemini) is installed.
+	GeminiRulesInstalled bool `protobuf:"varint,6,opt,name=gemini_rules_installed,json=geminiRulesInstalled,proto3" json:"gemini_rules_installed,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *GetHookStatusResponse) Reset() {
@@ -11405,14 +11409,32 @@ func (x *GetHookStatusResponse) GetNotificationsAvailable() bool {
 	return false
 }
 
+func (x *GetHookStatusResponse) GetAgyRulesInstalled() bool {
+	if x != nil {
+		return x.AgyRulesInstalled
+	}
+	return false
+}
+
+func (x *GetHookStatusResponse) GetGeminiRulesInstalled() bool {
+	if x != nil {
+		return x.GeminiRulesInstalled
+	}
+	return false
+}
+
 type InstallHooksRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Install the PreToolUse rule-enforcement hook.
+	// Install the PreToolUse rule-enforcement hook for Claude Code.
 	InstallRules bool `protobuf:"varint,1,opt,name=install_rules,json=installRules,proto3" json:"install_rules,omitempty"`
 	// Install the Notification/Stop notification hooks.
 	InstallNotifications bool `protobuf:"varint,2,opt,name=install_notifications,json=installNotifications,proto3" json:"install_notifications,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Install the PreToolUse rule-enforcement hook for Antigravity CLI (agy).
+	InstallAgyRules bool `protobuf:"varint,3,opt,name=install_agy_rules,json=installAgyRules,proto3" json:"install_agy_rules,omitempty"`
+	// Install the BeforeTool rule-enforcement hook for Gemini CLI.
+	InstallGeminiRules bool `protobuf:"varint,4,opt,name=install_gemini_rules,json=installGeminiRules,proto3" json:"install_gemini_rules,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *InstallHooksRequest) Reset() {
@@ -11455,6 +11477,20 @@ func (x *InstallHooksRequest) GetInstallRules() bool {
 func (x *InstallHooksRequest) GetInstallNotifications() bool {
 	if x != nil {
 		return x.InstallNotifications
+	}
+	return false
+}
+
+func (x *InstallHooksRequest) GetInstallAgyRules() bool {
+	if x != nil {
+		return x.InstallAgyRules
+	}
+	return false
+}
+
+func (x *InstallHooksRequest) GetInstallGeminiRules() bool {
+	if x != nil {
+		return x.InstallGeminiRules
 	}
 	return false
 }
@@ -16130,15 +16166,19 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x16GetFeatureFlagsRequest\"H\n" +
 	"\x17GetFeatureFlagsResponse\x12-\n" +
 	"\x05flags\x18\x01 \x03(\v2\x17.session.v1.FeatureFlagR\x05flags\"\x16\n" +
-	"\x14GetHookStatusRequest\"\xdb\x01\n" +
+	"\x14GetHookStatusRequest\"\xc1\x02\n" +
 	"\x15GetHookStatusResponse\x12'\n" +
 	"\x0frules_installed\x18\x01 \x01(\bR\x0erulesInstalled\x127\n" +
 	"\x17notifications_installed\x18\x02 \x01(\bR\x16notificationsInstalled\x12'\n" +
 	"\x0frules_available\x18\x03 \x01(\bR\x0erulesAvailable\x127\n" +
-	"\x17notifications_available\x18\x04 \x01(\bR\x16notificationsAvailable\"o\n" +
+	"\x17notifications_available\x18\x04 \x01(\bR\x16notificationsAvailable\x12.\n" +
+	"\x13agy_rules_installed\x18\x05 \x01(\bR\x11agyRulesInstalled\x124\n" +
+	"\x16gemini_rules_installed\x18\x06 \x01(\bR\x14geminiRulesInstalled\"\xcd\x01\n" +
 	"\x13InstallHooksRequest\x12#\n" +
 	"\rinstall_rules\x18\x01 \x01(\bR\finstallRules\x123\n" +
-	"\x15install_notifications\x18\x02 \x01(\bR\x14installNotifications\"m\n" +
+	"\x15install_notifications\x18\x02 \x01(\bR\x14installNotifications\x12*\n" +
+	"\x11install_agy_rules\x18\x03 \x01(\bR\x0finstallAgyRules\x120\n" +
+	"\x14install_gemini_rules\x18\x04 \x01(\bR\x12installGeminiRules\"m\n" +
 	"\x14InstallHooksResponse\x129\n" +
 	"\x06status\x18\x01 \x01(\v2!.session.v1.GetHookStatusResponseR\x06status\x12\x1a\n" +
 	"\bmessages\x18\x02 \x03(\tR\bmessages\"H\n" +
