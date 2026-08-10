@@ -44,6 +44,14 @@ jest.mock("@/components/ui/Modal", () => ({
   ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+// Radix's real Tooltip only reveals its label on hover after a delay via a portal —
+// mock it so the label is assertable synchronously without simulating pointer timing.
+jest.mock("@/components/ui/Tooltip", () => ({
+  Tooltip: ({ children, label }: { children: React.ReactNode; label: string }) => (
+    <div data-testid="tooltip-mock" data-label={label}>{children}</div>
+  ),
+}));
+
 jest.mock("@/lib/hooks/useSessionActions", () => ({
   useSessionActions: () => ({
     pause: jest.fn(),
@@ -91,6 +99,6 @@ describe("SessionCard — note badge", () => {
     render(<SessionCard session={session} />);
     const badge = screen.getByTestId("badge-has-note");
     const expected = "N".repeat(119) + "…";
-    expect(badge).toHaveAttribute("title", expected);
+    expect(badge.closest('[data-testid="tooltip-mock"]')).toHaveAttribute("data-label", expected);
   });
 });

@@ -1282,7 +1282,16 @@ export function SessionDetailView({
             {session.goal?.goalText && (
               <GoalPanel goal={session.goal} />
             )}
-            <NotePanel note={session.note ?? ""} onSave={async (v) => { await actions.update({ note: v }); }} />
+            <NotePanel
+              note={session.note ?? ""}
+              onSave={async (v) => {
+                // actions.update resolves to null (never rejects) on RPC failure — NotePanel's
+                // save-error UI (aria-live assertive message, textarea preserved) only fires on
+                // a rejected promise, so a null result must be converted into a throw here.
+                const result = await actions.update({ note: v });
+                if (!result) throw new Error("Failed to save note");
+              }}
+            />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
           </div>

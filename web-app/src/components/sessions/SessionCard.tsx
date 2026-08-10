@@ -644,15 +644,16 @@ function SessionCardInner({
               </span>
             )}
             {noteTooltip && (
-              <span
-                className={noteBadge}
-                role="img"
-                title={noteTooltip}
-                aria-label="Has a note"
-                data-testid="badge-has-note"
-              >
-                <span aria-hidden="true">📝</span> Note
-              </span>
+              <Tooltip label={noteTooltip}>
+                <span
+                  className={noteBadge}
+                  role="img"
+                  aria-label="Has a note"
+                  data-testid="badge-has-note"
+                >
+                  <span aria-hidden="true">📝</span> Note
+                </span>
+              </Tooltip>
             )}
           </div>
         </div>
