@@ -227,8 +227,19 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				// and Latin-1 accented chars (Flambéing, Sautéing) — Go RE2 \w = [0-9A-Za-z_] only.
 				// [ \t]* allows leading whitespace so indented spinners (e.g. task manager sub-items)
 				// are detected: "  ✽ Roosting… (9m 52s · ↓ 2.8k tokens)"
-				Pattern:     `(?m)^[ \t]*[·✢✳✶✻✽●*✦][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3})`,
-				Description: "Claude thinking state with random verb — any spinner frame + capitalized verb + ellipsis",
+				//
+				// Two tail alternatives after the verb:
+				//   1. Ellipsis/dots immediately follow the verb (original shape), with anything
+				//      allowed afterward — e.g. "Roosting… (9m 52s · ↓ 2.8k tokens)".
+				//   2. A batched multi-tool-call summary clause trails the verb — e.g. "Searching
+				//      for 12 patterns, reading 3 files, running 1 shell command…" — allowed only
+				//      when it contains a digit (a tool-call count) and the ellipsis/dots are the
+				//      last thing on the line ([ \t]*$). Both constraints exist to avoid matching
+				//      ordinary multi-sentence prose that happens to contain a mid-line period
+				//      (e.g. "I've completed the implementation. Here's a summary...", where more
+				//      text follows the period on the same line) — see claude_cost_summary.txt.
+				Pattern:     `(?m)^[ \t]*[·✢✳✶✻✽●*✦][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3}|[^\n.…]*\d[^\n.…]*(?:…|\.{1,3})[ \t]*$)`,
+				Description: "Claude thinking state with random verb — any spinner frame + capitalized verb + ellipsis (optionally followed by a batched tool-call summary clause)",
 				Priority:    26,
 			},
 			{

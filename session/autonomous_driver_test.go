@@ -642,6 +642,71 @@ func TestWaitForIdle_should_returnFalse_When_ContextExpiresBeforeSettleWindowEla
 	}
 }
 
+// TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryReplayed is an
+// integration-style regression test for AC3 of the "no-op nudge into actively-working
+// sessions" bug: it runs the real production status classifier
+// (detection.NewStatusDetector) against the reported batched multi-tool-call summary pane
+// text, then feeds the resulting DetectedStatus into waitForIdle exactly as
+// AutonomousDriver.run()'s statusCh does — reproducing the causal chain (pane text →
+// classify → statusCh → waitForIdle → turn gate) end-to-end without needing a live tmux
+// session.
+//
+// Before the claude_thinking_verb widening (session/detection/binaries/claude.go), this
+// pane text fell through to StatusUnknown, which isIdleStatus does not treat as busy —
+// waitForIdle's default case only resets idleSince on a recognized busy status, so a
+// burst of unrecognized-but-busy frames could silently accumulate toward the idle settle
+// window and eventually return true, causing run() to inject a spurious "keep going" turn
+// (fireTurnCallback) into a session that was never actually idle. After the fix the same
+// text classifies StatusExecuting, which resets idleSince on every occurrence, so a
+// sustained burst must never let waitForIdle return true.
+func TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryReplayed(t *testing.T) {
+	inst := &Instance{Title: "test-waitforidle-batched-summary", UUID: "abcdefgh-wfi4"}
+	cc, _ := NewClaudeController(inst)
+
+	sd := detection.NewStatusDetector()
+	batchedSummary := "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…"
+	classified := sd.Detect([]byte(batchedSummary))
+	if classified != detection.StatusExecuting {
+		t.Fatalf("test setup: expected batched-summary pane text to classify as StatusExecuting, got %s — "+
+			"the claude_thinking_verb widening regressed", classified)
+	}
+
+	settleWindow := 80 * time.Millisecond
+	statusCh := make(chan detection.DetectedStatus, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	// Replay a burst of the classified batched-summary status, like repeated tool-call
+	// rounds during one busy turn — none of these should ever let the settle window
+	// complete while the burst is ongoing.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				select {
+				case statusCh <- classified:
+				default:
+				}
+			}
+		}
+	}()
+
+	ok := waitForIdle(ctx, statusCh, cc, settleWindow)
+	<-done
+
+	if ok {
+		t.Error("waitForIdle returned true during a sustained batched-tool-call-summary burst — " +
+			"this would fire a spurious no-op nudge (fireTurnCallback) into an actively-working session")
+	}
+}
+
 // TestNewAutonomousDriver_ConfigurableStartupTimeout verifies T-GO-18:
 // WithStartupTimeout sets the field; the default is 60s when no option is passed.
 func TestNewAutonomousDriver_ConfigurableStartupTimeout(t *testing.T) {
