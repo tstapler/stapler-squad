@@ -65,9 +65,11 @@ review→merge pipelines).
 ## Functional Requirements
 
 ### Inbound triggers
-- FR1: A `triggers` config (JSON, likely under existing `config/` JSON persistence
-  patterns) defines zero or more trigger specs: `type` (`github_push` | `cron` |
-  `webhook`), match criteria per type, and a `prompt` or `prompt_template`.
+- FR1: Trigger specs are persisted as rows on the existing `ent.Workflow` entity
+  (extended with `trigger_type`: `github_push` | `cron` | `webhook` | `manual`, plus
+  per-type match criteria and a `prompt_template` field) rather than a separate JSON
+  config file — see `research/architecture.md` §4 and ADR-001 for why a DB-backed
+  entity was chosen over a parallel JSON/config mechanism.
 - FR2: `github_push` triggers require a receiver endpoint that verifies GitHub's
   webhook HMAC signature (`X-Hub-Signature-256`) before acting.
 - FR3: `cron` triggers run on an in-process scheduler (evaluated against a
