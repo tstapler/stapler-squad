@@ -474,6 +474,20 @@ func (_c *SessionCreate) SetNillablePauseReason(v *string) *SessionCreate {
 	return _c
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (_c *SessionCreate) SetExitReason(v string) *SessionCreate {
+	_c.mutation.SetExitReason(v)
+	return _c
+}
+
+// SetNillableExitReason sets the "exit_reason" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableExitReason(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetExitReason(*v)
+	}
+	return _c
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (_c *SessionCreate) SetWorkflowID(v string) *SessionCreate {
 	_c.mutation.SetWorkflowID(v)
@@ -982,6 +996,10 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.PauseReason(); ok {
 		_spec.SetField(session.FieldPauseReason, field.TypeString, value)
 		_node.PauseReason = value
+	}
+	if value, ok := _c.mutation.ExitReason(); ok {
+		_spec.SetField(session.FieldExitReason, field.TypeString, value)
+		_node.ExitReason = value
 	}
 	if value, ok := _c.mutation.WorkflowID(); ok {
 		_spec.SetField(session.FieldWorkflowID, field.TypeString, value)
@@ -1725,6 +1743,24 @@ func (u *SessionUpsert) UpdatePauseReason() *SessionUpsert {
 // ClearPauseReason clears the value of the "pause_reason" field.
 func (u *SessionUpsert) ClearPauseReason() *SessionUpsert {
 	u.SetNull(session.FieldPauseReason)
+	return u
+}
+
+// SetExitReason sets the "exit_reason" field.
+func (u *SessionUpsert) SetExitReason(v string) *SessionUpsert {
+	u.Set(session.FieldExitReason, v)
+	return u
+}
+
+// UpdateExitReason sets the "exit_reason" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateExitReason() *SessionUpsert {
+	u.SetExcluded(session.FieldExitReason)
+	return u
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (u *SessionUpsert) ClearExitReason() *SessionUpsert {
+	u.SetNull(session.FieldExitReason)
 	return u
 }
 
@@ -2546,6 +2582,27 @@ func (u *SessionUpsertOne) UpdatePauseReason() *SessionUpsertOne {
 func (u *SessionUpsertOne) ClearPauseReason() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearPauseReason()
+	})
+}
+
+// SetExitReason sets the "exit_reason" field.
+func (u *SessionUpsertOne) SetExitReason(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetExitReason(v)
+	})
+}
+
+// UpdateExitReason sets the "exit_reason" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateExitReason() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateExitReason()
+	})
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (u *SessionUpsertOne) ClearExitReason() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearExitReason()
 	})
 }
 
@@ -3555,6 +3612,27 @@ func (u *SessionUpsertBulk) UpdatePauseReason() *SessionUpsertBulk {
 func (u *SessionUpsertBulk) ClearPauseReason() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearPauseReason()
+	})
+}
+
+// SetExitReason sets the "exit_reason" field.
+func (u *SessionUpsertBulk) SetExitReason(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetExitReason(v)
+	})
+}
+
+// UpdateExitReason sets the "exit_reason" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateExitReason() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateExitReason()
+	})
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (u *SessionUpsertBulk) ClearExitReason() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearExitReason()
 	})
 }
 

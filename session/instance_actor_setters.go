@@ -406,3 +406,21 @@ func (i *Instance) SetPauseReason(reason string) {
 		return nil
 	})
 }
+
+// ---- ExitReason -------------------------------------------------------------
+
+func setExitReasonLocked(s *instanceState, reason string) {
+	s.inst.mu.Lock()
+	s.inst.ExitReason = reason
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetExitReason sets (or, passed "", clears) the reason this session's pane crashed.
+func (i *Instance) SetExitReason(reason string) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setExitReasonLocked(s, reason)
+		return nil
+	})
+}

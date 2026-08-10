@@ -86,6 +86,8 @@ function getStatusDotValue(status: SessionStatus): string {
       return "needs-approval";
     case SessionStatus.HIBERNATED:
       return "hibernated";
+    case SessionStatus.CRASHED:
+      return "crashed";
     default:
       return "idle";
   }
@@ -99,6 +101,7 @@ const STATUS_DOT_LABELS: Record<string, string> = {
   "loading": "Loading",
   "needs-approval": "Needs Approval",
   "hibernated": "Hibernated",
+  "crashed": "Crashed",
 };
 
 function getStatusDotLabel(dotValue: string): string {
