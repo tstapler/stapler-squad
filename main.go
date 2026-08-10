@@ -792,6 +792,20 @@ func resolveLANHostnames(lanIPStr string) []string {
 		}
 	}
 
+	// 1b. macOS split-DNS scopes forward lookups by search domain (e.g. a
+	// VPN profile routes *.corp.example to a corp resolver and a home
+	// router's domain to the router), but a PTR query has no domain
+	// suffix to match against — so it always falls through to the
+	// system's default/unscoped resolver. If that default is a VPN/corp
+	// resolver, a LAN router's PTR record (e.g. a UniFi "Local DNS
+	// Record") is silently invisible to step 1 above even though it
+	// exists and answers fine when queried directly. Ask every
+	// nameserver scutil knows about — including scoped ones — so that
+	// record isn't lost.
+	for _, name := range reverseDNSViaKnownNameservers(lanIPStr) {
+		add(name)
+	}
+
 	// 2. Linux-specific: mDNS reverse lookup via avahi-resolve
 	avahiCtx, avahiCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer avahiCancel()
@@ -871,6 +885,75 @@ func getDNSSearchDomains() []string {
 	}
 
 	return domains
+}
+
+// scutilNameservers extracts every nameserver IP scutil knows about,
+// including ones scoped to a single search domain (e.g. a LAN router
+// handling only a home domain while a VPN resolver handles everything
+// else). Returns nil on non-macOS systems where scutil isn't present.
+func scutilNameservers() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := safeexec.CommandContext(ctx, "scutil", "--dns").Output()
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var servers []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		// Format: "nameserver[N] : 192.168.1.1"
+		if !strings.HasPrefix(line, "nameserver[") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ns := strings.TrimSpace(parts[1])
+		if ns != "" && !seen[ns] {
+			seen[ns] = true
+			servers = append(servers, ns)
+		}
+	}
+	return servers
+}
+
+// reverseDNSViaKnownNameservers performs a PTR lookup for lanIPStr against
+// every nameserver scutil reports, rather than relying on the OS's default
+// resolver selection. A PTR query carries no domain suffix, so per-domain
+// split-DNS scoping (which routes forward lookups like *.home.example to a
+// LAN router and everything else to a VPN/corp resolver) can't route it
+// correctly — it always falls through to whichever resolver is unscoped or
+// listed first. Querying each known nameserver directly finds a LAN-only
+// PTR record that step 1's net.LookupAddr would otherwise miss.
+func reverseDNSViaKnownNameservers(lanIPStr string) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, server := range scutilNameservers() {
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		found, err := resolver.LookupAddr(ctx, lanIPStr)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, name := range found {
+			name = strings.TrimSuffix(name, ".")
+			if name != "" && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	return names
 }
 
 // getOutboundIP detects the primary LAN IP by consulting the OS routing table.
