@@ -432,6 +432,31 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			}
 		}
 		instance.started.Store(true)
+	} else if instance.Status == Crashed {
+		// Wire the tmux session object (for IsAlive checks) but do NOT call Start --
+		// like Hibernated, a Crashed session resumes only on explicit request
+		// (Instance.ResumeFromCrash / the ResumeCrashedSession RPC). Without this
+		// branch, Crashed falls into the generic (Active) else-branch below with
+		// started=false, and server/dependencies.go's Step 6 startup loop
+		// unconditionally calls Start(false) on every !Started() instance --
+		// silently auto-resuming every Crashed session on the very next server
+		// restart, exactly what the new Crashed status is designed to prevent
+		// (see session/health.go's "must not be silently respawned" comment).
+		tmuxPrefix := instance.TmuxPrefix
+		if tmuxPrefix == "" {
+			tmuxPrefix = "staplersquad_"
+		}
+		if tb, ok := instance.processManager.(*TmuxBackend); ok {
+			if instance.TmuxServerSocket != "" {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(
+					instance.Title, instance.Program, tmuxPrefix,
+					instance.TmuxServerSocket, tmux.WithRegistry(nil)))
+			} else {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(
+					instance.Title, instance.Program, tmuxPrefix))
+			}
+		}
+		instance.started.Store(true)
 	} else {
 		// Wire the tmux session object first (mirrors the Paused/Stopped/Hibernated
 		// branches above) so initTmuxSession()'s HasSession() check correctly detects

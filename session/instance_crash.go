@@ -11,8 +11,20 @@ import (
 // SessionHealthChecker when it detects an abnormally-exited dead pane
 // (session/health.go) — remain-on-exit keeps the tmux session/pane around as
 // a placeholder after the wrapped program exits, so TmuxAlive() alone never
-// notices. Returns an error (and leaves the instance untouched) if the
-// instance is not in a state that can transition to Crashed.
+// notices. Returns an error (and leaves the instance's Status/ExitReason
+// untouched) if the instance is not Active when the actor executes this
+// command. KillSession() itself still runs regardless of that check (see
+// below) -- a truly-dead pane being killed is harmless even on the rare race
+// where the status changed concurrently between health.go's detection and
+// this call, and the in-actor guard below prevents that race from ever
+// corrupting Status/ExitReason.
+//
+// KillSession() runs on the CALLER's goroutine, outside the actor mailbox --
+// matching how the health checker called it directly before this status
+// existed. KillSession() only touches i.pm() (no actor-owned state), so this
+// is safe, and it keeps a slow/hung `tmux kill-session` from blocking every
+// other operation on this instance's actor (writes, resizes, other RPCs) for
+// its duration; only the transition + ExitReason write need the actor.
 //
 // Fires EventExited on success (mirroring ReviewQueuePoller.reconcileSessions'
 // "reconcile-session-missing" fire) so already-wired listeners -- the
@@ -20,11 +32,18 @@ import (
 // and BacklogLifecycleListener (session/backlog_lifecycle.go) that notifies on
 // EventExited/EventStopped -- pick this up without new plumbing. This is how a
 // backlog automation session that crashes surfaces the failure instead of
-// stalling silently.
+// stalling silently. sessionSummaryListener also fires on this (it excludes
+// only the reconciler's spurious "reconcile-session-missing" reason, per
+// ADR-002 "natural exit and explicit stop dispatch identically") -- a crash is
+// a real, confirmed exit (not a spurious signal), so generating a summary for
+// it is consistent with every other genuine exit reason, not a new cost path.
 func (i *Instance) MarkCrashed(exitReason string) error {
+	if err := i.KillSession(); err != nil {
+		log.Warn("markCrashed: failed to kill stale dead-pane session", "session", i.Title, "err", err)
+	}
 	err := i.sendSyncErr(func(s *instanceState) error {
-		if err := s.inst.KillSession(); err != nil {
-			log.Warn("markCrashed: failed to kill stale dead-pane session", "session", s.inst.Title, "err", err)
+		if s.inst.Status != Active {
+			return ErrInvalidTransition{From: s.inst.Status, To: Crashed}
 		}
 		s.inst.mu.Lock()
 		s.inst.ExitReason = exitReason
@@ -41,11 +60,15 @@ func (i *Instance) MarkCrashed(exitReason string) error {
 // instance from Active to Stopped. Called by SessionHealthChecker when it
 // detects a dead pane whose wrapped program exited normally (code 0, no
 // signal) -- not a crash, so it must not be marked Crashed (see MarkCrashed).
+// KillSession() runs outside the actor -- see MarkCrashed's doc comment.
 // Fires EventExited on success -- see MarkCrashed's doc comment.
 func (i *Instance) MarkExitedNormally() error {
+	if err := i.KillSession(); err != nil {
+		log.Warn("markExitedNormally: failed to kill stale dead-pane session", "session", i.Title, "err", err)
+	}
 	err := i.sendSyncErr(func(s *instanceState) error {
-		if err := s.inst.KillSession(); err != nil {
-			log.Warn("markExitedNormally: failed to kill stale dead-pane session", "session", s.inst.Title, "err", err)
+		if s.inst.Status != Active {
+			return ErrInvalidTransition{From: s.inst.Status, To: Stopped}
 		}
 		return transitionToLocked(s, context.Background(), Stopped)
 	})

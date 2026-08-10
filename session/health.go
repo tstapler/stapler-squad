@@ -187,15 +187,15 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 	// treats Stopped as "not alive" -- so without this skip, every naturally-
 	// completed session would hit the "!TmuxAlive()" branch below and get
 	// auto-restarted on the very next tick.
-	if instance.Snapshot().Status == Stopped {
-		result.Actions = append(result.Actions, "Skipped (session is stopped)")
-		return result
-	}
-
-	// Skip crashed instances - they require an explicit resume (see
+	//
+	// Skip crashed instances too - they require an explicit resume (see
 	// Instance.ResumeFromCrash / the ResumeCrashedSession RPC) and must not be
 	// silently respawned by the health checker.
-	if instance.Snapshot().Status == Crashed {
+	switch instance.Snapshot().Status {
+	case Stopped:
+		result.Actions = append(result.Actions, "Skipped (session is stopped)")
+		return result
+	case Crashed:
 		result.Actions = append(result.Actions, "Skipped (session has crashed, awaiting resume)")
 		return result
 	}

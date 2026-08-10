@@ -133,15 +133,15 @@ func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	return srv
 }
 
-// wireDepsIntoServer wires pre-built ServerDependencies into srv: starts background
-// components, registers shutdown hooks, and mounts all ConnectRPC/HTTP handlers.
-// serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
-// active streaming connections to close.
 // sessionHealthCheckInterval is how often SessionHealthChecker polls for dead
 // tmux panes and stale sessions. With failureThreshold (session/health.go) at 2
 // consecutive misses, a dead pane surfaces within ~2x this interval.
 const sessionHealthCheckInterval = 15 * time.Second
 
+// wireDepsIntoServer wires pre-built ServerDependencies into srv: starts background
+// components, registers shutdown hooks, and mounts all ConnectRPC/HTTP handlers.
+// serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
+// active streaming connections to close.
 func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context.Context) {
 	// Start background components
 	go deps.ReactiveQueueMgr.Start(serverCtx)

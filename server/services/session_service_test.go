@@ -811,6 +811,16 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 	}
 	require.NoError(t, storage.AddInstance(testInstance))
 
+	// ResumeFromCrash (session/instance_crash.go) dispatches the actual relaunch
+	// to a background goroutine that calls the real Start(false) -- a real tmux
+	// session gets created as a side effect. Best-effort clean it up so repeated
+	// test runs don't leave orphaned tmux sessions on the machine; the goroutine
+	// isn't awaited, so this is a short grace delay, not a guarantee.
+	t.Cleanup(func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = testInstance.KillSession()
+	})
+
 	resp, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: sessionUUID}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Session)

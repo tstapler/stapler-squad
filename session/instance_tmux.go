@@ -404,6 +404,12 @@ func (i *Instance) TmuxSessionExists() bool {
 }
 
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
+// TmuxAlive intentionally does not special-case Hibernated or Crashed here (unlike
+// Paused/Stopped): both rely on their tmux session having actually been killed
+// (Hibernate()/MarkCrashed) to make !i.pm().HasSession() true. If that kill ever
+// fails, TmuxAlive() can still report true for either status -- ReviewQueuePoller's
+// reconcileSessions Hibernated-but-alive and Crashed-but-alive cases exist as the
+// safety net for exactly that scenario.
 func (i *Instance) TmuxAlive() bool {
 	if i.Status == Paused || i.Status == Stopped || !i.started.Load() || !i.pm().HasSession() {
 		return false
