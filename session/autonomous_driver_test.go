@@ -642,125 +642,80 @@ func TestWaitForIdle_should_returnFalse_When_ContextExpiresBeforeSettleWindowEla
 	}
 }
 
-// TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryReplayed is an
-// integration-style regression test for AC3 of the "no-op nudge into actively-working
-// sessions" bug: it runs the real production status classifier
-// (detection.NewStatusDetector) against the reported batched multi-tool-call summary pane
-// text, then feeds the resulting DetectedStatus into waitForIdle exactly as
-// AutonomousDriver.run()'s statusCh does — reproducing the causal chain (pane text →
-// classify → statusCh → waitForIdle → turn gate) end-to-end without needing a live tmux
-// session.
+// TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryDisplayed is a
+// regression test for AC3 of the "no-op nudge into actively-working sessions" bug, built via
+// newControllerWithMock so it exercises the REAL mechanism the bug lived in: waitForIdle's
+// settleWindow>0 branch seeds idleSince from a single cc.IsIdle() call before entering its
+// loop, then relies entirely on statusCh events to reset it. In production, statusCh is driven
+// by ClaudeController.runStatusChangeLoop, which only re-fires listeners when the classified
+// status CHANGES — so if a busy pane keeps classifying to the same (wrong) status, no further
+// events arrive at all and idleSince, once wrongly seeded, is never reset. This test sends NO
+// statusCh events (matching that "unchanged status, no re-fire" production behavior) and relies
+// solely on the initial cc.IsIdle() seed to prove the fix: before the claude_thinking_verb
+// widening, the reported batched-summary pane text classified as StatusUnknown, which
+// detection.IdleDetector's mapStatusToIdleState maps to IdleStateWaiting (idle) — so
+// cc.IsIdle() incorrectly seeded idleSince immediately, and waitForIdle returned true once
+// settleWindow elapsed despite the session never having gone idle. After the fix the same text
+// classifies StatusExecuting → IdleStateActive, cc.IsIdle() is false, idleSince is never seeded,
+// and waitForIdle must time out via ctx rather than return true.
 //
-// Before the claude_thinking_verb widening (session/detection/binaries/claude.go), this
-// pane text fell through to StatusUnknown, which isIdleStatus does not treat as busy —
-// waitForIdle's default case only resets idleSince on a recognized busy status, so a
-// burst of unrecognized-but-busy frames could silently accumulate toward the idle settle
-// window and eventually return true, causing run() to inject a spurious "keep going" turn
-// (fireTurnCallback) into a session that was never actually idle. After the fix the same
-// text classifies StatusExecuting, which resets idleSince on every occurrence, so a
-// sustained burst must never let waitForIdle return true.
-func TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryReplayed(t *testing.T) {
-	inst := &Instance{Title: "test-waitforidle-batched-summary", UUID: "abcdefgh-wfi4"}
-	cc, _ := NewClaudeController(inst)
-
-	sd := detection.NewStatusDetector()
+// (An earlier version of this test fed the classified status directly into statusCh instead of
+// relying on cc.IsIdle() — that construction doesn't discriminate pre/post fix at all, since
+// waitForIdle's statusCh switch treats StatusUnknown and StatusExecuting identically (both hit
+// the `default:` reset case); its only real regression-guarding power was the setup assertion
+// duplicating bug_regression_test.go's coverage, not the driver mechanism. Found in code
+// review; see TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryDisplayed
+// in claude_controller_test.go for the most direct unit-level test of the same root mechanism.)
+func TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryDisplayed(t *testing.T) {
 	batchedSummary := "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…"
-	classified := sd.Detect([]byte(batchedSummary))
-	if classified != detection.StatusExecuting {
-		t.Fatalf("test setup: expected batched-summary pane text to classify as StatusExecuting, got %s — "+
-			"the claude_thinking_verb widening regressed", classified)
-	}
+	cc, _ := newControllerWithMock(batchedSummary)
 
 	settleWindow := 80 * time.Millisecond
-	statusCh := make(chan detection.DetectedStatus, 1)
+	statusCh := make(chan detection.DetectedStatus, 1) // deliberately never written to
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	// Replay a burst of the classified batched-summary status, like repeated tool-call
-	// rounds during one busy turn — none of these should ever let the settle window
-	// complete while the burst is ongoing.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(20 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				select {
-				case statusCh <- classified:
-				default:
-				}
-			}
-		}
-	}()
-
 	ok := waitForIdle(ctx, statusCh, cc, settleWindow)
-	<-done
 
 	if ok {
-		t.Error("waitForIdle returned true during a sustained batched-tool-call-summary burst — " +
-			"this would fire a spurious no-op nudge (fireTurnCallback) into an actively-working session")
+		t.Error("waitForIdle returned true for a sustained batched-tool-call-summary pane with no " +
+			"status-change events — cc.IsIdle()'s initial seed incorrectly treated the busy session " +
+			"as idle, which would fire a spurious no-op nudge (fireTurnCallback) after the settle window")
 	}
 }
 
-// pumpStatus sends the DetectedStatus currently held in status to all listeners
-// registered on cc, at a fixed cadence, until ctx is cancelled. Like pumpIdleSignals,
-// but the emitted status can be changed mid-test (via status.Store) to simulate a
-// session transitioning from idle to a sustained busy burst.
-func pumpStatus(ctx context.Context, cc *ClaudeController, status *atomic.Int32, interval time.Duration) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(interval):
-			s := detection.DetectedStatus(status.Load())
-			var listeners []StatusChangeListener
-			cc.listeners.Read(func(ls []StatusChangeListener) {
-				listeners = make([]StatusChangeListener, len(ls))
-				copy(listeners, ls)
-			})
-			for _, fn := range listeners {
-				fn(s, cc.sessionName)
-			}
-		}
-	}
-}
-
-// TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolCallSummaryBurstObserved
-// is the full end-to-end AC3 regression test: it drives the real AutonomousDriver.run() loop
-// via Start() — not waitForIdle in isolation — with the session held in a sustained burst of
-// the real production classifier's output for the reported batched multi-tool-call summary
-// text ("Searching for 9 patterns, reading 2 files, running 7 shell commands…") and NO genuine
-// idle signal ever observed. It asserts RegisterTurnCallback's callback (what
-// AutonomousOrchestrationService.buildTurnCallback publishes the low-priority Alerts
-// notification from, per its doc comment in server/services/autonomous_orchestration_service.go)
-// is never invoked, and that the run() loop instead exits via the startup-wait timing out —
-// proving a sustained busy burst can never be mistaken for idle at any waitForIdle call site in
-// run(), not just the specific one exercised by the narrower waitForIdle-level test above.
+// TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolCallSummaryDisplayed
+// is the full end-to-end AC3 regression test: it drives the real AutonomousDriver.run() loop via
+// Start() — not waitForIdle in isolation — with a ClaudeController built via newControllerWithMock
+// so cc.IsIdle() is driven by the real, fixed classifier reading the reported batched-summary pane
+// text, and no status-change events ever arrive (matching production's "unchanged classification,
+// no re-fire" behavior — see the doc comment on TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryDisplayed
+// above for why that matters). It asserts RegisterTurnCallback's callback (what
+// AutonomousOrchestrationService.buildTurnCallback publishes the low-priority Alerts notification
+// from, per its doc comment in server/services/autonomous_orchestration_service.go) is never
+// invoked, and that the run() loop instead exits via the startup-wait timing out.
+//
+// This discriminates pre/post fix via the completion Reason, not just turn absence: pre-fix,
+// cc.IsIdle() incorrectly returns true immediately, so the startup gate passes at once and run()
+// proceeds to call the headless pool and attempt SendKeys — which fails (no real tmux-backed
+// Instance backs this test; see below), so the loop breaks early with Stuck=true but
+// Reason="max turns reached", never firing a turn either way. Only checking Reason=="startup
+// timeout" distinguishes the fixed behavior (correctly never leaving the startup wait) from the
+// buggy one (leaving it immediately, then failing for an unrelated reason).
 //
 // Deliberately exercises the startup gate (settleWindow=0) rather than the post-turn gate: the
 // post-turn path requires a real tmux-backed Instance for SendKeys to succeed (session/tmux),
 // which would pull in unrelated infra (a real PTY + spawned tmux process) disproportionate to
-// verifying a regex classification fix. The startup gate calls the identical waitForIdle
-// function this bug's fix changes the input to, so it exercises the same causal chain
-// (classify → statusCh → waitForIdle → turn gate) without that dependency.
-func TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolCallSummaryBurstObserved(t *testing.T) {
-	sd := detection.NewStatusDetector()
+// verifying a regex classification fix. The startup gate calls the identical waitForIdle function
+// this bug's fix changes the input to.
+func TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolCallSummaryDisplayed(t *testing.T) {
 	batchedSummary := "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…"
-	classified := sd.Detect([]byte(batchedSummary))
-	if classified != detection.StatusExecuting {
-		t.Fatalf("test setup: expected batched-summary pane text to classify as StatusExecuting, got %s — "+
-			"the claude_thinking_verb widening regressed", classified)
-	}
 
 	pool := &fakeHeadlessPool{}
 
-	inst := &Instance{Title: "test-batched-summary-startup-burst", UUID: "abcdefgh-wfi5"}
-	cc, _ := NewClaudeController(inst)
+	inst := &Instance{Title: "test-batched-summary-startup", UUID: "abcdefgh-wfi5"}
+	cc, _ := newControllerWithMock(batchedSummary)
 	inst.controllerManager.controller.Store(cc)
 
 	driver := NewAutonomousDriver(inst, pool, "goal", 5, WithStartupTimeout(150*time.Millisecond))
@@ -777,12 +732,6 @@ func TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolC
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Sustained burst of the real classifier's batched-summary output, never idle — from
-	// the moment the driver starts through to the startup timeout.
-	var status atomic.Int32
-	status.Store(int32(classified))
-	go pumpStatus(ctx, cc, &status, 15*time.Millisecond)
-
 	if err := driver.Start(ctx); err != nil {
 		t.Fatalf("Start() failed: %v", err)
 	}
@@ -790,7 +739,7 @@ func TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolC
 	select {
 	case turn := <-turnCh:
 		t.Fatalf("unexpected turn (turn=%d) injected while only a sustained batched-tool-call-summary "+
-			"burst was observed — waitForIdle falsely treated the busy status as idle and "+
+			"pane was observed — waitForIdle falsely treated the busy status as idle and "+
 			"fireTurnCallback fired a spurious no-op nudge", turn)
 	case outcome := <-doneCh:
 		if !outcome.Stuck || outcome.Reason != "startup timeout" {

@@ -1,1 +1,5 @@
 ✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…
+  └ Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+
+> ▌
+esc to interrupt                                                    12% until auto-compact

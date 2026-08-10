@@ -232,15 +232,25 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				//   1. Ellipsis/dots immediately follow the verb (original shape), with anything
 				//      allowed afterward — e.g. "Roosting… (9m 52s · ↓ 2.8k tokens)".
 				//   2. A batched multi-tool-call summary clause trails the verb — e.g. "Searching
-				//      for 12 patterns, reading 3 files, running 1 shell command…" — allowed only
-				//      when it contains a digit (a tool-call count) and the ellipsis/dots are the
-				//      last thing on the line ([ \t]*$). Both constraints exist to avoid matching
-				//      ordinary multi-sentence prose that happens to contain a mid-line period
-				//      (e.g. "I've completed the implementation. Here's a summary...", where more
-				//      text follows the period on the same line) — see claude_cost_summary.txt.
-				Pattern:     `(?m)^[ \t]*[·✢✳✶✻✽●*✦][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3}|[^\n.…]*\d[^\n.…]*(?:…|\.{1,3})[ \t]*$)`,
-				Description: "Claude thinking state with random verb — any spinner frame + capitalized verb + ellipsis (optionally followed by a batched tool-call summary clause)",
-				Priority:    26,
+				//      for 12 patterns, reading 3 files, running 1 shell command…". Deliberately
+				//      narrow, not "any content containing a digit": requires the literal "for
+				//      <N>" immediately after the verb (every observed batched-summary line has
+				//      this exact shape) and the terminator to be a real ellipsis or exactly three
+				//      dots (never a single/double dot) with nothing after it but trailing
+				//      whitespace ([ \t]*$). A looser version of this branch (verb + arbitrary
+				//      digit-bearing content + 1-3 trailing dots, unanchored to "for") was caught in
+				//      review false-matching ordinary single-sentence bullet completions that
+				//      happen to contain a count, e.g. "Added 3 new tests to cover edge cases…" and
+				//      "Fixed 3 bugs." — both are common Claude output shapes, not contrived; see
+				//      TestBug_BatchedToolCallSummary_ProseNotFalsePositive for the locked-in
+				//      negative cases. (The multi-sentence-prose guard below — mid-line period, more
+				//      text follows — predates that review and is a separate, narrower concern; see
+				//      claude_cost_summary.txt: "I've completed the implementation. Here's a
+				//      summary...".)
+				Pattern: `(?m)^[ \t]*[·✢✳✶✻✽●*✦][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3}|\s+for\s+\d+[^\n.…]*(?:…|\.{3})[ \t]*$)`,
+				Description: "Claude thinking state with random verb — any spinner frame + capitalized verb + ellipsis " +
+					"(optionally followed by a batched tool-call summary clause: 'for N ...')",
+				Priority: 26,
 			},
 			{
 				Name:        "running_status",

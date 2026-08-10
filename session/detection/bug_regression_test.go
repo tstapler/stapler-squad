@@ -1014,35 +1014,59 @@ func TestBug_BatchedToolCallSummary_NotClassifiedIdle(t *testing.T) {
 }
 
 // TestBug_BatchedToolCallSummary_ProseNotFalsePositive guards the widened claude_thinking_verb
-// pattern against matching ordinary multi-sentence prose that happens to start with a spinner
-// glyph (e.g. Claude's "●" markdown bullet) and contain a mid-line period — the exact shape of
-// claude_cost_summary.txt's first line. Without the "digit + line-end" constraints on the new
-// batched-clause branch, greedy backtracking would match the mid-line period as if it were the
-// batched summary's terminal ellipsis.
+// pattern against matching ordinary Claude output that happens to start with a spinner glyph
+// (e.g. the "●" markdown bullet Claude also uses for prose, not just spinner frames) and contain
+// a digit — the batched-clause branch requires the literal "for <N>" immediately after the verb
+// and a real ellipsis/three-dot terminator specifically to exclude these shapes, which were
+// caught in code review as reachable via ordinary single- and multi-sentence bullet completions
+// (e.g. "Added 3 new tests..." and "Fixed 3 bugs." are both common Claude output, not contrived).
 func TestBug_BatchedToolCallSummary_ProseNotFalsePositive(t *testing.T) {
 	sd := NewStatusDetector()
 
 	cases := []struct {
 		name  string
 		input string
+		want  DetectedStatus
 	}{
 		{
 			name:  "bulleted prose sentence with mid-line period",
 			input: "● I've completed the implementation. Here's a summary of what was done:",
+			want:  StatusSuccess, // matches the unrelated "I've completed" task_complete pattern
 		},
 		{
 			name:  "bulleted prose with digit but no trailing ellipsis",
 			input: "● Reviewed 3 files and found no issues. Ready for the next step.",
+			want:  StatusUnknown,
+		},
+		{
+			name:  "single-sentence bullet completion ending in one period",
+			input: "● Fixed 3 bugs.",
+			want:  StatusUnknown,
+		},
+		{
+			name:  "single-sentence bullet completion, different verb and count",
+			input: "● Added 2 tests.",
+			want:  StatusUnknown,
+		},
+		{
+			name:  "multi-sentence bullet with digit and trailing ellipsis, no 'for'",
+			input: "* Added 3 new tests to cover edge cases…",
+			want:  StatusUnknown,
+		},
+		{
+			name:  "dialog/workflow content with digit and trailing ellipsis, no 'for'",
+			input: "● Workflow(Migrate all 137 backend features to the typed TypeScript+Go catalog…",
+			want:  StatusUnknown,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sd.Detect([]byte(tc.input))
-			if got == StatusExecuting {
-				t.Errorf("Detect(%q) = StatusExecuting, want anything else\n"+
-					"  Ordinary prose starting with a glyph bullet must not false-match the widened\n"+
-					"  batched tool-call summary branch of claude_thinking_verb.",
-					tc.input)
+			if got != tc.want {
+				t.Errorf("Detect(%q) = %s, want %s\n"+
+					"  Ordinary prose/dialog starting with a glyph bullet must not false-match the\n"+
+					"  widened batched tool-call summary branch of claude_thinking_verb.",
+					tc.input, got, tc.want)
 			}
 		})
 	}
