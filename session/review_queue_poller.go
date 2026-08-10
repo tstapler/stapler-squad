@@ -439,14 +439,34 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				continue
 			}
 
-			switch inst.Status {
+			// Status(inst.GetStatus()) reads the lock-free published snapshot
+			// (Instance.snapshot, an atomic.Pointer[InstanceSnapshot]) instead of
+			// inst.Status directly. This switch runs on the poller's own goroutine,
+			// not the actor's, so a raw field read here races with
+			// transitionToLocked's write under -race. GetStatus() is the correct,
+			// zero-lock way to read status from outside an in-flight actor command --
+			// it's only unsafe to call *inside* one (see the s.inst.mu.RLock() reads
+			// below). Tracked flake: https://github.com/tstapler/stapler-squad/issues/271
+			switch Status(inst.GetStatus()) {
 			case Active:
 				// Active but tmux session gone — mark Stopped.
 				if !liveSessions[sessionName] {
 					log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == Active {
+						// Can't use GetStatus()/Snapshot() here: this closure runs
+						// *inside* an in-flight actor command, and the published
+						// snapshot is only republished by runActor after the command
+						// returns (session/actor.go) -- Snapshot() would read the stale
+						// pre-command value. Fall back to the same i.mu.RLock()-guarded
+						// direct read transitionToLocked uses for its own status read
+						// (session/instance_state.go), which defends against legacy
+						// setters writing i.Status directly under i.mu from other
+						// goroutines while this actor command runs.
+						s.inst.mu.RLock()
+						status := s.inst.Status
+						s.inst.mu.RUnlock()
+						if status == Active {
 							if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
 								log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
 								s.inst.loadStatus(Stopped)
@@ -463,7 +483,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == Stopped {
+						s.inst.mu.RLock()
+						status := s.inst.Status
+						s.inst.mu.RUnlock()
+						if status == Stopped {
 							if err := transitionToLocked(s, context.Background(), Active); err != nil {
 								log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
 							}
@@ -487,7 +510,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					log.Warn("reconcileSessions: hibernated session found alive in tmux, resuming to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == Hibernated {
+						s.inst.mu.RLock()
+						status := s.inst.Status
+						s.inst.mu.RUnlock()
+						if status == Hibernated {
 							if err := transitionToLocked(s, context.Background(), Active); err != nil {
 								log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
 							}
