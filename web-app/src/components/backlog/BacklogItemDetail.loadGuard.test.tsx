@@ -13,7 +13,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
@@ -167,15 +167,16 @@ describe("BacklogItemDetail load() staleness guards", () => {
     });
     await waitFor(() => expect(screen.getByText("second-issued-call-data")).toBeInTheDocument());
 
-    call1.resolve({
-      ...baseItem,
-      notes: "first-issued-call-data",
-      updatedAt: "2026-07-01T00:00:05.000Z",
-    });
-
     // Give the first-issued (now-stale) response a chance to apply if the
     // guard were broken, then assert it never did.
-    await new Promise((r) => setTimeout(r, 0));
+    await act(async () => {
+      call1.resolve({
+        ...baseItem,
+        notes: "first-issued-call-data",
+        updatedAt: "2026-07-01T00:00:05.000Z",
+      });
+      await new Promise((r) => setTimeout(r, 0));
+    });
     expect(screen.getByText("second-issued-call-data")).toBeInTheDocument();
     expect(screen.queryByText("first-issued-call-data")).not.toBeInTheDocument();
   });
@@ -194,13 +195,14 @@ describe("BacklogItemDetail load() staleness guards", () => {
 
     // Resolves with an OLDER updatedAt than what's currently applied —
     // simulating a slow response racing behind a fresher live-store update.
-    staleCall.resolve({
-      ...baseItem,
-      notes: "stale-notes",
-      updatedAt: "2026-07-01T00:00:01.000Z",
+    await act(async () => {
+      staleCall.resolve({
+        ...baseItem,
+        notes: "stale-notes",
+        updatedAt: "2026-07-01T00:00:01.000Z",
+      });
+      await new Promise((r) => setTimeout(r, 0));
     });
-
-    await new Promise((r) => setTimeout(r, 0));
     expect(screen.getByText("current-notes")).toBeInTheDocument();
     expect(screen.queryByText("stale-notes")).not.toBeInTheDocument();
   });
@@ -251,9 +253,10 @@ describe("BacklogItemDetail load() staleness guards", () => {
       notes: "stale-live-notes",
       updatedAt: timestampFromDate(new Date("2026-07-01T00:00:01.000Z")),
     };
-    rerender(<BacklogItemDetail itemId="item-1" />);
-
-    await new Promise((r) => setTimeout(r, 0));
+    await act(async () => {
+      rerender(<BacklogItemDetail itemId="item-1" />);
+      await new Promise((r) => setTimeout(r, 0));
+    });
     expect(screen.getByText("current-notes")).toBeInTheDocument();
     expect(screen.queryByText("stale-live-notes")).not.toBeInTheDocument();
   });
@@ -294,10 +297,11 @@ describe("BacklogItemDetail load() staleness guards", () => {
     });
     await waitFor(() => expect(getBacklogItem).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss triage review" }));
-
     // Give any accidental async load() a tick to fire, then assert it never did.
-    await new Promise((r) => setTimeout(r, 0));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss triage review" }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
     expect(getBacklogItem).toHaveBeenCalledTimes(1);
   });
 });

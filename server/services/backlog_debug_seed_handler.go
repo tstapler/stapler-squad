@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -188,7 +189,19 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 	}
 
 	if req.HasPlan {
-		planDir := filepath.Join(os.TempDir(), "stapler-squad-e2e-plan-artifacts", item.ID)
+		// Rooted under this instance's own isolated config/state dir
+		// (STAPLER_SQUAD_TEST_DIR, set by the e2e harness's global-setup.ts)
+		// rather than the shared os.TempDir() — avoids a predictable,
+		// world-writable temp path (CWE-377/CWE-59 symlink-race risk) and
+		// gets cleaned up for free by the e2e harness's global-teardown.ts,
+		// which deletes the whole test dir when the run ends.
+		configDir, err := config.GetConfigDir()
+		if err != nil {
+			log.Error("backlog debug seed: resolve config dir failed", "err", err)
+			http.Error(w, "failed to resolve config dir: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		planDir := filepath.Join(configDir, "e2e-plan-artifacts", item.ID)
 		if err := os.MkdirAll(planDir, 0o755); err != nil {
 			log.Error("backlog debug seed: create plan dir failed", "err", err)
 			http.Error(w, "failed to create plan artifacts dir: "+err.Error(), http.StatusInternalServerError)

@@ -188,7 +188,12 @@ export function StuckItemsSection() {
   // rather than a generic failure, in case the hasPlan gate is ever stale.
   const handleApprovePlan = useCallback(
     async (itemId: string): Promise<void> => {
-      await approvePlan(itemId);
+      // approvePlan resolves null (without throwing) if the RPC client isn't
+      // ready yet — must not let that silently read as success, which would
+      // reintroduce the exact "looks approved but isn't" flicker this PR
+      // fixes elsewhere.
+      const updated = await approvePlan(itemId);
+      if (!updated) throw new Error("Approve plan did not return an updated item.");
       await refetch();
     },
     [approvePlan, refetch]
