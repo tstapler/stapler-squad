@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -37,9 +38,19 @@ import (
 // order-dependent flake (reliably 1-pass-then-every-subsequent-run-fails under
 // -count=N in one process). Tests that specifically exercise the capability-check
 // failure/success path still override it per-instance via SetCapabilityCheck.
+//
+// It also clears GITHUB_TOKEN/GH_TOKEN for the whole test run, mirroring
+// github/main_test.go's TestMain: this package drives UserPRCache directly
+// (e.g. TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_ReturnsExactPath),
+// and collectAllTokens reads both env vars straight from the environment, so
+// a developer machine or CI runner with either set would otherwise leak a
+// real token into the cache and dial the real GitHub API mid-suite.
 func TestMain(m *testing.M) {
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
-	os.Exit(m.Run())
+	restore := envtest.ClearAmbientGitHubTokenEnv()
+	code := m.Run()
+	restore()
+	os.Exit(code)
 }
 
 // ─── fakeHeadlessPool ─────────────────────────────────────────────────────────
