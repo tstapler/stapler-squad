@@ -226,6 +226,14 @@ export const statusUnknown = style({
   color: vars.statusBadge.idleFg,
 });
 
+/** Distinct style for CRASHED sessions — reuses the error palette (not the
+ *  pulsing NEEDS_APPROVAL animation, since a crash isn't an active prompt). */
+export const statusCrashed = style({
+  background: vars.color.errorBg,
+  color: vars.color.errorText,
+  border: `1px solid ${vars.color.error}`,
+});
+
 export const category = style({
   display: "inline-block",
   padding: `${vars.space["1"]} ${vars.space["2"]}`,

@@ -922,6 +922,64 @@ func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffect
 	}
 }
 
+// TestReviewQueuePoller_ReconcileSessions_CrashedButTmuxAlive_RevivesToActive is the
+// regression test for the Crashed defensive-symmetry case mirroring the existing
+// Hibernated-but-alive handling: a Crashed session normally has no live tmux session
+// (MarkCrashed kills it before setting the status), but if one is found alive anyway
+// (e.g. an external `tmux new-session` reused the same name), reconcileSessions must
+// bring it back in sync rather than leaving it stuck showing the Crashed banner over
+// a live pane.
+func TestReviewQueuePoller_ReconcileSessions_CrashedButTmuxAlive_RevivesToActive(t *testing.T) {
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	poller.SetInstances([]*Instance{instCrashed})
+
+	querier.setLiveSessions("", "session-crashed")
+
+	poller.reconcileSessions()
+
+	if instCrashed.Status != Active {
+		t.Errorf("crashed instance found alive in tmux: got status %v, want Active (revived)", instCrashed.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_CrashedAndTmuxGone_StaysUntouched verifies the
+// expected steady state: a Crashed session with no live tmux session (the normal case,
+// since MarkCrashed already killed it) is left alone -- not silently resurrected.
+func TestReviewQueuePoller_ReconcileSessions_CrashedAndTmuxGone_StaysUntouched(t *testing.T) {
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	poller.SetInstances([]*Instance{instCrashed})
+
+	querier.setLiveSessions("") // nothing alive
+
+	poller.reconcileSessions()
+
+	if instCrashed.Status != Crashed {
+		t.Errorf("crashed instance with no live tmux session: got status %v, want Crashed (untouched)", instCrashed.Status)
+	}
+}
+
+// TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed pins shouldSkipSession's Crashed
+// exclusion: a Crashed session must not be checked for review-queue attention reasons --
+// it already surfaces via its own distinct status/banner, and MarkCrashed already killed
+// its tmux session, so there is no live pane content to inspect.
+func TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed(t *testing.T) {
+	poller := newSimpleTestPoller()
+	inst := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	inst.started.Store(true)
+
+	if !poller.shouldSkipSession(inst) {
+		t.Error("expected shouldSkipSession(Crashed instance) to be true")
+	}
+}
+
 // stubApprovalMetadataProvider is a minimal ApprovalMetadataProvider for tests. It records
 // each key it was queried with so tests can assert lookup order.
 type stubApprovalMetadataProvider struct {

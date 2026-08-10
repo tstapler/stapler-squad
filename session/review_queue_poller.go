@@ -496,6 +496,26 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					cancel()
 					inst.fireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
 				}
+			case Crashed:
+				// Crashed sessions intentionally have no tmux session (MarkCrashed
+				// kills it before setting this status, session/instance_crash.go) --
+				// that's the expected steady state until an explicit resume. But if
+				// one is found alive anyway, bring the instance back in sync rather
+				// than leaving it stuck showing the Crashed banner over a live pane,
+				// mirroring the Hibernated case just above.
+				if liveSessions[sessionName] {
+					log.Warn("reconcileSessions: crashed session found alive in tmux, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
+						if s.inst.Status == Crashed {
+							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+								log.Warn("reconcileSessions: revival from crashed failed", "session", inst.Title, "err", err)
+							}
+						}
+					})
+					cancel()
+					inst.fireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
+				}
 			}
 		}
 	}
@@ -644,8 +664,13 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 	// Lock-free snapshot read for Hidden, Status, and ArchivedAt; Started() reads
 	// inst.started (set once during construction, not in the snapshot).
+	// Crashed is skipped alongside Stopped/Paused: SessionHealthChecker already
+	// killed its tmux session before setting this status (see MarkCrashed,
+	// session/instance_crash.go), so there is no live pane content to check, and
+	// the session already surfaces to the user via its own distinct status/banner
+	// rather than a review-queue attention reason.
 	snap := inst.Snapshot()
-	return snap.Hidden || snap.Status == Stopped || snap.Status == Paused || snap.ArchivedAt != nil || !inst.Started()
+	return snap.Hidden || snap.Status == Stopped || snap.Status == Paused || snap.Status == Crashed || snap.ArchivedAt != nil || !inst.Started()
 }
 
 // checkSession checks a single session and adds/removes from queue as needed.

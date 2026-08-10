@@ -190,6 +190,7 @@ var methodToID = map[string]string{
 	"UnarchiveSession":        "session:unarchive",
 	"HibernateSession":        "session:hibernate",
 	"ResumeHibernatedSession": "session:resume-hibernated",
+	"ResumeCrashedSession":    "session:resume-crashed",
 	"WriteToSession":          "session:write",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",

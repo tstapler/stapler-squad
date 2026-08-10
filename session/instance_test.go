@@ -429,3 +429,41 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 		t.Fatalf("expected an empty/nil DiffSnapshot for a never-started instance, got %+v", stats)
 	}
 }
+
+// TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume is the
+// regression test for a production bug caught during review: fromInstanceData
+// special-cases Paused/Stopped/Hibernated but, before this fix, fell through to
+// the generic branch for Crashed -- leaving Started()==false with deferStart.
+// server/dependencies.go's Step 6 startup loop unconditionally calls Start(false)
+// on every !Started() instance, which would have silently auto-resumed every
+// Crashed session on the very next server restart -- exactly what the Crashed
+// status (session/health.go's "must not be silently respawned" comment, and
+// ResumeCrashedSession requiring an explicit user/automation action) is meant
+// to prevent. Pins that a Crashed instance loaded via LoadInstances() (which
+// always uses deferStart=true) comes back with Started()==true, so Step 6
+// skips it.
+func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testing.T) {
+	data := InstanceData{
+		Title:      "crashed-restore-test",
+		Path:       "/tmp/crashed-restore-test",
+		Status:     Crashed,
+		ExitReason: "signal SIGKILL (exit code 137)",
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+
+	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	if err != nil {
+		t.Fatalf("fromInstanceData returned error: %v", err)
+	}
+
+	if instance.Status != Crashed {
+		t.Fatalf("expected Status=Crashed, got %v", instance.Status)
+	}
+	if !instance.Started() {
+		t.Fatal("expected Started()=true for a restored Crashed instance -- " +
+			"Started()=false would cause server/dependencies.go's Step 6 startup " +
+			"loop to silently auto-resume this crashed session on next restart")
+	}
+}

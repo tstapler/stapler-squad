@@ -2102,6 +2102,54 @@ func (s *SessionService) ResumeHibernatedSession(
 	}), nil
 }
 
+// ResumeCrashedSession re-launches the AI process for a Crashed session (dead
+// tmux pane detected by SessionHealthChecker, session/health.go), transitioning
+// it back to Active status. The tmux session was already killed when the
+// instance was marked Crashed, so Start(false) takes the cold-restore path and
+// threads --resume automatically when a conversation UUID is known.
+// +api: session:resume_crashed
+func (s *SessionService) ResumeCrashedSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ResumeCrashedSessionRequest],
+) (*connect.Response[sessionv1.ResumeCrashedSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	var instance *session.Instance
+	var instanceIndex int
+	for i, inst := range instances {
+		if inst.MatchesID(req.Msg.Id) {
+			instance = inst
+			instanceIndex = i
+			break
+		}
+	}
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	if err := instance.ResumeFromCrash(ctx); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+
+	instances[instanceIndex] = instance
+	if err := s.storage.SaveInstances(instances); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
+
+	return connect.NewResponse(&sessionv1.ResumeCrashedSessionResponse{
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
+	}), nil
+}
+
 // DeleteSession stops and removes a session, cleaning up resources.
 // +api: session:delete
 func (s *SessionService) DeleteSession(

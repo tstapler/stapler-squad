@@ -121,6 +121,7 @@ type InstanceSnapshot struct {
 	PermissionMode      string
 	RateLimitAutoResume *bool // copy of pointee — see buildSnapshot
 	PauseReason         string
+	ExitReason          string
 	WorkflowID          string
 	EnvVars             map[string]string // defensive deep copy — see buildSnapshot
 	CLIFlags            string
@@ -201,6 +202,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		AllowedTools:       i.AllowedTools,
 		PermissionMode:     i.PermissionMode,
 		PauseReason:        i.PauseReason,
+		ExitReason:         i.ExitReason,
 		WorkflowID:         i.WorkflowID,
 		CLIFlags:           i.CLIFlags,
 		ReviewState:        i.ReviewState,
