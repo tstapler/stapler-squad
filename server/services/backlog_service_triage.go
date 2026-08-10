@@ -2326,6 +2326,32 @@ func (s *BacklogService) TriggerTriage(
 		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, triageCallBudget)
 		defer cancel()
 
+		// Run triage in a dedicated worktree, not itemRepoPath directly. SDD-mode
+		// triage prompts (session/pipeline_mode_seed.go's sddTriagePromptTemplate)
+		// deliberately write project_plans/<name>/ relative to CWD rather than to
+		// artifactAbsPath above — by design, so those docs land in the target repo
+		// and travel with the eventual PR (see that file's design-rationale
+		// comment). But itemRepoPath is routinely a shared or actively-used
+		// checkout (an app-managed mirror other sessions touch, or — for items
+		// created interactively with repo_path defaulted to the calling session's
+		// own cwd — a developer's live working directory), so writing uncommitted
+		// planning docs directly into it pollutes whatever else is happening
+		// there. A worktree gives the research phase the same real repo content
+		// (git worktrees share history/objects with the main checkout) while
+		// isolating the writes; falls back to itemRepoPath directly if worktree
+		// creation fails (e.g. itemRepoPath isn't a git repo at all — some items
+		// legitimately target a plain directory).
+		triageWorkDir := itemRepoPath
+		var triageWorktree *git.GitWorktree
+		if wt, _, wtErr := git.NewGitWorktree(itemRepoPath, "triage-"+itemID); wtErr != nil {
+			log.WarningLog.Printf("[TriggerTriage] failed to create isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, wtErr)
+		} else if setupErr := wt.Setup(); setupErr != nil {
+			log.WarningLog.Printf("[TriggerTriage] failed to set up isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, setupErr)
+		} else {
+			triageWorktree = wt
+			triageWorkDir = wt.GetWorktreePath()
+		}
+
 		callStart := time.Now()
 		raw, _, callErr := s.headlessPool.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
@@ -2344,7 +2370,7 @@ func (s *BacklogService) TriggerTriage(
 			// earlier), not a permission-mode gap. Do not add bypassPermissions here
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
-			headless.CallOptions{WorkDir: itemRepoPath},
+			headless.CallOptions{WorkDir: triageWorkDir},
 		)
 
 		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful
@@ -2384,6 +2410,19 @@ func (s *BacklogService) TriggerTriage(
 		result.Iteration = iteration
 		result.Feedback = feedback
 
+		// Commit whatever the triage prompt wrote (project_plans/<name>/ for SDD
+		// mode; nothing for default mode, which writes to artifactAbsPath instead
+		// — CommitChanges no-ops when the worktree isn't dirty) so the docs
+		// survive past this goroutine instead of sitting uncommitted indefinitely
+		// (the exact gap .claude/rules/sdd-planning-artifacts-commit.md already
+		// names). Only when triageWorktree is non-nil — the itemRepoPath fallback
+		// path must never auto-commit into a repo this code didn't create.
+		if triageWorktree != nil {
+			if commitErr := triageWorktree.CommitChanges(fmt.Sprintf("chore(sdd): planning artifacts for %s", result.Title)); commitErr != nil {
+				log.WarningLog.Printf("[TriggerTriage] failed to commit triage artifacts item=%s worktree=%s: %v", itemID, triageWorkDir, commitErr)
+			}
+		}
+
 		payloadJSON, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] marshal triage result item=%s: %v", itemID, marshalErr)
@@ -2401,7 +2440,17 @@ func (s *BacklogService) TriggerTriage(
 			persistFailures = append(persistFailures, "saving the triage result")
 		}
 
+		// SDD mode writes plan.md under project_plans/<name>/implementation/, not
+		// flat under artifactAbsPath like the default pipeline's prompt does —
+		// readPlanFile (session/backlog_review.go) only ever looks for
+		// <PlanArtifactsPath>/plan.md, so this must point at the implementation/
+		// subdirectory in the triage worktree, or review/context-building
+		// silently finds no plan content for every SDD-mode item (true even
+		// before this change, since artifactAbsPath never held SDD's output).
 		pap := artifactAbsPath
+		if triageWorktree != nil && item.PipelineMode == session.DefaultSDDPipelineModeSlug {
+			pap = filepath.Join(triageWorkDir, "project_plans", result.Title, "implementation")
+		}
 		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
 		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
