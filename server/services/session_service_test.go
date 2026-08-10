@@ -640,6 +640,71 @@ func TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument(t *testing.T)
 	assert.Empty(t, found.Note, "note must not be partially written when rejected")
 }
 
+// TestUpdateSession_NoteLengthValidation_IsByteAccurate proves the length check uses
+// Go's byte-length len(string), not a rune count — an ASCII-only fixture can't tell
+// these apart since 1 rune == 1 byte for ASCII, so this specifically exercises a
+// multi-byte string whose rune count is under session.MaxNoteLength but whose byte
+// length exceeds it (mirrors the frontend's equivalent guard in NotePanel.tsx).
+func TestUpdateSession_NoteLengthValidation_IsByteAccurate(t *testing.T) {
+	// "あ" is 1 rune but 3 UTF-8 bytes: 3400 runes = 3400 runes / 10200 bytes,
+	// under the rune-based reading of the cap but over the byte-based one.
+	multiByteTooLong := strings.Repeat("あ", 3400)
+	require.Less(t, len([]rune(multiByteTooLong)), session.MaxNoteLength,
+		"fixture invariant: rune count must be under MaxNoteLength")
+	require.Greater(t, len(multiByteTooLong), session.MaxNoteLength,
+		"fixture invariant: byte length must exceed MaxNoteLength")
+
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &multiByteTooLong,
+	}))
+	require.Error(t, err, "a note under the rune-count cap but over the byte cap must still be rejected")
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestUpdateSession_NoteExceedsMaxLength_LeavesOtherFieldsUnmutated is a regression
+// test for a partial-mutation bug: the note-length check used to run after
+// SetCategory/SetTitleDirect had already mutated the live in-memory Instance and
+// published a new snapshot (visible to concurrent readers like WatchSessions), even
+// though the RPC as a whole returned InvalidArgument. A combined request that fails
+// on Note must leave every other field it also touched completely unmutated — not
+// just unwritten to storage (SaveInstances never runs on this error path either way,
+// so a storage-only check wouldn't catch this), but unmutated in the live instance
+// the poller holds.
+func TestUpdateSession_NoteExceedsMaxLength_LeavesOtherFieldsUnmutated(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	originalCategory := "original-category"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:       "my-session",
+		Category: &originalCategory,
+	}))
+	require.NoError(t, err)
+
+	newCategory := "should-not-apply"
+	tooLong := strings.Repeat("a", session.MaxNoteLength+1)
+	_, err = fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:       "my-session",
+		Category: &newCategory,
+		Note:     &tooLong,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+	live := fix.poller.FindInstance("my-session")
+	require.NotNil(t, live, "session should still be resolvable in the live poller list")
+	assert.Equal(t, originalCategory, live.Category,
+		"category must remain unmutated in the live in-memory instance when the note in the same request is rejected")
+}
+
 // TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload is the regression test
 // for the ent Update path's guarded-vs-unconditional SetNote fix: it must fail
 // against a guarded (`if data.Note != ""`) Update and pass against the
@@ -676,6 +741,46 @@ func TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload(t *testing.T) {
 	}
 	require.NotNil(t, found)
 	assert.Equal(t, "", found.Note, "cleared note must persist as empty across reload, not the stale prior value")
+}
+
+// TestUpdateSession_UnrelatedFieldUpdate_PreservesExistingNote guards the interaction
+// between the RPC handler's conditional field application (Note only mutated when
+// req.Msg.Note != nil) and ent_repository.go's *unconditional* SetNote(data.Note) on
+// every Update call: an UpdateSession call that doesn't touch Note at all must not
+// let the unconditional set clobber an existing note, since data.Note always reflects
+// the instance's already-current in-memory value when Note wasn't part of this request.
+func TestUpdateSession_UnrelatedFieldUpdate_PreservesExistingNote(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	existingNote := "left this waiting on CI"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &existingNote,
+	}))
+	require.NoError(t, err)
+
+	newTitle := "my-session-renamed"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:    "my-session",
+		Title: &newTitle,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, existingNote, resp.Msg.Session.Note, "response should still show the existing note after a Title-only update")
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == newTitle {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, existingNote, found.Note, "note must survive an unrelated field update across reload")
 }
 
 // --------------------------------------------------------------------------

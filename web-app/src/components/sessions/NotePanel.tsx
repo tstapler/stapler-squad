@@ -26,6 +26,8 @@ import {
 // sync manually across all three; see plan.md's Unresolved Question 1.
 const NOTE_MAX_LENGTH = 10000;
 
+const noteEncoder = new TextEncoder();
+
 // A user-typed `# Heading` must never become a real page-level heading tag — even
 // a remapped one (e.g. h1->h5) still creates a heading-order skip against this
 // page's actual h2 session title, tripping the repo's axe/Lighthouse heading-order
@@ -99,7 +101,7 @@ export function NotePanel({ note, onSave }: NotePanelProps) {
   // textarea's native maxLength counts UTF-16 code units — a multi-byte-heavy
   // note (CJK, emoji) can pass the char cap yet still fail server-side. Track
   // bytes so the hint and the save guard below are both byte-accurate.
-  const noteByteLength = new TextEncoder().encode(draftValue).length;
+  const noteByteLength = noteEncoder.encode(draftValue).length;
 
   const save = async () => {
     if (noteByteLength > NOTE_MAX_LENGTH) {

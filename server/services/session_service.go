@@ -1736,6 +1736,15 @@ func (s *SessionService) UpdateSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Validate the note length before any field below mutates live in-memory state
+	// (SetTitleDirect/SetCategory publish immediately via snapshot.Store, not staged
+	// until SaveInstances) — otherwise a rejected request could still leave title/category
+	// changes visible to concurrent readers.
+	if req.Msg.Note != nil && len(*req.Msg.Note) > session.MaxNoteLength {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("note exceeds maximum length of %d bytes", session.MaxNoteLength))
+	}
+
 	// Track which fields are being updated for event publishing
 	var updatedFields []string
 
@@ -1757,12 +1766,8 @@ func (s *SessionService) UpdateSession(
 		updatedFields = append(updatedFields, "category")
 	}
 
-	// Handle note update.
+	// Handle note update. Length already validated above.
 	if req.Msg.Note != nil {
-		if len(*req.Msg.Note) > session.MaxNoteLength {
-			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("note exceeds maximum length of %d bytes", session.MaxNoteLength))
-		}
 		instance.SetNote(*req.Msg.Note)
 		updatedFields = append(updatedFields, "note")
 	}
