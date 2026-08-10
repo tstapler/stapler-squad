@@ -16,13 +16,13 @@ test.describe("session-notes", () => {
       // Create a trivial one-off session (no worktree/program lifecycle needed
       // to exercise the note panel).
       await sessionsPage.newSessionButton.click();
-      await page.getByRole("radio", { name: /one.off/i }).click();
+      await page.getByRole("radio", { name: /temporary \(no git\)/i }).click();
 
       const sessionTitle = `e2e-notes-${Date.now()}`;
       await page.getByLabel("Session Name").fill(sessionTitle);
 
       await page.getByText("Advanced Options").click();
-      await page.getByLabel("Program").selectOption("bash");
+      await page.getByLabel("Program", { exact: true }).selectOption("bash");
 
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",

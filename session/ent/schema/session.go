@@ -133,7 +133,7 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Default("").
 			MaxLen(10000).
-			Comment("User-authored free-form markdown note attached to this session. Capped at 10,000 chars — see NOTE_MAX_LENGTH cross-reference in server/services/session_service.go."),
+			Comment("User-authored free-form markdown note attached to this session. Capped at 10,000 bytes — see session.MaxNoteLength cross-reference in session/instance.go."),
 	}
 }
 

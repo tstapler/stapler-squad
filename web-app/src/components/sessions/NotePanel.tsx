@@ -1,7 +1,7 @@
 "use client";
 
 // +feature: session-notes-panel
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { markdownBody } from "@/components/backlog/markdownBody.css";
@@ -58,6 +58,10 @@ export function NotePanel({ note, onSave }: NotePanelProps) {
   const [draftValue, setDraftValue] = useState(note);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Restores focus to the Edit/Add-note button on exiting edit mode (Save or
+  // Cancel), per design/ux.md Surface 3 AC11 — focus must never fall back to
+  // <body>. Same ref serves both buttons since only one renders at a time.
+  const editButtonRef = useRef<HTMLButtonElement>(null);
 
   // Only re-sync local state from the note prop when not editing, so a
   // stream-driven update from another tab doesn't clobber an in-progress edit —
@@ -67,6 +71,17 @@ export function NotePanel({ note, onSave }: NotePanelProps) {
       setDraftValue(note);
     }
   }, [note, isEditing]);
+
+  // Restore focus to the Edit/Add-note button after exiting edit mode (Save or
+  // Cancel) — design/ux.md Surface 3 AC11. Runs after render so the button has
+  // already remounted; wasEditingRef guards against firing on initial mount.
+  const wasEditingRef = useRef(false);
+  useEffect(() => {
+    if (wasEditingRef.current && !isEditing) {
+      editButtonRef.current?.focus();
+    }
+    wasEditingRef.current = isEditing;
+  }, [isEditing]);
 
   const startEditing = () => {
     setDraftValue(note);
@@ -80,7 +95,19 @@ export function NotePanel({ note, onSave }: NotePanelProps) {
     setIsEditing(false);
   };
 
+  // The backend caps by UTF-8 byte length (session.MaxNoteLength), but the
+  // textarea's native maxLength counts UTF-16 code units — a multi-byte-heavy
+  // note (CJK, emoji) can pass the char cap yet still fail server-side. Track
+  // bytes so the hint and the save guard below are both byte-accurate.
+  const noteByteLength = new TextEncoder().encode(draftValue).length;
+
   const save = async () => {
+    if (noteByteLength > NOTE_MAX_LENGTH) {
+      setSaveError(
+        `Note is too long (${noteByteLength}/${NOTE_MAX_LENGTH} bytes) — some characters take more than one byte`,
+      );
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -96,7 +123,7 @@ export function NotePanel({ note, onSave }: NotePanelProps) {
   const hasNote = note.trim().length > 0;
 
   return (
-    <details className={panelContainer} data-testid="session-note-panel">
+    <details open className={panelContainer} data-testid="session-note-panel">
       <summary className={summary}>Notes</summary>
       <div className={body}>
         {isEditing ? (
@@ -117,7 +144,7 @@ export function NotePanel({ note, onSave }: NotePanelProps) {
               </p>
             )}
             <p id="session-note-hint" className={hint}>
-              Markdown supported
+              Markdown supported. {noteByteLength}/{NOTE_MAX_LENGTH}
             </p>
             <div className={actionsRow}>
               <button
@@ -140,14 +167,14 @@ export function NotePanel({ note, onSave }: NotePanelProps) {
                 {note}
               </ReactMarkdown>
             </div>
-            <button className={editButton} onClick={startEditing}>
+            <button ref={editButtonRef} className={editButton} onClick={startEditing}>
               Edit
             </button>
           </>
         ) : (
           <>
             <p className={emptyText}>No notes yet — leave yourself a reminder about this session.</p>
-            <button className={addButton} onClick={startEditing}>
+            <button ref={editButtonRef} className={addButton} onClick={startEditing}>
               Add note
             </button>
           </>

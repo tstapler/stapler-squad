@@ -57,6 +57,11 @@ describe("NotePanel", () => {
     expect(rendered).toHaveTextContent("Heading");
   });
 
+  it("NotePanel_should_RenderDetailsOpenByDefault_When_Mounted", () => {
+    render(<NotePanel note="something" onSave={jest.fn()} />);
+    expect(screen.getByTestId("session-note-panel")).toHaveAttribute("open");
+  });
+
   it("renders empty state when note is empty", () => {
     render(<NotePanel note="" onSave={jest.fn()} />);
     expect(screen.getByText(/no notes yet/i)).toBeInTheDocument();
@@ -78,5 +83,47 @@ describe("NotePanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(screen.queryByTestId("session-note-textarea")).toBeNull();
     expect(screen.getByTestId("session-note-rendered")).toHaveTextContent("original");
+  });
+
+  it("NotePanel_should_ReturnFocusToEditButton_When_CancelClicked", () => {
+    render(<NotePanel note="original" onSave={jest.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(screen.getByRole("button", { name: /edit/i })).toHaveFocus();
+  });
+
+  it("NotePanel_should_ReturnFocusToAddNoteButton_When_SaveSucceeds", async () => {
+    const onSave = jest.fn().mockResolvedValue(undefined);
+    render(<NotePanel note="" onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: /add note/i }));
+    fireEvent.click(screen.getByTestId("session-note-save-button"));
+    await waitFor(() => expect(screen.queryByTestId("session-note-textarea")).toBeNull());
+    expect(screen.getByRole("button", { name: /add note/i })).toHaveFocus();
+  });
+
+  it("NotePanel_should_ShowLiveByteCount_When_Typing", () => {
+    render(<NotePanel note="" onSave={jest.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /add note/i }));
+    fireEvent.change(screen.getByTestId("session-note-textarea"), {
+      target: { value: "hello" },
+    });
+    expect(document.getElementById("session-note-hint")).toHaveTextContent("Markdown supported. 5/10000");
+  });
+
+  it("NotePanel_should_BlockSaveWithByteAccurateError_When_MultiByteNoteExceedsByteCapButNotCharCap", () => {
+    // "あ" is 1 UTF-16 code unit (under the 10000-char textarea maxLength) but
+    // 3 UTF-8 bytes — 4000 of them is 4000 chars / 12000 bytes, over the
+    // backend's byte-based session.MaxNoteLength cap.
+    const onSave = jest.fn().mockResolvedValue(undefined);
+    render(<NotePanel note="" onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: /add note/i }));
+    fireEvent.change(screen.getByTestId("session-note-textarea"), {
+      target: { value: "あ".repeat(4000) },
+    });
+    fireEvent.click(screen.getByTestId("session-note-save-button"));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/too long/i);
+    expect(screen.getByTestId("session-note-textarea")).toHaveValue("あ".repeat(4000));
   });
 });

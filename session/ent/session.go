@@ -103,7 +103,7 @@ type Session struct {
 	GithubRepo string `json:"github_repo,omitempty"`
 	// JSON-encoded SessionArtifactsBlob: PRURLs, CommitSHAs, ExternalURLs, scan offset.
 	SessionArtifacts string `json:"session_artifacts,omitempty"`
-	// User-authored free-form markdown note attached to this session. Capped at 10,000 chars — see NOTE_MAX_LENGTH cross-reference in server/services/session_service.go.
+	// User-authored free-form markdown note attached to this session. Capped at 10,000 bytes — see session.MaxNoteLength cross-reference in session/instance.go.
 	Note string `json:"note,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the SessionQuery when eager-loading is set.
