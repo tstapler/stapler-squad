@@ -1,11 +1,10 @@
 {
-  "id": "ResumeCrashedSession",
+  "id": "session:resume-crashed",
   "type": "backend",
   "service": "SessionService",
   "method": "ResumeCrashedSession",
   "protoFile": "proto/session/v1/session.proto",
-  "markerFound": true,
-  "handlerFile": "server/services/session_service.go",
+  "markerFound": false,
   "tested": true,
   "testIds": [
     "TestResumeCrashedSession_EmptyId",
