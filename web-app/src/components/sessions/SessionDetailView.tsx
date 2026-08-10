@@ -39,6 +39,7 @@ import {
   pausedOverlayTitle,
   pausedOverlayReason,
   pausedOverlayButton,
+  crashedOverlayIcon,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -423,6 +424,10 @@ export function SessionDetailView({
     }
   };
 
+  const handleResumeFromCrash = async () => {
+    await actions.resumeFromCrash();
+  };
+
   const handleDeleteClick = () => {
     if (session.status === SessionStatus.RUNNING || session.status === SessionStatus.NEEDS_APPROVAL) {
       setShowDeleteConfirm(true);
@@ -725,6 +730,35 @@ export function SessionDetailView({
                       onClick={(e) => {
                         e.stopPropagation();
                         handlePauseResume();
+                      }}
+                      aria-label="Resume this session"
+                    >
+                      ▶ Resume Session
+                    </button>
+                  </div>
+                )}
+                {/* Crashed overlay: the tmux pane exited abnormally (remain-on-exit
+                    dead pane) and was detected by SessionHealthChecker. Distinct
+                    from the paused overlay above — same layout, error palette. */}
+                {session.status === SessionStatus.CRASHED && (
+                  <div
+                    className={pausedOverlay}
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Session has crashed"
+                  >
+                    <span className={crashedOverlayIcon} aria-hidden="true">⚠️</span>
+                    <p className={pausedOverlayTitle}>This session has crashed</p>
+                    {session.exitReason && (
+                      <p className={pausedOverlayReason}>
+                        {session.exitReason}
+                      </p>
+                    )}
+                    <button
+                      className={pausedOverlayButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleResumeFromCrash();
                       }}
                       aria-label="Resume this session"
                     >

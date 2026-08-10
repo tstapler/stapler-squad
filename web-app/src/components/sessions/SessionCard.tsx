@@ -53,6 +53,7 @@ import {
   statusLoading,
   statusNeedsApproval,
   statusUnknown,
+  statusCrashed,
   category,
   tagsContainer,
   tags,
@@ -198,6 +199,8 @@ function SessionCardInner({
         return statusPaused;
       case SessionStatus.HIBERNATED:
         return statusPaused;  // no distinct style yet; reuses paused (session is idle/stopped)
+      case SessionStatus.CRASHED:
+        return statusCrashed;
       default:
         return statusUnknown;
     }
@@ -221,6 +224,8 @@ function SessionCardInner({
         return "Stopped";
       case SessionStatus.HIBERNATED:
         return "Hibernated";
+      case SessionStatus.CRASHED:
+        return "Crashed";
       default:
         return "Unknown";
     }

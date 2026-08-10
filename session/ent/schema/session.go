@@ -105,6 +105,9 @@ func (Session) Fields() []ent.Field {
 		field.String("pause_reason").
 			Optional().
 			Comment("Reason the session was paused: manual, auto:inactivity, auto:session_limit, auto:resource. Empty when never paused."),
+		field.String("exit_reason").
+			Optional().
+			Comment("Reason the session's pane crashed (status == Crashed), e.g. 'signal SIGKILL (exit code 137)'. Empty when the session has never crashed."),
 		field.String("workflow_id").
 			Optional().
 			Comment("UUID of the Workflow that spawned this session, if any."),

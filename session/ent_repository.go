@@ -447,6 +447,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	} else {
 		sessionUpdate.ClearPauseReason()
 	}
+	if data.ExitReason != "" {
+		sessionUpdate.SetExitReason(data.ExitReason)
+	} else {
+		sessionUpdate.ClearExitReason()
+	}
 	sessionUpdate.SetOneShot(data.OneShot)
 	sessionUpdate.SetHidden(data.Hidden)
 	if data.WorkflowID != "" {
@@ -1094,6 +1099,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	}
 	data.LastPromptSignature = sess.LastPromptSignature
 	data.PauseReason = sess.PauseReason
+	data.ExitReason = sess.ExitReason
 	data.WorkflowID = sess.WorkflowID
 	data.ArchivedAt = sess.ArchivedAt
 	data.GitHubPRURL = sess.GithubPrURL

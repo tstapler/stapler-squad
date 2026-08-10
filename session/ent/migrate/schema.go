@@ -721,6 +721,7 @@ var (
 		{Name: "last_prompt_signature", Type: field.TypeString, Nullable: true},
 		{Name: "hidden", Type: field.TypeBool, Default: false},
 		{Name: "pause_reason", Type: field.TypeString, Nullable: true},
+		{Name: "exit_reason", Type: field.TypeString, Nullable: true},
 		{Name: "workflow_id", Type: field.TypeString, Nullable: true},
 		{Name: "archived_at", Type: field.TypeTime, Nullable: true},
 		{Name: "github_pr_url", Type: field.TypeString, Nullable: true},
@@ -739,7 +740,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sessions_projects_sessions",
-				Columns:    []*schema.Column{SessionsColumns[43]},
+				Columns:    []*schema.Column{SessionsColumns[44]},
 				RefColumns: []*schema.Column{ProjectsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -778,12 +779,12 @@ var (
 			{
 				Name:    "session_workflow_id",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[35]},
+				Columns: []*schema.Column{SessionsColumns[36]},
 			},
 			{
 				Name:    "session_archived_at",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[36]},
+				Columns: []*schema.Column{SessionsColumns[37]},
 			},
 		},
 	}

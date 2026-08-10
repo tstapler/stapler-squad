@@ -963,6 +963,77 @@ func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *test
 }
 
 // --------------------------------------------------------------------------
+// ResumeCrashedSession
+// --------------------------------------------------------------------------
+
+func TestResumeCrashedSession_EmptyId(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	_, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: ""}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+func TestResumeCrashedSession_NotFound(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	_, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: "does-not-exist"}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+}
+
+// TestResumeCrashedSession_TransitionsCrashedToActive verifies that resuming a
+// Crashed session (dead pane detected by SessionHealthChecker) transitions it
+// back to Active in the response, giving the frontend a one-tap resume action
+// instead of requiring the user to hand-type the --resume command.
+func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	const sessionUUID = "cccccccc-0000-0000-0000-000000000003"
+	testInstance := &session.Instance{
+		Title:      "crashed-session",
+		UUID:       sessionUUID,
+		Path:       "/tmp/test",
+		Status:     session.Crashed,
+		ExitReason: "signal SIGKILL (exit code 137)",
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInstance))
+
+	// ResumeFromCrash (session/instance_crash.go) dispatches the actual relaunch
+	// to a background goroutine that calls the real Start(false) -- a real tmux
+	// session gets created as a side effect. Best-effort clean it up so repeated
+	// test runs don't leave orphaned tmux sessions on the machine; the goroutine
+	// isn't awaited, so this is a short grace delay, not a guarantee.
+	t.Cleanup(func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = testInstance.KillSession()
+	})
+
+	resp, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: sessionUUID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, resp.Msg.Session.Status)
+}
+
+// --------------------------------------------------------------------------
 // UpdateSession – title conflict
 // --------------------------------------------------------------------------
 

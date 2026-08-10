@@ -136,6 +136,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// Pause reason — empty for sessions that have never been paused.
 	protoSession.PauseReason = snap.PauseReason
 
+	// Exit reason — only meaningful when status == SESSION_STATUS_CRASHED.
+	protoSession.ExitReason = snap.ExitReason
+
 	// VNC / browser-passthrough state.
 	if vncMgr := inst.VNCManager(); vncMgr != nil {
 		vncState := vncMgr.State()
@@ -305,6 +308,8 @@ func StatusToProto(status session.Status) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
 	case session.Restoring:
 		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
+	case session.Crashed:
+		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -329,6 +334,10 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_CREATING
 	case "Stopped":
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	case "Hibernated":
+		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
+	case "Crashed":
+		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}

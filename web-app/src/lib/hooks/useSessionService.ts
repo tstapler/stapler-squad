@@ -98,6 +98,7 @@ interface UseSessionServiceReturn {
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
   hibernateSession: (id: string) => Promise<Session | null>;
   resumeHibernatedSession: (id: string) => Promise<Session | null>;
+  resumeCrashedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
@@ -419,6 +420,25 @@ export function useSessionService(
     [dispatch]
   );
 
+  // Resume a crashed session (Crashed → Active). Server-side resume of a dead
+  // tmux pane detected by SessionHealthChecker — threads --resume automatically
+  // when a conversation UUID is known, no manual copy/paste required.
+  const resumeCrashedSession = useCallback(
+    async (id: string): Promise<Session | null> => {
+      if (!clientRef.current) return null;
+      dispatch(setError(null));
+      try {
+        const response = await clientRef.current.resumeCrashedSession({ id });
+        if (response.session) dispatch(upsertSession(response.session));
+        return response.session ?? null;
+      } catch (err) {
+        console.error("[useSessionService] resumeCrashedSession failed:", err);
+        dispatch(setError(err instanceof Error ? err.message : "Failed to resume crashed session"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
 
   // Rename session
   const renameSession = useCallback(
@@ -1095,6 +1115,7 @@ export function useSessionService(
     resumeSession,
     hibernateSession,
     resumeHibernatedSession,
+    resumeCrashedSession,
     renameSession,
     restartSession,
     clearConversationState,

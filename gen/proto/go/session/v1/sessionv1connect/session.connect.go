@@ -306,6 +306,9 @@ const (
 	// SessionServiceResumeHibernatedSessionProcedure is the fully-qualified name of the
 	// SessionService's ResumeHibernatedSession RPC.
 	SessionServiceResumeHibernatedSessionProcedure = "/session.v1.SessionService/ResumeHibernatedSession"
+	// SessionServiceResumeCrashedSessionProcedure is the fully-qualified name of the SessionService's
+	// ResumeCrashedSession RPC.
+	SessionServiceResumeCrashedSessionProcedure = "/session.v1.SessionService/ResumeCrashedSession"
 	// SessionServiceSpawnShellProcedure is the fully-qualified name of the SessionService's SpawnShell
 	// RPC.
 	SessionServiceSpawnShellProcedure = "/session.v1.SessionService/SpawnShell"
@@ -615,6 +618,11 @@ type SessionServiceClient interface {
 	// ResumeHibernatedSession re-launches the AI process for a Hibernated session,
 	// transitioning it back to Active status.
 	ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error)
+	// ResumeCrashedSession re-launches the AI process for a Crashed session
+	// (dead tmux pane detected by SessionHealthChecker), transitioning it back
+	// to Active status. Threads --resume automatically when a conversation UUID
+	// is known.
+	ResumeCrashedSession(context.Context, *connect.Request[v1.ResumeCrashedSessionRequest]) (*connect.Response[v1.ResumeCrashedSessionResponse], error)
 	// SpawnShell creates and starts a new custom shell attached to a session.
 	// The shell runs as an independent sibling tmux session.
 	SpawnShell(context.Context, *connect.Request[v1.SpawnShellRequest]) (*connect.Response[v1.SpawnShellResponse], error)
@@ -1237,6 +1245,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("ResumeHibernatedSession")),
 			connect.WithClientOptions(opts...),
 		),
+		resumeCrashedSession: connect.NewClient[v1.ResumeCrashedSessionRequest, v1.ResumeCrashedSessionResponse](
+			httpClient,
+			baseURL+SessionServiceResumeCrashedSessionProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ResumeCrashedSession")),
+			connect.WithClientOptions(opts...),
+		),
 		spawnShell: connect.NewClient[v1.SpawnShellRequest, v1.SpawnShellResponse](
 			httpClient,
 			baseURL+SessionServiceSpawnShellProcedure,
@@ -1466,6 +1480,7 @@ type sessionServiceClient struct {
 	getEscapeAnalyticsSummary    *connect.Client[v1.GetEscapeAnalyticsSummaryRequest, v1.GetEscapeAnalyticsSummaryResponse]
 	hibernateSession             *connect.Client[v1.HibernateSessionRequest, v1.HibernateSessionResponse]
 	resumeHibernatedSession      *connect.Client[v1.ResumeHibernatedSessionRequest, v1.ResumeHibernatedSessionResponse]
+	resumeCrashedSession         *connect.Client[v1.ResumeCrashedSessionRequest, v1.ResumeCrashedSessionResponse]
 	spawnShell                   *connect.Client[v1.SpawnShellRequest, v1.SpawnShellResponse]
 	stopShell                    *connect.Client[v1.StopShellRequest, v1.StopShellResponse]
 	restartShell                 *connect.Client[v1.RestartShellRequest, v1.RestartShellResponse]
@@ -1950,6 +1965,11 @@ func (c *sessionServiceClient) ResumeHibernatedSession(ctx context.Context, req 
 	return c.resumeHibernatedSession.CallUnary(ctx, req)
 }
 
+// ResumeCrashedSession calls session.v1.SessionService.ResumeCrashedSession.
+func (c *sessionServiceClient) ResumeCrashedSession(ctx context.Context, req *connect.Request[v1.ResumeCrashedSessionRequest]) (*connect.Response[v1.ResumeCrashedSessionResponse], error) {
+	return c.resumeCrashedSession.CallUnary(ctx, req)
+}
+
 // SpawnShell calls session.v1.SessionService.SpawnShell.
 func (c *sessionServiceClient) SpawnShell(ctx context.Context, req *connect.Request[v1.SpawnShellRequest]) (*connect.Response[v1.SpawnShellResponse], error) {
 	return c.spawnShell.CallUnary(ctx, req)
@@ -2301,6 +2321,11 @@ type SessionServiceHandler interface {
 	// ResumeHibernatedSession re-launches the AI process for a Hibernated session,
 	// transitioning it back to Active status.
 	ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error)
+	// ResumeCrashedSession re-launches the AI process for a Crashed session
+	// (dead tmux pane detected by SessionHealthChecker), transitioning it back
+	// to Active status. Threads --resume automatically when a conversation UUID
+	// is known.
+	ResumeCrashedSession(context.Context, *connect.Request[v1.ResumeCrashedSessionRequest]) (*connect.Response[v1.ResumeCrashedSessionResponse], error)
 	// SpawnShell creates and starts a new custom shell attached to a session.
 	// The shell runs as an independent sibling tmux session.
 	SpawnShell(context.Context, *connect.Request[v1.SpawnShellRequest]) (*connect.Response[v1.SpawnShellResponse], error)
@@ -2919,6 +2944,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("ResumeHibernatedSession")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceResumeCrashedSessionHandler := connect.NewUnaryHandler(
+		SessionServiceResumeCrashedSessionProcedure,
+		svc.ResumeCrashedSession,
+		connect.WithSchema(sessionServiceMethods.ByName("ResumeCrashedSession")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceSpawnShellHandler := connect.NewUnaryHandler(
 		SessionServiceSpawnShellProcedure,
 		svc.SpawnShell,
@@ -3237,6 +3268,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceHibernateSessionHandler.ServeHTTP(w, r)
 		case SessionServiceResumeHibernatedSessionProcedure:
 			sessionServiceResumeHibernatedSessionHandler.ServeHTTP(w, r)
+		case SessionServiceResumeCrashedSessionProcedure:
+			sessionServiceResumeCrashedSessionHandler.ServeHTTP(w, r)
 		case SessionServiceSpawnShellProcedure:
 			sessionServiceSpawnShellHandler.ServeHTTP(w, r)
 		case SessionServiceStopShellProcedure:
@@ -3656,6 +3689,10 @@ func (UnimplementedSessionServiceHandler) HibernateSession(context.Context, *con
 
 func (UnimplementedSessionServiceHandler) ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ResumeHibernatedSession is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ResumeCrashedSession(context.Context, *connect.Request[v1.ResumeCrashedSessionRequest]) (*connect.Response[v1.ResumeCrashedSessionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ResumeCrashedSession is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) SpawnShell(context.Context, *connect.Request[v1.SpawnShellRequest]) (*connect.Response[v1.SpawnShellResponse], error) {
