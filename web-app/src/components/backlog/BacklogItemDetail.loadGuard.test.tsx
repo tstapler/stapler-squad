@@ -14,6 +14,7 @@
 
 import React from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 
@@ -40,8 +41,11 @@ jest.mock("@/lib/analytics", () => ({
 jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
   useWatchBacklogItems: () => ({ items: [], connectionState: "live" }),
 }));
+// Controllable per-test — simulates the raw proto item currently sitting in
+// backlogItemsSlice for this itemId (selectBacklogItemById's return value).
+let mockLiveRawItem: unknown = undefined;
 jest.mock("@/lib/store", () => ({
-  useAppSelector: () => undefined,
+  useAppSelector: () => mockLiveRawItem,
 }));
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
@@ -122,6 +126,7 @@ describe("BacklogItemDetail load() staleness guards", () => {
   beforeEach(() => {
     getBacklogItem.mockReset();
     deleteSession.mockClear();
+    mockLiveRawItem = undefined;
     jest.spyOn(window, "confirm").mockReturnValue(true);
     localStorage.clear();
   });
@@ -222,6 +227,55 @@ describe("BacklogItemDetail load() staleness guards", () => {
     });
 
     await waitFor(() => expect(screen.getByText("same-ms-notes")).toBeInTheDocument());
+  });
+
+  it("BacklogItemDetail_should_dropStaleLiveStoreEvent_When_ItsOlderThanTheCurrentlyDisplayedItem", async () => {
+    // Root-caused via this fix's own e2e spec: a freshly-seeded item's
+    // "created" live-store event (no plan_artifacts_path yet) can arrive
+    // AFTER a separately-issued load()/GetBacklogItem fetch already applied
+    // a newer, more-complete state (e.g. plan_artifacts_path set moments
+    // later) — backlogItemsSlice's own upsertItem guard only protects the
+    // 2nd+ write for a given item id, so this component's liveRawItem effect
+    // needs its own guard too, mirroring load()'s.
+    const initial = deferred<BacklogItem>();
+    getBacklogItem.mockReturnValueOnce(initial.promise);
+    const { rerender } = render(<BacklogItemDetail itemId="item-1" />);
+    initial.resolve({ ...baseItem, updatedAt: "2026-07-01T00:00:10.000Z", notes: "current-notes" });
+    await waitFor(() => expect(screen.getByText("current-notes")).toBeInTheDocument());
+
+    mockLiveRawItem = {
+      id: "item-1",
+      title: baseItem.title,
+      status: baseItem.status,
+      priority: baseItem.priority,
+      notes: "stale-live-notes",
+      updatedAt: timestampFromDate(new Date("2026-07-01T00:00:01.000Z")),
+    };
+    rerender(<BacklogItemDetail itemId="item-1" />);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText("current-notes")).toBeInTheDocument();
+    expect(screen.queryByText("stale-live-notes")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_applyLiveStoreEvent_When_ItsNewerThanTheCurrentlyDisplayedItem", async () => {
+    const initial = deferred<BacklogItem>();
+    getBacklogItem.mockReturnValueOnce(initial.promise);
+    const { rerender } = render(<BacklogItemDetail itemId="item-1" />);
+    initial.resolve({ ...baseItem, updatedAt: "2026-07-01T00:00:10.000Z", notes: "current-notes" });
+    await waitFor(() => expect(screen.getByText("current-notes")).toBeInTheDocument());
+
+    mockLiveRawItem = {
+      id: "item-1",
+      title: baseItem.title,
+      status: baseItem.status,
+      priority: baseItem.priority,
+      notes: "fresh-live-notes",
+      updatedAt: timestampFromDate(new Date("2026-07-01T00:00:20.000Z")),
+    };
+    rerender(<BacklogItemDetail itemId="item-1" />);
+
+    await waitFor(() => expect(screen.getByText("fresh-live-notes")).toBeInTheDocument());
   });
 
   it("BacklogItemDetail_should_notCallLoad_When_TriageReviewPanelIsDismissed", async () => {

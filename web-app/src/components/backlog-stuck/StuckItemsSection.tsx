@@ -15,8 +15,21 @@ type FilterValue = "all" | StuckReason;
 // pr_ready_unmerged leads (one known next step: merge it); the remaining
 // reasons that need a decision or investigation follow. This must never be
 // read as a danger/severity ranking (design/ux.md Surface 2).
+//
+// IMPORTANT: this list must be kept in sync with every StuckReason value
+// (stuckReason.ts's STUCK_REASON_LABELS/ICONS/CLASS maps are `Record<StuckReason,
+// T>` and so are compile-checked exhaustive, but this array is not — a
+// reason present in `grouped` (below) yet absent here is silently never
+// rendered even though it still counts toward the total/badge, which is
+// exactly the kind of count-vs-list mismatch this feature exists to avoid).
+// plan_not_approved, spawn_failed, pr_pending_no_pr, rework_blocked_stale,
+// pr_needs_fix, and respawn_blocked_active were all previously missing here
+// (backlog/plan-approval-flicker fix, 2026-08) — found via the e2e test for
+// the plan-approval flicker fix never being able to find a seeded
+// plan_not_approved item's card despite the section's own count showing 1.
 const GROUP_ORDER: StuckReason[] = [
   StuckReason.PR_READY_UNMERGED,
+  StuckReason.PLAN_NOT_APPROVED,
   StuckReason.ABANDONED_REVIEW,
   StuckReason.STALE_WORK,
   StuckReason.ORPHANED_TRIAGE,
@@ -24,6 +37,11 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.AUTONOMOUS_STUCK,
   StuckReason.BOUNCING,
   StuckReason.PUSH_FAILED,
+  StuckReason.SPAWN_FAILED,
+  StuckReason.PR_PENDING_NO_PR,
+  StuckReason.REWORK_BLOCKED_STALE,
+  StuckReason.PR_NEEDS_FIX,
+  StuckReason.RESPAWN_BLOCKED_ACTIVE,
 ];
 
 function itemKey(item: Pick<StuckBacklogItem, "itemId" | "reason">): string {

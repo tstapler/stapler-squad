@@ -239,6 +239,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setBufferedItem(mapped);
       return;
     }
+    // Guard against a stale live-store entry stomping more-current state
+    // (pitfall #2's other half, alongside load()'s matching guard below):
+    // backlogItemsSlice's own upsertItem guard only protects the 2nd+ write
+    // for a given item id — the *first* live event this component observes
+    // for an item (e.g. a "created" event delivered, after a connection
+    // delay, later than a separately-issued load()/GetBacklogItem fetch
+    // already completed) has no `existing` entry to compare against there,
+    // so it's accepted into the store unconditionally and would otherwise
+    // unconditionally overwrite this component's already-fresher `item`.
+    const current = itemRef.current;
+    const currentMs = current?.updatedAt ? new Date(current.updatedAt).getTime() : 0;
+    const mappedMs = mapped.updatedAt ? new Date(mapped.updatedAt).getTime() : 0;
+    if (current && mappedMs < currentMs) return;
     setItem(mapped);
     setNotesValue(mapped.notes ?? "");
     // editMode is read from the closure at the time this effect actually
