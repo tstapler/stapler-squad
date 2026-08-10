@@ -2850,6 +2850,13 @@ func (s *SessionService) GetSessionDiff(
 				found.Worktree.BaseCommitSHA,
 			)
 			diffStats = wt.Diff()
+		} else if found.Path != "" {
+			// ponytail: directory sessions have no worktree; use the session path directly.
+			// resolveBaseCommitSHA() will find the merge-base with main/master as fallback.
+			wt := git.NewGitWorktreeFromStorage(found.Path, found.Path, found.Title, "", "")
+			if wt != nil {
+				diffStats = wt.Diff()
+			}
 		}
 	}
 

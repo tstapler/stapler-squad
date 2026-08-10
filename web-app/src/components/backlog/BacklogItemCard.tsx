@@ -86,6 +86,28 @@ function AcSummary({ item }: { item: BacklogItem }) {
   );
 }
 
+const VERDICT_BADGE_CONFIG: Partial<Record<NonNullable<BacklogItem["gateVerdict"]>, { label: string; className: string }>> = {
+  PASS: { label: "✓ PASS", className: styles.verdictBadgePass },
+  PARTIAL: { label: "◑ PARTIAL", className: styles.verdictBadgePartial },
+  FAIL: { label: "✗ FAIL", className: styles.verdictBadgeFail },
+  UNVERIFIABLE: { label: "? UNVERIFIABLE", className: styles.verdictBadgeUnverifiable },
+};
+
+// Last review result, at a glance — most useful on in_progress cards, where a
+// FAIL/PARTIAL verdict that triggered rework is otherwise invisible until the
+// item is opened (PENDING is left unbadged: it just means a review is running,
+// not a signal worth a card badge).
+function VerdictBadge({ item }: { item: BacklogItem }) {
+  if (!item.gateVerdict) return null;
+  const config = VERDICT_BADGE_CONFIG[item.gateVerdict];
+  if (!config) return null;
+  return (
+    <span className={config.className} title="Last review result">
+      {config.label}
+    </span>
+  );
+}
+
 const PRIORITY_LABELS: Record<number, string> = {
   1: "P1",
   2: "P2",
@@ -193,7 +215,10 @@ export const BacklogItemCard = memo(function BacklogItemCard({
       )}
 
       <div className={styles.cardFooter}>
-        <AcSummary item={item} />
+        <span className={styles.footerLeft}>
+          <AcSummary item={item} />
+          <VerdictBadge item={item} />
+        </span>
         {item.externalUrl && item.externalId && (
           <a
             href={item.externalUrl}
