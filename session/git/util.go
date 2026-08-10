@@ -17,6 +17,13 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+// isTraversalPathSegment reports whether s is "." or ".." — mirrors
+// session.isTraversalSegment (session/repo_path.go), which can't be imported
+// here without a package cycle (session imports git).
+func isTraversalPathSegment(s string) bool {
+	return s == "." || s == ".."
+}
+
 // sanitizeBranchName transforms an arbitrary string into a Git branch name friendly string.
 // Note: Git branch names have several rules, so this function uses a simple approach
 // by allowing only a safe subset of characters.
@@ -39,7 +46,53 @@ func sanitizeBranchName(s string) string {
 	// Trim leading and trailing dashes or slashes to avoid issues
 	s = strings.Trim(s, "-/")
 
-	return s
+	// Strip "." and ".." path segments so a crafted name like "../../etc" can't
+	// escape the directory it's later joined into
+	// (filepath.Join(worktreeDir, sanitizedName) at the worktree-creation call
+	// sites in worktree.go). Only exact segment matches are dropped — "..hidden",
+	// "user..name", and "v1.2.3" are literal names, not traversal, and survive
+	// untouched.
+	segments := strings.Split(s, "/")
+	kept := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if seg == "" || isTraversalPathSegment(seg) {
+			continue
+		}
+		kept = append(kept, seg)
+	}
+	cleaned := strings.Join(kept, "/")
+
+	// If the input was non-empty but every segment was traversal/empty, fall
+	// back to a safe non-empty name — otherwise filepath.Join(worktreeDir, "")
+	// collapses to worktreeDir itself, and a downstream os.RemoveAll on the
+	// resulting "worktree" path (session/git/worktree_ops.go) would delete the
+	// entire worktrees base directory. An originally-empty input still yields
+	// "" here, preserving pre-existing behavior for that case.
+	if cleaned == "" && s != "" {
+		return "session"
+	}
+
+	return cleaned
+}
+
+// joinWithinDir joins name onto baseDir and verifies the result is still a
+// descendant of baseDir, returning an error instead of the escaped path if
+// not. sanitizeBranchName already strips "." and ".." segments, so this
+// should never trigger in practice — it exists as defense-in-depth against a
+// future regression in the sanitizer at the actual filepath.Join call sites
+// (worktree-creation and the PreviewWorktreePath RPC preview).
+func joinWithinDir(baseDir, name string) (string, error) {
+	joined := filepath.Join(baseDir, name)
+
+	rel, err := filepath.Rel(baseDir, joined)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute relative path from %q to %q: %w", baseDir, joined, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("sanitized name %q escapes base directory %q", name, baseDir)
+	}
+
+	return joined, nil
 }
 
 // checkGHCLI checks if GitHub CLI is installed and configured

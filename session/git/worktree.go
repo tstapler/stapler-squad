@@ -101,7 +101,10 @@ func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA st
 	}
 
 	sanitizedName := sanitizeBranchName(sessionName)
-	worktreePath := filepath.Join(worktreeDir, sanitizedName)
+	worktreePath, err := joinWithinDir(worktreeDir, sanitizedName)
+	if err != nil {
+		return nil, "", err
+	}
 	worktreePath = worktreePath + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
 
 	return &GitWorktree{
@@ -202,7 +205,10 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 
 	// No existing worktree found, create a new one with timestamp suffix
 	sanitizedName := sanitizeBranchName(sessionName)
-	worktreePath := filepath.Join(worktreeDir, sanitizedName)
+	worktreePath, err := joinWithinDir(worktreeDir, sanitizedName)
+	if err != nil {
+		return nil, "", err
+	}
 	worktreePath = worktreePath + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
 
 	return &GitWorktree{
@@ -240,7 +246,7 @@ func PreviewWorktreePath(repoPath, sessionName string) (string, error) {
 	}
 
 	sanitizedName := sanitizeBranchName(sessionName)
-	return filepath.Join(worktreeDir, sanitizedName), nil
+	return joinWithinDir(worktreeDir, sanitizedName)
 }
 
 // findExistingGitRepoRootReadOnly walks up from path looking for an existing git
