@@ -1230,26 +1230,42 @@ func TestGetPTY_ReturnsNotInitializedError_When_TripleNeverSet(t *testing.T) {
 }
 
 func TestTapEnter_TapDAndEnter_SendKeys_ReturnSameWrappedErrors_When_PTYNil(t *testing.T) {
-	session := newTmuxSession("tap-sendkeys-nil-pty-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+	tests := []struct {
+		name          string
+		call          func(*TmuxSession) error
+		wantMsgPrefix string // "" means the raw GetPTY error is returned unwrapped
+	}{
+		{
+			name:          "TapEnter",
+			call:          func(s *TmuxSession) error { return s.TapEnter() },
+			wantMsgPrefix: "error sending enter keystroke to PTY:",
+		},
+		{
+			name:          "TapDAndEnter",
+			call:          func(s *TmuxSession) error { return s.TapDAndEnter() },
+			wantMsgPrefix: "error sending enter keystroke to PTY:",
+		},
+		{
+			name: "SendKeys",
+			call: func(s *TmuxSession) error {
+				n, err := s.SendKeys("hello")
+				require.Equal(t, 0, n)
+				return err
+			},
+		},
+	}
 
-	t.Run("TapEnter", func(t *testing.T) {
-		err := session.TapEnter()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "error sending enter keystroke to PTY:")
-		require.Contains(t, err.Error(), "PTY not initialized")
-	})
-	t.Run("TapDAndEnter", func(t *testing.T) {
-		err := session.TapDAndEnter()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "error sending enter keystroke to PTY:")
-		require.Contains(t, err.Error(), "PTY not initialized")
-	})
-	t.Run("SendKeys", func(t *testing.T) {
-		n, err := session.SendKeys("hello")
-		require.Equal(t, 0, n)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "PTY not initialized")
-	})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			session := newTmuxSession("tap-sendkeys-nil-pty-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+			err := tc.call(session)
+			require.Error(t, err)
+			if tc.wantMsgPrefix != "" {
+				require.Contains(t, err.Error(), tc.wantMsgPrefix)
+			}
+			require.Contains(t, err.Error(), "PTY not initialized")
+		})
+	}
 }
 
 func TestUpdateWindowSize_ReturnsSameErrors_When_PTYNilOrFdInvalid(t *testing.T) {

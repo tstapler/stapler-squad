@@ -156,6 +156,21 @@ jobs:
             -covermode=atomic ./server/... ./session/... ./config/... \
             || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -v ./...; exit 1)
 
+      # PTY-triple (ptmx/attachCmd/attachCmdWaitOnce) race fix regression gate:
+      # these tests were validated locally at -count=20/-count=50 during development
+      # (see project_plans/tmux-ptmx-race-fix/), but the plain -race run above only
+      # executes each test once per CI run — not enough repetition to reliably catch
+      # a reintroduced race in a timing-sensitive test. Run them amplified here so
+      # CI keeps the same confidence level the fix was originally verified with.
+      - name: PTY-triple race regression (amplified repetitions)
+        run: |
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race ./server/... \
+            -run 'TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort|TestSessionService_CreateThenImmediateDelete_NoDataRace' \
+            -count=20
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race ./session/tmux/... \
+            -run 'TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized|TestDetach_ConcurrentWithGetPTY_NoDeadlock|TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock' \
+            -count=20
+
       - name: Run scanner unit tests
         run: cd tools/scanner && go test ./...
 

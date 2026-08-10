@@ -1325,29 +1325,25 @@ func (m *statusMonitor) hash(s string) []byte {
 }
 
 // TapEnter sends an enter keystroke to the tmux pane.
-func (t *TmuxSession) TapEnter() error {
+// writeToPTY looks up the current PTY via GetPTY() and writes data to it,
+// wrapping the not-initialized error in the given message on failure.
+func (t *TmuxSession) writeToPTY(data []byte, errMsg string) (int, error) {
 	file, err := t.GetPTY()
 	if err != nil {
-		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
+		return 0, fmt.Errorf("%s: %w", errMsg, err)
 	}
-	_, err = file.Write([]byte{0x0D})
-	if err != nil {
-		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
-	}
-	return nil
+	return file.Write(data)
+}
+
+func (t *TmuxSession) TapEnter() error {
+	_, err := t.writeToPTY([]byte{0x0D}, "error sending enter keystroke to PTY")
+	return err
 }
 
 // TapDAndEnter sends 'D' followed by an enter keystroke to the tmux pane.
 func (t *TmuxSession) TapDAndEnter() error {
-	file, err := t.GetPTY()
-	if err != nil {
-		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
-	}
-	_, err = file.Write([]byte{0x44, 0x0D})
-	if err != nil {
-		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
-	}
-	return nil
+	_, err := t.writeToPTY([]byte{0x44, 0x0D}, "error sending enter keystroke to PTY")
+	return err
 }
 
 func (t *TmuxSession) SendKeys(keys string) (int, error) {
