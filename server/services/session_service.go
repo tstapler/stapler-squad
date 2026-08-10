@@ -1757,6 +1757,16 @@ func (s *SessionService) UpdateSession(
 		updatedFields = append(updatedFields, "category")
 	}
 
+	// Handle note update.
+	if req.Msg.Note != nil {
+		if len(*req.Msg.Note) > session.MaxNoteLength {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("note exceeds maximum length of %d bytes", session.MaxNoteLength))
+		}
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
+	}
+
 	// Handle tags update.
 	// In proto3, an empty repeated field is indistinguishable from "not provided",
 	// so clients send tags=[""] to clear all tags.

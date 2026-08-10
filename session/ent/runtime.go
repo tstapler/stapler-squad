@@ -542,6 +542,12 @@ func init() {
 	sessionDescSessionArtifacts := sessionFields[40].Descriptor()
 	// session.DefaultSessionArtifacts holds the default value on creation for the session_artifacts field.
 	session.DefaultSessionArtifacts = sessionDescSessionArtifacts.Default.(string)
+	// sessionDescNote is the schema descriptor for note field.
+	sessionDescNote := sessionFields[41].Descriptor()
+	// session.DefaultNote holds the default value on creation for the note field.
+	session.DefaultNote = sessionDescNote.Default.(string)
+	// session.NoteValidator is a validator for the "note" field. It is called by the builders before save.
+	session.NoteValidator = sessionDescNote.Validators[0].(func(string) error)
 	sessiongoalFields := schema.SessionGoal{}.Fields()
 	_ = sessiongoalFields
 	// sessiongoalDescSessionUUID is the schema descriptor for session_uuid field.

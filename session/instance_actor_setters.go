@@ -371,6 +371,24 @@ func (i *Instance) SetCategory(category string) {
 	})
 }
 
+// ---- Note -----------------------------------------------------------------------
+
+func setNoteLocked(s *instanceState, note string) {
+	s.inst.mu.Lock()
+	s.inst.Note = note
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetNote sets the session's free-form markdown note.
+func (i *Instance) SetNote(note string) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setNoteLocked(s, note)
+		return nil
+	})
+}
+
 // ---- WorkingDir -----------------------------------------------------------------
 
 func setWorkingDirLocked(s *instanceState, dir string) {

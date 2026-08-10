@@ -796,6 +796,26 @@ func (_u *SessionUpdate) ClearSessionArtifacts() *SessionUpdate {
 	return _u
 }
 
+// SetNote sets the "note" field.
+func (_u *SessionUpdate) SetNote(v string) *SessionUpdate {
+	_u.mutation.SetNote(v)
+	return _u
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableNote(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetNote(*v)
+	}
+	return _u
+}
+
+// ClearNote clears the value of the "note" field.
+func (_u *SessionUpdate) ClearNote() *SessionUpdate {
+	_u.mutation.ClearNote()
+	return _u
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_u *SessionUpdate) SetWorktreeID(id int) *SessionUpdate {
 	_u.mutation.SetWorktreeID(id)
@@ -1062,6 +1082,11 @@ func (_u *SessionUpdate) check() error {
 			return &ValidationError{Name: "program", err: fmt.Errorf(`ent: validator failed for field "Session.program": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Note(); ok {
+		if err := session.NoteValidator(v); err != nil {
+			return &ValidationError{Name: "note", err: fmt.Errorf(`ent: validator failed for field "Session.note": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -1298,6 +1323,12 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.SessionArtifactsCleared() {
 		_spec.ClearField(session.FieldSessionArtifacts, field.TypeString)
+	}
+	if value, ok := _u.mutation.Note(); ok {
+		_spec.SetField(session.FieldNote, field.TypeString, value)
+	}
+	if _u.mutation.NoteCleared() {
+		_spec.ClearField(session.FieldNote, field.TypeString)
 	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -2330,6 +2361,26 @@ func (_u *SessionUpdateOne) ClearSessionArtifacts() *SessionUpdateOne {
 	return _u
 }
 
+// SetNote sets the "note" field.
+func (_u *SessionUpdateOne) SetNote(v string) *SessionUpdateOne {
+	_u.mutation.SetNote(v)
+	return _u
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableNote(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetNote(*v)
+	}
+	return _u
+}
+
+// ClearNote clears the value of the "note" field.
+func (_u *SessionUpdateOne) ClearNote() *SessionUpdateOne {
+	_u.mutation.ClearNote()
+	return _u
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_u *SessionUpdateOne) SetWorktreeID(id int) *SessionUpdateOne {
 	_u.mutation.SetWorktreeID(id)
@@ -2609,6 +2660,11 @@ func (_u *SessionUpdateOne) check() error {
 			return &ValidationError{Name: "program", err: fmt.Errorf(`ent: validator failed for field "Session.program": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Note(); ok {
+		if err := session.NoteValidator(v); err != nil {
+			return &ValidationError{Name: "note", err: fmt.Errorf(`ent: validator failed for field "Session.note": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -2862,6 +2918,12 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if _u.mutation.SessionArtifactsCleared() {
 		_spec.ClearField(session.FieldSessionArtifacts, field.TypeString)
+	}
+	if value, ok := _u.mutation.Note(); ok {
+		_spec.SetField(session.FieldNote, field.TypeString, value)
+	}
+	if _u.mutation.NoteCleared() {
+		_spec.ClearField(session.FieldNote, field.TypeString)
 	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{

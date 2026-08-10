@@ -637,7 +637,9 @@ type UpdateSessionRequest struct {
 	AutonomousMode *bool `protobuf:"varint,10,opt,name=autonomous_mode,json=autonomousMode,proto3,oneof" json:"autonomous_mode,omitempty"`
 	// Steering message to inject into an autonomous session mid-run.
 	// Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
-	SteerMessage  *string `protobuf:"bytes,11,opt,name=steer_message,json=steerMessage,proto3,oneof" json:"steer_message,omitempty"`
+	SteerMessage *string `protobuf:"bytes,11,opt,name=steer_message,json=steerMessage,proto3,oneof" json:"steer_message,omitempty"`
+	// Update the session's free-form note. Capped at 10,000 bytes.
+	Note          *string `protobuf:"bytes,12,opt,name=note,proto3,oneof" json:"note,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -745,6 +747,13 @@ func (x *UpdateSessionRequest) GetAutonomousMode() bool {
 func (x *UpdateSessionRequest) GetSteerMessage() string {
 	if x != nil && x.SteerMessage != nil {
 		return *x.SteerMessage
+	}
+	return ""
+}
+
+func (x *UpdateSessionRequest) GetNote() string {
+	if x != nil && x.Note != nil {
+		return *x.Note
 	}
 	return ""
 }
@@ -15178,7 +15187,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x0e\x10\x0fR\aone_off\"F\n" +
 	"\x15CreateSessionResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xb2\x04\n" +
+	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xd4\x04\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x126\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x19.session.v1.SessionStatusH\x00R\x06status\x88\x01\x01\x12\x1f\n" +
@@ -15192,7 +15201,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\fpause_reason\x18\t \x01(\tH\x06R\vpauseReason\x88\x01\x01\x12,\n" +
 	"\x0fautonomous_mode\x18\n" +
 	" \x01(\bH\aR\x0eautonomousMode\x88\x01\x01\x12(\n" +
-	"\rsteer_message\x18\v \x01(\tH\bR\fsteerMessage\x88\x01\x01B\t\n" +
+	"\rsteer_message\x18\v \x01(\tH\bR\fsteerMessage\x88\x01\x01\x12\x17\n" +
+	"\x04note\x18\f \x01(\tH\tR\x04note\x88\x01\x01B\t\n" +
 	"\a_statusB\v\n" +
 	"\t_categoryB\b\n" +
 	"\x06_titleB\n" +
@@ -15202,7 +15212,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x13_rate_limit_enabledB\x0f\n" +
 	"\r_pause_reasonB\x12\n" +
 	"\x10_autonomous_modeB\x10\n" +
-	"\x0e_steer_message\"F\n" +
+	"\x0e_steer_messageB\a\n" +
+	"\x05_note\"F\n" +
 	"\x15UpdateSessionResponse\x12-\n" +
 	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"<\n" +
 	"\x14DeleteSessionRequest\x12\x0e\n" +

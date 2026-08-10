@@ -43,6 +43,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		Prompt:             snap.Prompt,
 		InitialPrompt:      snap.InitialPrompt,
 		Category:           snap.Category,
+		Note:               snap.Note,
 		IsExpanded:         snap.IsExpanded,
 		SessionType:        sessionTypeToProto(snap.SessionType),
 		TmuxPrefix:         snap.TmuxPrefix,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -575,6 +576,106 @@ func TestUpdateSession_TagsUpdate_Replaces(t *testing.T) {
 		"tags should be fully replaced, not appended")
 	assert.NotContains(t, resp.Msg.Session.Tags, "old-tag",
 		"old tags must be removed after replacement")
+}
+
+// TestUpdateSession_NoteUpdate verifies that a session note round-trips through
+// UpdateSession and persists through a full storage reload, not just the in-memory
+// response (mirrors TestUpdateSession_TagsUpdate).
+func TestUpdateSession_NoteUpdate(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	note := "left this waiting on CI"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &note,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, note, resp.Msg.Session.Note, "response should contain the updated note")
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == "my-session" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found, "session should still exist in storage after update")
+	assert.Equal(t, note, found.Note, "note should be persisted in storage")
+}
+
+// TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument verifies that a
+// note longer than session.MaxNoteLength is rejected with InvalidArgument and
+// does not partially write.
+func TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	tooLong := strings.Repeat("a", session.MaxNoteLength+1)
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &tooLong,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == "my-session" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Empty(t, found.Note, "note must not be partially written when rejected")
+}
+
+// TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload is the regression test
+// for the ent Update path's guarded-vs-unconditional SetNote fix: it must fail
+// against a guarded (`if data.Note != ""`) Update and pass against the
+// unconditional one, since clearing a note is a meaningful state, not "unset".
+func TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	stale := "stale reminder"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &stale,
+	}))
+	require.NoError(t, err)
+
+	empty := ""
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &empty,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "", resp.Msg.Session.Note, "response should reflect the cleared note")
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == "my-session" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, "", found.Note, "cleared note must persist as empty across reload, not the stale prior value")
 }
 
 // --------------------------------------------------------------------------

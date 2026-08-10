@@ -312,6 +312,7 @@ export function useSessionService(
           id,
           status: updates.status,
           category: updates.category,
+          note: updates.note,
           title: updates.title,
           program: updates.program,
           tags: updates.tags ?? [],

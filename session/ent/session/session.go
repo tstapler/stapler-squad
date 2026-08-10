@@ -96,6 +96,8 @@ const (
 	FieldGithubRepo = "github_repo"
 	// FieldSessionArtifacts holds the string denoting the session_artifacts field in the database.
 	FieldSessionArtifacts = "session_artifacts"
+	// FieldNote holds the string denoting the note field in the database.
+	FieldNote = "note"
 	// EdgeWorktree holds the string denoting the worktree edge name in mutations.
 	EdgeWorktree = "worktree"
 	// EdgeDiffStats holds the string denoting the diff_stats edge name in mutations.
@@ -203,6 +205,7 @@ var Columns = []string{
 	FieldGithubOwner,
 	FieldGithubRepo,
 	FieldSessionArtifacts,
+	FieldNote,
 }
 
 // ForeignKeys holds the SQL foreign-keys that are owned by the "sessions"
@@ -264,6 +267,10 @@ var (
 	DefaultGithubPrNumber int
 	// DefaultSessionArtifacts holds the default value on creation for the "session_artifacts" field.
 	DefaultSessionArtifacts string
+	// DefaultNote holds the default value on creation for the "note" field.
+	DefaultNote string
+	// NoteValidator is a validator for the "note" field. It is called by the builders before save.
+	NoteValidator func(string) error
 )
 
 // OrderOption defines the ordering options for the Session queries.
@@ -477,6 +484,11 @@ func ByGithubRepo(opts ...sql.OrderTermOption) OrderOption {
 // BySessionArtifacts orders the results by the session_artifacts field.
 func BySessionArtifacts(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSessionArtifacts, opts...).ToFunc()
+}
+
+// ByNote orders the results by the note field.
+func ByNote(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNote, opts...).ToFunc()
 }
 
 // ByWorktreeField orders the results by worktree field.

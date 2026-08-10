@@ -94,6 +94,7 @@ type InstanceSnapshot struct {
 	Prompt           string
 	InitialPrompt    string
 	Category         string
+	Note             string
 	SessionType      SessionType
 	TmuxPrefix       string
 	TmuxServerSocket string
@@ -160,6 +161,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Prompt:           i.Prompt,
 		InitialPrompt:    i.InitialPrompt,
 		Category:         i.Category,
+		Note:             i.Note,
 		SessionType:      i.SessionType,
 		TmuxPrefix:       i.TmuxPrefix,
 		TmuxServerSocket: i.TmuxServerSocket,

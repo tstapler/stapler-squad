@@ -237,6 +237,9 @@ message Session {
   // when there's no GitHub remote). Sessions sharing this key are workspace peers. Empty
   // when neither GitHub info nor a repo path could be determined (e.g. a bare one-off session).
   string workspace_key = 71;
+
+  // User-authored free-form markdown note attached to this session.
+  string note = 72;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's

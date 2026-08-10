@@ -63,6 +63,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Prompt:               snap.Prompt,
 		InitialPrompt:        snap.InitialPrompt,
 		Category:             snap.Category,
+		Note:                 snap.Note,
 		IsExpanded:           snap.IsExpanded,
 		Tags:                 snap.Tags, // Include tags in serialization
 		SessionType:          snap.SessionType,
@@ -227,6 +228,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		Prompt:           data.Prompt,
 		InitialPrompt:    data.InitialPrompt,
 		Category:         data.Category,
+		Note:             data.Note,
 		IsExpanded:       data.IsExpanded,
 		Tags:             tags, // Use migrated tags (includes category if needed)
 		SessionType:      data.SessionType,

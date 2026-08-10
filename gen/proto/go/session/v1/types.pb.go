@@ -1611,7 +1611,9 @@ type Session struct {
 	// Canonical workspace/repo identity (e.g. "gh:owner/repo", or "path:<main repo path>"
 	// when there's no GitHub remote). Sessions sharing this key are workspace peers. Empty
 	// when neither GitHub info nor a repo path could be determined (e.g. a bare one-off session).
-	WorkspaceKey  string `protobuf:"bytes,71,opt,name=workspace_key,json=workspaceKey,proto3" json:"workspace_key,omitempty"`
+	WorkspaceKey string `protobuf:"bytes,71,opt,name=workspace_key,json=workspaceKey,proto3" json:"workspace_key,omitempty"`
+	// User-authored free-form markdown note attached to this session.
+	Note          string `protobuf:"bytes,72,opt,name=note,proto3" json:"note,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2118,6 +2120,13 @@ func (x *Session) GetArtifacts() *SessionArtifacts {
 func (x *Session) GetWorkspaceKey() string {
 	if x != nil {
 		return x.WorkspaceKey
+	}
+	return ""
+}
+
+func (x *Session) GetNote() string {
+	if x != nil {
+		return x.Note
 	}
 	return ""
 }
@@ -6546,7 +6555,7 @@ var File_session_v1_types_proto protoreflect.FileDescriptor
 const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"\x16session/v1/types.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa8\x18\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbc\x18\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -6627,7 +6636,8 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x0fdetected_status\x18D \x01(\x0e2\x1a.session.v1.DetectedStatusR\x0edetectedStatus\x12)\n" +
 	"\x10detected_context\x18E \x01(\tR\x0fdetectedContext\x12:\n" +
 	"\tartifacts\x18F \x01(\v2\x1c.session.v1.SessionArtifactsR\tartifacts\x12#\n" +
-	"\rworkspace_key\x18G \x01(\tR\fworkspaceKey\"\xb5\x01\n" +
+	"\rworkspace_key\x18G \x01(\tR\fworkspaceKey\x12\x12\n" +
+	"\x04note\x18H \x01(\tR\x04note\"\xb5\x01\n" +
 	"\x10SessionArtifacts\x12\x17\n" +
 	"\apr_urls\x18\x01 \x03(\tR\x06prUrls\x12\x1f\n" +
 	"\vcommit_shas\x18\x02 \x03(\tR\n" +

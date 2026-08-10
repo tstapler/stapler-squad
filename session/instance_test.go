@@ -429,3 +429,33 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 		t.Fatalf("expected an empty/nil DiffSnapshot for a never-started instance, got %+v", stats)
 	}
 }
+
+// TestInstance_Note_RoundTripsThroughSerialization directly exercises the Risk
+// Control mitigation for the "missing touchpoint" risk (plan.md's 8-hop round-trip
+// checklist): Instance.Note set via SetNote must survive ToInstanceData() ->
+// FromInstanceData() unchanged.
+func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
+	inst := &Instance{
+		Title:     "note-round-trip-test",
+		UUID:      "sess-note-round-trip",
+		Path:      "/path/to/repo",
+		Status:    Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	inst.SetNote("left this waiting on CI")
+
+	data := inst.ToInstanceData()
+	if data.Note != "left this waiting on CI" {
+		t.Fatalf("ToInstanceData(): expected Note %q, got %q", "left this waiting on CI", data.Note)
+	}
+
+	reconstructed, err := FromInstanceData(data)
+	if err != nil {
+		t.Fatalf("FromInstanceData() returned error: %v", err)
+	}
+	if reconstructed.Note != "left this waiting on CI" {
+		t.Fatalf("FromInstanceData(): expected Note %q, got %q", "left this waiting on CI", reconstructed.Note)
+	}
+}

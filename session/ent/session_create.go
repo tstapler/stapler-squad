@@ -572,6 +572,20 @@ func (_c *SessionCreate) SetNillableSessionArtifacts(v *string) *SessionCreate {
 	return _c
 }
 
+// SetNote sets the "note" field.
+func (_c *SessionCreate) SetNote(v string) *SessionCreate {
+	_c.mutation.SetNote(v)
+	return _c
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableNote(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetNote(*v)
+	}
+	return _c
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_c *SessionCreate) SetWorktreeID(id int) *SessionCreate {
 	_c.mutation.SetWorktreeID(id)
@@ -768,6 +782,10 @@ func (_c *SessionCreate) defaults() {
 		v := session.DefaultSessionArtifacts
 		_c.mutation.SetSessionArtifacts(v)
 	}
+	if _, ok := _c.mutation.Note(); !ok {
+		v := session.DefaultNote
+		_c.mutation.SetNote(v)
+	}
 }
 
 // check runs all checks and user-defined validators on the builder.
@@ -819,6 +837,11 @@ func (_c *SessionCreate) check() error {
 	}
 	if _, ok := _c.mutation.Hidden(); !ok {
 		return &ValidationError{Name: "hidden", err: errors.New(`ent: missing required field "Session.hidden"`)}
+	}
+	if v, ok := _c.mutation.Note(); ok {
+		if err := session.NoteValidator(v); err != nil {
+			return &ValidationError{Name: "note", err: fmt.Errorf(`ent: validator failed for field "Session.note": %w`, err)}
+		}
 	}
 	return nil
 }
@@ -1010,6 +1033,10 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.SessionArtifacts(); ok {
 		_spec.SetField(session.FieldSessionArtifacts, field.TypeString, value)
 		_node.SessionArtifacts = value
+	}
+	if value, ok := _c.mutation.Note(); ok {
+		_spec.SetField(session.FieldNote, field.TypeString, value)
+		_node.Note = value
 	}
 	if nodes := _c.mutation.WorktreeIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1860,6 +1887,24 @@ func (u *SessionUpsert) ClearSessionArtifacts() *SessionUpsert {
 	return u
 }
 
+// SetNote sets the "note" field.
+func (u *SessionUpsert) SetNote(v string) *SessionUpsert {
+	u.Set(session.FieldNote, v)
+	return u
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateNote() *SessionUpsert {
+	u.SetExcluded(session.FieldNote)
+	return u
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *SessionUpsert) ClearNote() *SessionUpsert {
+	u.SetNull(session.FieldNote)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -2700,6 +2745,27 @@ func (u *SessionUpsertOne) UpdateSessionArtifacts() *SessionUpsertOne {
 func (u *SessionUpsertOne) ClearSessionArtifacts() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearSessionArtifacts()
+	})
+}
+
+// SetNote sets the "note" field.
+func (u *SessionUpsertOne) SetNote(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetNote(v)
+	})
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateNote() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateNote()
+	})
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *SessionUpsertOne) ClearNote() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearNote()
 	})
 }
 
@@ -3709,6 +3775,27 @@ func (u *SessionUpsertBulk) UpdateSessionArtifacts() *SessionUpsertBulk {
 func (u *SessionUpsertBulk) ClearSessionArtifacts() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearSessionArtifacts()
+	})
+}
+
+// SetNote sets the "note" field.
+func (u *SessionUpsertBulk) SetNote(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetNote(v)
+	})
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateNote() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateNote()
+	})
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *SessionUpsertBulk) ClearNote() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearNote()
 	})
 }
 

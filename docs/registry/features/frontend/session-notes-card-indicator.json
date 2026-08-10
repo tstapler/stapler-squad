@@ -1,0 +1,15 @@
+{
+  "id": "session-notes-card-indicator",
+  "type": "frontend",
+  "description": "SessionCard note badge — visual indicator when a session has a non-empty note",
+  "component": "SessionCard",
+  "path": "web-app/src/components/sessions/SessionCard.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "SessionCard_should_RenderNoteBadge_When_SessionNoteIsNonEmpty",
+    "SessionCard_should_NotRenderNoteBadge_When_SessionNoteIsWhitespaceOrEmpty",
+    "SessionCard_should_TruncateNoteBadgeTooltipToOneHundredTwentyChars_When_NoteIsLong"
+  ],
+  "lastModified": "2026-08-10T05:53:16Z"
+}
