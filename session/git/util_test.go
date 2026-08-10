@@ -225,9 +225,19 @@ func TestPreviewWorktreePath_RejectsTraversal(t *testing.T) {
 	for _, input := range maliciousInputs {
 		t.Run(input, func(t *testing.T) {
 			path, err := PreviewWorktreePath(repoDir, input)
+			// sanitizeBranchName is deterministic and already strips every traversal
+			// segment (verified independently in TestSanitizeBranchName), so
+			// joinWithinDir's escape check can never actually fire for these inputs —
+			// assert the exact expected outcome rather than accepting either "errored"
+			// or "resolved safely", so a regression in either function is caught.
+			wantSanitized := sanitizeBranchName(input)
+			wantPath := filepath.Join(worktreeDir, wantSanitized)
 			if err != nil {
-				// An explicit error is an acceptable outcome for traversal input.
-				return
+				t.Fatalf("PreviewWorktreePath(%q, %q) returned unexpected error: %v (want path %q)",
+					repoDir, input, err, wantPath)
+			}
+			if path != wantPath {
+				t.Errorf("PreviewWorktreePath(%q, %q) = %q, want %q", repoDir, input, path, wantPath)
 			}
 
 			rel, relErr := filepath.Rel(worktreeDir, path)
