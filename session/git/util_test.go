@@ -100,6 +100,21 @@ func TestSanitizeBranchName(t *testing.T) {
 			expected: "user..name",
 		},
 		{
+			name:     "lone slash falls back to a safe non-empty name",
+			input:    "/",
+			expected: "session",
+		},
+		{
+			name:     "all-dashes falls back to a safe non-empty name",
+			input:    "---",
+			expected: "session",
+		},
+		{
+			name:     "all-disallowed-characters falls back to a safe non-empty name",
+			input:    "!!!",
+			expected: "session",
+		},
+		{
 			name:     "triple-dot embedded in a segment is preserved",
 			input:    "a...b",
 			expected: "a...b",

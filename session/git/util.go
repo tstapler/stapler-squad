@@ -28,6 +28,8 @@ func isTraversalPathSegment(s string) bool {
 // Note: Git branch names have several rules, so this function uses a simple approach
 // by allowing only a safe subset of characters.
 func sanitizeBranchName(s string) string {
+	original := s
+
 	// Convert to lower-case
 	s = strings.ToLower(s)
 
@@ -66,9 +68,13 @@ func sanitizeBranchName(s string) string {
 	// back to a safe non-empty name — otherwise filepath.Join(worktreeDir, "")
 	// collapses to worktreeDir itself, and a downstream os.RemoveAll on the
 	// resulting "worktree" path (session/git/worktree_ops.go) would delete the
-	// entire worktrees base directory. An originally-empty input still yields
-	// "" here, preserving pre-existing behavior for that case.
-	if cleaned == "" && s != "" {
+	// entire worktrees base directory. Compare against the ORIGINAL input, not
+	// the post-trim/post-strip `s` — inputs like "/", "---", or "!!!" trim down
+	// to "" before this point even though they were non-empty, and checking `s`
+	// here would miss them, letting them fall through as "" unflagged. An
+	// originally-empty input still yields "" here, preserving pre-existing
+	// behavior for that case.
+	if cleaned == "" && original != "" {
 		return "session"
 	}
 
