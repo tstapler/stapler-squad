@@ -839,6 +839,20 @@ export const workflowBadge = style({
   maxWidth: "120px",
 });
 
+export const noteBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
 /** Goal row compact display — session list card */
 export const taskFraction = style({
   fontSize: vars.fontSize.xs,

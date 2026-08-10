@@ -132,6 +132,11 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("JSON-encoded SessionArtifactsBlob: PRURLs, CommitSHAs, ExternalURLs, scan offset."),
+		field.Text("note").
+			Optional().
+			Default("").
+			MaxLen(10000).
+			Comment("User-authored free-form markdown note attached to this session. Capped at 10,000 bytes — see session.MaxNoteLength cross-reference in session/instance.go."),
 	}
 }
 

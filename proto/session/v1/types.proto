@@ -241,6 +241,9 @@ message Session {
   // Reason the session's pane crashed. Only meaningful when status ==
   // SESSION_STATUS_CRASHED. Empty when the session has never crashed.
   string exit_reason = 72;
+
+  // User-authored free-form markdown note attached to this session.
+  string note = 73;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's

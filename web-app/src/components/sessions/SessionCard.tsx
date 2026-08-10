@@ -88,6 +88,7 @@ import {
   taskFraction,
   autonomousBadge,
   workflowBadge,
+  noteBadge,
   creationSpinner,
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
@@ -175,6 +176,8 @@ function SessionCardInner({
   const isCreating = session.status === SessionStatus.CREATING;
   const isPaused = session.status === SessionStatus.PAUSED;
   const pendingProgramChange = hasPendingProgramChange(session);
+  const trimmedNote = session.note?.trim();
+  const noteTooltip = trimmedNote ? truncateGoal(trimmedNote, 120) : undefined;
   const { html: snapshotHtml, isEmpty: snapshotIsEmpty, loading: snapshotLoadingState, error: snapshotErrorMsg } =
     useTerminalSnapshot(session.id, isSnapshotEnabled);
 
@@ -639,6 +642,18 @@ function SessionCardInner({
               >
                 <span aria-hidden="true">⏳</span> Pending program change
               </span>
+            )}
+            {noteTooltip && (
+              <Tooltip label={noteTooltip}>
+                <span
+                  className={noteBadge}
+                  role="img"
+                  aria-label="Has a note"
+                  data-testid="badge-has-note"
+                >
+                  <span aria-hidden="true">📝</span> Note
+                </span>
+              </Tooltip>
             )}
           </div>
         </div>

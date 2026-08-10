@@ -104,6 +104,12 @@ type LifecycleListener interface {
 
 // ==== Instance -- Core Fields and Construction ====
 
+// MaxNoteLength is the maximum length, in bytes, of Instance.Note. Cross-referenced with the
+// ent schema's field.Text("note").MaxLen(10000) (session/ent/schema/session.go) — the schema
+// package cannot import this package (would create an import cycle), so the two 10000s must be
+// kept in sync by comment, not by shared constant.
+const MaxNoteLength = 10000
+
 // Instance is a running instance of claude code.
 type Instance struct {
 	// ID is the stable, immutable identifier for this instance.
@@ -150,6 +156,8 @@ type Instance struct {
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
 	Category string
+	// Note is a user-authored free-form markdown note attached to this session.
+	Note string
 	// IsExpanded indicates whether this session's category is expanded in the UI
 	IsExpanded bool
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
@@ -489,6 +497,8 @@ type InstanceOptions struct {
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
 	Category string
+	// Note is a user-authored free-form markdown note attached to this session.
+	Note string
 	// Tags are multi-valued labels for flexible organization
 	Tags []string
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
@@ -619,6 +629,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		InitialPrompt:    opts.InitialPrompt,
 		ExistingWorktree: opts.ExistingWorktree,
 		Category:         opts.Category,
+		Note:             opts.Note,
 		Tags:             opts.Tags, // Set tags from options
 		SessionType:      sessionType,
 		TmuxPrefix:       opts.TmuxPrefix,

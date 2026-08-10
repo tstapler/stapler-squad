@@ -625,6 +625,9 @@ message UpdateSessionRequest {
   // Steering message to inject into an autonomous session mid-run.
   // Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
   optional string steer_message = 11;
+
+  // Update the session's free-form note. Capped at 10,000 bytes.
+  optional string note = 12;
 }
 
 message UpdateSessionResponse {

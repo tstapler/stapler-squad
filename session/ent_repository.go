@@ -179,6 +179,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.Category != "" {
 		sessionCreate.SetCategory(data.Category)
 	}
+	if data.Note != "" {
+		sessionCreate.SetNote(data.Note)
+	}
 	if data.SessionType != "" {
 		sessionCreate.SetSessionType(string(data.SessionType))
 	}
@@ -391,6 +394,10 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if data.Category != "" {
 		sessionUpdate.SetCategory(data.Category)
 	}
+	// Note is set unconditionally, unlike sibling optional string fields: an empty note is a
+	// meaningful, intentionally-reachable state ("cleared"), not an "unset" sentinel, so the
+	// guarded-update convention would silently prevent a user from ever clearing it.
+	sessionUpdate.SetNote(data.Note)
 	if data.SessionType != "" {
 		sessionUpdate.SetSessionType(string(data.SessionType))
 	}
@@ -1056,6 +1063,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		Program:             sess.Program,
 		ExistingWorktree:    sess.ExistingWorktree,
 		Category:            sess.Category,
+		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
 		LastOutputSignature: sess.LastOutputSignature,

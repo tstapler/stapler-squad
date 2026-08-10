@@ -729,6 +729,7 @@ var (
 		{Name: "github_owner", Type: field.TypeString, Nullable: true},
 		{Name: "github_repo", Type: field.TypeString, Nullable: true},
 		{Name: "session_artifacts", Type: field.TypeString, Nullable: true, Default: ""},
+		{Name: "note", Type: field.TypeString, Nullable: true, Size: 10000, Default: ""},
 		{Name: "project_sessions", Type: field.TypeInt, Nullable: true},
 	}
 	// SessionsTable holds the schema information for the "sessions" table.
@@ -739,7 +740,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sessions_projects_sessions",
-				Columns:    []*schema.Column{SessionsColumns[43]},
+				Columns:    []*schema.Column{SessionsColumns[44]},
 				RefColumns: []*schema.Column{ProjectsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},

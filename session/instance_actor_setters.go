@@ -371,6 +371,30 @@ func (i *Instance) SetCategory(category string) {
 	})
 }
 
+// ---- Note -----------------------------------------------------------------------
+
+func setNoteLocked(s *instanceState, note string) {
+	s.inst.mu.Lock()
+	s.inst.Note = note
+	// Bump UpdatedAt so the frontend's upsertSession no-op dedup (sessionsSlice.ts,
+	// keyed on unchanged updatedAt) doesn't silently drop this update — without it,
+	// a note saved on a session whose UpdatedAt hadn't otherwise moved (e.g. a
+	// freshly created, still-idle session) would return success from the RPC but
+	// never appear in the UI until some other field bumped UpdatedAt first.
+	s.inst.UpdatedAt = time.Now()
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetNote sets the session's free-form markdown note.
+func (i *Instance) SetNote(note string) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setNoteLocked(s, note)
+		return nil
+	})
+}
+
 // ---- WorkingDir -----------------------------------------------------------------
 
 func setWorkingDirLocked(s *instanceState, dir string) {

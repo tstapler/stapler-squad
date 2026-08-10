@@ -245,6 +245,16 @@ export const memoryBadgeHigh = style({
   fontWeight: 700,
 });
 
+/** Inline note indicator in the name/path cell — icon-only (unlike SessionCard's
+ * pill) since the row layout has no room for badge text without breaking the
+ * single-line grid. */
+export const noteIndicator = style({
+  fontSize: vars.fontSize.sm,
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
+});
+
 export const diffBadge = style({
   display: "inline-flex",
   alignItems: "center",

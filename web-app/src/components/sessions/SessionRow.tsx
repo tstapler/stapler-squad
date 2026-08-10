@@ -28,12 +28,14 @@ import {
   memoryBadgeWarning,
   memoryBadgeHigh,
   diffBadge,
+  noteIndicator,
   branchCell,
   rowMemoryPressure,
   checkboxCell,
   checkboxButton,
 } from "./SessionRow.css";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS, buildRowGridTemplate } from "./session-columns";
+import { truncateGoal } from "@/lib/utils/string";
 
 interface SessionRowProps {
   session: Session;
@@ -173,6 +175,9 @@ function SessionRowInner({
   const showBranchCol = visibleColumns.includes("branch");
   const displayName = showBranchCol ? session.title : (session.branch || session.title);
 
+  const trimmedNote = session.note?.trim();
+  const noteTooltip = trimmedNote ? truncateGoal(trimmedNote, 120) : undefined;
+
   const memMB = Number(session.memoryRssMb ?? 0n);
   const memorySeverityClass =
     memMB > 500 ? memoryBadgeHigh :
@@ -274,6 +279,18 @@ function SessionRowInner({
             checkConclusion={session.githubCheckConclusion}
             compact={true}
           />
+          {noteTooltip && (
+            <Tooltip label={noteTooltip}>
+              <span
+                className={noteIndicator}
+                role="img"
+                aria-label="Has a note"
+                data-testid="badge-has-note"
+              >
+                📝
+              </span>
+            </Tooltip>
+          )}
         </span>
       </span>
 

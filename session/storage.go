@@ -38,6 +38,7 @@ type InstanceData struct {
 
 	// New fields for session organization and grouping
 	Category   string   `json:"category,omitempty"`
+	Note       string   `json:"note,omitempty"`
 	IsExpanded bool     `json:"is_expanded,omitempty"`
 	Tags       []string `json:"tags,omitempty"` // Multi-valued tags for flexible organization
 

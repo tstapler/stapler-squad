@@ -430,6 +430,36 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 	}
 }
 
+// TestInstance_Note_RoundTripsThroughSerialization directly exercises the Risk
+// Control mitigation for the "missing touchpoint" risk (plan.md's 8-hop round-trip
+// checklist): Instance.Note set via SetNote must survive ToInstanceData() ->
+// FromInstanceData() unchanged.
+func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
+	inst := &Instance{
+		Title:     "note-round-trip-test",
+		UUID:      "sess-note-round-trip",
+		Path:      "/path/to/repo",
+		Status:    Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	inst.SetNote("left this waiting on CI")
+
+	data := inst.ToInstanceData()
+	if data.Note != "left this waiting on CI" {
+		t.Fatalf("ToInstanceData(): expected Note %q, got %q", "left this waiting on CI", data.Note)
+	}
+
+	reconstructed, err := FromInstanceData(data)
+	if err != nil {
+		t.Fatalf("FromInstanceData() returned error: %v", err)
+	}
+	if reconstructed.Note != "left this waiting on CI" {
+		t.Fatalf("FromInstanceData(): expected Note %q, got %q", "left this waiting on CI", reconstructed.Note)
+	}
+}
+
 // TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume is the
 // regression test for a production bug caught during review: fromInstanceData
 // special-cases Paused/Stopped/Hibernated but, before this fix, fell through to

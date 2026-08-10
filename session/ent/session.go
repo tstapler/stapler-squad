@@ -105,6 +105,8 @@ type Session struct {
 	GithubRepo string `json:"github_repo,omitempty"`
 	// JSON-encoded SessionArtifactsBlob: PRURLs, CommitSHAs, ExternalURLs, scan offset.
 	SessionArtifacts string `json:"session_artifacts,omitempty"`
+	// User-authored free-form markdown note attached to this session. Capped at 10,000 bytes — see session.MaxNoteLength cross-reference in session/instance.go.
+	Note string `json:"note,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the SessionQuery when eager-loading is set.
 	Edges            SessionEdges `json:"edges"`
@@ -213,7 +215,7 @@ func (*Session) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case session.FieldID, session.FieldStatus, session.FieldHeight, session.FieldWidth, session.FieldGithubPrNumber:
 			values[i] = new(sql.NullInt64)
-		case session.FieldTitle, session.FieldUUID, session.FieldPath, session.FieldWorkingDir, session.FieldBranch, session.FieldPrompt, session.FieldProgram, session.FieldExistingWorktree, session.FieldCategory, session.FieldSessionType, session.FieldTmuxPrefix, session.FieldLastOutputSignature, session.FieldMcpServerURL, session.FieldInitialPrompt, session.FieldLastPromptSignature, session.FieldPauseReason, session.FieldExitReason, session.FieldWorkflowID, session.FieldGithubPrURL, session.FieldGithubOwner, session.FieldGithubRepo, session.FieldSessionArtifacts:
+		case session.FieldTitle, session.FieldUUID, session.FieldPath, session.FieldWorkingDir, session.FieldBranch, session.FieldPrompt, session.FieldProgram, session.FieldExistingWorktree, session.FieldCategory, session.FieldSessionType, session.FieldTmuxPrefix, session.FieldLastOutputSignature, session.FieldMcpServerURL, session.FieldInitialPrompt, session.FieldLastPromptSignature, session.FieldPauseReason, session.FieldExitReason, session.FieldWorkflowID, session.FieldGithubPrURL, session.FieldGithubOwner, session.FieldGithubRepo, session.FieldSessionArtifacts, session.FieldNote:
 			values[i] = new(sql.NullString)
 		case session.FieldCreatedAt, session.FieldUpdatedAt, session.FieldLastTerminalUpdate, session.FieldLastMeaningfulOutput, session.FieldLastAddedToQueue, session.FieldLastViewed, session.FieldLastAcknowledged, session.FieldLastUserResponse, session.FieldProcessingGraceUntil, session.FieldLastPromptDetected, session.FieldArchivedAt:
 			values[i] = new(sql.NullTime)
@@ -501,6 +503,12 @@ func (_m *Session) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.SessionArtifacts = value.String
 			}
+		case session.FieldNote:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field note", values[i])
+			} else if value.Valid {
+				_m.Note = value.String
+			}
 		case session.ForeignKeys[0]:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for edge-field project_sessions", value)
@@ -722,6 +730,9 @@ func (_m *Session) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("session_artifacts=")
 	builder.WriteString(_m.SessionArtifacts)
+	builder.WriteString(", ")
+	builder.WriteString("note=")
+	builder.WriteString(_m.Note)
 	builder.WriteByte(')')
 	return builder.String()
 }
