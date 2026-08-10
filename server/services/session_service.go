@@ -267,9 +267,16 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	}
 
 	// Initialize search engine with disk persistence for incremental index updates.
+	// Under go test (config.IsTestMode), skip disk entirely and use a fresh
+	// in-memory engine: search.NewIndexStore() otherwise persists to a
+	// per-process test directory that every NewSessionService call in a test
+	// binary shares, so the index grows across the whole package run and
+	// gob-decoding it gets slow enough under -race to blow CI's timeout
+	// budget — independent of whatever each test is actually exercising.
 	var searchEngine *search.SearchEngine
-	indexStore, err := search.NewIndexStore()
-	if err != nil {
+	if config.IsTestMode() {
+		searchEngine = search.NewSearchEngine()
+	} else if indexStore, err := search.NewIndexStore(); err != nil {
 		log.Warn("failed to create index store, using in-memory search", "err", err)
 		searchEngine = search.NewSearchEngine()
 	} else {
