@@ -388,16 +388,36 @@ func triageShortTitle(sessions []session.ItemSessionSummary, itemTitle string) s
 	return strings.Join(parts, "-")
 }
 
+// backlogWorkBranchSlug is the single source of truth for the deterministic
+// worktree/branch slug a backlog item's work session uses, given its repo path
+// and a short title identifying it (the triage-suggested title, or
+// triageShortTitle's item.Title-derived fallback). session.CreateBacklogWorktree
+// (session/instance_worktree.go) prefixes this with "backlog/" to get the real
+// git branch.
+//
+// This function exists because the formula was previously duplicated —
+// spawnSessionAfterGates computed it inline for a real spawn, and
+// retitleTriageWorktreeToFinalBranch (below) independently recomputed it ahead
+// of time so the triage worktree could be renamed onto the same branch before
+// spawn ever runs. The two silently drifted once already (see
+// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession,
+// which failed against that duplicated version — a fresh worktree was created
+// from main instead of reusing triage's). Every caller that needs this slug
+// MUST go through this function, not reimplement the formula.
+func backlogWorkBranchSlug(repoPath, title string) string {
+	repoName := slugify(filepath.Base(repoPath))
+	return slugify(repoName + "-" + title)
+}
+
 // retitleTriageWorktreeToFinalBranch moves wt's branch from its provisional
 // "triage-<item-id>" name onto the exact "backlog/<repo>-<title>" branch
 // spawnSessionAfterGates will independently compute and look for once this item
-// reaches a real work session — session.CreateBacklogWorktree
-// (session/instance_worktree.go) always names it "backlog/" + slug, where slug
-// is resolveSessionPath's slugify(baseTitle) and baseTitle is
-// "<repoName>-<title>"; title comes from triageShortTitle, which picks up this
-// exact title from the triage result this goroutine is about to persist. So the
-// eventual work session reuses this same worktree, and its already-committed
-// planning docs, instead of starting fresh from main.
+// reaches a real work session (via backlogWorkBranchSlug — see its doc comment
+// for why both sides must share that one function); title comes from
+// triageShortTitle, which picks up this exact title from the triage result
+// this goroutine is about to persist. So the eventual work session reuses this
+// same worktree, and its already-committed planning docs, instead of starting
+// fresh from main.
 //
 // Best-effort: any failure (including the target branch already being checked
 // out elsewhere — a stale leftover from an earlier run, most likely) just
@@ -409,9 +429,7 @@ func retitleTriageWorktreeToFinalBranch(itemID, repoPath, title string, wt *git.
 	if title == "" {
 		return
 	}
-	repoName := slugify(filepath.Base(repoPath))
-	baseTitle := repoName + "-" + title
-	finalBranch := "backlog/" + slugify(baseTitle)
+	finalBranch := session.BacklogBranchPrefix + backlogWorkBranchSlug(repoPath, title)
 
 	if renameErr := wt.RenameBranch(finalBranch); renameErr != nil {
 		log.WarningLog.Printf("[TriggerTriage] failed to rename triage worktree branch for item=%s to %q: %v", itemID, finalBranch, renameErr)
@@ -791,21 +809,25 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 9. Generate session title.
 	// On reopen, append a revision number (r2, r3…) based on how many work sessions
 	// already exist so the session list shows distinct, human-readable names.
-	repoName := slugify(filepath.Base(item.RepoPath))
-	baseTitle := repoName + "-" + triageShortTitle(priorSessions, item.Title)
+	shortTitle := triageShortTitle(priorSessions, item.Title)
+	baseTitle := slugify(filepath.Base(item.RepoPath)) + "-" + shortTitle
 	title := buildRevisionTitle(baseTitle, isReopen, priorSessions)
 
-	// 10. Create a dedicated git worktree for this work session. The branch slug is
-	// derived from baseTitle (NOT title) so rework/reopen iterations reuse the same
-	// "backlog/<item>" branch instead of minting a new one per -rN revision — the
-	// worktree setup path already detects and reuses an existing branch (see
-	// git.GitWorktree.Setup), so this just needs a stable slug across reopens.
+	// 10. Create a dedicated git worktree for this work session. The branch slug
+	// comes from backlogWorkBranchSlug(item.RepoPath, shortTitle) — the same
+	// single formula TriggerTriage's retitleTriageWorktreeToFinalBranch
+	// independently computes ahead of time (see its doc comment for why both
+	// sides must share it) — so rework/reopen iterations reuse the same
+	// "backlog/<item>" branch instead of minting a new one per -rN revision, and
+	// so a triage worktree already committed on that branch gets reused here
+	// instead of a fresh one from main. The worktree setup path already detects
+	// and reuses an existing branch (see git.GitWorktree.Setup).
 	// Falls back to a plain directory session if the repo is not git-managed (or
 	// worktree creation fails for any other reason — e.g. a bare clone, a detached
 	// HEAD, or disk quota hit).
 	// Files must be written to the session path BEFORE spawning.
 	// worktreeMu guards concurrent spawns from interleaving writes to the same path.
-	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, slugify(baseTitle))
+	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
 	if resolveErr != nil {
 		return nil, resolveErr
 	}
