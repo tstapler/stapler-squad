@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -46,20 +47,9 @@ import (
 // real token into the cache and dial the real GitHub API mid-suite.
 func TestMain(m *testing.M) {
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
-
-	origGithubToken, hadGithubToken := os.LookupEnv("GITHUB_TOKEN")
-	origGhToken, hadGhToken := os.LookupEnv("GH_TOKEN")
-	_ = os.Unsetenv("GITHUB_TOKEN")
-	_ = os.Unsetenv("GH_TOKEN")
-
+	restore := envtest.ClearAmbientGitHubTokenEnv()
 	code := m.Run()
-
-	if hadGithubToken {
-		_ = os.Setenv("GITHUB_TOKEN", origGithubToken)
-	}
-	if hadGhToken {
-		_ = os.Setenv("GH_TOKEN", origGhToken)
-	}
+	restore()
 	os.Exit(code)
 }
 

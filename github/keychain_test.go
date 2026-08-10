@@ -1,6 +1,7 @@
 package github
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,7 +16,19 @@ import (
 // test in this package runs, so a real token left in a developer's shell (gh
 // CLI auth) or a CI runner's env can't silently flow into
 // UserPRCache.resolveAllLogins/fetch and dial the real GitHub API mid-suite.
+//
+// Asserts the env vars directly rather than only checking collectAllTokens()'s
+// output: with a clean env to begin with, collectAllTokens() returns nothing
+// "env:"-prefixed regardless of whether TestMain actually cleared anything, so
+// that alone can't tell a working TestMain apart from a reverted one.
 func TestCollectAllTokens_AmbientEnvVarsNeutralizedByTestMain(t *testing.T) {
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		t.Fatalf("GITHUB_TOKEN = %q; TestMain must clear it before any test runs", tok)
+	}
+	if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		t.Fatalf("GH_TOKEN = %q; TestMain must clear it before any test runs", tok)
+	}
+
 	keyring.MockInit()
 	for _, tok := range collectAllTokens() {
 		if strings.HasPrefix(tok.Username, "env:") {

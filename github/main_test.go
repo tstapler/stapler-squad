@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 // TestMain switches go-keyring to its in-memory mock provider before any test
@@ -23,19 +25,8 @@ import (
 // GraphQL path.
 func TestMain(m *testing.M) {
 	keyring.MockInit()
-
-	origGithubToken, hadGithubToken := os.LookupEnv("GITHUB_TOKEN")
-	origGhToken, hadGhToken := os.LookupEnv("GH_TOKEN")
-	_ = os.Unsetenv("GITHUB_TOKEN")
-	_ = os.Unsetenv("GH_TOKEN")
-
+	restore := envtest.ClearAmbientGitHubTokenEnv()
 	code := m.Run()
-
-	if hadGithubToken {
-		_ = os.Setenv("GITHUB_TOKEN", origGithubToken)
-	}
-	if hadGhToken {
-		_ = os.Setenv("GH_TOKEN", origGhToken)
-	}
+	restore()
 	os.Exit(code)
 }
