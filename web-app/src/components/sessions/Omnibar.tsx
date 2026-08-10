@@ -12,6 +12,7 @@ import type { ThemeName } from "@/lib/contexts/ThemeContext";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { usePathHistory } from "@/lib/hooks/usePathHistory";
 import { useWorktreeSuggestions } from "@/lib/hooks/useWorktreeSuggestions";
+import { useDestinationPathPreview } from "@/lib/hooks/useDestinationPathPreview";
 import { useSessionSearch, type SessionSearchResult } from "@/lib/hooks/useSessionSearch";
 import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
@@ -308,6 +309,39 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       : "";
   const { worktrees, isLoading: isWorktreesLoading, error: worktreesError } = useWorktreeSuggestions(repoPathForWorktrees, {
     enabled: sessionType === "existing_worktree" && !!repoPathForWorktrees,
+  });
+
+  // Destination path preview: github_url mode previews the exact clone destination for a
+  // detected GitHub URL/PR/shorthand; new_worktree mode previews the deterministic prefix
+  // of where the worktree will be created (the real path also gets a random suffix at
+  // creation time — see PreviewWorktreePath's doc comment).
+  const isGitHubUrlDetection =
+    detection?.type === InputType.GitHubPR ||
+    detection?.type === InputType.GitHubBranch ||
+    detection?.type === InputType.GitHubRepo ||
+    detection?.type === InputType.GitHubShorthand;
+
+  const destinationPreviewParams = useMemo(() => {
+    if (isGitHubUrlDetection && detection?.parsedValue) {
+      return { mode: "github_url" as const, input: detection.parsedValue };
+    }
+    if (sessionType === "new_worktree" && repoPathForWorktrees && sessionName.trim()) {
+      return {
+        mode: "new_worktree" as const,
+        input: "",
+        repoPath: repoPathForWorktrees,
+        sessionName: useTitleAsBranch ? sessionName : branch || sessionName,
+      };
+    }
+    return null;
+  }, [isGitHubUrlDetection, detection?.parsedValue, sessionType, repoPathForWorktrees, sessionName, useTitleAsBranch, branch]);
+
+  const {
+    path: destinationPreviewPath,
+    isExact: destinationPreviewIsExact,
+    isLoading: isDestinationPreviewLoading,
+  } = useDestinationPathPreview(destinationPreviewParams, {
+    enabled: destinationPreviewParams !== null,
   });
 
   // Convert live OS entries to CompletionEntry for type-safe downstream use.
@@ -1469,6 +1503,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             uploadBaseUrl={uploadBaseUrl}
             onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
             pathDoesNotExist={pathDoesNotExist}
+            destinationPreviewPath={destinationPreviewPath}
+            destinationPreviewIsExact={destinationPreviewIsExact}
+            isDestinationPreviewLoading={isDestinationPreviewLoading}
             namePrefix={
               detection?.type === InputType.Alias
                 ? ((detection.metadata as AliasMetadata | undefined)?.alias?.namePrefix ?? "")

@@ -251,6 +251,11 @@ service SessionService {
   // Returns the resolved values plus source metadata for per-field badges in the UI.
   rpc ResolveDefaults(ResolveDefaultsRequest) returns (ResolveDefaultsResponse) {}
 
+  // PreviewDestinationPath computes where a session's checkout/worktree would land,
+  // without performing any git or filesystem mutation. Used by the Omnibar to show a
+  // live destination hint before the user submits session creation.
+  rpc PreviewDestinationPath(PreviewDestinationPathRequest) returns (PreviewDestinationPathResponse) {}
+
   // UpdateGlobalDefaults replaces the global default fields.
   rpc UpdateGlobalDefaults(UpdateGlobalDefaultsRequest) returns (UpdateGlobalDefaultsResponse) {}
 
@@ -1739,6 +1744,21 @@ message GetSessionDefaultsRequest {}
 
 message GetSessionDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
+}
+
+// PreviewDestinationPath
+
+message PreviewDestinationPathRequest {
+  string input = 1;         // raw omnibar text (URL/shorthand or local path)
+  string mode = 2;          // "github_url" | "new_worktree" - client already knows which
+  string repo_path = 3;     // new_worktree only: resolved local repo path
+  string session_name = 4;  // new_worktree only: source string for the sanitized dir name
+}
+
+message PreviewDestinationPathResponse {
+  string path = 1;              // exact for github_url; a directory prefix for new_worktree
+  bool is_exact = 2;            // true only for github_url
+  string unresolved_reason = 3; // set (non-error) when input isn't resolvable yet
 }
 
 // ResolveDefaults

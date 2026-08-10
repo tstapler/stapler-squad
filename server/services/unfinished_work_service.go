@@ -501,7 +501,10 @@ func (s *UnfinishedWorkService) GetWorktreeDiff(
 
 	return connect.NewResponse(&sessionv1.GetWorktreeDiffResponse{
 		DiffStats: &sessionv1.DiffStats{
-			Content: content,
+			// git diff output is raw bytes and can contain sequences that aren't valid
+			// UTF-8; DiffStats.content is a proto3 string field, which rejects those at
+			// marshal time, so sanitize here at the source.
+			Content: strings.ToValidUTF8(content, "�"),
 			Added:   int32(added),
 			Removed: int32(removed),
 		},
