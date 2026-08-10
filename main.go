@@ -193,6 +193,25 @@ var (
 			}
 
 			// Web server mode (default and only mode)
+			// Acquire an exclusive, process-lifetime lock before touching any
+			// shared state (tmux server, ent DB) so a prior process that
+			// launchd/systemd has lost track of (see
+			// .claude/rules/service-restart-orphan-process.md) can't race
+			// this one over the same instance directory.
+			configDir, err := config.GetConfigDir()
+			if err != nil {
+				return fmt.Errorf("failed to resolve config directory: %w", err)
+			}
+			instanceLock, err := config.AcquireInstanceLock(configDir, config.DefaultInstanceLockTimeout)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if unlockErr := instanceLock.Unlock(); unlockErr != nil {
+					log.Warn("Failed to release instance lock", "err", unlockErr)
+				}
+			}()
+
 			// Initialize OpenTelemetry for APM (Datadog, etc.)
 			telemetryCfg := telemetry.DefaultConfig()
 			telemetryProvider, err := telemetry.Initialize(ctx, telemetryCfg)
