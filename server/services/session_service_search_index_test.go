@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -13,11 +14,24 @@ import (
 // grew one persisted index for the life of the binary -- slow enough under
 // -race to blow CI's 150s budget. Under config.IsTestMode() (true for every
 // go test binary), NewSessionService must use an in-memory search engine and
-// never touch disk for the index at all, regardless of $HOME or
-// STAPLER_SQUAD_TEST_DIR.
+// never touch disk for the index at all.
+//
+// STAPLER_SQUAD_TEST_DIR is deliberately left unset so config.GetConfigDir()
+// falls through to its IsTestMode() branch (config/config.go:159-166), which
+// resolves to $HOME/.stapler-squad/test/test-<pid> -- the exact isolated
+// directory a regression back to the old search.NewIndexStore()-always path
+// would write search_index/ into (session/search/index_store.go:49-56). $HOME
+// is stubbed to a t.TempDir() so that specific search_index/ subdirectory can
+// be asserted precisely, rather than checking the production-only
+// $HOME/.claude/search_index path, which config.IsTestMode() makes
+// unreachable from any go test binary regardless of this fix. The parent
+// test-<pid> dir itself is not asserted against, since other NewSessionService
+// dependencies (approval store, capacity config, etc.) legitimately use
+// config.GetConfigDir() for their own unrelated state.
 func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", "")
 
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
@@ -25,16 +39,9 @@ func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
 		t.Fatal("NewSessionService returned nil")
 	}
 
-	realSearchIndexDir := filepath.Join(fakeHome, ".claude", "search_index")
-	if _, err := os.Stat(realSearchIndexDir); !os.IsNotExist(err) {
-		t.Errorf("NewSessionService created %q under test mode; want no disk persistence at all (err=%v)", realSearchIndexDir, err)
-	}
-
-	testConfigDir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
-	if testConfigDir != "" {
-		isolatedSearchIndexDir := filepath.Join(testConfigDir, "search_index")
-		if _, err := os.Stat(isolatedSearchIndexDir); !os.IsNotExist(err) {
-			t.Errorf("NewSessionService created %q under test mode; want in-memory search engine, not disk persistence to an isolated dir either (err=%v)", isolatedSearchIndexDir, err)
-		}
+	pidTestDir := filepath.Join(fakeHome, ".stapler-squad", "test", "test-"+strconv.Itoa(os.Getpid()))
+	searchIndexDir := filepath.Join(pidTestDir, "search_index")
+	if _, err := os.Stat(searchIndexDir); !os.IsNotExist(err) {
+		t.Errorf("NewSessionService created %q in test mode; want no disk persistence for the search index at all (err=%v)", searchIndexDir, err)
 	}
 }
