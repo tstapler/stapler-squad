@@ -2,11 +2,27 @@ package github
 
 import (
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/zalando/go-keyring"
 )
+
+// TestCollectAllTokens_AmbientEnvVarsNeutralizedByTestMain guards the
+// defense-in-depth fix alongside graphQLURLForHost's EnterpriseBaseURLOverride
+// gap: TestMain (github/main_test.go) clears GITHUB_TOKEN/GH_TOKEN before any
+// test in this package runs, so a real token left in a developer's shell (gh
+// CLI auth) or a CI runner's env can't silently flow into
+// UserPRCache.resolveAllLogins/fetch and dial the real GitHub API mid-suite.
+func TestCollectAllTokens_AmbientEnvVarsNeutralizedByTestMain(t *testing.T) {
+	keyring.MockInit()
+	for _, tok := range collectAllTokens() {
+		if strings.HasPrefix(tok.Username, "env:") {
+			t.Fatalf("collectAllTokens() returned ambient env token %q; TestMain must clear GITHUB_TOKEN/GH_TOKEN", tok.Username)
+		}
+	}
+}
 
 // TestSetKeychainTokenForAccount_NoRace_When_ConcurrentWithListAndGetAllTokens
 // is the BUG-052 regression test. It reproduces the exact race the bug

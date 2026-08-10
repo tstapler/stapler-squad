@@ -27,9 +27,12 @@ func IsGitHubCom(host string) bool {
 }
 
 // EnterpriseBaseURLOverride lets tests redirect a specific enterprise host's
-// REST API base URL to an httptest.Server, mirroring the GhBaseURL seam for
-// github.com. Keyed by normalized host; empty/absent falls back to the real
-// GHES API path.
+// API traffic (both REST and GraphQL) to an httptest.Server, mirroring the
+// GhBaseURL seam for github.com. Keyed by normalized host, value is the
+// server root including a trailing slash; empty/absent falls back to the
+// real GHES API paths. RestBaseURLForHost and graphQLURLForHost must both
+// consult this map — if only one does, tests that set it get a false sense
+// of isolation while the other call type still dials the real host.
 var EnterpriseBaseURLOverride = map[string]string{}
 
 // RestBaseURLForHost returns the REST API base URL for host, including a
@@ -51,6 +54,9 @@ func graphQLURLForHost(host string) string {
 	host = NormalizeHost(host)
 	if host == defaultHost {
 		return GhBaseURL + "graphql"
+	}
+	if override, ok := EnterpriseBaseURLOverride[host]; ok {
+		return strings.TrimSuffix(override, "/") + "/api/graphql"
 	}
 	return "https://" + host + "/api/graphql"
 }

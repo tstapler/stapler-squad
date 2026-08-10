@@ -77,10 +77,7 @@ func TestAddGitHubAccountWithToken_EmptyToken_ReturnsInvalidArgument(t *testing.
 }
 
 func TestListGitHubAccounts_AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
-	}))
+	ts := httptest.NewServer(http.HandlerFunc(fakeGitHubEnterpriseHandler))
 	defer ts.Close()
 	const enterpriseHost = "github.netflix.net"
 	gh.EnterpriseBaseURLOverride[enterpriseHost] = ts.URL + "/"
