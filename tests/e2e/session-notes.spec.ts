@@ -10,6 +10,12 @@ test.describe("session-notes", () => {
       const sessionsPage = new SessionsPage(page);
       const detail = new SessionDetailPage(page);
 
+      // Pre-seed the first-visit onboarding dialog as dismissed so it doesn't
+      // intercept clicks later in the flow (same pattern as ci-status-badge.spec.ts).
+      await page.addInitScript(() => {
+        localStorage.setItem("stapler-squad:onboarded", "true");
+      });
+
       await sessionsPage.goto();
       await expect(sessionsPage.searchInput).toBeVisible({ timeout: 15000 });
 
@@ -21,13 +27,14 @@ test.describe("session-notes", () => {
       const sessionTitle = `e2e-notes-${Date.now()}`;
       await page.getByLabel("Session Name").fill(sessionTitle);
 
-      await page.getByText("Advanced Options").click();
-      await page.getByLabel("Program", { exact: true }).selectOption("bash");
-
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",
       );
-      await page.getByRole("button", { name: /create|start/i }).click();
+      // Exact "Create Session" (not the broader /create|start/i) to avoid matching
+      // the omnibar's own "Create new session" trigger button; `.first()` because
+      // the creation panel renders a submit button in both its mobile and desktop
+      // layouts simultaneously (see `.claude/rules/feature-testing-registry.md`).
+      await page.getByRole("button", { name: "Create Session", exact: true }).first().click();
       await createRequest;
       await page.waitForURL(/[?&]session=/, { timeout: 15000 });
 
@@ -48,6 +55,10 @@ test.describe("session-notes", () => {
       // Renders as markdown in read mode.
       await expect(detail.getNoteRenderedBody()).toBeVisible({ timeout: 10000 });
       await expect(detail.getNoteRenderedBody().locator("strong")).toHaveText("Blocked");
+
+      // The sidebar list (same page, no navigation) already reflects the badge
+      // immediately after save — no reload needed.
+      await expect(sessionsPage.getSessionCard(sessionTitle).getByTestId("badge-has-note")).toBeVisible({ timeout: 10000 });
 
       // --- Reload the page (proxy for a server restart — both discard the
       // in-memory Instance and rebuild it from the same ent/SQLite-backed

@@ -610,6 +610,38 @@ func TestUpdateSession_NoteUpdate(t *testing.T) {
 	assert.Equal(t, note, found.Note, "note should be persisted in storage")
 }
 
+// TestUpdateSession_NoteUpdate_BumpsUpdatedAt is a regression test: setNoteLocked
+// used to mutate Instance.Note without touching Instance.UpdatedAt. The frontend's
+// upsertSession reducer (sessionsSlice.ts) skips applying an incoming session as a
+// no-op dedup optimization whenever its updatedAt matches the already-stored value —
+// so on a session whose UpdatedAt hadn't otherwise moved (e.g. freshly created and
+// still idle), a note save would succeed server-side yet never appear in the UI,
+// since the client-side dedup silently discarded the "unchanged" update. Confirmed
+// live via tests/e2e/session-notes.spec.ts before this fix. UpdatedAt must always
+// move forward on a note change so that dedup check can't misfire.
+func TestUpdateSession_NoteUpdate_BumpsUpdatedAt(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	before := fix.poller.FindInstance("my-session")
+	require.NotNil(t, before)
+	beforeUpdatedAt := before.UpdatedAt
+
+	note := "left this waiting on CI"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &note,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	require.NotNil(t, resp.Msg.Session.UpdatedAt)
+	assert.True(t, resp.Msg.Session.UpdatedAt.AsTime().After(beforeUpdatedAt),
+		"UpdatedAt must move forward after a note-only update, or the frontend's "+
+			"upsertSession no-op dedup will silently drop the change")
+}
+
 // TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument verifies that a
 // note longer than session.MaxNoteLength is rejected with InvalidArgument and
 // does not partially write.
