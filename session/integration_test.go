@@ -806,9 +806,13 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		// Simulate kill and restore
-		gitWorktree, _ := instance.GetGitWorktree()
-		worktreePath := gitWorktree.GetWorktreePath()
+		// Simulate kill and restore. This is a directory session (no git
+		// worktree), so gitManager.GetWorktreePath() returns "" — fall back
+		// to tempRepo like the production resume path does (instance.go).
+		worktreePath := instance.gitManager.GetWorktreePath()
+		if worktreePath == "" {
+			worktreePath = tempRepo
+		}
 
 		// Kill the original session
 		_ = instance.Kill()
