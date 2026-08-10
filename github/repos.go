@@ -110,9 +110,12 @@ type ghIssueSearchResponse struct {
 // SearchUserRepos fetches repos accessible to the authenticated user.
 // When query is empty it uses GET /user/repos (all accessible repos sorted by
 // push time). When non-empty it uses GET /search/repositories.
+// account.Host "" means github.com; account.Username, when non-empty, selects
+// among multiple connected accounts for that host (see getGHTokenForAccount).
 // Returns ErrNotAuthenticated when no token is configured.
-func SearchUserRepos(ctx context.Context, query string, limit int) ([]RepoResult, error) {
-	if getGHToken(ctx) == "" {
+func SearchUserRepos(ctx context.Context, account AccountRef, query string, limit int) ([]RepoResult, error) {
+	token := getGHTokenForAccount(ctx, account)
+	if token == "" {
 		return nil, ErrNotAuthenticated
 	}
 
@@ -123,7 +126,7 @@ func SearchUserRepos(ctx context.Context, query string, limit int) ([]RepoResult
 		apiPath = fmt.Sprintf("search/repositories?q=%s&per_page=%d", url.QueryEscape(query), limit)
 	}
 
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHostWithToken(ctx, account.Host, apiPath, token)
 	if err != nil {
 		return nil, fmt.Errorf("build repos request: %w", err)
 	}
@@ -171,9 +174,12 @@ func SearchUserRepos(ctx context.Context, query string, limit int) ([]RepoResult
 // ListRepoIssues fetches issues for a specific repo.
 // When search is empty it uses GET /repos/{owner}/{repo}/issues.
 // When search is non-empty it uses GET /search/issues.
+// account.Host "" means github.com; account.Username, when non-empty, selects
+// among multiple connected accounts for that host (see getGHTokenForAccount).
 // Returns ErrNotAuthenticated when no token is configured.
-func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limit int) ([]IssueResult, error) {
-	if getGHToken(ctx) == "" {
+func ListRepoIssues(ctx context.Context, account AccountRef, repo RepoRef, state, search string, limit int) ([]IssueResult, error) {
+	token := getGHTokenForAccount(ctx, account)
+	if token == "" {
 		return nil, ErrNotAuthenticated
 	}
 
@@ -183,16 +189,16 @@ func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limi
 			state = "open"
 		}
 		apiPath = fmt.Sprintf("repos/%s/%s/issues?state=%s&per_page=%d",
-			url.PathEscape(owner), url.PathEscape(repo), url.QueryEscape(state), limit)
+			url.PathEscape(repo.Owner()), url.PathEscape(repo.Repo()), url.QueryEscape(state), limit)
 	} else {
-		q := fmt.Sprintf("%s+repo:%s/%s+is:issue", url.QueryEscape(search), owner, repo)
+		q := fmt.Sprintf("%s+repo:%s/%s+is:issue", url.QueryEscape(search), repo.Owner(), repo.Repo())
 		if state != "" && state != "all" {
 			q += "+is:" + state
 		}
 		apiPath = fmt.Sprintf("search/issues?q=%s&per_page=%d", q, limit)
 	}
 
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHostWithToken(ctx, account.Host, apiPath, token)
 	if err != nil {
 		return nil, fmt.Errorf("build issues request: %w", err)
 	}
@@ -251,15 +257,18 @@ func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limi
 }
 
 // GetIssue fetches a single issue (including its body) by number.
+// account.Host "" means github.com; account.Username, when non-empty, selects
+// among multiple connected accounts for that host (see getGHTokenForAccount).
 // Returns ErrNotAuthenticated when no token is configured.
-func GetIssue(ctx context.Context, owner, repo string, number int) (*IssueResult, error) {
-	if getGHToken(ctx) == "" {
+func GetIssue(ctx context.Context, account AccountRef, repo RepoRef, number int) (*IssueResult, error) {
+	token := getGHTokenForAccount(ctx, account)
+	if token == "" {
 		return nil, ErrNotAuthenticated
 	}
 
-	apiPath := fmt.Sprintf("repos/%s/%s/issues/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	apiPath := fmt.Sprintf("repos/%s/%s/issues/%d", url.PathEscape(repo.Owner()), url.PathEscape(repo.Repo()), number)
 
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHostWithToken(ctx, account.Host, apiPath, token)
 	if err != nil {
 		return nil, fmt.Errorf("build issue request: %w", err)
 	}
@@ -309,15 +318,18 @@ func GetIssue(ctx context.Context, owner, repo string, number int) (*IssueResult
 // GetPR fetches a single pull request by number via the GitHub REST API
 // (native net/http, not the `gh` CLI subprocess GetPRInfoCtx uses) — a lean
 // existence check sharing GetIssue's auth mechanism and error classification.
+// account.Host "" means github.com; account.Username, when non-empty, selects
+// among multiple connected accounts for that host (see getGHTokenForAccount).
 // Returns ErrNotAuthenticated when no token is configured.
-func GetPR(ctx context.Context, owner, repo string, number int) (*PRResult, error) {
-	if getGHToken(ctx) == "" {
+func GetPR(ctx context.Context, account AccountRef, repo RepoRef, number int) (*PRResult, error) {
+	token := getGHTokenForAccount(ctx, account)
+	if token == "" {
 		return nil, ErrNotAuthenticated
 	}
 
-	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d", url.PathEscape(repo.Owner()), url.PathEscape(repo.Repo()), number)
 
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHostWithToken(ctx, account.Host, apiPath, token)
 	if err != nil {
 		return nil, fmt.Errorf("build PR request: %w", err)
 	}

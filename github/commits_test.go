@@ -87,7 +87,8 @@ func TestGetCommit(t *testing.T) {
 			defer resetGhBaseURL(ts)()
 			t.Setenv("GITHUB_TOKEN", "fake-token")
 
-			result, err := GetCommit(context.Background(), "tstapler", "stapler-squad", "a1b2c3d4")
+			repo, _ := NewRepoRef("tstapler", "stapler-squad")
+			result, err := GetCommit(context.Background(), AccountRef{}, repo, "a1b2c3d4")
 
 			if !tt.wantErr {
 				if err != nil {
