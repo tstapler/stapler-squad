@@ -1116,6 +1116,11 @@ message StuckBacklogItem {
   // parked (remediation_attempts >= 5) — check remediation_attempts to tell
   // the two apart.
   optional google.protobuf.Timestamp next_remediation_at = 13;
+  // plan_artifacts_path mirrors BacklogItem.plan_artifacts_path — empty means
+  // no plan exists yet. Lets the frontend gate the PLAN_NOT_APPROVED
+  // "Approve Plan" affordance on an actual plan existing, instead of trusting
+  // `reason` alone (which only refreshes on the next ReconcileStuck tick).
+  string plan_artifacts_path = 14;
 }
 
 message ListStuckBacklogItemsRequest {}
