@@ -114,6 +114,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // fallback rather than blocking the rest of the item detail view.
   const [pipelineModes, setPipelineModes] = useState<PipelineMode[]>([]);
 
+  // Mirrors `item` on every render (assignment during render, not in an
+  // effect, so it's always current by the time an in-flight load() resolves)
+  // — lets load() compare a freshly-fetched result against whatever is
+  // currently displayed without needing `item` in its own dependency array.
+  const itemRef = useRef<BacklogItem | null>(null);
+  itemRef.current = item;
+
+  // Monotonic guard against out-of-order load() resolution (pitfall #4):
+  // each call captures its own sequence number, and only the response
+  // matching the most-recently-issued call is applied.
+  const loadSeqRef = useRef(0);
+
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -396,16 +408,29 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   };
 
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const result = await getBacklogItem(itemId);
-      if (!mountedRef.current) return;
+      // Drop this response if it's not the most recently issued load() call
+      // (pitfall #4 — resolution order isn't guaranteed to match call order)
+      // or the component has since unmounted.
+      if (!mountedRef.current || seq !== loadSeqRef.current) return;
       if (!result) {
         setError("Item not found.");
       } else {
-        setItem(result);
-        setNotesValue(result.notes ?? "");
+        // Guard against stomping a fresher live-watch/optimistic update with
+        // an older fetched result (pitfall #2) — `>=` is intentional: a
+        // same-millisecond result from the user's own just-triggered
+        // mutation must still apply, only a strictly *older* one is dropped.
+        const current = itemRef.current;
+        const currentMs = current?.updatedAt ? new Date(current.updatedAt).getTime() : 0;
+        const resultMs = result.updatedAt ? new Date(result.updatedAt).getTime() : 0;
+        if (!current || resultMs >= currentMs) {
+          setItem(result);
+          setNotesValue(result.notes ?? "");
+        }
       }
     } catch (e) {
       if (mountedRef.current) setError(e instanceof Error ? e.message : "Failed to load item.");
@@ -1199,7 +1224,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 triageResult={item.triageResult}
                 onApply={handleApplyTriageSuggestions}
                 onUndoApply={handleUndoTriageSuggestions}
-                onSkip={() => { void load(); }}
+                // Dismissing the panel is a purely client-local state change
+                // (localStorage + local React state, no server mutation) —
+                // nothing to refresh (pitfall #3). A load() here was a
+                // needless, unguarded race source that could stomp
+                // more-current live-store state with a redundant read.
+                onSkip={() => {}}
                 onRefine={handleRefineTriage}
               />
             </div>

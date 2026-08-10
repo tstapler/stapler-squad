@@ -7019,6 +7019,11 @@ type StuckBacklogItem struct {
 	// parked (remediation_attempts >= 5) — check remediation_attempts to tell
 	// the two apart.
 	NextRemediationAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=next_remediation_at,json=nextRemediationAt,proto3,oneof" json:"next_remediation_at,omitempty"`
+	// plan_artifacts_path mirrors BacklogItem.plan_artifacts_path — empty means
+	// no plan exists yet. Lets the frontend gate the PLAN_NOT_APPROVED
+	// "Approve Plan" affordance on an actual plan existing, instead of trusting
+	// `reason` alone (which only refreshes on the next ReconcileStuck tick).
+	PlanArtifactsPath string `protobuf:"bytes,14,opt,name=plan_artifacts_path,json=planArtifactsPath,proto3" json:"plan_artifacts_path,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -7142,6 +7147,13 @@ func (x *StuckBacklogItem) GetNextRemediationAt() *timestamppb.Timestamp {
 		return x.NextRemediationAt
 	}
 	return nil
+}
+
+func (x *StuckBacklogItem) GetPlanArtifactsPath() string {
+	if x != nil {
+		return x.PlanArtifactsPath
+	}
+	return ""
 }
 
 type ListStuckBacklogItemsRequest struct {
@@ -8206,7 +8218,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\asummary\x18\x03 \x01(\tR\asummary\x12R\n" +
 	"\x16per_criterion_verdicts\x18\x04 \x03(\v2\x1c.session.v1.CriterionVerdictR\x14perCriterionVerdicts\"I\n" +
 	"\x1aSubmitManualReviewResponse\x12+\n" +
-	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\"\x85\x05\n" +
+	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\"\xb5\x05\n" +
 	"\x10StuckBacklogItem\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x16\n" +
@@ -8221,7 +8233,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\fsnoozedUntil\x12-\n" +
 	"\x10allow_auto_merge\x18\v \x01(\bH\x00R\x0eallowAutoMerge\x88\x01\x01\x121\n" +
 	"\x14remediation_attempts\x18\f \x01(\x05R\x13remediationAttempts\x12O\n" +
-	"\x13next_remediation_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampH\x01R\x11nextRemediationAt\x88\x01\x01B\x13\n" +
+	"\x13next_remediation_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampH\x01R\x11nextRemediationAt\x88\x01\x01\x12.\n" +
+	"\x13plan_artifacts_path\x18\x0e \x01(\tR\x11planArtifactsPathB\x13\n" +
 	"\x11_allow_auto_mergeB\x16\n" +
 	"\x14_next_remediation_at\"\x1e\n" +
 	"\x1cListStuckBacklogItemsRequest\"S\n" +

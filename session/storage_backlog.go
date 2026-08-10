@@ -906,6 +906,7 @@ type OpenStuckStateData struct {
 	RemediationAttempts int32
 	NextRemediationAt   *time.Time
 	GraceBootTime       *time.Time
+	PlanArtifactsPath   string
 }
 
 // FindOpenStuckStates returns every BacklogStuckState row that is currently
@@ -948,6 +949,7 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 			data.ItemStatus = BacklogStatus(item.Status)
 			data.PrNumber = item.PrNumber
 			data.PrURL = item.PrURL
+			data.PlanArtifactsPath = item.PlanArtifactsPath
 		}
 		result = append(result, data)
 	}

@@ -123,6 +123,49 @@ func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *te
 	assert.Nil(t, got.AllowAutoMerge)
 }
 
+// TestListStuckBacklogItems_should_PopulatePlanArtifactsPath verifies
+// plan_artifacts_path round-trips end to end — from the parent item's
+// column, through the FindOpenStuckStates join, through
+// stuckBacklogItemToProto — so the frontend's hasPlan gate
+// (StuckItemDetail.tsx) has real data to check instead of trusting `reason`
+// alone (research/pitfalls.md #1).
+func TestListStuckBacklogItems_should_PopulatePlanArtifactsPath(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	itemWithPlan, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "queued item with a plan",
+		Status: string(session.BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+	planPath := "project_plans/queued-item/plan.md"
+	_, err = storage.UpdateBacklogItem(ctx, itemWithPlan.ID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &planPath,
+	}, nil)
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, itemWithPlan.ID, domain.StuckReasonPlanNotApproved, time.Now(), "has a plan")
+
+	itemWithoutPlan, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "queued item with no plan yet",
+		Status: string(session.BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, itemWithoutPlan.ID, domain.StuckReasonPlanNotApproved, time.Now(), "no plan yet")
+
+	resp, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Items, 2)
+
+	byItemID := make(map[string]*sessionv1.StuckBacklogItem, len(resp.Msg.Items))
+	for _, it := range resp.Msg.Items {
+		byItemID[it.ItemId] = it
+	}
+
+	assert.Equal(t, planPath, byItemID[itemWithPlan.ID].PlanArtifactsPath)
+	assert.Empty(t, byItemID[itemWithoutPlan.ID].PlanArtifactsPath)
+}
+
 // TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called
 // verifies SnoozeStuckItem sets snoozed_until on the matching open row and
 // that the next ListStuckBacklogItems call omits it.

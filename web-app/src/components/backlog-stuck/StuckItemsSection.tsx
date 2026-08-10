@@ -162,17 +162,16 @@ export function StuckItemsSection() {
   // item-detail page's `status === "ready"` block, but items this reason
   // flags are stuck in `status === "queued"` — so that button was never
   // reachable. This is the fix: approve directly from the stuck-item card.
+  //
+  // Deliberately NOT try/catch-swallowed (unlike the other handlers in this
+  // file): useBacklogService's approvePlan rethrows the backend's
+  // FailedPrecondition message verbatim (e.g. "no plan artifacts found — run
+  // TriggerTriage first"), and StuckItemDetail needs that specific message
+  // rather than a generic failure, in case the hasPlan gate is ever stale.
   const handleApprovePlan = useCallback(
-    async (itemId: string): Promise<boolean> => {
-      try {
-        const updated = await approvePlan(itemId);
-        if (!updated) return false;
-        await refetch();
-        return true;
-      } catch (err) {
-        console.error("[StuckItemsSection] approvePlan failed:", err);
-        return false;
-      }
+    async (itemId: string): Promise<void> => {
+      await approvePlan(itemId);
+      await refetch();
     },
     [approvePlan, refetch]
   );
