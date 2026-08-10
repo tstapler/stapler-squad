@@ -1,0 +1,15 @@
+{
+  "id": "file-content-viewer",
+  "type": "frontend",
+  "name": "Files tab CodeMirror content viewer (theming, pane sizing, mobile back button, vim keybindings, cross-tab state preservation)",
+  "component": "FileContentViewer",
+  "path": "web-app/src/components/sessions/FileContentViewer.tsx",
+  "markerLine": 453,
+  "tested": true,
+  "testIds": [
+    "FileContentViewer — CodeMirror rendering > renders CodeMirror with no gutter marks when there is no diff",
+    "FileContentViewer — CodeMirror rendering > uses CodeMirror with a gutter marker when the file has a diff",
+    "FileContentViewer — CodeMirror rendering > renders CodeMirror with no gutter marks when diffContent doesn't cover this file"
+  ],
+  "lastModified": "2026-08-10T16:49:05-07:00"
+}

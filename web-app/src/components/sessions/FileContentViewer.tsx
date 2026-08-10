@@ -450,6 +450,7 @@ interface FileContentViewerProps {
   diffContent?: string;
 }
 
+// +feature: file-content-viewer
 export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent }: FileContentViewerProps) {
   const { data, loading, error } = useGetFileContent(sessionId, filePath, baseUrl);
   const [wrapLines, setWrapLines] = useState(false);
