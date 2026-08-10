@@ -388,6 +388,36 @@ func triageShortTitle(sessions []session.ItemSessionSummary, itemTitle string) s
 	return strings.Join(parts, "-")
 }
 
+// retitleTriageWorktreeToFinalBranch moves wt's branch from its provisional
+// "triage-<item-id>" name onto the exact "backlog/<repo>-<title>" branch
+// spawnSessionAfterGates will independently compute and look for once this item
+// reaches a real work session — session.CreateBacklogWorktree
+// (session/instance_worktree.go) always names it "backlog/" + slug, where slug
+// is resolveSessionPath's slugify(baseTitle) and baseTitle is
+// "<repoName>-<title>"; title comes from triageShortTitle, which picks up this
+// exact title from the triage result this goroutine is about to persist. So the
+// eventual work session reuses this same worktree, and its already-committed
+// planning docs, instead of starting fresh from main.
+//
+// Best-effort: any failure (including the target branch already being checked
+// out elsewhere — a stale leftover from an earlier run, most likely) just
+// leaves wt on its provisional branch, logged but non-fatal. The committed docs
+// are never lost either way, only not picked up automatically —
+// spawnSessionAfterGates falls back to creating its own worktree off main, same
+// as if this had never run.
+func retitleTriageWorktreeToFinalBranch(itemID, repoPath, title string, wt *git.GitWorktree) {
+	if title == "" {
+		return
+	}
+	repoName := slugify(filepath.Base(repoPath))
+	baseTitle := repoName + "-" + title
+	finalBranch := "backlog/" + slugify(baseTitle)
+
+	if renameErr := wt.RenameBranch(finalBranch); renameErr != nil {
+		log.WarningLog.Printf("[TriggerTriage] failed to rename triage worktree branch for item=%s to %q: %v", itemID, finalBranch, renameErr)
+	}
+}
+
 func (s *BacklogService) SpawnSessionFromItem(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SpawnSessionFromItemRequest],
@@ -2421,6 +2451,7 @@ func (s *BacklogService) TriggerTriage(
 			if commitErr := triageWorktree.CommitChanges(fmt.Sprintf("chore(sdd): planning artifacts for %s", result.Title)); commitErr != nil {
 				log.WarningLog.Printf("[TriggerTriage] failed to commit triage artifacts item=%s worktree=%s: %v", itemID, triageWorkDir, commitErr)
 			}
+			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, result.Title, triageWorktree)
 		}
 
 		payloadJSON, marshalErr := json.Marshal(result)
