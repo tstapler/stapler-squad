@@ -931,6 +931,10 @@ message ImportGitHubIssueRequest {
   string repo_path = 2;
   // If true, skip automated triage after import.
   bool skip_planning = 3;
+  // Optional GitHub account username to authenticate the import with, when
+  // multiple accounts are connected for the issue URL's host. Empty resolves
+  // to any configured token for that host (see github.GetKeychainTokenForHost).
+  string account_username = 4;
 }
 
 message ImportGitHubIssueResponse {

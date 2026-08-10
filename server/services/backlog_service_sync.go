@@ -258,7 +258,11 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid GitHub issue URL %q", req.Msg.IssueUrl))
 	}
 
-	issue, err := gh.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+	repo, err := gh.NewRepoRef(ref.Owner, ref.Repo)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	issue, err := gh.GetIssue(ctx, gh.AccountRef{Host: ref.Host, Username: req.Msg.AccountUsername}, repo, ref.IssueNumber)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fetch GitHub issue: %w", err))
 	}

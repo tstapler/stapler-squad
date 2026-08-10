@@ -5830,9 +5830,13 @@ type ImportGitHubIssueRequest struct {
 	// Optional repo path override; if empty, derived from the issue URL.
 	RepoPath string `protobuf:"bytes,2,opt,name=repo_path,json=repoPath,proto3" json:"repo_path,omitempty"`
 	// If true, skip automated triage after import.
-	SkipPlanning  bool `protobuf:"varint,3,opt,name=skip_planning,json=skipPlanning,proto3" json:"skip_planning,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SkipPlanning bool `protobuf:"varint,3,opt,name=skip_planning,json=skipPlanning,proto3" json:"skip_planning,omitempty"`
+	// Optional GitHub account username to authenticate the import with, when
+	// multiple accounts are connected for the issue URL's host. Empty resolves
+	// to any configured token for that host (see github.GetKeychainTokenForHost).
+	AccountUsername string `protobuf:"bytes,4,opt,name=account_username,json=accountUsername,proto3" json:"account_username,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ImportGitHubIssueRequest) Reset() {
@@ -5884,6 +5888,13 @@ func (x *ImportGitHubIssueRequest) GetSkipPlanning() bool {
 		return x.SkipPlanning
 	}
 	return false
+}
+
+func (x *ImportGitHubIssueRequest) GetAccountUsername() string {
+	if x != nil {
+		return x.AccountUsername
+	}
+	return ""
 }
 
 type ImportGitHubIssueResponse struct {
@@ -8137,11 +8148,12 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x18WatchBacklogItemsRequest\x12#\n" +
 	"\rstatus_filter\x18\x01 \x03(\tR\fstatusFilter\x12'\n" +
 	"\x0fcategory_filter\x18\x02 \x03(\tR\x0ecategoryFilter\x12\x1b\n" +
-	"\tafter_seq\x18\x03 \x01(\x04R\bafterSeq\"y\n" +
+	"\tafter_seq\x18\x03 \x01(\x04R\bafterSeq\"\xa4\x01\n" +
 	"\x18ImportGitHubIssueRequest\x12\x1b\n" +
 	"\tissue_url\x18\x01 \x01(\tR\bissueUrl\x12\x1b\n" +
 	"\trepo_path\x18\x02 \x01(\tR\brepoPath\x12#\n" +
-	"\rskip_planning\x18\x03 \x01(\bR\fskipPlanning\"s\n" +
+	"\rskip_planning\x18\x03 \x01(\bR\fskipPlanning\x12)\n" +
+	"\x10account_username\x18\x04 \x01(\tR\x0faccountUsername\"s\n" +
 	"\x19ImportGitHubIssueResponse\x12+\n" +
 	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\x12)\n" +
 	"\x10triage_triggered\x18\x02 \x01(\bR\x0ftriageTriggered\".\n" +
