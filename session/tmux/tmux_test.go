@@ -989,17 +989,31 @@ func TestClearPTYTriple_CapturesThenNilsAllThreeFields(t *testing.T) {
 func TestPtmxMuDocComment_StatesLeafLockInvariant(t *testing.T) {
 	data, err := os.ReadFile("tmux.go")
 	require.NoError(t, err)
-	src := string(data)
+	lines := strings.Split(string(data), "\n")
 
-	idx := strings.Index(src, "ptmxMu deadlock.Mutex")
-	require.Greater(t, idx, 0, "ptmxMu field declaration not found in tmux.go")
-
-	const docCommentLookbackBytes = 2000 // generous margin over the expected doc-comment length
-	start := idx - docCommentLookbackBytes
-	if start < 0 {
-		start = 0
+	fieldLine := -1
+	for i, line := range lines {
+		if strings.Contains(line, "ptmxMu deadlock.Mutex") {
+			fieldLine = i
+			break
+		}
 	}
-	docComment := strings.ToLower(src[start:idx])
+	require.GreaterOrEqual(t, fieldLine, 0, "ptmxMu field declaration not found in tmux.go")
+
+	// Walk upward from the field declaration, collecting only the contiguous run of
+	// "//"-comment lines immediately preceding it -- this is that field's doc comment,
+	// not a fixed byte lookback that could drift into an unrelated preceding comment
+	// block if either grows or shrinks.
+	var commentLines []string
+	for i := fieldLine - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(trimmed, "//") {
+			break
+		}
+		commentLines = append([]string{trimmed}, commentLines...)
+	}
+	docComment := strings.ToLower(strings.Join(commentLines, "\n"))
+	require.NotEmpty(t, docComment, "ptmxMu field declaration has no preceding doc comment")
 
 	require.Contains(t, docComment, "leaf lock")
 	for _, lockName := range []string{"detachMutex", "controlModeSubMu", "controlModeStartMu", "cmdSendMu", "recoveryMu"} {
@@ -1095,6 +1109,58 @@ func TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
 	case <-getDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("GetPTY deadlocked against concurrent DetachSafely — detachMutex/ptmxMu ordering broken")
+	}
+}
+
+// TestDetach_ConcurrentWithGetPTY_NoDeadlock covers the specific nesting
+// TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock does not: Detach() (unlike
+// DetachSafely) holds detachMutex across TWO separate ptmxMu acquisitions in
+// sequence -- closePTYAndAttachCmd() first, then Restore() -> RestoreWithWorkDir(),
+// which itself acquires ptmxMu via lockedPTMX()/setPTYTriple() in its retry loop.
+// This is exactly the nesting the ptmxMu doc comment and ADR-001 cite by name as
+// justification for treating ptmxMu as a safe leaf lock -- it needs its own
+// deadlock-guard test, not just DetachSafely's simpler one-acquisition case.
+func TestDetach_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
+	registry := NewFakeTmuxRegistry()
+	session := newTmuxSessionWithSocket("detach-restore-getpty-nodeadlock-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix, "", WithRegistry(registry))
+	registry.SetSessions([]string{session.sanitizedName})
+
+	const iterations = 10
+	detachDone := make(chan struct{})
+	go func() {
+		defer close(detachDone)
+		for i := 0; i < iterations; i++ {
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			session.setPTYTriple(r, nil, nil)
+			session.attachCh = make(chan struct{})
+			session.wg = &sync.WaitGroup{}
+			// Detach() panics on a fatal cleanup/restore error; the mocked PTY factory
+			// and registry are wired so DoesSessionExist()/ptyFactory.StartWithSize()
+			// always succeed, so no panic is expected -- this test's only concern is
+			// deadlock-freedom, not Detach()'s success/failure semantics.
+			session.Detach()
+			_ = w.Close()
+		}
+	}()
+
+	getDone := make(chan struct{})
+	go func() {
+		defer close(getDone)
+		for i := 0; i < iterations; i++ {
+			_, _ = session.GetPTY()
+		}
+	}()
+
+	select {
+	case <-detachDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Detach deadlocked against concurrent GetPTY — detachMutex/ptmxMu ordering broken across Restore()/RestoreWithWorkDir()")
+	}
+	select {
+	case <-getDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetPTY deadlocked against concurrent Detach")
 	}
 }
 

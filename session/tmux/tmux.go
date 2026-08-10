@@ -1740,7 +1740,13 @@ func (t *TmuxSession) setPTYTriple(file *os.File, cmd *exec.Cmd, waitOnce *sync.
 
 // clearPTYTriple atomically captures and clears the PTY triple, returning the
 // captured values so the caller can run blocking cleanup (Close/Kill/Wait) outside
-// the lock. Safe to call even if the triple is already nil (returns nils).
+// the lock. Safe to call even if the triple is already nil (returns nils). Clears
+// all three fields unconditionally -- pre-fix, closePTYAndAttachCmd only nilled
+// attachCmd/attachCmdWaitOnce inside the `attachCmd.Process != nil` branch, so an
+// attachCmd with a nil Process (shouldn't happen via the normal write sites, which
+// only install a triple after ptyFactory.Start/StartWithSize succeeds) would have
+// been left stale. Clearing unconditionally here closes that edge case rather than
+// reproducing it.
 func (t *TmuxSession) clearPTYTriple() (file *os.File, cmd *exec.Cmd, waitOnce *sync.Once) {
 	t.ptmxMu.Lock()
 	defer t.ptmxMu.Unlock()
