@@ -37,6 +37,12 @@ const (
 	// Restoring is the transient startup state when a hibernated session is being restored.
 	// Never persisted to the database — transitions to Active or Creating on completion.
 	Restoring Status = 5
+	// Crashed is a terminal state distinct from Stopped: the wrapped program exited
+	// abnormally (non-zero exit code or signal) and tmux's remain-on-exit left a dead
+	// pane placeholder, detected by SessionHealthChecker's polling (see session/health.go).
+	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
+	// it surfaces to the user/automation for an explicit resume (see ExitReason).
+	Crashed Status = 6
 
 	// Deprecated: use Active.
 	Running = Active
@@ -61,6 +67,8 @@ func (s Status) String() string {
 		return "Hibernated"
 	case Restoring:
 		return "Restoring"
+	case Crashed:
+		return "Crashed"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -282,6 +290,11 @@ type Instance struct {
 	// PauseReason records why this session was paused. Use PauseReason* constants.
 	// Empty when session has never been paused.
 	PauseReason string `json:"pause_reason,omitempty"`
+
+	// ExitReason records why this session's pane exited when Status == Crashed
+	// (e.g. "signal SIGKILL (exit code 137)"). Empty otherwise. Set by
+	// SessionHealthChecker when it detects a dead pane (session/health.go).
+	ExitReason string `json:"exit_reason,omitempty"`
 
 	// WorkflowID is the UUID of the Workflow that spawned this session.
 	// Empty for manually-created sessions.

@@ -117,6 +117,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		MCPServerURL: snap.MCPServerURL,
 		// Pause reason — persisted so it survives restarts
 		PauseReason: snap.PauseReason,
+		// Exit reason — persisted so a Crashed banner survives restarts
+		ExitReason: snap.ExitReason,
 		// Workflow linkage and archive state
 		WorkflowID: snap.WorkflowID,
 		ArchivedAt: snap.ArchivedAt,
@@ -288,6 +290,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		MCPServerURL: data.MCPServerURL,
 		// Pause reason
 		PauseReason: data.PauseReason,
+		// Exit reason
+		ExitReason: data.ExitReason,
 		// Workflow linkage and archive state
 		WorkflowID: data.WorkflowID,
 		ArchivedAt: data.ArchivedAt,

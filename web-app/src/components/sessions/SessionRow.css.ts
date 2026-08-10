@@ -75,6 +75,9 @@ export const statusDot = style({
     '&[data-status="hibernated"]': {
       background: vars.color.statusDot.idle,
     },
+    '&[data-status="crashed"]': {
+      background: vars.color.error,
+    },
   },
   "@media": {
     "(prefers-reduced-motion: no-preference)": {

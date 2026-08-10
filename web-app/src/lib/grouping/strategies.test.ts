@@ -66,6 +66,26 @@ describe("groupSessions", () => {
     expect(uncategorizedGroup?.sessions).toHaveLength(1);
   });
 
+  describe("GroupingStrategy.Status", () => {
+    it("should group a Crashed session into its own distinct 'Crashed' group, separate from Active/Stopped", () => {
+      const sessionsWithCrashed = [
+        create(SessionSchema, { title: "active-session", status: SessionStatus.ACTIVE }),
+        create(SessionSchema, { title: "stopped-session", status: SessionStatus.STOPPED }),
+        create(SessionSchema, { title: "crashed-session", status: SessionStatus.CRASHED }),
+      ];
+      const result = groupSessions(sessionsWithCrashed, GroupingStrategy.Status);
+
+      const crashedGroup = result.find(g => g.groupKey === "Crashed");
+      expect(crashedGroup?.sessions).toHaveLength(1);
+      expect(crashedGroup?.sessions[0].title).toBe("crashed-session");
+
+      const activeGroup = result.find(g => g.groupKey === "Active");
+      const stoppedGroup = result.find(g => g.groupKey === "Stopped");
+      expect(activeGroup?.sessions).toHaveLength(1);
+      expect(stoppedGroup?.sessions).toHaveLength(1);
+    });
+  });
+
   describe("GroupingStrategy.Workflow", () => {
     const wfSession1 = create(SessionSchema, {
       title: "wf-session-1",

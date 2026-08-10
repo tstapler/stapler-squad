@@ -649,6 +649,26 @@ func (_u *SessionUpdate) ClearPauseReason() *SessionUpdate {
 	return _u
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (_u *SessionUpdate) SetExitReason(v string) *SessionUpdate {
+	_u.mutation.SetExitReason(v)
+	return _u
+}
+
+// SetNillableExitReason sets the "exit_reason" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableExitReason(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetExitReason(*v)
+	}
+	return _u
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (_u *SessionUpdate) ClearExitReason() *SessionUpdate {
+	_u.mutation.ClearExitReason()
+	return _u
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (_u *SessionUpdate) SetWorkflowID(v string) *SessionUpdate {
 	_u.mutation.SetWorkflowID(v)
@@ -1253,6 +1273,12 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.PauseReasonCleared() {
 		_spec.ClearField(session.FieldPauseReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.ExitReason(); ok {
+		_spec.SetField(session.FieldExitReason, field.TypeString, value)
+	}
+	if _u.mutation.ExitReasonCleared() {
+		_spec.ClearField(session.FieldExitReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.WorkflowID(); ok {
 		_spec.SetField(session.FieldWorkflowID, field.TypeString, value)
@@ -2183,6 +2209,26 @@ func (_u *SessionUpdateOne) ClearPauseReason() *SessionUpdateOne {
 	return _u
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (_u *SessionUpdateOne) SetExitReason(v string) *SessionUpdateOne {
+	_u.mutation.SetExitReason(v)
+	return _u
+}
+
+// SetNillableExitReason sets the "exit_reason" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableExitReason(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetExitReason(*v)
+	}
+	return _u
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (_u *SessionUpdateOne) ClearExitReason() *SessionUpdateOne {
+	_u.mutation.ClearExitReason()
+	return _u
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (_u *SessionUpdateOne) SetWorkflowID(v string) *SessionUpdateOne {
 	_u.mutation.SetWorkflowID(v)
@@ -2817,6 +2863,12 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if _u.mutation.PauseReasonCleared() {
 		_spec.ClearField(session.FieldPauseReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.ExitReason(); ok {
+		_spec.SetField(session.FieldExitReason, field.TypeString, value)
+	}
+	if _u.mutation.ExitReasonCleared() {
+		_spec.ClearField(session.FieldExitReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.WorkflowID(); ok {
 		_spec.SetField(session.FieldWorkflowID, field.TypeString, value)

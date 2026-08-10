@@ -420,19 +420,29 @@ func (i *Instance) TmuxAlive() bool {
 // TmuxAlive() to detect that failure mode. Returns false for non-tmux backends
 // (e.g. native process manager), which have no equivalent placeholder state.
 func (i *Instance) PaneProcessDead() bool {
+	dead, _, _ := i.PaneExitInfo()
+	return dead
+}
+
+// PaneExitInfo reports whether the wrapped program's pane has exited
+// (PaneProcessDead), along with its exit code and signal (empty string if
+// none) when available. Used by SessionHealthChecker to distinguish a normal
+// completion (exit code 0, no signal) from a genuine crash. code/signal are
+// zero-valued when dead is false.
+func (i *Instance) PaneExitInfo() (dead bool, code int, signal string) {
 	if !i.TmuxAlive() {
-		return false
+		return false, 0, ""
 	}
 	tb, ok := i.pm().(*TmuxBackend)
 	if !ok {
-		return false
+		return false, 0, ""
 	}
 	tm := tb.TmuxManager()
 	if tm == nil {
-		return false
+		return false, 0, ""
 	}
-	_, _, dead := tm.PaneExitStatus()
-	return dead
+	code, signal, dead = tm.PaneExitStatus()
+	return dead, code, signal
 }
 
 // GetPTYReader returns the PTY file handle for the tmux session.
