@@ -707,6 +707,101 @@ func TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryRepl
 	}
 }
 
+// pumpStatus sends the DetectedStatus currently held in status to all listeners
+// registered on cc, at a fixed cadence, until ctx is cancelled. Like pumpIdleSignals,
+// but the emitted status can be changed mid-test (via status.Store) to simulate a
+// session transitioning from idle to a sustained busy burst.
+func pumpStatus(ctx context.Context, cc *ClaudeController, status *atomic.Int32, interval time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+			s := detection.DetectedStatus(status.Load())
+			var listeners []StatusChangeListener
+			cc.listeners.Read(func(ls []StatusChangeListener) {
+				listeners = make([]StatusChangeListener, len(ls))
+				copy(listeners, ls)
+			})
+			for _, fn := range listeners {
+				fn(s, cc.sessionName)
+			}
+		}
+	}
+}
+
+// TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolCallSummaryBurstObserved
+// is the full end-to-end AC3 regression test: it drives the real AutonomousDriver.run() loop
+// via Start() — not waitForIdle in isolation — with the session held in a sustained burst of
+// the real production classifier's output for the reported batched multi-tool-call summary
+// text ("Searching for 9 patterns, reading 2 files, running 7 shell commands…") and NO genuine
+// idle signal ever observed. It asserts RegisterTurnCallback's callback (what
+// AutonomousOrchestrationService.buildTurnCallback publishes the low-priority Alerts
+// notification from, per its doc comment in server/services/autonomous_orchestration_service.go)
+// is never invoked, and that the run() loop instead exits via the startup-wait timing out —
+// proving a sustained busy burst can never be mistaken for idle at any waitForIdle call site in
+// run(), not just the specific one exercised by the narrower waitForIdle-level test above.
+//
+// Deliberately exercises the startup gate (settleWindow=0) rather than the post-turn gate: the
+// post-turn path requires a real tmux-backed Instance for SendKeys to succeed (session/tmux),
+// which would pull in unrelated infra (a real PTY + spawned tmux process) disproportionate to
+// verifying a regex classification fix. The startup gate calls the identical waitForIdle
+// function this bug's fix changes the input to, so it exercises the same causal chain
+// (classify → statusCh → waitForIdle → turn gate) without that dependency.
+func TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolCallSummaryBurstObserved(t *testing.T) {
+	sd := detection.NewStatusDetector()
+	batchedSummary := "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…"
+	classified := sd.Detect([]byte(batchedSummary))
+	if classified != detection.StatusExecuting {
+		t.Fatalf("test setup: expected batched-summary pane text to classify as StatusExecuting, got %s — "+
+			"the claude_thinking_verb widening regressed", classified)
+	}
+
+	pool := &fakeHeadlessPool{}
+
+	inst := &Instance{Title: "test-batched-summary-startup-burst", UUID: "abcdefgh-wfi5"}
+	cc, _ := NewClaudeController(inst)
+	inst.controllerManager.controller.Store(cc)
+
+	driver := NewAutonomousDriver(inst, pool, "goal", 5, WithStartupTimeout(150*time.Millisecond))
+
+	turnCh := make(chan int, 10)
+	driver.RegisterTurnCallback(func(turn, _ int, _ string) {
+		turnCh <- turn
+	})
+	doneCh := make(chan AutonomousDriverOutcome, 1)
+	driver.RegisterCompletionCallback(func(_ string, outcome AutonomousDriverOutcome) {
+		doneCh <- outcome
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Sustained burst of the real classifier's batched-summary output, never idle — from
+	// the moment the driver starts through to the startup timeout.
+	var status atomic.Int32
+	status.Store(int32(classified))
+	go pumpStatus(ctx, cc, &status, 15*time.Millisecond)
+
+	if err := driver.Start(ctx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	select {
+	case turn := <-turnCh:
+		t.Fatalf("unexpected turn (turn=%d) injected while only a sustained batched-tool-call-summary "+
+			"burst was observed — waitForIdle falsely treated the busy status as idle and "+
+			"fireTurnCallback fired a spurious no-op nudge", turn)
+	case outcome := <-doneCh:
+		if !outcome.Stuck || outcome.Reason != "startup timeout" {
+			t.Errorf("expected completion via startup timeout (Stuck=true, Reason=%q), got %+v",
+				"startup timeout", outcome)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the driver to complete via startup timeout")
+	}
+}
+
 // TestNewAutonomousDriver_ConfigurableStartupTimeout verifies T-GO-18:
 // WithStartupTimeout sets the field; the default is 60s when no option is passed.
 func TestNewAutonomousDriver_ConfigurableStartupTimeout(t *testing.T) {
