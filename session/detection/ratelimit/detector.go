@@ -89,17 +89,15 @@ func (d *Detector) maybeLogUndetectedWording(output string) {
 	}
 	lower := strings.ToLower(output)
 	for _, kw := range quotaKeywords {
-		if strings.Contains(lower, kw) {
+		if idx := strings.Index(lower, kw); idx != -1 {
 			d.canaryLogged = true
-			// Truncate on a rune boundary — a byte-index slice risks splitting
-			// a multi-byte UTF-8 rune (box-drawing chars, emoji, etc. are
-			// realistic in terminal output), which would produce invalid
-			// UTF-8 in the log line and can break structured log parsers.
-			truncated := []rune(output)
-			if len(truncated) > 200 {
-				truncated = truncated[:200]
-			}
-			log.Warn("ratelimit: possible undetected quota/limit wording", "session", d.sessionID, "line", string(truncated))
+			// Deliberately never logs the raw matched output: terminal
+			// output routinely contains secrets (API keys, tokens pasted or
+			// printed alongside an unrelated quota/rate-limit message), and
+			// this canary's whole purpose — flagging a detector-wording gap
+			// — only needs the matched keyword and where it occurred, not
+			// the surrounding text.
+			log.Warn("ratelimit: possible undetected quota/limit wording", "session", d.sessionID, "keyword", kw, "byte_offset", idx, "output_len", len(output))
 			return
 		}
 	}

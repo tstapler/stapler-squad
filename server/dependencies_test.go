@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -129,11 +130,14 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 	}
 }
 
-// TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagEnabled
+// TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagDisabledByDefault
 // verifies QuotaGate.Enable is only ever reached via quotaGate.Reconcile's own
 // decision path (Story 2.2.2), not a bare unconditional call — exercised against
-// the real TokenStore/BacklogController wiring in server/dependencies.go.
-func TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagEnabled(t *testing.T) {
+// the real TokenStore/BacklogController wiring in server/dependencies.go. Named
+// for the disabled-by-default path this test actually exercises; see
+// TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot
+// below for the Quota.Enabled=true path.
+func TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagDisabledByDefault(t *testing.T) {
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
@@ -147,6 +151,43 @@ func TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFl
 	// limit or token-usage fixture.
 	if deps.QuotaGate.IsPausedByQuota() {
 		t.Error("IsPausedByQuota() = true at boot with Quota.Enabled defaulting to false, want false")
+	}
+}
+
+// TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot
+// is the regression guard for a CRITICAL code-review finding: the cfgFn closure
+// built in BuildRuntimeDeps must call config.LoadConfig() fresh, not close over
+// the *config.Config pointer passed into BuildRuntimeDeps (which is loaded once
+// at process boot and never refreshed) — the whole point of cfgFn being a
+// func() rather than a plain value is "config.json edits take effect without a
+// restart" (see both quota_gate.go's and dependencies.go's own doc comments).
+// StatusDetail() calls cfgFn() directly, so it's used here as the observable
+// proof without needing a rate-limit/token-usage fixture to trigger Reconcile.
+func TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+	if deps.QuotaGate == nil {
+		t.Fatal("expected QuotaGate to be wired onto ServerDependencies")
+	}
+
+	if got := deps.QuotaGate.StatusDetail(); got != "" {
+		t.Fatalf("test precondition failed: StatusDetail() = %q before any config change, want empty (Quota.Enabled defaults to false)", got)
+	}
+
+	cfg := config.LoadConfig()
+	cfg.Quota.Enabled = true
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got := deps.QuotaGate.StatusDetail()
+	if !strings.Contains(strings.ToLower(got), "reactive-only") {
+		t.Errorf("StatusDetail() = %q after enabling Quota via config.json with no restart, want it to reflect the live change (mentions reactive-only mode) — cfgFn must re-read config.json on every call, not close over a boot-time snapshot", got)
 	}
 }
 

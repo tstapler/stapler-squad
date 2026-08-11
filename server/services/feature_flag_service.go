@@ -211,11 +211,17 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 
 	log.Info("feature flag updated", "feature", name, "enabled", enabled)
 
+	var statusDetail string
+	if provider, ok := f.statusDetailProviders[name]; ok {
+		statusDetail = provider()
+	}
+
 	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
 		Flag: &sessionv1.FeatureFlag{
-			Name:        name,
-			Enabled:     enabled,
-			Description: description,
+			Name:         name,
+			Enabled:      enabled,
+			Description:  description,
+			StatusDetail: statusDetail,
 		},
 	}), nil
 }

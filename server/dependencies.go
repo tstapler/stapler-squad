@@ -1047,7 +1047,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		tokenStoreReader = tokenStore
 	}
 	quotaGate := services.NewQuotaGate(
-		func() config.QuotaConfig { return cfg.Quota.QuotaConfigOrDefault() },
+		// config.LoadConfig() re-reads config.json from disk on every call
+		// (same pattern as feature_flag_service.go's GetFeatureFlags) — cfg
+		// here is the boot-time snapshot passed into BuildRuntimeDeps and is
+		// never refreshed, so closing over cfg.Quota directly would freeze
+		// every Quota field at boot, contradicting this closure's whole
+		// purpose ("no restart needed" for config.json edits).
+		func() config.QuotaConfig { return config.LoadConfig().Quota.QuotaConfigOrDefault() },
 		tokenStoreReader,
 		sessionService,
 		backlogCtrl,

@@ -37,13 +37,11 @@ const (
 // this is a named, non-embedded field on QuotaGate, so Go does not promote
 // these methods, and callers outside this file cannot reach them directly.
 type RateLimitAggregate struct {
-	LastEventAt      time.Time
-	RecentEventCount int
+	LastEventAt time.Time
 }
 
 func (a *RateLimitAggregate) recordRateLimitEvent(at time.Time) {
 	a.LastEventAt = at
-	a.RecentEventCount++
 }
 
 func (a *RateLimitAggregate) hasRecentRateLimitEvent(now time.Time, window time.Duration) bool {
@@ -224,7 +222,13 @@ func (g *QuotaGate) Reconcile(ctx context.Context) {
 	}
 
 	// Provenance: detect whether an external actor (the manual Settings
-	// toggle) changed backlogCtrl's enabled state since the last tick.
+	// toggle) changed backlogCtrl's enabled state since the last tick. Must
+	// re-sync lastSetEnabled to current immediately — otherwise this branch
+	// re-fires on every subsequent tick until QuotaGate itself next calls
+	// disable()/enable() (which is the only other place lastSetEnabled is
+	// written), continuously refreshing manualOverrideAt and defeating
+	// ManualOverrideGraceMinutes' "once, for a bounded window after the
+	// override" semantics.
 	current := g.backlogCtrl.IsEnabled()
 	if g.state.lastSetEnabled != nil && *g.state.lastSetEnabled != current {
 		g.state.manualOverrideAt = now
@@ -232,6 +236,8 @@ func (g *QuotaGate) Reconcile(ctx context.Context) {
 			g.state.pausedByQuota = false
 		}
 		log.Info("QuotaGate: detected external change to backlog enabled state", "enabled", current)
+		c := current
+		g.state.lastSetEnabled = &c
 	}
 
 	// hard is computed once per tick and consulted both by the immediate
