@@ -11,6 +11,8 @@ import { getDefaultRegistry } from "@/lib/omnibar/detector";
 import { WorkflowDetector, type WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import { useAliases } from "@/lib/hooks/useAliases";
 import { AliasDetector } from "@/lib/omnibar/detectors/AliasDetector";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
+import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
 
 const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
@@ -105,6 +107,25 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
       aliasDetectorRef.current = null;
     };
   }, [aliases]);
+
+  const enterpriseHosts = useGitHubEnterpriseHosts();
+
+  // Dynamically register/unregister GitHubEnterpriseURLDetector whenever the
+  // configured GHES host list changes.
+  const githubEnterpriseDetectorRef = useRef<GitHubEnterpriseURLDetector | null>(null);
+  useEffect(() => {
+    const registry = getDefaultRegistry();
+    if (githubEnterpriseDetectorRef.current) {
+      registry.unregister(githubEnterpriseDetectorRef.current);
+    }
+    const detector = new GitHubEnterpriseURLDetector(enterpriseHosts);
+    registry.register(detector);
+    githubEnterpriseDetectorRef.current = detector;
+    return () => {
+      registry.unregister(detector);
+      githubEnterpriseDetectorRef.current = null;
+    };
+  }, [enterpriseHosts]);
 
   const open = useCallback(() => {
     setInitialMode("discovery");

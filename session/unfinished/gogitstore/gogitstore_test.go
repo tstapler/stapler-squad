@@ -522,7 +522,7 @@ func TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst(t *testing.T) {
 		t.Logf("shared: worktree #%d open+read heap delta = %d bytes", i, sharedDeltas[i])
 	}
 
-	commonDirAbs := filepath.Clean(filepath.Join(mainRepo, ".git"))
+	commonDirAbs := canonicalizeDir(filepath.Join(mainRepo, ".git"))
 	store, ok := reg.stores[commonDirAbs]
 	if !ok {
 		t.Fatalf("no SharedObjectStore registered for commondir %s; registered keys: %v", commonDirAbs, reg.Stats())
@@ -696,7 +696,7 @@ func TestWorktreeStorer_UsesSharedStore(t *testing.T) {
 	if !ok {
 		t.Fatalf("repo.Storer is %T, want *WorktreeStorer", repo.Storer)
 	}
-	commonDirAbs := filepath.Clean(filepath.Join(mainRepo, ".git"))
+	commonDirAbs := canonicalizeDir(filepath.Join(mainRepo, ".git"))
 	store := reg.stores[commonDirAbs]
 	if store == nil {
 		t.Fatalf("no SharedObjectStore for %s", commonDirAbs)

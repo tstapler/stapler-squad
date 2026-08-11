@@ -8,9 +8,13 @@ import { useGitHubPRs } from "@/lib/hooks/useGitHubPRs";
 import {
   GitHubUserService,
   type GitHubAccount,
+  type GitHubCLIHost,
   StartGitHubDeviceAuthRequestSchema,
   PollGitHubDeviceAuthRequestSchema,
   RevokeGitHubTokenRequestSchema,
+  AddGitHubAccountWithTokenRequestSchema,
+  ListGitHubCLIHostsRequestSchema,
+  AddGitHubAccountFromCLIRequestSchema,
   DeviceAuthStatus,
 } from "@/gen/session/v1/github_user_pb";
 import { createClient } from "@connectrpc/connect";
@@ -20,11 +24,13 @@ import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import * as styles from "./GitHubPRsSection.css";
 
 function useGitHubUserClient() {
-  const transport = createConnectTransport({
-    baseUrl: getApiBaseUrl(),
-    interceptors: [createAuthInterceptor()],
-  });
-  return createClient(GitHubUserService, transport);
+  return useMemo(() => {
+    const transport = createConnectTransport({
+      baseUrl: getApiBaseUrl(),
+      interceptors: [createAuthInterceptor()],
+    });
+    return createClient(GitHubUserService, transport);
+  }, []);
 }
 
 function prCheckChip(pr: UserPR): React.ReactNode {
@@ -160,7 +166,7 @@ function StatsBar({ prs }: StatsBarProps) {
 
 interface AccountsBarProps {
   accounts: GitHubAccount[];
-  onDisconnect: (username: string) => void;
+  onDisconnect: (username: string, host: string) => void;
   onAddAccount: () => void;
 }
 
@@ -169,15 +175,18 @@ function AccountsBar({ accounts, onDisconnect, onAddAccount }: AccountsBarProps)
     <div className={styles.accountsRow} data-testid="github-accounts-row">
       {accounts.map((acc) => (
         <span
-          key={acc.username}
+          key={`${acc.host || "github.com"}:${acc.username}`}
           className={acc.isEnvToken ? styles.accountChipEnv : styles.accountChip}
           title={acc.isEnvToken ? "Sourced from environment variable" : undefined}
         >
           @{acc.username}
+          {acc.host && acc.host !== "github.com" && (
+            <span className={styles.hostBadge}>({acc.host})</span>
+          )}
           {!acc.isEnvToken && (
             <button
               className={styles.disconnectAccountButton}
-              onClick={() => onDisconnect(acc.username)}
+              onClick={() => onDisconnect(acc.username, acc.host)}
               aria-label={`Disconnect ${acc.username}`}
               title="Disconnect this account"
             >
@@ -217,6 +226,7 @@ interface DeviceAuthBannerProps {
 function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuthBannerProps) {
   const client = useGitHubUserClient();
   const [flow, setFlow] = useState<DeviceFlowPhase>({ kind: "idle" });
+  const [host, setHost] = useState("");
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef(false);
 
@@ -232,7 +242,7 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
     setFlow({ kind: "starting" });
     try {
       const res = await client.startGitHubDeviceAuth(
-        create(StartGitHubDeviceAuthRequestSchema, {})
+        create(StartGitHubDeviceAuthRequestSchema, { host: host.trim() })
       );
       if (abortRef.current) return;
       setFlow({
@@ -246,7 +256,7 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
         setFlow({ kind: "error", message: String(err) });
       }
     }
-  }, [client]);
+  }, [client, host]);
 
   const schedulePoll = useCallback(
     (deviceCode: string, userCode: string, verificationUri: string, intervalMs: number) => {
@@ -298,6 +308,14 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
         <span className={styles.authBannerText}>
           {errorMessage || "GitHub authentication not yet configured."}
         </span>
+        <input
+          className={styles.hostInput}
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          placeholder="github.com"
+          aria-label="GitHub host"
+          data-testid="github-host-input"
+        />
         <button
           className={styles.connectButton}
           onClick={handleConnect}
@@ -385,6 +403,260 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
         Try again
       </button>
     </div>
+  );
+}
+
+// --- Add account panel (tab switcher) ---
+
+type AddAccountMode = "device" | "token";
+
+function AddAccountPanel({ errorMessage, onAuthComplete, onCancel }: DeviceAuthBannerProps) {
+  const [mode, setMode] = useState<AddAccountMode>("device");
+  const [cliAvailable, setCliAvailable] = useState(false);
+  const [manualExpanded, setManualExpanded] = useState(false);
+  const modeChosenRef = useRef(false);
+
+  const handleCliAvailabilityChange = useCallback((available: boolean) => {
+    setCliAvailable(available);
+    // Once CLI credentials are importable, prefer the token tab over device flow —
+    // there's no reason to walk through device flow when credentials are already local.
+    if (available && !modeChosenRef.current) {
+      setMode("token");
+    }
+  }, []);
+
+  const showManualAuth = !cliAvailable || manualExpanded;
+
+  return (
+    <div className={styles.addAccountPanel} data-testid="github-add-account-panel">
+      <CLIImportSection onAuthComplete={onAuthComplete} onAvailabilityChange={handleCliAvailabilityChange} />
+      {cliAvailable && !manualExpanded && (
+        <button
+          type="button"
+          className={styles.cancelButton}
+          onClick={() => setManualExpanded(true)}
+          data-testid="github-add-account-manual-toggle"
+        >
+          Set up manually instead
+        </button>
+      )}
+      {showManualAuth && (
+        <>
+          <div className={styles.authTabs} role="tablist">
+            <button
+              role="tab"
+              aria-selected={mode === "device"}
+              className={mode === "device" ? styles.authTabActive : styles.authTab}
+              onClick={() => {
+                modeChosenRef.current = true;
+                setMode("device");
+              }}
+              data-testid="github-auth-tab-device"
+            >
+              Device flow
+            </button>
+            <button
+              role="tab"
+              aria-selected={mode === "token"}
+              className={mode === "token" ? styles.authTabActive : styles.authTab}
+              onClick={() => {
+                modeChosenRef.current = true;
+                setMode("token");
+              }}
+              data-testid="github-auth-tab-token"
+            >
+              Personal access token
+            </button>
+          </div>
+          {mode === "device" ? (
+            <DeviceAuthBanner
+              errorMessage={errorMessage}
+              onAuthComplete={onAuthComplete}
+              onCancel={onCancel}
+            />
+          ) : (
+            <TokenAuthForm onAuthComplete={onAuthComplete} onCancel={onCancel} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// --- gh CLI host import ---
+
+type CLIImportState =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | { kind: "ready"; hosts: GitHubCLIHost[] }
+  | { kind: "error"; message: string };
+
+function CLIImportSection({
+  onAuthComplete,
+  onAvailabilityChange,
+}: {
+  onAuthComplete: () => void;
+  onAvailabilityChange?: (available: boolean) => void;
+}) {
+  const client = useGitHubUserClient();
+  const [state, setState] = useState<CLIImportState>({ kind: "loading" });
+  const [importingHost, setImportingHost] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    client
+      .listGitHubCLIHosts(create(ListGitHubCLIHostsRequestSchema, {}))
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.ghAvailable || res.hosts.length === 0) {
+          setState({ kind: "unavailable" });
+          onAvailabilityChange?.(false);
+        } else {
+          setState({ kind: "ready", hosts: res.hosts });
+          onAvailabilityChange?.(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setState({ kind: "unavailable" });
+          onAvailabilityChange?.(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // onAvailabilityChange is expected to be a stable setState-style callback from the parent
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client]);
+
+  const handleImport = useCallback(
+    async (host: string) => {
+      setImportingHost(host);
+      try {
+        await client.addGitHubAccountFromCLI(
+          create(AddGitHubAccountFromCLIRequestSchema, { host })
+        );
+        onAuthComplete();
+      } catch (err) {
+        setState({ kind: "error", message: String(err) });
+      } finally {
+        setImportingHost(null);
+      }
+    },
+    [client, onAuthComplete]
+  );
+
+  if (state.kind === "loading" || state.kind === "unavailable") {
+    return null;
+  }
+
+  return (
+    <div className={styles.cliImportSection} data-testid="github-cli-import-section">
+      <span className={styles.cliImportLabel}>Already logged in via gh CLI:</span>
+      {state.kind === "ready" && (
+        <div className={styles.cliImportHostList}>
+          {state.hosts.map((h) => (
+            <button
+              key={h.host}
+              type="button"
+              className={styles.cliImportHostButton}
+              disabled={h.alreadyAdded || importingHost === h.host}
+              onClick={() => handleImport(h.host)}
+              data-testid={`github-cli-import-host-${h.host}`}
+            >
+              {h.alreadyAdded
+                ? `${h.host}${h.username ? ` (${h.username})` : ""} — connected`
+                : importingHost === h.host
+                  ? `Importing ${h.host}…`
+                  : `Import ${h.host}${h.username ? ` (${h.username})` : ""}`}
+            </button>
+          ))}
+        </div>
+      )}
+      {state.kind === "error" && (
+        <span className={styles.authError} data-testid="github-cli-import-error">
+          {state.message}
+        </span>
+      )}
+      <span className={styles.cliImportDivider}>or paste a token manually</span>
+    </div>
+  );
+}
+
+interface TokenAuthFormProps {
+  onAuthComplete: () => void;
+  onCancel?: () => void;
+}
+
+function TokenAuthForm({ onAuthComplete, onCancel }: TokenAuthFormProps) {
+  const client = useGitHubUserClient();
+  const [host, setHost] = useState("");
+  const [token, setToken] = useState("");
+  const [status, setStatus] = useState<{ kind: "idle" | "submitting" | "error"; message?: string }>({
+    kind: "idle",
+  });
+
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      setStatus({ kind: "submitting" });
+      try {
+        await client.addGitHubAccountWithToken(
+          create(AddGitHubAccountWithTokenRequestSchema, {
+            host: host.trim(),
+            token: token.trim(),
+          })
+        );
+        onAuthComplete();
+      } catch (err) {
+        setStatus({ kind: "error", message: String(err) });
+      }
+    },
+    [client, host, token, onAuthComplete]
+  );
+
+  return (
+    <form
+      className={styles.deviceFlowCard}
+      onSubmit={handleSubmit}
+      data-testid="github-token-auth-form"
+    >
+      <input
+        className={styles.hostInput}
+        value={host}
+        onChange={(e) => setHost(e.target.value)}
+        placeholder="github.com"
+        aria-label="GitHub host"
+        data-testid="github-token-host-input"
+      />
+      <input
+        type="password"
+        className={styles.hostInput}
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        placeholder="ghp_… or a GHES personal access token"
+        aria-label="Personal access token"
+        data-testid="github-token-input"
+      />
+      <button
+        type="submit"
+        className={styles.connectButton}
+        disabled={status.kind === "submitting" || !token.trim()}
+        data-testid="github-token-submit-button"
+      >
+        {status.kind === "submitting" ? "Validating…" : "Connect with token"}
+      </button>
+      {onCancel && (
+        <button type="button" className={styles.cancelButton} onClick={onCancel}>
+          Cancel
+        </button>
+      )}
+      {status.kind === "error" && (
+        <span className={styles.authError} data-testid="github-token-auth-error">
+          {status.message}
+        </span>
+      )}
+    </form>
   );
 }
 
@@ -602,9 +874,9 @@ export function GitHubPRsSection() {
   };
 
   const handleDisconnect = useCallback(
-    async (username: string) => {
+    async (username: string, host: string) => {
       await client.revokeGitHubToken(
-        create(RevokeGitHubTokenRequestSchema, { username })
+        create(RevokeGitHubTokenRequestSchema, { username, host })
       );
       refresh();
     },
@@ -651,7 +923,7 @@ export function GitHubPRsSection() {
       {isOpen && (
         <div id="github-prs-list">
           {authUnavailable && !addingAccount ? (
-            <DeviceAuthBanner
+            <AddAccountPanel
               errorMessage={authState?.errorMessage ?? ""}
               onAuthComplete={refresh}
             />
@@ -666,7 +938,7 @@ export function GitHubPRsSection() {
               )}
 
               {addingAccount && (
-                <DeviceAuthBanner
+                <AddAccountPanel
                   errorMessage=""
                   onAuthComplete={handleAddAccountComplete}
                   onCancel={handleAddAccountCancel}

@@ -7,7 +7,7 @@ import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
+import { BackoffState, connectTimeoutMs, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
 import { MessageQueue } from "@/lib/terminal/MessageQueue";
 import { useTerminalFlowControl } from "./useTerminalFlowControl";
 import { useTerminalMetrics } from "./useTerminalMetrics";
@@ -49,6 +49,14 @@ interface UseTerminalStreamOptions {
   initialCols?: number; // Initial terminal columns (prevents size mismatch on first load)
   initialRows?: number; // Initial terminal rows (prevents size mismatch on first load)
   isExternal?: boolean; // Whether this is an external session (uses /ws/external endpoint)
+  /**
+   * True when this terminal is the one currently selected/visible to the user
+   * (drives fast connect-timeout). Only affects the NEXT_PUBLIC_RECONNECT_V2-gated
+   * auto-reconnect path below — the pre-flag legacy reconnect path in
+   * TerminalOutput.tsx has no automatic retry loop to attach a connect-timeout
+   * to and is out of scope.
+   */
+  foreground?: boolean;
 }
 
 interface TerminalStreamResult {
@@ -56,9 +64,9 @@ interface TerminalStreamResult {
   isConnected: boolean;
   error: Error | null;
   sendInput: (input: string) => void;
-  resize: (cols: number, rows: number) => void;
-  connect: (cols?: number, rows?: number) => void; // Optional dimensions to override initial values
-  disconnect: () => void;
+  resize: (cols: number, rows: number, force?: boolean) => void;
+  connect: (cols?: number, rows?: number) => Promise<void>; // Optional dimensions to override initial values
+  disconnect: () => Promise<void>;
   scrollbackLoaded: boolean; // Indicates if scrollback has been loaded
   requestScrollback: (fromSequence: number, limit: number) => void; // Request historical scrollback
   sendFlowControl: (paused: boolean, watermark?: number) => void; // Send flow control signal to server
@@ -68,6 +76,9 @@ interface TerminalStreamResult {
   terminalState: TerminalState;
   isHardFailed: boolean;
   handleManualReconnect: () => void;
+  requestFullResync: (urgent?: boolean) => void;
+  markResyncComplete: () => void;
+  markPaneResponseReceived: () => void;
 }
 
 export function useTerminalStream({
@@ -83,6 +94,7 @@ export function useTerminalStream({
   autoConnect = true,
   initialCols,
   initialRows,
+  foreground = false,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
   const [isConnected, setIsConnected] = useState(false);
@@ -96,11 +108,31 @@ export function useTerminalStream({
   const abortControllerRef = useRef<AbortController | null>(null);
   const isDisconnectingRef = useRef(false);
   const isConnectedRef = useRef(false);
+  // Guards against two independent visibility/focus-triggered reconnect paths
+  // (this hook's own Story 3.1.3 listener and useVisibilityResync, composed
+  // together in TerminalOutput.tsx) both calling connect() for the same
+  // disconnected session before either handshake completes.
+  const isConnectingRef = useRef(false);
   const shouldReconnectRef = useRef(false);
   const terminalBackoffRef = useRef(new BackoffState(1000, 30_000));
   const isHardFailedRef = useRef(false);
   const terminalDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const foregroundRef = useRef(foreground);
+  const foregroundConnectAttemptRef = useRef(0);
+  // Shared across the hook's whole lifetime (not per-connect() call) because the
+  // connectTimeoutRef callback below is declared outside the async message-processing
+  // IIFE and needs to read it. Correctness relies on connect()'s own re-entrancy guard
+  // (isConnectedRef/isConnectingRef) preventing two attempts from touching this ref at
+  // once — do not relax those guards without re-checking this invariant.
+  const firstMessageRef = useRef(true);
+  // Set immediately before attemptController.abort() fires from a connect-timeout,
+  // so the resulting stream error can be routed past onError (see the catch block
+  // below) instead of surfacing as a visible connection failure — a connect-timeout
+  // is a deliberate, internal fast-retry optimization, not a real failure the caller
+  // should count toward its own attempt/error UI.
+  const connectTimeoutAbortedRef = useRef(false);
   const connectRef = useRef<(overrideCols?: number, overrideRows?: number) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
   const scrollbackDecoderRef = useRef(new TextDecoder());
@@ -114,10 +146,53 @@ export function useTerminalStream({
     })
   ));
 
+  // Clears the pending per-attempt connect-timeout timer, if any. Shared across every
+  // exit path (first-message success, stream error/end, disconnect(), unmount, and a
+  // synchronous throw before the async message loop starts) so none of them can miss it.
+  const clearConnectTimeout = useCallback(() => {
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
+    }
+  }, []);
+
   // Sync ref with state
   useEffect(() => {
     isConnectedRef.current = isConnected;
   }, [isConnected]);
+
+  // Detect the foreground false→true transition (AC3): reset both the
+  // existing backoff-delay counter and the new fast-connect-timeout
+  // attempt counter so a just-selected terminal gets the full fast
+  // window immediately, not whatever was left over from before it was
+  // foreground (or from background attempts that happened while it wasn't selected).
+  //
+  // Also clear any pending reconnectTimerRef and reconnect immediately (pre-mortem
+  // Failure #1, P1): without this, a terminal that was mid-backoff-delay while
+  // backgrounded would still sit out that stale, potentially-30s wait after being
+  // selected, before the fast connect-timeout ever got a chance to apply.
+  useEffect(() => {
+    const wasForeground = foregroundRef.current;
+    foregroundRef.current = foreground;
+    if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") return; // same gate as the rest of this file's auto-reconnect logic
+    if (!wasForeground && foreground) {
+      terminalBackoffRef.current.reset();
+      foregroundConnectAttemptRef.current = 0;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+        // !isDisconnectingRef.current is unreachable via any path today — disconnect()
+        // always clears reconnectTimerRef before setting isDisconnectingRef, so this
+        // branch can never observe both truthy at once — but it's cheap, matches
+        // handleVisibilityOrOnline's analogous guard below, and protects a future
+        // refactor of disconnect()'s ordering from silently reintroducing a race.
+        // Not independently unit-tested for that reason (see sdd:6-verify PR review).
+        if (shouldReconnectRef.current && !isConnectingRef.current && !isConnectedRef.current && !isDisconnectingRef.current) {
+          connectRef.current?.();
+        }
+      }
+    }
+  }, [foreground]);
 
   // ---- Compose sub-hooks ----
 
@@ -152,7 +227,8 @@ export function useTerminalStream({
 
   // ---- Connect ----
   const connect = useCallback(async (overrideCols?: number, overrideRows?: number) => {
-    if (isConnectedRef.current || !sessionId) return;
+    if (isConnectedRef.current || isConnectingRef.current || !sessionId) return;
+    isConnectingRef.current = true;
     shouldReconnectRef.current = true;
     terminalBackoffRef.current.reset();
 
@@ -173,6 +249,27 @@ export function useTerminalStream({
 
     try {
       abortControllerRef.current = new AbortController();
+      const attemptController = abortControllerRef.current;
+      firstMessageRef.current = true;
+      connectTimeoutAbortedRef.current = false;
+      const foregroundAtSchedule = foregroundRef.current;
+      const timeoutMs = connectTimeoutMs(foregroundAtSchedule, foregroundConnectAttemptRef.current);
+      // Counted unconditionally (even with the flag off) since it's cheap and inert
+      // when nothing schedules a connect-timeout to consume it.
+      foregroundConnectAttemptRef.current += 1;
+      const attemptNumber = foregroundConnectAttemptRef.current;
+      if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") {
+        connectTimeoutRef.current = setTimeout(() => {
+          connectTimeoutRef.current = null;
+          // Race guard (pre-mortem Failure #3, P2): re-check firstMessageRef
+          // immediately before aborting, so a message that already landed and
+          // was processed is not retroactively aborted.
+          if (!firstMessageRef.current) return;
+          console.warn(`[reconnect] stream=terminal trigger=connect-timeout foreground=${foregroundAtSchedule} attempt=${attemptNumber} timeoutMs=${timeoutMs}`);
+          connectTimeoutAbortedRef.current = true;
+          attemptController.abort();
+        }, timeoutMs);
+      }
       messageQueueRef.current = new MessageQueue();
 
       // Send initial handshake with dimensions
@@ -207,13 +304,14 @@ export function useTerminalStream({
       // Message processing loop
       (async () => {
         try {
-          let firstMessage = true;
           for await (const msg of stream) {
-            if (firstMessage) {
+            if (firstMessageRef.current) {
+              clearConnectTimeout();
+              isConnectingRef.current = false;
               setIsConnected(true);
               setScrollbackLoaded(true);
               setTerminalState('LOADING');
-              firstMessage = false;
+              firstMessageRef.current = false;
             }
 
             // Task 4.1.2 — Handle ResizeQuiescence message (R1.4).
@@ -308,15 +406,25 @@ export function useTerminalStream({
             setIsHardFailed(true);
             console.warn(`[reconnect] stream=terminal non-retriable ws-close-code=${wsCode}, giving up`);
           }
-          handleError(err);
+          // A connect-timeout abort is our own deliberate fast-retry optimization, not
+          // a real failure — don't surface it via onError/setError, or callers that
+          // count onError calls toward a user-visible "connection failed" UI (e.g.
+          // TerminalOutput.tsx's connectionAttempts banner) would show churn/false
+          // "Terminal unavailable" states for what's meant to be an invisible retry.
+          // The internal backoff/reconnect scheduling below is unaffected either way.
+          if (!connectTimeoutAbortedRef.current) {
+            handleError(err);
+          }
         } finally {
           isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
+          isConnectingRef.current = false;
           setIsConnected(false);
           setTerminalState('DISCONNECTED');
           // Reset decoders so stale {stream:true} buffered state from a server-closed
           // connection does not corrupt the next connect() call.
           textDecoderRef.current = new TextDecoder();
           scrollbackDecoderRef.current = new TextDecoder();
+          clearConnectTimeout();
           if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
               && shouldReconnectRef.current
               && !isDisconnectingRef.current) {
@@ -342,11 +450,16 @@ export function useTerminalStream({
         }
       })();
     } catch (err) {
+      // Covers a synchronous throw before the async message loop starts (e.g. proto
+      // schema validation, MessageQueue construction) — the connect-timeout scheduled
+      // above must not outlive this now-dead attempt.
+      isConnectingRef.current = false;
+      clearConnectTimeout();
       handleError(err);
       setIsConnected(false);
     }
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      flowControl, metrics, handleError, initialCols, initialRows]);
+      flowControl, metrics, handleError, initialCols, initialRows, clearConnectTimeout]);
 
   // Keep connectRef in sync so visibility/online listeners always call the current closure
   connectRef.current = connect;
@@ -362,6 +475,7 @@ export function useTerminalStream({
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
+    clearConnectTimeout();
     const isResyncingRef = getIsResyncingRef();
     if (isDisconnectingRef.current || isResyncingRef.current) {
       if (isResyncingRef.current) {
@@ -398,7 +512,7 @@ export function useTerminalStream({
     isDisconnectingRef.current = false;
     textDecoderRef.current = new TextDecoder();
     scrollbackDecoderRef.current = new TextDecoder();
-  }, [getIsResyncingRef]);
+  }, [getIsResyncingRef, clearConnectTimeout]);
 
   // ---- Auto-connect / cleanup ----
   useEffect(() => {
@@ -411,6 +525,7 @@ export function useTerminalStream({
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
+      clearConnectTimeout();
       metrics.flushOutputBuffer();
       disconnect();
     };
@@ -470,5 +585,8 @@ export function useTerminalStream({
     terminalState,
     isHardFailed,
     handleManualReconnect,
+    requestFullResync: flowControl.requestFullResync,
+    markResyncComplete: flowControl.markResyncComplete,
+    markPaneResponseReceived: flowControl.markPaneResponseReceived,
   };
 }

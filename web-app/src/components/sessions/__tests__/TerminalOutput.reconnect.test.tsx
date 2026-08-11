@@ -114,6 +114,11 @@ function makeStreamMock(overrides: Record<string, unknown> = {}) {
     terminalState: "DISCONNECTED",
     isHardFailed: false,
     handleManualReconnect: jest.fn(),
+    // useVisibilityResync is wired unconditionally in TerminalOutput.tsx and
+    // calls these on every unmount/session-id change.
+    requestFullResync: jest.fn(),
+    markResyncComplete: jest.fn(),
+    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }
@@ -354,5 +359,29 @@ describe("TerminalOutput reconnect banner", () => {
     fireEvent.click(retryButton);
 
     expect(handleManualReconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TerminalOutput foreground wiring", () => {
+  it("TerminalOutput_should_passForegroundTrue_When_isVisiblePropTrue", () => {
+    const mockFn = useTerminalStream as jest.Mock;
+    mockFn.mockReturnValue(makeStreamMock());
+
+    render(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={true} />);
+
+    expect(mockFn).toHaveBeenCalledWith(
+      expect.objectContaining({ foreground: true })
+    );
+  });
+
+  it("TerminalOutput_should_passForegroundFalse_When_isVisiblePropFalse", () => {
+    const mockFn = useTerminalStream as jest.Mock;
+    mockFn.mockReturnValue(makeStreamMock());
+
+    render(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+
+    expect(mockFn).toHaveBeenCalledWith(
+      expect.objectContaining({ foreground: false })
+    );
   });
 });

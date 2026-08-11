@@ -36,6 +36,16 @@ var (
 
 const ghAuthTTL = 5 * time.Minute
 
+// PR state strings. These are the single source of truth for the three PR
+// lifecycle states surfaced by PRInfo.State — GetPRByNumber and any other
+// consumer of PRInfo.State should compare against these constants rather
+// than hardcoding "open"/"closed"/"merged" string literals.
+const (
+	PRStateOpen   = "open"
+	PRStateClosed = "closed"
+	PRStateMerged = "merged"
+)
+
 // PRInfo contains metadata about a GitHub pull request
 type PRInfo struct {
 	Number       int       `json:"number"`
@@ -201,10 +211,11 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 	return fetchLoginFromRequest(req)
 }
 
-// GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token.
+// GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token
+// on host ("" means github.com).
 // Returns ("", nil) when the token is invalid or unauthenticated.
-func GetCurrentUserLoginWithToken(ctx context.Context, token string) (string, error) {
-	req, err := newGHRequestWithToken(ctx, "user", token)
+func GetCurrentUserLoginWithToken(ctx context.Context, host, token string) (string, error) {
+	req, err := newGHRequestForHostWithToken(ctx, host, "user", token)
 	if err != nil {
 		return "", fmt.Errorf("build /user request: %w", err)
 	}
@@ -424,6 +435,100 @@ func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, e
 	})
 
 	return GetPRInfoCtx(ctx, owner, repo, prs[0].Number)
+}
+
+// GetPRByNumber fetches a single pull request by its number using the GitHub
+// REST API directly (no gh subprocess). Unlike GetPRForBranch, which looks a
+// PR up by head branch name and can therefore match the wrong PR when a
+// branch is reused or renamed, GetPRByNumber looks a PR up by its immutable
+// number — the root-cause fix for branch-name-keyed lookups matching stale
+// or unrelated PRs.
+//
+// Returns ErrNoPR when no pull request exists for the given number (HTTP
+// 404). Before returning success, the response's base.repo.full_name is
+// compared against the requested owner/repo; a mismatch returns a non-nil,
+// non-ErrNoPR error rather than trusting the response body blindly.
+func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRInfo, error) {
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
+		url.PathEscape(owner), url.PathEscape(repo), prNumber)
+
+	req, err := newGHRequest(ctx, apiPath)
+	if err != nil {
+		return nil, fmt.Errorf("build PR request: %w", err)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("PR request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, ErrNoPR
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("GitHub API: unauthorized (401) – run 'gh auth login'")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("GitHub API: forbidden (403) – check token permissions")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned status %d for PR #%d", resp.StatusCode, prNumber)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read PR response: %w", err)
+	}
+
+	// Distinct local response struct for this REST endpoint's shape — note
+	// the author field here is user.login, NOT author.login (the shape used
+	// by ghPRResponse for the gh pr view --json subprocess path above).
+	var prResp struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		State   string `json:"state"`
+		Merged  bool   `json:"merged"`
+		Head    struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+		Base struct {
+			Ref  string `json:"ref"`
+			Repo struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
+		} `json:"base"`
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &prResp); err != nil {
+		return nil, fmt.Errorf("parse PR response: %w", err)
+	}
+
+	wantFullName := owner + "/" + repo
+	if prResp.Base.Repo.FullName != wantFullName {
+		return nil, fmt.Errorf("PR #%d base.repo.full_name %q does not match requested repo %q",
+			prNumber, prResp.Base.Repo.FullName, wantFullName)
+	}
+
+	state := PRStateOpen
+	switch {
+	case prResp.Merged:
+		state = PRStateMerged
+	case prResp.State == PRStateClosed:
+		state = PRStateClosed
+	}
+
+	return &PRInfo{
+		Number:  prResp.Number,
+		HeadRef: prResp.Head.Ref,
+		BaseRef: prResp.Base.Ref,
+		State:   state,
+		Author:  prResp.User.Login,
+		HTMLURL: prResp.HTMLURL,
+	}, nil
 }
 
 // IsForkRepo reports whether the given repo is a fork of another repository.

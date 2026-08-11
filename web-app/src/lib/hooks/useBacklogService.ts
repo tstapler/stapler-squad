@@ -3,6 +3,8 @@
 import { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
+import { timestampDate } from "@bufbuild/protobuf/wkt";
+import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import {
   BacklogService,
@@ -110,6 +112,17 @@ export interface BacklogItem {
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * The raw, undecoded protobuf Timestamp backing `updatedAt` — kept
+   * alongside the display-oriented ISO string because `updatedAt` is
+   * lossy (a JS Date is millisecond-precision; the server's real
+   * updated_at column is nanosecond-precision Go time.Time, and ent's CAS
+   * check is exact equality). Passing this straight back as
+   * transitionStatus's expectedUpdatedAt is a lossless passthrough — the
+   * exact bytes the server sent, never touched by a Date conversion — so
+   * it round-trips correctly where `updatedAt` cannot.
+   */
+  updatedAtRaw?: Timestamp;
   /** Gate verdict from the most recent item session (if in review status) */
   gateVerdict?: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "UNVERIFIABLE";
   gateVerdictSummary?: string;
@@ -128,8 +141,29 @@ export interface BacklogItem {
   prUrl?: string;
   /** GitHub PR number when item is in pr_pending status */
   prNumber?: number;
+  /** Source tracker's identifier for this item (e.g. a GitHub issue number), populated for imported items only. */
+  externalId?: string;
+  /** Deep link to the source tracker's issue for this item (e.g. a GitHub issue's html_url), populated for imported items only. */
+  externalUrl?: string;
+  /** Labels mirrored from the source tracker (e.g. GitHub issue labels), populated for imported items only. */
+  labels?: string[];
+  /**
+   * Server-authoritative set of statuses a manual override may transition
+   * this item to (session.WorkflowEngine.AllowedTransitions(status)). The
+   * manual-override UI must render this verbatim, not re-derive the
+   * transition graph client-side. Optional (defaults to []) so existing
+   * test fixtures that predate this field don't all need updating.
+   */
+  allowedTransitions?: string[];
   /** Pipeline mode slug driving this item's triage/work/review, or "" for the built-in default. */
   pipelineMode?: string;
+  /**
+   * Coarse classification (bugfix/feature/chore/refactor) used only as a
+   * frontend-defaulting hint at creation time — see
+   * web-app/src/lib/backlog/categoryDefaults.ts. Undefined/"" means
+   * uncategorized.
+   */
+  category?: string;
   /**
    * Per-item override for the auto-rework cap. Undefined = use the global
    * default (Settings → Defaults). 0 = unlimited retries for this item. >0 =
@@ -235,8 +269,18 @@ export interface BacklogItemInput {
   skipTriage?: boolean;
   /** Pipeline mode slug, or "" for the built-in default. */
   pipelineMode?: string;
+  /** Coarse classification (bugfix/feature/chore/refactor), or "" for uncategorized. See BacklogItem.category. */
+  category?: string;
   /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
   reworkCapOverride?: number;
+  /**
+   * Manually associate an existing PR with this item (the "escape hatch" for
+   * a PR that shipped via an out-of-band worktree). Must be set together
+   * with prNumber, and only takes effect while the item is in "review"
+   * status — see UpdateBacklogItem's server-side validation.
+   */
+  prUrl?: string;
+  prNumber?: number;
 }
 
 export interface ListBacklogItemsFilter {
@@ -429,8 +473,14 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
     linkedSessions,
     notes: p.notes || undefined,
-    createdAt: p.createdAt ? new Date(Number(p.createdAt.seconds) * 1000).toISOString() : undefined,
-    updatedAt: p.updatedAt ? new Date(Number(p.updatedAt.seconds) * 1000).toISOString() : undefined,
+    // timestampDate (not a hand-rolled `Number(seconds) * 1000`) — the
+    // previous conversion silently dropped the sub-second `nanos` field
+    // entirely, truncating to the whole second. Still only millisecond
+    // precision (a JS Date's ceiling) for display purposes — updatedAtRaw
+    // below is the lossless form used for exact-equality CAS checks.
+    createdAt: p.createdAt ? timestampDate(p.createdAt).toISOString() : undefined,
+    updatedAt: p.updatedAt ? timestampDate(p.updatedAt).toISOString() : undefined,
+    updatedAtRaw: p.updatedAt,
     gateVerdict,
     gateVerdictSummary,
     gateCriteria,
@@ -442,7 +492,12 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
     pipelineMode: p.pipelineMode || undefined,
+    category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
+    externalId: p.externalId || undefined,
+    externalUrl: p.externalUrl || undefined,
+    labels: p.labels ?? [],
+    allowedTransitions: p.allowedTransitions ?? [],
   };
 }
 
@@ -508,7 +563,27 @@ interface UseBacklogServiceReturn {
   transitionStatus: (
     id: string,
     toStatus: BacklogItemStatus,
-    precondition?: BacklogItemStatus
+    options?: {
+      /** CAS precondition: reject if the item's current status isn't this. */
+      expectedStatus?: BacklogItemStatus;
+      /**
+       * CAS precondition: reject if the item's updated_at isn't this.
+       * Pass the item's own `updatedAtRaw` (the undecoded protobuf
+       * Timestamp), not `updatedAt` (a display-oriented ISO string) — the
+       * latter is millisecond-precision and can never exactly match the
+       * server's nanosecond-precision column, so a write built from it
+       * would spuriously fail CAS on virtually every call.
+       */
+      expectedUpdatedAt?: Timestamp;
+      /**
+       * Non-empty means this is a manual operator override (bypasses
+       * TransitionGuard's business-rule gates, e.g. review->done without a
+       * PASS verdict) rather than a routine automated transition — required
+       * by the manual-override UI, threaded to the server so the audit trail
+       * and success notification carry the operator's stated reason.
+       */
+      overrideReason?: string;
+    }
   ) => Promise<BacklogItem | null>;
   spawnSessionFromItem: (id: string, options?: { autonomous?: boolean; force?: boolean }) => Promise<{ sessionUuid: string; queued: boolean } | null>;
   triggerTriage: (id: string, feedback?: string) => Promise<{ itemSessionId: string } | null>;
@@ -617,6 +692,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           notes: data.notes ?? "",
           skipTriage: data.skipTriage ?? false,
           pipelineMode: data.pipelineMode ?? "",
+          category: data.category ?? "",
         });
         return resp.item
           ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
@@ -648,7 +724,10 @@ export function useBacklogService(): UseBacklogServiceReturn {
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,
+          category: data.category,
           reworkCapOverride: data.reworkCapOverride,
+          prUrl: data.prUrl,
+          prNumber: data.prNumber,
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
@@ -688,7 +767,11 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (
       id: string,
       toStatus: BacklogItemStatus,
-      precondition?: BacklogItemStatus
+      options?: {
+        expectedStatus?: BacklogItemStatus;
+        expectedUpdatedAt?: Timestamp;
+        overrideReason?: string;
+      }
     ): Promise<BacklogItem | null> => {
       if (!clientRef.current) return null;
       try {
@@ -696,8 +779,11 @@ export function useBacklogService(): UseBacklogServiceReturn {
         const resp = await clientRef.current.transitionBacklogItemStatus({
           itemId: id,
           targetStatus: toStatus,
-          expectedStatus: precondition ?? "",
-          overrideReason: "",
+          expectedStatus: options?.expectedStatus ?? "",
+          // Passed through verbatim — no Date round-trip. See the
+          // expectedUpdatedAt doc comment above for why that matters.
+          expectedUpdatedAt: options?.expectedUpdatedAt,
+          overrideReason: options?.overrideReason ?? "",
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {

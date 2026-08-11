@@ -225,6 +225,11 @@ func PauseReason(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldPauseReason, v))
 }
 
+// ExitReason applies equality check predicate on the "exit_reason" field. It's identical to ExitReasonEQ.
+func ExitReason(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldExitReason, v))
+}
+
 // WorkflowID applies equality check predicate on the "workflow_id" field. It's identical to WorkflowIDEQ.
 func WorkflowID(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldWorkflowID, v))
@@ -258,6 +263,11 @@ func GithubRepo(v string) predicate.Session {
 // SessionArtifacts applies equality check predicate on the "session_artifacts" field. It's identical to SessionArtifactsEQ.
 func SessionArtifacts(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldSessionArtifacts, v))
+}
+
+// Note applies equality check predicate on the "note" field. It's identical to NoteEQ.
+func Note(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldNote, v))
 }
 
 // TitleEQ applies the EQ predicate on the "title" field.
@@ -2100,6 +2110,81 @@ func PauseReasonContainsFold(v string) predicate.Session {
 	return predicate.Session(sql.FieldContainsFold(FieldPauseReason, v))
 }
 
+// ExitReasonEQ applies the EQ predicate on the "exit_reason" field.
+func ExitReasonEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldExitReason, v))
+}
+
+// ExitReasonNEQ applies the NEQ predicate on the "exit_reason" field.
+func ExitReasonNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldExitReason, v))
+}
+
+// ExitReasonIn applies the In predicate on the "exit_reason" field.
+func ExitReasonIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldExitReason, vs...))
+}
+
+// ExitReasonNotIn applies the NotIn predicate on the "exit_reason" field.
+func ExitReasonNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldExitReason, vs...))
+}
+
+// ExitReasonGT applies the GT predicate on the "exit_reason" field.
+func ExitReasonGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldExitReason, v))
+}
+
+// ExitReasonGTE applies the GTE predicate on the "exit_reason" field.
+func ExitReasonGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldExitReason, v))
+}
+
+// ExitReasonLT applies the LT predicate on the "exit_reason" field.
+func ExitReasonLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldExitReason, v))
+}
+
+// ExitReasonLTE applies the LTE predicate on the "exit_reason" field.
+func ExitReasonLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldExitReason, v))
+}
+
+// ExitReasonContains applies the Contains predicate on the "exit_reason" field.
+func ExitReasonContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldExitReason, v))
+}
+
+// ExitReasonHasPrefix applies the HasPrefix predicate on the "exit_reason" field.
+func ExitReasonHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldExitReason, v))
+}
+
+// ExitReasonHasSuffix applies the HasSuffix predicate on the "exit_reason" field.
+func ExitReasonHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldExitReason, v))
+}
+
+// ExitReasonIsNil applies the IsNil predicate on the "exit_reason" field.
+func ExitReasonIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldExitReason))
+}
+
+// ExitReasonNotNil applies the NotNil predicate on the "exit_reason" field.
+func ExitReasonNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldExitReason))
+}
+
+// ExitReasonEqualFold applies the EqualFold predicate on the "exit_reason" field.
+func ExitReasonEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldExitReason, v))
+}
+
+// ExitReasonContainsFold applies the ContainsFold predicate on the "exit_reason" field.
+func ExitReasonContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldExitReason, v))
+}
+
 // WorkflowIDEQ applies the EQ predicate on the "workflow_id" field.
 func WorkflowIDEQ(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldWorkflowID, v))
@@ -2573,6 +2658,81 @@ func SessionArtifactsEqualFold(v string) predicate.Session {
 // SessionArtifactsContainsFold applies the ContainsFold predicate on the "session_artifacts" field.
 func SessionArtifactsContainsFold(v string) predicate.Session {
 	return predicate.Session(sql.FieldContainsFold(FieldSessionArtifacts, v))
+}
+
+// NoteEQ applies the EQ predicate on the "note" field.
+func NoteEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldNote, v))
+}
+
+// NoteNEQ applies the NEQ predicate on the "note" field.
+func NoteNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldNote, v))
+}
+
+// NoteIn applies the In predicate on the "note" field.
+func NoteIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldNote, vs...))
+}
+
+// NoteNotIn applies the NotIn predicate on the "note" field.
+func NoteNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldNote, vs...))
+}
+
+// NoteGT applies the GT predicate on the "note" field.
+func NoteGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldNote, v))
+}
+
+// NoteGTE applies the GTE predicate on the "note" field.
+func NoteGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldNote, v))
+}
+
+// NoteLT applies the LT predicate on the "note" field.
+func NoteLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldNote, v))
+}
+
+// NoteLTE applies the LTE predicate on the "note" field.
+func NoteLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldNote, v))
+}
+
+// NoteContains applies the Contains predicate on the "note" field.
+func NoteContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldNote, v))
+}
+
+// NoteHasPrefix applies the HasPrefix predicate on the "note" field.
+func NoteHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldNote, v))
+}
+
+// NoteHasSuffix applies the HasSuffix predicate on the "note" field.
+func NoteHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldNote, v))
+}
+
+// NoteIsNil applies the IsNil predicate on the "note" field.
+func NoteIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldNote))
+}
+
+// NoteNotNil applies the NotNil predicate on the "note" field.
+func NoteNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldNote))
+}
+
+// NoteEqualFold applies the EqualFold predicate on the "note" field.
+func NoteEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldNote, v))
+}
+
+// NoteContainsFold applies the ContainsFold predicate on the "note" field.
+func NoteContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldNote, v))
 }
 
 // HasWorktree applies the HasEdge predicate on the "worktree" edge.

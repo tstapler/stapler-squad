@@ -123,6 +123,11 @@ function makeStreamMock(overrides: Record<string, unknown> = {}) {
     stopRecording: jest.fn(),
     output: "",
     terminalState: "STABLE",
+    // useVisibilityResync is wired unconditionally in TerminalOutput.tsx and
+    // calls these on every unmount/session-id change.
+    requestFullResync: jest.fn(),
+    markResyncComplete: jest.fn(),
+    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }

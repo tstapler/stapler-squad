@@ -2,20 +2,29 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useGetFileContent } from "@/lib/hooks/useFileService";
-import { darkTheme } from "@/styles/theme.css";
+import { vars } from "@/styles/theme.css";
 import { buildGutterMarks, type GutterMarkType } from "@/lib/utils/parseDiff";
 import {
   container, emptyState, emptyIcon, emptyHint,
   loading as loadingClass, error as errorClass, spinner,
   breadcrumb, breadcrumbSegment, breadcrumbCurrent, breadcrumbSep,
-  truncationWarning, viewer, shikiOutput, shikiOutputWrap, plainPre, plainPreWrapped, codeMirrorEditor,
+  truncationWarning, viewer, codeMirrorEditor,
   binaryPlaceholder, binaryIcon, binaryTitle, binaryMeta,
   downloadButton, wrapToggleButton, wrapToggleButtonActive, imageViewer, imagePreview,
   pdfViewer, pdfEmbed,
   videoViewer, videoPlayer, videoMeta,
-  shimmer,
   gutterMarkerAdd, gutterMarkerDelete, gutterMarkerModify,
 } from "./FileContentViewer.css";
+
+// Vim-style "gg" (jump to doc start) requires two "g" presses within a short
+// window; a lone "g" should otherwise be a no-op (not insert text, since the
+// editor is read-only anyway). Extracted as a pure function so the timing
+// logic is unit-testable without mounting CodeMirror.
+export const DOUBLE_G_WINDOW_MS = 400;
+
+export function isDoubleGPress(lastGPressAt: number, now: number, windowMs: number = DOUBLE_G_WINDOW_MS): boolean {
+  return now - lastGPressAt < windowMs;
+}
 
 const GUTTER_MARKER_CLASS: Record<GutterMarkType, string> = {
   add: gutterMarkerAdd,
@@ -23,7 +32,7 @@ const GUTTER_MARKER_CLASS: Record<GutterMarkType, string> = {
   modify: gutterMarkerModify,
 };
 
-// Language detection map: file extension → Shiki/CodeMirror language ID.
+// Language detection map: file extension → CodeMirror language ID.
 const EXT_TO_LANG: Record<string, string> = {
   go: "go",
   ts: "typescript",
@@ -93,23 +102,6 @@ function detectLanguage(filePath: string): string {
 
   const ext = lower.split(".").pop() || "";
   return EXT_TO_LANG[ext] || "text";
-}
-
-const LARGE_FILE_LINE_THRESHOLD = 5000;
-
-// ---- Shiki highlighter singleton ----
-
-let highlighterPromise: Promise<import("shiki").Highlighter> | null = null;
-
-async function getHighlighter() {
-  if (!highlighterPromise) {
-    const { getSingletonHighlighter } = await import("shiki");
-    highlighterPromise = getSingletonHighlighter({
-      themes: ["github-light", "github-dark"],
-      langs: [],
-    });
-  }
-  return highlighterPromise;
 }
 
 // ---- Breadcrumb ----
@@ -184,29 +176,13 @@ function Breadcrumb({ path, onSegmentClick, downloadUrl, openUrl, wrapLines, onT
   );
 }
 
-// ---- App theme hook ----
-
-function useAppTheme(): "light" | "dark" {
-  const [isDark, setIsDark] = useState<boolean>(() => {
-    if (typeof document === "undefined") return true;
-    return document.documentElement.classList.contains(darkTheme);
-  });
-
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setIsDark(document.documentElement.classList.contains(darkTheme));
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => observer.disconnect();
-  }, []);
-
-  return isDark ? "dark" : "light";
-}
-
-// ---- CodeMirror viewer (large files) ----
+// ---- CodeMirror viewer ----
+//
+// Editor chrome and syntax colors are sourced from theme tokens (mainly the
+// `terminal*` family, matching FilesTab.css.ts's container) rather than a
+// hardcoded dark theme. These tokens resolve to CSS custom properties scoped
+// by the active theme class on <html>, so no JS theme-detection is needed —
+// switching themes (including non-dark ones like "clean") repaints automatically.
 
 interface CodeMirrorViewerProps {
   content: string;
@@ -218,19 +194,57 @@ interface CodeMirrorViewerProps {
 function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMirrorViewerProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<import("@codemirror/view").EditorView | null>(null);
-  const appTheme = useAppTheme();
-  const isDark = appTheme === "dark";
+  // Compartment for the line-wrapping extension, plus the cached extension
+  // value itself, so toggling "wrap" can dispatch a lightweight reconfigure
+  // instead of tearing down and rebuilding the whole EditorView (which would
+  // discard cursor position, scroll offset, and undo history). Both are set
+  // once the async mount below finishes and cleared on unmount/remount.
+  const wrapCompartmentRef = useRef<import("@codemirror/state").Compartment | null>(null);
+  const lineWrappingExtRef = useRef<import("@codemirror/state").Extension | null>(null);
+  // Always-current wrapLines value, read at EditorView-construction time so a
+  // toggle that happens while the dynamic imports below are still in flight
+  // isn't silently lost (the mount effect intentionally does NOT depend on
+  // wrapLines anymore — see the dedicated reconfigure effect below).
+  const wrapLinesRef = useRef(wrapLines);
+  useEffect(() => {
+    wrapLinesRef.current = wrapLines;
+  }, [wrapLines]);
 
   useEffect(() => {
+    // Guards against a stale async mount overwriting a newer one: if the
+    // file/language changes again before this effect's dynamic imports
+    // resolve, React runs this cleanup (setting cancelled=true) before the
+    // next effect run starts its own mount. Every await point below checks
+    // `cancelled` so a superseded run never calls `new EditorView(...)` nor
+    // touches viewRef.current, and the cleanup only destroys/nulls the view
+    // it actually owns.
+    let cancelled = false;
     let view: import("@codemirror/view").EditorView | null = null;
 
     (async () => {
       if (!editorRef.current) return;
 
-      const { EditorView, gutter, GutterMarker } = await import("@codemirror/view");
-      const { EditorState } = await import("@codemirror/state");
+      const { EditorView, gutter, GutterMarker, keymap } = await import("@codemirror/view");
+      if (cancelled) return;
+      const { EditorState, Compartment } = await import("@codemirror/state");
+      if (cancelled) return;
       const { basicSetup } = await import("codemirror");
-      const { oneDark } = await import("@codemirror/theme-one-dark");
+      if (cancelled) return;
+      const { HighlightStyle, syntaxHighlighting } = await import("@codemirror/language");
+      if (cancelled) return;
+      const { tags } = await import("@lezer/highlight");
+      if (cancelled) return;
+      const {
+        cursorCharLeft, cursorCharRight, cursorLineDown, cursorLineUp,
+        selectCharLeft, selectCharRight, selectLineDown, selectLineUp,
+        cursorLineBoundaryBackward, cursorLineBoundaryForward,
+        selectLineBoundaryBackward, selectLineBoundaryForward,
+        cursorDocStart, cursorDocEnd, cursorPageDown, cursorPageUp,
+        selectPageDown, selectPageUp,
+      } = await import("@codemirror/commands");
+      if (cancelled) return;
+      const { openSearchPanel, findNext, findPrevious } = await import("@codemirror/search");
+      if (cancelled) return;
 
       // Load language extension.
       let langExtension = null;
@@ -239,6 +253,7 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
       } catch {
         // Fall back to plain text if language not supported.
       }
+      if (cancelled) return;
 
       class ChangeGutterMarker extends GutterMarker {
         constructor(private markType: GutterMarkType) {
@@ -264,13 +279,123 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
         },
       });
 
+      // Editor chrome (background/foreground/gutters/selection/cursor) sourced from the
+      // theme-invariant terminal token family, matching FilesTab.css.ts's container.
+      const cmTheme = EditorView.theme(
+        {
+          "&": {
+            color: vars.color.terminalForeground,
+            backgroundColor: vars.color.terminalBackground,
+            height: "100%",
+          },
+          ".cm-content": {
+            caretColor: vars.color.terminalCursor,
+          },
+          ".cm-cursor, .cm-dropCursor": {
+            borderLeftColor: vars.color.terminalCursor,
+          },
+          "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+            backgroundColor: `${vars.color.terminalHoverBg} !important`,
+          },
+          ".cm-activeLine": {
+            backgroundColor: vars.color.terminalHoverBg,
+          },
+          ".cm-activeLineGutter": {
+            backgroundColor: vars.color.terminalHoverBg,
+          },
+          ".cm-gutters": {
+            backgroundColor: vars.color.terminalBackground,
+            color: vars.color.terminalTextMuted,
+            borderRight: `1px solid ${vars.color.terminalBorder}`,
+          },
+          ".cm-lineNumbers .cm-gutterElement": {
+            color: vars.color.terminalTextMuted,
+          },
+        },
+        { dark: true },
+      );
+
+      // Syntax-token colors, sourced from existing semantic tokens so they stay
+      // consistent with the rest of the app's accent/status palette.
+      const cmHighlightStyle = HighlightStyle.define([
+        { tag: [tags.keyword, tags.controlKeyword, tags.operatorKeyword, tags.modifier], color: vars.color.primary },
+        { tag: [tags.string, tags.special(tags.string)], color: vars.color.success },
+        { tag: [tags.comment, tags.lineComment, tags.blockComment], color: vars.color.terminalTextMuted, fontStyle: "italic" },
+        { tag: [tags.number, tags.bool, tags.null], color: vars.color.warning },
+        { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: vars.color.accentText },
+        { tag: [tags.definition(tags.variableName), tags.definition(tags.propertyName)], color: vars.color.terminalForeground },
+        { tag: [tags.className, tags.typeName], color: vars.color.primary },
+        { tag: [tags.tagName, tags.attributeName], color: vars.color.gitModified },
+        { tag: tags.invalid, color: vars.color.error },
+      ]);
+
+      // Vim-style navigation/selection, matching FileTree.tsx's handleTreeKeyDown
+      // semantics: hjkl movement, gg/G doc start/end, ctrl-d/u paging, v-extended
+      // selection via shift, y to yank, / n N for search.
+      let lastGPress = 0;
+      const vimKeymap = keymap.of([
+        { key: "h", run: cursorCharLeft },
+        { key: "l", run: cursorCharRight },
+        { key: "j", run: cursorLineDown },
+        { key: "k", run: cursorLineUp },
+        { key: "0", run: cursorLineBoundaryBackward },
+        { key: "$", run: cursorLineBoundaryForward },
+        {
+          key: "g",
+          run: (v) => {
+            const now = Date.now();
+            const isDoubleG = isDoubleGPress(lastGPress, now);
+            lastGPress = isDoubleG ? 0 : now;
+            return isDoubleG ? cursorDocStart(v) : true;
+          },
+        },
+        { key: "G", run: cursorDocEnd },
+        { key: "Ctrl-d", run: cursorPageDown },
+        { key: "Ctrl-u", run: cursorPageUp },
+        { key: "Shift-h", run: selectCharLeft },
+        { key: "Shift-l", run: selectCharRight },
+        { key: "Shift-j", run: selectLineDown },
+        { key: "Shift-k", run: selectLineUp },
+        { key: "Shift-0", run: selectLineBoundaryBackward },
+        { key: "Shift-$", run: selectLineBoundaryForward },
+        { key: "Shift-Ctrl-d", run: selectPageDown },
+        { key: "Shift-Ctrl-u", run: selectPageUp },
+        {
+          key: "y",
+          run: (v) => {
+            const selected = v.state.sliceDoc(v.state.selection.main.from, v.state.selection.main.to);
+            if (selected) void navigator.clipboard.writeText(selected);
+            return true;
+          },
+        },
+        { key: "/", run: openSearchPanel },
+        { key: "n", run: findNext },
+        { key: "Shift-n", run: findPrevious },
+      ]);
+
+      // Wrap-lines is wired through a Compartment so a later toggle (see the
+      // dedicated effect below) can reconfigure just this slice of state via
+      // dispatch() instead of tearing down and recreating the whole
+      // EditorView, which would otherwise discard cursor position, scroll
+      // offset, and undo history on every wrap toggle.
+      const wrapCompartment = new Compartment();
+      const lineWrappingExt = EditorView.lineWrapping;
+
       // readOnly prevents edits; omitting editable.of(false) keeps contenteditable=true
       // so the browser allows text selection and copy.
       const extensions = [
         basicSetup,
         EditorState.readOnly.of(true),
-        ...(isDark ? [oneDark] : []),
-        ...(wrapLines ? [EditorView.lineWrapping] : []),
+        cmTheme,
+        syntaxHighlighting(cmHighlightStyle),
+        vimKeymap,
+        wrapCompartment.of(wrapLinesRef.current ? [lineWrappingExt] : []),
+        // gutterMarks is intentionally NOT compartmentalized: the gutter's
+        // structural inclusion (present/absent) and its lineMarker closure
+        // both close over `gutterMarks` from this render, and gutter marks
+        // only change when the diff content or selected file changes
+        // (infrequent, unlike the interactively-toggled wrapLines), so a
+        // full rebuild on that dependency is an acceptable, simpler tradeoff.
         ...(gutterMarks && gutterMarks.size > 0 ? [changeGutter] : []),
       ];
       if (langExtension) extensions.push(langExtension);
@@ -280,15 +405,39 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
         extensions,
       });
 
+      if (cancelled || !editorRef.current) return;
+
       view = new EditorView({ state, parent: editorRef.current });
       viewRef.current = view;
+      wrapCompartmentRef.current = wrapCompartment;
+      lineWrappingExtRef.current = lineWrappingExt;
     })();
 
     return () => {
+      cancelled = true;
       view?.destroy();
-      viewRef.current = null;
+      if (viewRef.current === view) {
+        viewRef.current = null;
+      }
+      wrapCompartmentRef.current = null;
+      lineWrappingExtRef.current = null;
     };
-  }, [content, language, isDark, wrapLines, gutterMarks]);
+  }, [content, language, gutterMarks]);
+
+  // Lightweight wrap-lines toggle: reconfigures the existing view's
+  // Compartment instead of rebuilding the EditorView, so cursor position,
+  // scroll offset, and undo history survive the toggle. No-ops until the
+  // async mount effect above has finished (wrapCompartmentRef populated);
+  // wrapLinesRef (kept current above) covers the value at initial mount.
+  useEffect(() => {
+    const view = viewRef.current;
+    const compartment = wrapCompartmentRef.current;
+    const lineWrappingExt = lineWrappingExtRef.current;
+    if (!view || !compartment) return;
+    view.dispatch({
+      effects: compartment.reconfigure(wrapLines ? [lineWrappingExt!] : []),
+    });
+  }, [wrapLines]);
 
   return <div ref={editorRef} className={codeMirrorEditor} />;
 }
@@ -342,69 +491,6 @@ async function loadCodemirrorLang(lang: string) {
   }
 }
 
-// ---- Shiki viewer (small/medium files) ----
-
-interface ShikiViewerProps {
-  content: string;
-  language: string;
-  wrapLines?: boolean;
-}
-
-function ShikiViewer({ content, language, wrapLines }: ShikiViewerProps) {
-  const [html, setHtml] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const highlighter = await getHighlighter();
-        // Ensure the language is loaded.
-        try {
-          await highlighter.loadLanguage(language as import("shiki").BundledLanguage);
-        } catch {
-          // Language might not exist in Shiki's bundle; fall back to plain text.
-        }
-
-        const result = highlighter.codeToHtml(content, {
-          lang: language as import("shiki").BundledLanguage,
-          themes: { light: "github-light", dark: "github-dark" },
-        });
-
-        if (!cancelled) setHtml(result);
-      } catch (err) {
-        console.error("Shiki highlighting error:", err);
-        if (!cancelled) setError(true);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [content, language]);
-
-  if (error) {
-    // Error fallback — render plain text.
-    return (
-      <pre className={wrapLines ? plainPreWrapped : plainPre}>
-        <code>{content}</code>
-      </pre>
-    );
-  }
-
-  if (html === null) {
-    // Still loading — show shimmer to avoid flash of unstyled plain text.
-    return <div className={shimmer} aria-hidden="true" />;
-  }
-
-  return (
-    <div
-      className={[shikiOutput, wrapLines ? shikiOutputWrap : ""].filter(Boolean).join(" ")}
-      // Shiki generates safe HTML (no user content, only syntax highlights).
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  );
-}
-
 // ---- Image content types ----
 
 const IMAGE_CONTENT_TYPES = new Set([
@@ -443,6 +529,7 @@ interface FileContentViewerProps {
   diffContent?: string;
 }
 
+// +feature: file-content-viewer
 export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent }: FileContentViewerProps) {
   const { data, loading, error } = useGetFileContent(sessionId, filePath, baseUrl);
   const [wrapLines, setWrapLines] = useState(false);
@@ -577,11 +664,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent }:
   }
 
   const lang = detectLanguage(filePath);
-  const lineCount = (data.content.match(/\n/g) || []).length + 1;
   const hasGutterMarks = gutterMarks.size > 0;
-  // Files with diff gutter markers use CodeMirror even below the line threshold — Shiki
-  // (used for small/medium files) has no gutter decoration API.
-  const useLargeMode = lineCount > LARGE_FILE_LINE_THRESHOLD || hasGutterMarks;
 
   return (
     <div className={container}>
@@ -598,16 +681,12 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent }:
         </div>
       )}
       <div className={viewer}>
-        {useLargeMode ? (
-          <CodeMirrorViewer
-            content={data.content}
-            language={lang}
-            wrapLines={wrapLines}
-            gutterMarks={hasGutterMarks ? gutterMarks : undefined}
-          />
-        ) : (
-          <ShikiViewer content={data.content} language={lang} wrapLines={wrapLines} />
-        )}
+        <CodeMirrorViewer
+          content={data.content}
+          language={lang}
+          wrapLines={wrapLines}
+          gutterMarks={hasGutterMarks ? gutterMarks : undefined}
+        />
       </div>
     </div>
   );

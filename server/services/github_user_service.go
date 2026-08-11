@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	githubpkg "github.com/tstapler/stapler-squad/github"
@@ -16,14 +19,45 @@ import (
 // Compile-time check: GitHubUserService must implement the generated handler.
 var _ sessionv1connect.GitHubUserServiceHandler = (*GitHubUserService)(nil)
 
+// pendingDeviceAuth stashes the host/clientID for an in-flight device code so
+// PollGitHubDeviceAuth can resolve them without the proto needing to carry
+// them on every poll request.
+type pendingDeviceAuth struct {
+	host     string
+	clientID string
+}
+
 // GitHubUserService implements the ConnectRPC GitHubUserServiceHandler.
 type GitHubUserService struct {
-	cache *githubpkg.UserPRCache
+	cache           *githubpkg.UserPRCache
+	enterpriseHosts []config.GitHubEnterpriseHost
+
+	pendingMu sync.Mutex
+	pending   map[string]pendingDeviceAuth // device_code -> host/clientID
 }
 
 // NewGitHubUserService creates a new service backed by the given cache.
-func NewGitHubUserService(cache *githubpkg.UserPRCache) *GitHubUserService {
-	return &GitHubUserService{cache: cache}
+func NewGitHubUserService(cache *githubpkg.UserPRCache, enterpriseHosts []config.GitHubEnterpriseHost) *GitHubUserService {
+	return &GitHubUserService{
+		cache:           cache,
+		enterpriseHosts: enterpriseHosts,
+		pending:         make(map[string]pendingDeviceAuth),
+	}
+}
+
+// clientIDForHost looks up the registered OAuth App client_id for an
+// enterprise host. Returns "" for github.com (StartDeviceAuth falls back to
+// the default/env-var client_id in that case).
+func (s *GitHubUserService) clientIDForHost(host string) string {
+	if githubpkg.IsGitHubCom(host) {
+		return ""
+	}
+	for _, h := range s.enterpriseHosts {
+		if githubpkg.NormalizeHost(h.Host) == host {
+			return h.ClientID
+		}
+	}
+	return ""
 }
 
 // +api: github-user:list-prs
@@ -101,12 +135,19 @@ func (s *GitHubUserService) GetGitHubAuthState(
 // StartGitHubDeviceAuth initiates the GitHub Device Flow OAuth.
 func (s *GitHubUserService) StartGitHubDeviceAuth(
 	ctx context.Context,
-	_ *connect.Request[sessionv1.StartGitHubDeviceAuthRequest],
+	req *connect.Request[sessionv1.StartGitHubDeviceAuthRequest],
 ) (*connect.Response[sessionv1.StartGitHubDeviceAuthResponse], error) {
-	da, err := githubpkg.StartDeviceAuth(ctx)
+	host := githubpkg.NormalizeHost(req.Msg.Host)
+	clientID := s.clientIDForHost(host)
+	da, err := githubpkg.StartDeviceAuth(ctx, host, clientID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("start device auth: %w", err))
 	}
+
+	s.pendingMu.Lock()
+	s.pending[da.DeviceCode] = pendingDeviceAuth{host: host, clientID: clientID}
+	s.pendingMu.Unlock()
+
 	return connect.NewResponse(&sessionv1.StartGitHubDeviceAuthResponse{
 		DeviceCode:      da.DeviceCode,
 		UserCode:        da.UserCode,
@@ -127,10 +168,22 @@ func (s *GitHubUserService) PollGitHubDeviceAuth(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("device_code is required"))
 	}
 
-	token, err := githubpkg.PollDeviceAuth(ctx, req.Msg.DeviceCode)
+	s.pendingMu.Lock()
+	pend, ok := s.pending[req.Msg.DeviceCode]
+	s.pendingMu.Unlock()
+	if !ok {
+		// Unknown device_code (e.g. server restarted mid-flow) — fall back to github.com.
+		pend = pendingDeviceAuth{host: githubpkg.NormalizeHost(""), clientID: ""}
+	}
+
+	token, err := githubpkg.PollDeviceAuth(ctx, pend.host, pend.clientID, req.Msg.DeviceCode)
 	if err == nil {
+		s.pendingMu.Lock()
+		delete(s.pending, req.Msg.DeviceCode)
+		s.pendingMu.Unlock()
+
 		// Discover the username and store per-account in the keychain.
-		if storeErr := githubpkg.StoreTokenForDiscoveredUser(ctx, token); storeErr != nil {
+		if storeErr := githubpkg.StoreTokenForDiscoveredUser(ctx, pend.host, token); storeErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("store token in keychain: %w", storeErr))
 		}
 		s.cache.InvalidateLoginCache()
@@ -147,6 +200,9 @@ func (s *GitHubUserService) PollGitHubDeviceAuth(
 		}), nil
 	}
 	if errors.Is(err, githubpkg.ErrDeviceFlowExpired) {
+		s.pendingMu.Lock()
+		delete(s.pending, req.Msg.DeviceCode)
+		s.pendingMu.Unlock()
 		return connect.NewResponse(&sessionv1.PollGitHubDeviceAuthResponse{
 			Status: sessionv1.DeviceAuthStatus_DEVICE_AUTH_STATUS_EXPIRED,
 		}), nil
@@ -164,7 +220,7 @@ func (s *GitHubUserService) RevokeGitHubToken(
 	req *connect.Request[sessionv1.RevokeGitHubTokenRequest],
 ) (*connect.Response[sessionv1.RevokeGitHubTokenResponse], error) {
 	if req.Msg.Username != "" {
-		_ = githubpkg.DeleteKeychainTokenForAccount(req.Msg.Username)
+		_ = githubpkg.DeleteKeychainTokenForAccount(req.Msg.Host, req.Msg.Username)
 	} else {
 		_ = githubpkg.DeleteKeychainToken()
 	}
@@ -180,8 +236,134 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	_ *connect.Request[sessionv1.ListGitHubAccountsRequest],
 ) (*connect.Response[sessionv1.ListGitHubAccountsResponse], error) {
 	accounts := s.buildAccountList()
+
+	// EnterpriseHosts drives the omnibar's GHE URL detector, so it must reflect
+	// every host the user can actually reach — not just hosts with a
+	// statically configured OAuth App (s.enterpriseHosts), which omits hosts
+	// added via AddGitHubAccountWithToken/AddGitHubAccountFromCLI (e.g. gh CLI
+	// import) since those never touch s.enterpriseHosts.
+	seen := make(map[string]bool, len(s.enterpriseHosts)+len(accounts))
+	hosts := make([]string, 0, len(s.enterpriseHosts)+len(accounts))
+	addHost := func(host string) {
+		host = githubpkg.NormalizeHost(host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+			return
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	for _, h := range s.enterpriseHosts {
+		addHost(h.Host)
+	}
+	for _, a := range accounts {
+		addHost(a.Host)
+	}
 	return connect.NewResponse(&sessionv1.ListGitHubAccountsResponse{
-		Accounts: accounts,
+		Accounts:        accounts,
+		EnterpriseHosts: hosts,
+	}), nil
+}
+
+// +api: github-user:add-account-with-token
+// AddGitHubAccountWithToken validates a personal access token against the
+// host's /user endpoint and stores it in the keychain on success. Use this
+// for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
+func (s *GitHubUserService) AddGitHubAccountWithToken(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AddGitHubAccountWithTokenRequest],
+) (*connect.Response[sessionv1.AddGitHubAccountWithTokenResponse], error) {
+	token := strings.TrimSpace(req.Msg.Token)
+	if token == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("token is required"))
+	}
+	host := githubpkg.NormalizeHost(req.Msg.Host)
+
+	login, err := githubpkg.GetCurrentUserLoginWithToken(ctx, host, token)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("validate token: %w", err))
+	}
+	if login == "" {
+		// CodePermissionDenied, not CodeUnauthenticated: the latter triggers the
+		// frontend's global session-expired redirect to /login (createAuthInterceptor
+		// in web-app/src/lib/config.ts), which would yank the user off this form
+		// instead of showing the inline "token rejected" error.
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("token was rejected — check the token and host"))
+	}
+	if err := githubpkg.SetKeychainTokenForAccount(host, login, token); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("store token: %w", err))
+	}
+
+	s.cache.InvalidateLoginCache()
+	_ = s.cache.Refresh(ctx)
+	return connect.NewResponse(&sessionv1.AddGitHubAccountWithTokenResponse{
+		AuthState: s.resolveAuthState(ctx),
+	}), nil
+}
+
+// +api: github-user:list-cli-hosts
+// ListGitHubCLIHosts discovers hosts the local gh CLI is already
+// authenticated to, so the UI can offer one-click imports.
+func (s *GitHubUserService) ListGitHubCLIHosts(
+	_ context.Context,
+	_ *connect.Request[sessionv1.ListGitHubCLIHostsRequest],
+) (*connect.Response[sessionv1.ListGitHubCLIHostsResponse], error) {
+	cliHosts, err := githubpkg.ListCLIHosts()
+	if err != nil {
+		return connect.NewResponse(&sessionv1.ListGitHubCLIHostsResponse{
+			GhAvailable: false,
+		}), nil
+	}
+
+	connected := make(map[string]bool)
+	for _, a := range s.cache.GetCachedAccounts() {
+		connected[githubpkg.NormalizeHost(a.Host)+"|"+a.Login] = true
+	}
+
+	hosts := make([]*sessionv1.GitHubCLIHost, 0, len(cliHosts))
+	for _, h := range cliHosts {
+		hosts = append(hosts, &sessionv1.GitHubCLIHost{
+			Host:         h.Host,
+			Username:     h.Username,
+			AlreadyAdded: connected[h.Host+"|"+h.Username],
+		})
+	}
+	return connect.NewResponse(&sessionv1.ListGitHubCLIHostsResponse{
+		Hosts:       hosts,
+		GhAvailable: true,
+	}), nil
+}
+
+// +api: github-user:add-account-from-cli
+// AddGitHubAccountFromCLI fetches the token gh CLI already holds for a host
+// (discovered via ListGitHubCLIHosts), validates it, and stores it in the
+// keychain — same outcome as AddGitHubAccountWithToken without manual paste.
+func (s *GitHubUserService) AddGitHubAccountFromCLI(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AddGitHubAccountFromCLIRequest],
+) (*connect.Response[sessionv1.AddGitHubAccountWithTokenResponse], error) {
+	host := githubpkg.NormalizeHost(req.Msg.Host)
+
+	token, err := githubpkg.GetCLIToken(ctx, host)
+	if err != nil || token == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("gh CLI has no token for %s: %w", host, err))
+	}
+
+	login, err := githubpkg.GetCurrentUserLoginWithToken(ctx, host, token)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("validate token: %w", err))
+	}
+	if login == "" {
+		// CodePermissionDenied, not CodeUnauthenticated: see AddGitHubAccountWithToken.
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("gh CLI token was rejected by the host"))
+	}
+	if err := githubpkg.SetKeychainTokenForAccount(host, login, token); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("store token: %w", err))
+	}
+
+	s.cache.InvalidateLoginCache()
+	_ = s.cache.Refresh(ctx)
+	return connect.NewResponse(&sessionv1.AddGitHubAccountWithTokenResponse{
+		AuthState: s.resolveAuthState(ctx),
 	}), nil
 }
 
@@ -203,13 +385,14 @@ func (s *GitHubUserService) resolveAuthState(_ context.Context) *sessionv1.GitHu
 }
 
 func (s *GitHubUserService) buildAccountList() []*sessionv1.GitHubAccount {
-	logins := s.cache.GetCachedLogins()
-	accounts := make([]*sessionv1.GitHubAccount, 0, len(logins))
-	for _, login := range logins {
-		isEnv := login == "env:GITHUB_TOKEN" || login == "env:GH_TOKEN"
+	cached := s.cache.GetCachedAccounts()
+	accounts := make([]*sessionv1.GitHubAccount, 0, len(cached))
+	for _, a := range cached {
+		isEnv := a.Login == "env:GITHUB_TOKEN" || a.Login == "env:GH_TOKEN"
 		accounts = append(accounts, &sessionv1.GitHubAccount{
-			Username:   login,
+			Username:   a.Login,
 			IsEnvToken: isEnv,
+			Host:       a.Host,
 		})
 	}
 	return accounts

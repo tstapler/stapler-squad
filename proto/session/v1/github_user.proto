@@ -39,12 +39,29 @@ service GitHubUserService {
 
   // ListGitHubAccounts returns all connected GitHub accounts (from keychain and env vars).
   rpc ListGitHubAccounts(ListGitHubAccountsRequest) returns (ListGitHubAccountsResponse) {}
+
+  // AddGitHubAccountWithToken validates a personal access token against the
+  // host's /user endpoint and stores it in the keychain on success. Use this
+  // for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
+  rpc AddGitHubAccountWithToken(AddGitHubAccountWithTokenRequest) returns (AddGitHubAccountWithTokenResponse) {}
+
+  // ListGitHubCLIHosts discovers hosts the local `gh` CLI is already
+  // authenticated to (via its hosts.yml config), so the UI can offer them as
+  // one-click imports instead of requiring the user to paste a token.
+  rpc ListGitHubCLIHosts(ListGitHubCLIHostsRequest) returns (ListGitHubCLIHostsResponse) {}
+
+  // AddGitHubAccountFromCLI fetches the token gh CLI already holds for host
+  // (via `gh auth token --hostname <host>`), validates it, and stores it in
+  // the keychain on success — the same outcome as AddGitHubAccountWithToken
+  // but without the user needing to locate/paste the token by hand.
+  rpc AddGitHubAccountFromCLI(AddGitHubAccountFromCLIRequest) returns (AddGitHubAccountWithTokenResponse) {}
 }
 
 // GitHubAccount is a single connected GitHub account.
 message GitHubAccount {
   string username    = 1;
   bool   is_env_token = 2; // true when sourced from GITHUB_TOKEN/GH_TOKEN env var
+  string host         = 3; // GitHub host, e.g. "github.com" or a GHES hostname; empty means github.com
 }
 
 // GitHubAuthState describes the current GitHub authentication status.
@@ -77,7 +94,9 @@ message GetGitHubAuthStateResponse {
   GitHubAuthState auth_state = 1;
 }
 
-message StartGitHubDeviceAuthRequest {}
+message StartGitHubDeviceAuthRequest {
+  string host = 1; // GitHub host to authenticate against; empty means github.com
+}
 
 message StartGitHubDeviceAuthResponse {
   string device_code       = 1; // opaque code passed back to PollGitHubDeviceAuth
@@ -108,6 +127,7 @@ message PollGitHubDeviceAuthResponse {
 
 message RevokeGitHubTokenRequest {
   string username = 1; // if set, remove only this account; otherwise remove the legacy single-account token
+  string host     = 2; // host the account belongs to; empty means github.com
 }
 
 message RevokeGitHubTokenResponse {}
@@ -116,4 +136,34 @@ message ListGitHubAccountsRequest {}
 
 message ListGitHubAccountsResponse {
   repeated GitHubAccount accounts = 1;
+  // enterprise_hosts lists the GHES hostnames configured on the server
+  // (github.com is always implicitly available and not included here).
+  repeated string enterprise_hosts = 2;
+}
+
+message AddGitHubAccountWithTokenRequest {
+  string host  = 1; // GitHub host to authenticate against; empty means github.com
+  string token = 2; // personal access token
+}
+
+message AddGitHubAccountWithTokenResponse {
+  GitHubAuthState auth_state = 1; // updated state on success
+}
+
+// GitHubCLIHost is a host the local `gh` CLI is already authenticated to.
+message GitHubCLIHost {
+  string host          = 1; // normalized host, e.g. "github.com" or a GHES hostname
+  string username      = 2; // gh CLI's recorded username for this host, if known
+  bool   already_added = 3; // true when this host+username is already a connected account
+}
+
+message ListGitHubCLIHostsRequest {}
+
+message ListGitHubCLIHostsResponse {
+  repeated GitHubCLIHost hosts   = 1;
+  bool                   gh_available = 2; // false when the gh CLI config could not be read (not installed / never logged in)
+}
+
+message AddGitHubAccountFromCLIRequest {
+  string host = 1; // host to import, as returned by ListGitHubCLIHosts
 }

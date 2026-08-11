@@ -7,6 +7,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -67,6 +68,7 @@ func TestAutonomousOrchestrationService_SetLifecycleContext(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Without SetLifecycleContext, driverCtx() should fall back to Background.
 	assert.NoError(t, svc.autonomousSvc.driverCtx().Err(), "driverCtx() should return non-cancelled ctx before SetLifecycleContext")
@@ -85,6 +87,7 @@ func TestAutonomousOrchestrationService_DriverRegistry_RegisterAndDeregister(t *
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	inst := &session.Instance{
 		Title: "reg-test",
@@ -109,6 +112,7 @@ func TestAutonomousOrchestrationService_DeleteSession_StopsRegisteredDriver(t *t
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "delete-driver-test"
 	addPausedAutonomousInstance(t, storage, title)
@@ -136,6 +140,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DeregistersDr
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "complete-driver-test"
 
@@ -166,6 +171,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "notif-race-test"
 	inst := &session.Instance{
@@ -237,6 +243,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-test"
 	inst := &session.Instance{
@@ -284,6 +291,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-done-test"
 	inst := &session.Instance{
@@ -350,6 +358,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	trigger := &fakeReviewGateTrigger{}
 	svc.SetReviewGateTrigger(trigger)
@@ -402,6 +411,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "not-linked-test"
 	inst := &session.Instance{
@@ -429,6 +439,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "dangling-item-session-test"
 	inst := &session.Instance{
@@ -478,6 +489,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "unrecognized-role-test"
 	inst := &session.Instance{
@@ -542,6 +554,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-resolves-test"
 	inst := &session.Instance{
@@ -599,6 +612,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-review-resolves-test"
 	inst := &session.Instance{
@@ -655,6 +669,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-still-stuck-test"
 	inst := &session.Instance{
@@ -705,6 +720,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "review-stuck-already-moved-on-test"
 	inst := &session.Instance{
@@ -764,6 +780,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "review-stuck-still-stuck-test"
 	inst := &session.Instance{
@@ -814,4 +831,312 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1, "onAutonomousDriverComplete must not spawn a competing review session — that is abandoned_review's job")
+}
+
+// TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck is the regression test for
+// Epic 3 Story 3.1: a stuck (outcome.Done=false) triage-role driver run previously published
+// the "Triage stuck" notification with nil metadata, giving downstream consumers (e.g.
+// server/notifications) no way to correlate the notification back to its backlog item. The
+// notification's metadata must now carry {"item_id": <item.ID>}.
+func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	const title = "triage-stuck-metadata-test"
+	inst := &session.Instance{
+		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
+		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Triage stuck metadata test item",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleTriage,
+	})
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 5, Stuck: true}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	var notif *events.Event
+	for i := 0; i < 5; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification && ev.NotificationTitle == "Triage did not complete" {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 5
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected the 'Triage did not complete' notification")
+	require.NotNil(t, notif.NotificationMetadata, "metadata must not be nil so downstream consumers can correlate the notification to its item")
+	assert.Equal(t, item.ID, notif.NotificationMetadata["item_id"])
+}
+
+// TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceHidden verifies
+// the Epic 3 Story 3.2 Hidden gate: the generic done/stuck notification at the end of
+// onAutonomousDriverComplete must never fire for a Hidden instance (e.g. a review-gate driver
+// run the operator never surfaces in the UI) — publishing it anyway would functionally
+// duplicate AC1's intent of suppressing notifications for sessions hidden from the UI.
+func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceHidden(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	const title = "hidden-generic-notif-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		Hidden:         true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	// The session.updated badge event still fires (unrelated to the Hidden gate); only the
+	// notification event must be absent. Drain briefly and assert no notification arrives.
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case ev := <-ch:
+			require.NotEqual(t, events.EventNotification, ev.Type, "a Hidden instance must never receive the generic done/stuck notification")
+		case <-deadline:
+			return
+		}
+	}
+}
+
+// TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAndBacklogLinked
+// covers the positive case for Epic 3 Story 3.2: a non-Hidden instance whose completing
+// session is linked to a backlog item must have the generic done/stuck notification's
+// metadata built via events.SessionScopedMetadata — {"item_id": ..., "session_scoped": "true"}
+// — not the nil it carried before this fix.
+func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAndBacklogLinked(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	const title = "generic-notif-metadata-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		Hidden:         false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Generic notif metadata test item",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: "future-pipeline-stage", // reaches the generic notifier, not a status transition
+	})
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	var notif *events.Event
+	for i := 0; i < 5; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 5
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected the generic done/stuck notification")
+	require.NotNil(t, notif.NotificationMetadata)
+	assert.Equal(t, item.ID, notif.NotificationMetadata["item_id"])
+	assert.Equal(t, "true", notif.NotificationMetadata["session_scoped"])
+}
+
+// TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_When_Called
+// is the regression test for one of the four instances of the recurring
+// "silent status-transition failure" bug shape found by the 2026-07-27
+// backlog-feature-improvement audit (BUG-030/040/041/046/048's shape):
+// onAutonomousDriverComplete's "still genuinely stuck in review" branch (see
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_EndsSession_NoCompetingRespawn)
+// calls UpdateItemSessionEnded — the exact mechanism BUG-048's own fix added
+// to make a stuck review session visible to abandoned_review/bouncing.
+// Previously, if that write itself failed, it was only log.Warn'd — and the
+// caller returns immediately afterward without ever reaching any other
+// notification path — reproducing BUG-048's original gap one layer
+// underneath its own fix. notifyStuckReviewBookkeepingFailed (extracted from
+// that call site so it's directly testable, at the same fidelity as
+// TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called
+// covers BUG-030's equivalent fix) is the closure of that gap.
+func TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_When_Called(t *testing.T) {
+	eventBus := events.NewEventBus(4)
+	svc := &AutonomousOrchestrationService{bus: eventBus}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	svc.notifyStuckReviewBookkeepingFailed("item-456", "Stuck review item", "item-session-789",
+		fmt.Errorf("failed to set ended_at on item session item-session-789: item_session not found"))
+
+	var notif *events.Event
+	for i := 0; i < 3; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 3
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected an operator-facing notification when the stuck-review bookkeeping write fails, instead of only being logged")
+	assert.Equal(t, "Stuck-review bookkeeping failed", notif.NotificationTitle)
+	assert.Equal(t, int32(9), notif.NotificationType, "must surface as a FAILURE notification")
+	assert.Contains(t, notif.NotificationMessage, "Stuck review item")
+	assert.Contains(t, notif.NotificationMessage, "could not mark the stalled review session ended")
+}
+
+// fakeFailingAutonomousStuckRespawner always returns err from
+// AutoRespawnAutonomousWork, simulating a headless respawn attempt that
+// fails (timeout, pool exhaustion, etc.) rather than a wiring/no-op gap.
+type fakeFailingAutonomousStuckRespawner struct {
+	err error
+}
+
+func (f *fakeFailingAutonomousStuckRespawner) AutoRespawnAutonomousWork(_ context.Context, _ string) error {
+	return f.err
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOperator_When_RespawnAttemptFails
+// is the regression test for the MAJOR bug flagged in
+// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry:
+// AutoRespawnAutonomousWork errors were only log.Warn'd, with no operator
+// notification until RemediationDue's justParked branch finally fired once
+// the full attempt budget was exhausted (up to the ~4.5-day backoff
+// schedule) — unlike the justParked branch a few lines above it in the same
+// block, which already notifies immediately. This reproduces a single failed
+// respawn attempt (first occurrence, so RemediationDue's fresh-row default
+// grants it immediately) and asserts a non-terminal, WARNING-level
+// notification is published right away, distinct from the "Autonomous fix
+// stuck" generic notification onAutonomousDriverComplete always fires and
+// from the terminal "Auto-rework paused" justParked notification.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOperator_When_RespawnAttemptFails(t *testing.T) {
+	storage := createTestStorage(t)
+	// A cancellable context (not context.Background()) so SetLifecycleContext's
+	// capacityMonitor.Start goroutine actually exits when the test ends, instead
+	// of leaking for the life of the test binary.
+	ctx, lifecycleCancel := context.WithCancel(context.Background())
+	t.Cleanup(lifecycleCancel)
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetLifecycleContext(ctx)
+
+	respawnErr := fmt.Errorf("headless pool exhausted")
+	svc.SetAutonomousStuckRespawner(&fakeFailingAutonomousStuckRespawner{err: respawnErr})
+
+	const title = "autonomous-respawn-failure-test"
+	inst := &session.Instance{
+		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
+		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous respawn failure test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	var notif *events.Event
+	for i := 0; i < 10; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification && ev.NotificationTitle == "Automated retry failed" {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 10
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "a failed respawn attempt must publish an operator-facing notification, not just a log line")
+	assert.Equal(t, int32(8), notif.NotificationType, "must surface as a WARNING, not a terminal FAILURE")
+	assert.Equal(t, int32(2), notif.NotificationPriority, "non-terminal — must not demand acknowledgment like the justParked notification does")
+	assert.Contains(t, notif.NotificationMessage, "headless pool exhausted")
+	assert.Contains(t, notif.NotificationMessage, "will retry automatically")
 }

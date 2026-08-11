@@ -239,7 +239,7 @@ func (s *BacklogService) SearchGitHubRepos(ctx context.Context, req *connect.Req
 	if limit <= 0 {
 		limit = 30
 	}
-	results, err := gh.SearchUserRepos(ctx, req.Msg.Query, limit)
+	results, err := gh.SearchUserRepos(ctx, gh.AccountRef{}, req.Msg.Query, limit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search repos: %w", err))
 	}
@@ -271,7 +271,11 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 	if limit <= 0 {
 		limit = 30
 	}
-	results, err := gh.ListRepoIssues(ctx, req.Msg.Owner, req.Msg.Repo, req.Msg.State, req.Msg.Search, limit)
+	repo, err := gh.NewRepoRef(req.Msg.Owner, req.Msg.Repo)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	results, err := gh.ListRepoIssues(ctx, gh.AccountRef{}, repo, req.Msg.State, req.Msg.Search, limit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list issues: %w", err))
 	}
@@ -468,7 +472,7 @@ func (s *BacklogService) GetBacklogItemCost(
 		if result == nil {
 			continue
 		}
-		cost := s.pricing.EstimateCost(result)
+		cost, _ := s.pricing.EstimateCost(result)
 		resp.TotalCostUsd += cost
 		resp.Sessions = append(resp.Sessions, &sessionv1.SessionCostEntry{
 			SessionId:        is.SessionUUID,

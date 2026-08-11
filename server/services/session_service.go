@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -31,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
@@ -112,6 +114,11 @@ type SessionService struct {
 	// persist across shell restarts.
 	tmuxStreamerManager *session.ExternalTmuxStreamerManager
 
+	// userPRCache supplies enterprise hosts from dynamically-added GitHub
+	// accounts (gh CLI import, device auth) for CreateSession's GitHub URL
+	// detection — mirrors ListGitHubAccounts' host union in github_user_service.go.
+	userPRCache *githubpkg.UserPRCache
+
 	// fileSvc handles file tree browsing RPCs (ListFiles, GetFileContent).
 	fileSvc *FileService
 
@@ -159,8 +166,21 @@ type SessionService struct {
 	// backlog item state transitions fire when the session exits.
 	backlogLifecycleListener *session.BacklogLifecycleListener
 
+	// sessionSummaryGenerator is wired to each newly created session (alongside
+	// backlogLifecycleListener, at the same call sites) so that session-completion-
+	// summary generation fires on exit/stop. Nil until SetSessionSummaryGenerator is
+	// called (session/session_summary_service.go's ent-client/headless-pool wiring
+	// happens after SessionService construction).
+	sessionSummaryGenerator *session.SessionSummaryGenerator
+
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
+
+	// quotaGate feeds account-wide rate-limit detections into the quota
+	// headroom gate that pauses/resumes backlog automation. Late-wired via
+	// SetQuotaGate since QuotaGate needs backlogCtrl, which doesn't exist yet
+	// inside NewSessionService.
+	quotaGate *QuotaGate
 
 	// analyticsClient is the ent client for the analytics database (escape events, etc.).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
@@ -238,10 +258,48 @@ type ScrollbackSequencer interface {
 // Conclusion: the two-param constructor (storage, eventBus) is the correct boundary.
 // All other deps are external to this package or have construction-order constraints.
 
-// NewSessionService creates a new SessionService with the given storage and event bus.
+// NewSessionService creates a new SessionService with the given storage and event bus,
+// using a disk-backed search engine (or an in-memory one under config.IsTestMode(), to
+// keep the ~78 existing test call sites working without change — see
+// NewSessionServiceWithSearchEngine's doc comment for why IsTestMode() is only the
+// default, not the seam itself).
 // NOTE: Instances are NOT loaded here to prevent double-loading and initialization timing issues.
 // Instances will be loaded in server.go after dependencies (statusManager, reviewQueue) are wired.
 func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus) *SessionService {
+	return NewSessionServiceWithSearchEngine(storage, eventBus, newDefaultSearchEngine())
+}
+
+// newDefaultSearchEngine builds the search engine NewSessionService uses when the caller
+// doesn't inject one: disk-backed with incremental persistence in production, in-memory
+// under config.IsTestMode(). Under go test, skipping disk avoids a shared per-process test
+// directory that every NewSessionService call in a test binary would otherwise persist
+// into — the index grows across the whole package run and gob-decoding it gets slow enough
+// under -race to blow CI's timeout budget, independent of what each test is exercising.
+func newDefaultSearchEngine() *search.SearchEngine {
+	if config.IsTestMode() {
+		return search.NewSearchEngine()
+	}
+	indexStore, err := search.NewIndexStore()
+	if err != nil {
+		log.Warn("failed to create index store, using in-memory search", "err", err)
+		return search.NewSearchEngine()
+	}
+	searchEngine := search.NewSearchEngineWithPersistence(indexStore)
+	if loadErr := searchEngine.LoadIndex(); loadErr != nil {
+		log.Warn("failed to load persisted search index", "err", loadErr)
+	} else if meta := searchEngine.GetSyncMetadata(); meta != nil {
+		log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
+	}
+	return searchEngine
+}
+
+// NewSessionServiceWithSearchEngine is the dependency-injection seam for the search engine:
+// pass an explicit *search.SearchEngine (e.g. search.NewSearchEngine() for in-memory)
+// instead of relying on NewSessionService's config.IsTestMode() default. Full migration of
+// the ~78 existing NewSessionService(storage, eventBus) call sites to explicit injection is
+// a separate, larger mechanical refactor — out of scope here; this seam exists so new or
+// updated tests can opt in without waiting on that migration.
+func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *events.EventBus, searchEngine *search.SearchEngine) *SessionService {
 	reviewQueue := session.NewReviewQueue()
 
 	// concStorage is the concrete backing store used by sub-services that haven't migrated to
@@ -250,22 +308,6 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	var concStorage *session.Storage
 	if cs, ok := storage.(*session.Storage); ok {
 		concStorage = cs
-	}
-
-	// Initialize search engine with disk persistence for incremental index updates.
-	var searchEngine *search.SearchEngine
-	indexStore, err := search.NewIndexStore()
-	if err != nil {
-		log.Warn("failed to create index store, using in-memory search", "err", err)
-		searchEngine = search.NewSearchEngine()
-	} else {
-		searchEngine = search.NewSearchEngineWithPersistence(indexStore)
-		if loadErr := searchEngine.LoadIndex(); loadErr != nil {
-			log.Warn("failed to load persisted search index", "err", loadErr)
-		} else if searchEngine.GetSyncMetadata() != nil {
-			meta := searchEngine.GetSyncMetadata()
-			log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
-		}
 	}
 
 	// Build approval store with disk persistence path
@@ -376,6 +418,10 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
 	workspaceSvc.SetLiveFinder(svc)
+	// Wire the live-instance lookup into ApprovalService's block-on-red-CI guard (AC5).
+	// GitHubCheckConclusion is not persisted (see plan.md's Implementation Deviations),
+	// so this must be the live registry, not storage.
+	approvalSvc.SetLiveInstanceFinder(svc)
 	// Wire the live-instance provider so ListClaudeHistory can populate
 	// session_status on history entries without a separate storage call.
 	svc.searchSvc.SetInstanceProvider(svc.allInstances)
@@ -516,7 +562,9 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if inst == nil {
 		return nil // already gone / never tracked
 	}
-	if !inst.SetArchivedAtIfNil(time.Now()) {
+	// SetArchivedAtIfNilAndStop also transitions Status to Stopped (see ArchiveSession's
+	// comment) — safe to call unconditionally: no-ops the transition if already Stopped.
+	if !inst.SetArchivedAtIfNilAndStop(time.Now()) {
 		return nil // already archived
 	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
@@ -585,7 +633,8 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	name := stapleSquadTmuxName(title)
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", name)
+	args := tmux.ResolveSocket("").Args("kill-session", "-t", name)
+	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		combined := strings.ToLower(string(out))
@@ -658,6 +707,15 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 		return nil
 	}
 	return s.rulesSvc.analyticsStore
+}
+
+// Shutdown stops background goroutines owned by SessionService (currently the
+// AnalyticsStore flush loop started in NewSessionService). Idempotent — safe
+// to call multiple times (AnalyticsStore.Stop is itself sync.Once-guarded).
+func (s *SessionService) Shutdown() {
+	if store := s.GetAnalyticsStore(); store != nil {
+		store.Stop()
+	}
 }
 
 // SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
@@ -800,6 +858,14 @@ func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycle
 	return s.backlogLifecycleListener
 }
 
+// SetSessionSummaryGenerator wires the generator to all sessions created via
+// CreateSession/CreateDirectorySession/CreateWorktreeSession after this call,
+// mirroring SetBacklogLifecycleListener's wiring pattern (see the WireToInstance
+// call sites alongside session.WireSessionSummaryListener below).
+func (s *SessionService) SetSessionSummaryGenerator(g *session.SessionSummaryGenerator) {
+	s.sessionSummaryGenerator = g
+}
+
 // SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
 // service so that completed work sessions immediately kick off headless review.
 func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
@@ -878,6 +944,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	}
 	return instance, nil
 }
 
@@ -927,6 +996,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	}
 	return instance, nil
 }
 
@@ -959,6 +1031,19 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	s.wireClaudeSessionIDCallback(inst)
 	s.wireAutoArchiveCallback(inst)
 	s.wireSessionExitedPublisher(inst)
+	// Register with the HistoryLinker so its poll/fsnotify correlation loop
+	// detects this session's Claude JSONL file and persists claude_session_id.
+	// Without this, only sessions loaded at server boot (server/dependencies.go)
+	// were ever registered — every session created afterward (regular sessions
+	// via CreateSession, and every backlog/autonomous session via
+	// CreateWorktreeSession/CreateDirectorySession) never got a conversation
+	// UUID captured, so HasClaudeSession() stayed false and a session whose
+	// tmux pane died (restart, hibernation, crash) started a fresh Claude
+	// conversation on recovery instead of resuming — confirmed live
+	// 2026-08-02 on backlog work sessions failing to resume post-restart.
+	if s.historyLinker != nil {
+		s.historyLinker.AddInstance(inst)
+	}
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.
@@ -1026,6 +1111,13 @@ func (s *SessionService) SetTmuxStreamerManager(mgr *session.ExternalTmuxStreame
 	s.tmuxStreamerManager = mgr
 }
 
+// SetUserPRCache wires the shared UserPRCache so CreateSession's GitHub URL
+// detection recognizes enterprise hosts from dynamically-added accounts, not
+// just hosts with a statically configured OAuth App in config.json.
+func (s *SessionService) SetUserPRCache(cache *githubpkg.UserPRCache) {
+	s.userPRCache = cache
+}
+
 // SetNotificationStore sets the notification history store for the notification history RPCs
 // and wires it into the approval service so resolved approvals are stamped with their decision.
 func (s *SessionService) SetNotificationStore(store *notifications.NotificationHistoryStore) {
@@ -1047,6 +1139,12 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {
 	s.featureFlagSvc.SetFeatureController(name, c)
+}
+
+// SetStatusDetailProvider wires an optional status-detail provider for the
+// named feature flag. Delegates to FeatureFlagService.
+func (s *SessionService) SetStatusDetailProvider(name string, fn func() string) {
+	s.featureFlagSvc.SetStatusDetailProvider(name, fn)
 }
 
 // ListSessions returns all sessions with optional filtering.
@@ -1195,13 +1293,14 @@ func (s *SessionService) GetSession(
 }
 
 // workspacePeersBlockFor returns a one-time "other active sessions in this workspace"
-// nudge for a new session being created at repoPath, or "" on any detection/lookup
-// failure, when there's no concrete storage backing this service, or when there are no
-// peers (AC5). Best-effort: this is a convenience nudge, not required session context.
-// Delegates to session.WorkspacePeersBlockForPath, shared with BacklogService's
-// initialPromptFor so the two callers can't drift on how the nudge is built.
+// nudge for a new session being created at repoPath, or "" when the workspacePeersNudgeFlagName
+// feature flag is off (default), on any detection/lookup failure, when there's no concrete
+// storage backing this service, or when there are no peers. Best-effort: this is a
+// convenience nudge, not required session context. Delegates to
+// session.WorkspacePeersBlockForPath, shared with BacklogService's initialPromptFor so the
+// two callers can't drift on how the nudge is built.
 func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return session.WorkspacePeersBlockForPath(ctx, s.concStorage, repoPath)
+	return workspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
 // CreateSession initializes a new AI agent session with tmux and git worktree.
@@ -1269,20 +1368,32 @@ func (s *SessionService) CreateSession(
 			"fork_at_message", req.Msg.ForkAtMessage)
 	}
 
-	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/github.com/owner/repo)
+	// Load config once; used by the GitHub URL resolution below as well as the
+	// one-off path and the defaults/alias path further down.
+	cfg := config.LoadConfig()
+
+	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
 	resolvedPath := expandTildePath(req.Msg.Path)
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
 
-	if session.IsGitHubURL(req.Msg.Path) {
+	// Union statically-configured hosts with hosts from dynamically-added
+	// accounts (gh CLI import, device auth) — mirrors ListGitHubAccounts'
+	// host union in github_user_service.go so CreateSession recognizes the
+	// same enterprise URLs the omnibar's detector does.
+	enterpriseHosts := s.enterpriseHosts(cfg)
+
+	if session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
 
-		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// ResolveGitHubInputCtxWithHosts threads ctx down to the underlying git
 		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
 		// timeout genuinely cancels the subprocess instead of abandoning it
-		// to keep running in the background after the RPC returns.
-		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
+		// to keep running in the background after the RPC returns. It also
+		// recognizes URLs against any configured GitHub Enterprise hosts, not
+		// just github.com.
+		localPath, ref, err := session.ResolveGitHubInputCtxWithHosts(ctx, req.Msg.Path, enterpriseHosts)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
@@ -1300,9 +1411,6 @@ func (s *SessionService) CreateSession(
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
 	}
-
-	// Load config once; used by both the one-off path and the defaults/alias path below.
-	cfg := config.LoadConfig()
 
 	// One-off session: generate a fresh directory and override resolvedPath.
 	// Autonomous sessions created without an explicit path (the omnibar's normal
@@ -1422,8 +1530,9 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
-	// One-time workspace-peers nudge for genuinely new sessions (not resumes) — AC5.
-	// Best-effort: any detection/lookup failure just omits the nudge.
+	// One-time workspace-peers nudge for genuinely new sessions (not resumes), when the
+	// workspacePeersNudgeFlagName feature flag is enabled. Best-effort: any detection/lookup
+	// failure just omits the nudge.
 	initialPrompt := req.Msg.InitialPrompt
 	if req.Msg.ResumeId == "" {
 		initialPrompt += s.workspacePeersBlockFor(ctx, resolvedPath)
@@ -1544,6 +1653,9 @@ func (s *SessionService) CreateSession(
 		if s.backlogLifecycleListener != nil {
 			s.backlogLifecycleListener.WireToInstance(instance)
 		}
+		if s.sessionSummaryGenerator != nil {
+			session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+		}
 
 		// Wire the status manager and start the controller AFTER Start() returns so the
 		// tmux attach-session process has had time to fully initialize. Starting the
@@ -1614,6 +1726,96 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) sess
 	return session.SessionTypeDirectory
 }
 
+// enterpriseHosts unions statically-configured GitHub Enterprise hosts with hosts
+// from dynamically-added accounts (gh CLI import, device auth) — mirrors
+// ListGitHubAccounts' host union in github_user_service.go so every caller
+// recognizes the same enterprise URLs the omnibar's detector does. CreateSession
+// and PreviewDestinationPath both call this so the two never diverge.
+func (s *SessionService) enterpriseHosts(cfg *config.Config) []string {
+	configuredHosts := cfg.GetGitHubEnterpriseHosts()
+	var cachedAccounts []githubpkg.CachedAccount
+	if s.userPRCache != nil {
+		cachedAccounts = s.userPRCache.GetCachedAccounts()
+	}
+	seenHosts := make(map[string]bool, len(configuredHosts)+len(cachedAccounts))
+	hosts := make([]string, 0, len(configuredHosts)+len(cachedAccounts))
+	addHost := func(host string) {
+		host = githubpkg.NormalizeHost(host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seenHosts[host] {
+			return
+		}
+		seenHosts[host] = true
+		hosts = append(hosts, host)
+	}
+	for _, h := range configuredHosts {
+		addHost(h.Host)
+	}
+	for _, a := range cachedAccounts {
+		addHost(a.Host)
+	}
+	return hosts
+}
+
+// PreviewDestinationPath computes where a session's checkout/worktree would land
+// without performing any git or filesystem mutation. Used by the Omnibar to show a
+// live destination hint before the user submits session creation.
+// +api: session:preview-destination-path
+func (s *SessionService) PreviewDestinationPath(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PreviewDestinationPathRequest],
+) (*connect.Response[sessionv1.PreviewDestinationPathResponse], error) {
+	cfg := config.LoadConfig()
+
+	switch req.Msg.Mode {
+	case "github_url":
+		ref, err := session.ParseGitHubURLWithHosts(req.Msg.Input, s.enterpriseHosts(cfg))
+		if err != nil {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: "not a recognized GitHub URL",
+			}), nil
+		}
+		path := session.DefaultRepoPathManager.GetRepoPath(ref)
+		return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+			Path:    path,
+			IsExact: true,
+		}), nil
+
+	case "new_worktree":
+		if req.Msg.RepoPath == "" || req.Msg.SessionName == "" {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: "repo_path and session_name are required",
+			}), nil
+		}
+		prefix, err := git.PreviewWorktreePath(req.Msg.RepoPath, req.Msg.SessionName)
+		if err != nil {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: fmt.Sprintf("could not resolve repo path: %v", err),
+			}), nil
+		}
+		return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+			Path:    prefix,
+			IsExact: false,
+		}), nil
+
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown mode: %q", req.Msg.Mode))
+	}
+}
+
+// classifyPauseResumeErr maps a Pause()/Resume() error to the appropriate connect
+// error code. Permission and state-machine rejections are the caller's fault
+// (FailedPrecondition, not a 500); anything else is an unexpected operational
+// failure (git/tmux errors) and stays CodeInternal.
+func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
+	var transErr session.ErrInvalidTransition
+	if errors.As(err, &transErr) ||
+		errors.Is(err, session.ErrPauseNotPermitted) ||
+		errors.Is(err, session.ErrResumeNotPermitted) {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
+}
+
 // UpdateSession modifies session properties (pause/resume, category, title).
 // +api: session:update
 func (s *SessionService) UpdateSession(
@@ -1640,11 +1842,9 @@ func (s *SessionService) UpdateSession(
 
 	// Find the instance to update
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -1653,8 +1853,32 @@ func (s *SessionService) UpdateSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Captured before any rename below mutates instance.Title in-memory. A narrow
+	// metadata update must key its WHERE clause off the pre-rename title, or it misses
+	// the DB row entirely once instance.Title has already moved to the new value.
+	currentTitle := instance.Title
+
+	// Validate the note length before any field below mutates live in-memory state
+	// (SetTitleDirect/SetCategory publish immediately via snapshot.Store, not staged
+	// until SaveInstances) — otherwise a rejected request could still leave title/category
+	// changes visible to concurrent readers.
+	if req.Msg.Note != nil && len(*req.Msg.Note) > session.MaxNoteLength {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("note exceeds maximum length of %d bytes", session.MaxNoteLength))
+	}
+
 	// Track which fields are being updated for event publishing
 	var updatedFields []string
+
+	// Metadata fields (title/category/note/working_dir) persist via a single narrow
+	// UPDATE (UpdateInstanceMetadata) instead of the full-row SaveInstances rewrite.
+	// A non-nil pointer here means "this field was part of the request".
+	var metaTitle, metaCategory, metaNote, metaWorkingDir *string
+
+	// sideEffectChanged tracks fields (tags, status, rate_limit_enabled, autonomous_mode)
+	// that still need the full-row SaveInstances write — e.g. tags requires managing the
+	// tags M2M relation, which a narrow column UPDATE can't replicate.
+	var sideEffectChanged bool
 
 	// Handle title update (before status change so rename is atomic with resume)
 	if req.Msg.Title != nil && *req.Msg.Title != "" && *req.Msg.Title != instance.Title {
@@ -1666,12 +1890,27 @@ func (s *SessionService) UpdateSession(
 		}
 		instance.SetTitleDirect(*req.Msg.Title)
 		updatedFields = append(updatedFields, "title")
+		metaTitle = req.Msg.Title
 	}
 
 	// Handle category update
 	if req.Msg.Category != nil {
 		instance.SetCategory(*req.Msg.Category)
 		updatedFields = append(updatedFields, "category")
+		metaCategory = req.Msg.Category
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
+		metaNote = req.Msg.Note
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
 	}
 
 	// Handle tags update.
@@ -1686,6 +1925,7 @@ func (s *SessionService) UpdateSession(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update tags: %w", err))
 		}
 		updatedFields = append(updatedFields, "tags")
+		sideEffectChanged = true
 	}
 
 	// Handle program update. Empty string means "System default" — resolve to the
@@ -1693,9 +1933,26 @@ func (s *SessionService) UpdateSession(
 	// the capacity-monitor auto-fallback path (UpdateSessionProgram below) via
 	// Instance.SwitchProgram so the two entry points can't drift or double-restart.
 	if req.Msg.Program != nil {
+		// Flush any pending title/category/note rename now, keyed on currentTitle,
+		// before SwitchProgram's callback below can trigger its own SaveInstances
+		// call. That call persists via instance.ToInstanceData(), whose Title is
+		// already the in-memory-renamed value — looking the DB row up by that new
+		// title (before the narrow rename below has run) misses the still-old-titled
+		// row and duplicates it via saveInstancesToRepo's Create fallback, exactly
+		// the orphaned/duplicate-row bug this file's UpdateSessionMetadata exists to
+		// avoid. Flushing here first keeps every later persist call in this handler
+		// looking up the same, already-correct row.
+		if metaTitle != nil || metaCategory != nil || metaNote != nil {
+			if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, nil); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+			}
+			if metaTitle != nil {
+				currentTitle = *metaTitle
+			}
+			metaTitle, metaCategory, metaNote = nil, nil, nil
+		}
 		changed, _, switchErr := instance.SwitchProgram(ctx, *req.Msg.Program, func() error {
-			instances[instanceIndex] = instance
-			return s.storage.SaveInstances(instances)
+			return s.storage.SaveInstances([]*session.Instance{instance})
 		})
 		if changed {
 			updatedFields = append(updatedFields, "program")
@@ -1710,6 +1967,7 @@ func (s *SessionService) UpdateSession(
 	if req.Msg.WorkingDir != nil {
 		instance.SetWorkingDir(*req.Msg.WorkingDir)
 		updatedFields = append(updatedFields, "working_dir")
+		metaWorkingDir = req.Msg.WorkingDir
 	}
 
 	// Handle rate limit enabled toggle. SetRateLimitEnabled persists to the
@@ -1723,6 +1981,7 @@ func (s *SessionService) UpdateSession(
 			}
 		}
 		updatedFields = append(updatedFields, "rate_limit_enabled")
+		sideEffectChanged = true
 	}
 
 	// Handle autonomous mode toggle. Starting/stopping the AutonomousDriver is a
@@ -1739,6 +1998,7 @@ func (s *SessionService) UpdateSession(
 			s.autonomousSvc.stopAndDeregisterDriver(instance.Title)
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
+		sideEffectChanged = true
 	}
 
 	// Handle steering: inject a message into an active autonomous session.
@@ -1772,49 +2032,50 @@ func (s *SessionService) UpdateSession(
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
 
 		if targetStatus == session.Paused && instance.Status != session.Paused {
-			// Set pause reason before transitioning — mirrors HibernateSession pattern.
+			if err := instance.Pause(); err != nil {
+				return nil, classifyPauseResumeErr(err, "pause")
+			}
+			// Set pause reason after a successful transition — mirrors HibernateSession
+			// pattern, and avoids stamping the reason on a request that got rejected
+			// (permission denied, invalid transition).
 			if req.Msg.PauseReason == nil || *req.Msg.PauseReason == "" {
 				instance.SetPauseReason(session.PauseReasonManual)
 			} else {
 				instance.SetPauseReason(*req.Msg.PauseReason)
 			}
-			if err := instance.Pause(); err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to pause session: %w", err))
-			}
 			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
 		} else if targetStatus != session.Paused && instance.Status == session.Paused {
-			// Clear pause reason on resume.
-			instance.SetPauseReason("")
 			// Resume from paused state
 			if err := instance.Resume(); err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resume session: %w", err))
+				return nil, classifyPauseResumeErr(err, "resume")
 			}
+			// Clear pause reason only after a successful resume.
+			instance.SetPauseReason("")
 			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
 		}
 	}
 
-	// Update the instance in the list and save
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	// Persist changes. The narrow metadata UPDATE runs first so a title rename lands
+	// under currentTitle in the DB before any side-effecting SaveInstances call below
+	// looks the row up by the already-in-memory-mutated new title — doing it in the
+	// other order would miss the still-old-titled DB row and orphan it via
+	// SaveInstances' Update-fails-so-Create fallback (see UpdateSessionMetadata).
+	if metaTitle != nil || metaCategory != nil || metaNote != nil || metaWorkingDir != nil {
+		if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, metaWorkingDir); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+		}
+	}
+	if sideEffectChanged {
+		if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+		}
 	}
 
 	// Publish events based on what was updated
 	if len(updatedFields) > 0 {
-		// Publish general update event, including detection state when available.
-		if s.statusManager != nil {
-			statusInfo := s.statusManager.GetStatus(instance)
-			if statusInfo.IsControllerActive {
-				s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
-					instance, updatedFields,
-					statusInfo.ClaudeStatus, statusInfo.StatusContext,
-				))
-			} else {
-				s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
-			}
-		} else {
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
-		}
+		s.publishSessionUpdatedEvent(instance, updatedFields)
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
@@ -1839,11 +2100,9 @@ func (s *SessionService) HibernateSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -1870,8 +2129,7 @@ func (s *SessionService) HibernateSession(
 	// session does not linger with a stale queue entry until reconcileSessions fires.
 	s.removeFromAllPollers(instance.Title)
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -1899,11 +2157,9 @@ func (s *SessionService) ResumeHibernatedSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -1915,14 +2171,58 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
 
 	return connect.NewResponse(&sessionv1.ResumeHibernatedSessionResponse{
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
+	}), nil
+}
+
+// ResumeCrashedSession re-launches the AI process for a Crashed session (dead
+// tmux pane detected by SessionHealthChecker, session/health.go), transitioning
+// it back to Active status. The tmux session was already killed when the
+// instance was marked Crashed, so Start(false) takes the cold-restore path and
+// threads --resume automatically when a conversation UUID is known.
+// +api: session:resume_crashed
+func (s *SessionService) ResumeCrashedSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ResumeCrashedSessionRequest],
+) (*connect.Response[sessionv1.ResumeCrashedSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.MatchesID(req.Msg.Id) {
+			instance = inst
+			break
+		}
+	}
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	if err := instance.ResumeFromCrash(ctx); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
+
+	return connect.NewResponse(&sessionv1.ResumeCrashedSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
 }
@@ -1963,6 +2263,16 @@ func (s *SessionService) DeleteSession(
 	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
 	s.autonomousSvc.stopAndDeregisterDriver(sessionTitle)
 
+	// Capture the live instance BEFORE removing from pollers. removeFromAllPollers
+	// (below) evicts this session from the ReviewQueuePoller's instance list — the
+	// exact list FindLiveInstance searches — so calling FindLiveInstance after
+	// removeFromAllPollers always returned nil here, silently skipping Destroy()'s
+	// git worktree cleanup for every delete (live or not) in favor of the
+	// tmux-only KillTmuxSessionByTitle fallback. Capturing the pointer first fixes
+	// that without reopening the race the ordering comment below is about (that
+	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
+	liveInst := s.FindLiveInstance(sessionTitle)
+
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
 	// re-add the session between storage deletion and the old LoadInstances() reload.
@@ -1972,9 +2282,9 @@ func (s *SessionService) DeleteSession(
 	// Destroy tmux/git resources asynchronously so the RPC returns immediately
 	// after storage deletion. Cleanup errors are non-fatal — they are logged and
 	// do not affect the success response the caller receives.
-	if inst := s.FindLiveInstance(sessionTitle); inst != nil {
+	if liveInst != nil {
 		go func() {
-			if err := inst.Destroy(); err != nil {
+			if err := liveInst.Destroy(); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		}()
@@ -2602,6 +2912,13 @@ func (s *SessionService) GetSessionDiff(
 				found.Worktree.BaseCommitSHA,
 			)
 			diffStats = wt.Diff()
+		} else if found.Path != "" {
+			// ponytail: directory sessions have no worktree; use the session path directly.
+			// resolveBaseCommitSHA() will find the merge-base with main/master as fallback.
+			wt := git.NewGitWorktreeFromStorage(found.Path, found.Path, found.Title, "", "")
+			if wt != nil {
+				diffStats = wt.Diff()
+			}
 		}
 	}
 
@@ -2804,11 +3121,9 @@ func (s *SessionService) RenameSession(
 
 	// Find the instance to rename
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -2833,9 +3148,11 @@ func (s *SessionService) RenameSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to rename session: %w", err))
 	}
 
-	// Update the instance in the list and save
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	// Narrow single-row rename, keyed on the pre-mutation title. The generic
+	// SaveInstances path looks the DB row up by the (already renamed) in-memory
+	// title, misses the still-old-titled row, and falls into a Create fallback that
+	// orphans it — using oldTitle as the WHERE key avoids that.
+	if err := s.storage.UpdateInstanceMetadata(oldTitle, &req.Msg.NewTitle, nil, nil, nil); err != nil {
 		// Try to rollback the rename
 		instance.SetTitleDirect(oldTitle)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save renamed instance: %w", err))
@@ -3838,6 +4155,13 @@ func (s *SessionService) wireStatusChangeCallback(inst *session.Instance) {
 	})
 }
 
+// rateLimitLookupTimeout bounds the ItemSession lookup performed by
+// onRateLimitDetected/onRateLimitRecovery to resolve a Hidden, backlog-linked
+// session's item_id for notification metadata. These callbacks run from
+// goroutines in the ratelimit package, so an unbounded lookup could otherwise
+// hang that goroutine indefinitely on a slow/stuck storage backend.
+const rateLimitLookupTimeout = 2 * time.Second
+
 // wireRateLimitCallbacks registers server-level callbacks on an Instance so that
 // rate-limit detection and recovery events are published to the event bus and
 // trigger desktop push notifications.
@@ -3846,48 +4170,100 @@ func (s *SessionService) wireRateLimitCallbacks(inst *session.Instance) {
 		return
 	}
 	inst.SetRateLimitCallbacks(
-		// onDetected: called when rate limit is detected.
 		func(sessionID string, resetTime time.Time) {
-			var resetMsg string
-			if !resetTime.IsZero() {
-				resetMsg = fmt.Sprintf(" — resumes at %s", resetTime.Format("3:04 PM"))
-			}
-			title := fmt.Sprintf("Session \"%s\" rate limited%s", inst.Title, resetMsg)
-			notifID := fmt.Sprintf("rl-detect-%s", sessionID)
-			s.eventBus.Publish(events.NewNotificationEvent(
-				sessionID, inst.Title, notifID,
-				int32(8), // NotificationType_WARNING
-				int32(3), // NotificationPriority_HIGH
-				title,
-				fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
-				nil,
-			))
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
+			s.onRateLimitDetected(inst, sessionID, resetTime)
 		},
-		// onRecovery: called when recovery completes (success or failure).
 		func(sessionID string, success bool, errMsg string) {
-			var title, message string
-			notifID := fmt.Sprintf("rl-recover-%s", sessionID)
-			if success {
-				title = fmt.Sprintf("Session \"%s\" resumed after rate limit", inst.Title)
-				message = "Session auto-resumed after rate limit expiry."
-			} else {
-				title = fmt.Sprintf("Session \"%s\" failed to resume after rate limit", inst.Title)
-				message = fmt.Sprintf("Auto-resume failed: %s", errMsg)
-			}
-			notifType := int32(10) // NotificationType_INFO
-			if !success {
-				notifType = int32(9) // NotificationType_FAILURE
-			}
-			s.eventBus.Publish(events.NewNotificationEvent(
-				sessionID, inst.Title, notifID,
-				notifType,
-				int32(2), // NotificationPriority_MEDIUM
-				title, message, nil,
-			))
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state"}))
+			s.onRateLimitRecovery(inst, sessionID, success, errMsg)
 		},
 	)
+}
+
+// rateLimitLinkedItemID looks up the backlog item ID linked to inst's session
+// (via concStorage), bounded by rateLimitLookupTimeout. Returns "" when the
+// instance isn't backlog-linked, when concStorage is nil (fake InstanceStore
+// backing, e.g. in some test setups), or when the lookup fails/times out.
+func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
+	if s.concStorage == nil {
+		return ""
+	}
+	lookupCtx, cancel := context.WithTimeout(context.Background(), rateLimitLookupTimeout)
+	defer cancel()
+	itemSession, err := s.concStorage.GetItemSessionBySessionUUID(lookupCtx, inst.UUID)
+	if err != nil {
+		if !errors.Is(err, session.ErrNotFound) {
+			log.Warn("wireRateLimitCallbacks: ItemSession lookup failed", "session", inst.UUID, "err", err)
+		}
+		return ""
+	}
+	return itemSession.BacklogItemID
+}
+
+// onRateLimitDetected publishes the rate-limit-detected notification for inst.
+// Hidden instances (e.g. headless review sessions) never surface a
+// notification for this.
+func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID string, resetTime time.Time) {
+	if !inst.Hidden {
+		linkedItemID := s.rateLimitLinkedItemID(inst)
+
+		var resetMsg string
+		if !resetTime.IsZero() {
+			resetMsg = fmt.Sprintf(" — resumes at %s", resetTime.Format("3:04 PM"))
+		}
+		title := fmt.Sprintf("Session \"%s\" rate limited%s", inst.Title, resetMsg)
+		notifID := fmt.Sprintf("rl-detect-%s", sessionID)
+		s.eventBus.Publish(events.NewNotificationEvent(
+			sessionID, inst.Title, notifID,
+			int32(8), // NotificationType_WARNING
+			int32(3), // NotificationPriority_HIGH
+			title,
+			fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
+			events.SessionScopedMetadata(nil, linkedItemID),
+		))
+	}
+	// Session state sync (rate_limit_state/rate_limit_reset_time) must fire
+	// regardless of Hidden — only the Notifications-page entry above is gated.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
+
+	// Feed the account-wide quota gate's hard/reactive override signal. Not
+	// gated on inst.Hidden (unlike the notification above) — a rate limit hit
+	// by a hidden/headless session still consumes real account quota.
+	if s.quotaGate != nil {
+		s.quotaGate.recordRateLimitEvent(time.Now())
+	}
+}
+
+// onRateLimitRecovery publishes the rate-limit-recovery notification for inst.
+// Hidden instances (e.g. headless review sessions) never surface a
+// notification for this.
+func (s *SessionService) onRateLimitRecovery(inst *session.Instance, sessionID string, success bool, errMsg string) {
+	if !inst.Hidden {
+		linkedItemID := s.rateLimitLinkedItemID(inst)
+
+		var title, message string
+		notifID := fmt.Sprintf("rl-recover-%s", sessionID)
+		if success {
+			title = fmt.Sprintf("Session \"%s\" resumed after rate limit", inst.Title)
+			message = "Session auto-resumed after rate limit expiry."
+		} else {
+			title = fmt.Sprintf("Session \"%s\" failed to resume after rate limit", inst.Title)
+			message = fmt.Sprintf("Auto-resume failed: %s", errMsg)
+		}
+		notifType := int32(10) // NotificationType_INFO
+		if !success {
+			notifType = int32(9) // NotificationType_FAILURE
+		}
+		s.eventBus.Publish(events.NewNotificationEvent(
+			sessionID, inst.Title, notifID,
+			notifType,
+			int32(2), // NotificationPriority_MEDIUM
+			title, message,
+			events.SessionScopedMetadata(nil, linkedItemID),
+		))
+	}
+	// Session state sync (rate_limit_state) must fire regardless of Hidden —
+	// only the Notifications-page entry above is gated.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state"}))
 }
 
 // wireClaudeSessionIDCallback registers a callback on inst so that when the
@@ -4147,7 +4523,12 @@ func (s *SessionService) ArchiveSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 	now := time.Now()
-	inst.SetArchivedAt(&now)
+	// ArchiveWithStop also transitions Status to Stopped (best-effort — archiving
+	// previously left ArchivedAt set while Status stayed Active/Paused/Hibernated,
+	// which the retention sweep and other Stopped-gated logic depend on being in sync).
+	if err := inst.ArchiveWithStop(now); err != nil {
+		log.Warn("failed to transition archived session to Stopped", "session", req.Msg.SessionId, "err", err)
+	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
@@ -4323,10 +4704,31 @@ func (s *SessionService) GetProviderLimits(
 	}), nil
 }
 
+// publishSessionUpdatedEvent publishes a SessionUpdated event for instance covering
+// updatedFields, using the statusManager-aware NewSessionUpdatedEventWithDetection variant
+// when a controller is actively running (so clients see live ClaudeStatus/StatusContext),
+// and falling back to the plain NewSessionUpdatedEvent otherwise. Shared by UpdateSession's
+// end-of-handler publish and UpdateSessionProgram (the capacity-monitor auto-fallback path)
+// so the two program-switch entry points publish identically instead of drifting.
+func (s *SessionService) publishSessionUpdatedEvent(instance *session.Instance, updatedFields []string) {
+	if s.statusManager != nil {
+		statusInfo := s.statusManager.GetStatus(instance)
+		if statusInfo.IsControllerActive {
+			s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
+				instance, updatedFields,
+				statusInfo.ClaudeStatus, statusInfo.StatusContext,
+			))
+			return
+		}
+	}
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
+}
+
 // UpdateSessionProgram handles switching programs for a session, doing the history
 // porting, DB save, and PTY restart. Shares its implementation with the UpdateSession RPC
-// handler via Instance.SwitchProgram (see session/instance_program.go) so the two
-// program-switch entry points — this auto-fallback path and the manual RPC — can't drift.
+// handler via Instance.SwitchProgram (see session/instance_program.go) and
+// publishSessionUpdatedEvent above so the two program-switch entry points — this
+// auto-fallback path and the manual RPC — can't drift.
 func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID string, newProgram string) error {
 	inst := s.findInstance(sessionID)
 	if inst == nil {
@@ -4343,7 +4745,7 @@ func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID str
 		return fmt.Errorf("failed to restart session: %w", err)
 	}
 
-	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))
+	s.publishSessionUpdatedEvent(inst, []string{"program"})
 
 	return nil
 }
@@ -4358,6 +4760,12 @@ func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
 	if s.capacityMonitor != nil {
 		s.capacityMonitor.tokenStore = store
 	}
+}
+
+// SetQuotaGate wires the account-wide quota gate so onRateLimitDetected can
+// feed it the hard/reactive override signal.
+func (s *SessionService) SetQuotaGate(g *QuotaGate) {
+	s.quotaGate = g
 }
 
 // GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.

@@ -64,6 +64,17 @@ export const thRight = style([
   { textAlign: "right" },
 ]);
 
+export const sortableTh = style({
+  cursor: "pointer",
+  display: "inline-block",
+  selectors: {
+    "&:focus-visible": {
+      outline: `2px solid ${vars.color.primary}`,
+      outlineOffset: "2px",
+    },
+  },
+});
+
 export const td = style({
   padding: `${vars.space[2]} ${vars.space[2]}`,
   color: vars.color.textPrimary,
@@ -95,6 +106,14 @@ export const orphanBadge = style({
   marginLeft: vars.space[1],
   verticalAlign: "middle",
 });
+
+// Distinct from orphanBadge's warning colors — "unpriced" (cost not
+// computable) and "orphan" (session not matched to a backlog item) are
+// different states and shouldn't be visually indistinguishable.
+export const unpricedBadge = style([
+  orphanBadge,
+  { background: vars.color.accentBg, color: vars.color.accentText },
+]);
 
 export const empty = style({
   color: vars.color.textMuted,

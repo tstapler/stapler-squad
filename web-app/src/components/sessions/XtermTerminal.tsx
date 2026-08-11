@@ -6,16 +6,130 @@ import { useTerminalGestures } from "@/lib/hooks/useTerminalGestures";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { WebglAddon } from "@xterm/addon-webgl";
+// @xterm/addon-canvas@0.7.0's peer dependency is @xterm/xterm: ^5.0.0 and will never be
+// bumped -- upstream removed the canvas renderer from the xterm.js monorepo entirely as of
+// 6.0.0 (xtermjs/xterm.js#5105). Despite the stale peer range (and the resulting pnpm install
+// warning against our @xterm/xterm@^6.0.0), this addon is verified to still activate and
+// function correctly against xterm 6 -- see the "Addendum (2026-07-27)" in
+// project_plans/terminal-resize-fit-loop/decisions/ADR-001-add-xterm-addon-canvas-dependency.md
+// and the runnable proof in
+// __tests__/XtermTerminal.canvasAddonXterm6Compat.test.ts. Re-verify before any future
+// @xterm/xterm major bump.
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
 import * as styles from "./XtermTerminal.css";
 import { TerminalContextMenu } from "./TerminalContextMenu";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
+import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from "@/lib/terminal/types";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
+
+/**
+ * Fixed cadence (ms) of the decoupled resize sampler. See
+ * project_plans/terminal-resize-fit-loop/decisions/ADR-002-decoupled-sampler-tick-semantics.md
+ *
+ * Exported so tests import the real cadence instead of redeclaring a local
+ * copy that could silently desync from the implementation.
+ */
+export const SAMPLE_INTERVAL_MS = 50;
+
+/**
+ * Bounded give-up threshold (~1s of sampling) for sustained oscillation. See
+ * project_plans/terminal-resize-fit-loop/decisions/ADR-002-decoupled-sampler-tick-semantics.md
+ *
+ * Exported so tests import the real threshold instead of redeclaring a local
+ * copy that could silently desync from the implementation.
+ */
+export const MAX_SAMPLES = 20;
+
+/**
+ * Tolerance (px) and consecutive-sample threshold for the WebGL actual-vs-
+ * expected pixels-per-column mismatch tracker (AC5). Provisional values, not
+ * yet validated against a real fractionally-scaled display — jsdom cannot
+ * reproduce real WebGL glyph-width mismatch magnitude, especially under
+ * fractional OS display scaling (Windows 125%/150%, macOS non-integer zoom),
+ * which is exactly the condition that produces this mismatch in the first
+ * place. Chosen as a reasonable starting point from requirements.md's own
+ * "warns above a 1px tolerance" precedent, not measured data. See Task 5.2
+ * step 7 in project_plans/terminal-resize-fit-loop/implementation/plan.md
+ * for the real-device validation/tuning step.
+ */
+const MISMATCH_TOLERANCE_PX = 1;
+const MISMATCH_THRESHOLD = 3;
+
+export interface ShouldScheduleFitResult {
+  schedule: boolean;
+  nextPending: ResizeDimensions | null;
+}
+
+/**
+ * Pure Reading-A dead-band decision: a fit() should only be scheduled once a
+ * proposed candidate matches the immediately preceding sampled candidate
+ * exactly (not merely "differs from applied"). See ADR-002 §2 for the full
+ * derivation of why Reading A is correct and Reading B is not.
+ */
+export function shouldScheduleFit(
+  proposed: ResizeDimensions | undefined,
+  applied: ResizeDimensions,
+  pending: ResizeDimensions | null
+): ShouldScheduleFitResult {
+  if (!proposed) return { schedule: false, nextPending: null };
+  if (dimensionsEqual(proposed, applied)) {
+    return { schedule: false, nextPending: null };
+  }
+  if (pending && dimensionsEqual(pending, proposed)) {
+    return { schedule: true, nextPending: null };
+  }
+  return { schedule: false, nextPending: proposed };
+}
+
+export interface CellMismatchInputs {
+  actualPxPerCol: number;
+  expectedPxPerCol: number;
+}
+
+/**
+ * Impure extraction of the raw actual-vs-expected pixels-per-column inputs
+ * from xterm.js internals and DOM measurement (AC5). Returns null when the
+ * renderer hasn't measured cell dimensions yet. Deliberately does no
+ * Number.isFinite guarding here — `terminal.cols === 0` simply produces
+ * `Infinity` and is passed through; `isSustainedMismatch()` is the sole
+ * guard boundary (architecture-review.md Concern 2).
+ */
+export function extractCellMismatchInputs(
+  terminal: Terminal,
+  containerEl: HTMLElement
+): CellMismatchInputs | null {
+  const dims = (terminal as any)._core?._renderService?.dimensions;
+  if (!dims?.css?.cell?.width) return null;
+  return {
+    actualPxPerCol: containerEl.getBoundingClientRect().width / terminal.cols,
+    expectedPxPerCol: dims.css.cell.width,
+  };
+}
+
+/**
+ * Pure, Number.isFinite-guarded mismatch decision (AC5). Returns false
+ * unless both inputs are finite — guards against the `terminal.cols === 0`
+ * / hidden-tab `Infinity` case (pitfalls §4) using `Number.isFinite`, not
+ * `Number.isNaN` (per AC5's explicit wording; `Number.isNaN(Infinity)` is
+ * `false`, which would incorrectly admit the sample).
+ */
+export function isSustainedMismatch(
+  actualPxPerCol: number,
+  expectedPxPerCol: number,
+  tolerance: number
+): boolean {
+  if (!Number.isFinite(actualPxPerCol) || !Number.isFinite(expectedPxPerCol)) {
+    return false;
+  }
+  return Math.abs(actualPxPerCol - expectedPxPerCol) > tolerance;
+}
 
 export interface XtermTerminalProps {
   /**
@@ -109,6 +223,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  const webglAddonRef = useRef<WebglAddon | null>(null);
   const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
@@ -317,6 +432,90 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       rightClickSelectsWord: true, // Right-click selects the word under cursor
     });
 
+    // WebGL mismatch tracker + one-directional Canvas fallback (AC5). See
+    // project_plans/terminal-resize-fit-loop/decisions/ADR-001-add-xterm-addon-canvas-dependency.md
+    let webglMismatchCount = 0;
+    let webglFallbackTriggered = false;
+    // RAF handle for the post-fallback fit() scheduled inside
+    // triggerCanvasFallback()'s success path, so it can be cancelled on
+    // unmount if the component tears down before the RAF fires.
+    let postFallbackRafId: number | null = null;
+
+    const triggerCanvasFallback = () => {
+      if (webglFallbackTriggered || cancelled) return; // one-directional latch, never re-arms (pitfalls §4)
+      webglFallbackTriggered = true;
+      console.warn('[XtermTerminal] WebGL cell-measurement mismatch exceeded threshold, falling back to canvas renderer');
+
+      // @xterm/addon-webgl resolved to 0.18.0 (confirmed in package-lock.json /
+      // node_modules). This postdates the historical WebglAddon.dispose()
+      // no-op bug (xterm.js #2254, fixed via #2548, a 2019-era fix long since
+      // released). The GPU-memory-leak-on-dispose fix (#3889, fixed via
+      // #3890) is also merged upstream, but a lightweight web search could not
+      // definitively pin the exact release/version boundary where #3890
+      // landed relative to 0.18.0 — noting that explicitly rather than
+      // asserting an unverified claim (Task 3.0.2).
+      webglAddonRef.current?.dispose();
+      webglAddonRef.current = null;
+
+      try {
+        terminal.loadAddon(new CanvasAddon());
+        // Wait one RAF frame after the addon swap before fitting, per the
+        // historical xterm.js #1416 crash precedent (measuring against a
+        // not-yet-initialized renderer).
+        postFallbackRafId = requestAnimationFrame(() => {
+          postFallbackRafId = null;
+          const proposed = fitAddonRef.current?.proposeDimensions();
+          if (fitAddonRef.current && isFiniteResizeDimensions(proposed)) {
+            fitAddonRef.current.fit();
+          } else {
+            console.warn('[XtermTerminal] Skipped post-fallback fit: proposed dimensions not finite');
+          }
+        });
+      } catch (err) {
+        // adversarial-review.md Blocker: CanvasAddon construction must be
+        // guarded, mirroring the WebglAddon try/catch above. If this also
+        // throws, the latch stays tripped (no retry) and xterm.js's built-in
+        // DOM renderer is left active automatically — no explicit fallback
+        // code path is needed (confirmed by build-vs-buy.md research).
+        console.error("[XtermTerminal] Canvas renderer also failed to load; falling back to xterm's built-in DOM renderer", err);
+      }
+    };
+
+    // Single check-and-maybe-trigger-fallback sequence, shared by both the
+    // startup double-RAF check and the sampler's per-confirmed-resize check
+    // (previously duplicated with inconsistent guard placement). `inputs` is
+    // null when the renderer hasn't measured cell dimensions yet -- that's
+    // "no sample", not a clean sample, so it neither increments nor resets
+    // the counter. A genuinely clean (non-mismatching) sample resets the
+    // counter to 0, making MISMATCH_THRESHOLD a true consecutive-sample
+    // threshold rather than a cumulative one (AC5's "sustained" mismatch).
+    const recordMismatchSample = (inputs: CellMismatchInputs | null) => {
+      if (webglFallbackTriggered || !inputs) return;
+      if (isSustainedMismatch(inputs.actualPxPerCol, inputs.expectedPxPerCol, MISMATCH_TOLERANCE_PX)) {
+        console.error(`[XtermTerminal] ⚠️ SIZING MISMATCH! Container width doesn't match cell width calculation`);
+        webglMismatchCount++;
+        if (webglMismatchCount >= MISMATCH_THRESHOLD) {
+          triggerCanvasFallback();
+        }
+      } else {
+        webglMismatchCount = 0;
+      }
+    };
+
+    // Dev-only manual trigger (Task 3.2.1a): lets a human visually confirm
+    // the Canvas tier renders correctly without waiting for the mismatch
+    // heuristic or a real WebGL context loss (jsdom cannot exercise either
+    // path for real, so this is otherwise unverifiable pre-ship).
+    //
+    // Scoped to this instance's container DOM node (not `window`) so that
+    // multiple concurrently mounted XtermTerminal instances -- the normal
+    // case in this multi-session app -- each get their own independent
+    // trigger instead of clobbering one another's global hook on mount/
+    // unmount (Task 5.2 step 7 manual multi-instance verification).
+    if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true" && containerRef.current) {
+      (containerRef.current as any).__staplerSquadForceCanvasFallback = () => triggerCanvasFallback();
+    }
+
     // Create and load addons
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
@@ -328,17 +527,31 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(serializeAddon);
 
-    // xterm.js issue #2033 — guard WebGL before loading on Android/mobile
+    // xterm.js issue #2033 — guard WebGL before loading on Android/mobile.
+    // Loaded dynamically (rather than the always-on static import this
+    // replaced) so platforms lacking WebGL2RenderingContext never pull the
+    // addon-webgl module at all. webglAddonRef is still populated (instead of
+    // a locally-scoped const) so triggerCanvasFallback()'s dispose() call and
+    // the unmount cleanup effect below can reach the live instance, and
+    // onContextLoss routes through triggerCanvasFallback() so a real context
+    // loss is treated identically to the AC5 mismatch-tracker fallback path.
+    // Guards against the async import below resolving after this effect has
+    // already been cleaned up (e.g. a fast session-switch unmount) — without
+    // this, loadAddon() would be called on an already-disposed terminal and
+    // webglAddonRef.current would be left pointing at an orphaned, undisposed
+    // WebGL addon that leaks its context. Set to true in the cleanup below.
+    let cancelled = false;
     (async () => {
       if (typeof WebGL2RenderingContext !== 'undefined') {
         try {
           const { WebglAddon } = await import('@xterm/addon-webgl');
-          const webglAddon = new WebglAddon();
-          webglAddon.onContextLoss(() => {
+          if (cancelled) return;
+          webglAddonRef.current = new WebglAddon();
+          terminal.loadAddon(webglAddonRef.current);
+          webglAddonRef.current.onContextLoss(() => {
             console.warn('[XtermTerminal] WebGL context lost, falling back to canvas renderer');
-            webglAddon.dispose();
+            triggerCanvasFallback();
           });
-          terminal.loadAddon(webglAddon);
           console.log("[XtermTerminal] WebGL renderer enabled");
         } catch (e) {
           console.warn("[XtermTerminal] WebGL failed to load:", e);
@@ -452,16 +665,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
           console.log(`[XtermTerminal] Initial fit complete: ${terminal.cols} cols × ${terminal.rows} rows`);
 
-          // Calculate actual pixels per column for verification
-          if (containerEl && terminal.cols > 0) {
-            const actualPixelsPerCol = containerEl.getBoundingClientRect().width / terminal.cols;
-            console.log(`[XtermTerminal] Actual pixels per column: ${actualPixelsPerCol.toFixed(2)}px`);
-            if (dims?.css?.cell) {
-              console.log(`[XtermTerminal] Expected pixels per column: ${dims.css.cell.width.toFixed(2)}px`);
-              if (Math.abs(actualPixelsPerCol - dims.css.cell.width) > 1) {
-                console.error(`[XtermTerminal] ⚠️ SIZING MISMATCH! Container width doesn't match cell width calculation`);
-              }
+          // Calculate actual pixels per column for verification (AC5 mismatch tracker)
+          if (containerEl) {
+            const mismatchInputs = extractCellMismatchInputs(terminal, containerEl);
+            if (mismatchInputs) {
+              console.log(`[XtermTerminal] Actual pixels per column: ${mismatchInputs.actualPxPerCol.toFixed(2)}px`);
+              console.log(`[XtermTerminal] Expected pixels per column: ${mismatchInputs.expectedPxPerCol.toFixed(2)}px`);
             }
+            recordMismatchSample(mismatchInputs);
           }
           // Secondary delayed fit() removed (R1.3): the double-rAF above provides sufficient layout
           // stability; the extra setTimeout caused a second terminal.onResize, triggering a duplicate
@@ -544,6 +755,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       fitAddonRef.current = fitAddon;
       searchAddonRef.current = searchAddon;
       serializeAddonRef.current = serializeAddon;
+
+      // Deliberately no synchronous initial onResize() call here: it used to fire
+      // onResize(terminal.cols, terminal.rows) with xterm's construction-time defaults
+      // (80x24) before fitAddon.fit() ever ran, corrupting TerminalOutput's dimension
+      // cache with the wrong size (see XtermTerminalBug.test.tsx "Bug 1" and R-series fix
+      // "prevent premature resize from corrupting dimension cache"). The double-RAF
+      // initial fit() below — and the decoupled sampler / ResizeObserver after it — are
+      // solely responsible for telling the parent the real size via terminal.onResize.
 
       // ---- Mobile selection handle drag logic ----
       // Each handle listens for touchstart, then registers a document-level
@@ -733,6 +952,91 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // Track container size to avoid unnecessary fit() calls
       let lastContainerSize = { width: 0, height: 0 };
       let resizeTimeout: NodeJS.Timeout | null = null;
+
+      // Decoupled resize sampler (ADR-002): a fixed-cadence re-sampling loop,
+      // started by the debounce below but never reset by further
+      // ResizeObserver deliveries once running. See ADR-002 for the full
+      // algorithm and rationale.
+      let samplerActive = false;
+      let sampleTimeout: NodeJS.Timeout | null = null;
+      let sampleCount = 0;
+      let pendingProposedDims: ResizeDimensions | null = null;
+
+      const stopSampler = () => {
+        samplerActive = false;
+        pendingProposedDims = null;
+        sampleCount = 0;
+        if (sampleTimeout) {
+          clearTimeout(sampleTimeout);
+          sampleTimeout = null;
+        }
+      };
+
+      const sampleTick = () => {
+        if (!fitAddonRef.current || !terminalRef.current) {
+          stopSampler();
+          return;
+        }
+
+        const proposed = fitAddonRef.current.proposeDimensions();
+        const applied: ResizeDimensions = {
+          cols: terminalRef.current.cols,
+          rows: terminalRef.current.rows,
+        };
+        const result = shouldScheduleFit(proposed, applied, pendingProposedDims);
+
+        if (result.schedule) {
+          fitAddonRef.current.fit();
+          console.log(`[XtermTerminal] Sampler confirmed resize, fit applied: ${terminalRef.current.cols} cols × ${terminalRef.current.rows} rows`);
+
+          // Sync lastContainerSize to the post-fit DOM dimensions so the next
+          // ResizeObserver entry (triggered by fit() resizing xterm.js internals)
+          // is filtered out, breaking the scrollbar-appearance oscillation loop.
+          if (containerRef.current) {
+            const r = containerRef.current.getBoundingClientRect();
+            lastContainerSize = { width: r.width, height: r.height };
+          }
+
+          // AC5: accumulate mismatch across confirmed resize events, not just
+          // a single startup check (architecture research point 2).
+          if (containerRef.current) {
+            const mismatchInputs = extractCellMismatchInputs(terminalRef.current, containerRef.current);
+            recordMismatchSample(mismatchInputs);
+          }
+
+          stopSampler();
+          return;
+        }
+
+        if (result.nextPending === null) {
+          // At rest (proposed equals applied) or proposeDimensions() returned undefined.
+          stopSampler();
+          return;
+        }
+
+        pendingProposedDims = result.nextPending;
+        sampleCount++;
+
+        if (sampleCount >= MAX_SAMPLES) {
+          console.warn('[XtermTerminal] Resize did not converge after 20 samples; giving up');
+          // Full reset (not a partial abandon): give-up must not leave the
+          // sampler permanently inert, since startSamplerIfNeeded() is a
+          // no-op whenever samplerActive is already true. See ADR-002.
+          stopSampler();
+          return;
+        }
+
+        sampleTimeout = setTimeout(sampleTick, SAMPLE_INTERVAL_MS);
+      };
+
+      const startSamplerIfNeeded = () => {
+        if (samplerActive) return;
+        samplerActive = true;
+        sampleCount = 0;
+        pendingProposedDims = null;
+        sampleTick();
+      };
+
       const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
         if (!fitAddonRef.current || !terminalRef.current) return;
 
@@ -763,24 +1067,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             clearTimeout(resizeTimeout);
           }
 
-          // Schedule fit with adaptive debounce.
-          // Double rAF ensures DOM reflow is complete before measuring on iOS Safari —
-          // a single rAF is insufficient because the browser may batch it with the resize
-          // event, leaving stale dimensions. See xterm.js issue #3895.
+          // Schedule the decoupled sampler start (ADR-002) after the debounce settles.
+          // No extra rAF guard here (unlike the startup double-rAF fit): a stale first
+          // proposeDimensions() read just produces a "pending" sample that won't match
+          // the next tick SAMPLE_INTERVAL_MS later, self-correcting within one extra
+          // 50ms tick rather than committing a wrong fit(). The debounce only decides
+          // *when to start* the sampler for a burst of RO deliveries; once started, the
+          // sampler's own tick chain is never reset by further RO deliveries (ADR-002).
           resizeTimeout = setTimeout(() => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                fitAddonRef.current?.fit();
-                // Sync lastContainerSize to the post-fit DOM dimensions so the next
-                // ResizeObserver entry (triggered by fit() resizing xterm.js internals)
-                // is filtered out, breaking the scrollbar-appearance oscillation loop.
-                if (containerRef.current) {
-                  const r = containerRef.current.getBoundingClientRect();
-                  lastContainerSize = { width: r.width, height: r.height };
-                }
-                console.log(`[XtermTerminal] Terminal dimensions AFTER fit: ${terminalRef.current?.cols} cols × ${terminalRef.current?.rows} rows`);
-              });
-            });
+            startSamplerIfNeeded();
             resizeTimeout = null;
           }, debounceDelay);
         } else if ((widthChanged || heightChanged) && (width === 0 || height === 0)) {
@@ -792,8 +1087,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       // Cleanup
       return () => {
+        cancelled = true;
         if (resizeTimeout) {
           clearTimeout(resizeTimeout);
+        }
+        stopSampler();
+        if (postFallbackRafId !== null) {
+          cancelAnimationFrame(postFallbackRafId);
+          postFallbackRafId = null;
         }
         cleanupContextMenu();
         resizeObserver.disconnect();
@@ -808,6 +1109,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         fitAddonRef.current = null;
         searchAddonRef.current = null;
         serializeAddonRef.current = null;
+        webglAddonRef.current = null;
+        if (containerRef.current) {
+          delete (containerRef.current as any).__staplerSquadForceCanvasFallback;
+        }
       };
     } catch (error) {
       console.error('[XtermTerminal] Terminal initialization failed:', error);

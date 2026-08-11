@@ -12,6 +12,7 @@ import type { ThemeName } from "@/lib/contexts/ThemeContext";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { usePathHistory } from "@/lib/hooks/usePathHistory";
 import { useWorktreeSuggestions } from "@/lib/hooks/useWorktreeSuggestions";
+import { useDestinationPathPreview } from "@/lib/hooks/useDestinationPathPreview";
 import { useSessionSearch, type SessionSearchResult } from "@/lib/hooks/useSessionSearch";
 import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
@@ -239,6 +240,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const lastSuggestedNameRef = useRef<string>("");
   const prevDetectionTypeRef = useRef<string | null>(null);
+  // Tracks the input value as of the last time the detection effect actually
+  // ran its body, so a reset_to_discovery dispatch only fires when input truly
+  // transitioned away from empty — not merely because aliases/workflows finished
+  // an async refetch while input was already empty (see reset_to_discovery guard below).
+  const prevDetectionInputRef = useRef<string>("");
   // Stable ref so handleKeyDown can always call the latest handleSubmit without
   // a circular declaration-order dependency (handleKeyDown is declared before handleSubmit).
   const handleSubmitRef = useRef<() => void>(() => {});
@@ -303,6 +309,39 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       : "";
   const { worktrees, isLoading: isWorktreesLoading, error: worktreesError } = useWorktreeSuggestions(repoPathForWorktrees, {
     enabled: sessionType === "existing_worktree" && !!repoPathForWorktrees,
+  });
+
+  // Destination path preview: github_url mode previews the exact clone destination for a
+  // detected GitHub URL/PR/shorthand; new_worktree mode previews the deterministic prefix
+  // of where the worktree will be created (the real path also gets a random suffix at
+  // creation time — see PreviewWorktreePath's doc comment).
+  const isGitHubUrlDetection =
+    detection?.type === InputType.GitHubPR ||
+    detection?.type === InputType.GitHubBranch ||
+    detection?.type === InputType.GitHubRepo ||
+    detection?.type === InputType.GitHubShorthand;
+
+  const destinationPreviewParams = useMemo(() => {
+    if (isGitHubUrlDetection && detection?.parsedValue) {
+      return { mode: "github_url" as const, input: detection.parsedValue };
+    }
+    if (sessionType === "new_worktree" && repoPathForWorktrees && sessionName.trim()) {
+      return {
+        mode: "new_worktree" as const,
+        input: "",
+        repoPath: repoPathForWorktrees,
+        sessionName: useTitleAsBranch ? sessionName : branch || sessionName,
+      };
+    }
+    return null;
+  }, [isGitHubUrlDetection, detection?.parsedValue, sessionType, repoPathForWorktrees, sessionName, useTitleAsBranch, branch]);
+
+  const {
+    path: destinationPreviewPath,
+    isExact: destinationPreviewIsExact,
+    isLoading: isDestinationPreviewLoading,
+  } = useDestinationPathPreview(destinationPreviewParams, {
+    enabled: destinationPreviewParams !== null,
   });
 
   // Convert live OS entries to CompletionEntry for type-safe downstream use.
@@ -540,10 +579,19 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             }
           }
         } else {
-          setDetection(null);
-          dispatchMode({ kind: "reset_to_discovery" });
-          setResultHighlightIndex(-1);
+          // This branch also runs when aliases/workflows finish an async refetch
+          // while input is (and already was) empty — that's an identity change in
+          // this effect's dep array, not a real input edit. Only reset to discovery
+          // when input actually transitioned from non-empty to empty, so it doesn't
+          // stomp a mode the user reached another way (e.g. Ctrl+Shift+K creation
+          // mode) before they've typed anything.
+          if (prevDetectionInputRef.current.trim()) {
+            setDetection(null);
+            dispatchMode({ kind: "reset_to_discovery" });
+            setResultHighlightIndex(-1);
+          }
         }
+        prevDetectionInputRef.current = input;
       } catch (err) {
         // Never let a thrown exception mid-update abandon UI state — leave the
         // last valid detection/canSubmit state in place and surface the failure.
@@ -1455,6 +1503,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             uploadBaseUrl={uploadBaseUrl}
             onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
             pathDoesNotExist={pathDoesNotExist}
+            destinationPreviewPath={destinationPreviewPath}
+            destinationPreviewIsExact={destinationPreviewIsExact}
+            isDestinationPreviewLoading={isDestinationPreviewLoading}
             namePrefix={
               detection?.type === InputType.Alias
                 ? ((detection.metadata as AliasMetadata | undefined)?.alias?.namePrefix ?? "")

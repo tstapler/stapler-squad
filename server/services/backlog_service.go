@@ -163,12 +163,27 @@ type BacklogService struct {
 	// section.
 	spawnInFlight sync.Map
 
-
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
+
+	// triageInFlight tracks, per item ID, whether a headless triage call this
+	// process itself started is still genuinely running. tombstoneOrphanTriageSessions
+	// has no other way to tell a still-running headless call apart from a dead one —
+	// unlike a work/review session, there's no tmux session to query liveness against
+	// (see BUG-054: before this field existed, tombstoneOrphanTriageSessions treated
+	// every not-yet-ended headless triage session as dead unconditionally, so
+	// retriggering triage for an item with a genuinely still-running call silently
+	// orphaned that live call in the DB and started a fully redundant duplicate).
+	// Same self-cleaning LoadOrStore-on-entry/Delete-via-defer-on-exit shape as
+	// spawnInFlight above, for the same reason: a sync.Map here never leaks an entry
+	// past the life of the call it tracks, and this is a single-process server so an
+	// in-process guard is sufficient. Deliberately NOT persisted — on a fresh process
+	// start after a restart, every item's entry is (correctly) absent, since no
+	// goroutine in the new process could possibly still be running an old triage call.
+	triageInFlight sync.Map
 
 	// capabilityCheck gates the first codebase-read call per process lifetime (Story
 	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
@@ -281,6 +296,14 @@ func (s *BacklogService) maxAutoReworkIterations() int {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.cfg.MaxAutoReworkIterationsOrDefault()
+}
+
+// autoSpawnReadyItemsEnabled reads cfg.AutoSpawnReadyItemsOrDefault() under
+// cfgMu's read lock — see maxConcurrentBacklogWorkItems's doc comment.
+func (s *BacklogService) autoSpawnReadyItemsEnabled() bool {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.AutoSpawnReadyItemsOrDefault()
 }
 
 // SetEventBus wires in the event bus used to publish operator-facing notifications.
@@ -426,7 +449,8 @@ func (s *BacklogService) buildCostLookup() func(tmuxUUID string) float64 {
 		if r == nil {
 			return 0
 		}
-		return pt.EstimateCost(r)
+		cost, _ := pt.EstimateCost(r)
+		return cost
 	}
 }
 
@@ -572,10 +596,14 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 		RepoPath:   item.RepoPath,
 		Notes:      item.Notes,
 		ExternalId: item.ExternalID,
+		Labels:     item.Labels,
 		PrUrl:      item.PrURL,
 		PrNumber:   int32(item.PrNumber),
 		CreatedAt:  timestamppb.New(item.CreatedAt),
 		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+	}
+	if item.ExternalURL != "" {
+		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
@@ -608,29 +636,54 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
+// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
+// surface AllowedTransitions on the wire (backlogItemToProto below) — package
+// state is safe here since the underlying transitions map is never mutated
+// after construction. Not s.engine: backlogItemToProto is a free function
+// called from many BacklogService methods, and threading an engine parameter
+// through every call site would be a much larger change for the same result.
+var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
+
+// allowedTransitionStrings returns the string form of
+// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
+func allowedTransitionStrings(from session.BacklogStatus) []string {
+	targets := protoWorkflowEngine.AllowedTransitions(from)
+	out := make([]string, len(targets))
+	for i, t := range targets {
+		out[i] = string(t)
+	}
+	return out
+}
+
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                item.ID,
-		Title:             item.Title,
-		Description:       item.Description,
-		Priority:          int32(item.Priority),
-		Status:            item.Status,
-		RepoPath:          item.RepoPath,
-		SkipReviewGate:    item.SkipReviewGate,
-		SkipPlanning:      item.SkipPlanning,
-		AutoSpawnSession:  item.AutoSpawnSession,
-		AutoCreatePr:      item.AutoCreatePR,
-		PipelineMode:      &item.PipelineMode,
-		PlanApproved:      item.PlanApproved,
-		PlanArtifactsPath: item.PlanArtifactsPath,
-		Notes:             item.Notes,
-		ExternalId:        item.ExternalID,
-		SourceId:          item.SourceID,
-		PrUrl:             item.PrURL,
-		PrNumber:          int32(item.PrNumber),
-		CreatedAt:         timestamppb.New(item.CreatedAt),
-		UpdatedAt:         timestamppb.New(item.UpdatedAt),
+		Id:                 item.ID,
+		Title:              item.Title,
+		Description:        item.Description,
+		Priority:           int32(item.Priority),
+		Status:             item.Status,
+		RepoPath:           item.RepoPath,
+		SkipReviewGate:     item.SkipReviewGate,
+		SkipPlanning:       item.SkipPlanning,
+		AutoSpawnSession:   item.AutoSpawnSession,
+		AutoCreatePr:       item.AutoCreatePR,
+		PipelineMode:       &item.PipelineMode,
+		Category:           &item.Category,
+		PlanApproved:       item.PlanApproved,
+		PlanArtifactsPath:  item.PlanArtifactsPath,
+		Notes:              item.Notes,
+		ExternalId:         item.ExternalID,
+		Labels:             item.Labels,
+		SourceId:           item.SourceID,
+		PrUrl:              item.PrURL,
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+	}
+	if item.ExternalURL != "" {
+		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
@@ -710,13 +763,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 // itemSourceToProto maps an ItemSourceData to the proto ItemSource message.
 func itemSourceToProto(src *session.ItemSourceData) *sessionv1.ItemSource {
 	p := &sessionv1.ItemSource{
-		Id:              src.ID,
-		PluginId:        src.PluginID,
-		DisplayName:     src.DisplayName,
-		Enabled:         src.Enabled,
-		TokenConfigured: src.TokenConfigured,
-		CreatedAt:       timestamppb.New(src.CreatedAt),
-		UpdatedAt:       timestamppb.New(src.UpdatedAt),
+		Id:                    src.ID,
+		PluginId:              src.PluginID,
+		DisplayName:           src.DisplayName,
+		Enabled:               src.Enabled,
+		ForwardSyncEnabled:    src.ForwardSyncEnabled,
+		BackwardSyncEnabled:   src.BackwardSyncEnabled,
+		ForwardSyncCloseLabel: src.ForwardSyncCloseLabel,
+		TokenConfigured:       src.TokenConfigured,
+		CreatedAt:             timestamppb.New(src.CreatedAt),
+		UpdatedAt:             timestamppb.New(src.UpdatedAt),
 	}
 	if src.LastSyncedAt != nil {
 		p.LastSyncedAt = timestamppb.New(*src.LastSyncedAt)
@@ -795,23 +851,37 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 	}
 }
 
-// archiveItemWorkSessions soft-archives every work-role session in sessions so it
-// stops accumulating in the default session list. Callers are: (1) terminal status
-// transitions (done/archived), where every work session for the item is superseded,
-// and (2) rework respawns, where only the sessions loaded *before* the new spawn
-// (i.e. every prior round) are passed in — the brand-new session is never included.
-// Nil-safe (sessionStopper may be unwired, e.g. in tests) and best-effort: archival
-// failures are logged, not returned, matching cleanupItemWorktreesExcept's contract.
+// archiveItemWorkSessions soft-archives every work- or review-role session in
+// sessions so it stops accumulating in the default session list, and kills its live
+// tmux pane so the underlying claude process (and its MCP server subprocess fleet)
+// doesn't keep running indefinitely — ArchiveSessionByUUID alone only hides the
+// session from the UI, it does not stop it (root cause of the 2026-07-29 OOM:
+// dozens of superseded/completed work AND review sessions still live). Worktree
+// cleanup is handled separately by cleanupItemWorktreesExcept, so this uses
+// KillTmuxPaneOnly (pane only), not StopSessionByUUID (which also destroys the
+// worktree). Review sessions are included because they leak the same way work
+// sessions do — a review session that already wrote its verdict (the precondition
+// for reaching either call site below) has no further reason to stay alive, but
+// nothing else stops it. Callers are: (1) terminal status transitions (done/
+// archived), where every session for the item is superseded, and (2) rework
+// respawns, where only the sessions loaded *before* the new spawn (i.e. every prior
+// round, including the review session whose FAIL verdict triggered the reopen) are
+// passed in — the brand-new session is never included. Nil-safe (sessionStopper may
+// be unwired, e.g. in tests) and best-effort: archival/kill failures are logged, not
+// returned, matching cleanupItemWorktreesExcept's contract.
 func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions []session.ItemSessionSummary) {
 	if s.sessionStopper == nil {
 		return
 	}
 	for _, is := range sessions {
-		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
+		if is.SessionUUID == "" || !session.IsTmuxBackedSessionRole(is.Role) {
 			continue
 		}
 		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {
 			log.WarningLog.Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
+		}
+		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
+			log.WarningLog.Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }

@@ -367,6 +367,60 @@ func TestEventToRecord_RealSessionFallsBackToSessionID(t *testing.T) {
 	}
 }
 
+// TestEventToRecord_SessionScoped_True verifies that eventToRecord sets
+// SessionScoped==true when the incoming event carries
+// metadata[events.MetadataKeySessionScoped] == "true" (stamped by real
+// session-scoped notification producers via events.SessionScopedMetadata).
+func TestEventToRecord_SessionScoped_True(t *testing.T) {
+	event := &events.Event{
+		Type:                 events.EventNotification,
+		Timestamp:            time.Now(),
+		SessionID:            "real-session-uuid",
+		Context:              "My Session",
+		NotificationID:       "notif-scoped",
+		NotificationType:     1,
+		NotificationPriority: 1,
+		NotificationTitle:    "Test",
+		NotificationMessage:  "Message",
+		NotificationMetadata: map[string]string{events.MetadataKeySessionScoped: "true"},
+	}
+
+	record := eventToRecord(event)
+	if record == nil {
+		t.Fatal("expected non-nil record")
+	}
+	if !record.SessionScoped {
+		t.Errorf("expected SessionScoped=true when metadata[%q]=%q, got false", events.MetadataKeySessionScoped, "true")
+	}
+}
+
+// TestEventToRecord_SessionScoped_False verifies that eventToRecord leaves
+// SessionScoped==false when the metadata key is absent — the default for
+// notifications that don't originate from the session-scoped stamping helper
+// (e.g. backlog-item-level notifications with SessionID overloaded to an item ID).
+func TestEventToRecord_SessionScoped_False(t *testing.T) {
+	event := &events.Event{
+		Type:                 events.EventNotification,
+		Timestamp:            time.Now(),
+		SessionID:            "item-aaaa-1111",
+		Context:              "",
+		NotificationID:       "notif-unscoped",
+		NotificationType:     8,
+		NotificationPriority: 2,
+		NotificationTitle:    "Auto-rework cap reached",
+		NotificationMessage:  "Item A — hit the rework cap.",
+		NotificationMetadata: map[string]string{"item_id": "item-aaaa-1111"},
+	}
+
+	record := eventToRecord(event)
+	if record == nil {
+		t.Fatal("expected non-nil record")
+	}
+	if record.SessionScoped {
+		t.Errorf("expected SessionScoped=false when metadata key is absent, got true")
+	}
+}
+
 // TestCoalescing_NonNotificationEventsIgnored verifies that events of other
 // types are ignored by the subscriber.
 func TestCoalescing_NonNotificationEventsIgnored(t *testing.T) {

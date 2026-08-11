@@ -50,6 +50,8 @@ type Tx struct {
 	Session *SessionClient
 	// SessionGoal is the client for interacting with the SessionGoal builders.
 	SessionGoal *SessionGoalClient
+	// SessionSummary is the client for interacting with the SessionSummary builders.
+	SessionSummary *SessionSummaryClient
 	// Shell is the client for interacting with the Shell builders.
 	Shell *ShellClient
 	// SourceSyncEvent is the client for interacting with the SourceSyncEvent builders.
@@ -210,6 +212,7 @@ func (tx *Tx) init() {
 	tx.ReviewVerdict = NewReviewVerdictClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
 	tx.SessionGoal = NewSessionGoalClient(tx.config)
+	tx.SessionSummary = NewSessionSummaryClient(tx.config)
 	tx.Shell = NewShellClient(tx.config)
 	tx.SourceSyncEvent = NewSourceSyncEventClient(tx.config)
 	tx.Tag = NewTagClient(tx.config)

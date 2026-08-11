@@ -1,10 +1,12 @@
 package session
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestCaptureCurrentState_NotStarted_IsNoOp verifies that CaptureCurrentState
@@ -44,6 +46,32 @@ func TestCaptureCurrentState_TmuxSessionDead_IsNoOp(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, inst.WorkingDir, "WorkingDir should not be set when tmux session is dead")
+}
+
+// TestInstance_CaptureCurrentState_UpdatesWorkingDir verifies the happy path:
+// a started, running instance with a live tmux session has WorkingDir populated.
+func TestInstance_CaptureCurrentState_UpdatesWorkingDir(t *testing.T) {
+	const sessionName = "capture-happy"
+	mockExec := &tmux.MockCmdExec{
+		// list-sessions response: our session is alive
+		CombinedOutputFunc: func(_ *exec.Cmd) ([]byte, error) {
+			return []byte("staplersquad_capture-happy\n"), nil
+		},
+		// display-message response: current pane path
+		OutputFunc: func(_ *exec.Cmd) ([]byte, error) {
+			return []byte("/home/user/project\n"), nil
+		},
+	}
+	mockSession := tmux.NewTmuxSessionWithDeps(sessionName, "echo", nil, mockExec)
+	tpm := &TmuxProcessManager{}
+	tpm.SetSession(mockSession)
+	inst := &Instance{Title: sessionName, processManager: NewTmuxBackend(tpm)}
+	inst.started.Store(true)
+
+	err := inst.CaptureCurrentState()
+
+	require.NoError(t, err)
+	assert.Equal(t, "/home/user/project", inst.WorkingDir)
 }
 
 // --- BUG-033: pathEscapesRoot (the write-side gate CaptureCurrentState now

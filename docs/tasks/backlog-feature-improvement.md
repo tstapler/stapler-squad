@@ -9,6 +9,224 @@ and four quality-skill passes (`quality:architecture-review`, `ux:review`, `code
 Findings are bucketed: **[1] reconciliation bugs**, **[2] manual gates that could be
 policy-driven**, **[3] hardcoded pipeline steps that need a configurability seam**.
 
+## Update — 2026-08-05 (fix shipped + independently verified blast radius): 13 items had real work wrongly discarded, not 1 — plus 2 more unfixed instances of the same "field written once at creation, never kept live" shape
+
+**Fix shipped**: PR [#346](https://github.com/tstapler/stapler-squad/pull/346) (merged) splits `base_commit_sha`
+(spawn-time baseline, still feeds the review gate's diff) from a genuinely-live `last_commit_sha`,
+refreshed via go-git on the existing reconciliation sweep. Fixes both `closeIfSupersededByMain`
+and `GetBacklogItemShipStatus`. PR [#347](https://github.com/tstapler/stapler-squad/pull/347)
+(merged) recovers BUG-047's actual fix (commits `541fc846e7`/`342c49b6ed`) that PR #342 had
+wrongly discarded. Root cause turned out to be a **missed call site**, not a novel bug class —
+the repo had already fixed this staleness pattern for other consumers via a
+`resolveLatestWorkCommit` helper; `closeIfSupersededByMain` was simply never migrated to it.
+
+**Blast radius — independently verified via `ListBacklogItems{includeTerminal:true,
+includeArchived:true}` (78 items total) + a parallel `GetBacklogItem` fetch of all 64
+done/archived items, grepped for `"closed as superseded"` in `statusEvents`.** Found **14
+items / 15 events** (one item, `98f006f2`, hit twice) between 2026-07-25 and 2026-08-05 — a
+6-week window, not a one-off. Cross-referenced every cited PR via `gh pr view --json state`:
+
+| Outcome | Count | Detail |
+|---|---|---|
+| Real work discarded (PR `CLOSED`, never merged) | 12 events / 12 items | `310`, `297`, `324`, `305`, `224`, `342`, `298`, `331`, `313`, `314`, `307`, `281` |
+| Real work discarded (PR left `OPEN` — the `ClosePR` call itself silently failed, item marked `done` anyway per the code's own best-effort comment) | 2 events / 2 items | `312`, `286` |
+| Likely harmless (PR `188` had genuinely already `MERGED` 5 days before the self-heal note fired — a legitimate catch-up, not data loss) | 1 event / 1 item | `12601982` |
+
+13 of 14 items are true false-positives — confirmed not coincidental supersession, since the
+cited SHAs repeat across *unrelated* items: `654c6012fe` closes 4 events across 3 different
+items (cross-session FTS5 search, subagent spawn tracking, "Wire Jest into CI" — closed this
+way **twice**, PR #313 then #314, on the identical stale SHA both times, proving the system did
+retry and got bitten again before the fix landed); `4eca0ed34a` closes 3 (archive-item MCP
+tool, Omnibar modal scroll fix, terminal resize feedback-loop fix); `32f504c803` closes 3
+(phantom-keystroke fix, flaky-CI-hook-wait fix, TOML agent-detector plugins). Titles span
+completely unrelated features — no plausible legitimate cross-shipping explains the overlap.
+
+**Not yet recovered** — this pass only confirmed the list and cross-referenced PR state; it did
+not attempt to rebase/reopen the other 13 branches the way PR #347 did for #342. Branch
+existence for each is unverified. Whether these are still worth recovering (vs. superseded for
+real by since-shipped work, given up to 6 weeks have passed) needs a per-item look before
+committing recovery effort — flagged for the user rather than assumed.
+
+**Two more unfixed instances of the same recurring shape, assessed (not fixed) this pass:**
+
+- **`LastFileTouchAt`** — LOW severity, inert. Its only writer, `UpdateItemSessionFileTouch`
+  (`session/storage_backlog.go:342-356`), has zero callers anywhere in the codebase (confirmed
+  by grep) — dead code, not just under-called. The field stays permanently `nil`; its one
+  reader (`server/services/backlog_service.go:500-501`) just omits it from API responses when
+  nil. Unlike `LastCommitSha`, nothing consumes this incorrectly — it's an unfinished feature,
+  not an active bug.
+- **`LastProgressAt`** — MODERATE severity, opposite-direction risk from the `LastCommitSha`
+  bug. Confirmed by reading `reportProgress` (`server/mcp/tools_backlog.go:306-380`) end to
+  end: it calls `UpdateAcCriterionStatus` and `AppendProgressNote` only — never touches
+  `ItemSession`/`LastProgressAt` at all. So the MCP tool an active work session calls most
+  often (marking AC criteria pass/fail) does not reset the staleness clock that
+  `remediateStaleWorkWithBackoffGate` (`session/backlog_lifecycle.go:1298-1299, 2115-2116`)
+  reads to decide whether to remediate. Since PR #346 also fixed `UpdateItemSessionGitActivity`
+  to run periodically (not just once at spawn), `LastProgressAt` now at least refreshes on
+  every new commit as a side effect — but a session doing real work between commits (research,
+  test runs, criteria updates) still won't reset it, risking a false "stale" verdict. Bounded by
+  the existing backoff/circuit-breaker machinery, so not CRITICAL, but a real gap.
+- **`EstimatedCostUsd`** — LOW-MODERATE severity, reporting accuracy only. Confirmed by reading
+  `TriggerTriage`'s `CreateItemSession` call (`server/services/backlog_service_triage.go`,
+  ~line 2180) — it never sets `EstimatedCostUsd`, unlike the sibling `TriggerReReview` path
+  (`backlog_service_triage.go:2672-2677`), which correctly threads `callCostUSD` through via
+  `CreateItemSessionWithVerdict`. Every headless triage session's cost silently reports $0,
+  understating total spend in any cost aggregation (`server/services/backlog_service.go:627,
+  694`) that includes triage rounds. Mechanical fix (thread the same value through the
+  sibling code path already does) whenever prioritized.
+
+### Recommended Next Actions
+
+1. **Decide recovery scope for the 13 false-positive items** — a per-item check (does the
+   branch still exist? is the fix still relevant given elapsed time?) before committing to
+   full recovery effort matching what PR #347 did for #342. User input needed on how much of
+   this to pursue.
+2. `LastProgressAt` not being touched by `report_progress` — worth a small, mechanical
+   `sdd:fix-bug` given it's now fully characterized; low effort relative to the moderate
+   staleness-detection accuracy gain.
+3. `EstimatedCostUsd` gap in `TriggerTriage` — worth a small, mechanical fix for the same
+   reason; both this and #2 are good candidates for a single combined fix session since
+   they're both "thread an existing value through a sibling code path that already does it
+   correctly" shaped, not novel design work.
+4. `LastFileTouchAt` — deprioritized; inert dead code, no active harm, lowest value fix here.
+
+## Update — 2026-08-05 (correction, same day): the "self-healing" story above was itself a false positive — `closeIfSupersededByMain` uses a structurally stale `LastCommitSha`, CRITICAL, systemic
+
+Checking on `d6ddbef3`'s progress after the update below revealed the update's own headline
+claim was wrong. `d6ddbef3` now shows `status: done`, PR #342 closed via
+`self-heal: PR #342 closed as superseded — commit 1a751723b4ce38bb3b9f55700ba3bc896c1780c3
+already on main`. That commit is real and on main — but it's `1a751723b`
+("feat(review-queue): surface pending plan reviews and busy sessions"), an unrelated commit
+that predates this branch's own work by almost a day (authored 2026-08-04T17:29:18Z). `gh pr
+view 342 --json commits` shows the branch's *real* fix commits — `541fc846e7`
+("fix(backlog): recover items wedged in review by an idle-but-alive reviewer") and `342c49b6ed`
+(review-fix follow-up) — landed at 2026-08-05T17:03:40Z/17:25:38Z, **after** the SHA that got
+marked "superseded." Those two commits exist only on the PR branch; PR #342 is `CLOSED`, not
+merged. **BUG-047 (the reviewer-wedge fix) is not on main. The two live wedged reviews
+(`3065ecfb`, `4c71d3a3`) will NOT self-heal** — correcting the "no action needed... strong
+evidence" conclusion below, which was wrong.
+
+**Root cause, verified by reading the code**: `closeIfSupersededByMain`
+(`session/backlog_lifecycle.go:4386`) checks `git.IsCommitOnMain(..., lastWork.LastCommitSha)`
+on the assumption that `LastCommitSha` tracks "the work session's most recent commit." It
+doesn't. Every writer of this field —
+`SpawnSessionFromItem` step 12b (`server/services/backlog_service_triage.go:846-851`),
+`AttachSessionToItem` (`server/services/backlog_service_sync.go:103-108`, comment: "same as
+SpawnSessionFromItem step 12b") — captures it exactly **once, at session-start, as the
+pre-work baseline HEAD SHA**, explicitly for the review gate's `base..HEAD` diffing. No call
+site anywhere updates it again as the agent commits during the session (confirmed by grep:
+`UpdateItemSessionGitActivity` has no other callers). So `LastCommitSha` is permanently frozen
+at whatever main's tip was when the worktree branched — which `IsCommitOnMain` will always
+report as "on main," because it always was, trivially. Any item whose merge-detection sweep
+runs against this field will false-positive "superseded" **regardless of whether the item's
+actual work ever shipped** — this isn't specific to `d6ddbef3`; it's a structural property of
+the field. `server/services/backlog_service_ship_status.go:61-76` (`GetBacklogItemShipStatus`,
+backing the item detail page's "Ship PR" self-service action per 07-18's entry) reads the same
+field the same way — the user-facing "has this shipped?" check is subject to the identical
+false positive.
+
+**Blast radius unknown, not yet quantified this pass** — log retention (~1 day locally) doesn't
+reach back far enough to count how many prior `done` transitions went through this exact path;
+a proper fix should include an audit query for backlog items whose `done` transition note
+matches `"closed as superseded"` to check how many silently-discarded PRs this has produced
+historically, not just this occurrence.
+
+### Recommended Next Action
+
+`sdd:fix-bug`, priority CRITICAL (raised from the deferred/low-priority framing this doc
+otherwise defaults to) — `closeIfSupersededByMain` and `GetBacklogItemShipStatus` need
+`LastCommitSha` to actually track the work session's latest commit (wire a real updater into
+whatever already observes agent commits — e.g. the same hook that updates
+`CommitCountSinceSpawn`/`LastProgressAt` elsewhere), not a permanently-frozen pre-work
+baseline. Until fixed, `d6ddbef3`/PR #342 needs to be manually reopened and re-merged (the
+fix code itself passed review and `make ci`, per its own status-event history — it's the
+close-as-superseded step that was wrong, not the implementation), and the historical
+blast-radius audit above should run alongside the fix.
+
+## Update — 2026-08-05: light verification pass — pipeline is now self-detecting and self-fixing its own reconciliation bugs live; one new 4th sibling instance of the known `hasActiveWorkSession`-blocks-silently shape found
+
+Not a full 4-agent re-run (same rationale as every pass since 07-28). `ListStuckBacklogItems`
+now returns **3 rows** (up from 1 on 08-03), but none needed a fresh fix this pass — two are
+already being actively repaired by the system's own in-flight work, one new gap is found and
+documented below.
+
+**Live state**: 6 total backlog items visible via `ListBacklogItems` beyond idea/queued/review
+buckets (4 idea, 4 queued, 4 review, 1 in_progress — 13 shown; some done/archived items are
+excluded from the default list).
+
+**The headline finding this pass isn't a bug — it's the pipeline working as intended.** Two of
+the three stuck rows are `3065ecfb` ("CI/CD status in diff viewer", `review`,
+`STUCK_REASON_AUTONOMOUS_STUCK`) and the pre-existing `59bbff11` bucket. Investigating why
+`3065ecfb`'s review verdict (PARTIAL) never resolved led to `staplersquad_review_3065ecfb`
+being a live-but-idle tmux session — a reviewer that submitted its verdict and never exited,
+the exact "wedged review" shape this doc first named 07-22. **The system had already caught
+this itself**: backlog item `d6ddbef3` ("bug: reviewer session that submits a verdict but
+never exits leaves the item wedged in review forever", `in_progress`, work session
+`stapler-squad-fix-idle-reviewer-wedge-r1` spawned 2026-08-05T16:03:35Z and active as of this
+writing) is a general fix for exactly this class, and its own AC7 explicitly targets recovering
+the *other* live wedged item, `4c71d3a3` ("bug: request_review fails permanently when a
+backlog item is stuck in 'review' status with no active reviewer") — itself a previously-routed
+fix for the same shape, now PARTIAL-reviewed and itself wedged by the very bug its sibling item
+is fixing (confirmed via `staplersquad_review_4c71d3a3` also idle-but-alive). Both are being
+worked live; no action needed from this pass beyond recording that the self-detection loop
+closed this gap without human intervention — strong evidence for bucket 3/the "software
+factory" framing this doc's mandate is built around. Not routing a duplicate fix.
+
+**New finding, root-caused: `DequeueNextQueuedItems` is a 4th, previously-uncounted sibling of
+the `hasActiveWorkSession`-blocks-with-no-signal gap (PR #292/07-31).** `59bbff11`'s
+`statusEvents` show two `in_progress → queued` transitions today (02:14:32Z and 16:03:34Z) each
+annotated `"dequeue spawn failed"`, both roughly 14 hours apart with no successful respawn in
+between — consistent with the log line
+(`server/services/backlog_service_triage.go:633`, `staplersquad-2026-08-05T09-07-58.230.log.gz`):
+```
+[DequeueNextQueuedItems] spawn failed for dequeued item=59bbff11...: already_exists: a work
+session (9ea71ee2...) is already active for this item; wait for it to finish or kill it first —
+likely stalled: no output in 47m39s (stale threshold 15m0s); rolling back to queued
+```
+The guard's own staleness check is correct and precise (47m39s idle vs. a 15-minute threshold)
+— but the only consequence is a `log.WarningLog.Printf` (`backlog_service_triage.go:633`) and a
+silent rollback to `queued`; `notifySpawnAndRollbackFailed` only fires if the *rollback itself*
+fails (`:636-643`), not on the underlying spawn-blocked condition. The stale session
+(`9ea71ee2`, work session for `59bbff11`, alive since 2026-08-03T18:56Z — **45+ hours** by the
+time of this check) never reaches the `stale_work` sweep detector either: that detector's own
+staleness definition and remediation path (`remediateStaleWorkWithBackoffGate`,
+`session/backlog_lifecycle.go:2306`) is a separate code path from this inline 15-minute check
+inside the dequeue guard, and `ListStuckBacklogItems` never flagged this item's underlying
+session as stuck — only the *symptom* (repeated failed dequeue) is visible, and only in a log
+line an operator would have to go looking for. This is the same shape as the 3 sibling call
+sites already carried forward since 07-31 (`AutoRespawnAutonomousWork:1441`,
+`AutoReopenForPRFix`, `AutoRespawnReview`) — a spawn correctly declines to duplicate an active
+session, but the "already active" signal it computed (including its own staleness verdict) is
+discarded instead of being routed into the `RespawnEvent`/stuck-detector machinery that already
+exists for this exact purpose. `DequeueNextQueuedItems` (`backlog_service_triage.go:576-649`)
+was not among the 3 named in the 07-31/08-03 entries — this is a genuinely new 4th site, not a
+repeat citation.
+
+**Not routed to `sdd:fix-bug` this pass** — same standing rationale as the 3 known siblings
+("still not urgent enough to route unprompted"), plus two live overlapping sessions already
+running against the same reconciliation-bug family (`fix-idle-reviewer-wedge-r1`,
+`review-status-recovery-r1`) — routing a 5th concurrent backlog work item into an
+already-active WIP slot risks contention rather than adding signal. `d6ddbef3`'s AC4
+("`reconcileUnprocessedReviewVerdicts` treats a verdict older than an idle threshold as
+actionable even when `SessionLivenessChecker` reports the session alive") is solving the
+identical "process alive but stalled" false-liveness problem for reviewer sessions; once it
+ships, the natural follow-on is generalizing the same idle-threshold approach to
+`DequeueNextQueuedItems`' work-session guard rather than patching this site in isolation.
+
+### Recommended Next Actions
+
+1. Once `d6ddbef3` ships and both live wedged reviews (`3065ecfb`, `4c71d3a3`) self-heal per its
+   AC7, confirm both leave `review` status without manual intervention — verification item for
+   the next pass, not a new fix.
+2. `DequeueNextQueuedItems` (`backlog_service_triage.go:633`) — 4th sibling call site added to
+   the existing low-priority `hasActiveWorkSession`-signal-loss backlog; extend `RespawnEvent`
+   recording here too, ideally in the same follow-on that generalizes `d6ddbef3`'s idle-threshold
+   liveness check, once that pattern exists to reuse.
+3. Carried forward unchanged: interface-pollution cleanup (`PipelineModeRepository`,
+   `Repository`), and the pre-08-05 assessment that `59bbff11`'s stalled work session
+   (`9ea71ee2`, now 45+ hours idle) will most likely resolve itself once (1) or (2) lands —
+   no separate action needed.
+
 ## Update — 2026-07-17 (night): PR #168's abandon-review respawn verified live, with one caveat
 
 Deployed PR #168 (`make install-service`) and watched the live 60s reconciliation sweep
@@ -49,7 +267,7 @@ notify-only**:
 | Reason | Auto-recovery? | Verdict |
 |---|---|---|
 | `abandoned_review` | No (fix in flight, PR #168, not yet merged) | Real gap |
-| `orphaned_triage` | No — **and the code comment falsely claims it self-heals**; it only `MarkStuck`+notifies, never re-triggers triage | Real gap + misleading comment, fix next |
+| `orphaned_triage` | **FIXED 2026-07-27** — was only `MarkStuck`+notify, never re-triggered triage; see "Update — 2026-07-27" below | Closed |
 | `bouncing` | No | Real gap — no escalation/different-approach retry once non-converging, just a notification |
 | `pr_ready_unmerged` | No | Gap — no direct-merge fallback if `EnablePRAutoMerge` silently doesn't take effect |
 | `stale_work` | No | Deliberate — "a slow-but-alive agent should not be force-stopped" |
@@ -1121,6 +1339,28 @@ auto-retry. **This gap is now fixed** — see PR #274, which wires `orphaned_tri
 backoff/parking machinery as its siblings. **Remaining action**: manually re-trigger triage on
 both items now (or let the new automated retry pick them up once #274 merges and deploys).
 
+**PR #274 implementation detail**: `reconcileOrphanedTriageItems`
+(`session/backlog_lifecycle.go`) correctly detected the orphaned triage session, tombstoned it,
+`MarkStuck`'d the row, and sent exactly one notification, then never retried automatically — its
+own doc comment ("no resolve pass needed here... once the item leaves 'idea'") was true for
+*resolution* but masked that nothing was driving the item toward leaving `idea` in the first
+place. Fixed by wiring the same pattern used for `abandoned_review`/`ReviewRespawner`: a new
+`TriageRespawner` interface + `SetTriageRespawner`/`getTriageRespawner` on
+`BacklogLifecycleListener`, implemented by `BacklogService.AutoRespawnTriage`
+(`server/services/backlog_service_triage.go`), delegating to the existing `TriggerTriage` RPC
+handler after a no-op guard for items that already left `idea`; a new periodic detector
+`reconcileOrphanedTriageRemediation` + backoff-gated dispatcher
+`retryOrphanedTriageWithBackoffGate`, registered as its own `runStuckDetector` entry
+(`orphaned_triage_remediation`) right after the existing detection-only
+`reconcileOrphanedTriageItems`; and `orphaned_triage` wired into `remediationActionByReason`
+(`server/services/backlog_service_stuck.go`) so the manual "Retry now" RPC works for it too —
+removed from `reasonsWithoutAutomatedRemediation` in the exhaustiveness guard test (added by
+commit `a027bc5da`), which caught this gap by construction. No proto/frontend changes needed —
+`StuckItemsSection.tsx`'s "Retry now" button already calls `TriggerRemediationNow`
+unconditionally for every reason; it previously just failed with `CodeUnimplemented` for
+`orphaned_triage` and now succeeds. 8 new regression tests added across `session` and
+`server/services`; full suites and `golangci-lint` pass.
+
 ### [1] Reconciliation Bugs — 4 NEW CRITICAL findings, same recurring shape
 
 All four independently found by the architecture/code-review passes, all the same signature this
@@ -1299,6 +1539,564 @@ yet merged/reviewed):**
    how much default automation to apply per item category, not a bug or a small UX fix.
 6. Interface-pollution cleanup (`PipelineModeRepository`, `Repository`) — low priority,
    mechanical, no functional bug; fold into a future refactor pass rather than its own session.
-7. **Review note**: PRs #274 and this doc's own 07-27 update both touched
-   `docs/tasks/backlog-feature-improvement.md` on divergent branches — check for a merge
-   conflict on this file specifically when reviewing/merging #274.
+7. ~~Review note: PRs #274 and this doc's own 07-27 update both touched this file on divergent
+   branches~~ — resolved: merged both entries into one narrative when landing #274 on top of
+   the updated `main`.
+
+## Update — 2026-07-28: light verification pass (no full re-run) — PRs #273-275 confirmed working live, 2 MAJORs still open
+
+Not a full skill re-run — live state is the best this doc has ever recorded and yesterday's full
+pass (07-27) is less than 24h old, so a second full 4-agent quality sweep this soon would mostly
+re-derive what's already tracked. Instead: checked `ListStuckBacklogItems` live, then verified by
+direct code/PR read whether each of 07-27's shipped fixes and open action items actually hold up,
+rather than re-discovering them from scratch.
+
+**Live state**: `ListStuckBacklogItems` returns **3 rows / 3 unique items** — best-ever reading
+(down from 4/4 on 07-27):
+- `4f03de7b`, `505fb733` — both still `ORPHANED_TRIAGE`, idea status. **Confirmed PR #274's
+  remediation wiring is actually firing, not just merged**: `505fb733` has a 4th triage session
+  (`headless-triage-46950abe...`), auto-spawned and currently running with no `endedAt` — live
+  proof the new `retryOrphanedTriageWithBackoffGate` detector is retrying these, not leaving them
+  to rot the way the pre-PR-274 code did. Not counted as a regression; these will very likely clear
+  on their own.
+- `35f0f7b1` — `PLAN_NOT_APPROVED`, queued. Confirmed working-as-designed (BUG-038), unchanged.
+
+**PRs #273/#274/#275 confirmed merged** (`gh pr view`, all `state: MERGED`, 2026-07-27 evening).
+Spot-checked #273's two claimed fixes directly against current source rather than trusting the PR
+title: the `/settings/pipeline-modes` nav link (`web-app/src/app/settings/page.tsx`,
+`data-testid="settings-pipeline-modes-tab-link"`) is real and landed in this same commit
+(`ac0c9d0fa`) — closes the last open bucket-[3] UI gap tracked since 07-19. (07-27's own entry
+listed this as "still open" because it was written before #273 landed later the same session; that
+line is now stale, corrected here.)
+
+**07-27's two not-yet-started MAJORs — both confirmed still open by direct code read:**
+1. `ReconcilePRPending`'s CI-failing/blocked branch (`session/backlog_lifecycle.go:3971`) still
+   calls `fixSpawner.AutoReopenForPRFix(...)` with no `RemediationDue` backoff gate — every sibling
+   remediation call site (`abandoned_review`, `stale_work`, `orphaned_triage`, `push_failed`, and
+   the *closed*-PR branch just above this one in the same function) goes through a
+   `*WithBackoffGate` wrapper; this branch alone does not.
+2. `AutoRespawnAutonomousWork`'s failure (`server/services/autonomous_orchestration_service.go:383`)
+   is still only `log.Warn`'d, no operator notification — confirmed by reading the surrounding
+   `if due { go func() { ... log.Warn ... } }` block directly; the `justParked` case just above it
+   does notify, the per-attempt failure still does not.
+
+Both routed to a parallel `sdd:fix-bug` run (`Agent(isolation: worktree)`, per this repo's standing
+preference over `create_session` for Claude-driven fix work) — see below.
+
+**Item #5 from 07-27 (label/category-driven defaults for
+`SkipReviewGate`/`AutoSpawnSession`/`AutoCreatePR`/`PipelineMode`)** — still a product decision, not
+routed; asked the user directly rather than deciding unilaterally.
+
+**Item #6 (interface-pollution cleanup: `PipelineModeRepository`, `Repository`)** — still low
+priority/mechanical, left for a future refactor pass, not routed this time.
+
+## Update — 2026-07-30: light verification pass — best-ever live state (1 stuck item), both 07-28 MAJORs and item #5 confirmed closed, one new low-severity finding
+
+Not a full skill re-run (same rationale as 07-28: a full pass ran 2 days ago and live state is
+trending well) — checked `ListStuckBacklogItems` live, verified the two 07-28 open items and item
+#5 by direct code/PR read, then root-caused the one remaining stuck item via its full status-event
+history rather than trusting the surfaced reason string.
+
+**Live state**: `ListStuckBacklogItems` returns **1 row / 1 item** — best-ever reading (down from
+3/3 on 07-28).
+
+**07-28's two open MAJORs — both confirmed fixed**, via `054f3fe27` / PR #284 ("gate PR-fix
+respawns with backoff, notify on failed autonomous respawn"), merged same day: `ReconcilePRPending`'s
+closed-PR branch now routes `AutoReopenForPRFix` through the same `RemediationDue` backoff gate
+every sibling call site uses; `AutoRespawnAutonomousWork`'s per-attempt failure now publishes
+`notifyAutonomousRespawnAttemptFailed` in addition to the existing `log.Warn`, confirmed by reading
+`autonomous_orchestration_service.go:384-385` directly.
+
+**07-27's item #5 (label/category-driven defaults) — confirmed closed**, via `46b7e6239` / PR #285
+("add category picker with per-category automation defaults"): a 4-value hardcoded category enum
+pre-fills `SkipReviewGate`/`SkipPlanning`/`AutoSpawnSession`/`AutoCreatePR`/`PipelineMode` at
+creation time, client-side, once — per-item manual overrides still win. Closes the product-decision
+item that was deliberately left unrouted pending a direct answer from the user.
+
+**Item #6 (interface-pollution cleanup)** — still open, still low priority, not re-routed.
+
+### [1, low severity, NOT NEW — re-demonstrated via a different trigger] `autonomous_stuck` stale row survives a manual `pr_pending`→`idea` reset
+
+The one live stuck item (`04089969` "Phantom repeated '1' keystroke...") is flagged
+`STUCK_REASON_AUTONOMOUS_STUCK`, context "autonomous driver stopped after 0 turns without a DONE
+signal (startup timeout)", `firstDetectedAt`/`lastCheckedAt` both `2026-07-29T15:49:47Z`. Read the
+item's full `statusEvents` history (not just the surfaced reason) to root-cause it, since the
+context string alone reads as an active problem and isn't:
+
+1. The item's actual history: idea→ready (triage, 07-25) → in_progress → review → in_progress
+   (manual reopen) → review → review→pr_pending (`system`, 07-29T17:12 — draft PR opened, but the
+   note records the worktree's local `main` was ~1429 commits behind `origin/main`, so GitHub
+   reported the PR `CONFLICTING` across 2769 files; merging origin/main hit 841 conflicts and was
+   correctly aborted as too risky to resolve autonomously) → **pr_pending→idea, `triggeredBy:
+   "user"`, 07-30T05:32** — a deliberate manual reset (the "Return to Triage" escape hatch,
+   `.claude` rules' documented human-override affordance), not a bug.
+2. The `autonomous_stuck` row's `firstDetectedAt` (07-29T15:49) predates that manual reset by
+   ~14h — it's a stale leftover from the turn-cap episode that happened *before* the human decided
+   to reset the item, not a live problem with the item's current (fresh) state. This is the exact
+   gap the 07-19 audit entry already flagged and left open ("Recommended Next Actions #4... low
+   severity, cosmetic, cheap fix: add an automated `ResolveStuck` call mirroring
+   `resolveToPRPending`'s pattern") — confirmed still unfixed, now demonstrated via a new trigger
+   (surviving a manual status reset) rather than the original automated-completion path.
+3. **[1, NEW, root-caused via the rotated server logs — corrects an earlier, wrong hypothesis
+   written earlier in this same pass]** A 4th triage session (`headless-triage-a79d4747...`) ran
+   after the manual reset (created 05:32:07, ended 05:54:05) and the item is still `status=idea`
+   with no `idea→ready` event. Initially hypothesized as another instance of the "swallowed
+   `TransitionBacklogItemStatus` write" shape — **wrong, disproven by direct log evidence**:
+   `staplersquad-2026-07-29T22-55-04.915.log.gz:32397` —
+   `ERROR ... backlog_service_triage.go:1957: [TriggerTriage] parse result failed item=04089969
+   elapsed=21m59s rawLen=164: ParseHeadlessTriageResult: no JSON object found in output (raw:
+   "Planning subagent is running in the background to write plan.md. I'll wait for its completion
+   before dispatching the architecture/adversarial/UX review subagents.")`. The headless call
+   itself succeeded (no `callErr`, no timeout — the 30-minute budget was not exhausted) but
+   returned a **placeholder "still working" message as its final turn**, well before the
+   SDD-mode multi-subagent triage flow (background `plan.md` writer → architecture/adversarial/UX
+   review subagents) actually finished. `ParseHeadlessTriageResult` correctly rejects this as
+   unparseable (per `backlog_service_triage.go:1955-1961`), logs it, calls
+   `UpdateItemSessionEnded`, and `return`s **before ever reaching the `idea`→`ready` transition
+   call** (line ~1990) — so there was no silent write failure; the transition attempt was never
+   made. This is a **new, distinct failure mode**, specific to `PipelineMode: "sdd"`'s
+   multi-subagent orchestration prematurely reporting completion to the headless caller — not the
+   generic bucket-1 "logged-only error swallows a status write" shape at all.
+
+   **Compounding gap, still real**: nothing retries after this. The session ended cleanly (has a
+   real `endedAt`), so `reconcileOrphanedTriageItems`'s "stale *open* session" detection
+   (`session/backlog_lifecycle.go`, 2h-idle threshold per the 07-27 update) doesn't apply — there's
+   no open session to find stale. The item is left in `idea` with a cleanly-ended, unparseable
+   triage result and no automated path back to a retry, which is presumably why it's surfacing as
+   a stale `autonomous_stuck` row instead (point 2) — an unrelated, older detector — rather than
+   anything that actually matches its current state.
+
+Not routed to `sdd:fix-bug` this pass — point 3 needs to be scoped as two separate things (the
+SDD-mode premature-completion bug in the headless prompt/orchestration itself, likely upstream of
+this repo's own code if the multi-subagent behavior lives in the triage system prompt; and the
+missing "triage ended but produced no usable result and nothing retries" detector gap) rather than
+routed as one undifferentiated fix; the stale `autonomous_stuck` row (point 2) stays at the
+low-priority assessment unchanged since 07-19.
+
+### Recommended Next Actions
+
+1. **`sdd:fix-bug` — point 3 above (SDD-mode headless triage can return a premature "still
+   working" placeholder instead of the final result, with no retry path once that happens).**
+   Highest priority this pass: live, on the one currently-stuck item, blocking a fully-researched
+   item with an open PR from ever resuming. Two angles to scope before implementing: (a) can the
+   headless call be made to actually block until the background subagent completes, rather than
+   returning once the orchestrating turn says "I'll wait" — check `HeadlessTriageSystemPrompt()`
+   and whatever drives the SDD pipeline mode's subagent dispatch; (b) independent of (a), add a
+   detector/retry for "most recent triage session ended with an unparseable/failed result and the
+   item never left idea" — the same shape `orphaned_triage`'s backoff-retry machinery (PR #274)
+   already solves for *open*-and-stale sessions, extended to cover *ended*-but-failed ones. Item
+   `04089969` is the live regression case.
+2. `sdd:fix-bug` — the `autonomous_stuck` stale-row-on-manual-reset gap (low priority, unchanged
+   from 07-19's assessment) — pick up whenever a session has slack for cosmetic-severity fixes.
+3. Item #6 (interface-pollution cleanup) — still deferred to a future refactor pass.
+
+## Update — 2026-07-30: "sdd" pipeline mode triage stranded on a premature-completion
+placeholder — fixed (root cause + compounding detection gap)
+
+**Finding**: item `04089969-0f19-499c-be34-2e8bcfc4f13e` ("Phantom repeated '1'
+keystroke...", `PipelineMode: "sdd"`) sat at `status=idea` with a fully-researched plan
+and an open draft PR #288, but zero automatic path forward. Root-caused via
+`staplersquad-2026-07-29T22-55-04.915.log.gz:32397`:
+
+```
+[TriggerTriage] parse result failed item=04089969... elapsed=21m59s rawLen=164:
+ParseHeadlessTriageResult: no JSON object found in output (raw: "Planning subagent is
+running in the background to write `plan.md`. I'll wait for its completion before
+dispatching the architecture/adversarial/UX review subagents.")
+```
+
+The headless triage call for the "sdd" pipeline mode returned successfully (no error, no
+timeout — well inside the 30-minute budget) but its final turn was a status update about a
+still-running subagent, not the required JSON result. `ParseHeadlessTriageResult` correctly
+rejected it and `TriggerTriage` tombstoned the triage session — but never reached its
+`idea`→`ready` transition, and (compounding gap) `reconcileOrphanedTriageItems`
+(`session/backlog_lifecycle.go`) only matched sessions that were still open and stale, not
+ones that had already ended cleanly. A cleanly-ended, unparseable triage session was
+invisible to every existing detector, so the item was stranded with no retry path.
+
+**Root cause** (verified against actual prompt text, not assumed): the pipeline-mode-
+specific prompt content lives in `session/pipeline_mode_seed.go`'s `sddTriagePromptTemplate`
+— seeded once into the `PipelineMode` DB table at boot and never overwritten again (by
+design, so operator hand-edits survive restarts; see ADR-001 in
+`project_plans/backlog-configurable-pipeline/decisions/`). Its Step 2 instructs the model to
+invoke `sdd:2-research`, `sdd:3-plan`, and `sdd:4-validate`. `sdd:3-plan`
+(`~/dotfiles/.claude/skills/sdd/skills/3-plan/SKILL.md`) dispatches a planning subagent via
+the `Task` tool and says "Wait for the subagent to complete." A `claude -p` headless call has
+no later turn to resume in, though: once the top-level turn ends with no more pending tool
+calls, the process returns whatever text was last written and exits. On this run, the model
+reported the subagent as "running in the background" and ended its turn expecting a
+follow-up notification that a one-shot headless call can never deliver — that sentence became
+the entire raw output. Neither the shared system prompt (`headlessTriageSystemPrompt`,
+`session/headless/features.go`) nor the sdd-specific template said anything about this
+single-shot-no-later-turn constraint.
+
+**Fix shipped** (both halves of the scope, independent and both required for recovery):
+
+1. **Root cause — prompt fix.** Added an explicit "this is a single, non-interactive call
+   with no later turn; do not end your response with a status update about work still in
+   progress" directive to both `headlessTriageSystemPrompt`
+   (`session/headless/features.go` — applies to every pipeline mode's triage call, defense
+   in depth) and `sddTriagePromptTemplate` (`session/pipeline_mode_seed.go` — the
+   sdd-mode-specific reinforcement, naming the `sdd:3-plan` subagent-dispatch step
+   directly). Known limitation: because the "sdd" `PipelineMode` row is seeded once and
+   never overwritten (the same operator-durability guarantee this fix relies on for
+   *future* hand-edits), an already-seeded production DB row will keep serving the old
+   template text until it is refreshed via the pipeline-modes settings UI/RPC — a manual,
+   one-time operational step, not automated by this fix. New/fresh deployments get the
+   corrected template immediately.
+2. **Detection/retry gap — extended `reconcileOrphanedTriageItems`.** The detector now
+   flags an idea-status item's most recent triage session in either of two shapes: still
+   open and stale (the original behavior, unchanged), or already ended while the item is
+   still in idea (new). The second shape needs no staleness wait — `TriggerTriage` always
+   attempts the idea→ready transition immediately after a successful parse, so an ended
+   session with the item still in idea is unambiguous the moment it's observed. Both
+   shapes reuse the exact same `StuckReasonOrphanedTriage` stuck-row, notify, and
+   `RemediationDue`-gated `AutoRespawnTriage` retry machinery from PR #274 — no new
+   `StuckReason`, no new remediation path, no frontend changes needed. This also
+   incidentally closes an adjacent, previously-undetected gap: a plain headless *call
+   error* (not just an unparseable result) left an ended triage session with the item
+   stuck in idea the same way, with no detector either.
+
+**Regression tests** (`make build && make test && make lint` all green; the one failure
+observed in a full `make test` run, `session/tmux`'s `TestEnsureServerRunning_NoOp`, is the
+pre-existing, already-filed `BUG-051` flake under parallel load — confirmed unrelated: this
+change touches no file under `session/tmux/`, and the test passes reliably in isolation):
+- `TestParseHeadlessTriageResult_PrematureCompletionPlaceholder`
+  (`session/backlog_triage_test.go`) — reproduces the exact 164-byte raw string from the
+  incident log and asserts it is rejected the same as any other non-JSON output.
+- `TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition`
+  and `TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan`
+  (`session/backlog_lifecycle_stuck_test.go`) — detector-side coverage for the new
+  "ended, no transition" shape, and a guard against over-broadening it to items that
+  simply never had triage triggered.
+- `TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRow_When_Due`
+  — confirms the new shape is actually retried through the existing
+  `AutoRespawnTriage`/backoff-gate path end to end, the acceptance case for the
+  detection/retry half of this finding.
+
+**Item 04089969 itself**: not re-triggered from this session — this worktree has no access
+to (and per this repo's standing convention should not touch) the live deployed instance's
+`~/.stapler-squad/` DB. Once this fix is deployed, the new detector will pick the item up and
+retry it automatically on the next `ReconcileStuck` sweep; a human may also re-trigger triage
+manually in the interim.
+
+**Recurring-shape note** (`quality:reflect-and-fix` classification): Framework Pattern
+Misuse — an interactive multi-turn agentic pattern ("dispatch work, expect a notification in
+a later turn") applied inside a single-shot, no-later-turn execution context
+(`claude -p`/headless). This is the same general shape as the swallowed-status-transition
+class this doc has tracked since 07-27 (PR #275's `silenttransition` lint pass): a write or
+completion signal silently doesn't happen and nothing detects the resulting dead end. The
+earliest achievable enforcement point here is the regression test level (prompt content
+cannot be type- or lint-checked for semantic correctness) — the detector-side test is the
+structural backstop that would catch *any* future variant of "triage call returns without
+transitioning the item," not just this specific placeholder-text shape, which is the right
+altitude for this fix.
+
+## Update — 2026-07-31: blocked-spawn error gave zero progress signal — fixed, plus a deferred-scope note on 3 sibling call sites
+
+**Finding**: `SpawnSessionFromItem`'s 8b guard (`server/services/backlog_service_triage.go`) —
+the check that rejects a second spawn attempt while a work session is already active for an
+item — returned a bare `"a work session (%s) is already active for this item; wait for it to
+finish or kill it first"` error with no indication of whether that blocking session was
+actually making progress. Discovered live while manually unsticking backlog item
+`04089969` (the same item as the 07-30 entry above, in a later stuck episode): the blocked-
+spawn error alone gave no way to tell "still working" from "silently stuck," and the answer
+had to be reconstructed by hand via `get_session`'s timestamps, a full diff pull, and a live
+tmux check — exactly the kind of manual cross-referencing this doc's `notifyIfActiveWorkSessionStale`
+finding (07-20-era work, see `maxReworkBlockStaleness`'s doc comment) already solved for the
+review-reopen path, just never extended to this RPC's own error response.
+
+**Classification** (`quality:reflect-and-fix` taxonomy): API Contract Gap — the server already
+computed the needed signal (`SessionStopper.TimeSinceLastMeaningfulOutput`, via the
+`maxReworkBlockStaleness` 15-minute threshold) for one narrow path
+(`notifyIfActiveWorkSessionStale` / `ResolveReworkBlockedStaleIfRecovered`), but never exposed
+it on the actual spawn-blocking RPC error a caller (human or agent) directly receives.
+
+**Fix**: PR #292 (branch `fix/spawn-blocked-progress-signal`) adds
+`activeWorkSessionBlockedError`, which enriches the 8b guard's error with the same
+`TimeSinceLastMeaningfulOutput`-vs-`maxReworkBlockStaleness` progress signal, and generalizes
+the staleness computation both existing call sites already had into one shared helper,
+`workSessionStaleness`, called from all three sites
+(`activeWorkSessionBlockedError`, `notifyIfActiveWorkSessionStale`,
+`ResolveReworkBlockedStaleIfRecovered`) so the "idle vs. threshold" comparison can no longer
+drift between them.
+
+**Deferred scope** (noted and deliberately out of scope for PR #292, not missed): 3 sibling
+call sites of `hasActiveWorkSession` — `AutoRespawnAutonomousWork`, `AutoReopenForPRFix`, and
+`AutoRespawnReview` — still silently log-and-skip when they find an active work session
+blocking their own respawn attempt, with no equivalent progress signal exposed anywhere. This
+is strictly worse than even the pre-fix `SpawnSessionFromItem` baseline, since none of the
+three even attempt `notifyIfActiveWorkSessionStale`-style enrichment. Left out of this PR
+because those are internal reconciler loops, not caller-facing RPC responses — but worth a
+follow-up pass extending the same `workSessionStaleness`-backed enrichment pattern to their
+log lines (or a notification, matching `notifyIfActiveWorkSessionStale`'s shape) once a
+concrete stuck-item episode traces back to one of them.
+
+## Update — 2026-08-03: light verification pass — bucket [3]'s core gap confirmed substantially resolved; 08-02's routed fix shipped; no new bugs found live
+
+Not a full 4-agent re-run (same rationale as every pass since 07-28: live state keeps trending
+well and the last full pass was 07-19/07-22 for architecture/UX/code-review specifically).
+Checked `ListStuckBacklogItems` live, verified 08-02's routed fix landed, then — since this
+audit's core deliverable (per-item configurable pipeline) hasn't had a dedicated fresh look
+since 07-30 — spawned an independent fork with no prior knowledge of this doc to re-derive the
+`PipelineMode`/`PipelineEngine` ground truth from scratch, then cross-checked its conclusions
+against this doc's own history rather than trusting either source alone.
+
+**Live state**: `ListStuckBacklogItems` returns **1 row / 1 item** (`be676dab`,
+"Two-way linkage + status/label sync between imported backlog items and their GitHub issue
+counterparts"), `STUCK_REASON_PLAN_NOT_APPROVED`, `queued`. Confirmed working-as-designed
+(same `reconcilePlanNotApprovedItems`/`selfHealStuck` checkpoint pattern as every prior
+PLAN_NOT_APPROVED instance since 07-22): the item has a committed `requirements.md`
+(`project_plans/backlog-github-two-way-sync/`, commit `922ac4e9e`) but no `plan.md` yet — it's
+correctly waiting on a human plan-approval decision, not stuck on a bug. Total backlog is 6
+items (2 queued, 2 review, 1 in_progress, 1 ready) — the smallest live count this doc has
+recorded, consistent with the WIP-cap-driven `ready→queued` transition being the normal
+mechanism (verified via `59bbff11`'s `statusEvents`: `idea→ready` then `ready→queued` with
+note "WIP cap hit" — not a stuck state, doesn't appear in `ListStuckBacklogItems`).
+
+**08-02's routed fix — confirmed merged and live**: PR #301 ("exclude archived sessions from
+Review Queue polling") landed; `shouldSkipSession` (`session/review_queue_poller.go:641`) now
+includes `snap.ArchivedAt != nil` alongside the pre-existing `Hidden`/`Stopped`/`Paused` checks,
+and `TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue` exists and covers it.
+
+**Also already fixed, same-day, before this pass started**: HEAD commit `26e0d610f`
+("fail loudly instead of silently spawning sessions in the main checkout", fixing BUG-057,
+09:17 this morning) — `resolveSessionPath` previously fell back to an unscoped
+`session.ResolveSessionPath(repoPath)` whenever `CreateBacklogWorktree` failed for *any*
+reason (disk quota, detached HEAD, locked ref — not just "not a git repo"), landing the spawned
+session directly in the live checkout instead of an isolated worktree with no error surfaced.
+Now the plain-directory fallback is scoped to genuinely non-git-managed repos only; a
+git-managed repo whose worktree creation fails returns an error. **Recurring-shape note**: this
+is a *new* shape, not a repeat of the four already catalogued in this doc's mandate (silent
+no-op spawn, self-defeating exclusion guard, event lost across restart, notify-once never
+resolved) — call it a fifth: **a degraded-but-"successful" fallback silently masks a real error
+as normal operation**, differing from "silent no-op" in that it doesn't fail to act, it acts
+in the wrong place while looking like success. Worth watching for repeats of this specific
+shape (any `if createErr != nil { return degradedPath }` with no check on *why* the primary
+path failed) in future passes.
+
+**Bucket [3] — the core "software factory" gap — reassessed end-to-end, confirmed
+substantially RESOLVED.** An independent fork (briefed only on the original 2026-07-14 "Known
+Findings" framing, with no access to this doc's own 07-17→07-30 tracking) re-derived the
+current ground truth from source and reached the same conclusions this doc already
+established, confirming they've held since 07-30 with no regression:
+
+1. `BacklogItemData` (`session/repository.go:346-410`) now has `PipelineMode string`,
+   `Category string`, `ReworkCapOverride *int`, plus the original `SkipReviewGate`/
+   `SkipPlanning`/`AutoCreatePR` bools — the 07-14 claim of "only two bools exist" is stale.
+2. `PipelineMode` is a real, user-creatable, slug-addressed entity (`proto/session/v1/backlog.proto:166-168`)
+   with full CRUD RPCs and a settings UI (`web-app/src/app/settings/pipeline-modes/`), distinct
+   from `pipeline_mode_snapshot`/`pipeline_mode_snapshot_hash` (a separate per-session
+   audit-trail field recording which mode a session ran under — the two are cleanly separated,
+   not conflated).
+3. The item-level picker (`BacklogItemForm.tsx`), the Settings nav link
+   (`data-testid="settings-pipeline-modes-tab-link"`), the automatic review-gate's
+   `PipelineEngine` coverage (`session/review_gate.go`'s `reviewPromptFor`), and category-driven
+   defaults (`46b7e6239`, PR #285) are all confirmed shipped and live — this closes essentially
+   every concrete UI/wiring gap this doc tracked for bucket [3] between 07-18 and 07-30.
+4. `WriteSlashCommands` (`session/backlog_commands.go:31-68`) delegates to
+   `engine.SlashCommandSet(item)`, falling back to the old fixed set only when unwired —
+   the original 07-14 "every item gets the same fixed slash-command set" finding is resolved.
+5. **The one confirmed-unchanged thread**: ADR-013's `WorkflowEngine` remains
+   `DefaultWorkflowEngine` only — governs transition *guards*, not stage/skill *selection*. As
+   this doc concluded 07-19/07-22, this is now understood as a deliberate division of concerns
+   (`PipelineMode` owns content-selection, `WorkflowEngine` owns guard logic) rather than an
+   open gap requiring action — no new evidence this pass changes that assessment.
+
+**New feature landed since 08-02, not yet audited here**: the respawn-event audit trail
+(`22970e37b`, "surface session/respawn lifecycle status + respawn-event audit trail") — adopted
+`project_plans/backlog-session-lifecycle-ux`'s already-planned, adversarially-reviewed 5-phase
+plan as the vehicle for backlog item `0a366262` (07-22/08-02's stuck-item subject), rather than
+re-planning independently. Ships `end_reason`/`pause_reason` chips and a `RespawnHistorySection`
+recording every `AutoRespawnAutonomousWork`/`RemediateStaleWorkSession`/`AutoRespawnReview`/
+`AutoRespawnTriage` attempt with its reason — **this incidentally closes the 07-27 "pipeline
+provenance not visible after done/archived" UX finding**, since respawn reasons (which include
+pipeline-relevant context) are now visible in a durable per-item history section rather than a
+transient badge. Two rigorous same-day follow-up fixes (`ce0814ba9`, `38ab3ee2b`) closed a
+`CreateRespawnEvent` TOCTOU race (via `sdd:6-verify` + two independent `code:review` agents),
+confirming the SDD verify/review gate is catching real concurrency bugs before merge, not just
+style nits. Item `0a366262` itself is no longer live (moved to done/archived) — confirms PR
+#310's work actually unblocked the item it was seeded from.
+
+**Still open, unchanged, still low priority** — checked directly, both confirmed still present:
+- Interface-pollution cleanup (`PipelineModeRepository` in `session/pipeline_mode_repository.go:11`,
+  `Repository` in `session/repository.go:23`) — not routed, per standing low-priority assessment.
+- The 3 deferred `hasActiveWorkSession` sibling call sites from PR #292/07-31
+  (`AutoRespawnAutonomousWork:1441`, plus `AutoReopenForPRFix`/`AutoRespawnReview`) still just
+  `log.InfoLog.Printf` on a blocked respawn with no progress-signal enrichment or `RespawnEvent`
+  record — confirmed by direct read this pass. Note: PR #310's new `RespawnEvent` audit trail
+  instruments the four *successful/attempted* respawn call sites but not this *skipped-due-to-
+  active-session* branch specifically — a natural, cheap follow-on now that the `RespawnEvent`
+  table and dedupe machinery already exist, but still not urgent enough to route unprompted.
+
+### Recommended Next Actions
+
+Nothing new rises to `sdd:fix-bug`/`sdd:quick` urgency this pass — the one live stuck item is a
+correct human-decision checkpoint, and the one bug found (BUG-057) was already fixed before this
+pass started. Carried forward, unchanged priority:
+1. Interface-pollution cleanup (`PipelineModeRepository`, `Repository`) — still deferred to a
+   future refactor pass.
+2. The 3 `hasActiveWorkSession` sibling call sites — extend `RespawnEvent` recording to the
+   skipped-respawn branch, now cheaper than 07-31 since the table/dedupe logic already exists.
+3. `be676dab` needs a human plan-approval/reject decision — surfaced for visibility, not a fix.
+
+## Update — 2026-08-03 (later same day): user-reported mobile screenshot led to a real bug — `PLAN_NOT_APPROVED` items with an empty `triageResult` are a UI dead end
+
+The stuck item flagged earlier this pass (`be676dab`) turned out not to be the routine
+"working as designed" checkpoint it resembled. Root-caused via the item's own session history
+rather than trusting the stuck-reason label:
+
+**Finding**: the item's only triage session (`headless-triage-b601011a...`, `pipelineMode: sdd`)
+ran **8h52m** (18:00:34 → 02:52:54) — versus the ~20-30min normal for this pipeline mode — and
+ended with `triageResult: null`. Only `requirements.md` was ever committed to
+`project_plans/backlog-github-two-way-sync/`; `research/`, `decisions/`, `implementation/` are
+all empty — no plan was ever produced. Server logs covering the session's actual end time
+(02:52) had already rotated out by the time this was investigated (~7h later), so the original
+in-session failure mode can't be forensically reconstructed — but the structural gap is
+confirmed from code + data alone regardless of that specific cause.
+
+**Why this is worse than a normal `PLAN_NOT_APPROVED` wait**: `BacklogItemDetail.tsx:1102`
+only renders the plan-review UI (`TriageReviewPanel`) when `item.triageResult` is truthy —
+`item.triageResult && (<TriageReviewPanel .../>)`. With a null `triageResult`, the panel is
+silently omitted: the item detail page shows the stuck badge and zero actionable content (no
+summary, no suggestions, no retry affordance — the "Actions" section had only "Delete").
+`reconcilePlanNotApprovedItems` treats this identically to the normal "plan generated,
+awaiting your review" case it was designed for (correctly, per the 08-02 entry, for items that
+*do* have a triageResult) — nothing distinguishes "waiting for a human to review a real plan"
+from "waiting for a plan that was never generated." The existing orphaned-triage
+detection/retry machinery (extended 07-30 for a related but distinct failure — see that day's
+entries) only watches `idea`-status items whose latest triage session ended without a
+transition; this item had already moved past `idea` (to `ready`, then `queued` via WIP cap), so
+it fell outside that detector's scope entirely, with no automated path back.
+
+**Immediate action taken** (user confirmed via AskUserQuestion): transitioned the item
+`queued→idea` (the same "Return to Triage" manual escape hatch used for item `04089969` on
+07-30) via `TransitionBacklogItemStatus`, then called `TriggerTriage` to spawn a fresh triage
+session (`headless-triage-ff194010...`, started 16:44:50 UTC). Not yet confirmed complete as of
+this writing.
+
+**Recurring-shape classification**: sibling of the `orphaned_triage`/notify-once gap family
+this doc has tracked since 07-27/07-30 — a detector was taught to cover one specific shape
+("triage session ended, item still in idea") but a structurally identical shape one status
+transition further downstream ("triage session ended with nothing usable, item already
+progressed past idea via a manual/WIP-cap transition, no plan exists to approve") was never
+covered. Same underlying lesson as the audit's standing mandate: the earlier fix closed its
+exact instance, not the class — "any status where an item is gated on plan-approval but has no
+underlying plan" is the actual invariant that needs a detector, not "idea-status items with a
+stale/ended triage session" specifically.
+
+### Recommended Next Action
+
+`sdd:fix-bug` — extend the orphaned/failed-triage detection to cover `PLAN_NOT_APPROVED`-gated
+items (any status) whose most recent triage session has `triageResult == nil`/unparseable,
+using the same `RemediationDue`-gated retry machinery PR #274/07-30 already built, so this
+resolves automatically instead of requiring a human to notice a mobile screenshot's dead-end
+UI. Also worth a small frontend fix in `BacklogItemDetail.tsx` so a null `triageResult` renders
+an explicit "triage produced no usable result — retry" affordance instead of silently rendering
+nothing.
+
+## Update — 2026-08-03 (later still): PR #321's own review surfaces the next instance of the recurring shape one status further down the pipeline
+
+While independently reviewing PR #321 (the `queued`-status orphaned-triage generalization above) before merge, the reviewer traced `TriggerTriage`'s actual commit logic (`server/services/backlog_service_triage.go:2121-2141`) and found the `idea→ready` transition is gated only on a successful *parse* of the triage result, not on the separate `UpdateItemSessionTriageResult` persist call also succeeding — they're independent DB writes. A transient failure of just the persist call leaves a `ready`-status item whose latest triage session has `TriageResult == ""`, structurally identical to the `idea`/`queued` "no usable result" shape PR #321 just made detectable — but for `ready` specifically, it's invisible: the only signal is a one-shot `notifyTriagePersistFailure` notification event, not a durable `BacklogStuckState` row, and no detector in `backlog_lifecycle.go` looks at `BacklogStatusReady` at all.
+
+**Not routed as a fix this pass** — explicitly out of scope for #321 (a pre-existing gap, not a regression it introduces), and no live instance is currently known. Recorded here per this doc's own mandate to name a recurring shape the moment it's spotted, even mid-review, rather than waiting for it to surface as a fresh "new" bug in some future audit pass: this is the same "status-transition generalization leaves the next status still exposed" shape #321 itself exists to fix (for `idea`→`queued`), now visible one status further down (`ready`). If it ever surfaces live, the fix is the same shape as #321's: extend the detector's covered-status set again, ideally by generalizing to "any status gated on plan-approval with no usable result," ­not by special-casing `ready` on top of `idea`+`queued`.
+
+## Update — 2026-08-02: light verification pass — 1 new root-caused bug (archived work sessions never leave the Review Queue), everything else confirmed working as designed
+
+Not a full 4-agent re-run (last full pass 07-18, light passes trending well since — same rationale
+as 07-28/07-30). Housekeeping first: found and committed 3 fully-planned SDD artifact sets
+(`backlog-session-lifecycle-ux`, `backlog-status-visibility`, `backlog-description-prominence`,
+through Phase 4 validation) sitting uncommitted in the working tree from prior sessions — per
+`.claude/rules/sdd-planning-artifacts-commit.md` (commit `42d630327`).
+
+**Substantial bucket-3 feature work landed since 07-31, not yet audited in this doc**: triage now
+assigns priority + item category (`639366809`), ready items auto-spawn by priority by default
+(`f9aadda7d`), and a full plan-review/reject/in-app-plan-rendering flow shipped
+(`c9a4c75f4`/`88f5c9c76`, with its own `chore(sdd): verification report for plan-approval-ux`).
+Confirmed PR #292 (07-31's blocked-spawn staleness signal) merged and live
+(`mergedAt: 2026-08-01T18:18:32Z`).
+
+**Live state**: `ListStuckBacklogItems` returns 3 items — all confirmed non-issues on inspection:
+- `0a366262` (**this is the `backlog-session-lifecycle-ux` item itself**) and `98f006f2` both
+  `STUCK_REASON_PLAN_NOT_APPROVED`, `queued`. Traced `reconcilePlanNotApprovedItems`
+  (`session/backlog_lifecycle.go:2509-2568`) and its `selfHealStuck` resolution case
+  (`backlog_lifecycle.go:3054`, `resolve = row.ItemStatus != BacklogStatusQueued`) — this is a
+  deliberate, well-built human-review checkpoint (has a `SkipPlanning` escape hatch, confirmed by
+  `TestReconcilePlanNotApprovedItems_should_notFlag_When_SkipPlanningTrue`, and self-resolves the
+  instant the item leaves `queued`), the same trust-boundary pattern as `AutoCreatePR`. Working as
+  designed, not a bug — these two just need a human to approve or reject the plan.
+- `04089969` (the recurring "Phantom repeated 1 keystroke" item from the 07-30/07-31 entries) is
+  flagged `STUCK_REASON_AUTONOMOUS_STUCK` again — **confirmed the same known, already-deprioritized
+  gap**, not new: `selfHealStuck`'s own `default` case
+  (`backlog_lifecycle.go:3060-3065`) explicitly documents that `autonomous_stuck` "stays open until
+  the blanket terminal rule... or its own event-site resolves it first" — i.e., the code itself
+  acknowledges this reason has no non-terminal self-heal anchor, by design. Confirmed via
+  `GetBacklogItem` that the item has real, live progress (3/6 acceptance criteria done, `review`
+  status, plan approved) and its current work session (`53f649e0...`, started 2026-08-01T22:38, no
+  `endedAt`) has been legitimately running 14+ hours — the stuck row is just a stale label sitting
+  on top of an item that's actually fine. Unchanged low-priority assessment from 07-19/07-30.
+
+### [1, FIXED] Archived/superseded backlog work sessions never leave the Review Queue — the tmux-pane-kill cleanup that fixed the *resource* leak left a *signal* leak behind
+
+**Status: FIXED.** `shouldSkipSession` (`session/review_queue_poller.go`) now also excludes
+instances with `ArchivedAt != nil`, closing the gap described below. Regression test:
+`TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue` (`session/review_queue_poller_test.go`).
+
+Triggered by cross-checking the Review Queue's overall size against 07-18's numbers out of habit —
+found 73 total items (up from 18-20), 28 tagged `backlog:work`, **26 of them `ATTENTION_REASON_STALE`,
+0 `TASK_COMPLETE`**. Several are the same item reopened many times in a row still sitting in the
+queue individually — e.g. `stapler-squad-terminal-visibility-resync-r10` through `-r14`,
+`stapler-squad-terminal-resize-loop-fix-r5` through `-r10`, `stapler-squad-launchd-shell-sourcing-r2`
+through `-r4` — several 175-184h stale (7+ days). None of these titles match any of the 27 items
+that currently exist across active/done/archived `ListBacklogItems` — i.e. these are sessions from
+items that have long since finished, been reopened repeatedly, or been deleted, whose *tmux
+sessions* were never actually retired from the queue's point of view.
+
+**Root-caused, not just observed.** `archiveItemWorkSessions` (`server/services/backlog_service.go:841-856`,
+called from `SpawnSessionFromItem`'s reopen path, `backlog_service_triage.go:867`) does exactly what
+its own doc comment says: `ArchiveSessionByUUID` (sets `Instance.ArchivedAt`) then
+`KillTmuxPaneOnly` (frees the tmux pane's memory/resources) for every prior-round work session on a
+reopen — this is the fix from the 07-18-era "every rework round piles up a fresh work session"
+finding, and it's working exactly as designed for its stated purpose (resource cleanup; this is
+*not* the OOM-adjacent session leak from the 2026-07-29 memory-noted fix, which was a different
+code path). **But `KillTmuxPaneOnly` deliberately does not call `StopSessionByUUID`/`Instance.Kill()`**
+(per its own name and the comment at `backlog_service_triage.go:726`, preserving the session record
+so its diff/history stays inspectable) — and the Review Queue poller's session filter,
+`shouldSkipSession` (`session/review_queue_poller.go:631-636`:
+`snap.Hidden || snap.Status == Stopped || snap.Status == Paused || !inst.Started()`), **never checks
+`snap.ArchivedAt`**. `ArchiveSessionByUUID` doesn't set `Hidden` or transition `Status` to `Stopped`
+either (confirmed by reading `server/services/session_service.go:508-526` directly) — it only sets
+`ArchivedAt`. So an archived-but-pane-killed session keeps getting evaluated by the poller every
+tick forever: its tmux pane is dead, so no real activity is ever detected, so it falls through to a
+staleness verdict and sits in the queue as `ATTENTION_REASON_STALE` permanently — a phantom entry
+for a session nobody can or should act on, since it was already deliberately superseded.
+
+This directly compounds the exact "signal quality" complaint the 07-18 entry raised about
+notifications ("degrades signal quality for whoever is meant to notice... while genuinely-repeating
+noise dominates") — here it's the Review Queue instead of the notification feed, and the mechanism
+is a cleanup path that solved its own problem (freed tmux resources) but created this one (the
+queue can never tell "archived" from "alive but idle"). 26 of the queue's 73 entries are candidates
+for this exact gap based on titles alone (many-times-reopened items, days-old timestamps); an exact
+count would need cross-referencing `ArchivedAt` on each queue entry's `Instance` directly.
+
+**Fix direction**: add an `ArchivedAt`-nil check to `shouldSkipSession` (mirroring the existing
+`Hidden`/`Stopped`/`Paused` checks) so an archived instance is excluded from every future poll tick,
+the same way a stopped one already is. Routed to `sdd:fix-bug` (Agent, isolation: worktree, per this
+repo's standing preference over `create_session` for Claude-driven fix work) — see below.
+
+**Recurring-shape check** (per this skill's mandate to name the shape, not just the instance): this
+is the same general class as the `abandoned_review`/`orphaned_triage` notify-once gaps this doc has
+tracked since 07-27/07-30 — a state transition (archival) that one consumer (the DB/Instance record)
+sees but a second, independent consumer (the poller's queue-membership decision) was never taught to
+check. The fix for those was "extend the detector's condition set"; the fix here is the same shape,
+one layer down the stack (a session-liveness filter instead of a backlog-status filter).
+
+### Recommended Next Actions
+
+1. **`sdd:fix-bug`** — the archived-session-never-leaves-review-queue gap above. Routed to a
+   worktree agent this session.
+2. `0a366262`/`98f006f2` — need a human plan-approval/reject decision, not a fix; surfaced here for
+   visibility since one is this doc's own subject item.
+3. Carried forward unchanged: the 3 deferred `hasActiveWorkSession` sibling call sites from PR #292,
+   and item #6 (interface-pollution cleanup, `PipelineModeRepository`/`Repository`) — still low
+   priority, still not routed.

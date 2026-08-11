@@ -25,12 +25,54 @@ const (
 	BacklogStatusArchived   = domain.BacklogStatusArchived
 )
 
+// BacklogCategory represents a coarse frontend-defaulting classification for
+// a backlog item (bugfix/feature/chore/refactor, or "" for uncategorized).
+// Type alias — session.BacklogCategory and domain.BacklogCategory are
+// identical types; all existing callers continue to work without any import
+// changes.
+type BacklogCategory = domain.BacklogCategory
+
+const (
+	BacklogCategoryBugfix   = domain.BacklogCategoryBugfix
+	BacklogCategoryFeature  = domain.BacklogCategoryFeature
+	BacklogCategoryChore    = domain.BacklogCategoryChore
+	BacklogCategoryRefactor = domain.BacklogCategoryRefactor
+)
+
+// IsValidBacklogCategory reports whether s is a known backlog category value
+// or the empty string (uncategorized).
+func IsValidBacklogCategory(s string) bool {
+	return BacklogCategory(s).IsValid()
+}
+
 // Session role constants.
 const (
 	SessionRoleWork   = "work"
 	SessionRoleTriage = "triage"
 	SessionRoleReview = "review"
 )
+
+// IsTmuxBackedSessionRole reports whether role identifies a session that runs as a
+// persistent, live tmux-attached claude process — one that must be explicitly
+// archived AND have its tmux pane killed once its backlog item goes terminal, or it
+// leaks indefinitely (root cause of the 2026-07-29 OOM: dozens of done/archived
+// items' work and review sessions still running, each with its own MCP subprocess
+// fleet). Work and review sessions are tmux-backed. Triage sessions are not: they run
+// as bounded one-shot headless subprocess calls (see headlessTriageUUIDPrefix) that
+// exit on their own when the call returns, so they were never tracked as a live
+// Instance in the first place and have nothing to kill — their own failure mode
+// (a crashed/hung goroutine leaving a stale DB row) is handled separately by
+// reconcileOrphanedTriageItems/reconcileOrphanedTriageRemediation.
+//
+// This is the single source of truth for "which roles does the terminal-item sweep
+// clean up" — both reconcileTerminalItemSessions (session/backlog_lifecycle.go) and
+// archiveItemWorkSessions (server/services/backlog_service.go) call this rather than
+// each re-deriving the role set, so the two can't silently drift apart again the way
+// they already did once (the archive-and-kill fix originally covered work sessions
+// only; review sessions kept leaking until this predicate unified both call sites).
+func IsTmuxBackedSessionRole(role string) bool {
+	return role == SessionRoleWork || role == SessionRoleReview
+}
 
 // Session tag constants for backlog-spawned sessions.
 const (
@@ -45,10 +87,13 @@ const (
 // into "Uncategorized".
 const CategoryBacklog = "Backlog"
 
-// TriggeredBy values for BacklogStatusEvent records.
+// TriggeredBy values for BacklogStatusEvent records. Agent-initiated
+// transitions (e.g. request_review, report_duplicate) use TriggeredByAgent.
 const (
-	TriggeredByUser   = "user"
-	TriggeredBySystem = "system"
+	TriggeredByUser       = "user"
+	TriggeredBySystem     = "system"
+	TriggeredByAgent      = "agent"
+	TriggeredByGitHubSync = "github_sync"
 )
 
 // DefaultBacklogPriority is the default priority assigned to new backlog items

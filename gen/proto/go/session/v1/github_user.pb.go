@@ -82,6 +82,7 @@ type GitHubAccount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
 	IsEnvToken    bool                   `protobuf:"varint,2,opt,name=is_env_token,json=isEnvToken,proto3" json:"is_env_token,omitempty"` // true when sourced from GITHUB_TOKEN/GH_TOKEN env var
+	Host          string                 `protobuf:"bytes,3,opt,name=host,proto3" json:"host,omitempty"`                                  // GitHub host, e.g. "github.com" or a GHES hostname; empty means github.com
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -128,6 +129,13 @@ func (x *GitHubAccount) GetIsEnvToken() bool {
 		return x.IsEnvToken
 	}
 	return false
+}
+
+func (x *GitHubAccount) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
 }
 
 // GitHubAuthState describes the current GitHub authentication status.
@@ -466,6 +474,7 @@ func (x *GetGitHubAuthStateResponse) GetAuthState() *GitHubAuthState {
 
 type StartGitHubDeviceAuthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"` // GitHub host to authenticate against; empty means github.com
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -498,6 +507,13 @@ func (x *StartGitHubDeviceAuthRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use StartGitHubDeviceAuthRequest.ProtoReflect.Descriptor instead.
 func (*StartGitHubDeviceAuthRequest) Descriptor() ([]byte, []int) {
 	return file_session_v1_github_user_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *StartGitHubDeviceAuthRequest) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
 }
 
 type StartGitHubDeviceAuthResponse struct {
@@ -683,6 +699,7 @@ func (x *PollGitHubDeviceAuthResponse) GetAuthState() *GitHubAuthState {
 type RevokeGitHubTokenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"` // if set, remove only this account; otherwise remove the legacy single-account token
+	Host          string                 `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`         // host the account belongs to; empty means github.com
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -720,6 +737,13 @@ func (*RevokeGitHubTokenRequest) Descriptor() ([]byte, []int) {
 func (x *RevokeGitHubTokenRequest) GetUsername() string {
 	if x != nil {
 		return x.Username
+	}
+	return ""
+}
+
+func (x *RevokeGitHubTokenRequest) GetHost() string {
+	if x != nil {
+		return x.Host
 	}
 	return ""
 }
@@ -797,10 +821,13 @@ func (*ListGitHubAccountsRequest) Descriptor() ([]byte, []int) {
 }
 
 type ListGitHubAccountsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accounts      []*GitHubAccount       `protobuf:"bytes,1,rep,name=accounts,proto3" json:"accounts,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Accounts []*GitHubAccount       `protobuf:"bytes,1,rep,name=accounts,proto3" json:"accounts,omitempty"`
+	// enterprise_hosts lists the GHES hostnames configured on the server
+	// (github.com is always implicitly available and not included here).
+	EnterpriseHosts []string `protobuf:"bytes,2,rep,name=enterprise_hosts,json=enterpriseHosts,proto3" json:"enterprise_hosts,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListGitHubAccountsResponse) Reset() {
@@ -840,16 +867,313 @@ func (x *ListGitHubAccountsResponse) GetAccounts() []*GitHubAccount {
 	return nil
 }
 
+func (x *ListGitHubAccountsResponse) GetEnterpriseHosts() []string {
+	if x != nil {
+		return x.EnterpriseHosts
+	}
+	return nil
+}
+
+type AddGitHubAccountWithTokenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`   // GitHub host to authenticate against; empty means github.com
+	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"` // personal access token
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddGitHubAccountWithTokenRequest) Reset() {
+	*x = AddGitHubAccountWithTokenRequest{}
+	mi := &file_session_v1_github_user_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddGitHubAccountWithTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddGitHubAccountWithTokenRequest) ProtoMessage() {}
+
+func (x *AddGitHubAccountWithTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_github_user_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddGitHubAccountWithTokenRequest.ProtoReflect.Descriptor instead.
+func (*AddGitHubAccountWithTokenRequest) Descriptor() ([]byte, []int) {
+	return file_session_v1_github_user_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *AddGitHubAccountWithTokenRequest) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *AddGitHubAccountWithTokenRequest) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+type AddGitHubAccountWithTokenResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AuthState     *GitHubAuthState       `protobuf:"bytes,1,opt,name=auth_state,json=authState,proto3" json:"auth_state,omitempty"` // updated state on success
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddGitHubAccountWithTokenResponse) Reset() {
+	*x = AddGitHubAccountWithTokenResponse{}
+	mi := &file_session_v1_github_user_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddGitHubAccountWithTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddGitHubAccountWithTokenResponse) ProtoMessage() {}
+
+func (x *AddGitHubAccountWithTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_github_user_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddGitHubAccountWithTokenResponse.ProtoReflect.Descriptor instead.
+func (*AddGitHubAccountWithTokenResponse) Descriptor() ([]byte, []int) {
+	return file_session_v1_github_user_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *AddGitHubAccountWithTokenResponse) GetAuthState() *GitHubAuthState {
+	if x != nil {
+		return x.AuthState
+	}
+	return nil
+}
+
+// GitHubCLIHost is a host the local `gh` CLI is already authenticated to.
+type GitHubCLIHost struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`                                      // normalized host, e.g. "github.com" or a GHES hostname
+	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`                              // gh CLI's recorded username for this host, if known
+	AlreadyAdded  bool                   `protobuf:"varint,3,opt,name=already_added,json=alreadyAdded,proto3" json:"already_added,omitempty"` // true when this host+username is already a connected account
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GitHubCLIHost) Reset() {
+	*x = GitHubCLIHost{}
+	mi := &file_session_v1_github_user_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GitHubCLIHost) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GitHubCLIHost) ProtoMessage() {}
+
+func (x *GitHubCLIHost) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_github_user_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GitHubCLIHost.ProtoReflect.Descriptor instead.
+func (*GitHubCLIHost) Descriptor() ([]byte, []int) {
+	return file_session_v1_github_user_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *GitHubCLIHost) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *GitHubCLIHost) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *GitHubCLIHost) GetAlreadyAdded() bool {
+	if x != nil {
+		return x.AlreadyAdded
+	}
+	return false
+}
+
+type ListGitHubCLIHostsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListGitHubCLIHostsRequest) Reset() {
+	*x = ListGitHubCLIHostsRequest{}
+	mi := &file_session_v1_github_user_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListGitHubCLIHostsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListGitHubCLIHostsRequest) ProtoMessage() {}
+
+func (x *ListGitHubCLIHostsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_github_user_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListGitHubCLIHostsRequest.ProtoReflect.Descriptor instead.
+func (*ListGitHubCLIHostsRequest) Descriptor() ([]byte, []int) {
+	return file_session_v1_github_user_proto_rawDescGZIP(), []int{19}
+}
+
+type ListGitHubCLIHostsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Hosts         []*GitHubCLIHost       `protobuf:"bytes,1,rep,name=hosts,proto3" json:"hosts,omitempty"`
+	GhAvailable   bool                   `protobuf:"varint,2,opt,name=gh_available,json=ghAvailable,proto3" json:"gh_available,omitempty"` // false when the gh CLI config could not be read (not installed / never logged in)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListGitHubCLIHostsResponse) Reset() {
+	*x = ListGitHubCLIHostsResponse{}
+	mi := &file_session_v1_github_user_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListGitHubCLIHostsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListGitHubCLIHostsResponse) ProtoMessage() {}
+
+func (x *ListGitHubCLIHostsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_github_user_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListGitHubCLIHostsResponse.ProtoReflect.Descriptor instead.
+func (*ListGitHubCLIHostsResponse) Descriptor() ([]byte, []int) {
+	return file_session_v1_github_user_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ListGitHubCLIHostsResponse) GetHosts() []*GitHubCLIHost {
+	if x != nil {
+		return x.Hosts
+	}
+	return nil
+}
+
+func (x *ListGitHubCLIHostsResponse) GetGhAvailable() bool {
+	if x != nil {
+		return x.GhAvailable
+	}
+	return false
+}
+
+type AddGitHubAccountFromCLIRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"` // host to import, as returned by ListGitHubCLIHosts
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddGitHubAccountFromCLIRequest) Reset() {
+	*x = AddGitHubAccountFromCLIRequest{}
+	mi := &file_session_v1_github_user_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddGitHubAccountFromCLIRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddGitHubAccountFromCLIRequest) ProtoMessage() {}
+
+func (x *AddGitHubAccountFromCLIRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_github_user_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddGitHubAccountFromCLIRequest.ProtoReflect.Descriptor instead.
+func (*AddGitHubAccountFromCLIRequest) Descriptor() ([]byte, []int) {
+	return file_session_v1_github_user_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *AddGitHubAccountFromCLIRequest) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
 var File_session_v1_github_user_proto protoreflect.FileDescriptor
 
 const file_session_v1_github_user_proto_rawDesc = "" +
 	"\n" +
 	"\x1csession/v1/github_user.proto\x12\n" +
-	"session.v1\x1a\x16session/v1/types.proto\"M\n" +
+	"session.v1\x1a\x16session/v1/types.proto\"a\n" +
 	"\rGitHubAccount\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12 \n" +
 	"\fis_env_token\x18\x02 \x01(\bR\n" +
-	"isEnvToken\"\xa7\x01\n" +
+	"isEnvToken\x12\x12\n" +
+	"\x04host\x18\x03 \x01(\tR\x04host\"\xa7\x01\n" +
 	"\x0fGitHubAuthState\x12\x1c\n" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12#\n" +
@@ -870,8 +1194,9 @@ const file_session_v1_github_user_proto_rawDesc = "" +
 	"\x19GetGitHubAuthStateRequest\"X\n" +
 	"\x1aGetGitHubAuthStateResponse\x12:\n" +
 	"\n" +
-	"auth_state\x18\x01 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"\x1e\n" +
-	"\x1cStartGitHubDeviceAuthRequest\"\xc3\x01\n" +
+	"auth_state\x18\x01 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"2\n" +
+	"\x1cStartGitHubDeviceAuthRequest\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\"\xc3\x01\n" +
 	"\x1dStartGitHubDeviceAuthResponse\x12\x1f\n" +
 	"\vdevice_code\x18\x01 \x01(\tR\n" +
 	"deviceCode\x12\x1b\n" +
@@ -887,19 +1212,37 @@ const file_session_v1_github_user_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\x0e2\x1c.session.v1.DeviceAuthStatusR\x06status\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12:\n" +
 	"\n" +
-	"auth_state\x18\x03 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"6\n" +
+	"auth_state\x18\x03 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"J\n" +
 	"\x18RevokeGitHubTokenRequest\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername\"\x1b\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x12\n" +
+	"\x04host\x18\x02 \x01(\tR\x04host\"\x1b\n" +
 	"\x19RevokeGitHubTokenResponse\"\x1b\n" +
-	"\x19ListGitHubAccountsRequest\"S\n" +
+	"\x19ListGitHubAccountsRequest\"~\n" +
 	"\x1aListGitHubAccountsResponse\x125\n" +
-	"\baccounts\x18\x01 \x03(\v2\x19.session.v1.GitHubAccountR\baccounts*\xb5\x01\n" +
+	"\baccounts\x18\x01 \x03(\v2\x19.session.v1.GitHubAccountR\baccounts\x12)\n" +
+	"\x10enterprise_hosts\x18\x02 \x03(\tR\x0fenterpriseHosts\"L\n" +
+	" AddGitHubAccountWithTokenRequest\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\x12\x14\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"_\n" +
+	"!AddGitHubAccountWithTokenResponse\x12:\n" +
+	"\n" +
+	"auth_state\x18\x01 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"d\n" +
+	"\rGitHubCLIHost\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\x12#\n" +
+	"\ralready_added\x18\x03 \x01(\bR\falreadyAdded\"\x1b\n" +
+	"\x19ListGitHubCLIHostsRequest\"p\n" +
+	"\x1aListGitHubCLIHostsResponse\x12/\n" +
+	"\x05hosts\x18\x01 \x03(\v2\x19.session.v1.GitHubCLIHostR\x05hosts\x12!\n" +
+	"\fgh_available\x18\x02 \x01(\bR\vghAvailable\"4\n" +
+	"\x1eAddGitHubAccountFromCLIRequest\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host*\xb5\x01\n" +
 	"\x10DeviceAuthStatus\x12\"\n" +
 	"\x1eDEVICE_AUTH_STATUS_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aDEVICE_AUTH_STATUS_PENDING\x10\x01\x12\x1f\n" +
 	"\x1bDEVICE_AUTH_STATUS_COMPLETE\x10\x02\x12\x1e\n" +
 	"\x1aDEVICE_AUTH_STATUS_EXPIRED\x10\x03\x12\x1c\n" +
-	"\x18DEVICE_AUTH_STATUS_ERROR\x10\x042\xc2\x05\n" +
+	"\x18DEVICE_AUTH_STATUS_ERROR\x10\x042\x9d\b\n" +
 	"\x11GitHubUserService\x12P\n" +
 	"\vListUserPRs\x12\x1e.session.v1.ListUserPRsRequest\x1a\x1f.session.v1.ListUserPRsResponse\"\x00\x12L\n" +
 	"\fWatchUserPRs\x12\x1f.session.v1.WatchUserPRsRequest\x1a\x17.session.v1.UserPREvent\"\x000\x01\x12e\n" +
@@ -907,7 +1250,10 @@ const file_session_v1_github_user_proto_rawDesc = "" +
 	"\x15StartGitHubDeviceAuth\x12(.session.v1.StartGitHubDeviceAuthRequest\x1a).session.v1.StartGitHubDeviceAuthResponse\"\x00\x12k\n" +
 	"\x14PollGitHubDeviceAuth\x12'.session.v1.PollGitHubDeviceAuthRequest\x1a(.session.v1.PollGitHubDeviceAuthResponse\"\x00\x12b\n" +
 	"\x11RevokeGitHubToken\x12$.session.v1.RevokeGitHubTokenRequest\x1a%.session.v1.RevokeGitHubTokenResponse\"\x00\x12e\n" +
-	"\x12ListGitHubAccounts\x12%.session.v1.ListGitHubAccountsRequest\x1a&.session.v1.ListGitHubAccountsResponse\"\x00B\xaf\x01\n" +
+	"\x12ListGitHubAccounts\x12%.session.v1.ListGitHubAccountsRequest\x1a&.session.v1.ListGitHubAccountsResponse\"\x00\x12z\n" +
+	"\x19AddGitHubAccountWithToken\x12,.session.v1.AddGitHubAccountWithTokenRequest\x1a-.session.v1.AddGitHubAccountWithTokenResponse\"\x00\x12e\n" +
+	"\x12ListGitHubCLIHosts\x12%.session.v1.ListGitHubCLIHostsRequest\x1a&.session.v1.ListGitHubCLIHostsResponse\"\x00\x12v\n" +
+	"\x17AddGitHubAccountFromCLI\x12*.session.v1.AddGitHubAccountFromCLIRequest\x1a-.session.v1.AddGitHubAccountWithTokenResponse\"\x00B\xaf\x01\n" +
 	"\x0ecom.session.v1B\x0fGithubUserProtoP\x01ZCgithub.com/tstapler/stapler-squad/gen/proto/go/session/v1;sessionv1\xa2\x02\x03SXX\xaa\x02\n" +
 	"Session.V1\xca\x02\n" +
 	"Session\\V1\xe2\x02\x16Session\\V1\\GPBMetadata\xea\x02\vSession::V1b\x06proto3"
@@ -925,56 +1271,70 @@ func file_session_v1_github_user_proto_rawDescGZIP() []byte {
 }
 
 var file_session_v1_github_user_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_session_v1_github_user_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_session_v1_github_user_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_session_v1_github_user_proto_goTypes = []any{
-	(DeviceAuthStatus)(0),                 // 0: session.v1.DeviceAuthStatus
-	(*GitHubAccount)(nil),                 // 1: session.v1.GitHubAccount
-	(*GitHubAuthState)(nil),               // 2: session.v1.GitHubAuthState
-	(*ListUserPRsRequest)(nil),            // 3: session.v1.ListUserPRsRequest
-	(*ListUserPRsResponse)(nil),           // 4: session.v1.ListUserPRsResponse
-	(*WatchUserPRsRequest)(nil),           // 5: session.v1.WatchUserPRsRequest
-	(*UserPREvent)(nil),                   // 6: session.v1.UserPREvent
-	(*GetGitHubAuthStateRequest)(nil),     // 7: session.v1.GetGitHubAuthStateRequest
-	(*GetGitHubAuthStateResponse)(nil),    // 8: session.v1.GetGitHubAuthStateResponse
-	(*StartGitHubDeviceAuthRequest)(nil),  // 9: session.v1.StartGitHubDeviceAuthRequest
-	(*StartGitHubDeviceAuthResponse)(nil), // 10: session.v1.StartGitHubDeviceAuthResponse
-	(*PollGitHubDeviceAuthRequest)(nil),   // 11: session.v1.PollGitHubDeviceAuthRequest
-	(*PollGitHubDeviceAuthResponse)(nil),  // 12: session.v1.PollGitHubDeviceAuthResponse
-	(*RevokeGitHubTokenRequest)(nil),      // 13: session.v1.RevokeGitHubTokenRequest
-	(*RevokeGitHubTokenResponse)(nil),     // 14: session.v1.RevokeGitHubTokenResponse
-	(*ListGitHubAccountsRequest)(nil),     // 15: session.v1.ListGitHubAccountsRequest
-	(*ListGitHubAccountsResponse)(nil),    // 16: session.v1.ListGitHubAccountsResponse
-	(*UserPR)(nil),                        // 17: session.v1.UserPR
+	(DeviceAuthStatus)(0),                     // 0: session.v1.DeviceAuthStatus
+	(*GitHubAccount)(nil),                     // 1: session.v1.GitHubAccount
+	(*GitHubAuthState)(nil),                   // 2: session.v1.GitHubAuthState
+	(*ListUserPRsRequest)(nil),                // 3: session.v1.ListUserPRsRequest
+	(*ListUserPRsResponse)(nil),               // 4: session.v1.ListUserPRsResponse
+	(*WatchUserPRsRequest)(nil),               // 5: session.v1.WatchUserPRsRequest
+	(*UserPREvent)(nil),                       // 6: session.v1.UserPREvent
+	(*GetGitHubAuthStateRequest)(nil),         // 7: session.v1.GetGitHubAuthStateRequest
+	(*GetGitHubAuthStateResponse)(nil),        // 8: session.v1.GetGitHubAuthStateResponse
+	(*StartGitHubDeviceAuthRequest)(nil),      // 9: session.v1.StartGitHubDeviceAuthRequest
+	(*StartGitHubDeviceAuthResponse)(nil),     // 10: session.v1.StartGitHubDeviceAuthResponse
+	(*PollGitHubDeviceAuthRequest)(nil),       // 11: session.v1.PollGitHubDeviceAuthRequest
+	(*PollGitHubDeviceAuthResponse)(nil),      // 12: session.v1.PollGitHubDeviceAuthResponse
+	(*RevokeGitHubTokenRequest)(nil),          // 13: session.v1.RevokeGitHubTokenRequest
+	(*RevokeGitHubTokenResponse)(nil),         // 14: session.v1.RevokeGitHubTokenResponse
+	(*ListGitHubAccountsRequest)(nil),         // 15: session.v1.ListGitHubAccountsRequest
+	(*ListGitHubAccountsResponse)(nil),        // 16: session.v1.ListGitHubAccountsResponse
+	(*AddGitHubAccountWithTokenRequest)(nil),  // 17: session.v1.AddGitHubAccountWithTokenRequest
+	(*AddGitHubAccountWithTokenResponse)(nil), // 18: session.v1.AddGitHubAccountWithTokenResponse
+	(*GitHubCLIHost)(nil),                     // 19: session.v1.GitHubCLIHost
+	(*ListGitHubCLIHostsRequest)(nil),         // 20: session.v1.ListGitHubCLIHostsRequest
+	(*ListGitHubCLIHostsResponse)(nil),        // 21: session.v1.ListGitHubCLIHostsResponse
+	(*AddGitHubAccountFromCLIRequest)(nil),    // 22: session.v1.AddGitHubAccountFromCLIRequest
+	(*UserPR)(nil),                            // 23: session.v1.UserPR
 }
 var file_session_v1_github_user_proto_depIdxs = []int32{
 	1,  // 0: session.v1.GitHubAuthState.accounts:type_name -> session.v1.GitHubAccount
-	17, // 1: session.v1.ListUserPRsResponse.prs:type_name -> session.v1.UserPR
+	23, // 1: session.v1.ListUserPRsResponse.prs:type_name -> session.v1.UserPR
 	2,  // 2: session.v1.ListUserPRsResponse.auth_state:type_name -> session.v1.GitHubAuthState
-	17, // 3: session.v1.UserPREvent.prs:type_name -> session.v1.UserPR
+	23, // 3: session.v1.UserPREvent.prs:type_name -> session.v1.UserPR
 	2,  // 4: session.v1.UserPREvent.auth_state:type_name -> session.v1.GitHubAuthState
 	2,  // 5: session.v1.GetGitHubAuthStateResponse.auth_state:type_name -> session.v1.GitHubAuthState
 	0,  // 6: session.v1.PollGitHubDeviceAuthResponse.status:type_name -> session.v1.DeviceAuthStatus
 	2,  // 7: session.v1.PollGitHubDeviceAuthResponse.auth_state:type_name -> session.v1.GitHubAuthState
 	1,  // 8: session.v1.ListGitHubAccountsResponse.accounts:type_name -> session.v1.GitHubAccount
-	3,  // 9: session.v1.GitHubUserService.ListUserPRs:input_type -> session.v1.ListUserPRsRequest
-	5,  // 10: session.v1.GitHubUserService.WatchUserPRs:input_type -> session.v1.WatchUserPRsRequest
-	7,  // 11: session.v1.GitHubUserService.GetGitHubAuthState:input_type -> session.v1.GetGitHubAuthStateRequest
-	9,  // 12: session.v1.GitHubUserService.StartGitHubDeviceAuth:input_type -> session.v1.StartGitHubDeviceAuthRequest
-	11, // 13: session.v1.GitHubUserService.PollGitHubDeviceAuth:input_type -> session.v1.PollGitHubDeviceAuthRequest
-	13, // 14: session.v1.GitHubUserService.RevokeGitHubToken:input_type -> session.v1.RevokeGitHubTokenRequest
-	15, // 15: session.v1.GitHubUserService.ListGitHubAccounts:input_type -> session.v1.ListGitHubAccountsRequest
-	4,  // 16: session.v1.GitHubUserService.ListUserPRs:output_type -> session.v1.ListUserPRsResponse
-	6,  // 17: session.v1.GitHubUserService.WatchUserPRs:output_type -> session.v1.UserPREvent
-	8,  // 18: session.v1.GitHubUserService.GetGitHubAuthState:output_type -> session.v1.GetGitHubAuthStateResponse
-	10, // 19: session.v1.GitHubUserService.StartGitHubDeviceAuth:output_type -> session.v1.StartGitHubDeviceAuthResponse
-	12, // 20: session.v1.GitHubUserService.PollGitHubDeviceAuth:output_type -> session.v1.PollGitHubDeviceAuthResponse
-	14, // 21: session.v1.GitHubUserService.RevokeGitHubToken:output_type -> session.v1.RevokeGitHubTokenResponse
-	16, // 22: session.v1.GitHubUserService.ListGitHubAccounts:output_type -> session.v1.ListGitHubAccountsResponse
-	16, // [16:23] is the sub-list for method output_type
-	9,  // [9:16] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	2,  // 9: session.v1.AddGitHubAccountWithTokenResponse.auth_state:type_name -> session.v1.GitHubAuthState
+	19, // 10: session.v1.ListGitHubCLIHostsResponse.hosts:type_name -> session.v1.GitHubCLIHost
+	3,  // 11: session.v1.GitHubUserService.ListUserPRs:input_type -> session.v1.ListUserPRsRequest
+	5,  // 12: session.v1.GitHubUserService.WatchUserPRs:input_type -> session.v1.WatchUserPRsRequest
+	7,  // 13: session.v1.GitHubUserService.GetGitHubAuthState:input_type -> session.v1.GetGitHubAuthStateRequest
+	9,  // 14: session.v1.GitHubUserService.StartGitHubDeviceAuth:input_type -> session.v1.StartGitHubDeviceAuthRequest
+	11, // 15: session.v1.GitHubUserService.PollGitHubDeviceAuth:input_type -> session.v1.PollGitHubDeviceAuthRequest
+	13, // 16: session.v1.GitHubUserService.RevokeGitHubToken:input_type -> session.v1.RevokeGitHubTokenRequest
+	15, // 17: session.v1.GitHubUserService.ListGitHubAccounts:input_type -> session.v1.ListGitHubAccountsRequest
+	17, // 18: session.v1.GitHubUserService.AddGitHubAccountWithToken:input_type -> session.v1.AddGitHubAccountWithTokenRequest
+	20, // 19: session.v1.GitHubUserService.ListGitHubCLIHosts:input_type -> session.v1.ListGitHubCLIHostsRequest
+	22, // 20: session.v1.GitHubUserService.AddGitHubAccountFromCLI:input_type -> session.v1.AddGitHubAccountFromCLIRequest
+	4,  // 21: session.v1.GitHubUserService.ListUserPRs:output_type -> session.v1.ListUserPRsResponse
+	6,  // 22: session.v1.GitHubUserService.WatchUserPRs:output_type -> session.v1.UserPREvent
+	8,  // 23: session.v1.GitHubUserService.GetGitHubAuthState:output_type -> session.v1.GetGitHubAuthStateResponse
+	10, // 24: session.v1.GitHubUserService.StartGitHubDeviceAuth:output_type -> session.v1.StartGitHubDeviceAuthResponse
+	12, // 25: session.v1.GitHubUserService.PollGitHubDeviceAuth:output_type -> session.v1.PollGitHubDeviceAuthResponse
+	14, // 26: session.v1.GitHubUserService.RevokeGitHubToken:output_type -> session.v1.RevokeGitHubTokenResponse
+	16, // 27: session.v1.GitHubUserService.ListGitHubAccounts:output_type -> session.v1.ListGitHubAccountsResponse
+	18, // 28: session.v1.GitHubUserService.AddGitHubAccountWithToken:output_type -> session.v1.AddGitHubAccountWithTokenResponse
+	21, // 29: session.v1.GitHubUserService.ListGitHubCLIHosts:output_type -> session.v1.ListGitHubCLIHostsResponse
+	18, // 30: session.v1.GitHubUserService.AddGitHubAccountFromCLI:output_type -> session.v1.AddGitHubAccountWithTokenResponse
+	21, // [21:31] is the sub-list for method output_type
+	11, // [11:21] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_github_user_proto_init() }
@@ -989,7 +1349,7 @@ func file_session_v1_github_user_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_v1_github_user_proto_rawDesc), len(file_session_v1_github_user_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   16,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

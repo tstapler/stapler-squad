@@ -483,6 +483,122 @@ func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T)
 	}
 }
 
+// TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrStale verifies
+// the reason-scoped Hidden gate added at the end of Determine(): a Hidden instance must
+// never produce DetectionActionAdd for ReasonTaskComplete/ReasonIdle/ReasonStale, but the
+// narrowing must NOT suppress ReasonErrorState/ReasonTestsFailing — no other durable
+// detector watches a still-alive, stuck-in-error Hidden review session.
+func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrStale(t *testing.T) {
+	detector := detection.NewStatusDetector()
+	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
+
+	newHiddenInstance := func() *Instance {
+		inst := &Instance{
+			Title:  "review:153f8eac",
+			UUID:   "aaaa1111-2222-3333-4444-555566667777",
+			Status: Running,
+			Hidden: true,
+		}
+		inst.started.Store(true)
+		return inst
+	}
+
+	t.Run("task_complete_suppressed", func(t *testing.T) {
+		inst := newHiddenInstance()
+		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+		inst.SyncAtomicTimestamps()
+
+		statusInfo := InstanceStatusInfo{
+			IsControllerActive: true,
+			ClaudeStatus:       detection.StatusSuccess,
+		}
+
+		result := determiner.Determine(inst, "", statusInfo, detector)
+
+		if result.Action != DetectionActionSkip {
+			t.Errorf("expected Skip for Hidden instance with ReasonTaskComplete, got %v (reason=%v)", result.Action, result.Reason)
+		}
+	})
+
+	t.Run("idle_suppressed", func(t *testing.T) {
+		inst := newHiddenInstance()
+		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+		inst.SyncAtomicTimestamps()
+
+		statusInfo := InstanceStatusInfo{
+			IsControllerActive: true,
+			ClaudeStatus:       detection.StatusUnknown,
+			IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},
+		}
+
+		result := determiner.Determine(inst, "", statusInfo, detector)
+
+		if result.Action != DetectionActionSkip {
+			t.Errorf("expected Skip for Hidden instance with ReasonIdle, got %v (reason=%v)", result.Action, result.Reason)
+		}
+	})
+
+	t.Run("stale_suppressed", func(t *testing.T) {
+		inst := newHiddenInstance()
+		// Beyond StalenessThreshold (5m) so the staleness path fires ReasonStale.
+		inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
+		inst.UpdatedAt = time.Now().Add(-10 * time.Minute)
+		inst.SyncAtomicTimestamps()
+
+		statusInfo := InstanceStatusInfo{
+			IsControllerActive: false,
+		}
+
+		result := determiner.Determine(inst, "", statusInfo, detector)
+
+		if result.Action != DetectionActionSkip {
+			t.Errorf("expected Skip for Hidden instance with ReasonStale, got %v (reason=%v)", result.Action, result.Reason)
+		}
+	})
+
+	// Safety-net cases: the narrowing must not over-suppress ReasonErrorState or
+	// ReasonTestsFailing — these must still produce DetectionActionAdd even when Hidden.
+	t.Run("error_state_not_suppressed", func(t *testing.T) {
+		inst := newHiddenInstance()
+		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+		inst.SyncAtomicTimestamps()
+
+		statusInfo := InstanceStatusInfo{
+			IsControllerActive: true,
+			ClaudeStatus:       detection.StatusError,
+		}
+
+		result := determiner.Determine(inst, "", statusInfo, detector)
+
+		if result.Action != DetectionActionAdd {
+			t.Errorf("expected Add for Hidden instance with ReasonErrorState (safety net), got %v", result.Action)
+		}
+		if result.Reason != ReasonErrorState {
+			t.Errorf("expected ReasonErrorState, got %v", result.Reason)
+		}
+	})
+
+	t.Run("tests_failing_not_suppressed", func(t *testing.T) {
+		inst := newHiddenInstance()
+		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+		inst.SyncAtomicTimestamps()
+
+		statusInfo := InstanceStatusInfo{
+			IsControllerActive: true,
+			ClaudeStatus:       detection.StatusTestsFailing,
+		}
+
+		result := determiner.Determine(inst, "", statusInfo, detector)
+
+		if result.Action != DetectionActionAdd {
+			t.Errorf("expected Add for Hidden instance with ReasonTestsFailing (safety net), got %v", result.Action)
+		}
+		if result.Reason != ReasonTestsFailing {
+			t.Errorf("expected ReasonTestsFailing, got %v", result.Reason)
+		}
+	})
+}
+
 // TestDefaultStatusDeterminer_NoControllerApprovalInTerminal is the no-controller analog
 // of the regression test for the bug: approval content in terminal must be detected even
 // without a controller.

@@ -15,8 +15,21 @@ type FilterValue = "all" | StuckReason;
 // pr_ready_unmerged leads (one known next step: merge it); the remaining
 // reasons that need a decision or investigation follow. This must never be
 // read as a danger/severity ranking (design/ux.md Surface 2).
+//
+// IMPORTANT: this list must be kept in sync with every StuckReason value
+// (stuckReason.ts's STUCK_REASON_LABELS/ICONS/CLASS maps are `Record<StuckReason,
+// T>` and so are compile-checked exhaustive, but this array is not — a
+// reason present in `grouped` (below) yet absent here is silently never
+// rendered even though it still counts toward the total/badge, which is
+// exactly the kind of count-vs-list mismatch this feature exists to avoid).
+// plan_not_approved, spawn_failed, pr_pending_no_pr, rework_blocked_stale,
+// pr_needs_fix, and respawn_blocked_active were all previously missing here
+// (backlog/plan-approval-flicker fix, 2026-08) — found via the e2e test for
+// the plan-approval flicker fix never being able to find a seeded
+// plan_not_approved item's card despite the section's own count showing 1.
 const GROUP_ORDER: StuckReason[] = [
   StuckReason.PR_READY_UNMERGED,
+  StuckReason.PLAN_NOT_APPROVED,
   StuckReason.ABANDONED_REVIEW,
   StuckReason.STALE_WORK,
   StuckReason.ORPHANED_TRIAGE,
@@ -24,6 +37,11 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.AUTONOMOUS_STUCK,
   StuckReason.BOUNCING,
   StuckReason.PUSH_FAILED,
+  StuckReason.SPAWN_FAILED,
+  StuckReason.PR_PENDING_NO_PR,
+  StuckReason.REWORK_BLOCKED_STALE,
+  StuckReason.PR_NEEDS_FIX,
+  StuckReason.RESPAWN_BLOCKED_ACTIVE,
 ];
 
 function itemKey(item: Pick<StuckBacklogItem, "itemId" | "reason">): string {
@@ -162,17 +180,21 @@ export function StuckItemsSection() {
   // item-detail page's `status === "ready"` block, but items this reason
   // flags are stuck in `status === "queued"` — so that button was never
   // reachable. This is the fix: approve directly from the stuck-item card.
+  //
+  // Deliberately NOT try/catch-swallowed (unlike the other handlers in this
+  // file): useBacklogService's approvePlan rethrows the backend's
+  // FailedPrecondition message verbatim (e.g. "no plan artifacts found — run
+  // TriggerTriage first"), and StuckItemDetail needs that specific message
+  // rather than a generic failure, in case the hasPlan gate is ever stale.
   const handleApprovePlan = useCallback(
-    async (itemId: string): Promise<boolean> => {
-      try {
-        const updated = await approvePlan(itemId);
-        if (!updated) return false;
-        await refetch();
-        return true;
-      } catch (err) {
-        console.error("[StuckItemsSection] approvePlan failed:", err);
-        return false;
-      }
+    async (itemId: string): Promise<void> => {
+      // approvePlan resolves null (without throwing) if the RPC client isn't
+      // ready yet — must not let that silently read as success, which would
+      // reintroduce the exact "looks approved but isn't" flicker this PR
+      // fixes elsewhere.
+      const updated = await approvePlan(itemId);
+      if (!updated) throw new Error("Approve plan did not return an updated item.");
+      await refetch();
     },
     [approvePlan, refetch]
   );

@@ -68,7 +68,7 @@ func TestRegistry_Prune_should_neverEvict_When_RefCountNonzero(t *testing.T) {
 		t.Fatalf("Head: %v", err)
 	}
 
-	commonDirAbs := filepath.Clean(filepath.Join(mainRepo, ".git"))
+	commonDirAbs := canonicalizeDir(filepath.Join(mainRepo, ".git"))
 	store, ok := reg.stores[commonDirAbs]
 	if !ok {
 		t.Fatalf("no SharedObjectStore for %s", commonDirAbs)
@@ -113,7 +113,7 @@ func TestRegistry_Prune_should_evict_When_RefCountZero_AndPastTTL(t *testing.T) 
 		t.Fatalf("repo.Storer is %T, want *WorktreeStorer", repo.Storer)
 	}
 
-	commonDirAbs := filepath.Clean(filepath.Join(mainRepo, ".git"))
+	commonDirAbs := canonicalizeDir(filepath.Join(mainRepo, ".git"))
 	store, ok := reg.stores[commonDirAbs]
 	if !ok {
 		t.Fatalf("no SharedObjectStore for %s", commonDirAbs)
@@ -180,7 +180,7 @@ func TestRegistry_ThreeWorktreesOfOneRepo_OnlyFullyReleasedStoreIsEvicted(t *tes
 		t.Fatalf("Open(wt2): %v", err)
 	}
 
-	commonDirAbs := filepath.Clean(filepath.Join(mainRepo, ".git"))
+	commonDirAbs := canonicalizeDir(filepath.Join(mainRepo, ".git"))
 	store, ok := reg.stores[commonDirAbs]
 	if !ok {
 		t.Fatalf("no SharedObjectStore for %s", commonDirAbs)
@@ -374,7 +374,7 @@ func TestRegistry_ConcurrentOpenClose_NeverEvictsInUseStore(t *testing.T) {
 	reg := &Registry{CacheMaxSize: 1} // tiny budget: maximize eviction pressure
 	withRegistryHeapPressure(t, registrySevereMemoryPressureThreshold+1)
 
-	pinnedCommonDirAbs := filepath.Clean(filepath.Join(pinnedRepo, ".git"))
+	pinnedCommonDirAbs := canonicalizeDir(filepath.Join(pinnedRepo, ".git"))
 
 	pinnedRepoHandle, err := Open(pinnedRepo, reg)
 	if err != nil {
@@ -467,7 +467,7 @@ func TestRegistry_ConcurrentOpenClose_NeverEvictsInUseStore(t *testing.T) {
 	// Sanity: the churn repo's store must never have gone negative — a
 	// negative refcount would indicate a double-release bug (e.g. Close()
 	// called twice for one WorktreeStorer without closeOnce protecting it).
-	churnCommonDirAbs := filepath.Clean(filepath.Join(churnRepo, ".git"))
+	churnCommonDirAbs := canonicalizeDir(filepath.Join(churnRepo, ".git"))
 	if churnStore, ok := reg.stores[churnCommonDirAbs]; ok {
 		if rc := churnStore.RefCount(); rc < 0 {
 			t.Errorf("churn store RefCount() = %d, must never go negative", rc)

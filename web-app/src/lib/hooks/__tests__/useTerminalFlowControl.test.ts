@@ -6,9 +6,11 @@
 
 import { renderHook, act } from '@testing-library/react';
 
-// Mock @bufbuild/protobuf so create() returns a plain object mirroring the init fields
+// Mock @bufbuild/protobuf's create() to bypass real schema-based construction — the
+// events_pb mock below exports plain classes, not GenMessage schema descriptors, so the
+// real create(SomeSchema, init) would receive `undefined` for the schema and throw.
 jest.mock('@bufbuild/protobuf', () => ({
-  create: (_schema: unknown, init: Record<string, unknown> = {}) => ({ ...init }),
+  create: (_schema: any, init: any) => init,
 }));
 
 // Mock protobuf modules
@@ -150,6 +152,145 @@ describe('useTerminalFlowControl', () => {
       expect(pushMessageFn.mock.calls.length).toBe(afterResize + 1);
       const followUp = pushMessageFn.mock.calls[pushMessageFn.mock.calls.length - 1][0];
       expect(followUp.data.case).toBe('currentPaneRequest');
+    });
+
+    // Task 4.3.1, AC3: value-dedup against lastSentDimsRef, isolated from the
+    // 200ms time throttle by advancing well past it before the repeat call.
+    it('does not resend TerminalResize when (cols, rows) equals lastSentDimsRef even after the 200ms throttle window has elapsed', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(120, 40);
+      });
+
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(0);
+
+      act(() => {
+        // Past both the 200ms resize throttle AND the 100ms follow-up
+        // CurrentPaneRequest scheduled by the first resize() call.
+        jest.advanceTimersByTime(201);
+      });
+
+      const beforeSecondCall = pushMessageFn.mock.calls.length;
+
+      act(() => {
+        result.current.resize(120, 40);
+      });
+
+      // Same (cols, rows) as last sent -- dedup should skip it even though
+      // the time throttle window has long since elapsed.
+      expect(pushMessageFn.mock.calls.length).toBe(beforeSecondCall);
+    });
+
+    // Task 4.3.2, AC4: force:true bypasses both value-dedup and the time
+    // throttle, mirroring the existing 'should allow urgent resync to bypass
+    // throttle' test for requestFullResync.
+    it('force:true bypasses both value-dedup and the time throttle and still sends TerminalResize', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(100, 30);
+      });
+
+      const afterFirst = pushMessageFn.mock.calls.length;
+      expect(afterFirst).toBeGreaterThan(0);
+
+      act(() => {
+        // Immediately (0ms elapsed), same value, but forced.
+        result.current.resize(100, 30, true);
+      });
+
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(afterFirst);
+      const forcedMsg = pushMessageFn.mock.calls[pushMessageFn.mock.calls.length - 1][0];
+      expect(forcedMsg.data.case).toBe('resize');
+      expect(forcedMsg.data.value.cols).toBe(100);
+      expect(forcedMsg.data.value.rows).toBe(30);
+    });
+
+    // Task 4.3.3: reordered lastResizeTimeRef/lastSentDimsRef update timing
+    // (Task 2.1.4) -- a throwing send must not update lastSentDimsRef, so a
+    // subsequent identical resize() call is not falsely deduped.
+    it('does not dedupe a same-value resize following a failed send, since lastSentDimsRef only updates after pushMessage succeeds', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      pushMessageFn.mockImplementationOnce(() => {
+        throw new Error('send failed');
+      });
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(90, 20);
+      });
+
+      expect(options.onError).toHaveBeenCalledTimes(1);
+      const callsAfterFailure = pushMessageFn.mock.calls.length;
+
+      act(() => {
+        // Same (cols, rows) as the failed attempt -- must NOT be deduped,
+        // since the throwing call never reached the lastSentDimsRef update.
+        result.current.resize(90, 20);
+      });
+
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(callsAfterFailure);
+      const msg = pushMessageFn.mock.calls[pushMessageFn.mock.calls.length - 1][0];
+      expect(msg.data.case).toBe('resize');
+      expect(msg.data.value.cols).toBe(90);
+      expect(msg.data.value.rows).toBe(20);
+    });
+
+    // Regression: a bounce-back resize call that dedups against lastSentDimsRef
+    // must still cancel any still-pending deferred resize timer. Scenario:
+    // resize(80,24) sends immediately -> resize(85,24) within the 200ms
+    // throttle window gets deferred (not sent yet, lastSentDimsRef still
+    // {80,24}) -> resize(80,24) again matches lastSentDimsRef and dedup-
+    // returns. If the pending-timer cancellation ran AFTER the dedup
+    // early-return, the deferred {85,24} send would still be pending and
+    // would fire later with a stale, wrong size.
+    it('cancels a still-pending deferred resize when a bounce-back call dedups against lastSentDimsRef', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        // A: sends immediately, lastSentDimsRef = {80, 24}.
+        result.current.resize(80, 24);
+      });
+
+      const afterFirstSend = pushMessageFn.mock.calls.length;
+      expect(afterFirstSend).toBeGreaterThan(0);
+
+      act(() => {
+        jest.advanceTimersByTime(10);
+      });
+
+      act(() => {
+        // B: within the 200ms throttle window -- deferred, not sent yet.
+        result.current.resize(85, 24);
+      });
+
+      // Still no additional send -- {85, 24} is only pending via pendingResizeTimerRef.
+      expect(pushMessageFn.mock.calls.length).toBe(afterFirstSend);
+
+      act(() => {
+        // Bounce back to A -- matches lastSentDimsRef, so this dedup-returns.
+        // It must ALSO cancel the still-pending deferred {85, 24} timer.
+        result.current.resize(80, 24);
+      });
+
+      act(() => {
+        // Advance well past when the deferred {85, 24} send would have fired.
+        jest.advanceTimersByTime(300);
+      });
+
+      // If the pending timer wasn't cancelled, a stale resize(85, 24) would
+      // have fired during the advance above.
+      const staleResize = pushMessageFn.mock.calls.find(
+        ([call]) =>
+          call.data.case === 'resize' &&
+          call.data.value.cols === 85 &&
+          call.data.value.rows === 24
+      );
+      expect(staleResize).toBeUndefined();
     });
   });
 

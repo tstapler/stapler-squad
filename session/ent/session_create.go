@@ -474,6 +474,20 @@ func (_c *SessionCreate) SetNillablePauseReason(v *string) *SessionCreate {
 	return _c
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (_c *SessionCreate) SetExitReason(v string) *SessionCreate {
+	_c.mutation.SetExitReason(v)
+	return _c
+}
+
+// SetNillableExitReason sets the "exit_reason" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableExitReason(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetExitReason(*v)
+	}
+	return _c
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (_c *SessionCreate) SetWorkflowID(v string) *SessionCreate {
 	_c.mutation.SetWorkflowID(v)
@@ -568,6 +582,20 @@ func (_c *SessionCreate) SetSessionArtifacts(v string) *SessionCreate {
 func (_c *SessionCreate) SetNillableSessionArtifacts(v *string) *SessionCreate {
 	if v != nil {
 		_c.SetSessionArtifacts(*v)
+	}
+	return _c
+}
+
+// SetNote sets the "note" field.
+func (_c *SessionCreate) SetNote(v string) *SessionCreate {
+	_c.mutation.SetNote(v)
+	return _c
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableNote(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetNote(*v)
 	}
 	return _c
 }
@@ -768,6 +796,10 @@ func (_c *SessionCreate) defaults() {
 		v := session.DefaultSessionArtifacts
 		_c.mutation.SetSessionArtifacts(v)
 	}
+	if _, ok := _c.mutation.Note(); !ok {
+		v := session.DefaultNote
+		_c.mutation.SetNote(v)
+	}
 }
 
 // check runs all checks and user-defined validators on the builder.
@@ -819,6 +851,11 @@ func (_c *SessionCreate) check() error {
 	}
 	if _, ok := _c.mutation.Hidden(); !ok {
 		return &ValidationError{Name: "hidden", err: errors.New(`ent: missing required field "Session.hidden"`)}
+	}
+	if v, ok := _c.mutation.Note(); ok {
+		if err := session.NoteValidator(v); err != nil {
+			return &ValidationError{Name: "note", err: fmt.Errorf(`ent: validator failed for field "Session.note": %w`, err)}
+		}
 	}
 	return nil
 }
@@ -983,6 +1020,10 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 		_spec.SetField(session.FieldPauseReason, field.TypeString, value)
 		_node.PauseReason = value
 	}
+	if value, ok := _c.mutation.ExitReason(); ok {
+		_spec.SetField(session.FieldExitReason, field.TypeString, value)
+		_node.ExitReason = value
+	}
 	if value, ok := _c.mutation.WorkflowID(); ok {
 		_spec.SetField(session.FieldWorkflowID, field.TypeString, value)
 		_node.WorkflowID = value
@@ -1010,6 +1051,10 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.SessionArtifacts(); ok {
 		_spec.SetField(session.FieldSessionArtifacts, field.TypeString, value)
 		_node.SessionArtifacts = value
+	}
+	if value, ok := _c.mutation.Note(); ok {
+		_spec.SetField(session.FieldNote, field.TypeString, value)
+		_node.Note = value
 	}
 	if nodes := _c.mutation.WorktreeIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1728,6 +1773,24 @@ func (u *SessionUpsert) ClearPauseReason() *SessionUpsert {
 	return u
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (u *SessionUpsert) SetExitReason(v string) *SessionUpsert {
+	u.Set(session.FieldExitReason, v)
+	return u
+}
+
+// UpdateExitReason sets the "exit_reason" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateExitReason() *SessionUpsert {
+	u.SetExcluded(session.FieldExitReason)
+	return u
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (u *SessionUpsert) ClearExitReason() *SessionUpsert {
+	u.SetNull(session.FieldExitReason)
+	return u
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (u *SessionUpsert) SetWorkflowID(v string) *SessionUpsert {
 	u.Set(session.FieldWorkflowID, v)
@@ -1857,6 +1920,24 @@ func (u *SessionUpsert) UpdateSessionArtifacts() *SessionUpsert {
 // ClearSessionArtifacts clears the value of the "session_artifacts" field.
 func (u *SessionUpsert) ClearSessionArtifacts() *SessionUpsert {
 	u.SetNull(session.FieldSessionArtifacts)
+	return u
+}
+
+// SetNote sets the "note" field.
+func (u *SessionUpsert) SetNote(v string) *SessionUpsert {
+	u.Set(session.FieldNote, v)
+	return u
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateNote() *SessionUpsert {
+	u.SetExcluded(session.FieldNote)
+	return u
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *SessionUpsert) ClearNote() *SessionUpsert {
+	u.SetNull(session.FieldNote)
 	return u
 }
 
@@ -2549,6 +2630,27 @@ func (u *SessionUpsertOne) ClearPauseReason() *SessionUpsertOne {
 	})
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (u *SessionUpsertOne) SetExitReason(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetExitReason(v)
+	})
+}
+
+// UpdateExitReason sets the "exit_reason" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateExitReason() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateExitReason()
+	})
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (u *SessionUpsertOne) ClearExitReason() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearExitReason()
+	})
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (u *SessionUpsertOne) SetWorkflowID(v string) *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
@@ -2700,6 +2802,27 @@ func (u *SessionUpsertOne) UpdateSessionArtifacts() *SessionUpsertOne {
 func (u *SessionUpsertOne) ClearSessionArtifacts() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearSessionArtifacts()
+	})
+}
+
+// SetNote sets the "note" field.
+func (u *SessionUpsertOne) SetNote(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetNote(v)
+	})
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateNote() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateNote()
+	})
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *SessionUpsertOne) ClearNote() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearNote()
 	})
 }
 
@@ -3558,6 +3681,27 @@ func (u *SessionUpsertBulk) ClearPauseReason() *SessionUpsertBulk {
 	})
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (u *SessionUpsertBulk) SetExitReason(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetExitReason(v)
+	})
+}
+
+// UpdateExitReason sets the "exit_reason" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateExitReason() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateExitReason()
+	})
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (u *SessionUpsertBulk) ClearExitReason() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearExitReason()
+	})
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (u *SessionUpsertBulk) SetWorkflowID(v string) *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
@@ -3709,6 +3853,27 @@ func (u *SessionUpsertBulk) UpdateSessionArtifacts() *SessionUpsertBulk {
 func (u *SessionUpsertBulk) ClearSessionArtifacts() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearSessionArtifacts()
+	})
+}
+
+// SetNote sets the "note" field.
+func (u *SessionUpsertBulk) SetNote(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetNote(v)
+	})
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateNote() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateNote()
+	})
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *SessionUpsertBulk) ClearNote() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearNote()
 	})
 }
 

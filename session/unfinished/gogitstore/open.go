@@ -83,7 +83,7 @@ func resolveGitFilesystems(worktreePath string) (dotFs, commonFs, wtFs billy.Fil
 	}
 
 	commonFs = dotFs
-	commonDirAbs = filepath.Clean(dotFs.Root())
+	commonDirAbs = canonicalizeDir(dotFs.Root())
 
 	if cf, cerr := dotFs.Open("commondir"); cerr == nil {
 		b, rerr := io.ReadAll(cf)
@@ -95,7 +95,7 @@ func resolveGitFilesystems(worktreePath string) (dotFs, commonFs, wtFs billy.Fil
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(dotFs.Root(), p)
 		}
-		p = filepath.Clean(p)
+		p = canonicalizeDir(p)
 		commonFs = osfs.New(p)
 		commonDirAbs = p
 	} else if !os.IsNotExist(cerr) {
@@ -103,6 +103,24 @@ func resolveGitFilesystems(worktreePath string) (dotFs, commonFs, wtFs billy.Fil
 	}
 
 	return dotFs, commonFs, wtFs, commonDirAbs, nil
+}
+
+// canonicalizeDir resolves symlinks in path so that the same physical
+// directory always yields the same string key regardless of which symlinked
+// route it was reached through. This matters because `git worktree add`
+// writes symlink-resolved absolute paths into a linked worktree's gitdir
+// pointer file, while a main worktree's path is otherwise only
+// lexically cleaned — on macOS, where /tmp and /var/folders/... are
+// symlinks into /private/..., that asymmetry alone would make Registry
+// treat one physical commondir as two distinct cache keys. Falls back to
+// filepath.Clean if the path can't be resolved (e.g. it doesn't exist yet
+// or a transient permission error).
+func canonicalizeDir(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return resolved
 }
 
 // readGitdirFile reads worktreePath/.git (a "gitdir: <path>" pointer file,

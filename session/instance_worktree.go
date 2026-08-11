@@ -97,15 +97,26 @@ func EnsureDirectorySessionPath(path string) error {
 	}
 }
 
+// BacklogBranchPrefix is the git branch prefix every backlog work session's
+// branch is created under — the one place this literal is defined. Anything
+// that needs to independently predict or recreate a backlog work session's
+// branch name (e.g. server/services/backlog_service_triage.go's
+// retitleTriageWorktreeToFinalBranch, which renames a triage worktree onto the
+// exact branch a later real spawn will look for) must reference this constant
+// rather than hardcoding "backlog/" — see that function's doc comment for the
+// bug this once caused when the two sides used independently-duplicated logic.
+const BacklogBranchPrefix = "backlog/"
+
 // CreateBacklogWorktree creates a git worktree for a backlog work session.
-// It creates a branch named "backlog/<branchSuffix>" and returns the on-disk worktree path.
-// The caller is responsible for writing files to the path before spawning the session.
+// It creates a branch named BacklogBranchPrefix+branchSuffix and returns the
+// on-disk worktree path. The caller is responsible for writing files to the
+// path before spawning the session.
 func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 	resolvedRepo, err := ResolveSessionPath(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}
-	wt, _, err := git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, "backlog/"+branchSuffix)
+	wt, _, err := git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, BacklogBranchPrefix+branchSuffix)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}

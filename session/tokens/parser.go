@@ -9,12 +9,19 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/scanbuf"
 )
 
 const (
 	// maxScannerTokenSize is the maximum line size for the bufio.Scanner.
 	// 10MB handles the longest possible JSONL lines with large base64-encoded content.
 	maxScannerTokenSize = 10 * 1024 * 1024
+
+	// syntheticModelSentinel is the internal marker Claude Code's own transcript
+	// writer emits for synthetic turns (zero usage, not a real priced model).
+	// only known internal sentinel today; extend this list if Claude Code adds another
+	syntheticModelSentinel = "<synthetic>"
 )
 
 // Parser parses Claude Code JSONL transcript files into ParseResult values.
@@ -65,7 +72,9 @@ func (p *Parser) ParseFile(filePath string) (*ParseResult, error) {
 // Suitable for tests that pass in strings via strings.NewReader.
 func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, maxScannerTokenSize), maxScannerTokenSize)
+	bufPtr := scanbuf.Get()
+	defer scanbuf.Put(bufPtr)
+	scanner.Buffer(*bufPtr, maxScannerTokenSize)
 
 	result := &ParseResult{
 		ToolUsage: make(map[string]ToolTokenStats),
@@ -175,12 +184,14 @@ func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, mo
 		result.ToolUsage[c.Name] = stat
 	}
 
-	if msg.Model != "" {
+	if msg.Model != "" && msg.Model != syntheticModelSentinel {
 		modelCounts[msg.Model]++
 	}
 
 	result.MessageCount++
-	result.TurnTimeline = append(result.TurnTimeline, turn)
+	if msg.Model != syntheticModelSentinel {
+		result.TurnTimeline = append(result.TurnTimeline, turn)
+	}
 }
 
 // processUserEntry detects skill activations and /commands in user turns.

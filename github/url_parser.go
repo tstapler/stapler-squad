@@ -47,6 +47,7 @@ func (t RefType) String() string {
 // ParsedGitHubRef represents a parsed GitHub URL or reference
 type ParsedGitHubRef struct {
 	Type        RefType
+	Host        string // GitHub host, e.g. "github.com" or a GHES hostname; "" means github.com
 	Owner       string
 	Repo        string
 	PRNumber    int    // Only populated for RefTypePR
@@ -64,18 +65,19 @@ type ParsedGitHubRef struct {
 
 // CloneURL returns the HTTPS clone URL for the repository
 func (p *ParsedGitHubRef) CloneURL() string {
-	return fmt.Sprintf("https://github.com/%s/%s.git", p.Owner, p.Repo)
+	return fmt.Sprintf("%s/%s/%s.git", webBaseURLForHost(p.Host), p.Owner, p.Repo)
 }
 
 // HTMLURL returns the human-readable GitHub URL
 func (p *ParsedGitHubRef) HTMLURL() string {
+	base := webBaseURLForHost(p.Host)
 	switch p.Type {
 	case RefTypePR:
-		return fmt.Sprintf("https://github.com/%s/%s/pull/%d", p.Owner, p.Repo, p.PRNumber)
+		return fmt.Sprintf("%s/%s/%s/pull/%d", base, p.Owner, p.Repo, p.PRNumber)
 	case RefTypeBranch:
-		return fmt.Sprintf("https://github.com/%s/%s/tree/%s", p.Owner, p.Repo, p.Branch)
+		return fmt.Sprintf("%s/%s/%s/tree/%s", base, p.Owner, p.Repo, p.Branch)
 	case RefTypeFile:
-		url := fmt.Sprintf("https://github.com/%s/%s/blob/%s/%s", p.Owner, p.Repo, p.Branch, p.FilePath)
+		url := fmt.Sprintf("%s/%s/%s/blob/%s/%s", base, p.Owner, p.Repo, p.Branch, p.FilePath)
 		if p.LineStart > 0 {
 			if p.LineEnd > 0 && p.LineEnd != p.LineStart {
 				url += fmt.Sprintf("#L%d-L%d", p.LineStart, p.LineEnd)
@@ -85,15 +87,15 @@ func (p *ParsedGitHubRef) HTMLURL() string {
 		}
 		return url
 	case RefTypeCommit:
-		return fmt.Sprintf("https://github.com/%s/%s/commit/%s", p.Owner, p.Repo, p.CommitSHA)
+		return fmt.Sprintf("%s/%s/%s/commit/%s", base, p.Owner, p.Repo, p.CommitSHA)
 	case RefTypeIssue:
-		return fmt.Sprintf("https://github.com/%s/%s/issues/%d", p.Owner, p.Repo, p.IssueNumber)
+		return fmt.Sprintf("%s/%s/%s/issues/%d", base, p.Owner, p.Repo, p.IssueNumber)
 	case RefTypeCompare:
-		return fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", p.Owner, p.Repo, p.BaseBranch, p.HeadBranch)
+		return fmt.Sprintf("%s/%s/%s/compare/%s...%s", base, p.Owner, p.Repo, p.BaseBranch, p.HeadBranch)
 	case RefTypeRelease:
-		return fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", p.Owner, p.Repo, p.Tag)
+		return fmt.Sprintf("%s/%s/%s/releases/tag/%s", base, p.Owner, p.Repo, p.Tag)
 	default:
-		return fmt.Sprintf("https://github.com/%s/%s", p.Owner, p.Repo)
+		return fmt.Sprintf("%s/%s/%s", base, p.Owner, p.Repo)
 	}
 }
 
@@ -175,48 +177,93 @@ func (p *ParsedGitHubRef) RepoFullName() string {
 	return fmt.Sprintf("%s/%s", p.Owner, p.Repo)
 }
 
-// Regex patterns for parsing GitHub URLs
-var (
-	// Full GitHub URL patterns
+// URL pattern templates for parsing GitHub URLs. Each has a "%s" placeholder
+// for a host alternation (e.g. "github\.com|github\.example\.com") and
+// captures the matched host as group 1, followed by the original capture
+// groups shifted by one.
+const (
 	// https://github.com/owner/repo/pull/123
-	prURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/pull/(\d+)(?:/.*)?$`)
+	prURLTmpl = `^(?:https?://)?(%s)/([^/]+)/([^/]+)/pull/(\d+)(?:/.*)?$`
 
 	// https://github.com/owner/repo/tree/branch-name
-	branchURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/tree/(.+)$`)
+	branchURLTmpl = `^(?:https?://)?(%s)/([^/]+)/([^/]+)/tree/(.+)$`
 
 	// https://github.com/owner/repo/blob/branch/path/to/file.go#L10-L20
-	// Captures: owner, repo, branch, path, optional line info
-	fileURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+?)(?:#L(\d+)(?:-L(\d+))?)?$`)
+	// Captures: host, owner, repo, branch, path, optional line info
+	fileURLTmpl = `^(?:https?://)?(%s)/([^/]+)/([^/]+)/blob/([^/]+)/(.+?)(?:#L(\d+)(?:-L(\d+))?)?$`
 
 	// https://github.com/owner/repo/commit/abc123def456
-	commitURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/commit/([a-fA-F0-9]+)(?:/.*)?$`)
+	commitURLTmpl = `^(?:https?://)?(%s)/([^/]+)/([^/]+)/commit/([a-fA-F0-9]+)(?:/.*)?$`
 
 	// https://github.com/owner/repo/issues/42
-	issueURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:/.*)?$`)
+	issueURLTmpl = `^(?:https?://)?(%s)/([^/]+)/([^/]+)/issues/(\d+)(?:/.*)?$`
 
 	// https://github.com/owner/repo/compare/main...feature
-	compareURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/compare/([^.]+)\.\.\.(.+)$`)
+	compareURLTmpl = `^(?:https?://)?(%s)/([^/]+)/([^/]+)/compare/([^.]+)\.\.\.(.+)$`
 
 	// https://github.com/owner/repo/releases/tag/v1.0.0
-	releaseURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/releases/tag/(.+)$`)
+	releaseURLTmpl = `^(?:https?://)?(%s)/([^/]+)/([^/]+)/releases/tag/(.+)$`
 
 	// https://github.com/owner/repo or github.com/owner/repo
-	repoURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$`)
+	repoURLTmpl = `^(?:https?://)?(%s)/([^/]+)/([^/]+?)(?:\.git)?/?$`
 
-	// SSH URL patterns
 	// git@github.com:owner/repo.git
-	sshURLPattern = regexp.MustCompile(`^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$`)
+	sshURLTmpl = `^git@(%s):([^/]+)/([^/]+?)(?:\.git)?$`
 
 	// ssh://git@github.com/owner/repo.git
-	sshProtocolURLPattern = regexp.MustCompile(`^ssh://git@github\.com/([^/]+)/([^/]+?)(?:\.git)?$`)
+	sshProtocolURLTmpl = `^ssh://git@(%s)/([^/]+)/([^/]+?)(?:\.git)?$`
+)
 
-	// Shorthand patterns
+// Shorthand patterns carry no host information (they never specify one), so
+// they stay static and always resolve to the default host.
+var (
 	// owner/repo:branch
 	shorthandBranchPattern = regexp.MustCompile(`^([^/:]+)/([^/:]+):(.+)$`)
 
 	// owner/repo (no colon, no https)
 	shorthandRepoPattern = regexp.MustCompile(`^([^/:]+)/([^/:]+)$`)
 )
+
+// hostAlternation builds a regex alternation of github.com plus any
+// normalized, deduped extra hosts, each escaped for safe embedding in a
+// regex pattern. The whole alternation is wrapped case-insensitive: GHE
+// hosts are free-text config, so a URL pasted with different case than the
+// registered host (or a registered host typed in mixed case) must still
+// match — NormalizeHost lowercases the captured Host afterward for
+// consistent downstream comparisons (e.g. keychain lookup).
+func hostAlternation(extraHosts []string) string {
+	hosts := []string{regexp.QuoteMeta(defaultHost)}
+	seen := map[string]bool{defaultHost: true}
+	for _, h := range extraHosts {
+		h = NormalizeHost(h)
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		hosts = append(hosts, regexp.QuoteMeta(h))
+	}
+	return "(?i:" + strings.Join(hosts, "|") + ")"
+}
+
+// ghPatterns is the set of compiled URL patterns for a given host alternation.
+type ghPatterns struct {
+	pr, branch, file, commit, issue, compare, release, repo, ssh, sshProtocol *regexp.Regexp
+}
+
+func compilePatterns(hostAlt string) *ghPatterns {
+	return &ghPatterns{
+		pr:          regexp.MustCompile(fmt.Sprintf(prURLTmpl, hostAlt)),
+		branch:      regexp.MustCompile(fmt.Sprintf(branchURLTmpl, hostAlt)),
+		file:        regexp.MustCompile(fmt.Sprintf(fileURLTmpl, hostAlt)),
+		commit:      regexp.MustCompile(fmt.Sprintf(commitURLTmpl, hostAlt)),
+		issue:       regexp.MustCompile(fmt.Sprintf(issueURLTmpl, hostAlt)),
+		compare:     regexp.MustCompile(fmt.Sprintf(compareURLTmpl, hostAlt)),
+		release:     regexp.MustCompile(fmt.Sprintf(releaseURLTmpl, hostAlt)),
+		repo:        regexp.MustCompile(fmt.Sprintf(repoURLTmpl, hostAlt)),
+		ssh:         regexp.MustCompile(fmt.Sprintf(sshURLTmpl, hostAlt)),
+		sshProtocol: regexp.MustCompile(fmt.Sprintf(sshProtocolURLTmpl, hostAlt)),
+	}
+}
 
 // ParseGitHubRef parses a GitHub URL or shorthand reference into a ParsedGitHubRef
 // Supported formats:
@@ -236,45 +283,57 @@ var (
 //   - owner/repo:branch-name
 //   - owner/repo
 func ParseGitHubRef(input string) (*ParsedGitHubRef, error) {
+	return ParseGitHubRefWithHosts(input, nil)
+}
+
+// ParseGitHubRefWithHosts parses a GitHub URL or shorthand reference into a
+// ParsedGitHubRef, matching either github.com or any of the supplied
+// enterpriseHosts. The Host field of the returned ref is set to the matched
+// host (or left empty for shorthand references, which default to github.com).
+func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGitHubRef, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return nil, fmt.Errorf("empty input")
 	}
 
+	p := compilePatterns(hostAlternation(enterpriseHosts))
+
 	// Try PR URL first
-	if matches := prURLPattern.FindStringSubmatch(input); matches != nil {
-		prNum, err := strconv.Atoi(matches[3])
+	if matches := p.pr.FindStringSubmatch(input); matches != nil {
+		prNum, err := strconv.Atoi(matches[4])
 		if err != nil {
 			return nil, fmt.Errorf("invalid PR number: %w", err)
 		}
 		return &ParsedGitHubRef{
 			Type:        RefTypePR,
-			Owner:       matches[1],
-			Repo:        matches[2],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
 			PRNumber:    prNum,
 			OriginalURL: input,
 		}, nil
 	}
 
 	// Try file/blob URL (must be before branch URL since it's more specific)
-	if matches := fileURLPattern.FindStringSubmatch(input); matches != nil {
+	if matches := p.file.FindStringSubmatch(input); matches != nil {
 		ref := &ParsedGitHubRef{
 			Type:        RefTypeFile,
-			Owner:       matches[1],
-			Repo:        matches[2],
-			Branch:      matches[3],
-			FilePath:    matches[4],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
+			Branch:      matches[4],
+			FilePath:    matches[5],
 			OriginalURL: input,
 		}
 		// Parse optional line numbers
-		if matches[5] != "" {
-			lineStart, err := strconv.Atoi(matches[5])
+		if matches[6] != "" {
+			lineStart, err := strconv.Atoi(matches[6])
 			if err == nil {
 				ref.LineStart = lineStart
 			}
 		}
-		if matches[6] != "" {
-			lineEnd, err := strconv.Atoi(matches[6])
+		if matches[7] != "" {
+			lineEnd, err := strconv.Atoi(matches[7])
 			if err == nil {
 				ref.LineEnd = lineEnd
 			}
@@ -283,91 +342,99 @@ func ParseGitHubRef(input string) (*ParsedGitHubRef, error) {
 	}
 
 	// Try commit URL
-	if matches := commitURLPattern.FindStringSubmatch(input); matches != nil {
+	if matches := p.commit.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeCommit,
-			Owner:       matches[1],
-			Repo:        matches[2],
-			CommitSHA:   matches[3],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
+			CommitSHA:   matches[4],
 			OriginalURL: input,
 		}, nil
 	}
 
 	// Try issue URL
-	if matches := issueURLPattern.FindStringSubmatch(input); matches != nil {
-		issueNum, err := strconv.Atoi(matches[3])
+	if matches := p.issue.FindStringSubmatch(input); matches != nil {
+		issueNum, err := strconv.Atoi(matches[4])
 		if err != nil {
 			return nil, fmt.Errorf("invalid issue number: %w", err)
 		}
 		return &ParsedGitHubRef{
 			Type:        RefTypeIssue,
-			Owner:       matches[1],
-			Repo:        matches[2],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
 			IssueNumber: issueNum,
 			OriginalURL: input,
 		}, nil
 	}
 
 	// Try compare URL
-	if matches := compareURLPattern.FindStringSubmatch(input); matches != nil {
+	if matches := p.compare.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeCompare,
-			Owner:       matches[1],
-			Repo:        matches[2],
-			BaseBranch:  matches[3],
-			HeadBranch:  matches[4],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
+			BaseBranch:  matches[4],
+			HeadBranch:  matches[5],
 			OriginalURL: input,
 		}, nil
 	}
 
 	// Try release URL
-	if matches := releaseURLPattern.FindStringSubmatch(input); matches != nil {
+	if matches := p.release.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeRelease,
-			Owner:       matches[1],
-			Repo:        matches[2],
-			Tag:         matches[3],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
+			Tag:         matches[4],
 			OriginalURL: input,
 		}, nil
 	}
 
 	// Try branch URL
-	if matches := branchURLPattern.FindStringSubmatch(input); matches != nil {
+	if matches := p.branch.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeBranch,
-			Owner:       matches[1],
-			Repo:        matches[2],
-			Branch:      matches[3],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
+			Branch:      matches[4],
 			OriginalURL: input,
 		}, nil
 	}
 
 	// Try repo URL (full URL)
-	if matches := repoURLPattern.FindStringSubmatch(input); matches != nil {
+	if matches := p.repo.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeRepo,
-			Owner:       matches[1],
-			Repo:        matches[2],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
 			OriginalURL: input,
 		}, nil
 	}
 
 	// Try SSH URL (git@github.com:owner/repo.git)
-	if matches := sshURLPattern.FindStringSubmatch(input); matches != nil {
+	if matches := p.ssh.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeRepo,
-			Owner:       matches[1],
-			Repo:        matches[2],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
 			OriginalURL: input,
 		}, nil
 	}
 
 	// Try SSH protocol URL (ssh://git@github.com/owner/repo)
-	if matches := sshProtocolURLPattern.FindStringSubmatch(input); matches != nil {
+	if matches := p.sshProtocol.FindStringSubmatch(input); matches != nil {
 		return &ParsedGitHubRef{
 			Type:        RefTypeRepo,
-			Owner:       matches[1],
-			Repo:        matches[2],
+			Host:        NormalizeHost(matches[1]),
+			Owner:       matches[2],
+			Repo:        matches[3],
 			OriginalURL: input,
 		}, nil
 	}
@@ -404,24 +471,32 @@ func ParseGitHubRef(input string) (*ParsedGitHubRef, error) {
 // IsGitHubRef checks if the input string looks like a GitHub URL or reference
 // This is a quick check that doesn't validate the full format
 func IsGitHubRef(input string) bool {
+	return IsGitHubRefWithHosts(input, nil)
+}
+
+// IsGitHubRefWithHosts is the host-aware variant of IsGitHubRef, additionally
+// recognizing URLs against any of the supplied enterpriseHosts.
+func IsGitHubRefWithHosts(input string, enterpriseHosts []string) bool {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return false
 	}
 
-	// Check for explicit GitHub URLs (HTTPS)
-	if strings.Contains(input, "github.com/") {
-		return true
-	}
-
-	// Check for SSH URL format (git@github.com:owner/repo)
-	if strings.HasPrefix(input, "git@github.com:") {
-		return true
-	}
-
-	// Check for SSH protocol URL (ssh://git@github.com/)
-	if strings.HasPrefix(input, "ssh://git@github.com/") {
-		return true
+	hosts := append([]string{defaultHost}, enterpriseHosts...)
+	for _, h := range hosts {
+		h = NormalizeHost(h)
+		if h == "" {
+			continue
+		}
+		if strings.Contains(input, h+"/") {
+			return true
+		}
+		if strings.HasPrefix(input, "git@"+h+":") {
+			return true
+		}
+		if strings.HasPrefix(input, "ssh://git@"+h+"/") {
+			return true
+		}
 	}
 
 	// Check for shorthand formats (owner/repo or owner/repo:branch)

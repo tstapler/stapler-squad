@@ -20,6 +20,7 @@ func newTestHandlerWithAnalytics(t *testing.T) (*ApprovalHandler, *AnalyticsStor
 	storage := createTestStorage(t)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 
 	store := NewApprovalStore("")
 	bus := events.NewEventBus(10)

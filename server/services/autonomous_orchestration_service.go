@@ -265,6 +265,10 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	// "complete" while the backlog item silently failed to advance (e.g. a concurrent status
 	// change broke the optimistic-concurrency precondition).
 	var statusTransitionErr error
+	// linkedItemID carries the backlog item ID (when this session is backlog-linked) out
+	// of the nested lookup block below, so the generic done/stuck notification at the end
+	// of this function can stamp it via events.SessionScopedMetadata.
+	var linkedItemID string
 	if a.storageGetter != nil {
 		concreteStorage := a.storageGetter()
 		if concreteStorage != nil {
@@ -283,6 +287,8 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 				if itemErr != nil || item == nil {
 					log.Warn("[AutonomousDriver] onAutonomousDriverComplete: failed to load linked backlog item", "itemSession", is.ID, "item", is.BacklogItemID, "err", itemErr)
 				} else {
+					linkedItemID = item.ID
+
 					// Write a durable autonomous_stuck row so a turn-cap stop is visible in
 					// the Unfinished tab, not just the ephemeral "Autonomous fix stuck"
 					// notification published below — previously invisible to the whole
@@ -315,7 +321,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 								int32(2), // NotificationPriority_MEDIUM
 								"Triage did not complete",
 								fmt.Sprintf("%s: autonomous triage session got stuck", item.Title),
-								nil,
+								map[string]string{"item_id": item.ID},
 							))
 							log.Info("[AutonomousDriver] triage stuck, notified operator", "item", item.ID, "reason", outcome.Reason)
 							return
@@ -376,6 +382,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 									go func() {
 										if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
 											log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
+											a.notifyAutonomousRespawnAttemptFailed(itemID, itemTitle, respawnErr)
 										}
 									}()
 								} else {
@@ -473,6 +480,15 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// (~60s) — bookkeeping only, no new actor, no session spawn.
 							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil {
 								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(review, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
+								// This bookkeeping write is the exact mechanism BUG-048's
+								// fix added to make a stuck review session visible to
+								// abandoned_review/bouncing — a silent failure here
+								// reproduces BUG-048's original gap one layer underneath
+								// its own fix, and this function returns right below
+								// without ever reaching the generic "Autonomous fix
+								// stuck" notification further down (SessionRoleReview
+								// deliberately skips it, see comment above).
+								a.notifyStuckReviewBookkeepingFailed(item.ID, item.Title, is.ID, endErr)
 							}
 						}
 						log.Info("[AutonomousDriver] skipping status transition for role", "role", is.Role, "item", item.ID)
@@ -487,7 +503,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					}
 					if toStatus != "" {
 						precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
-						if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil {
+						if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil { //nolint:silenttransition surfaced below via statusTransitionErr, which overrides the operator notification title/body ("status update failed") rather than a silent success
 							statusTransitionErr = transErr
 							log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
 						} else {
@@ -537,11 +553,65 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		body += fmt.Sprintf(" The backlog item status could not be updated (%v); it may be stuck in its previous status — check manually.", statusTransitionErr)
 		notifType = int32(9) // NotificationType_FAILURE
 	}
+	// Hidden sessions (e.g. review-gate driver runs) already have their own
+	// role-specific notification handling above (or intentionally none, per
+	// SessionRoleReview's comment) — this generic notifier would otherwise
+	// duplicate that signal for a session the operator never surfaces in the
+	// UI. See AC1's intent in the Epic 3 plan.
+	if !inst.Hidden {
+		a.bus.Publish(events.NewNotificationEvent(
+			sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
+			notifType,
+			int32(2), // NotificationPriority_MEDIUM
+			title, body, events.SessionScopedMetadata(nil, linkedItemID),
+		))
+	}
+}
+
+// notifyStuckReviewBookkeepingFailed publishes an operator-facing notification
+// when onAutonomousDriverComplete's UpdateItemSessionEnded call — the exact
+// mechanism BUG-048's fix added to make a stuck review session visible to the
+// abandoned_review/bouncing detectors — itself fails. Previously this was
+// only log.Warn'd, and the caller returns immediately afterward without ever
+// reaching any other notification path (SessionRoleReview deliberately skips
+// the generic "Autonomous fix stuck" notification below, see the call site's
+// doc comment), reproducing BUG-048's original silent-stranding gap one layer
+// underneath its own fix. Mirrors the "Auto-rework paused" direct
+// a.bus.Publish call used elsewhere in this same file (SessionRoleWork
+// branch) rather than inventing a new pattern.
+func (a *AutonomousOrchestrationService) notifyStuckReviewBookkeepingFailed(itemID, itemTitle, itemSessionID string, endErr error) {
 	a.bus.Publish(events.NewNotificationEvent(
-		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
-		notifType,
+		itemID, "", fmt.Sprintf("stuck-review-bookkeeping-failed-%s", itemSessionID),
+		int32(9), // NotificationType_FAILURE
+		int32(3), // NotificationPriority_HIGH
+		"Stuck-review bookkeeping failed",
+		fmt.Sprintf("%s: could not mark the stalled review session ended (%v) — it may stay invisible to automatic recovery until this is fixed manually.", itemTitle, endErr),
+		nil,
+	))
+}
+
+// notifyAutonomousRespawnAttemptFailed publishes an operator-facing
+// notification when a single AutoRespawnAutonomousWork attempt fails. Before
+// this fix, a failed respawn attempt was only log.Warn'd — invisible to the
+// operator for up to the full ~4.5-day backoff schedule, until either a
+// later attempt silently succeeded or RemediationDue's justParked branch
+// finally surfaced something once attempts were exhausted (see
+// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry: "unlike
+// BUG-030's fix which surfaces every failure immediately"). Unlike that
+// justParked notification (terminal: "give up automatically, use Reset"),
+// this fires on every individual failed attempt and is deliberately
+// non-terminal — WARNING/MEDIUM rather than justParked's WARNING/HIGH, since
+// no operator action is required yet: the item will still retry
+// automatically on the next backoff-eligible tick. Mirrors
+// notifyStuckReviewBookkeepingFailed's direct a.bus.Publish shape.
+func (a *AutonomousOrchestrationService) notifyAutonomousRespawnAttemptFailed(itemID, itemTitle string, respawnErr error) {
+	a.bus.Publish(events.NewNotificationEvent(
+		itemID, "", fmt.Sprintf("stuck-autonomous-respawn-failed-%s", itemID),
+		int32(8), // NotificationType_WARNING
 		int32(2), // NotificationPriority_MEDIUM
-		title, body, nil,
+		"Automated retry failed",
+		fmt.Sprintf("%s — an automated turn-budget respawn attempt failed (%v). It will retry automatically per the standard backoff schedule.", itemTitle, respawnErr),
+		nil,
 	))
 }
 

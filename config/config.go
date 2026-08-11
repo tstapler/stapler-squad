@@ -309,6 +309,15 @@ type Config struct {
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
 	MaxConcurrentBacklogWorkItems int `json:"max_concurrent_backlog_work_items,omitempty"`
+	// AutoSpawnReadyItems controls whether "ready" backlog items (post-triage, plan
+	// approved or SkipPlanning) automatically claim a free WIP slot and spawn a work
+	// session — in priority order (P1 first) — the moment one is free, without a
+	// human clicking "Spawn Session". A *bool, not bool: the zero value of bool
+	// can't represent "unset" the way 0 does for the int settings above, and this
+	// setting's default is true (unlike SkipReviewGate/AutoCreatePR's per-item
+	// false-by-default opt-ins), so nil must mean "use the default", not "disabled".
+	// Pass explicit false to require manual spawning instead.
+	AutoSpawnReadyItems *bool `json:"auto_spawn_ready_items,omitempty"`
 
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
 	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
@@ -328,8 +337,13 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// Quota holds configuration for the account-wide session-quota gate that
+	// pauses/resumes backlog automation based on inferred quota headroom.
+	Quota QuotaConfig `json:"quota,omitempty"`
 	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
+	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
+	SessionRetention SessionRetentionConfig `json:"session_retention,omitempty"`
 
 	// Escape analytics configuration
 
@@ -362,6 +376,18 @@ type Config struct {
 	// Valid values: "tmux" (default), "native" (Phase 2).
 	// Empty string is backwards-compatible and defaults to "tmux".
 	ProcessManagerBackend string `json:"process_manager_backend,omitempty"`
+	// GitHubEnterpriseHosts registers GitHub Enterprise Server instances (beyond
+	// github.com) with their own OAuth App client IDs, enabling device-flow login,
+	// PR polling, and link detection against those hosts. Empty means github.com only.
+	GitHubEnterpriseHosts []GitHubEnterpriseHost `json:"github_enterprise_hosts,omitempty"`
+}
+
+// GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
+func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
+	if c == nil {
+		return nil
+	}
+	return c.GitHubEnterpriseHosts
 }
 
 // DefaultConfig returns the default configuration
@@ -438,6 +464,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		RetentionDays:             30,
 	}
 	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
+	cfg.Quota = QuotaConfig{}.QuotaConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
 	// LoadConfigFromPath applies the same guards after JSON decode; DefaultConfig
 	// must mirror them so the two code paths are equivalent.
@@ -600,6 +627,17 @@ func (c *Config) MaxConcurrentBacklogWorkItemsOrDefault() int {
 		return maxConcurrentBacklogWorkItemsHardCeiling
 	}
 	return c.MaxConcurrentBacklogWorkItems
+}
+
+// AutoSpawnReadyItemsOrDefault reports whether "ready" items should be automatically
+// dequeued and spawned — in priority order, respecting the WIP cap — the moment a
+// slot frees up, without a human manually clicking "Spawn Session". Defaults to true
+// (nil or c == nil); pass explicit false to require manual spawning instead.
+func (c *Config) AutoSpawnReadyItemsOrDefault() bool {
+	if c == nil || c.AutoSpawnReadyItems == nil {
+		return true
+	}
+	return *c.AutoSpawnReadyItems
 }
 
 // AnalyticsMaxAgeDaysOrDefault returns the configured max analytics age in days,
@@ -880,6 +918,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
+	cfg.Quota = cfg.Quota.QuotaConfigOrDefault()
 
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {

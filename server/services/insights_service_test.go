@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -403,4 +404,342 @@ func TestGetInsightsSummary_CacheHitRate_ComputedCorrectly(t *testing.T) {
 	require.Len(t, resp.Msg.Sessions, 1)
 	assert.InDelta(t, 0.2, resp.Msg.Sessions[0].CacheHitRate, 0.001)
 	assert.InDelta(t, 0.2, resp.Msg.OverallCacheHitRate, 0.001)
+}
+
+// --------------------------------------------------------------------------
+// AC-2/AC-5: unpriced-model signal reaches the RPC response
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlagged(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Models, 1)
+	assert.Equal(t, "gpt-99-turbo", resp.Msg.Models[0].ModelFamily)
+	assert.True(t, resp.Msg.Models[0].PricingUnavailable)
+	assert.Contains(t, resp.Msg.UnpricedModels, "gpt-99-turbo")
+}
+
+// --------------------------------------------------------------------------
+// AC-1: claude-sonnet-5 pricing table entry is reachable end-to-end through
+// the GetInsightsSummary RPC path (not just verified in isolation by
+// session/tokens/pricing_test.go).
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenSonnet5ModelUsed_ExpectNonZeroCost(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "claude-sonnet-5-20250929", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Models, 1)
+	assert.Equal(t, "claude-sonnet-5", resp.Msg.Models[0].ModelFamily)
+	assert.False(t, resp.Msg.Models[0].PricingUnavailable)
+	assert.NotContains(t, resp.Msg.UnpricedModels, "claude-sonnet-5")
+	assert.Greater(t, resp.Msg.TotalCostUsd, float64(0))
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Greater(t, resp.Msg.Sessions[0].EstimatedCostUsd, float64(0))
+}
+
+func TestListSessionTokens_WhenUnpricedModelFamily_ExpectUnpricedModelsPopulated(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.ListSessionTokens(
+		context.Background(),
+		connect.NewRequest(&sessionv1.ListSessionTokensRequest{}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, []string{"gpt-99-turbo"}, resp.Msg.Sessions[0].UnpricedModels)
+}
+
+// --------------------------------------------------------------------------
+// Pre-mortem Failure #2 (P2): <synthetic> must never leak into the unpriced
+// signal end-to-end, even though Epic 1.2's parser-boundary filter already
+// keeps it out of TurnTimeline in production. This test constructs the
+// ParseResult by hand (bypassing the parser) to prove the service layer
+// itself has no separate leak path — see pre-mortem.md row 2.
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenSyntheticTurnMixedWithRealTurns_ExpectSyntheticNeverSurfacedAsUnpriced(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		{
+			SessionUUID: "uuid-mixed",
+			ProjectPath: "/proj",
+			FileModTime: now,
+			TurnTimeline: []tokens.TurnStats{
+				// Synthetic turn: zero usage across every counter, matching the
+				// real empirical shape Claude Code's transcript writer emits.
+				{Model: "<synthetic>", Timestamp: now},
+				{Model: "claude-sonnet-4", Input: 1000, Output: 500, Timestamp: now},
+				{Model: "gpt-99-turbo", Input: 700, Output: 300, Timestamp: now},
+			},
+			TotalInput:  1700,
+			TotalOutput: 800,
+			ToolUsage:   map[string]tokens.ToolTokenStats{},
+		},
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+
+	assert.Contains(t, resp.Msg.UnpricedModels, "gpt-99-turbo")
+	assert.NotContains(t, resp.Msg.UnpricedModels, "<synthetic>")
+
+	for _, mb := range resp.Msg.Models {
+		assert.NotEqual(t, "<synthetic>", mb.ModelFamily)
+	}
+}
+
+// --------------------------------------------------------------------------
+// AC-5: runtime signal — a newly-observed unpriced family is logged once,
+// not once per request. Asserting on actual log output is awkward, so this
+// asserts on the observable dedup state instead (whitebox test in package
+// services): len(loggedUnpricedFamilies) stays at 1 after two calls with the
+// same unpriced family.
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenCalledTwiceWithSameUnpricedFamily_ExpectLoggedOnce(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	_, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+
+	_, err = svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+
+	assert.Len(t, svc.loggedUnpricedFamilies, 1)
+	assert.True(t, svc.loggedUnpricedFamilies["gpt-99-turbo"])
+}
+
+// --------------------------------------------------------------------------
+// AC-4: WatchInsights streaming test coverage, via the insightsEventSender
+// seam (mirrors backlogItemEventSender/watchBacklogItems).
+// --------------------------------------------------------------------------
+
+// fakeInsightsEventSender is a hand-rolled fake implementing
+// insightsEventSender, capturing every sent message in a mutex-guarded slice
+// — watchInsights runs in a goroutine below while the test triggers a file
+// change concurrently, so Send is called concurrently with Sent().
+type fakeInsightsEventSender struct {
+	mu   sync.Mutex
+	sent []*sessionv1.InsightsEvent
+}
+
+func (f *fakeInsightsEventSender) Send(e *sessionv1.InsightsEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, e)
+	return nil
+}
+
+// Sent returns a snapshot copy of the messages sent so far, safe to read
+// concurrently with in-flight Send calls.
+func (f *fakeInsightsEventSender) Sent() []*sessionv1.InsightsEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*sessionv1.InsightsEvent, len(f.sent))
+	copy(out, f.sent)
+	return out
+}
+
+var _ insightsEventSender = (*fakeInsightsEventSender)(nil)
+
+// runWatchInsights launches watchInsights in a goroutine, mirroring
+// runWatchBacklogItems (backlog_service_events_test.go). Cleanup/completion
+// is checked via the package's existing requireCleanReturn helper.
+func runWatchInsights(ctx context.Context, svc *InsightsService, sender insightsEventSender) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- svc.watchInsights(ctx, sender) }()
+	return done
+}
+
+func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *testing.T) {
+	store := tokens.NewTokenStore("")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store.Start(ctx)
+	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil)
+
+	sender := &fakeInsightsEventSender{}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	t.Cleanup(runCancel)
+	done := runWatchInsights(runCtx, svc, sender)
+
+	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+
+	// walkAndEnqueue's deferred cleanup fires exactly one notify() even for
+	// an empty historyDir (store.go's defer runs before the historyDir==""
+	// early return check) — a real, unbounded race against Subscribe() above.
+	// Snapshotting the count immediately before triggering the real file
+	// change, and gating completion on the file having actually been parsed
+	// (not just "some update event exists"), ties the assertion to the
+	// causal chain this test claims to exercise rather than either notify.
+	before := len(sender.Sent())
+	store.OnHistoryFileChanged("../../session/tokens/testdata/valid_session.jsonl")
+
+	require.Eventually(t, func() bool {
+		return len(sender.Sent()) > before && store.GetByUUID("valid_session") != nil
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.Equal(t, "update", sender.Sent()[len(sender.Sent())-1].EventType)
+
+	requireCleanReturn(t, runCancel, done)
+}
+
+// --------------------------------------------------------------------------
+// AC-1: GetSessionTurnTimeline
+// --------------------------------------------------------------------------
+
+func TestGetSessionTurnTimeline_should_returnTurns_When_ConversationIdMatches(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "claude-sonnet-4", "/proj", 1000, 500, 200, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetSessionTurnTimeline(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetSessionTurnTimelineRequest{ConversationId: "uuid-1"}),
+	)
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Turns, 1)
+	assert.Equal(t, "claude-sonnet-4", resp.Msg.Turns[0].Model)
+	assert.Equal(t, int64(1000), resp.Msg.Turns[0].InputTokens)
+	assert.Equal(t, int64(500), resp.Msg.Turns[0].OutputTokens)
+	assert.Equal(t, int64(200), resp.Msg.Turns[0].CacheReadTokens)
+}
+
+func TestGetSessionTurnTimeline_should_returnEmptyTurns_When_ConversationIdUnknown(t *testing.T) {
+	svc := newInsightsFixture(nil, nil)
+
+	resp, err := svc.GetSessionTurnTimeline(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetSessionTurnTimelineRequest{ConversationId: "no-such-uuid"}),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msg.Turns)
+}
+
+func TestGetSessionTurnTimeline_should_omitTimestamp_When_TurnTimestampIsZero(t *testing.T) {
+	results := []*tokens.ParseResult{
+		{
+			SessionUUID: "uuid-zero-ts",
+			TurnTimeline: []tokens.TurnStats{
+				{Model: "claude-sonnet-4", Input: 100, Output: 50}, // zero-value Timestamp
+			},
+			ToolUsage: map[string]tokens.ToolTokenStats{},
+		},
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetSessionTurnTimeline(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetSessionTurnTimelineRequest{ConversationId: "uuid-zero-ts"}),
+	)
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Turns, 1)
+	assert.Nil(t, resp.Msg.Turns[0].Timestamp)
+}
+
+func TestGetSessionTurnTimeline_should_returnIndependentToolNamesSlice_When_CalledTwice(t *testing.T) {
+	results := []*tokens.ParseResult{
+		{
+			SessionUUID: "uuid-tools",
+			TurnTimeline: []tokens.TurnStats{
+				{Model: "claude-sonnet-4", Input: 100, Output: 50, ToolNames: []string{"bash", "read"}},
+			},
+			ToolUsage: map[string]tokens.ToolTokenStats{},
+		},
+	}
+	svc := newInsightsFixture(results, nil)
+	req := connect.NewRequest(&sessionv1.GetSessionTurnTimelineRequest{ConversationId: "uuid-tools"})
+
+	first, err := svc.GetSessionTurnTimeline(context.Background(), req)
+	require.NoError(t, err)
+	first.Msg.Turns[0].ToolNames[0] = "mutated"
+
+	second, err := svc.GetSessionTurnTimeline(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, "bash", second.Msg.Turns[0].ToolNames[0], "mutating one response's ToolNames must not affect a later call's result")
+}
+
+func TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore(t *testing.T) {
+	store := tokens.NewTokenStore("")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store.Start(ctx)
+	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil)
+
+	store.OnHistoryFileChanged("../../session/tokens/testdata/valid_session.jsonl")
+	require.Eventually(t, func() bool {
+		return store.GetByUUID("valid_session") != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	resp, err := svc.GetSessionTurnTimeline(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetSessionTurnTimelineRequest{ConversationId: "valid_session"}),
+	)
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Turns, 3)
+	// Assert the first turn's fields, not just the count — proves the real
+	// parse->handler mapping (not just newResult's synthetic fixture) wires
+	// model/token fields correctly. Values per testdata/valid_session.jsonl's
+	// first assistant turn (parser_test.go's own documented totals).
+	assert.Equal(t, int64(1000), resp.Msg.Turns[0].InputTokens)
+	assert.Equal(t, int64(500), resp.Msg.Turns[0].OutputTokens)
+	assert.NotEmpty(t, resp.Msg.Turns[0].Model)
+}
+
+func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *testing.T) {
+	store := tokens.NewTokenStore("")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store.Start(ctx)
+	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil)
+
+	sender := &fakeInsightsEventSender{}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	t.Cleanup(runCancel)
+	done := runWatchInsights(runCtx, svc, sender)
+
+	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+
+	requireCleanReturn(t, runCancel, done)
 }

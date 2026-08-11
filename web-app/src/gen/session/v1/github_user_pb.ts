@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file session/v1/github_user.proto.
  */
 export const file_session_v1_github_user: GenFile = /*@__PURE__*/
-  fileDesc("ChxzZXNzaW9uL3YxL2dpdGh1Yl91c2VyLnByb3RvEgpzZXNzaW9uLnYxIjcKDUdpdEh1YkFjY291bnQSEAoIdXNlcm5hbWUYASABKAkSFAoMaXNfZW52X3Rva2VuGAIgASgIInoKD0dpdEh1YkF1dGhTdGF0ZRIRCglhdmFpbGFibGUYASABKAgSEAoIdXNlcm5hbWUYAiABKAkSFQoNZXJyb3JfbWVzc2FnZRgDIAEoCRIrCghhY2NvdW50cxgEIAMoCzIZLnNlc3Npb24udjEuR2l0SHViQWNjb3VudCIUChJMaXN0VXNlclBSc1JlcXVlc3QiZwoTTGlzdFVzZXJQUnNSZXNwb25zZRIfCgNwcnMYASADKAsyEi5zZXNzaW9uLnYxLlVzZXJQUhIvCgphdXRoX3N0YXRlGAIgASgLMhsuc2Vzc2lvbi52MS5HaXRIdWJBdXRoU3RhdGUiFQoTV2F0Y2hVc2VyUFJzUmVxdWVzdCJzCgtVc2VyUFJFdmVudBISCgpldmVudF90eXBlGAEgASgJEh8KA3BycxgCIAMoCzISLnNlc3Npb24udjEuVXNlclBSEi8KCmF1dGhfc3RhdGUYAyABKAsyGy5zZXNzaW9uLnYxLkdpdEh1YkF1dGhTdGF0ZSIbChlHZXRHaXRIdWJBdXRoU3RhdGVSZXF1ZXN0Ik0KGkdldEdpdEh1YkF1dGhTdGF0ZVJlc3BvbnNlEi8KCmF1dGhfc3RhdGUYASABKAsyGy5zZXNzaW9uLnYxLkdpdEh1YkF1dGhTdGF0ZSIeChxTdGFydEdpdEh1YkRldmljZUF1dGhSZXF1ZXN0IocBCh1TdGFydEdpdEh1YkRldmljZUF1dGhSZXNwb25zZRITCgtkZXZpY2VfY29kZRgBIAEoCRIRCgl1c2VyX2NvZGUYAiABKAkSGAoQdmVyaWZpY2F0aW9uX3VyaRgDIAEoCRISCgpleHBpcmVzX2luGAQgASgFEhAKCGludGVydmFsGAUgASgFIjIKG1BvbGxHaXRIdWJEZXZpY2VBdXRoUmVxdWVzdBITCgtkZXZpY2VfY29kZRgBIAEoCSKMAQocUG9sbEdpdEh1YkRldmljZUF1dGhSZXNwb25zZRIsCgZzdGF0dXMYASABKA4yHC5zZXNzaW9uLnYxLkRldmljZUF1dGhTdGF0dXMSDQoFZXJyb3IYAiABKAkSLwoKYXV0aF9zdGF0ZRgDIAEoCzIbLnNlc3Npb24udjEuR2l0SHViQXV0aFN0YXRlIiwKGFJldm9rZUdpdEh1YlRva2VuUmVxdWVzdBIQCgh1c2VybmFtZRgBIAEoCSIbChlSZXZva2VHaXRIdWJUb2tlblJlc3BvbnNlIhsKGUxpc3RHaXRIdWJBY2NvdW50c1JlcXVlc3QiSQoaTGlzdEdpdEh1YkFjY291bnRzUmVzcG9uc2USKwoIYWNjb3VudHMYASADKAsyGS5zZXNzaW9uLnYxLkdpdEh1YkFjY291bnQqtQEKEERldmljZUF1dGhTdGF0dXMSIgoeREVWSUNFX0FVVEhfU1RBVFVTX1VOU1BFQ0lGSUVEEAASHgoaREVWSUNFX0FVVEhfU1RBVFVTX1BFTkRJTkcQARIfChtERVZJQ0VfQVVUSF9TVEFUVVNfQ09NUExFVEUQAhIeChpERVZJQ0VfQVVUSF9TVEFUVVNfRVhQSVJFRBADEhwKGERFVklDRV9BVVRIX1NUQVRVU19FUlJPUhAEMsIFChFHaXRIdWJVc2VyU2VydmljZRJQCgtMaXN0VXNlclBScxIeLnNlc3Npb24udjEuTGlzdFVzZXJQUnNSZXF1ZXN0Gh8uc2Vzc2lvbi52MS5MaXN0VXNlclBSc1Jlc3BvbnNlIgASTAoMV2F0Y2hVc2VyUFJzEh8uc2Vzc2lvbi52MS5XYXRjaFVzZXJQUnNSZXF1ZXN0Ghcuc2Vzc2lvbi52MS5Vc2VyUFJFdmVudCIAMAESZQoSR2V0R2l0SHViQXV0aFN0YXRlEiUuc2Vzc2lvbi52MS5HZXRHaXRIdWJBdXRoU3RhdGVSZXF1ZXN0GiYuc2Vzc2lvbi52MS5HZXRHaXRIdWJBdXRoU3RhdGVSZXNwb25zZSIAEm4KFVN0YXJ0R2l0SHViRGV2aWNlQXV0aBIoLnNlc3Npb24udjEuU3RhcnRHaXRIdWJEZXZpY2VBdXRoUmVxdWVzdBopLnNlc3Npb24udjEuU3RhcnRHaXRIdWJEZXZpY2VBdXRoUmVzcG9uc2UiABJrChRQb2xsR2l0SHViRGV2aWNlQXV0aBInLnNlc3Npb24udjEuUG9sbEdpdEh1YkRldmljZUF1dGhSZXF1ZXN0Giguc2Vzc2lvbi52MS5Qb2xsR2l0SHViRGV2aWNlQXV0aFJlc3BvbnNlIgASYgoRUmV2b2tlR2l0SHViVG9rZW4SJC5zZXNzaW9uLnYxLlJldm9rZUdpdEh1YlRva2VuUmVxdWVzdBolLnNlc3Npb24udjEuUmV2b2tlR2l0SHViVG9rZW5SZXNwb25zZSIAEmUKEkxpc3RHaXRIdWJBY2NvdW50cxIlLnNlc3Npb24udjEuTGlzdEdpdEh1YkFjY291bnRzUmVxdWVzdBomLnNlc3Npb24udjEuTGlzdEdpdEh1YkFjY291bnRzUmVzcG9uc2UiAEKvAQoOY29tLnNlc3Npb24udjFCD0dpdGh1YlVzZXJQcm90b1ABWkNnaXRodWIuY29tL3RzdGFwbGVyL3N0YXBsZXItc3F1YWQvZ2VuL3Byb3RvL2dvL3Nlc3Npb24vdjE7c2Vzc2lvbnYxogIDU1hYqgIKU2Vzc2lvbi5WMcoCClNlc3Npb25cVjHiAhZTZXNzaW9uXFYxXEdQQk1ldGFkYXRh6gILU2Vzc2lvbjo6VjFiBnByb3RvMw", [file_session_v1_types]);
+  fileDesc("ChxzZXNzaW9uL3YxL2dpdGh1Yl91c2VyLnByb3RvEgpzZXNzaW9uLnYxIkUKDUdpdEh1YkFjY291bnQSEAoIdXNlcm5hbWUYASABKAkSFAoMaXNfZW52X3Rva2VuGAIgASgIEgwKBGhvc3QYAyABKAkiegoPR2l0SHViQXV0aFN0YXRlEhEKCWF2YWlsYWJsZRgBIAEoCBIQCgh1c2VybmFtZRgCIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAMgASgJEisKCGFjY291bnRzGAQgAygLMhkuc2Vzc2lvbi52MS5HaXRIdWJBY2NvdW50IhQKEkxpc3RVc2VyUFJzUmVxdWVzdCJnChNMaXN0VXNlclBSc1Jlc3BvbnNlEh8KA3BycxgBIAMoCzISLnNlc3Npb24udjEuVXNlclBSEi8KCmF1dGhfc3RhdGUYAiABKAsyGy5zZXNzaW9uLnYxLkdpdEh1YkF1dGhTdGF0ZSIVChNXYXRjaFVzZXJQUnNSZXF1ZXN0InMKC1VzZXJQUkV2ZW50EhIKCmV2ZW50X3R5cGUYASABKAkSHwoDcHJzGAIgAygLMhIuc2Vzc2lvbi52MS5Vc2VyUFISLwoKYXV0aF9zdGF0ZRgDIAEoCzIbLnNlc3Npb24udjEuR2l0SHViQXV0aFN0YXRlIhsKGUdldEdpdEh1YkF1dGhTdGF0ZVJlcXVlc3QiTQoaR2V0R2l0SHViQXV0aFN0YXRlUmVzcG9uc2USLwoKYXV0aF9zdGF0ZRgBIAEoCzIbLnNlc3Npb24udjEuR2l0SHViQXV0aFN0YXRlIiwKHFN0YXJ0R2l0SHViRGV2aWNlQXV0aFJlcXVlc3QSDAoEaG9zdBgBIAEoCSKHAQodU3RhcnRHaXRIdWJEZXZpY2VBdXRoUmVzcG9uc2USEwoLZGV2aWNlX2NvZGUYASABKAkSEQoJdXNlcl9jb2RlGAIgASgJEhgKEHZlcmlmaWNhdGlvbl91cmkYAyABKAkSEgoKZXhwaXJlc19pbhgEIAEoBRIQCghpbnRlcnZhbBgFIAEoBSIyChtQb2xsR2l0SHViRGV2aWNlQXV0aFJlcXVlc3QSEwoLZGV2aWNlX2NvZGUYASABKAkijAEKHFBvbGxHaXRIdWJEZXZpY2VBdXRoUmVzcG9uc2USLAoGc3RhdHVzGAEgASgOMhwuc2Vzc2lvbi52MS5EZXZpY2VBdXRoU3RhdHVzEg0KBWVycm9yGAIgASgJEi8KCmF1dGhfc3RhdGUYAyABKAsyGy5zZXNzaW9uLnYxLkdpdEh1YkF1dGhTdGF0ZSI6ChhSZXZva2VHaXRIdWJUb2tlblJlcXVlc3QSEAoIdXNlcm5hbWUYASABKAkSDAoEaG9zdBgCIAEoCSIbChlSZXZva2VHaXRIdWJUb2tlblJlc3BvbnNlIhsKGUxpc3RHaXRIdWJBY2NvdW50c1JlcXVlc3QiYwoaTGlzdEdpdEh1YkFjY291bnRzUmVzcG9uc2USKwoIYWNjb3VudHMYASADKAsyGS5zZXNzaW9uLnYxLkdpdEh1YkFjY291bnQSGAoQZW50ZXJwcmlzZV9ob3N0cxgCIAMoCSI/CiBBZGRHaXRIdWJBY2NvdW50V2l0aFRva2VuUmVxdWVzdBIMCgRob3N0GAEgASgJEg0KBXRva2VuGAIgASgJIlQKIUFkZEdpdEh1YkFjY291bnRXaXRoVG9rZW5SZXNwb25zZRIvCgphdXRoX3N0YXRlGAEgASgLMhsuc2Vzc2lvbi52MS5HaXRIdWJBdXRoU3RhdGUiRgoNR2l0SHViQ0xJSG9zdBIMCgRob3N0GAEgASgJEhAKCHVzZXJuYW1lGAIgASgJEhUKDWFscmVhZHlfYWRkZWQYAyABKAgiGwoZTGlzdEdpdEh1YkNMSUhvc3RzUmVxdWVzdCJcChpMaXN0R2l0SHViQ0xJSG9zdHNSZXNwb25zZRIoCgVob3N0cxgBIAMoCzIZLnNlc3Npb24udjEuR2l0SHViQ0xJSG9zdBIUCgxnaF9hdmFpbGFibGUYAiABKAgiLgoeQWRkR2l0SHViQWNjb3VudEZyb21DTElSZXF1ZXN0EgwKBGhvc3QYASABKAkqtQEKEERldmljZUF1dGhTdGF0dXMSIgoeREVWSUNFX0FVVEhfU1RBVFVTX1VOU1BFQ0lGSUVEEAASHgoaREVWSUNFX0FVVEhfU1RBVFVTX1BFTkRJTkcQARIfChtERVZJQ0VfQVVUSF9TVEFUVVNfQ09NUExFVEUQAhIeChpERVZJQ0VfQVVUSF9TVEFUVVNfRVhQSVJFRBADEhwKGERFVklDRV9BVVRIX1NUQVRVU19FUlJPUhAEMp0IChFHaXRIdWJVc2VyU2VydmljZRJQCgtMaXN0VXNlclBScxIeLnNlc3Npb24udjEuTGlzdFVzZXJQUnNSZXF1ZXN0Gh8uc2Vzc2lvbi52MS5MaXN0VXNlclBSc1Jlc3BvbnNlIgASTAoMV2F0Y2hVc2VyUFJzEh8uc2Vzc2lvbi52MS5XYXRjaFVzZXJQUnNSZXF1ZXN0Ghcuc2Vzc2lvbi52MS5Vc2VyUFJFdmVudCIAMAESZQoSR2V0R2l0SHViQXV0aFN0YXRlEiUuc2Vzc2lvbi52MS5HZXRHaXRIdWJBdXRoU3RhdGVSZXF1ZXN0GiYuc2Vzc2lvbi52MS5HZXRHaXRIdWJBdXRoU3RhdGVSZXNwb25zZSIAEm4KFVN0YXJ0R2l0SHViRGV2aWNlQXV0aBIoLnNlc3Npb24udjEuU3RhcnRHaXRIdWJEZXZpY2VBdXRoUmVxdWVzdBopLnNlc3Npb24udjEuU3RhcnRHaXRIdWJEZXZpY2VBdXRoUmVzcG9uc2UiABJrChRQb2xsR2l0SHViRGV2aWNlQXV0aBInLnNlc3Npb24udjEuUG9sbEdpdEh1YkRldmljZUF1dGhSZXF1ZXN0Giguc2Vzc2lvbi52MS5Qb2xsR2l0SHViRGV2aWNlQXV0aFJlc3BvbnNlIgASYgoRUmV2b2tlR2l0SHViVG9rZW4SJC5zZXNzaW9uLnYxLlJldm9rZUdpdEh1YlRva2VuUmVxdWVzdBolLnNlc3Npb24udjEuUmV2b2tlR2l0SHViVG9rZW5SZXNwb25zZSIAEmUKEkxpc3RHaXRIdWJBY2NvdW50cxIlLnNlc3Npb24udjEuTGlzdEdpdEh1YkFjY291bnRzUmVxdWVzdBomLnNlc3Npb24udjEuTGlzdEdpdEh1YkFjY291bnRzUmVzcG9uc2UiABJ6ChlBZGRHaXRIdWJBY2NvdW50V2l0aFRva2VuEiwuc2Vzc2lvbi52MS5BZGRHaXRIdWJBY2NvdW50V2l0aFRva2VuUmVxdWVzdBotLnNlc3Npb24udjEuQWRkR2l0SHViQWNjb3VudFdpdGhUb2tlblJlc3BvbnNlIgASZQoSTGlzdEdpdEh1YkNMSUhvc3RzEiUuc2Vzc2lvbi52MS5MaXN0R2l0SHViQ0xJSG9zdHNSZXF1ZXN0GiYuc2Vzc2lvbi52MS5MaXN0R2l0SHViQ0xJSG9zdHNSZXNwb25zZSIAEnYKF0FkZEdpdEh1YkFjY291bnRGcm9tQ0xJEiouc2Vzc2lvbi52MS5BZGRHaXRIdWJBY2NvdW50RnJvbUNMSVJlcXVlc3QaLS5zZXNzaW9uLnYxLkFkZEdpdEh1YkFjY291bnRXaXRoVG9rZW5SZXNwb25zZSIAQq8BCg5jb20uc2Vzc2lvbi52MUIPR2l0aHViVXNlclByb3RvUAFaQ2dpdGh1Yi5jb20vdHN0YXBsZXIvc3RhcGxlci1zcXVhZC9nZW4vcHJvdG8vZ28vc2Vzc2lvbi92MTtzZXNzaW9udjGiAgNTWFiqAgpTZXNzaW9uLlYxygIKU2Vzc2lvblxWMeICFlNlc3Npb25cVjFcR1BCTWV0YWRhdGHqAgtTZXNzaW9uOjpWMWIGcHJvdG8z", [file_session_v1_types]);
 
 /**
  * GitHubAccount is a single connected GitHub account.
@@ -31,6 +31,13 @@ export type GitHubAccount = Message<"session.v1.GitHubAccount"> & {
    * @generated from field: bool is_env_token = 2;
    */
   isEnvToken: boolean;
+
+  /**
+   * GitHub host, e.g. "github.com" or a GHES hostname; empty means github.com
+   *
+   * @generated from field: string host = 3;
+   */
+  host: string;
 };
 
 /**
@@ -195,6 +202,12 @@ export const GetGitHubAuthStateResponseSchema: GenMessage<GetGitHubAuthStateResp
  * @generated from message session.v1.StartGitHubDeviceAuthRequest
  */
 export type StartGitHubDeviceAuthRequest = Message<"session.v1.StartGitHubDeviceAuthRequest"> & {
+  /**
+   * GitHub host to authenticate against; empty means github.com
+   *
+   * @generated from field: string host = 1;
+   */
+  host: string;
 };
 
 /**
@@ -309,6 +322,13 @@ export type RevokeGitHubTokenRequest = Message<"session.v1.RevokeGitHubTokenRequ
    * @generated from field: string username = 1;
    */
   username: string;
+
+  /**
+   * host the account belongs to; empty means github.com
+   *
+   * @generated from field: string host = 2;
+   */
+  host: string;
 };
 
 /**
@@ -352,6 +372,14 @@ export type ListGitHubAccountsResponse = Message<"session.v1.ListGitHubAccountsR
    * @generated from field: repeated session.v1.GitHubAccount accounts = 1;
    */
   accounts: GitHubAccount[];
+
+  /**
+   * enterprise_hosts lists the GHES hostnames configured on the server
+   * (github.com is always implicitly available and not included here).
+   *
+   * @generated from field: repeated string enterprise_hosts = 2;
+   */
+  enterpriseHosts: string[];
 };
 
 /**
@@ -360,6 +388,142 @@ export type ListGitHubAccountsResponse = Message<"session.v1.ListGitHubAccountsR
  */
 export const ListGitHubAccountsResponseSchema: GenMessage<ListGitHubAccountsResponse> = /*@__PURE__*/
   messageDesc(file_session_v1_github_user, 15);
+
+/**
+ * @generated from message session.v1.AddGitHubAccountWithTokenRequest
+ */
+export type AddGitHubAccountWithTokenRequest = Message<"session.v1.AddGitHubAccountWithTokenRequest"> & {
+  /**
+   * GitHub host to authenticate against; empty means github.com
+   *
+   * @generated from field: string host = 1;
+   */
+  host: string;
+
+  /**
+   * personal access token
+   *
+   * @generated from field: string token = 2;
+   */
+  token: string;
+};
+
+/**
+ * Describes the message session.v1.AddGitHubAccountWithTokenRequest.
+ * Use `create(AddGitHubAccountWithTokenRequestSchema)` to create a new message.
+ */
+export const AddGitHubAccountWithTokenRequestSchema: GenMessage<AddGitHubAccountWithTokenRequest> = /*@__PURE__*/
+  messageDesc(file_session_v1_github_user, 16);
+
+/**
+ * @generated from message session.v1.AddGitHubAccountWithTokenResponse
+ */
+export type AddGitHubAccountWithTokenResponse = Message<"session.v1.AddGitHubAccountWithTokenResponse"> & {
+  /**
+   * updated state on success
+   *
+   * @generated from field: session.v1.GitHubAuthState auth_state = 1;
+   */
+  authState?: GitHubAuthState;
+};
+
+/**
+ * Describes the message session.v1.AddGitHubAccountWithTokenResponse.
+ * Use `create(AddGitHubAccountWithTokenResponseSchema)` to create a new message.
+ */
+export const AddGitHubAccountWithTokenResponseSchema: GenMessage<AddGitHubAccountWithTokenResponse> = /*@__PURE__*/
+  messageDesc(file_session_v1_github_user, 17);
+
+/**
+ * GitHubCLIHost is a host the local `gh` CLI is already authenticated to.
+ *
+ * @generated from message session.v1.GitHubCLIHost
+ */
+export type GitHubCLIHost = Message<"session.v1.GitHubCLIHost"> & {
+  /**
+   * normalized host, e.g. "github.com" or a GHES hostname
+   *
+   * @generated from field: string host = 1;
+   */
+  host: string;
+
+  /**
+   * gh CLI's recorded username for this host, if known
+   *
+   * @generated from field: string username = 2;
+   */
+  username: string;
+
+  /**
+   * true when this host+username is already a connected account
+   *
+   * @generated from field: bool already_added = 3;
+   */
+  alreadyAdded: boolean;
+};
+
+/**
+ * Describes the message session.v1.GitHubCLIHost.
+ * Use `create(GitHubCLIHostSchema)` to create a new message.
+ */
+export const GitHubCLIHostSchema: GenMessage<GitHubCLIHost> = /*@__PURE__*/
+  messageDesc(file_session_v1_github_user, 18);
+
+/**
+ * @generated from message session.v1.ListGitHubCLIHostsRequest
+ */
+export type ListGitHubCLIHostsRequest = Message<"session.v1.ListGitHubCLIHostsRequest"> & {
+};
+
+/**
+ * Describes the message session.v1.ListGitHubCLIHostsRequest.
+ * Use `create(ListGitHubCLIHostsRequestSchema)` to create a new message.
+ */
+export const ListGitHubCLIHostsRequestSchema: GenMessage<ListGitHubCLIHostsRequest> = /*@__PURE__*/
+  messageDesc(file_session_v1_github_user, 19);
+
+/**
+ * @generated from message session.v1.ListGitHubCLIHostsResponse
+ */
+export type ListGitHubCLIHostsResponse = Message<"session.v1.ListGitHubCLIHostsResponse"> & {
+  /**
+   * @generated from field: repeated session.v1.GitHubCLIHost hosts = 1;
+   */
+  hosts: GitHubCLIHost[];
+
+  /**
+   * false when the gh CLI config could not be read (not installed / never logged in)
+   *
+   * @generated from field: bool gh_available = 2;
+   */
+  ghAvailable: boolean;
+};
+
+/**
+ * Describes the message session.v1.ListGitHubCLIHostsResponse.
+ * Use `create(ListGitHubCLIHostsResponseSchema)` to create a new message.
+ */
+export const ListGitHubCLIHostsResponseSchema: GenMessage<ListGitHubCLIHostsResponse> = /*@__PURE__*/
+  messageDesc(file_session_v1_github_user, 20);
+
+/**
+ * @generated from message session.v1.AddGitHubAccountFromCLIRequest
+ */
+export type AddGitHubAccountFromCLIRequest = Message<"session.v1.AddGitHubAccountFromCLIRequest"> & {
+  /**
+   * host to import, as returned by ListGitHubCLIHosts
+   *
+   * @generated from field: string host = 1;
+   */
+  host: string;
+};
+
+/**
+ * Describes the message session.v1.AddGitHubAccountFromCLIRequest.
+ * Use `create(AddGitHubAccountFromCLIRequestSchema)` to create a new message.
+ */
+export const AddGitHubAccountFromCLIRequestSchema: GenMessage<AddGitHubAccountFromCLIRequest> = /*@__PURE__*/
+  messageDesc(file_session_v1_github_user, 21);
 
 /**
  * DeviceAuthStatus describes the outcome of a single poll attempt.
@@ -493,6 +657,43 @@ export const GitHubUserService: GenService<{
     methodKind: "unary";
     input: typeof ListGitHubAccountsRequestSchema;
     output: typeof ListGitHubAccountsResponseSchema;
+  },
+  /**
+   * AddGitHubAccountWithToken validates a personal access token against the
+   * host's /user endpoint and stores it in the keychain on success. Use this
+   * for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
+   *
+   * @generated from rpc session.v1.GitHubUserService.AddGitHubAccountWithToken
+   */
+  addGitHubAccountWithToken: {
+    methodKind: "unary";
+    input: typeof AddGitHubAccountWithTokenRequestSchema;
+    output: typeof AddGitHubAccountWithTokenResponseSchema;
+  },
+  /**
+   * ListGitHubCLIHosts discovers hosts the local `gh` CLI is already
+   * authenticated to (via its hosts.yml config), so the UI can offer them as
+   * one-click imports instead of requiring the user to paste a token.
+   *
+   * @generated from rpc session.v1.GitHubUserService.ListGitHubCLIHosts
+   */
+  listGitHubCLIHosts: {
+    methodKind: "unary";
+    input: typeof ListGitHubCLIHostsRequestSchema;
+    output: typeof ListGitHubCLIHostsResponseSchema;
+  },
+  /**
+   * AddGitHubAccountFromCLI fetches the token gh CLI already holds for host
+   * (via `gh auth token --hostname <host>`), validates it, and stores it in
+   * the keychain on success — the same outcome as AddGitHubAccountWithToken
+   * but without the user needing to locate/paste the token by hand.
+   *
+   * @generated from rpc session.v1.GitHubUserService.AddGitHubAccountFromCLI
+   */
+  addGitHubAccountFromCLI: {
+    methodKind: "unary";
+    input: typeof AddGitHubAccountFromCLIRequestSchema;
+    output: typeof AddGitHubAccountWithTokenResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_session_v1_github_user, 0);

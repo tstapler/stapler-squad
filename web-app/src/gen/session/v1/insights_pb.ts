@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file session/v1/insights.proto.
  */
 export const file_session_v1_insights: GenFile = /*@__PURE__*/
-  fileDesc("ChlzZXNzaW9uL3YxL2luc2lnaHRzLnByb3RvEgpzZXNzaW9uLnYxIvMDChNTZXNzaW9uVG9rZW5TdW1tYXJ5EhIKCnNlc3Npb25faWQYASABKAkSFwoPY29udmVyc2F0aW9uX2lkGAIgASgJEhQKDHByb2plY3RfcGF0aBgDIAEoCRIVCg1wcmltYXJ5X21vZGVsGAQgASgJEhoKEnRvdGFsX2lucHV0X3Rva2VucxgFIAEoAxIbChN0b3RhbF9vdXRwdXRfdG9rZW5zGAYgASgDEh0KFWNhY2hlX2NyZWF0aW9uX3Rva2VucxgHIAEoAxIZChFjYWNoZV9yZWFkX3Rva2VucxgIIAEoAxIaChJlc3RpbWF0ZWRfY29zdF91c2QYCSABKAESFgoOY2FjaGVfaGl0X3JhdGUYCiABKAESFQoNbWVzc2FnZV9jb3VudBgLIAEoBRI0ChBmaXJzdF9tZXNzYWdlX2F0GAwgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIzCg9sYXN0X21lc3NhZ2VfYXQYDSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhEKCWlzX29ycGhhbhgOIAEoCBIZChFza2lsbF9hY3RpdmF0aW9ucxgPIAMoCRIrCgl0b3BfdG9vbHMYECADKAsyGC5zZXNzaW9uLnYxLlRvcFRvb2xFbnRyeSJJCgxUb3BUb29sRW50cnkSEQoJdG9vbF9uYW1lGAEgASgJEhIKCmNhbGxfY291bnQYAiABKAUSEgoKbWNwX3NlcnZlchgDIAEoCSK9AwoQRGFpbHlUb2tlbkJ1Y2tldBIoCgRkYXRlGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIaChJ0b3RhbF9pbnB1dF90b2tlbnMYAiABKAMSGwoTdG90YWxfb3V0cHV0X3Rva2VucxgDIAEoAxIZChFjYWNoZV9yZWFkX3Rva2VucxgEIAEoAxIaChJlc3RpbWF0ZWRfY29zdF91c2QYBSABKAESFQoNc2Vzc2lvbl9jb3VudBgGIAEoBRJECg1jb3N0X2J5X21vZGVsGAcgAygLMi0uc2Vzc2lvbi52MS5EYWlseVRva2VuQnVja2V0LkNvc3RCeU1vZGVsRW50cnkSSAoPdG9rZW5zX2J5X21vZGVsGAggAygLMi8uc2Vzc2lvbi52MS5EYWlseVRva2VuQnVja2V0LlRva2Vuc0J5TW9kZWxFbnRyeRoyChBDb3N0QnlNb2RlbEVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoAToCOAEaNAoSVG9rZW5zQnlNb2RlbEVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoAzoCOAEirQEKDk1vZGVsQnJlYWtkb3duEhQKDG1vZGVsX2ZhbWlseRgBIAEoCRIaChJ0b3RhbF9pbnB1dF90b2tlbnMYAiABKAMSGwoTdG90YWxfb3V0cHV0X3Rva2VucxgDIAEoAxIZChFjYWNoZV9yZWFkX3Rva2VucxgEIAEoAxIaChJlc3RpbWF0ZWRfY29zdF91c2QYBSABKAESFQoNc2Vzc2lvbl9jb3VudBgGIAEoBSJZCghUb3BFbnRyeRIMCgRuYW1lGAEgASgJEhMKC3Rva2VuX2NvdW50GAIgASgDEhgKEGFjdGl2YXRpb25fY291bnQYAyABKAUSEAoIY29zdF91c2QYBCABKAEi6AEKGUdldEluc2lnaHRzU3VtbWFyeVJlcXVlc3QSKAoEZnJvbRgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASJgoCdG8YAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhkKDG1vZGVsX2ZpbHRlchgDIAEoCUgAiAEBEh4KEXNlc3Npb25faWRfZmlsdGVyGAQgASgJSAGIAQESFwoPaW5jbHVkZV9vcnBoYW5zGAUgASgIQg8KDV9tb2RlbF9maWx0ZXJCFAoSX3Nlc3Npb25faWRfZmlsdGVyItQDChpHZXRJbnNpZ2h0c1N1bW1hcnlSZXNwb25zZRIxCghzZXNzaW9ucxgBIAMoCzIfLnNlc3Npb24udjEuU2Vzc2lvblRva2VuU3VtbWFyeRIWCg50b3RhbF9jb3N0X3VzZBgCIAEoARIaChJ0b3RhbF9pbnB1dF90b2tlbnMYAyABKAMSGwoTdG90YWxfb3V0cHV0X3Rva2VucxgEIAEoAxIfChd0b3RhbF9jYWNoZV9yZWFkX3Rva2VucxgFIAEoAxIeChZvdmVyYWxsX2NhY2hlX2hpdF9yYXRlGAYgASgBEisKBWRhaWx5GAcgAygLMhwuc2Vzc2lvbi52MS5EYWlseVRva2VuQnVja2V0EioKBm1vZGVscxgIIAMoCzIaLnNlc3Npb24udjEuTW9kZWxCcmVha2Rvd24SKAoKdG9wX3NraWxscxgJIAMoCzIULnNlc3Npb24udjEuVG9wRW50cnkSJwoJdG9wX3Rvb2xzGAogAygLMhQuc2Vzc2lvbi52MS5Ub3BFbnRyeRISCgppc19sb2FkaW5nGAsgASgIEjEKDXByaWNpbmdfYXNfb2YYDCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIrcBChhMaXN0U2Vzc2lvblRva2Vuc1JlcXVlc3QSKAoEZnJvbRgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASJgoCdG8YAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg8KB3NvcnRfYnkYAyABKAkSEQoJc29ydF9kZXNjGAQgASgIEhEKCXBhZ2Vfc2l6ZRgFIAEoBRISCgpwYWdlX3Rva2VuGAYgASgJInwKGUxpc3RTZXNzaW9uVG9rZW5zUmVzcG9uc2USMQoIc2Vzc2lvbnMYASADKAsyHy5zZXNzaW9uLnYxLlNlc3Npb25Ub2tlblN1bW1hcnkSFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJEhMKC3RvdGFsX2NvdW50GAMgASgFImgKFFdhdGNoSW5zaWdodHNSZXF1ZXN0EigKBGZyb20YASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEiYKAnRvGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJ6Cg1JbnNpZ2h0c0V2ZW50EhIKCmV2ZW50X3R5cGUYASABKAkSNQoHc2Vzc2lvbhgCIAEoCzIfLnNlc3Npb24udjEuU2Vzc2lvblRva2VuU3VtbWFyeUgAiAEBEhIKCmFsbF9wYXJzZWQYAyABKAhCCgoIX3Nlc3Npb24yrgIKD0luc2lnaHRzU2VydmljZRJlChJHZXRJbnNpZ2h0c1N1bW1hcnkSJS5zZXNzaW9uLnYxLkdldEluc2lnaHRzU3VtbWFyeVJlcXVlc3QaJi5zZXNzaW9uLnYxLkdldEluc2lnaHRzU3VtbWFyeVJlc3BvbnNlIgASYgoRTGlzdFNlc3Npb25Ub2tlbnMSJC5zZXNzaW9uLnYxLkxpc3RTZXNzaW9uVG9rZW5zUmVxdWVzdBolLnNlc3Npb24udjEuTGlzdFNlc3Npb25Ub2tlbnNSZXNwb25zZSIAElAKDVdhdGNoSW5zaWdodHMSIC5zZXNzaW9uLnYxLldhdGNoSW5zaWdodHNSZXF1ZXN0Ghkuc2Vzc2lvbi52MS5JbnNpZ2h0c0V2ZW50IgAwAUKtAQoOY29tLnNlc3Npb24udjFCDUluc2lnaHRzUHJvdG9QAVpDZ2l0aHViLmNvbS90c3RhcGxlci9zdGFwbGVyLXNxdWFkL2dlbi9wcm90by9nby9zZXNzaW9uL3YxO3Nlc3Npb252MaICA1NYWKoCClNlc3Npb24uVjHKAgpTZXNzaW9uXFYx4gIWU2Vzc2lvblxWMVxHUEJNZXRhZGF0YeoCC1Nlc3Npb246OlYxYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChlzZXNzaW9uL3YxL2luc2lnaHRzLnByb3RvEgpzZXNzaW9uLnYxIowEChNTZXNzaW9uVG9rZW5TdW1tYXJ5EhIKCnNlc3Npb25faWQYASABKAkSFwoPY29udmVyc2F0aW9uX2lkGAIgASgJEhQKDHByb2plY3RfcGF0aBgDIAEoCRIVCg1wcmltYXJ5X21vZGVsGAQgASgJEhoKEnRvdGFsX2lucHV0X3Rva2VucxgFIAEoAxIbChN0b3RhbF9vdXRwdXRfdG9rZW5zGAYgASgDEh0KFWNhY2hlX2NyZWF0aW9uX3Rva2VucxgHIAEoAxIZChFjYWNoZV9yZWFkX3Rva2VucxgIIAEoAxIaChJlc3RpbWF0ZWRfY29zdF91c2QYCSABKAESFgoOY2FjaGVfaGl0X3JhdGUYCiABKAESFQoNbWVzc2FnZV9jb3VudBgLIAEoBRI0ChBmaXJzdF9tZXNzYWdlX2F0GAwgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIzCg9sYXN0X21lc3NhZ2VfYXQYDSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhEKCWlzX29ycGhhbhgOIAEoCBIZChFza2lsbF9hY3RpdmF0aW9ucxgPIAMoCRIrCgl0b3BfdG9vbHMYECADKAsyGC5zZXNzaW9uLnYxLlRvcFRvb2xFbnRyeRIXCg91bnByaWNlZF9tb2RlbHMYESADKAkiSQoMVG9wVG9vbEVudHJ5EhEKCXRvb2xfbmFtZRgBIAEoCRISCgpjYWxsX2NvdW50GAIgASgFEhIKCm1jcF9zZXJ2ZXIYAyABKAki1gMKEERhaWx5VG9rZW5CdWNrZXQSKAoEZGF0ZRgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASGgoSdG90YWxfaW5wdXRfdG9rZW5zGAIgASgDEhsKE3RvdGFsX291dHB1dF90b2tlbnMYAyABKAMSGQoRY2FjaGVfcmVhZF90b2tlbnMYBCABKAMSGgoSZXN0aW1hdGVkX2Nvc3RfdXNkGAUgASgBEhUKDXNlc3Npb25fY291bnQYBiABKAUSRAoNY29zdF9ieV9tb2RlbBgHIAMoCzItLnNlc3Npb24udjEuRGFpbHlUb2tlbkJ1Y2tldC5Db3N0QnlNb2RlbEVudHJ5EkgKD3Rva2Vuc19ieV9tb2RlbBgIIAMoCzIvLnNlc3Npb24udjEuRGFpbHlUb2tlbkJ1Y2tldC5Ub2tlbnNCeU1vZGVsRW50cnkSFwoPdW5wcmljZWRfbW9kZWxzGAkgAygJGjIKEENvc3RCeU1vZGVsRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgBOgI4ARo0ChJUb2tlbnNCeU1vZGVsRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgDOgI4ASLKAQoOTW9kZWxCcmVha2Rvd24SFAoMbW9kZWxfZmFtaWx5GAEgASgJEhoKEnRvdGFsX2lucHV0X3Rva2VucxgCIAEoAxIbChN0b3RhbF9vdXRwdXRfdG9rZW5zGAMgASgDEhkKEWNhY2hlX3JlYWRfdG9rZW5zGAQgASgDEhoKEmVzdGltYXRlZF9jb3N0X3VzZBgFIAEoARIVCg1zZXNzaW9uX2NvdW50GAYgASgFEhsKE3ByaWNpbmdfdW5hdmFpbGFibGUYByABKAgiWQoIVG9wRW50cnkSDAoEbmFtZRgBIAEoCRITCgt0b2tlbl9jb3VudBgCIAEoAxIYChBhY3RpdmF0aW9uX2NvdW50GAMgASgFEhAKCGNvc3RfdXNkGAQgASgBIugBChlHZXRJbnNpZ2h0c1N1bW1hcnlSZXF1ZXN0EigKBGZyb20YASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEiYKAnRvGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIZCgxtb2RlbF9maWx0ZXIYAyABKAlIAIgBARIeChFzZXNzaW9uX2lkX2ZpbHRlchgEIAEoCUgBiAEBEhcKD2luY2x1ZGVfb3JwaGFucxgFIAEoCEIPCg1fbW9kZWxfZmlsdGVyQhQKEl9zZXNzaW9uX2lkX2ZpbHRlciLtAwoaR2V0SW5zaWdodHNTdW1tYXJ5UmVzcG9uc2USMQoIc2Vzc2lvbnMYASADKAsyHy5zZXNzaW9uLnYxLlNlc3Npb25Ub2tlblN1bW1hcnkSFgoOdG90YWxfY29zdF91c2QYAiABKAESGgoSdG90YWxfaW5wdXRfdG9rZW5zGAMgASgDEhsKE3RvdGFsX291dHB1dF90b2tlbnMYBCABKAMSHwoXdG90YWxfY2FjaGVfcmVhZF90b2tlbnMYBSABKAMSHgoWb3ZlcmFsbF9jYWNoZV9oaXRfcmF0ZRgGIAEoARIrCgVkYWlseRgHIAMoCzIcLnNlc3Npb24udjEuRGFpbHlUb2tlbkJ1Y2tldBIqCgZtb2RlbHMYCCADKAsyGi5zZXNzaW9uLnYxLk1vZGVsQnJlYWtkb3duEigKCnRvcF9za2lsbHMYCSADKAsyFC5zZXNzaW9uLnYxLlRvcEVudHJ5EicKCXRvcF90b29scxgKIAMoCzIULnNlc3Npb24udjEuVG9wRW50cnkSEgoKaXNfbG9hZGluZxgLIAEoCBIxCg1wcmljaW5nX2FzX29mGAwgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIXCg91bnByaWNlZF9tb2RlbHMYDSADKAkitwEKGExpc3RTZXNzaW9uVG9rZW5zUmVxdWVzdBIoCgRmcm9tGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBImCgJ0bxgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDwoHc29ydF9ieRgDIAEoCRIRCglzb3J0X2Rlc2MYBCABKAgSEQoJcGFnZV9zaXplGAUgASgFEhIKCnBhZ2VfdG9rZW4YBiABKAkifAoZTGlzdFNlc3Npb25Ub2tlbnNSZXNwb25zZRIxCghzZXNzaW9ucxgBIAMoCzIfLnNlc3Npb24udjEuU2Vzc2lvblRva2VuU3VtbWFyeRIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkSEwoLdG90YWxfY291bnQYAyABKAUiaAoUV2F0Y2hJbnNpZ2h0c1JlcXVlc3QSKAoEZnJvbRgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASJgoCdG8YAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wInoKDUluc2lnaHRzRXZlbnQSEgoKZXZlbnRfdHlwZRgBIAEoCRI1CgdzZXNzaW9uGAIgASgLMh8uc2Vzc2lvbi52MS5TZXNzaW9uVG9rZW5TdW1tYXJ5SACIAQESEgoKYWxsX3BhcnNlZBgDIAEoCEIKCghfc2Vzc2lvbiLIAQoNVHVyblRva2VuU3RhdBItCgl0aW1lc3RhbXAYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg0KBW1vZGVsGAIgASgJEhQKDGlucHV0X3Rva2VucxgDIAEoAxIVCg1vdXRwdXRfdG9rZW5zGAQgASgDEh0KFWNhY2hlX2NyZWF0aW9uX3Rva2VucxgFIAEoAxIZChFjYWNoZV9yZWFkX3Rva2VucxgGIAEoAxISCgp0b29sX25hbWVzGAcgAygJIjgKHUdldFNlc3Npb25UdXJuVGltZWxpbmVSZXF1ZXN0EhcKD2NvbnZlcnNhdGlvbl9pZBgBIAEoCSJKCh5HZXRTZXNzaW9uVHVyblRpbWVsaW5lUmVzcG9uc2USKAoFdHVybnMYASADKAsyGS5zZXNzaW9uLnYxLlR1cm5Ub2tlblN0YXQyoQMKD0luc2lnaHRzU2VydmljZRJlChJHZXRJbnNpZ2h0c1N1bW1hcnkSJS5zZXNzaW9uLnYxLkdldEluc2lnaHRzU3VtbWFyeVJlcXVlc3QaJi5zZXNzaW9uLnYxLkdldEluc2lnaHRzU3VtbWFyeVJlc3BvbnNlIgASYgoRTGlzdFNlc3Npb25Ub2tlbnMSJC5zZXNzaW9uLnYxLkxpc3RTZXNzaW9uVG9rZW5zUmVxdWVzdBolLnNlc3Npb24udjEuTGlzdFNlc3Npb25Ub2tlbnNSZXNwb25zZSIAElAKDVdhdGNoSW5zaWdodHMSIC5zZXNzaW9uLnYxLldhdGNoSW5zaWdodHNSZXF1ZXN0Ghkuc2Vzc2lvbi52MS5JbnNpZ2h0c0V2ZW50IgAwARJxChZHZXRTZXNzaW9uVHVyblRpbWVsaW5lEikuc2Vzc2lvbi52MS5HZXRTZXNzaW9uVHVyblRpbWVsaW5lUmVxdWVzdBoqLnNlc3Npb24udjEuR2V0U2Vzc2lvblR1cm5UaW1lbGluZVJlc3BvbnNlIgBCrQEKDmNvbS5zZXNzaW9uLnYxQg1JbnNpZ2h0c1Byb3RvUAFaQ2dpdGh1Yi5jb20vdHN0YXBsZXIvc3RhcGxlci1zcXVhZC9nZW4vcHJvdG8vZ28vc2Vzc2lvbi92MTtzZXNzaW9udjGiAgNTWFiqAgpTZXNzaW9uLlYxygIKU2Vzc2lvblxWMeICFlNlc3Npb25cVjFcR1BCTWV0YWRhdGHqAgtTZXNzaW9uOjpWMWIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * SessionTokenSummary is the per-session aggregated token record.
@@ -107,6 +107,13 @@ export type SessionTokenSummary = Message<"session.v1.SessionTokenSummary"> & {
    * @generated from field: repeated session.v1.TopToolEntry top_tools = 16;
    */
   topTools: TopToolEntry[];
+
+  /**
+   * unpriced_models lists ModelFamily values with usage but no pricing entry, for this session.
+   *
+   * @generated from field: repeated string unpriced_models = 17;
+   */
+  unpricedModels: string[];
 };
 
 /**
@@ -196,6 +203,13 @@ export type DailyTokenBucket = Message<"session.v1.DailyTokenBucket"> & {
    * @generated from field: map<string, int64> tokens_by_model = 8;
    */
   tokensByModel: { [key: string]: bigint };
+
+  /**
+   * unpriced_models is the union of unpriced ModelFamily values across sessions rolled into this day.
+   *
+   * @generated from field: repeated string unpriced_models = 9;
+   */
+  unpricedModels: string[];
 };
 
 /**
@@ -242,6 +256,14 @@ export type ModelBreakdown = Message<"session.v1.ModelBreakdown"> & {
    * @generated from field: int32 session_count = 6;
    */
   sessionCount: number;
+
+  /**
+   * pricing_unavailable is true when total_input_tokens/total_output_tokens > 0 but no
+   * PricingTable entry exists for model_family.
+   *
+   * @generated from field: bool pricing_unavailable = 7;
+   */
+  pricingUnavailable: boolean;
 };
 
 /**
@@ -391,6 +413,13 @@ export type GetInsightsSummaryResponse = Message<"session.v1.GetInsightsSummaryR
    * @generated from field: google.protobuf.Timestamp pricing_as_of = 12;
    */
   pricingAsOf?: Timestamp;
+
+  /**
+   * unpriced_models is the aggregate union across all sessions in this response, for a dashboard-level banner.
+   *
+   * @generated from field: repeated string unpriced_models = 13;
+   */
+  unpricedModels: string[];
 };
 
 /**
@@ -531,6 +560,98 @@ export const InsightsEventSchema: GenMessage<InsightsEvent> = /*@__PURE__*/
   messageDesc(file_session_v1_insights, 10);
 
 /**
+ * TurnTokenStat is one assistant turn's token usage (per-turn breakdown tables).
+ *
+ * @generated from message session.v1.TurnTokenStat
+ */
+export type TurnTokenStat = Message<"session.v1.TurnTokenStat"> & {
+  /**
+   * unset if the turn has no timestamp
+   *
+   * @generated from field: google.protobuf.Timestamp timestamp = 1;
+   */
+  timestamp?: Timestamp;
+
+  /**
+   * @generated from field: string model = 2;
+   */
+  model: string;
+
+  /**
+   * @generated from field: int64 input_tokens = 3;
+   */
+  inputTokens: bigint;
+
+  /**
+   * @generated from field: int64 output_tokens = 4;
+   */
+  outputTokens: bigint;
+
+  /**
+   * @generated from field: int64 cache_creation_tokens = 5;
+   */
+  cacheCreationTokens: bigint;
+
+  /**
+   * @generated from field: int64 cache_read_tokens = 6;
+   */
+  cacheReadTokens: bigint;
+
+  /**
+   * @generated from field: repeated string tool_names = 7;
+   */
+  toolNames: string[];
+};
+
+/**
+ * Describes the message session.v1.TurnTokenStat.
+ * Use `create(TurnTokenStatSchema)` to create a new message.
+ */
+export const TurnTokenStatSchema: GenMessage<TurnTokenStat> = /*@__PURE__*/
+  messageDesc(file_session_v1_insights, 11);
+
+/**
+ * GetSessionTurnTimelineRequest looks up per-turn stats for a single session,
+ * fetched on-demand when the session detail drawer opens.
+ *
+ * @generated from message session.v1.GetSessionTurnTimelineRequest
+ */
+export type GetSessionTurnTimelineRequest = Message<"session.v1.GetSessionTurnTimelineRequest"> & {
+  /**
+   * JSONL conversation UUID (SessionTokenSummary.conversation_id)
+   *
+   * @generated from field: string conversation_id = 1;
+   */
+  conversationId: string;
+};
+
+/**
+ * Describes the message session.v1.GetSessionTurnTimelineRequest.
+ * Use `create(GetSessionTurnTimelineRequestSchema)` to create a new message.
+ */
+export const GetSessionTurnTimelineRequestSchema: GenMessage<GetSessionTurnTimelineRequest> = /*@__PURE__*/
+  messageDesc(file_session_v1_insights, 12);
+
+/**
+ * GetSessionTurnTimelineResponse returns the per-turn breakdown for one session.
+ *
+ * @generated from message session.v1.GetSessionTurnTimelineResponse
+ */
+export type GetSessionTurnTimelineResponse = Message<"session.v1.GetSessionTurnTimelineResponse"> & {
+  /**
+   * @generated from field: repeated session.v1.TurnTokenStat turns = 1;
+   */
+  turns: TurnTokenStat[];
+};
+
+/**
+ * Describes the message session.v1.GetSessionTurnTimelineResponse.
+ * Use `create(GetSessionTurnTimelineResponseSchema)` to create a new message.
+ */
+export const GetSessionTurnTimelineResponseSchema: GenMessage<GetSessionTurnTimelineResponse> = /*@__PURE__*/
+  messageDesc(file_session_v1_insights, 13);
+
+/**
  * InsightsService provides token usage analytics derived from JSONL transcripts.
  *
  * @generated from service session.v1.InsightsService
@@ -565,6 +686,17 @@ export const InsightsService: GenService<{
     methodKind: "server_streaming";
     input: typeof WatchInsightsRequestSchema;
     output: typeof InsightsEventSchema;
+  },
+  /**
+   * GetSessionTurnTimeline returns per-turn token stats for one session, fetched
+   * on-demand when the session detail drawer opens (not embedded in list responses).
+   *
+   * @generated from rpc session.v1.InsightsService.GetSessionTurnTimeline
+   */
+  getSessionTurnTimeline: {
+    methodKind: "unary";
+    input: typeof GetSessionTurnTimelineRequestSchema;
+    output: typeof GetSessionTurnTimelineResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_session_v1_insights, 0);

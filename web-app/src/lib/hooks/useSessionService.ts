@@ -98,6 +98,7 @@ interface UseSessionServiceReturn {
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
   hibernateSession: (id: string) => Promise<Session | null>;
   resumeHibernatedSession: (id: string) => Promise<Session | null>;
+  resumeCrashedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
@@ -128,6 +129,9 @@ interface UseSessionServiceReturn {
   stopWatching: () => void;
 
   // Session monitor
+  // Both reject on a genuine fetch failure (network/RPC error) rather than
+  // resolving to an empty result — callers must distinguish "fetch failed" from
+  // "genuinely no output yet" and surface the former as a retryable error state.
   getTerminalSnapshot: (sessionId: string, lastNLines?: number) => Promise<string>;
   writeToSession: (sessionId: string, input: string, pressEnter?: boolean) => Promise<boolean>;
   getConversationMessages: (sessionId: string, limit?: number) => Promise<Array<{ role: string; content: string; timestamp?: string; model?: string }>>;
@@ -309,6 +313,7 @@ export function useSessionService(
           id,
           status: updates.status,
           category: updates.category,
+          note: updates.note,
           title: updates.title,
           program: updates.program,
           tags: updates.tags ?? [],
@@ -415,6 +420,25 @@ export function useSessionService(
     [dispatch]
   );
 
+  // Resume a crashed session (Crashed → Active). Server-side resume of a dead
+  // tmux pane detected by SessionHealthChecker — threads --resume automatically
+  // when a conversation UUID is known, no manual copy/paste required.
+  const resumeCrashedSession = useCallback(
+    async (id: string): Promise<Session | null> => {
+      if (!clientRef.current) return null;
+      dispatch(setError(null));
+      try {
+        const response = await clientRef.current.resumeCrashedSession({ id });
+        if (response.session) dispatch(upsertSession(response.session));
+        return response.session ?? null;
+      } catch (err) {
+        console.error("[useSessionService] resumeCrashedSession failed:", err);
+        dispatch(setError(err instanceof Error ? err.message : "Failed to resume crashed session"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
 
   // Rename session
   const renameSession = useCallback(
@@ -1036,12 +1060,11 @@ export function useSessionService(
   const getTerminalSnapshot = useCallback(
     async (sessionId: string, lastNLines = 50): Promise<string> => {
       if (!clientRef.current) return "";
-      try {
-        const resp = await clientRef.current.getTerminalSnapshot({ sessionId, lastNLines });
-        return resp.content ?? "";
-      } catch {
-        return "";
-      }
+      // Deliberately not caught here: a fetch failure must propagate to the
+      // caller (SessionMonitor) so it can render a distinct "failed to load"
+      // state instead of silently rendering identically to real emptiness.
+      const resp = await clientRef.current.getTerminalSnapshot({ sessionId, lastNLines });
+      return resp.content ?? "";
     },
     []
   );
@@ -1062,17 +1085,16 @@ export function useSessionService(
   const getConversationMessages = useCallback(
     async (sessionId: string, limit = 30): Promise<Array<{ role: string; content: string; timestamp?: string; model?: string }>> => {
       if (!clientRef.current) return [];
-      try {
-        const resp = await clientRef.current.getClaudeHistoryMessages({ id: sessionId, limit, tail: true });
-        return (resp.messages ?? []).map((m) => ({
-          role: m.role,
-          content: m.content,
-          timestamp: m.timestamp ? new Date(Number(m.timestamp.seconds) * 1000).toISOString() : undefined,
-          model: m.model,
-        }));
-      } catch {
-        return [];
-      }
+      // See getTerminalSnapshot above: fetch failures propagate to the caller
+      // instead of resolving to an empty array indistinguishable from "no
+      // conversation history yet".
+      const resp = await clientRef.current.getClaudeHistoryMessages({ id: sessionId, limit, tail: true });
+      return (resp.messages ?? []).map((m) => ({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp ? new Date(Number(m.timestamp.seconds) * 1000).toISOString() : undefined,
+        model: m.model,
+      }));
     },
     []
   );
@@ -1093,6 +1115,7 @@ export function useSessionService(
     resumeSession,
     hibernateSession,
     resumeHibernatedSession,
+    resumeCrashedSession,
     renameSession,
     restartSession,
     clearConversationState,

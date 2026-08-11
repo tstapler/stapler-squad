@@ -2,7 +2,11 @@ import { renderHook } from "@testing-library/react";
 import { useProjectedCost } from "@/lib/hooks/useProjectedCost";
 import type { DailyTokenBucket } from "@/gen/session/v1/insights_pb";
 
-function makeBucket(dateStr: string, cost: number): DailyTokenBucket {
+function makeBucket(
+  dateStr: string,
+  cost: number,
+  unpricedModels: string[] = []
+): DailyTokenBucket {
   const d = new Date(dateStr + "T12:00:00Z");
   return {
     date: { seconds: BigInt(Math.floor(d.getTime() / 1000)), nanos: 0 },
@@ -13,6 +17,7 @@ function makeBucket(dateStr: string, cost: number): DailyTokenBucket {
     sessionCount: 1,
     costByModel: {},
     tokensByModel: {},
+    unpricedModels,
   } as unknown as DailyTokenBucket;
 }
 
@@ -161,5 +166,27 @@ describe("useProjectedCost", () => {
     }
 
     jest.useRealTimers();
+  });
+
+  it("useProjectedCost_should_setHasUnpricedUsageTrue_When_anyCurrentMonthDayHasUnpricedModels", () => {
+    const daily = [1, 2, 3, 4, 5, 6, 7].map((day) =>
+      makeBucket(
+        currentMonthDateStr(day),
+        1.0,
+        day === 3 ? ["claude-opus-6"] : []
+      )
+    );
+    const { result } = renderHook(() => useProjectedCost(daily));
+    expect(result.current).not.toBeNull();
+    expect(result.current?.hasUnpricedUsage).toBe(true);
+  });
+
+  it("useProjectedCost_should_setHasUnpricedUsageFalse_When_noCurrentMonthDayHasUnpricedModels", () => {
+    const daily = [1, 2, 3, 4, 5, 6, 7].map((day) =>
+      makeBucket(currentMonthDateStr(day), 1.0)
+    );
+    const { result } = renderHook(() => useProjectedCost(daily));
+    expect(result.current).not.toBeNull();
+    expect(result.current?.hasUnpricedUsage).toBe(false);
   });
 });

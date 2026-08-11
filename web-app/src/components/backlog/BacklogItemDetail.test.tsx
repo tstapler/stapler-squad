@@ -475,13 +475,19 @@ describe("BacklogItemDetail — Story 5.3.1: shouldPoll removal / live updates",
     });
     expect(screen.getByText("Refactor auth middleware")).toBeInTheDocument();
 
-    // Simulate a BacklogItemUpdatedEvent landing in backlogItemsSlice.
+    // Simulate a BacklogItemUpdatedEvent landing in backlogItemsSlice. A real
+    // event always carries a newer updated_at than what's already displayed
+    // — the loadGuard test suite covers the reverse (an older/stale live
+    // event must NOT stomp a newer item), so this fixture must be genuinely
+    // newer than makeItem's "2026-07-12T14:02:00Z" to exercise the normal
+    // "apply it" path rather than accidentally tripping that guard.
     mockLiveItemsMap = {
       "item-1": {
         id: "item-1",
         title: "Refactor auth middleware (renamed live)",
         status: "idea",
         priority: 3,
+        updatedAt: timestampFromDate(new Date("2026-07-12T14:05:00Z")),
       },
     };
 
@@ -1121,6 +1127,7 @@ describe("BacklogItemDetail — Story 3.1.5: auto-expand-on-status-change, first
         title: "Refactor auth middleware",
         status: "review",
         priority: 3,
+        updatedAt: timestampFromDate(new Date("2026-07-12T14:05:00Z")),
       },
     };
     await act(async () => {
@@ -1191,5 +1198,40 @@ describe("BacklogItemDetail — regression: Collapsible's defaultExpanded-in-gro
     expect(warnSpy).not.toHaveBeenCalled();
 
     warnSpy.mockRestore();
+  });
+});
+
+describe("BacklogItemDetail — Epic 4.2 (backlog-github-two-way-sync): Source section", () => {
+  it("BacklogItemDetail_should_OmitSourceSection_When_ExternalUrlEmpty", async () => {
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("collapsible-header-source")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderSourceSection_When_ExternalUrlPresent", async () => {
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([session]),
+      externalUrl: "https://github.com/acme/widget/issues/42",
+      externalId: "42",
+      labels: ["bug"],
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("collapsible-header-source")).toBeInTheDocument();
   });
 });

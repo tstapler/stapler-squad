@@ -290,6 +290,19 @@ func (d *DefaultStatusDeterminer) Determine(
 		action = DetectionActionAdd
 	}
 
+	// Hidden (system/background) instances must never surface TaskComplete/Idle/Stale
+	// notifications — those reasons are routine, low-signal states that a hidden session
+	// shouldn't interrupt the user for. ReasonErrorState and ReasonTestsFailing are
+	// deliberately excluded from this narrowing: no other durable detector watches a
+	// still-alive, stuck-in-error Hidden review session, so those must still surface even
+	// when Hidden. This gate is reason-scoped and lives here (not as an early return) so it
+	// applies uniformly regardless of which caller (ReviewQueuePoller.checkSession,
+	// StartupScanner.Scan) invokes Determine.
+	if inst.Hidden && action == DetectionActionAdd &&
+		(reason == ReasonTaskComplete || reason == ReasonIdle || reason == ReasonStale) {
+		action = DetectionActionSkip
+	}
+
 	return DetectionResult{
 		Action:        action,
 		Reason:        reason,

@@ -344,6 +344,21 @@ export const accountChipEnv = style({
   whiteSpace: "nowrap",
 });
 
+export const hostBadge = style({
+  fontSize: "0.85em",
+  opacity: 0.7,
+});
+
+export const hostInput = style({
+  padding: `2px ${vars.space["2"]}`,
+  border: `1px solid ${vars.color.borderMuted}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  fontFamily: vars.font.mono,
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textSecondary,
+});
+
 export const disconnectAccountButton = style({
   display: "inline-flex",
   alignItems: "center",
@@ -374,6 +389,47 @@ export const addAccountButton = style({
     borderColor: vars.color.primary,
     color: vars.color.primary,
   },
+});
+
+export const cliImportSection = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  padding: `${vars.space["2"]} 0`,
+});
+
+export const cliImportLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const cliImportHostList = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+});
+
+export const cliImportHostButton = style({
+  padding: `2px ${vars.space["2"]}`,
+  background: vars.color.accentBg,
+  border: `1px solid ${vars.color.inputFocusBorder}`,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.inputFocusBorder,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  selectors: {
+    "&:disabled": {
+      opacity: 0.6,
+      cursor: "default",
+    },
+  },
+});
+
+export const cliImportDivider = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  opacity: 0.7,
 });
 
 // --- Stats bar ---
@@ -522,6 +578,49 @@ export const searchInput = style({
     transition: "width 0.2s",
   },
 });
+
+// --- Add account panel (tab switcher) ---
+
+export const addAccountPanel = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+  marginLeft: vars.space["4"],
+});
+
+export const authTabs = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+});
+
+const authTabBase = style({
+  padding: `${vars.space["1"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 500,
+  cursor: "pointer",
+  border: `1px solid ${vars.color.borderMuted}`,
+  background: "transparent",
+  color: vars.color.textMuted,
+  whiteSpace: "nowrap",
+  ":hover": {
+    borderColor: vars.color.borderHover,
+    color: vars.color.textSecondary,
+  },
+});
+
+export const authTab = style([authTabBase, {}]);
+
+export const authTabActive = style([
+  authTabBase,
+  {
+    background: vars.color.accentBg,
+    borderColor: vars.color.inputFocusBorder,
+    color: vars.color.inputFocusBorder,
+    fontWeight: 600,
+  },
+]);
 
 // --- Session action buttons ---
 

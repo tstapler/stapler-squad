@@ -70,3 +70,9 @@ export const inputError = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.errorText,
 });
+
+export const caveat = style({
+  color: vars.color.warningText,
+  fontStyle: "italic",
+  fontSize: vars.fontSize.sm,
+});

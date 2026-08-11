@@ -329,3 +329,18 @@ export const errorState = style({
   textAlign: "center",
   color: vars.color.error,
 });
+
+export const errorRetryButton = style({
+  marginTop: "1rem",
+  padding: "0.4rem 1rem",
+  background: "transparent",
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: "4px",
+  color: vars.color.error,
+  fontSize: "0.875rem",
+  cursor: "pointer",
+  transition: "background 0.2s",
+  selectors: {
+    "&:hover": { background: vars.color.terminalHoverBg },
+  },
+});

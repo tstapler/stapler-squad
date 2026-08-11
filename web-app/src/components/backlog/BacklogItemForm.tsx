@@ -15,6 +15,7 @@ import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
 import { getApiBaseUrl } from "@/lib/config";
 import { routes } from "@/lib/routes";
+import { BACKLOG_CATEGORIES, CATEGORY_DEFAULTS } from "@/lib/backlog/categoryDefaults";
 import * as styles from "./BacklogItemForm.css";
 import * as markdownStyles from "./markdownBody.css";
 
@@ -55,6 +56,13 @@ const PIPELINE_MODE_UNKNOWN_HINT =
 const SDD_PIPELINE_MODE_SLUG = "sdd";
 const SDD_DEFAULT_PIPELINE_FLAG = "backlog:sdd-default-pipeline";
 
+const UNCATEGORIZED_OPTION: RadioGroupOption<string> = {
+  value: "",
+  label: "Uncategorized",
+  description: "No automation defaults applied — set overrides manually below.",
+  dataTestId: "backlog-category-uncategorized",
+};
+
 interface BacklogItemFormProps {
   initialValues?: Partial<BacklogItem>;
   onSubmit: (data: BacklogItemInput) => Promise<void>;
@@ -92,6 +100,7 @@ export function BacklogItemForm({
     initialValues?.acCriteria ?? []
   );
   const [pipelineMode, setPipelineMode] = useState(initialValues?.pipelineMode ?? "");
+  const [category, setCategory] = useState(initialValues?.category ?? "");
   // Guards the one-shot SDD default pre-selection below from ever re-firing
   // after either the user has manually touched the selector, or the
   // pre-selection has already applied once — see handlePipelineModeChange
@@ -157,6 +166,53 @@ export function BacklogItemForm({
     pipelineModeTouchedRef.current = true;
     setPipelineMode(value);
   }, []);
+
+  const categoryOptions = useMemo<RadioGroupOption<string>[]>(
+    () => [
+      UNCATEGORIZED_OPTION,
+      ...BACKLOG_CATEGORIES.map((c) => ({
+        value: c.value,
+        label: c.label,
+        description: c.description,
+        dataTestId: `backlog-category-${c.value}`,
+      })),
+    ],
+    []
+  );
+
+  const categoryHintForValue = useCallback(
+    (v: string) => categoryOptions.find((o) => o.value === v)?.description,
+    [categoryOptions]
+  );
+
+  // Applies a category's automation-toggle defaults to local form state.
+  // Deliberately scoped to CREATE mode only (initialValues?.id unset) — this
+  // is a one-time "apply template" action fired at category-selection time,
+  // never a persistent binding: every field it touches remains a normal,
+  // fully-editable control afterward, and any later manual change to that
+  // field always wins over what this handler set. Re-selecting a category
+  // (including switching between two categories) re-applies that category's
+  // defaults from scratch each time — deliberately chosen over "don't
+  // clobber a field the user already touched" for predictability: picking a
+  // category always shows exactly that category's defaults, with no
+  // per-field history to reason about. On an existing item (edit mode) this
+  // only ever updates the `category` label itself — the automation toggles
+  // are intentionally left untouched.
+  const handleCategoryChange = useCallback(
+    (value: string) => {
+      setCategory(value);
+      if (initialValues?.id) return;
+      const defaults = CATEGORY_DEFAULTS[value];
+      if (!defaults) return;
+      setSkipReviewGate(defaults.skipReviewGate);
+      setSkipPlanning(defaults.skipPlanning);
+      setAutoSpawnSession(defaults.autoSpawnSession);
+      setAutoCreatePR(defaults.autoCreatePR);
+      pipelineModeTouchedRef.current = true;
+      setPipelineMode(defaults.pipelineMode);
+    },
+    [initialValues?.id]
+  );
 
   // Options offered by the RadioGroup: "Default" is always first and always
   // present. While the fetch is pending or failed, no other options render —
@@ -268,12 +324,13 @@ export function BacklogItemForm({
           acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
           skipTriage: isVague,
           pipelineMode,
+          category,
         });
       } finally {
         setSubmitting(false);
       }
     },
-    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, onSubmit, validate]
+    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, category, onSubmit, validate]
   );
 
   const addCriterion = useCallback(() => {
@@ -534,6 +591,18 @@ export function BacklogItemForm({
             <option value={5}>P5 — Trivial</option>
           </select>
         </div>
+      </div>
+
+      {/* Category selector — pre-fills automation-toggle defaults on create, and is
+          just a label on an existing item (edit mode never touches the toggles). */}
+      <div className={styles.fieldGroup}>
+        <RadioGroup
+          options={categoryOptions}
+          value={category}
+          onChange={handleCategoryChange}
+          groupLabel="Category"
+          hintForValue={categoryHintForValue}
+        />
       </div>
 
       {/* Pipeline mode selector (Epic 3.2) */}

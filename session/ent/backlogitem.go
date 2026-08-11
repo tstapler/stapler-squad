@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -41,6 +42,8 @@ type BacklogItem struct {
 	AutoCreatePr bool `json:"auto_create_pr,omitempty"`
 	// Slug of the PipelineMode this item uses to drive triage/work/review content. Empty string means the built-in default (today's fixed hardcoded pipeline).
 	PipelineMode string `json:"pipeline_mode,omitempty"`
+	// Coarse classification (bugfix/feature/chore/refactor) used by the frontend to pre-fill sane automation-toggle defaults at creation time. Empty string means uncategorized (today's behavior, preserved exactly). See session.IsValidBacklogCategory for the validated enum.
+	Category string `json:"category,omitempty"`
 	// PlanApproved holds the value of the "plan_approved" field.
 	PlanApproved bool `json:"plan_approved,omitempty"`
 	// PlanApprovedAt holds the value of the "plan_approved_at" field.
@@ -57,6 +60,10 @@ type BacklogItem struct {
 	Notes string `json:"notes,omitempty"`
 	// ExternalID holds the value of the "external_id" field.
 	ExternalID string `json:"external_id,omitempty"`
+	// ExternalURL holds the value of the "external_url" field.
+	ExternalURL string `json:"external_url,omitempty"`
+	// Labels holds the value of the "labels" field.
+	Labels []string `json:"labels,omitempty"`
 	// UserModifiedStatusAt holds the value of the "user_modified_status_at" field.
 	UserModifiedStatusAt *time.Time `json:"user_modified_status_at,omitempty"`
 	// ArchivedAt holds the value of the "archived_at" field.
@@ -73,6 +80,10 @@ type BacklogItem struct {
 	ShippedChangesReqCount int `json:"shipped_changes_req_count,omitempty"`
 	// Timestamp the durable ship snapshot was captured at.
 	ShippedSnapshotAt *time.Time `json:"shipped_snapshot_at,omitempty"`
+	// Per-item high-water mark: the newest substantive PR review-feedback timestamp a fix session has already been dispatched to address. GitHub never clears COMMENTED reviews/comments on push, so this watermark is what stops already-addressed feedback from re-triggering a fix session on every ReconcilePRPending tick.
+	PrFeedbackAddressedAt *time.Time `json:"pr_feedback_addressed_at,omitempty"`
+	// Per-item high-water mark: the GitHub issue updated_at value most recently synced from GitHub into this item. Stops a forward-sync write from GitHub from being re-observed and re-synced back to GitHub on the next poll (loop prevention).
+	GithubSyncedIssueUpdatedAt *time.Time `json:"github_synced_issue_updated_at,omitempty"`
 	// JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time
 	ShippedFileStats string `json:"shipped_file_stats,omitempty"`
 	// true when CaptureShipSnapshot's GitHub fetch or file-stats computation failed — distinct from shipped_check_conclusion, which holds only genuine CI-conclusion values
@@ -170,13 +181,15 @@ func (*BacklogItem) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case backlogitem.FieldLabels:
+			values[i] = new([]byte)
 		case backlogitem.FieldSkipReviewGate, backlogitem.FieldSkipPlanning, backlogitem.FieldAutoSpawnSession, backlogitem.FieldAutoCreatePr, backlogitem.FieldPlanApproved, backlogitem.FieldQueuedAutonomous, backlogitem.FieldShippedSnapshotCaptureFailed:
 			values[i] = new(sql.NullBool)
 		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount, backlogitem.FieldReworkCapOverride:
 			values[i] = new(sql.NullInt64)
-		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
+		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldCategory, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldExternalURL, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
 			values[i] = new(sql.NullString)
-		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
+		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldPrFeedbackAddressedAt, backlogitem.FieldGithubSyncedIssueUpdatedAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
 		case backlogitem.FieldID:
 			values[i] = new(uuid.UUID)
@@ -269,6 +282,12 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.PipelineMode = value.String
 			}
+		case backlogitem.FieldCategory:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field category", values[i])
+			} else if value.Valid {
+				_m.Category = value.String
+			}
 		case backlogitem.FieldPlanApproved:
 			if value, ok := values[i].(*sql.NullBool); !ok {
 				return fmt.Errorf("unexpected type %T for field plan_approved", values[i])
@@ -318,6 +337,20 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field external_id", values[i])
 			} else if value.Valid {
 				_m.ExternalID = value.String
+			}
+		case backlogitem.FieldExternalURL:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field external_url", values[i])
+			} else if value.Valid {
+				_m.ExternalURL = value.String
+			}
+		case backlogitem.FieldLabels:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field labels", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Labels); err != nil {
+					return fmt.Errorf("unmarshal field labels: %w", err)
+				}
 			}
 		case backlogitem.FieldUserModifiedStatusAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -369,6 +402,20 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ShippedSnapshotAt = new(time.Time)
 				*_m.ShippedSnapshotAt = value.Time
+			}
+		case backlogitem.FieldPrFeedbackAddressedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field pr_feedback_addressed_at", values[i])
+			} else if value.Valid {
+				_m.PrFeedbackAddressedAt = new(time.Time)
+				*_m.PrFeedbackAddressedAt = value.Time
+			}
+		case backlogitem.FieldGithubSyncedIssueUpdatedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field github_synced_issue_updated_at", values[i])
+			} else if value.Valid {
+				_m.GithubSyncedIssueUpdatedAt = new(time.Time)
+				*_m.GithubSyncedIssueUpdatedAt = value.Time
 			}
 		case backlogitem.FieldShippedFileStats:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -507,6 +554,9 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString("pipeline_mode=")
 	builder.WriteString(_m.PipelineMode)
 	builder.WriteString(", ")
+	builder.WriteString("category=")
+	builder.WriteString(_m.Category)
+	builder.WriteString(", ")
 	builder.WriteString("plan_approved=")
 	builder.WriteString(fmt.Sprintf("%v", _m.PlanApproved))
 	builder.WriteString(", ")
@@ -535,6 +585,12 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString("external_id=")
 	builder.WriteString(_m.ExternalID)
 	builder.WriteString(", ")
+	builder.WriteString("external_url=")
+	builder.WriteString(_m.ExternalURL)
+	builder.WriteString(", ")
+	builder.WriteString("labels=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Labels))
+	builder.WriteString(", ")
 	if v := _m.UserModifiedStatusAt; v != nil {
 		builder.WriteString("user_modified_status_at=")
 		builder.WriteString(v.Format(time.ANSIC))
@@ -562,6 +618,16 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString(", ")
 	if v := _m.ShippedSnapshotAt; v != nil {
 		builder.WriteString("shipped_snapshot_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.PrFeedbackAddressedAt; v != nil {
+		builder.WriteString("pr_feedback_addressed_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.GithubSyncedIssueUpdatedAt; v != nil {
+		builder.WriteString("github_synced_issue_updated_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")

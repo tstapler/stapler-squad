@@ -72,10 +72,11 @@ type loginResult struct {
 	checkedAt time.Time
 }
 
-// connectedAccount is one (token, login) pair resolved during a multi-account fetch.
+// connectedAccount is one (token, login, host) triple resolved during a multi-account fetch.
 type connectedAccount struct {
 	token string
 	login string
+	host  string
 }
 
 // multiLoginState caches the resolved accounts for the multi-account path.
@@ -121,6 +122,7 @@ type UserPRCache struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	startOnce    sync.Once
+	done         chan struct{} // closed when loop() returns; nil until Start
 }
 
 // NewUserPRCache creates a cache with default configuration.
@@ -140,13 +142,28 @@ func NewUserPRCacheWithConfig(cfg UserPRCacheConfig) *UserPRCache {
 func (c *UserPRCache) Start(ctx context.Context) {
 	c.startOnce.Do(func() {
 		c.ctx, c.cancel = context.WithCancel(ctx)
+		c.done = make(chan struct{})
 		go c.loop()
 	})
 }
 
-// Stop halts background polling.
+// Stop halts background polling and blocks until loop() has actually exited.
+// Without waiting here, a caller (notably a test's t.Cleanup) can return while
+// loop()'s unconditional first fetch (see loop's doc comment) is still running,
+// letting it race the next caller's use of shared package-level state (e.g.
+// go-keyring's mock, which a subsequent test re-initializes via MockInit) —
+// confirmed live via `go test -race`: TestListGitHubAccounts_
+// AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts raced
+// against a prior test's still-running fetch() on go-keyring's global state.
+// Safe to call before Start (done is nil, no-op) or more than once (cancel and
+// a receive on an already-closed channel are both idempotent).
 func (c *UserPRCache) Stop() {
-	c.cancel()
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.done != nil {
+		<-c.done
+	}
 }
 
 // SetOnUpdated atomically registers a callback invoked after every successful
@@ -217,6 +234,26 @@ func (c *UserPRCache) GetCachedLogins() []string {
 	return out
 }
 
+// CachedAccount is a resolved (login, host) pair for the accounts list RPC.
+type CachedAccount struct {
+	Login string
+	Host  string
+}
+
+// GetCachedAccounts returns all connected GitHub accounts with their host.
+func (c *UserPRCache) GetCachedAccounts() []CachedAccount {
+	v := c.multiLogin.Load()
+	s, ok := v.(*multiLoginState)
+	if !ok || s == nil {
+		return nil
+	}
+	out := make([]CachedAccount, len(s.accounts))
+	for i, a := range s.accounts {
+		out[i] = CachedAccount{Login: a.login, Host: a.host}
+	}
+	return out
+}
+
 // Annotate enriches the current snapshot with session IDs and worktree paths.
 // It performs a COW update: load → copy → mutate → store.
 // No-op if the snapshot hasn't been populated yet.
@@ -277,8 +314,10 @@ func (c *UserPRCache) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// loop is the background polling goroutine.
+// loop is the background polling goroutine. Closes c.done on exit so Stop can
+// block until this goroutine has genuinely finished (see Stop's doc comment).
 func (c *UserPRCache) loop() {
+	defer close(c.done)
 	// Fetch immediately on start.
 	if err := c.fetch(); err != nil {
 		log.Warn("UserPRCache: initial fetch failed", "err", err)
@@ -319,7 +358,7 @@ func (c *UserPRCache) fetch() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			prs, fetchErr := c.fetchUserPRsForToken(acc.token)
+			prs, fetchErr := c.fetchUserPRsForToken(acc.host, acc.token)
 			results[i] = prResult{prs: prs, err: fetchErr}
 		}()
 	}
@@ -393,12 +432,12 @@ func (c *UserPRCache) resolveAllLogins() ([]connectedAccount, error) {
 		for _, tok := range tokens {
 			tok := tok
 			go func() {
-				login, err := GetCurrentUserLoginWithToken(ctx, tok.Token)
+				login, err := GetCurrentUserLoginWithToken(ctx, tok.Host, tok.Token)
 				if err != nil || login == "" {
 					ch <- loginRes{err: err}
 					return
 				}
-				ch <- loginRes{acc: connectedAccount{token: tok.Token, login: login}}
+				ch <- loginRes{acc: connectedAccount{token: tok.Token, login: login, host: tok.Host}}
 			}()
 		}
 
@@ -410,8 +449,9 @@ func (c *UserPRCache) resolveAllLogins() ([]connectedAccount, error) {
 			if r.err != nil || r.acc.login == "" {
 				continue
 			}
-			if !seen[r.acc.login] {
-				seen[r.acc.login] = true
+			key := r.acc.host + "/" + r.acc.login
+			if !seen[key] {
+				seen[key] = true
 				accounts = append(accounts, r.acc)
 				logins = append(logins, r.acc.login)
 			}
@@ -546,16 +586,22 @@ type graphQLPRNode struct {
 	} `json:"commits"`
 }
 
-func (c *UserPRCache) fetchUserPRsForToken(token string) ([]UserPR, error) {
+func (c *UserPRCache) fetchUserPRsForToken(host, token string) ([]UserPR, error) {
 	body, err := json.Marshal(map[string]string{"query": userPRGraphQLQuery})
 	if err != nil {
 		return nil, fmt.Errorf("marshal GraphQL query: %w", err)
 	}
 
-	req, err := newGHPostRequestWithToken(c.ctx, "graphql", bytes.NewReader(body), token)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, graphQLURLForHost(host), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build GraphQL request: %w", err)
 	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
 	resp, err := ghHTTPClient.Do(req)
 	if err != nil {

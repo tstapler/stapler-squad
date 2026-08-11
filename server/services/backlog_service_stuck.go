@@ -51,6 +51,10 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR
 	case domain.StuckReasonReworkBlockedStale:
 		return sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE
+	case domain.StuckReasonPRNeedsFix:
+		return sessionv1.StuckReason_STUCK_REASON_PR_NEEDS_FIX
+	case domain.StuckReasonRespawnBlockedActive:
+		return sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -86,6 +90,10 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonPRPendingNoPR
 	case sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE:
 		return domain.StuckReasonReworkBlockedStale
+	case sessionv1.StuckReason_STUCK_REASON_PR_NEEDS_FIX:
+		return domain.StuckReasonPRNeedsFix
+	case sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE:
+		return domain.StuckReasonRespawnBlockedActive
 	default:
 		return ""
 	}
@@ -107,6 +115,7 @@ func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBac
 		PrUrl:               row.PrURL,
 		Context:             row.Context,
 		RemediationAttempts: row.RemediationAttempts,
+		PlanArtifactsPath:   row.PlanArtifactsPath,
 	}
 	if row.NextRemediationAt != nil {
 		item.NextRemediationAt = timestamppb.New(*row.NextRemediationAt)
@@ -252,9 +261,15 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 		return s.AutoRespawnAutonomousWork
 	case domain.StuckReasonStaleWork:
 		return s.RemediateStaleWorkSession
+	case domain.StuckReasonOrphanedTriage:
+		return s.AutoRespawnTriage
 	case domain.StuckReasonPRPendingNoPR:
 		return func(ctx context.Context, itemID string) error {
 			return s.AutoReopenForPRFix(ctx, itemID, "Manually triggered reopen — item was stuck in pr_pending with no PR reference (BUG-040)")
+		}
+	case domain.StuckReasonPRNeedsFix:
+		return func(ctx context.Context, itemID string) error {
+			return s.AutoReopenForPRFix(ctx, itemID, "Manually triggered PR fix retry — PR has failing CI, blocking reviews, or a merge conflict")
 		}
 	default:
 		return nil

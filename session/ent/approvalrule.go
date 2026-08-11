@@ -66,7 +66,9 @@ type ApprovalRule struct {
 	PythonModes []string `json:"python_modes,omitempty"`
 	// SafePythonImportsOnly holds the value of the "safe_python_imports_only" field.
 	SafePythonImportsOnly bool `json:"safe_python_imports_only,omitempty"`
-	selectValues          sql.SelectValues
+	// RequireCiPassing holds the value of the "require_ci_passing" field.
+	RequireCiPassing bool `json:"require_ci_passing,omitempty"`
+	selectValues     sql.SelectValues
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -76,7 +78,7 @@ func (*ApprovalRule) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case approvalrule.FieldPrograms, approvalrule.FieldSubcommands, approvalrule.FieldBlockedSubcommands, approvalrule.FieldRequiredFlags, approvalrule.FieldForbiddenFlags, approvalrule.FieldRequiredFlagPrefixes, approvalrule.FieldPythonModes:
 			values[i] = new([]byte)
-		case approvalrule.FieldEnabled, approvalrule.FieldSafePythonImportsOnly:
+		case approvalrule.FieldEnabled, approvalrule.FieldSafePythonImportsOnly, approvalrule.FieldRequireCiPassing:
 			values[i] = new(sql.NullBool)
 		case approvalrule.FieldID, approvalrule.FieldDecision, approvalrule.FieldRiskLevel, approvalrule.FieldPriority:
 			values[i] = new(sql.NullInt64)
@@ -263,6 +265,12 @@ func (_m *ApprovalRule) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.SafePythonImportsOnly = value.Bool
 			}
+		case approvalrule.FieldRequireCiPassing:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field require_ci_passing", values[i])
+			} else if value.Valid {
+				_m.RequireCiPassing = value.Bool
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -370,6 +378,9 @@ func (_m *ApprovalRule) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("safe_python_imports_only=")
 	builder.WriteString(fmt.Sprintf("%v", _m.SafePythonImportsOnly))
+	builder.WriteString(", ")
+	builder.WriteString("require_ci_passing=")
+	builder.WriteString(fmt.Sprintf("%v", _m.RequireCiPassing))
 	builder.WriteByte(')')
 	return builder.String()
 }

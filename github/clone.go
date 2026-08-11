@@ -20,6 +20,7 @@ const (
 
 // CloneOptions specifies options for cloning or accessing a repository
 type CloneOptions struct {
+	Host    string // GitHub host, e.g. "github.com" or a GHES hostname; "" means github.com
 	Owner   string
 	Repo    string
 	Branch  string // Optional: specific branch to checkout after cloning
@@ -100,7 +101,7 @@ func GetOrCloneRepository(opts CloneOptions) (*CloneResult, error) {
 	// Clone the repository via git (no gh CLI dependency)
 	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cloneCancel()
-	cloneURL := fmt.Sprintf("https://github.com/%s/%s.git", opts.Owner, opts.Repo)
+	cloneURL := fmt.Sprintf("%s/%s/%s.git", webBaseURLForHost(opts.Host), opts.Owner, opts.Repo)
 	cloneCmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, clonePath)
 	if err := cloneCmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

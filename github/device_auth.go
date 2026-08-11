@@ -42,24 +42,32 @@ type DeviceAuthStart struct {
 	Interval int
 }
 
-// clientID returns the OAuth client ID, preferring the env var override.
-func clientID() string {
-	if v := os.Getenv("STAPLER_SQUAD_GITHUB_CLIENT_ID"); v != "" {
-		return v
+// clientID returns the OAuth client ID for host, preferring an explicit
+// override, then (for github.com only) the env var override, then the default.
+func clientID(host, override string) string {
+	if override != "" {
+		return override
 	}
-	return defaultClientID
+	if IsGitHubCom(host) {
+		if v := os.Getenv("STAPLER_SQUAD_GITHUB_CLIENT_ID"); v != "" {
+			return v
+		}
+		return defaultClientID
+	}
+	return ""
 }
 
-// StartDeviceAuth initiates the GitHub Device Flow and returns the codes the
-// user must enter at verification_uri. The returned DeviceAuthStart.DeviceCode
-// must be passed to PollDeviceAuth.
-func StartDeviceAuth(ctx context.Context) (*DeviceAuthStart, error) {
+// StartDeviceAuth initiates the GitHub Device Flow against host and returns the
+// codes the user must enter at verification_uri. clientID is the OAuth App
+// client ID to use; pass "" for github.com to use the default/env-configured one.
+// The returned DeviceAuthStart.DeviceCode must be passed to PollDeviceAuth.
+func StartDeviceAuth(ctx context.Context, host, clientIDOverride string) (*DeviceAuthStart, error) {
 	body := url.Values{}
-	body.Set("client_id", clientID())
+	body.Set("client_id", clientID(host, clientIDOverride))
 	body.Set("scope", deviceAuthScopes)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://github.com/login/device/code",
+		webBaseURLForHost(host)+"/login/device/code",
 		strings.NewReader(body.Encode()),
 	)
 	if err != nil {
@@ -110,14 +118,14 @@ func StartDeviceAuth(ctx context.Context) (*DeviceAuthStart, error) {
 //   - Returns ("", ErrAuthorizationPending) if the user hasn't approved yet.
 //   - Returns ("", ErrDeviceFlowExpired) if the device code has expired.
 //   - Returns ("", err) for any other error.
-func PollDeviceAuth(ctx context.Context, deviceCode string) (string, error) {
+func PollDeviceAuth(ctx context.Context, host, clientIDOverride, deviceCode string) (string, error) {
 	body := url.Values{}
-	body.Set("client_id", clientID())
+	body.Set("client_id", clientID(host, clientIDOverride))
 	body.Set("device_code", deviceCode)
 	body.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://github.com/login/oauth/access_token",
+		webBaseURLForHost(host)+"/login/oauth/access_token",
 		strings.NewReader(body.Encode()),
 	)
 	if err != nil {
@@ -156,21 +164,24 @@ func PollDeviceAuth(ctx context.Context, deviceCode string) (string, error) {
 	}
 }
 
-// StoreTokenForDiscoveredUser fetches the GitHub login for token and stores it
-// under the per-username keychain slot. Falls back to the legacy slot if the
-// login cannot be determined.
-func StoreTokenForDiscoveredUser(ctx context.Context, token string) error {
-	login, err := GetCurrentUserLoginWithToken(ctx, token)
+// StoreTokenForDiscoveredUser fetches the GitHub login for token on host and
+// stores it under the per-account keychain slot. Falls back to the legacy
+// slot (github.com only) if the login cannot be determined.
+func StoreTokenForDiscoveredUser(ctx context.Context, host, token string) error {
+	login, err := GetCurrentUserLoginWithToken(ctx, host, token)
 	if err == nil && login != "" {
-		return SetKeychainTokenForAccount(login, token)
+		return SetKeychainTokenForAccount(host, login, token)
 	}
-	return SetKeychainToken(token)
+	if IsGitHubCom(host) {
+		return SetKeychainToken(token)
+	}
+	return err
 }
 
 // WaitForDeviceAuth polls GitHub repeatedly until the user completes
 // authorization, the code expires, or ctx is cancelled.
 // On success it stores the token in the OS keychain and returns it.
-func WaitForDeviceAuth(ctx context.Context, da *DeviceAuthStart) (string, error) {
+func WaitForDeviceAuth(ctx context.Context, host, clientIDOverride string, da *DeviceAuthStart) (string, error) {
 	interval := time.Duration(da.Interval) * time.Second
 	deadline := time.Now().Add(time.Duration(da.ExpiresIn) * time.Second)
 
@@ -185,9 +196,9 @@ func WaitForDeviceAuth(ctx context.Context, da *DeviceAuthStart) (string, error)
 			return "", ErrDeviceFlowExpired
 		}
 
-		token, err := PollDeviceAuth(ctx, da.DeviceCode)
+		token, err := PollDeviceAuth(ctx, host, clientIDOverride, da.DeviceCode)
 		if err == nil {
-			_ = StoreTokenForDiscoveredUser(ctx, token)
+			_ = StoreTokenForDiscoveredUser(ctx, host, token)
 			return token, nil
 		}
 		if errors.Is(err, ErrAuthorizationPending) {

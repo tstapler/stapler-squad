@@ -21,7 +21,10 @@ import {
   legendRow,
   legendItem,
   legendDot,
+  unpricedLabel,
+  cacheHitLabel,
 } from "./ModelBreakdownChart.css";
+import { fmtPct, computeCacheHitRate } from "./insightsFormatters";
 
 interface Props {
   models: ModelBreakdown[];
@@ -43,6 +46,8 @@ interface DataPoint {
   family: string;
   cost: number;
   color: string;
+  pricingUnavailable: boolean;
+  cacheHitRate: number;
 }
 
 function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
@@ -52,6 +57,8 @@ function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
       family: m.modelFamily || "unknown",
       cost: m.estimatedCostUsd,
       color: PALETTE[i % PALETTE.length],
+      pricingUnavailable: m.pricingUnavailable,
+      cacheHitRate: computeCacheHitRate(Number(m.totalInputTokens), Number(m.cacheReadTokens)),
     }));
 }
 
@@ -103,11 +110,16 @@ export function ModelBreakdownChart({ models }: Props) {
           </BarChart>
         </ResponsiveContainer>
       </div>
+      {/* +feature: insights-pricing-unavailable-indicator */}
       <div className={legendRow}>
         {data.map((d) => (
           <div key={d.family} className={legendItem}>
             <div className={legendDot} style={{ background: d.color }} />
             {d.family}
+            <span className={cacheHitLabel}> {fmtPct(d.cacheHitRate)} cache hit</span>
+            {d.pricingUnavailable && (
+              <span className={unpricedLabel}> (pricing unavailable)</span>
+            )}
           </div>
         ))}
       </div>

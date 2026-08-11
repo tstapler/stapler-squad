@@ -100,6 +100,38 @@ func newOrphanedTriageTestItem(t *testing.T, storage *Storage, er *EntRepository
 	return item
 }
 
+// newEndedTriageTestItem creates an idea-status BacklogItem with a single
+// triage-role ItemSession that has already ended (EndedAt set), matching
+// "shape 2" of reconcileOrphanedTriageItems: a headless triage call that
+// returned (errored, or produced output ParseHeadlessTriageResult rejected —
+// see TestParseHeadlessTriageResult_PrematureCompletionPlaceholder) and was
+// tombstoned by TriggerTriage's own goroutine, but never transitioned the item
+// out of idea. No staleness backdating needed — shape 2 has no staleness gate,
+// since an ended session with the item still in idea is unambiguous the moment
+// it's observed.
+func newEndedTriageTestItem(t *testing.T, storage *Storage, er *EntRepository) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Ended-without-transition triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	return item
+}
+
 // TestBackfillStuckStates_should_seedDBDerivableRowsWithNotifiedAt_When_ItemsParked
 // verifies that BackfillStuckStates seeds an open, notified stuck row for each
 // currently-stuck item it can detect from existing DB-derivable queries.
@@ -269,6 +301,7 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_PRMerged(t *testing.T)
 	ctx := context.Background()
 
 	item := newPRPendingTestItem(t, storage, 148)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/pr-ready-merged", "")
 	er := storage.repo.(*EntRepository)
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "PR is green & mergeable")
 	require.NoError(t, err)
@@ -276,6 +309,7 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_PRMerged(t *testing.T)
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/pr-ready-merged")
 
 	listener.ReconcilePRPending(ctx, er)
 
@@ -446,23 +480,116 @@ func TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewS
 
 // TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStillAlive
 // verifies a review session that hasn't ended yet and isn't confirmed dead is left
-// alone — it may simply be doing its own post-verdict cleanup.
+// alone — it may simply be doing its own post-verdict cleanup — unless its
+// verdict has aged past reviewVerdictIdleThreshold, in which case the sweep
+// must act regardless of what SessionLivenessChecker reports (BUG-047: a
+// reviewer that submits a verdict and then never exits reads as alive
+// forever, so a pure liveness check can never catch it).
 func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStillAlive(t *testing.T) {
-	storage, cleanup := createTestStorage(t)
-	defer cleanup()
-	ctx := context.Background()
+	t.Run("verdict younger than idle threshold: still no-act", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
 
-	item := newStuckReviewTestItem(t, storage, ReviewVerdictPass, false, false)
+		item := newStuckReviewTestItem(t, storage, ReviewVerdictPass, false, false)
 
-	listener := NewBacklogLifecycleListener(storage)
-	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
 
-	er := storage.repo.(*EntRepository)
-	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+		er := storage.repo.(*EntRepository)
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
-	fetched, err := storage.GetBacklogItem(ctx, item.ID)
-	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a still-alive review session must not be acted on")
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a still-alive review session with a fresh verdict must not be acted on")
+	})
+
+	t.Run("verdict older than idle threshold: now acts", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		er := storage.repo.(*EntRepository)
+		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold+time.Hour)
+
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive — only the verdict age should trigger action
+		reopener := newFakeAutoReopenSpawner()
+		listener.SetAutoReopener(reopener)
+
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+		select {
+		case gotItemID := <-reopener.called:
+			assert.Equal(t, item.ID, gotItemID,
+				"an idle-but-alive review session whose verdict has aged past reviewVerdictIdleThreshold must still reach the auto-reopener (forcePush path)")
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+		}
+
+		sessions, err := storage.ListItemSessions(ctx, item.ID)
+		require.NoError(t, err)
+		for _, is := range sessions {
+			if is.Role == string(SessionRoleReview) {
+				assert.NotNil(t, is.EndedAt, "the idle review session must be tombstoned even though the liveness checker reported it alive")
+			}
+		}
+	})
+
+	t.Run("verdict just under idle threshold: still no-act", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		er := storage.repo.(*EntRepository)
+		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold-time.Minute)
+
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
+
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, string(BacklogStatusReview), fetched.Status,
+			"a verdict just under reviewVerdictIdleThreshold must not be swept yet — only the (older, exercised above) case should trigger")
+	})
+
+	// PASS is deferred to session-exit by design, so it never gets the eager
+	// transition submitReviewVerdict drives for FAIL/PARTIAL/UNVERIFIABLE
+	// (server/mcp/tools_backlog.go) — this idle-timeout branch is PASS's
+	// *only* path back out of "review" once its reviewer session goes idle
+	// without exiting, so it needs its own direct coverage rather than
+	// inheriting confidence from the FAIL case above.
+	t.Run("PASS verdict older than idle threshold: now acts even though session reports alive", func(t *testing.T) {
+		storage, cleanup := createTestStorage(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		er := storage.repo.(*EntRepository)
+		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictPass, reviewVerdictIdleThreshold+time.Hour)
+
+		// A work session so the PASS verdict has something to ship — mirrors
+		// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive's
+		// setup; no worktree recorded, so this exercises the same pre-existing
+		// fallbackToDone("no worktree") branch that test does.
+		_, err := storage.CreateItemSession(ctx, ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: uuid.New().String(),
+			SessionRole: SessionRoleWork,
+		})
+		require.NoError(t, err)
+
+		listener := NewBacklogLifecycleListener(storage)
+		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive — only the verdict age should trigger action
+
+		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+			"a PASS verdict aged past reviewVerdictIdleThreshold must still ship even though SessionLivenessChecker reports the review session alive")
+	})
 }
 
 // TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemReenteredReviewAfterAlreadyShipping
@@ -1022,6 +1149,127 @@ func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_ResolverNotWir
 	})
 }
 
+// --- respawn_blocked_active: reconcileRespawnBlockedActiveResolution orchestration ---
+//
+// The mark side (notifyRespawnBlockedByActiveSession, server/services/
+// backlog_service_triage.go) is called from inside AutoRespawnAutonomousWork/
+// AutoReopenForPRFix/AutoRespawnReview, and each of those functions also
+// resolves the row itself the next time its own guard passes. That inline
+// resolve is NOT sufficient on its own for AutoRespawnReview: its only
+// caller, markAbandonedReview, gates the call behind
+// Storage.RemediationDue(StuckReasonAbandonedReview), which eventually parks
+// and stops re-invoking AutoRespawnReview for that item — so a row marked
+// once, right before parking, would never see AutoRespawnReview's guard pass
+// again and would be permanently orphaned without this independent sweep.
+// These tests exercise reconcileRespawnBlockedActiveResolution directly,
+// with no call to AutoRespawnReview at all, to prove the sweep — not the
+// inline resolve — is what actually guarantees resolution.
+
+// TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_BlockingSessionHasEnded
+// is the direct regression test for the orphaned-row scenario: a
+// respawn_blocked_active row is marked (simulating AutoRespawnReview's guard
+// having tripped once), the blocking review session then ends, and
+// reconcileRespawnBlockedActiveResolution — called on its own, with no
+// AutoRespawnReview/markAbandonedReview involved at all — must resolve the
+// row.
+func TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_BlockingSessionHasEnded(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Item stuck abandoned_review, its abandoned_review remediation now parked",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-that-has-since-ended",
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	// Simulate AutoRespawnReview's guard having tripped once (the mark side),
+	// with markAbandonedReview's caller never invoking AutoRespawnReview
+	// again — the row's only path to resolution is the sweep under test.
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonRespawnBlockedActive, BacklogStatusReview,
+		"AutoRespawnReview skipped auto-respawn — session review-session-that-has-since-ended already active")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The blocking session has since ended.
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileRespawnBlockedActiveResolution(ctx, er)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	for _, row := range open {
+		assert.False(t, row.ItemID == item.ID && row.Reason == domain.StuckReasonRespawnBlockedActive,
+			"the respawn_blocked_active row must be resolved once its blocking session has ended, independent of whether AutoRespawnReview is ever called again")
+	}
+}
+
+// TestReconcileRespawnBlockedActiveResolution_should_leaveRowOpen_When_BlockingSessionStillActive
+// is the negative case: the sweep must not clear a row while the blocking
+// session genuinely remains open.
+func TestReconcileRespawnBlockedActiveResolution_should_leaveRowOpen_When_BlockingSessionStillActive(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Item still genuinely blocked by an active work session",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "still-active-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonRespawnBlockedActive, BacklogStatusInProgress,
+		"AutoRespawnAutonomousWork skipped auto-respawn — session still-active-work-session already active")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileRespawnBlockedActiveResolution(ctx, er)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	found := false
+	for _, row := range open {
+		if row.ItemID == item.ID && row.Reason == domain.StuckReasonRespawnBlockedActive {
+			found = true
+		}
+	}
+	assert.True(t, found, "the row must stay open while the blocking session is still genuinely active")
+}
+
+// TestReconcileRespawnBlockedActiveResolution_should_beNoOp_When_NoOpenRows verifies
+// the sweep does nothing (and does not error) when there are no open
+// respawn_blocked_active rows to reconcile.
+func TestReconcileRespawnBlockedActiveResolution_should_beNoOp_When_NoOpenRows(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	listener := NewBacklogLifecycleListener(storage)
+
+	require.NotPanics(t, func() {
+		listener.reconcileRespawnBlockedActiveResolution(ctx, er)
+	})
+}
+
 // --- orphaned_triage: standing detector for tombstoneOrphanTriageSessions'
 // manual-re-trigger-only blind spot (backlog-feature-improvement audit finding #8) ---
 
@@ -1122,6 +1370,731 @@ func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *t
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
 }
 
+// TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive
+// guards the fix for BUG-055: before IsTriageLive existed, this shape-1 branch tombstoned
+// ANY headless triage session past maxHeadlessTriageSessionStaleness unconditionally, with
+// no way to tell "genuinely dead" apart from "still running, just slow" — confirmed live
+// 2026-08-01 that headless triage calls routinely run right up to their full 30m budget,
+// so this staleness-only gate raced the call's own natural completion on every slow call.
+// A respawner reporting the session as still live must now suppress the tombstone entirely.
+func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	// 45 minutes: past maxHeadlessTriageSessionStaleness (35m) — would have been
+	// tombstoned unconditionally before this fix.
+	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	respawner := newFakeTriageRespawner()
+	respawner.liveIDs = map[string]bool{item.ID: true}
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a stale-but-genuinely-live headless session must not be marked stuck")
+	assert.Empty(t, notifier.titles(), "a genuinely live session must not trigger a \"may be stuck\" notification")
+
+	sessions, listErr := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a genuinely live headless session must not be tombstoned")
+}
+
+// TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin guards
+// the exact margin regression named in BUG-055: this constant must stay strictly greater
+// than server/services.triageCallBudget (currently 30m — kept as a literal here rather than
+// imported, since session cannot depend on server/services) with real headroom, or every
+// slow-but-legitimate headless triage call races this sweep's staleness gate again,
+// regardless of how good IsTriageLive's liveness check is. If server/services.triageCallBudget
+// ever changes, this literal and the one there must be updated together.
+func TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin(t *testing.T) {
+	const knownTriageCallBudget = 30 * time.Minute
+	const minMargin = 2 * time.Minute
+	assert.Greater(t, maxHeadlessTriageSessionStaleness, knownTriageCallBudget+minMargin,
+		"maxHeadlessTriageSessionStaleness must exceed the real triage call budget with real margin, not race it")
+}
+
+// TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition
+// is the regression test for the "compounding gap" half of the live incident tracked in
+// docs/tasks/backlog-feature-improvement.md's 2026-07-30 entry (backlog item 04089969):
+// a headless triage call that returns cleanly (real EndedAt, no crash/kill) but with
+// output ParseHeadlessTriageResult rejects (see
+// TestParseHeadlessTriageResult_PrematureCompletionPlaceholder) never transitions the
+// item out of idea, and — before this fix — was invisible to every existing detector:
+// reconcileOrphanedTriageItems previously only matched EndedAt == nil (open) sessions,
+// so a session tombstoned by TriggerTriage's own goroutine (the normal completion path,
+// success or failure) fell through every check. No staleness wait should be required:
+// unlike the open-and-stale shape, an ended session with the item still in idea is
+// unambiguous the moment it's observed.
+func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "an ended triage session with the item still in idea must be flagged immediately, with no staleness wait")
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
+	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+
+	// Repeat tick must not re-notify (DB-backed notify-once dedup) — mirrors the
+	// open-and-stale shape's identical guarantee.
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	assert.Len(t, notifier.calls, 1)
+}
+
+// TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_TriageSessionEndedWithClassifiedError
+// guards the fix threading TriggerTriage's persisted classifyHeadlessCallError
+// bucket (server/services/backlog_service_triage.go's EndReason, written via
+// UpdateItemSessionEndedWithReason) into this detector's reasonDetail. Before
+// this fix, shape 2's reasonDetail was a hardcoded generic string — "triage
+// session %s ended without moving the item out of idea" — that discarded the
+// EndReason column even though it was one query away and already read
+// elsewhere in this same function (the "shutdown" carve-out just above). The
+// resulting backlog_stuck_states.context an operator actually sees carried no
+// hint of *why* the triage session died. Confirmed live: a real orphaned_triage
+// row for a process_error-classified failure showed the same generic message
+// as every other failure category.
+func TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_TriageSessionEndedWithClassifiedError(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Process-error-ended triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), "process_error"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "process_error",
+		"stuck-state context must surface the persisted EndReason, not a generic template")
+	assert.NotContains(t, open[0].Context, "ended without moving the item out of idea",
+		"the pre-fix generic-only template must no longer be emitted verbatim once an EndReason is known")
+}
+
+// TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNeverClassified
+// guards the empty-EndReason path (triageEndReasonOrUnknown): a session ended
+// via the plain UpdateItemSessionEnded (no errType ever recorded) must still
+// render a well-formed message rather than a blank/empty parenthetical.
+func TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNeverClassified(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er) // ends via UpdateItemSessionEnded, no reason recorded
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "unknown",
+		"an EndReason-less session must fall back to an explicit 'unknown' marker, not a blank parenthetical")
+}
+
+// TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_When_EndedByGracefulShutdown
+// guards the fix for the 2026-08-01 live incident (docs/bugs/fixed/BUG-053): a
+// routine service restart (e.g. `make install-service`) cancels shutdownCtx,
+// which kills any in-flight triage call via classifyHeadlessCallError's
+// "shutdown" bucket — a self-inflicted, zero-evidence event, not a real
+// triage failure. Before this fix, shape 2 treated a shutdown-caused orphan
+// identically to a genuine failure: MarkStuck + a "may be stuck" notification
+// + RemediationDue's exponential backoff (30m/2h/8h/24h/72h, sized for OOM
+// bursts) before the next retry. This must instead respawn immediately with
+// no remediation-attempt penalty and no alarming notification.
+func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_When_EndedByGracefulShutdown(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Shutdown-orphaned triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), "shutdown"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched immediately for a shutdown-caused orphan")
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a shutdown-caused orphan must not consume a remediation attempt or create a stuck-state row")
+	assert.Empty(t, notifier.titles(), "a shutdown-caused orphan is expected/self-inflicted and must not trigger a \"may be stuck\" notification")
+}
+
+// TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEndedSessionExists
+// guards the latestTriage selection added alongside the two-shape detector
+// above: an item can accumulate more than one triage-role ItemSession (e.g. an
+// older attempt that ended without transitioning the item, followed by a fresh
+// retry). The detector must key off the newest session's CreatedAt, not just
+// any EndedAt-nil-or-not row it happens to find — a stale older "shape 2" row
+// must not fire once a newer, still-fresh, still-open attempt is in flight.
+func TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEndedSessionExists(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er) // older session: ended, no transition
+
+	// A newer triage session was since started (e.g. auto-retried) and is
+	// still fresh/open — the detector must key off THIS one, not the older
+	// ended row, and must not fire yet.
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a fresh retry session must suppress the older ended session's shape-2 signal")
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan guards
+// against a regression where broadening the detector to also match ended sessions
+// starts matching idea items that have simply never had triage triggered at all.
+func TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Never triaged item",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item that has never had a triage session must not be flagged")
+}
+
+// TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRow_When_Due
+// verifies the ended-without-transition shape is retried through the exact same
+// AutoRespawnTriage backoff-gate path as the pre-existing open-and-stale shape —
+// reconcileOrphanedTriageRemediation and retryOrphanedTriageWithBackoffGate key only on
+// (reason, item status), so extending the detection condition in
+// reconcileOrphanedTriageItems is sufficient on its own; no changes to the remediation
+// path itself were needed. This is the "detection/retry gap" acceptance case for the
+// 2026-07-30 finding: item 04089969's shape must actually become eligible for an
+// automatic retry, not just get a durable stuck row that nothing ever acts on.
+func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRow_When_Due(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for the ended-without-transition row")
+	}
+}
+
+// fakeTriageRespawner is a test double implementing TriageRespawner, recording
+// every AutoRespawnTriage call on a buffered channel (not a plain counter)
+// because retryOrphanedTriageWithBackoffGate dispatches asynchronously —
+// mirrors fakeStaleWorkRemediator's identical rationale.
+type fakeTriageRespawner struct {
+	calls   chan string
+	err     error
+	liveIDs map[string]bool
+}
+
+func newFakeTriageRespawner() *fakeTriageRespawner {
+	return &fakeTriageRespawner{calls: make(chan string, 32)}
+}
+
+func (f *fakeTriageRespawner) AutoRespawnTriage(ctx context.Context, itemID string) error {
+	f.calls <- itemID
+	return f.err
+}
+
+func (f *fakeTriageRespawner) IsTriageLive(itemID string) bool {
+	return f.liveIDs[itemID]
+}
+
+// TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndRespawnerSucceeds
+// verifies the periodic remediation pass (the production entry point wired
+// into ReconcileStuck) retries triage for an open orphaned_triage row still
+// anchored at "idea" — closing the gap where reconcileOrphanedTriageItems'
+// one-time MarkStuck+notify never led anywhere without a human noticing and
+// manually re-triggering triage (docs/tasks/backlog-feature-improvement.md,
+// 2026-07-27 update).
+//
+// Unlike reconcileStaleWorkSessions (which bundles mark/notify and remediate
+// into ONE function with an explicit "not on the first sighting" grace gate,
+// since its work session is still alive and might just be slow), this
+// reason's own detection already required the triage session to sit stale
+// past its full staleness threshold (30m headless / 2h general) AND
+// tombstones it before ever marking stuck — there is nothing further to wait
+// for, so the sibling remediation detector may retry on the very same sweep
+// tick that first opened the row (mirrors reconcilePushFailedItems, whose
+// remediation pass carries no such grace gate either).
+func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndRespawnerSucceeds(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for the due row")
+	}
+
+	require.Eventually(t, func() bool {
+		rows, err := er.FindOpenStuckStates(ctx)
+		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
+	}, time.Second, 10*time.Millisecond, "the dispatched attempt must advance RemediationDue's own accounting")
+}
+
+// TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea verifies
+// an item whose orphaned_triage row is still open but whose status has since moved
+// off "idea" (e.g. a human already re-triggered triage manually, or the row is stale
+// bookkeeping) is never retried by the periodic remediation pass.
+func TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Orphaned triage item no longer idea",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "stale triage session")
+	require.NoError(t, err)
+	require.True(t, applied)
+	_, err = er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonOrphanedTriage)
+	require.NoError(t, err)
+
+	// A human already re-triggered triage manually — the item moved off
+	// "idea" while the orphaned_triage row is still open (selfHealStuck would
+	// resolve it on its own next tick, but that must not race this test).
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		t.Fatalf("an item that has moved off idea must not be retried, got call for item %s", itemID)
+	case <-time.After(100 * time.Millisecond):
+		// expected: no remediation dispatched
+	}
+}
+
+// newQueuedNoTriageResultTestItem creates a queued, plan-approval-gated item
+// (no SkipPlanning, no PlanApproved) whose only triage-role ItemSession ended
+// without ever persisting a usable TriageResult — the exact shape of item
+// be676dab (docs/tasks/backlog-feature-improvement.md's 2026-08-03 entry): a
+// triage session that ran, ended, but left nothing behind, after the item had
+// already advanced past idea (here, straight to queued, standing in for the
+// WIP-cap-driven idea->ready->queued path the live incident took).
+func newQueuedNoTriageResultTestItem(t *testing.T, storage *Storage) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Queued item with no usable triage result",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusQueued),
+		SkipPlanning:       false,
+		PlanApproved:       false,
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	return item
+}
+
+// TestReconcileOrphanedTriageItems_should_flagQueuedItem_When_TriageResultUnusable
+// is the direct regression test for the 2026-08-03 live incident (item be676dab):
+// a queued item, gated on plan approval, whose most recent triage session ended
+// with no usable result must now be flagged under the same orphaned_triage
+// reason and notified — previously this detector's Statuses filter was
+// idea-only, so a queued item in this shape fell outside its scope entirely and
+// only reconcilePlanNotApprovedItems flagged it, indistinguishably from the
+// normal "plan generated, awaiting review" case.
+func TestReconcileOrphanedTriageItems_should_flagQueuedItem_When_TriageResultUnusable(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newQueuedNoTriageResultTestItem(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "a queued item whose latest triage session left no usable result must be flagged")
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
+	assert.Equal(t, BacklogStatusQueued, open[0].ItemStatus)
+	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+
+	// Repeat tick must not re-notify (DB-backed notify-once dedup), same as the
+	// pre-existing idea-status shapes.
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	assert.Len(t, notifier.calls, 1)
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResultUsable
+// is the over-triggering guard: a queued item that legitimately has a real plan
+// behind it (the normal "awaiting human review" wait reconcilePlanNotApprovedItems
+// owns) must NOT be flagged by this detector — only "ended with nothing usable"
+// is the generalized shape's signal, not "ended" alone.
+func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResultUsable(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Queued item with a real plan",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusQueued),
+		SkipPlanning:       false,
+		PlanApproved:       false,
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionTriageResult(ctx, is.ID, `{"summary":"a real plan"}`))
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a queued item with a usable triage result is a normal plan-approval wait, not orphaned triage")
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriageSession
+// locks in shape 1's `if !isIdea { continue }` guard: nothing in this codebase
+// ever creates a new triage-role session while an item is queued (TriggerTriage's
+// own status guard only accepts idea/ready), so an open session found on a queued
+// item is an unmodeled anomaly this detector must never act on — no staleness
+// flag, no tombstone. The session here is backdated well past
+// maxWorkSessionStaleness so this test would fail loudly (a false-positive flag)
+// if that guard were ever removed or narrowed, rather than passing vacuously.
+func TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriageSession(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Queued item with an unexpected open triage session",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusQueued),
+		SkipPlanning:       false,
+		PlanApproved:       false,
+	})
+	require.NoError(t, err)
+
+	// created_at is Immutable() in the ent schema, so backdating requires the
+	// raw ent client rather than storage.CreateItemSession (always time.Now())
+	// — mirrors newOrphanedTriageTestItem's identical need above.
+	parsedItemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = er.client.ItemSession.Create().
+		SetSessionUUID("headless-triage-" + uuid.New().String()).
+		SetSessionRole(string(SessionRoleTriage)).
+		SetBacklogItemID(parsedItemID).
+		SetCreatedAt(time.Now().Add(-3 * time.Hour)). // beyond maxWorkSessionStaleness (2h)
+		Save(ctx)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a queued item with a still-open triage session must never be flagged — this shape doesn't happen today, and this detector must not invent behavior for it")
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "must not be tombstoned either — shape 1 is idea-only")
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanningOrPlanApproved
+// verifies the generalized shape respects the same escape hatches
+// reconcilePlanNotApprovedItems already does — an item that bypasses planning
+// entirely, or already has an approved plan, is never "gated" regardless of
+// what its triage session did or didn't produce.
+func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanningOrPlanApproved(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	for _, tc := range []struct {
+		name         string
+		skipPlanning bool
+		planApproved bool
+	}{
+		{"skip_planning", true, false},
+		{"plan_approved", false, true},
+	} {
+		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:              "Queued gate-bypass item " + tc.name,
+			AcceptanceCriteria: `[]`,
+			Priority:           1,
+			Status:             string(BacklogStatusQueued),
+			SkipPlanning:       tc.skipPlanning,
+			PlanApproved:       tc.planApproved,
+		})
+		require.NoError(t, err)
+
+		is, err := storage.CreateItemSession(ctx, ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: "headless-triage-" + uuid.New().String(),
+			SessionRole: SessionRoleTriage,
+		})
+		require.NoError(t, err)
+		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item with skip_planning or plan_approved set must never be flagged, regardless of triage result")
+}
+
+// TestReconcileOrphanedTriageRemediation_should_retryQueuedRow_When_Due verifies
+// the generalized queued shape is retried through the exact same backoff-gated
+// AutoRespawnTriage path as the pre-existing idea-status shapes — closing the
+// "detected but nothing ever acts on it" gap for be676dab's shape the same way
+// PR #274/07-30 closed it for the idea-status shape.
+func TestReconcileOrphanedTriageRemediation_should_retryQueuedRow_When_Due(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newQueuedNoTriageResultTestItem(t, storage)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusQueued, "no usable triage result")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for a due, queued orphaned_triage row")
+	}
+}
+
+// TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesReady verifies
+// the generalized resolve condition correctly recognizes success: a retry that
+// resets queued->idea then succeeds lands the item on "ready" — outside both
+// anchor statuses (idea, queued) — which must resolve the row. This is the case
+// the naive "resolve once status != queued" condition would get wrong, since a
+// retry in flight passes through "idea" (still an anchor status) before
+// reaching "ready".
+func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesReady(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newQueuedNoTriageResultTestItem(t, storage)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusQueued, "no usable triage result")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// Simulate a successful automated retry: queued -> idea (reset) -> ready
+	// (fresh triage succeeded).
+	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusQueued)}
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, precondition, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "row must stay open while the retry is in flight (item reset to idea, still an anchor status)")
+
+	precondition = &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusIdea)}
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, precondition, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener.selfHealStuck(ctx, er)
+	open, err = er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "row must resolve once the retried triage succeeds and the item reaches ready")
+}
+
+// TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
+// verifies the backoff gate itself: 10 back-to-back calls against the same open row
+// must consume exactly one attempt, mirroring
+// TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly.
+func TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Orphaned triage backoff test item",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "stale triage session")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	for i := 0; i < 10; i++ {
+		listener.retryOrphanedTriageWithBackoffGate(ctx, item.ID, item.Title)
+	}
+
+	require.Eventually(t, func() bool {
+		rows, err := er.FindOpenStuckStates(ctx)
+		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
+	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
+}
+
 func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -1151,11 +2124,13 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *te
 // and reconcileTerminalItemSessions. ---
 
 // fakeSessionArchiver is a test stub implementing SessionArchiver. It records every
-// UUID it was asked to archive, in order, and can be configured to fail for
-// specific UUIDs.
+// UUID it was asked to archive/kill, in order, and can be configured to fail for
+// specific UUIDs (archive and kill failures are tracked independently).
 type fakeSessionArchiver struct {
-	archivedUUIDs []string
-	errForUUID    map[string]error
+	archivedUUIDs  []string
+	killedUUIDs    []string
+	errForUUID     map[string]error
+	killErrForUUID map[string]error
 }
 
 func (f *fakeSessionArchiver) ArchiveSessionByUUID(_ context.Context, sessionUUID string) error {
@@ -1165,6 +2140,16 @@ func (f *fakeSessionArchiver) ArchiveSessionByUUID(_ context.Context, sessionUUI
 		}
 	}
 	f.archivedUUIDs = append(f.archivedUUIDs, sessionUUID)
+	return nil
+}
+
+func (f *fakeSessionArchiver) KillTmuxPaneOnly(_ context.Context, sessionUUID string) error {
+	if f.killErrForUUID != nil {
+		if err, ok := f.killErrForUUID[sessionUUID]; ok {
+			return err
+		}
+	}
+	f.killedUUIDs = append(f.killedUUIDs, sessionUUID)
 	return nil
 }
 
@@ -1199,6 +2184,68 @@ func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlread
 	assert.Contains(t, archiver.archivedUUIDs, "done-work-session")
 }
 
+// TestReconcileTerminalItemSessions_should_KillTmuxPane_When_ItemAlreadyDone guards
+// the 2026-07-29 OOM fix: archiving alone only hides a terminal item's work session
+// from the default list — without also killing its tmux pane, the underlying
+// claude process (and its MCP subprocess fleet) keeps running indefinitely.
+func TestReconcileTerminalItemSessions_should_KillTmuxPane_When_ItemAlreadyDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with a still-live work session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "leaked-live-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.killedUUIDs, "leaked-live-session")
+}
+
+// TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_ItemAlreadyDone
+// guards the review-session half of the 2026-07-29 OOM fix: review-role sessions
+// leaked the same way work-role ones did (excluded from both the terminal-transition
+// hook and this safety-net sweep), leaving live review sessions for already-done
+// items running indefinitely.
+func TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_ItemAlreadyDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with a still-live review session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "leaked-live-review-session",
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "leaked-live-review-session")
+	assert.Contains(t, archiver.killedUUIDs, "leaked-live-review-session")
+}
+
 func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyArchived(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -1225,20 +2272,27 @@ func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlread
 	assert.Contains(t, archiver.archivedUUIDs, "archived-work-session")
 }
 
-func TestReconcileTerminalItemSessions_should_NotArchiveNonWorkSessions_When_ItemDone(t *testing.T) {
+// TestReconcileTerminalItemSessions_should_NotArchiveTriageSessions_When_ItemDone
+// guards the triage-role exclusion in IsTmuxBackedSessionRole: triage sessions run
+// as bounded one-shot headless subprocess calls, not persistent tmux-attached claude
+// processes (see headlessTriageUUIDPrefix), so they have no live tmux pane for this
+// sweep to kill and archiving them here would be meaningless — their own failure
+// mode (a crashed/hung goroutine) is handled by reconcileOrphanedTriageItems /
+// reconcileOrphanedTriageRemediation instead.
+func TestReconcileTerminalItemSessions_should_NotArchiveTriageSessions_When_ItemDone(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:  "done item with a review session",
+		Title:  "done item with a triage session",
 		Status: string(BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, ItemSessionData{
 		ItemID:      item.ID,
-		SessionUUID: "review-session-not-archived-here",
-		SessionRole: SessionRoleReview,
+		SessionUUID: "triage-session-not-archived-here",
+		SessionRole: SessionRoleTriage,
 	})
 	require.NoError(t, err)
 
@@ -1248,7 +2302,8 @@ func TestReconcileTerminalItemSessions_should_NotArchiveNonWorkSessions_When_Ite
 
 	listener.reconcileTerminalItemSessions(ctx)
 
-	assert.Empty(t, archiver.archivedUUIDs, "the sweep only archives work-role sessions — review sessions are already hidden/one-shot and excluded by design")
+	assert.Empty(t, archiver.archivedUUIDs, "the sweep only archives tmux-backed (work/review) sessions — triage sessions are headless one-shot calls with no live pane and are excluded by design")
+	assert.Empty(t, archiver.killedUUIDs, "no tmux pane exists for a triage session to kill")
 }
 
 func TestReconcileTerminalItemSessions_should_NotArchiveAnything_When_ItemNotTerminal(t *testing.T) {
@@ -1409,6 +2464,67 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	assert.Len(t, notifier.calls, 1)
 }
 
+// TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_When_BouncingWithFailedVerdict
+// is the regression test for BUG-060: reconcileBouncingItems fetched the
+// item's most recent review verdict via GetMostRecentReviewVerdictForItem but
+// collapsed it to a bare hasPass bool before building the stuck-state
+// context, so an operator only ever saw "bounced ... with no PASS verdict"
+// with no indication of which verdict (PARTIAL/FAIL) or why. This is the same
+// discard-after-fetch shape BUG-059 fixed for reconcileOrphanedTriageItems'
+// EndReason. This test attaches a FAIL verdict with a distinctive summary to
+// the item's most recent review ItemSession, then asserts both the persisted
+// BacklogStuckState.Context and the operator notification body contain the
+// verdict's outcome and summary text, not just the generic bounce message.
+func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_When_BouncingWithFailedVerdict(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bouncing item with failed verdict",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	// Attach a FAIL verdict, with a distinctive summary, to a review
+	// ItemSession for this item — this is the diagnostic detail the fix must
+	// thread through into the stuck-state context instead of discarding.
+	const wantSummary = "AC3 not implemented: rate limiting missing from the new endpoint"
+	_, err = storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-review-" + uuid.New().String(),
+		SessionRole: SessionRoleReview,
+	}, ReviewVerdictData{
+		OverallOutcome: ReviewOutcomeFail,
+		Summary:        wantSummary,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason)
+	assert.Contains(t, open[0].Context, string(ReviewOutcomeFail), "context must surface which verdict (FAIL), not just that no PASS was recorded")
+	assert.Contains(t, open[0].Context, wantSummary, "context must surface the reviewer's actual summary, not a generic message")
+
+	require.Len(t, notifier.calls, 1)
+	assert.Contains(t, notifier.calls[0].Message, string(ReviewOutcomeFail))
+	assert.Contains(t, notifier.calls[0].Message, wantSummary)
+}
+
 // TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass verifies
 // an item with fewer than bounceThreshold cycles, and one with a recorded
 // PASS verdict, are not flagged bouncing.
@@ -1446,6 +2562,30 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 // transitions it to done instead of flagging it STUCK_REASON_BOUNCING.
 // Regression test for the 2026-07-20 live repro: backlog item "Add sorting
 // and grouping by repository path" bounced with remediationAttempts: 4 and a
+// TestNotifyTransitionFailed_should_publishNotification_When_Called is the
+// direct unit test for BacklogLifecycleListener's notifyTransitionFailed —
+// the session-package sibling of server/services/backlog_service_triage.go's
+// identical helper (same shape, different package: this package must not
+// import the server layer). Part of the fix for the recurring "silent
+// status-transition failure" bug shape (BUG-030/040/041/046/048).
+func TestNotifyTransitionFailed_should_publishNotification_When_Called(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.notifyTransitionFailed("item-999", "Ship the PR fix",
+		"PR #42 was confirmed merged but the item's transition to done failed",
+		errors.New("precondition failed: expected status \"in_progress\", got \"review\""))
+
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, "Status update failed after work completed", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "Ship the PR fix")
+	assert.Contains(t, notifier.calls[0].Message, "PR #42 was confirmed merged")
+}
+
 // remediation scheduled three hours *after* its PR #172 had already merged,
 // because reconcileBouncingItems never checked merge state before MarkStuck.
 func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerged(t *testing.T) {
@@ -1467,6 +2607,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 		PrNumber: &prNumber,
 	}, nil)
 	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged", "")
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
 	// shape isBouncing flags.
@@ -1479,6 +2620,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-merged")
 	notifier := &fakeNotifier{}
 	listener.SetNotifier(notifier)
 
@@ -1493,6 +2635,77 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	require.NoError(t, err)
 	assert.Empty(t, open, "a merged item must never be flagged bouncing")
 	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
+}
+
+// TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge
+// is a regression test for one of the sibling "silent status-transition
+// failure" instances found by the silenttransition lint analyzer (same shape
+// as BUG-030/040/041/046/048, and this fix's originally-reported findings):
+// reconcileBouncingItems confirms the linked PR is already merged, then its
+// own TransitionBacklogItemStatus(done) call can fail — previously that
+// failure was only log.WarningLog.Printf'd, leaving the item bouncing forever
+// with code that had already shipped and nothing else surfacing the mismatch.
+//
+// The precondition failure is forced deterministically (not via a real
+// goroutine race) by having the fake PR-pending-checker mutate the item's
+// status directly, bypassing TransitionBacklogItemStatus, at the exact point
+// a genuine concurrent writer would have: after reconcileBouncingItems reads
+// the item's status but before its own done-transition lands.
+func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with merged PR, concurrent status race",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 173
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-race", "")
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	parsedID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	checker := &fakePRPendingChecker{merged: true}
+	checker.onIsPRMerged = func() {
+		// Simulate a concurrent writer moving the item to "review" between
+		// reconcileBouncingItems' own read of item.Status ("in_progress") and
+		// its done-transition call a few lines later — the exact TOCTOU shape
+		// TransitionBacklogItemStatus's precondition exists to catch.
+		_, updErr := er.client.BacklogItem.UpdateOneID(parsedID).SetStatus(string(BacklogStatusReview)).Save(ctx)
+		require.NoError(t, updErr)
+	}
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, checker)
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-race")
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status,
+		"the failed done-transition must not silently succeed; the item stays at whatever the concurrent writer left it")
+
+	require.Len(t, notifier.calls, 1, "the failed transition must surface an operator notification instead of only being logged")
+	assert.Equal(t, "Status update failed after work completed", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "confirmed merged")
 }
 
 // TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged verifies
@@ -2883,6 +4096,35 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_SkipPlanningTrue(t *t
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "an item with skip_planning=true is never blocked by this gate and must not be flagged")
+}
+
+// TestReconcilePlanNotApprovedItems_should_notFlag_When_LatestTriageResultUnusable
+// verifies the 2026-08-03 delegation fix: an item whose most recent triage
+// session ended with no usable result is NOT "awaiting human review of a real
+// plan" (this detector's normal case) — it's reconcileOrphanedTriageItems'
+// generalized shape now. Without this delegation, item be676dab's shape would
+// get flagged under two different, differently-worded stuck reasons
+// simultaneously.
+func TestReconcilePlanNotApprovedItems_should_notFlag_When_LatestTriageResultUnusable(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newQueuedNoTriageResultTestItem(t, storage)
+	queuedAt := time.Now().Add(-10 * time.Minute)
+	_, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{QueuedAt: &queuedAt}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcilePlanNotApprovedItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item with no usable triage result must be left to reconcileOrphanedTriageItems, not double-flagged as plan_not_approved")
 }
 
 // TestSelfHealSweep_should_resolvePlanNotApprovedRow_When_ItemLeavesQueued verifies

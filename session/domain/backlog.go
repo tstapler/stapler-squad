@@ -55,10 +55,18 @@ const (
 	// create errored) leaving a post-review item with no pr_number.
 	StuckReasonPushFailed StuckReason = "push_failed"
 	// StuckReasonOrphanedTriage: an idea-status item's triage session ended
-	// (crashed, was killed, or the process exited) without ever transitioning
-	// the item to ready — previously only surfaced when a human manually
+	// without ever transitioning the item to ready. Covers two shapes: the
+	// session is still open and has gone stale (crashed, was killed, or the
+	// server restarted mid-triage), or the session already ended cleanly (the
+	// headless call errored, or returned output the triage parser rejected —
+	// e.g. a premature "still working" status message instead of the final
+	// JSON block, confirmed live 2026-07-29/30, see
+	// docs/tasks/backlog-feature-improvement.md's 2026-07-30 entry) but
+	// TriggerTriage never reached its idea->ready transition. Previously only
+	// the first shape was detected, and only when a human manually
 	// re-triggered triage (tombstoneOrphanTriageSessions); this reason lets the
-	// periodic stuck sweep catch it without a manual retry.
+	// periodic stuck sweep catch both shapes without a manual retry — see
+	// reconcileOrphanedTriageItems (session/backlog_lifecycle.go).
 	StuckReasonOrphanedTriage StuckReason = "orphaned_triage"
 	// StuckReasonAutonomousStuck: an autonomous driver run stopped after
 	// maxTurns without a DONE signal. Previously only surfaced as a one-off
@@ -112,6 +120,34 @@ const (
 	// (different item status, different threshold, different urgency) rather
 	// than merged.
 	StuckReasonReworkBlockedStale StuckReason = "rework_blocked_stale"
+	// StuckReasonPRNeedsFix: a pr_pending item's PR has failing CI, blocking
+	// reviews, or a merge conflict (ReconcilePRPending's spawn-fix branches).
+	// Gates ReconcilePRPending's AutoReopenForPRFix dispatch through the
+	// shared remediation backoff (Storage.RemediationDue) so a PR that keeps
+	// failing CI doesn't get a fresh fix session spawned on every ~60s
+	// reconciliation tick indefinitely — previously ungated, unlike every
+	// sibling remediation call site in session/backlog_lifecycle.go (see
+	// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry). Resolved
+	// once the PR becomes healthy again or the item reaches done.
+	StuckReasonPRNeedsFix StuckReason = "pr_needs_fix"
+	// StuckReasonRespawnBlockedActive: an automated respawn attempt
+	// (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview —
+	// server/services/backlog_service_triage.go) was skipped because the item
+	// already has an active work or review session, per
+	// findActiveWorkSession/findActiveReviewSession. Before this reason
+	// existed, all three call sites only log.InfoLog.Printf'd the skip —
+	// zero operator-visible signal and no audit record, strictly worse than
+	// spawnSessionAfterGates' own 8b guard (activeWorkSessionBlockedError),
+	// which at least returns a progress-enriched error to its synchronous
+	// caller (docs/tasks/backlog-feature-improvement.md, 2026-07-31/
+	// 2026-08-03 updates). Set by notifyRespawnBlockedByActiveSession, which
+	// reuses workSessionStaleness for the same "still active" vs. "likely
+	// stalled" distinction. Distinct from StuckReasonReworkBlockedStale
+	// (review-status-only, staleness-gated) since this fires regardless of
+	// staleness and covers three different item statuses (in_progress,
+	// pr_pending, review). Resolved the next time the guarding function runs
+	// past its active-session check (the block has cleared).
+	StuckReasonRespawnBlockedActive StuckReason = "respawn_blocked_active"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -128,6 +164,8 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonPlanNotApproved,
 	StuckReasonPRPendingNoPR,
 	StuckReasonReworkBlockedStale,
+	StuckReasonPRNeedsFix,
+	StuckReasonRespawnBlockedActive,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -136,7 +174,8 @@ func (r StuckReason) IsValid() bool {
 	case StuckReasonPRReadyUnmerged, StuckReasonReworkCap, StuckReasonAbandonedReview,
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
-		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale:
+		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
+		StuckReasonRespawnBlockedActive:
 		return true
 	}
 	return false
@@ -156,6 +195,34 @@ const (
 func (s AcStatus) IsValid() bool {
 	switch s {
 	case AcStatusPending, AcStatusInProgress, AcStatusDone, AcStatusFail:
+		return true
+	}
+	return false
+}
+
+// BacklogCategory is a validated string-backed enum classifying a backlog
+// item into a coarse bucket (bugfix/feature/chore/refactor). It is purely a
+// frontend-defaulting hint — BacklogItemForm.tsx applies each category's
+// automation-toggle defaults once, at creation time, into local form state;
+// the server only persists and validates the string itself (see
+// session.IsValidBacklogCategory), it does not resolve or apply any
+// defaults. Unlike StuckReason above, the empty string is a valid value here
+// too, meaning "uncategorized" — today's behavior for every existing item,
+// preserved exactly.
+type BacklogCategory string
+
+const (
+	BacklogCategoryBugfix   BacklogCategory = "bugfix"
+	BacklogCategoryFeature  BacklogCategory = "feature"
+	BacklogCategoryChore    BacklogCategory = "chore"
+	BacklogCategoryRefactor BacklogCategory = "refactor"
+)
+
+// IsValid reports whether c is a known backlog category, or the empty string
+// (uncategorized).
+func (c BacklogCategory) IsValid() bool {
+	switch c {
+	case "", BacklogCategoryBugfix, BacklogCategoryFeature, BacklogCategoryChore, BacklogCategoryRefactor:
 		return true
 	}
 	return false
