@@ -174,74 +174,57 @@ func pollUntil(t *testing.T, timeout time.Duration, msg string, fn func() bool) 
 // waitForReconnectCycles blocks until reconnectLoop's backoff has grown
 // enough to have entered its minCycles-th wait.
 //
-// This used to count minCycles complete IsHealthy() pulses (false -> true ->
-// false) via a busy-poll loop. That approach was replaced after production
-// log evidence (unconditional, unconditional-of-the-test Info logs, captured
-// independently of this helper's polling) showed each reconnectLoop cycle's
-// healthy window -- the span between tmux successfully attaching and the
-// control-mode read immediately failing against an already-killed session --
-// lasts only tens of *microseconds* during the early (100ms-400ms backoff)
-// cycles. A busy-poll loop calling runtime.Gosched() between IsHealthy()
-// reads is not guaranteed to ever observe a window that short, regardless of
-// scheduler pressure; the same captured run showed production's reconnectLoop
-// completing all 6 cycles correctly on-schedule while this helper's
-// rise/fall counter only registered 4/6. That made the old design an
-// unreliable detector of a real signal, not a reliable detector of a broken
-// one -- the actual failure mode was pulses being missed, not pulses not
-// happening.
+// The wait derives an expected elapsed time from reconnectLoop's own
+// documented backoff formula (100ms, doubling each cycle) rather than
+// counting IsHealthy() pulses: each cycle's healthy window (the span between
+// tmux attaching and the control-mode read failing against an
+// already-killed session) can last only tens of microseconds, too short for
+// a runtime.Gosched()-paced poll to reliably observe. nominalElapsed sums
+// the first minCycles-1 backoff terms; marginFixed is a flat buffer (not a
+// multiplier) against scheduling jitter right at the target cycle's
+// boundary.
 //
-// The replacement instead derives an expected elapsed time from
-// reconnectLoop's own documented backoff formula (100ms, doubling each
-// cycle) and waits for that much wall-clock time to pass while confirming
-// the registry is *currently* unhealthy -- i.e. that it is actually inside
-// the minCycles-th backoff wait, not merely that enough time has passed by
-// coincidence. This is still a condition-driven replacement for a fixed
-// sleep (see docs/adr/003-no-static-sleeps-in-tests.md), not a blind sleep:
-// the duration is derived from and cross-checked against the deterministic
-// behavior of the code under test, and the loop still reads live IsHealthy()
-// state every iteration rather than assuming success from elapsed time
-// alone. nominalElapsed sums the first minCycles-1 backoff terms (the time
-// needed to have exhausted cycles 1..minCycles-1 and be waiting out cycle
-// minCycles); marginFixed (a flat addition, not a multiplier) absorbs the
-// ~800ms-1s of real overhead per 6-cycle run observed in the same captured
-// log while still returning near the *start* of the target cycle's wait.
-// An earlier version used a 2x multiplier instead of a flat addition, which
-// for minCycles=6 (nominalElapsed=3.1s) produced minElapsed=6.2s -- inside
-// cycle 6's 3.2s-wide wait (3.1s-6.3s) but only ~100ms before that wait
-// ends. That left almost no gap before the *next* natural reconnect
-// attempt, so the target test's 1.5s post-kill detection window was
-// satisfied by the ordinary next reconnect regardless of whether
-// fast-recheck was doing anything -- confirmed empirically by temporarily
-// forcing waitBackoffWithFastRecheck's fastRecheckAttempts to 0 in
-// server_registry.go and observing the target test still pass. A flat
-// marginFixed instead lands minElapsed just past the start of the target
-// cycle's wait (elapsed=nominalElapsed+marginFixed, still cross-checked
-// against live IsHealthy() so an overhead-delayed cycle start is not
-// missed), leaving most of that cycle's duration as margin before the next
-// reconnect -- restoring the gap the fast-recheck path needs to be the
-// thing that closes exitCh inside 1.5s.
+// The loop still reads live IsHealthy() every iteration, but at this
+// function's only current call site the keepalive session is killed
+// permanently before this helper runs, so the registry never becomes
+// healthy again during the wait -- IsHealthy() is false for the entire
+// duration, and elapsed >= minElapsed is the only condition that actually
+// gates the return. The health check is a defensive early-exit for a caller
+// where health *could* recover mid-wait; it is not adaptive at this call
+// site, and this wait will not shrink or grow if the system runs faster or
+// slower than the backoff model assumes. Per ADR-003
+// (docs/adr/003-no-static-sleeps-in-tests.md) this is still derived from and
+// cross-checked against the code under test rather than an arbitrary fixed
+// sleep, but it is not a health-gated adaptive wait in practice here.
 //
-// marginFixed's value is bounded above by waitBackoffWithFastRecheck's own
-// fastRecheckAttempts*(fastRecheckSyncTimeout+fastRecheckInterval)=700ms --
-// fast-recheck only polls during that initial 700ms slice of each
-// qualifying cycle's wait, then blocks on the rest of the cycle doing no
-// further rechecking. A 1200ms flat margin (tried before 300ms) overshoots
-// that 700ms window -- it reliably lands minElapsed after fast-recheck's
-// own polling has already stopped for cycle 6, so the fix-under-test failed
-// the 1.5s detection deadline even with fast-recheck fully intact (confirmed
-// via 3 consecutive failing runs). 300ms keeps minElapsed inside the window
-// while still clearing real per-run overhead; confirmed via 3 consecutive
-// passing runs with fast-recheck intact, and via a temporary
-// fastRecheckAttempts=0 edit in server_registry.go reproducing the expected
-// t.Fatal (reverted immediately after -- this file is the only intended
-// diff). If reconnectLoop never elevates backoff or never goes unhealthy at
-// all (the actual failure mode AC1 depends on this helper still detecting),
-// the outer timeout is hit and t.Fatal fires with diagnostic detail.
+// marginFixed must stay below waitBackoffWithFastRecheck's own
+// fastRecheckAttempts*(fastRecheckSyncTimeout+fastRecheckInterval) ceiling
+// (mirrored below as fastRecheckCeiling -- those are unexported,
+// function-scoped constants in server_registry.go that this external
+// tmux_test package cannot reference directly): fast-recheck only polls
+// during that initial slice of a qualifying cycle's wait, so a margin past
+// the ceiling would land minElapsed after fast-recheck has already stopped
+// polling for the target cycle. The assertion below fails fast if the
+// mirror and the real constants drift apart, instead of silently desyncing.
 func waitForReconnectCycles(t *testing.T, registry *tmux.TmuxServerRegistry, minCycles int, timeout time.Duration) {
 	t.Helper()
 
 	const baseBackoff = 100 * time.Millisecond
 	const marginFixed = 300 * time.Millisecond
+
+	// Mirrors waitBackoffWithFastRecheck's constants of the same name in
+	// server_registry.go (2 * (150ms + 200ms) = 700ms today). Hand-copied,
+	// not compiler-linked -- see the doc comment above.
+	const (
+		mirroredFastRecheckAttempts    = 2
+		mirroredFastRecheckSyncTimeout = 150 * time.Millisecond
+		mirroredFastRecheckInterval    = 200 * time.Millisecond
+	)
+	fastRecheckCeiling := time.Duration(mirroredFastRecheckAttempts) * (mirroredFastRecheckSyncTimeout + mirroredFastRecheckInterval)
+	if marginFixed > fastRecheckCeiling {
+		t.Fatalf("marginFixed (%s) exceeds fastRecheckCeiling (%s) -- update the mirrored constants above to match server_registry.go's waitBackoffWithFastRecheck",
+			marginFixed, fastRecheckCeiling)
+	}
 
 	var nominalElapsed time.Duration
 	backoff := baseBackoff
