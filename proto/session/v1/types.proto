@@ -237,6 +237,13 @@ message Session {
   // when there's no GitHub remote). Sessions sharing this key are workspace peers. Empty
   // when neither GitHub info nor a repo path could be determined (e.g. a bare one-off session).
   string workspace_key = 71;
+
+  // Reason the session's pane crashed. Only meaningful when status ==
+  // SESSION_STATUS_CRASHED. Empty when the session has never crashed.
+  string exit_reason = 72;
+
+  // User-authored free-form markdown note attached to this session.
+  string note = 73;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's
@@ -348,6 +355,11 @@ enum SessionStatus {
   // Session is being restored from a previous run (transient startup state).
   // Never persisted to the database. Transitions to ACTIVE or CREATING on completion.
   SESSION_STATUS_RESTORING = 9;
+  // Session's tmux pane exited abnormally (non-zero exit code or signal) and was
+  // detected via remain-on-exit polling, distinct from a normal STOPPED
+  // completion. Not auto-recovered; requires an explicit resume (see
+  // ResumeCrashedSession).
+  SESSION_STATUS_CRASHED = 10;
 }
 
 // SessionType determines the session workflow.

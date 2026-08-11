@@ -24,11 +24,17 @@ export class SessionsPage {
     await this.page.waitForSelector('[data-testid="session-list"], .session-list', { timeout: 10000 });
   }
 
+  // Matches both densities: SessionCard.tsx (grid view, "session-card") and
+  // SessionRow.tsx (the default list view, "session-row" — see ci-status-badge.spec.ts
+  // for the same pattern). A title-only selector would previously silently match
+  // nothing against the app's default view.
   getSessionCard(title: string): Locator {
-    return this.page.locator('[data-testid="session-card"]').filter({ hasText: title });
+    return this.page
+      .locator('[data-testid="session-card"], [data-testid="session-row"]')
+      .filter({ hasText: title });
   }
 
   getSessionCards(): Locator {
-    return this.page.locator('[data-testid="session-card"]');
+    return this.page.locator('[data-testid="session-card"], [data-testid="session-row"]');
   }
 }

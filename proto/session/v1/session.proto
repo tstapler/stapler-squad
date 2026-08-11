@@ -341,6 +341,12 @@ service SessionService {
   // transitioning it back to Active status.
   rpc ResumeHibernatedSession(ResumeHibernatedSessionRequest) returns (ResumeHibernatedSessionResponse) {}
 
+  // ResumeCrashedSession re-launches the AI process for a Crashed session
+  // (dead tmux pane detected by SessionHealthChecker), transitioning it back
+  // to Active status. Threads --resume automatically when a conversation UUID
+  // is known.
+  rpc ResumeCrashedSession(ResumeCrashedSessionRequest) returns (ResumeCrashedSessionResponse) {}
+
   // ============================================================================
   // Custom Shell RPCs
   // ============================================================================
@@ -619,6 +625,9 @@ message UpdateSessionRequest {
   // Steering message to inject into an autonomous session mid-run.
   // Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
   optional string steer_message = 11;
+
+  // Update the session's free-form note. Capped at 10,000 bytes.
+  optional string note = 12;
 }
 
 message UpdateSessionResponse {
@@ -2373,6 +2382,15 @@ message ResumeHibernatedSessionRequest {
 }
 
 message ResumeHibernatedSessionResponse {
+  Session session = 1;
+}
+
+// ResumeCrashedSession messages
+message ResumeCrashedSessionRequest {
+  string id = 1;
+}
+
+message ResumeCrashedSessionResponse {
   Session session = 1;
 }
 

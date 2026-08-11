@@ -404,6 +404,12 @@ func (i *Instance) TmuxSessionExists() bool {
 }
 
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
+// TmuxAlive intentionally does not special-case Hibernated or Crashed here (unlike
+// Paused/Stopped): both rely on their tmux session having actually been killed
+// (Hibernate()/MarkCrashed) to make !i.pm().HasSession() true. If that kill ever
+// fails, TmuxAlive() can still report true for either status -- ReviewQueuePoller's
+// reconcileSessions Hibernated-but-alive and Crashed-but-alive cases exist as the
+// safety net for exactly that scenario.
 func (i *Instance) TmuxAlive() bool {
 	if i.Status == Paused || i.Status == Stopped || !i.started.Load() || !i.pm().HasSession() {
 		return false
@@ -420,19 +426,29 @@ func (i *Instance) TmuxAlive() bool {
 // TmuxAlive() to detect that failure mode. Returns false for non-tmux backends
 // (e.g. native process manager), which have no equivalent placeholder state.
 func (i *Instance) PaneProcessDead() bool {
+	dead, _, _ := i.PaneExitInfo()
+	return dead
+}
+
+// PaneExitInfo reports whether the wrapped program's pane has exited
+// (PaneProcessDead), along with its exit code and signal (empty string if
+// none) when available. Used by SessionHealthChecker to distinguish a normal
+// completion (exit code 0, no signal) from a genuine crash. code/signal are
+// zero-valued when dead is false.
+func (i *Instance) PaneExitInfo() (dead bool, code int, signal string) {
 	if !i.TmuxAlive() {
-		return false
+		return false, 0, ""
 	}
 	tb, ok := i.pm().(*TmuxBackend)
 	if !ok {
-		return false
+		return false, 0, ""
 	}
 	tm := tb.TmuxManager()
 	if tm == nil {
-		return false
+		return false, 0, ""
 	}
-	_, _, dead := tm.PaneExitStatus()
-	return dead
+	code, signal, dead = tm.PaneExitStatus()
+	return dead, code, signal
 }
 
 // GetPTYReader returns the PTY file handle for the tmux session.

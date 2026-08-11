@@ -38,6 +38,7 @@ type InstanceData struct {
 
 	// New fields for session organization and grouping
 	Category   string   `json:"category,omitempty"`
+	Note       string   `json:"note,omitempty"`
 	IsExpanded bool     `json:"is_expanded,omitempty"`
 	Tags       []string `json:"tags,omitempty"` // Multi-valued tags for flexible organization
 
@@ -131,6 +132,10 @@ type InstanceData struct {
 	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource".
 	// Empty when session has never been paused.
 	PauseReason string `json:"pause_reason,omitempty"`
+
+	// ExitReason records why this session's pane crashed (Status == Crashed).
+	// Empty otherwise. Set by SessionHealthChecker (session/health.go).
+	ExitReason string `json:"exit_reason,omitempty"`
 
 	// WorkflowID is the UUID of the Workflow that spawned this session.
 	// Empty for manually-created sessions.

@@ -1826,6 +1826,15 @@ func (s *SessionService) UpdateSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Validate the note length before any field below mutates live in-memory state
+	// (SetTitleDirect/SetCategory publish immediately via snapshot.Store, not staged
+	// until SaveInstances) — otherwise a rejected request could still leave title/category
+	// changes visible to concurrent readers.
+	if req.Msg.Note != nil && len(*req.Msg.Note) > session.MaxNoteLength {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("note exceeds maximum length of %d bytes", session.MaxNoteLength))
+	}
+
 	// Track which fields are being updated for event publishing
 	var updatedFields []string
 
@@ -1845,6 +1854,12 @@ func (s *SessionService) UpdateSession(
 	if req.Msg.Category != nil {
 		instance.SetCategory(*req.Msg.Category)
 		updatedFields = append(updatedFields, "category")
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
 	}
 
 	// Handle tags update.
@@ -2098,6 +2113,54 @@ func (s *SessionService) ResumeHibernatedSession(
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
 
 	return connect.NewResponse(&sessionv1.ResumeHibernatedSessionResponse{
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
+	}), nil
+}
+
+// ResumeCrashedSession re-launches the AI process for a Crashed session (dead
+// tmux pane detected by SessionHealthChecker, session/health.go), transitioning
+// it back to Active status. The tmux session was already killed when the
+// instance was marked Crashed, so Start(false) takes the cold-restore path and
+// threads --resume automatically when a conversation UUID is known.
+// +api: session:resume_crashed
+func (s *SessionService) ResumeCrashedSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ResumeCrashedSessionRequest],
+) (*connect.Response[sessionv1.ResumeCrashedSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	var instance *session.Instance
+	var instanceIndex int
+	for i, inst := range instances {
+		if inst.MatchesID(req.Msg.Id) {
+			instance = inst
+			instanceIndex = i
+			break
+		}
+	}
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	if err := instance.ResumeFromCrash(ctx); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+
+	instances[instanceIndex] = instance
+	if err := s.storage.SaveInstances(instances); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
+
+	return connect.NewResponse(&sessionv1.ResumeCrashedSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
 }
@@ -2787,6 +2850,13 @@ func (s *SessionService) GetSessionDiff(
 				found.Worktree.BaseCommitSHA,
 			)
 			diffStats = wt.Diff()
+		} else if found.Path != "" {
+			// ponytail: directory sessions have no worktree; use the session path directly.
+			// resolveBaseCommitSHA() will find the merge-base with main/master as fallback.
+			wt := git.NewGitWorktreeFromStorage(found.Path, found.Path, found.Title, "", "")
+			if wt != nil {
+				diffStats = wt.Diff()
+			}
 		}
 	}
 

@@ -86,6 +86,44 @@ describe("BacklogItemCard — per-card pending state", () => {
 
 });
 
+describe("BacklogItemCard — last-review verdict badge", () => {
+  it("shows a FAIL badge when the item's most recent review verdict is FAIL", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "in_progress", gateVerdict: "FAIL" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("✗ FAIL")).toBeInTheDocument();
+  });
+
+  it("shows no badge when the item has never been reviewed", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "in_progress", gateVerdict: undefined })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/PASS|FAIL|PARTIAL|UNVERIFIABLE/)).not.toBeInTheDocument();
+  });
+
+  it("shows no badge for a PENDING verdict (review still running, not a card-worthy signal)", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "review", gateVerdict: "PENDING" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/PENDING/)).not.toBeInTheDocument();
+  });
+});
+
 describe("BacklogItemCard — flash on live update (Epic 6.1)", () => {
   afterEach(() => {
     jest.useRealTimers();

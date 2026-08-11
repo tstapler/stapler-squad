@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -37,9 +38,19 @@ import (
 // order-dependent flake (reliably 1-pass-then-every-subsequent-run-fails under
 // -count=N in one process). Tests that specifically exercise the capability-check
 // failure/success path still override it per-instance via SetCapabilityCheck.
+//
+// It also clears GITHUB_TOKEN/GH_TOKEN for the whole test run, mirroring
+// github/main_test.go's TestMain: this package drives UserPRCache directly
+// (e.g. TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_ReturnsExactPath),
+// and collectAllTokens reads both env vars straight from the environment, so
+// a developer machine or CI runner with either set would otherwise leak a
+// real token into the cache and dial the real GitHub API mid-suite.
 func TestMain(m *testing.M) {
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
-	os.Exit(m.Run())
+	restore := envtest.ClearAmbientGitHubTokenEnv()
+	code := m.Run()
+	restore()
+	os.Exit(code)
 }
 
 // ─── fakeHeadlessPool ─────────────────────────────────────────────────────────
@@ -1858,13 +1869,16 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorIS.ID, time.Now().Add(-time.Hour)))
 
-	// A live Instance at repoPath, discoverable by AttachSessionToItem's
-	// storage.LoadInstances() lookup.
+	// A live Instance at its own dedicated directory (distinct from repoPath —
+	// AttachSessionToItem rejects a session whose path IS the item's shared repo
+	// checkout, see the isolation guard's regression test below), discoverable by
+	// AttachSessionToItem's storage.LoadInstances() lookup.
+	sessionDir := t.TempDir()
 	const attachUUID = "attach-session-uuid"
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title: "attach-target",
 		UUID:  attachUUID,
-		Path:  repoPath,
+		Path:  sessionDir,
 		// Paused (not Active) so LoadInstances doesn't attempt a real cold-restore
 		// tmux/claude process start — AttachSessionToItem only needs UUID+Path to
 		// match, not a live process, and a real restore attempt is slow/unreliable
@@ -1882,7 +1896,7 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 	}))
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(filepath.Join(repoPath, ".backlog-context.md"))
+	data, err := os.ReadFile(filepath.Join(sessionDir, ".backlog-context.md"))
 	require.NoError(t, err, "AttachSessionToItem must write .backlog-context.md to the instance's path")
 	content := string(data)
 
@@ -1897,6 +1911,60 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 	// future change that stops filtering on EndedAt.
 	assert.Equal(t, 1, strings.Count(content, "- Role:"),
 		"only the one real prior (ended) session should be rendered, not the just-created attach session")
+}
+
+// TestAttachSessionToItem_RejectsWhenSessionPathIsItemSharedRepoCheckout is the
+// regression test for the 2026-07-21 finding: unlike SpawnSessionFromItem
+// (which always tries a dedicated worktree first and only falls back to a
+// *fresh, per-session* directory — never the shared checkout), attaching an
+// arbitrary pre-existing session had no isolation guarantee at all. Confirmed
+// live on item 635a373d (PR #206): its attached session's effective root dir
+// was literally item.RepoPath — the shared main checkout used by unrelated
+// work — so a re-review graded whatever unrelated commits happened to land in
+// that directory between rounds, producing a wrong verdict rather than a
+// stuck one, and the item's stale-session auto-remediation couldn't recover
+// it either since the session was genuinely alive.
+func TestAttachSessionToItem_RejectsWhenSessionPathIsItemSharedRepoCheckout(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:      "shared-checkout attach attempt",
+		RepoPath:   repoPath,
+		SkipTriage: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	// The hazard: a session whose Path IS the item's own RepoPath, not a
+	// dedicated worktree or directory.
+	const attachUUID = "shared-checkout-session-uuid"
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "shared-checkout-session",
+		UUID:      attachUUID,
+		Path:      repoPath,
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	_, err = svc.AttachSessionToItem(t.Context(), connect.NewRequest(&sessionv1.AttachSessionToItemRequest{
+		ItemId:      itemID,
+		SessionUuid: attachUUID,
+	}))
+	require.Error(t, err, "attaching a session whose path is the item's shared repo checkout must be rejected")
+	assert.Contains(t, err.Error(), "shared repo checkout")
+
+	fetched, err := storage.GetBacklogItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusIdea), fetched.Status,
+		"a rejected attach must not transition the item or leave a dangling ItemSession")
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Empty(t, sessions, "a rejected attach must not create an ItemSession row")
 }
 
 // TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext is a regression test

@@ -250,6 +250,7 @@ kill %1   # stop it when done
 | ent ORM schema generation (`--feature sql/upsert`) | `.claude/rules/ent-schema-generation.md` |
 | Go double-checked locking pattern | `.claude/rules/go-double-checked-locking.md` |
 | Interface pollution checklist (leaky abstractions in LLM-generated Go) | `.claude/rules/interface-pollution-checklist.md` |
+| Primitive obsession checklist (same-typed parameter piles in LLM-generated Go) | `.claude/rules/primitive-obsession-checklist.md` |
 | E2E test conventions (annotation, locators, no waitForTimeout) | `.claude/rules/e2e-test-conventions.md` |
 | Commit SDD planning artifacts before ending a session | `.claude/rules/sdd-planning-artifacts-commit.md` |
 | Prefer go-git over shelling out to git CLI | `.claude/rules/prefer-go-git-over-subshells.md` |

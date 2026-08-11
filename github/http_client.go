@@ -59,6 +59,27 @@ func newGHRequest(ctx context.Context, path string) (*http.Request, error) {
 	return newGHRequestForHostWithToken(ctx, "", path, getGHToken(ctx))
 }
 
+// getGHTokenForAccount resolves a token for account, mirroring the per-host
+// resolution session/backlog_plugin_github.go already uses for recurring
+// sync. account.Host "" (or github.com) falls back to getGHToken's
+// env-var/first-keychain-token precedence so default behavior is unchanged
+// when no host/username is specified; a non-github.com host without a
+// username resolves to any token configured for that host.
+func getGHTokenForAccount(ctx context.Context, account AccountRef) string {
+	if account.Host == "" || IsGitHubCom(account.Host) {
+		if account.Username != "" {
+			if tok := GetKeychainTokenForAccount(account.Host, account.Username); tok != "" {
+				return tok
+			}
+		}
+		return getGHToken(ctx)
+	}
+	if account.Username != "" {
+		return GetKeychainTokenForAccount(account.Host, account.Username)
+	}
+	return GetKeychainTokenForHost(account.Host)
+}
+
 // newGHRequestForHostWithToken creates a GET request to host's REST API
 // authenticated with an explicit token. host "" means github.com.
 func newGHRequestForHostWithToken(ctx context.Context, host, path, token string) (*http.Request, error) {

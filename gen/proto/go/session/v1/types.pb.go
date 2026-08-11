@@ -183,6 +183,11 @@ const (
 	// Session is being restored from a previous run (transient startup state).
 	// Never persisted to the database. Transitions to ACTIVE or CREATING on completion.
 	SessionStatus_SESSION_STATUS_RESTORING SessionStatus = 9
+	// Session's tmux pane exited abnormally (non-zero exit code or signal) and was
+	// detected via remain-on-exit polling, distinct from a normal STOPPED
+	// completion. Not auto-recovered; requires an explicit resume (see
+	// ResumeCrashedSession).
+	SessionStatus_SESSION_STATUS_CRASHED SessionStatus = 10
 )
 
 // Enum value maps for SessionStatus.
@@ -191,14 +196,15 @@ var (
 		0: "SESSION_STATUS_UNSPECIFIED",
 		1: "SESSION_STATUS_ACTIVE",
 		// Duplicate value: 1: "SESSION_STATUS_RUNNING",
-		2: "SESSION_STATUS_READY",
-		3: "SESSION_STATUS_LOADING",
-		4: "SESSION_STATUS_PAUSED",
-		5: "SESSION_STATUS_NEEDS_APPROVAL",
-		6: "SESSION_STATUS_CREATING",
-		7: "SESSION_STATUS_STOPPED",
-		8: "SESSION_STATUS_HIBERNATED",
-		9: "SESSION_STATUS_RESTORING",
+		2:  "SESSION_STATUS_READY",
+		3:  "SESSION_STATUS_LOADING",
+		4:  "SESSION_STATUS_PAUSED",
+		5:  "SESSION_STATUS_NEEDS_APPROVAL",
+		6:  "SESSION_STATUS_CREATING",
+		7:  "SESSION_STATUS_STOPPED",
+		8:  "SESSION_STATUS_HIBERNATED",
+		9:  "SESSION_STATUS_RESTORING",
+		10: "SESSION_STATUS_CRASHED",
 	}
 	SessionStatus_value = map[string]int32{
 		"SESSION_STATUS_UNSPECIFIED":    0,
@@ -212,6 +218,7 @@ var (
 		"SESSION_STATUS_STOPPED":        7,
 		"SESSION_STATUS_HIBERNATED":     8,
 		"SESSION_STATUS_RESTORING":      9,
+		"SESSION_STATUS_CRASHED":        10,
 	}
 )
 
@@ -1611,7 +1618,12 @@ type Session struct {
 	// Canonical workspace/repo identity (e.g. "gh:owner/repo", or "path:<main repo path>"
 	// when there's no GitHub remote). Sessions sharing this key are workspace peers. Empty
 	// when neither GitHub info nor a repo path could be determined (e.g. a bare one-off session).
-	WorkspaceKey  string `protobuf:"bytes,71,opt,name=workspace_key,json=workspaceKey,proto3" json:"workspace_key,omitempty"`
+	WorkspaceKey string `protobuf:"bytes,71,opt,name=workspace_key,json=workspaceKey,proto3" json:"workspace_key,omitempty"`
+	// Reason the session's pane crashed. Only meaningful when status ==
+	// SESSION_STATUS_CRASHED. Empty when the session has never crashed.
+	ExitReason string `protobuf:"bytes,72,opt,name=exit_reason,json=exitReason,proto3" json:"exit_reason,omitempty"`
+	// User-authored free-form markdown note attached to this session.
+	Note          string `protobuf:"bytes,73,opt,name=note,proto3" json:"note,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2118,6 +2130,20 @@ func (x *Session) GetArtifacts() *SessionArtifacts {
 func (x *Session) GetWorkspaceKey() string {
 	if x != nil {
 		return x.WorkspaceKey
+	}
+	return ""
+}
+
+func (x *Session) GetExitReason() string {
+	if x != nil {
+		return x.ExitReason
+	}
+	return ""
+}
+
+func (x *Session) GetNote() string {
+	if x != nil {
+		return x.Note
 	}
 	return ""
 }
@@ -6546,7 +6572,7 @@ var File_session_v1_types_proto protoreflect.FileDescriptor
 const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"\x16session/v1/types.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa8\x18\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xdd\x18\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -6627,7 +6653,10 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x0fdetected_status\x18D \x01(\x0e2\x1a.session.v1.DetectedStatusR\x0edetectedStatus\x12)\n" +
 	"\x10detected_context\x18E \x01(\tR\x0fdetectedContext\x12:\n" +
 	"\tartifacts\x18F \x01(\v2\x1c.session.v1.SessionArtifactsR\tartifacts\x12#\n" +
-	"\rworkspace_key\x18G \x01(\tR\fworkspaceKey\"\xb5\x01\n" +
+	"\rworkspace_key\x18G \x01(\tR\fworkspaceKey\x12\x1f\n" +
+	"\vexit_reason\x18H \x01(\tR\n" +
+	"exitReason\x12\x12\n" +
+	"\x04note\x18I \x01(\tR\x04note\"\xb5\x01\n" +
 	"\x10SessionArtifacts\x12\x17\n" +
 	"\apr_urls\x18\x01 \x03(\tR\x06prUrls\x12\x1f\n" +
 	"\vcommit_shas\x18\x02 \x03(\tR\n" +
@@ -7116,7 +7145,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x12CDP_STATUS_WAITING\x10\x01\x12\x18\n" +
 	"\x14CDP_STATUS_STREAMING\x10\x02\x12\x19\n" +
 	"\x15CDP_STATUS_NO_BROWSER\x10\x03\x12\x1a\n" +
-	"\x16CDP_STATUS_UNAVAILABLE\x10\x04*\xe4\x02\n" +
+	"\x16CDP_STATUS_UNAVAILABLE\x10\x04*\x80\x03\n" +
 	"\rSessionStatus\x12\x1e\n" +
 	"\x1aSESSION_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SESSION_STATUS_ACTIVE\x10\x01\x12\x1e\n" +
@@ -7128,7 +7157,9 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x17SESSION_STATUS_CREATING\x10\x06\x12\x1a\n" +
 	"\x16SESSION_STATUS_STOPPED\x10\a\x12\x1d\n" +
 	"\x19SESSION_STATUS_HIBERNATED\x10\b\x12\x1c\n" +
-	"\x18SESSION_STATUS_RESTORING\x10\t\x1a\x02\x10\x01*\xc2\x01\n" +
+	"\x18SESSION_STATUS_RESTORING\x10\t\x12\x1a\n" +
+	"\x16SESSION_STATUS_CRASHED\x10\n" +
+	"\x1a\x02\x10\x01*\xc2\x01\n" +
 	"\vSessionType\x12\x1c\n" +
 	"\x18SESSION_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SESSION_TYPE_DIRECTORY\x10\x01\x12\x1d\n" +
