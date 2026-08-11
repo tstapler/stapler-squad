@@ -17,7 +17,6 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -34,9 +33,10 @@ import (
 // (many tests construct a BacklogService without one). Used by SpawnSessionFromItem
 // (Epic 1.5, Story 1.5.5) to build the prompt handed to inst.Prompt / AutonomousDriver.
 //
-// Appends a one-time "other active sessions in this workspace" nudge (AC5) when peers
-// exist — best-effort: detection/lookup failures are logged and swallowed rather than
-// blocking session creation, since this is a convenience nudge, not required context.
+// Appends a one-time "other active sessions in this workspace" nudge, when the
+// workspacePeersNudgeFlagName feature flag is enabled and peers exist — best-effort:
+// detection/lookup failures are logged and swallowed rather than blocking session creation,
+// since this is a convenience nudge, not required context.
 func (s *BacklogService) initialPromptFor(ctx context.Context, item *session.BacklogItemData, priorSessions []session.ItemSessionSummary) string {
 	var prompt string
 	if s.pipelineEngine == nil {
@@ -53,10 +53,7 @@ func (s *BacklogService) initialPromptFor(ctx context.Context, item *session.Bac
 // session.WorkspacePeersBlockForPath, shared with SessionService.CreateSession so the two
 // callers can't drift on how the nudge is built.
 func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	if !config.LoadConfig().GetFeatureFlag(workspacePeersNudgeFlagName) {
-		return ""
-	}
-	return session.WorkspacePeersBlockForPath(ctx, s.storage, repoPath)
+	return workspacePeersBlockFor(ctx, s.storage, repoPath)
 }
 
 // triagePromptFor returns s.pipelineEngine.TriagePromptFor(...) when pipelineEngine is

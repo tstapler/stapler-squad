@@ -195,7 +195,7 @@ const maxPeersInInitialPrompt = 5
 
 // BuildWorkspacePeersBlock renders a one-time "other active sessions in this workspace"
 // nudge for a new session's initial prompt. Returns "" when there are no peers, so callers
-// can unconditionally append the result without an empty-state noise check (AC5).
+// can unconditionally append the result without an empty-state noise check.
 func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 	if len(peers) == 0 {
 		return ""
@@ -237,12 +237,13 @@ func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 }
 
 // WorkspacePeersBlockForPath resolves repoPath's workspace identity, looks up its peers
-// with authoritative tmux liveness applied, and renders the one-time initial-prompt nudge
-// (AC5/AC6). Shared by both SessionService.CreateSession and BacklogService's
-// initialPromptFor so the two callers can't drift on how the nudge is built. Returns "" on
-// any detection/lookup failure, when storage is nil, or when repoPath is empty — this is a
-// best-effort convenience nudge, not required session context, so failures are logged and
-// swallowed rather than blocking session creation.
+// with authoritative tmux liveness applied, and renders the one-time initial-prompt nudge.
+// Shared by both SessionService.CreateSession and BacklogService's initialPromptFor (both
+// gated behind the workspacePeersNudgeFlagName feature flag) so the two callers can't drift
+// on how the nudge is built. Returns "" on any detection/lookup failure, when storage is
+// nil, or when repoPath is empty — this is a best-effort convenience nudge, not required
+// session context, so failures are logged and swallowed rather than blocking session
+// creation.
 func WorkspacePeersBlockForPath(ctx context.Context, storage *Storage, repoPath string) string {
 	if repoPath == "" || storage == nil {
 		return ""
