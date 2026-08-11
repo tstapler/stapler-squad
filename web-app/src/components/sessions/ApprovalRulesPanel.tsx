@@ -16,6 +16,7 @@ import { RuleTemplate } from "@/lib/ruleTemplates";
 import { RuleBuilderForm } from "@/components/rules/RuleBuilderForm";
 import { TemplateLibrary } from "@/components/rules/TemplateLibrary";
 import { MatchDescription } from "@/components/rules/MatchDescription";
+import { SeverityBadge } from "./SeverityBadge";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
   analyticsBar, analyticsTotal, analyticsRate, rateAllow, rateManual, analyticsTopTool,
@@ -512,6 +513,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
                 <th className={`${th} ${thSortable}`} onClick={() => handleSort("decision")}>
                   Decision{sortIcon("decision")}
                 </th>
+                <th className={th}>Risk</th>
                 <th className={th}>Source</th>
                 <th
                   className={`${th} ${thSortable}`}
@@ -546,6 +548,9 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
                     <span className={`${decisionBadge} ${decisionClass(rule.decision)}`}>
                       {decisionLabel(rule.decision)}
                     </span>
+                  </td>
+                  <td className={td}>
+                    <SeverityBadge riskLevel={rule.riskLevel} compact />
                   </td>
                   <td className={td}>
                     <span
