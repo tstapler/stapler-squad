@@ -22,6 +22,11 @@ const sddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
 // name can't drift between where it's declared and where it's read.
 const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 
+// workspacePeersNudgeFlagName is shared between knownFeatureFlags below and the
+// workspacePeersBlockFor gates in session_service.go and backlog_service_triage.go so the
+// flag name can't drift between where it's declared and where it's read.
+const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
 var knownFeatureFlags = []struct {
@@ -51,6 +56,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        blockApprovalOnCIFailureFlagName,
 		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
+	},
+	{
+		name:        workspacePeersNudgeFlagName,
+		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
 	},
 }
 

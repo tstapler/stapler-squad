@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -200,7 +201,15 @@ func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 		return ""
 	}
 
-	shown := peers
+	// Sort live/stuck peers before "gone" ones (stable, so within each group the original
+	// DB order is preserved) so the cap below can't hide a live peer behind stale entries.
+	sorted := make([]WorkspacePeer, len(peers))
+	copy(sorted, peers)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Lifecycle() != "gone" && sorted[j].Lifecycle() == "gone"
+	})
+
+	shown := sorted
 	if len(shown) > maxPeersInInitialPrompt {
 		shown = shown[:maxPeersInInitialPrompt]
 	}
@@ -210,14 +219,18 @@ func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 	sb.WriteString("These sessions share your repo (possibly a different branch/worktree). ")
 	sb.WriteString("Call the `list_workspace_peers` MCP tool before touching shared files (migrations, generated code, config) to avoid conflicting with them.\n")
 	for _, p := range shown {
-		fmt.Fprintf(&sb, "- %s (%s, %s)", p.Title, p.Branch, p.Lifecycle())
+		if p.Branch != "" {
+			fmt.Fprintf(&sb, "- %s (%s, %s)", p.Title, p.Branch, p.Lifecycle())
+		} else {
+			fmt.Fprintf(&sb, "- %s (%s)", p.Title, p.Lifecycle())
+		}
 		if p.Goal != nil && p.Goal.Goal != "" {
 			fmt.Fprintf(&sb, ": %s", p.Goal.Goal)
 		}
 		sb.WriteString("\n")
 	}
-	if len(peers) > len(shown) {
-		fmt.Fprintf(&sb, "- ...and %d more\n", len(peers)-len(shown))
+	if len(sorted) > len(shown) {
+		fmt.Fprintf(&sb, "- ...and %d more\n", len(sorted)-len(shown))
 	}
 	sb.WriteString("\n")
 	return sb.String()

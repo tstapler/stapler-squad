@@ -17,6 +17,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -47,10 +48,14 @@ func (s *BacklogService) initialPromptFor(ctx context.Context, item *session.Bac
 }
 
 // workspacePeersBlockFor returns the rendered workspace-peers nudge for repoPath, or ""
-// on any detection/lookup failure or when repoPath is empty. Delegates to
+// when the workspacePeersNudgeFlagName feature flag is off (default), on any
+// detection/lookup failure, or when repoPath is empty. Delegates to
 // session.WorkspacePeersBlockForPath, shared with SessionService.CreateSession so the two
 // callers can't drift on how the nudge is built.
 func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
+	if !config.LoadConfig().GetFeatureFlag(workspacePeersNudgeFlagName) {
+		return ""
+	}
 	return session.WorkspacePeersBlockForPath(ctx, s.storage, repoPath)
 }
 
