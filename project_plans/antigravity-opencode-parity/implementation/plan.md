@@ -542,6 +542,39 @@ For each (T1–T6):
   func installOpenCode() {
   ```
 - AC: Comment is present; code is unchanged. `go build ./cmd/ssq-hooks/` passes.
+- **Status (2026-08-11 re-verification, see `research/features.md` R4 addendum): this task was
+  never actually done** — no comment exists above `installOpenCode()` in the current codebase
+  (`implementation/validation.md`'s ST-03 corrected accordingly). More importantly, its premise is
+  now known incomplete: this section's "no PreToolUse hook system" claim covers only the static
+  `hook`/`permission` config schema, not OpenCode's separate JS/TS plugin API
+  (`@opencode-ai/plugin`'s `tool.execute.before`), which **is** a real PreToolUse-equivalent
+  (`throw`-to-block, confirmed against the locally installed plugin package and
+  [opencode.ai/docs/plugins/](https://opencode.ai/docs/plugins/)). This section's own "Revisit"
+  line has now triggered — do not write the comment as originally specified (it would assert a
+  false "no PreToolUse hook" premise); instead this epic's outcome is superseded by a follow-on
+  backlog item scoping `patchOpenCodeHooks()`.
+
+**Open questions for that follow-on item (recorded here so it doesn't re-research them):**
+1. **`AutoEscalate` → OpenCode UI mapping is unconfirmed.** Stapler-squad's `AutoEscalate` concept
+   (used in Claude's hook decision flow) has no confirmed equivalent surfaced in OpenCode's
+   plugin/permission model yet — needs research against `permission.ask`'s `status: "ask" | "deny"
+   | "allow"` output shape and the TUI's actual prompt behavior once `permission.ask` (or its
+   replacement approach) is live-tested.
+2. **Subagent (`task`-tool) coverage under `tool.execute.before` is disputed, not confirmed.**
+   [Issue #5894](https://github.com/anomalyco/opencode/issues/5894): reporter claimed subagent
+   tool calls bypass the hook (security-policy bypass); two maintainers disputed the repro and
+   argued hooks fire correctly per-`Instance` for subagent sessions too. Closed as `completed` by
+   stale-bot, not by a merged fix — the dispute itself was never independently re-verified with a
+   live plugin. The follow-on implementation item should live-test this before relying on
+   `tool.execute.before` coverage across subagent-spawned tool calls.
+3. **`opencode run` does not complete end-to-end in this environment** (pre-existing, tracked in
+   `implementation/validation.md`'s adversarial Issue 2 — a local
+   `~/.config/opencode/agents/skills/*.md` config error). This blocks any live-session test of a
+   plugin-based hook actually intercepting a real `opencode` invocation here; static
+   type/doc verification (done as part of this re-verification) is not a substitute. Fix the
+   config error before attempting live interception tests in the follow-on item.
+4. **`permission.ask` should not be used as the gating mechanism** — see `research/features.md`'s
+   R4 addendum for #7006/#19927. Use `tool.execute.before` instead.
 
 ---
 
