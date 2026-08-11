@@ -346,6 +346,15 @@ export const tabContent = style({
   display: "flex",
   flexDirection: "column",
   animation: `${tabFadeIn} 0.2s ease-out both`,
+  selectors: {
+    // Used by always-mounted tab panels (e.g. Files) that stay in the DOM
+    // across tab switches to preserve internal state (tree/scroll/editor)
+    // instead of unmounting. See ADR-009 / css-architecture.md — layout
+    // visibility is expressed via a data attribute, not an inline style.
+    '&[data-active="false"]': {
+      display: "none",
+    },
+  },
 });
 
 export const placeholder = style({

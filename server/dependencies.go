@@ -64,7 +64,10 @@ type ServerDependencies struct {
 	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
-	SyncLoop       *session.SyncLoop
+	// QuotaGate owns the account-wide session-quota pause/resume decision for
+	// backlog automation (see BacklogService/BacklogEnabledCheck above).
+	QuotaGate *services.QuotaGate
+	SyncLoop  *session.SyncLoop
 
 	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
 	// flag. See RuntimeDeps.BacklogEnabledCheck.
@@ -128,6 +131,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		GitHubUserService:       rt.GitHubUserService,
 		InsightsService:         rt.InsightsService,
 		BacklogService:          rt.BacklogService,
+		QuotaGate:               rt.QuotaGate,
 		SyncLoop:                rt.SyncLoop,
 		BacklogEnabledCheck:     rt.BacklogEnabledCheck,
 		AnalyticsEntClient:      rt.AnalyticsEntClient,
@@ -404,8 +408,11 @@ type RuntimeDeps struct {
 	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
-	SyncLoop       *session.SyncLoop
-	Config         *config.Config // Used for encryption of sensitive data
+	// QuotaGate owns the account-wide session-quota pause/resume decision for
+	// backlog automation (see BacklogService/BacklogEnabledCheck above).
+	QuotaGate *services.QuotaGate
+	SyncLoop  *session.SyncLoop
+	Config    *config.Config // Used for encryption of sensitive data
 
 	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
 	// flag (backlogCtrl.IsEnabled). Threaded into the MCP server so backlog/goal
@@ -492,6 +499,20 @@ func (a *reviewQueueLookupAdapter) ReviewQueueResolvedCount(ctx context.Context,
 // ordering, DoesSessionExist() may trigger recoverFromServerFailure, which starts
 // a fresh server that considers all sessions non-existent and cold-restores them.
 // cfg may be nil; when non-nil, is used for token encryption in backlog sources.
+
+// recoverAndLog runs fn with its own panic recovery, logging under label if it
+// panics. Used by the 60s reconcile ticker so a panic in one tick's work
+// (e.g. QuotaGate.Reconcile) never prevents a sibling call in the same tick,
+// or any future tick, from running.
+func recoverAndLog(label string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error(label+" recovered from panic", "recover", r)
+		}
+	}()
+	fn()
+}
+
 func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Config) (*RuntimeDeps, error) {
 	if svc == nil {
 		return nil, fmt.Errorf("BuildRuntimeDeps: ServiceDeps is nil (Phase 2 not completed)")
@@ -969,33 +990,34 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// One-time startup backfill: seed durable BacklogStuckState rows (with
 	// notified_at pre-set) for items that are already stuck, so the first
-	// genuine reconcile tick below does not re-notify for conditions already
-	// known before this restart. Must run before the ticker starts. Gated on
-	// the backlog feature flag directly (backlogCtrl isn't constructed until
-	// after the ticker below) — seeding rows a disabled ticker will never
-	// maintain would leave stale, un-reconciled rows behind.
+	// genuine reconcile tick does not re-notify for conditions already known
+	// before this restart. Must run before the ticker starts (constructed
+	// further below, after BacklogController/QuotaGate). Gated on the backlog
+	// feature flag directly (backlogCtrl isn't constructed yet at this point)
+	// — seeding rows a disabled ticker will never maintain would leave stale,
+	// un-reconciled rows behind.
 	if cfg.GetFeatureFlag("backlog") {
 		backlogLifecycleListener.BackfillStuckStates(context.Background())
 	}
 
-	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
-	// This goroutine is the only fallback for review-gate respawn, stale-item detection,
-	// and PR-pending polling (merge/CI/conflict) — a panic here must not kill it silently.
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		ctx := context.Background()
-		for range ticker.C {
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Error("backlog reconcile ticker recovered from panic", "recover", r)
-					}
-				}()
-				backlogLifecycleListener.ReconcileStuck(ctx)
-			}()
-		}
-	}()
+	// Construct and start TokenStore early — before BacklogController/QuotaGate
+	// below — so QuotaGate's very first Reconcile (synchronous, at boot) can
+	// read real, restart-durable token-usage data instead of skipping the soft
+	// signal entirely for up to 60s. Only tokenStore/historyDir/homeDir are
+	// hoisted here; InsightsService construction, backlogSvc.SetTokenStore, and
+	// the ArtifactExtractor wiring stay at their original later position
+	// (below), now reading these already-constructed outer-scope variables.
+	homeDir, homeDirErr := os.UserHomeDir()
+	var tokenStore *tokens.TokenStore
+	var historyDir string
+	if homeDirErr == nil {
+		historyDir = filepath.Join(homeDir, ".claude", "projects")
+		tokenStore = tokens.NewTokenStore(historyDir)
+		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
+		tokenStore.Start(context.Background())
+	} else {
+		log.Warn("could not determine home dir for InsightsService token store", "err", homeDirErr)
+	}
 
 	// Build the BacklogController and initialize its enabled state from config.
 	syncRegistry := session.NewDefaultRegistry()
@@ -1013,6 +1035,48 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	} else {
 		log.Info("backlog feature disabled (toggle via Settings → Features)")
 	}
+
+	// Construct the account-wide quota gate and reconcile it once, synchronously,
+	// right after the boot-time Enable() decision above — so if quota state is
+	// already bad, backlog is disabled again within the same boot sequence
+	// rather than trusting the persisted flag for up to 60s until the first
+	// ticker fire. Reads config.json fresh on every call (see cfgFn) so edits
+	// take effect without a restart.
+	var tokenStoreReader tokens.TokenStoreReader
+	if tokenStore != nil {
+		tokenStoreReader = tokenStore
+	}
+	quotaGate := services.NewQuotaGate(
+		// config.LoadConfig() re-reads config.json from disk on every call
+		// (same pattern as feature_flag_service.go's GetFeatureFlags) — cfg
+		// here is the boot-time snapshot passed into BuildRuntimeDeps and is
+		// never refreshed, so closing over cfg.Quota directly would freeze
+		// every Quota field at boot, contradicting this closure's whole
+		// purpose ("no restart needed" for config.json edits).
+		func() config.QuotaConfig { return config.LoadConfig().Quota.QuotaConfigOrDefault() },
+		tokenStoreReader,
+		sessionService,
+		backlogCtrl,
+		eventBus,
+	)
+	sessionService.SetQuotaGate(quotaGate)
+	quotaGate.Reconcile(context.Background())
+
+	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
+	// This goroutine is the only fallback for review-gate respawn, stale-item detection,
+	// and PR-pending polling (merge/CI/conflict) — a panic here must not kill it silently.
+	// Also drives QuotaGate.Reconcile on the same cadence, independently
+	// panic-recovered (via recoverAndLog) so a bug in one never blocks the
+	// other from running this tick or any future tick.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		ctx := context.Background()
+		for range ticker.C {
+			recoverAndLog("backlog reconcile ticker", func() { backlogLifecycleListener.ReconcileStuck(ctx) })
+			recoverAndLog("quota gate reconcile ticker", func() { quotaGate.Reconcile(ctx) })
+		}
+	}()
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetEventBus(eventBus)
@@ -1036,7 +1100,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetSyncKeyFunc(keyFunc)
 	// Refuse manual syncs while the backlog feature is toggled off, matching
 	// the periodic SyncLoop's behavior.
-	backlogSvc.SetSyncFeatureEnabledCheck(backlogCtrl.IsEnabled)
+	// Composed rather than a second gate: quota-critical (heavy — Disable(),
+	// pausedByQuota) stays distinct from "a human is actively working" (light
+	// — just skip this tick's dispatch), enforced through the one existing
+	// consulted checker.
+	backlogSvc.SetSyncFeatureEnabledCheck(func() bool {
+		return backlogCtrl.IsEnabled() && !quotaGate.ShouldThrottleForeground()
+	})
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
@@ -1129,6 +1199,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// can show history for backlog sessions that passed a tmux UUID as the session ID.
 	sessionService.SetResolveConversationUUID(storage.GetClaudeConversationUUIDBySessionUUID)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
+	sessionService.SetStatusDetailProvider("backlog", quotaGate.StatusDetail)
 
 	// Check VNC dependencies once at startup so the server knows whether browser
 	// passthrough is available on this host. Non-fatal: Missing deps log a warning.
@@ -1147,11 +1218,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Info("CDP browser streaming available", "chrome", cdpDeps.ChromePath)
 	}
 
-	// Initialize TokenStore and InsightsService for token usage analytics.
+	// Initialize InsightsService for token usage analytics. tokenStore/historyDir
+	// were already constructed and started earlier (see the QuotaGate wiring
+	// above) so QuotaGate's boot-time Reconcile could read real data — this
+	// block only builds the InsightsService/ArtifactExtractor machinery that
+	// depends on them, plus backlogSvc/sessionSummaryGenerator, all of which
+	// need backlogSvc (constructed after that early wiring).
 	var insightsSvc *services.InsightsService
-	if homeDir, homeDirErr := os.UserHomeDir(); homeDirErr == nil {
-		historyDir := filepath.Join(homeDir, ".claude", "projects")
-		tokenStore := tokens.NewTokenStore(historyDir)
+	if tokenStore != nil {
 		pricing := tokens.DefaultPricingTable()
 		if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
 			overridePath := filepath.Join(configDir, "pricing_overrides.json")
@@ -1167,8 +1241,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			log.Warn("pricing table is stale (an entry's EffectiveDate is 30+ days old)", "loadedAt", pricing.LoadedAt)
 		}
 		associator := tokens.NewAssociator(storage)
-		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
-		tokenStore.Start(context.Background())
 		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator)
 		sessionService.SetTokenStoreReader(tokenStore)
 		backlogSvc.SetTokenStore(tokenStore, pricing)
@@ -1220,9 +1292,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		artifactExtractor.SeedOffsets(session.InstanceInfoSlice(historyLinker.Instances()))
 		artifactExtractor.Start(context.Background(), historyDir)
 		log.Info("ArtifactExtractor initialized", "historyDir", historyDir)
-	} else {
-		log.Warn("could not determine home dir for InsightsService token store", "err", homeDirErr)
 	}
+	// else: home dir resolution already failed and was logged earlier, where
+	// tokenStore/historyDir are constructed (see the QuotaGate wiring above).
 
 	// Initialize WorkflowRepository using the ent client from storage.
 	// Nil-safe: when the storage is not ent-backed (e.g. tests), WorkflowRepo is nil.
@@ -1278,6 +1350,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		GitHubUserService:       githubUserSvc,
 		InsightsService:         insightsSvc,
 		BacklogService:          backlogSvc,
+		QuotaGate:               quotaGate,
 		SyncLoop:                nil, // managed by BacklogController
 		BacklogEnabledCheck:     backlogCtrl.IsEnabled,
 		Config:                  cfg,
