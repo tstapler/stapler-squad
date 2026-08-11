@@ -112,54 +112,11 @@ func ReadCanonicalTurnsFromFile(path string) ([]CanonicalTurn, error) {
 		lineStr := strings.TrimSpace(string(lineBytes))
 		if lineStr != "" {
 			var raw rawClaudeTurn
-			if err := json.Unmarshal([]byte(lineStr), &raw); err == nil && raw.Message != nil {
-				var canonicalBlocks []CanonicalBlock
-
-				// Parse content which can be a string or a list of blocks
-				if contentStr, ok := raw.Message.Content.(string); ok {
-					if contentStr != "" {
-						canonicalBlocks = append(canonicalBlocks, NewTextBlock(contentStr))
-					}
-				} else if contentList, ok := raw.Message.Content.([]interface{}); ok {
-					for _, item := range contentList {
-						var block rawClaudeMessageBlock
-						itemBytes, _ := json.Marshal(item)
-						if err := json.Unmarshal(itemBytes, &block); err == nil {
-							switch block.Type {
-							case "text":
-								canonicalBlocks = append(canonicalBlocks, NewTextBlock(block.Text))
-							case "thinking":
-								canonicalBlocks = append(canonicalBlocks, NewThinkingBlock(block.Thinking))
-							case "tool_use":
-								canonicalBlocks = append(canonicalBlocks, NewToolUseBlock(block.ID, block.Name, block.Input))
-							case "tool_result":
-								canonicalBlocks = append(canonicalBlocks, NewToolResultBlock(block.ToolUseID, "", block.Content, block.IsError))
-							}
-						}
-					}
+			if unmarshalErr := json.Unmarshal([]byte(lineStr), &raw); unmarshalErr == nil && raw.Message != nil {
+				turn, buildErr := buildCanonicalTurnFromRawClaudeTurn(raw, turnIdx)
+				if buildErr != nil {
+					return nil, buildErr
 				}
-
-				role := RoleUser
-				if raw.Message.Role == "assistant" {
-					role = RoleAssistant
-				}
-
-				tTime, parseErr := time.Parse(time.RFC3339Nano, raw.Timestamp)
-				if parseErr != nil {
-					tTime = time.Now()
-				}
-
-				turn := CanonicalTurn{
-					Role:      role,
-					Blocks:    canonicalBlocks,
-					Timestamp: tTime,
-					TurnIndex: turnIdx,
-				}
-
-				if err := turn.Validate(); err != nil {
-					return nil, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
-				}
-
 				turns = append(turns, turn)
 				turnIdx++
 			}
@@ -171,6 +128,88 @@ func ReadCanonicalTurnsFromFile(path string) ([]CanonicalTurn, error) {
 	}
 
 	return turns, nil
+}
+
+// buildCanonicalTurnFromRawClaudeTurn converts a single parsed JSONL line
+// (already known to carry a non-nil Message) into a CanonicalTurn, including
+// content-block parsing, role/timestamp normalization, and validation.
+func buildCanonicalTurnFromRawClaudeTurn(raw rawClaudeTurn, turnIdx int) (CanonicalTurn, error) {
+	canonicalBlocks := parseClaudeMessageContent(raw.Message.Content)
+
+	role := RoleUser
+	if raw.Message.Role == "assistant" {
+		role = RoleAssistant
+	}
+
+	tTime, parseErr := time.Parse(time.RFC3339Nano, raw.Timestamp)
+	if parseErr != nil {
+		tTime = time.Now()
+	}
+
+	turn := CanonicalTurn{
+		Role:      role,
+		Blocks:    canonicalBlocks,
+		Timestamp: tTime,
+		TurnIndex: turnIdx,
+	}
+
+	if err := turn.Validate(); err != nil {
+		return CanonicalTurn{}, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
+	}
+
+	return turn, nil
+}
+
+// parseClaudeMessageContent parses a raw Claude message's content field,
+// which may be either a plain string or a list of typed content blocks.
+func parseClaudeMessageContent(content interface{}) []CanonicalBlock {
+	if contentStr, ok := content.(string); ok {
+		if contentStr == "" {
+			return nil
+		}
+		return []CanonicalBlock{NewTextBlock(contentStr)}
+	}
+
+	contentList, ok := content.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	var canonicalBlocks []CanonicalBlock
+	for _, item := range contentList {
+		if block, ok := parseClaudeContentBlockItem(item); ok {
+			canonicalBlocks = append(canonicalBlocks, block)
+		}
+	}
+	return canonicalBlocks
+}
+
+// parseClaudeContentBlockItem parses a single entry from a Claude message's
+// content list into a CanonicalBlock. It returns ok=false for entries that
+// fail to unmarshal or carry an unrecognized block type, which are silently
+// skipped by the caller.
+func parseClaudeContentBlockItem(item interface{}) (CanonicalBlock, bool) {
+	var block rawClaudeMessageBlock
+	itemBytes, err := json.Marshal(item)
+	if err != nil {
+		return CanonicalBlock{}, false
+	}
+	if err := json.Unmarshal(itemBytes, &block); err != nil {
+		return CanonicalBlock{}, false
+	}
+
+	switch block.Type {
+	case "text":
+		return NewTextBlock(block.Text), true
+	case "thinking":
+		return NewThinkingBlock(block.Thinking), true
+	case "tool_use":
+		return NewToolUseBlock(block.ID, block.Name, block.Input), true
+	case "tool_result":
+		return NewToolResultBlock(block.ToolUseID, "", block.Content, block.IsError), true
+	default:
+		return CanonicalBlock{}, false
+	}
 }
 
 func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Instance) error {
