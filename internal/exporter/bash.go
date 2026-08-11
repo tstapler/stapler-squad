@@ -38,7 +38,7 @@ func (e *BashExporter) Export(events []*history.Event) error {
 		// For multiline bash commands, typically just literal newlines
 		cmd := ev.Command
 		
-		buf.WriteString(fmt.Sprintf("#%d\n%s\n", ts, cmd))
+		fmt.Fprintf(&buf, "#%d\n%s\n", ts, cmd)
 	}
 
 	_, err = file.Write(buf.Bytes())

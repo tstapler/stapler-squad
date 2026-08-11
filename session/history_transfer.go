@@ -75,7 +75,7 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 		return fmt.Errorf("failed to export session history to %s: %w", dstAdapter.Name(), err)
 	}
 
-	// 3. Perform post-switch steps like history.jsonl mapping
+	// 4. Perform post-switch steps like history.jsonl mapping
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err

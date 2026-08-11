@@ -40,7 +40,7 @@ func (e *ZshExporter) Export(events []*history.Event) error {
 		ts := ev.Timestamp.Unix()
 		cmd := string(e.metafy(ev.Command))
 		
-		buf.WriteString(fmt.Sprintf(": %d:0;%s\n", ts, cmd))
+		fmt.Fprintf(&buf, ": %d:0;%s\n", ts, cmd)
 	}
 
 	_, err = file.Write(buf.Bytes())
