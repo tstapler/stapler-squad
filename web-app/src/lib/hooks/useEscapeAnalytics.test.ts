@@ -9,10 +9,12 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
 
 const mockGetEscapeAnalyticsSummary = jest.fn();
+const mockGetEscapeAnalyticsGlobalSummary = jest.fn();
 
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
     getEscapeAnalyticsSummary: (...args: unknown[]) => mockGetEscapeAnalyticsSummary(...args),
+    getEscapeAnalyticsGlobalSummary: (...args: unknown[]) => mockGetEscapeAnalyticsGlobalSummary(...args),
   }),
 }));
 
@@ -20,7 +22,7 @@ jest.mock("@/lib/api/transport", () => ({
   getConnectTransport: () => ({}),
 }));
 
-import { useEscapeAnalyticsSummary } from "@/lib/hooks/useEscapeAnalytics";
+import { useEscapeAnalyticsSummary, useEscapeAnalyticsGlobalSummary } from "@/lib/hooks/useEscapeAnalytics";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -124,5 +126,96 @@ describe("useEscapeAnalyticsSummary", () => {
       expect.objectContaining({ sessionId: "sess-1" })
     );
     expect(result.current.totalSequences).toBe(5n);
+  });
+});
+
+function makeGlobalSummaryResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    histogram: [],
+    totalSequences: 5n,
+    totalMangled: 1n,
+    mangleRate: 0.2,
+    perSession: [],
+    ...overrides,
+  };
+}
+
+describe("useEscapeAnalyticsGlobalSummary", () => {
+  beforeEach(() => {
+    mockGetEscapeAnalyticsGlobalSummary.mockReset();
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("useEscapeAnalyticsGlobalSummary_should_Fetch_When_Enabled", async () => {
+    mockGetEscapeAnalyticsGlobalSummary.mockResolvedValue(
+      makeGlobalSummaryResponse({
+        perSession: [{ sessionId: "sess-1", totalSequences: 5n, totalMangled: 1n, mangleRate: 0.2 }],
+      })
+    );
+
+    const { result } = renderHook(() => useEscapeAnalyticsGlobalSummary(true));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(mockGetEscapeAnalyticsGlobalSummary).toHaveBeenCalledTimes(1);
+    expect(result.current.totalSequences).toBe(5n);
+    expect(result.current.totalMangled).toBe(1n);
+    expect(result.current.mangleRate).toBe(0.2);
+    expect(result.current.perSession).toHaveLength(1);
+    expect(result.current.perSession[0]).toEqual(
+      expect.objectContaining({ sessionId: "sess-1" })
+    );
+  });
+
+  it("useEscapeAnalyticsGlobalSummary_should_NotFetch_When_Disabled", async () => {
+    mockGetEscapeAnalyticsGlobalSummary.mockResolvedValue(makeGlobalSummaryResponse());
+
+    const { result } = renderHook(() => useEscapeAnalyticsGlobalSummary(false));
+
+    // Give any (incorrect) effect a chance to fire.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockGetEscapeAnalyticsGlobalSummary).not.toHaveBeenCalled();
+    expect(result.current.loading).toBe(false);
+
+    // refresh() should also be a no-op while disabled.
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(mockGetEscapeAnalyticsGlobalSummary).not.toHaveBeenCalled();
+  });
+
+  it("useEscapeAnalyticsGlobalSummary_should_IgnoreStaleResponse_When_DisabledBeforeFetchResolves", async () => {
+    const first = deferred<ReturnType<typeof makeGlobalSummaryResponse>>();
+    mockGetEscapeAnalyticsGlobalSummary.mockImplementationOnce(() => first.promise);
+
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useEscapeAnalyticsGlobalSummary(enabled),
+      { initialProps: { enabled: true } }
+    );
+
+    await waitFor(() => expect(mockGetEscapeAnalyticsGlobalSummary).toHaveBeenCalledTimes(1));
+    expect(result.current.loading).toBe(true);
+
+    // Disable the hook before the in-flight fetch resolves — this unmounts
+    // the effect (setting its `cancelled` flag).
+    rerender({ enabled: false });
+
+    // Resolve the now-stale request. If the cancellation guard is missing,
+    // this would overwrite state after the hook was disabled.
+    await act(async () => {
+      first.resolve(makeGlobalSummaryResponse({ totalSequences: 999n, totalMangled: 999n }));
+      await Promise.resolve();
+    });
+
+    expect(result.current.totalSequences).not.toBe(999n);
+    expect(result.current.totalMangled).not.toBe(999n);
+    expect(mockGetEscapeAnalyticsGlobalSummary).toHaveBeenCalledTimes(1);
   });
 });
