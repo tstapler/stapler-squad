@@ -64,6 +64,7 @@ type fakeHeadlessPool struct {
 	delay     time.Duration // simulates a slow LLM call; see TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext
 	cost      float64       // returned as CallBlocking's cost; see TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession
 	calls     []fakePoolCall
+	onCall    func(workDir string) // optional: simulates the LLM writing files into WorkDir before the response returns
 }
 
 type fakePoolCall struct {
@@ -96,6 +97,7 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	if callIndex < len(f.responses) {
 		resp = f.responses[callIndex]
 	}
+	onCall := f.onCall
 	f.mu.Unlock()
 	if delay > 0 {
 		timer := time.NewTimer(delay)
@@ -105,6 +107,9 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 		case <-ctx.Done():
 			return "", 0, ctx.Err()
 		}
+	}
+	if onCall != nil {
+		onCall(opts.WorkDir)
 	}
 	return resp, f.cost, f.err
 }
@@ -2868,6 +2873,211 @@ func TestTriggerTriage_Success(t *testing.T) {
 	require.NoError(t, listErr)
 	require.Len(t, sessions, 1)
 	assert.NotNil(t, sessions[0].EndedAt, "triage item session should be marked ended on success")
+}
+
+// TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo guards the
+// fix for triage writing planning docs directly into item.RepoPath — a routinely
+// shared or actively-used checkout (an app-managed mirror other sessions touch, or
+// a developer's own live working directory for items created with repo_path
+// defaulted to the calling session's cwd). When repo_path is a real git repo,
+// triage must run in a dedicated worktree, not repo_path itself.
+func TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "isolated worktree triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	workDir := pool.firstCall().workDir
+	assert.NotEqual(t, repoPath, workDir, "triage must not run directly in repo_path when repo_path is a real git repo")
+	assert.NotEmpty(t, workDir)
+	info, statErr := os.Stat(workDir)
+	require.NoError(t, statErr, "the worktree directory triage was told to use must actually exist")
+	assert.True(t, info.IsDir())
+}
+
+// TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo locks in
+// the fallback: worktree creation only kicks in when repo_path is a real git repo —
+// a repo_path that legitimately isn't one (a plain directory item) must not break
+// triage, and must preserve the pre-existing behavior of running directly there.
+func TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir() // deliberately not git-initialized
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "non-git repo_path triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	assert.Equal(t, repoPath, pool.firstCall().workDir,
+		"a non-git repo_path must fall back to running triage directly there, same as before this change")
+}
+
+// TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath is the
+// end-to-end regression test for both halves of the fix: SDD-mode triage's
+// project_plans/<name>/ output must land in the isolated worktree and get
+// committed there (closing the gap .claude/rules/sdd-planning-artifacts-commit.md
+// already names), and PlanArtifactsPath must point at the implementation/
+// subdirectory the SDD skills actually write plan.md into — not artifactAbsPath,
+// which SDD-mode never writes to at all.
+func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath(t *testing.T) {
+	storage := createTestStorage(t)
+	const slug = "my-test-slug"
+	pool := &fakeHeadlessPool{
+		response: `{"title":"` + slug + `","summary":"test summary"}`,
+		onCall: func(workDir string) {
+			// Simulate the SDD skills writing project_plans/<slug>/implementation/plan.md.
+			dir := filepath.Join(workDir, "project_plans", slug, "implementation")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "plan.md"), []byte("# Plan\n"), 0o644))
+		},
+	}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "sdd mode triage item",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     repoPath,
+		PipelineMode: session.DefaultSDDPipelineModeSlug,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	workDir := pool.firstCall().workDir
+	require.NotEqual(t, repoPath, workDir)
+
+	// The worktree must have a real commit for the simulated SDD output — not left
+	// sitting uncommitted.
+	logCmd := exec.Command("git", "-C", workDir, "log", "--oneline") //nolint:norawexec // test assertion, blocking CombinedOutput
+	out, logErr := logCmd.CombinedOutput()
+	require.NoError(t, logErr)
+	assert.Contains(t, string(out), "chore(sdd): planning artifacts for "+slug)
+
+	statusCmd := exec.Command("git", "-C", workDir, "status", "--porcelain") //nolint:norawexec // test assertion
+	statusOut, statusErr := statusCmd.CombinedOutput()
+	require.NoError(t, statusErr)
+	assert.Empty(t, string(statusOut), "the worktree must be clean after triage commits its output")
+
+	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	expectedPath := filepath.Join(workDir, "project_plans", slug, "implementation")
+	assert.Equal(t, expectedPath, updated.PlanArtifactsPath,
+		"PlanArtifactsPath must point at the implementation/ subdir SDD's plan.md actually lives in")
+}
+
+// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession is the
+// end-to-end proof that the triage worktree isn't just isolated — it's the SAME
+// worktree/branch the real work session ends up using. Runs the full real
+// pipeline (CreateBacklogItem -> TriggerTriage -> ApprovePlan ->
+// SpawnSessionFromItem, faking only the two external process boundaries: the
+// headless LLM call and the tmux/claude subprocess), for an SDD-mode item, and
+// asserts CreateWorktreeSession was called with the exact path TriggerTriage's
+// worktree was created at — proving retitleTriageWorktreeToFinalBranch's branch
+// rename actually lines up with spawnSessionAfterGates' independent branch-name
+// computation (via triageShortTitle picking up the stored triage result's
+// title), not just that each half compiles in isolation.
+func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	const slug = "widget-integration"
+	pool := &fakeHeadlessPool{
+		response: `{"title":"` + slug + `","summary":"build the widget"}`,
+		onCall: func(workDir string) {
+			dir := filepath.Join(workDir, "project_plans", slug, "implementation")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "plan.md"), []byte("# Plan\n"), 0o644))
+		},
+	}
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	pipelineMode := session.DefaultSDDPipelineModeSlug
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "widget integration",
+		RepoPath:     repoPath,
+		SkipTriage:   true,
+		PipelineMode: &pipelineMode,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+		return getErr == nil && getResp.Msg.Item.Status == "ready"
+	}, 2*time.Second, 10*time.Millisecond)
+
+	require.Equal(t, 1, pool.callCount())
+	triageWorktreePath := pool.firstCall().workDir
+	require.NotEqual(t, repoPath, triageWorktreePath, "sanity: triage must have run in an isolated worktree")
+
+	_, err = svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	require.Len(t, creator.calls, 1)
+	assert.Equal(t, triageWorktreePath, creator.calls[0].path,
+		"SpawnSessionFromItem must reuse the exact worktree TriggerTriage created and committed its SDD docs into, not start a fresh one from main")
+
+	// The committed planning docs must still be present — proving this is a
+	// reuse-in-place, not a coincidental path match after the real content was
+	// discarded.
+	planPath := filepath.Join(triageWorktreePath, "project_plans", slug, "implementation", "plan.md")
+	_, statErr := os.Stat(planPath)
+	assert.NoError(t, statErr, "the SDD plan.md committed during triage must still exist in the reused worktree")
 }
 
 // TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem guards
