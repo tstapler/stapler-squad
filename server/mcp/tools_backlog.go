@@ -948,18 +948,25 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 			itemID, item.PrNumber, prNumber), ""), nil
 	}
 	if isReassignment && item.PrNumber > 0 {
+		// Fail CLOSED on a parse failure here, same as a verification
+		// failure below — this is the one check the tool description
+		// promises has no override, so an unparseable stored PrURL must
+		// never silently skip it and let the reassignment through.
 		curRef, curParseErr := session.ParseGitHubURL(item.PrURL)
-		if curParseErr == nil {
-			curVerification, curErr := h.verifyPR(ctx, curRef.Owner, curRef.Repo, item.PrNumber, "")
-			if curErr != nil {
-				return errResult(ErrInternalError, fmt.Sprintf("could not verify the currently tracked PR #%d against GitHub — retry: %v", item.PrNumber, curErr), ""), nil
-			}
-			if curVerification.State == githubpkg.PRStateMerged {
-				return errResult(ErrInvalidArgument, fmt.Sprintf(
-					"item %s's currently tracked PR #%d is already merged — refusing to reassign it to PR #%d, even with override_reason. "+
-						"A merged PR's association with this item cannot be changed; open a new backlog item if further work is needed.",
-					itemID, item.PrNumber, prNumber), ""), nil
-			}
+		if curParseErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf(
+				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
+				item.PrURL, curParseErr), ""), nil
+		}
+		curVerification, curErr := h.verifyPR(ctx, curRef.Owner, curRef.Repo, item.PrNumber, "")
+		if curErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("could not verify the currently tracked PR #%d against GitHub — retry: %v", item.PrNumber, curErr), ""), nil
+		}
+		if curVerification.State == githubpkg.PRStateMerged {
+			return errResult(ErrInvalidArgument, fmt.Sprintf(
+				"item %s's currently tracked PR #%d is already merged — refusing to reassign it to PR #%d, even with override_reason. "+
+					"A merged PR's association with this item cannot be changed; open a new backlog item if further work is needed.",
+				itemID, item.PrNumber, prNumber), ""), nil
 		}
 	}
 
@@ -1033,7 +1040,23 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInvalidArgument, msg, ""), nil
 	}
 
-	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, item, prURL, prNumber, summary); setErr != nil {
+	// Build the reassignment guard from what was already verified above:
+	// override_reason is non-empty (rejected earlier otherwise), the
+	// currently tracked PR is confirmed not merged (rejected earlier
+	// otherwise — or there was no PR to check), and decideOverridePolicy
+	// just accepted with forceOverride=true, which requires
+	// verification.Author == callerLogin. nil when this isn't a
+	// reassignment — SetBacklogItemPRAndTransition ignores it in that case.
+	var guard *session.PRReassignmentGuard
+	if isReassignment {
+		guard = &session.PRReassignmentGuard{
+			OverrideReason:      overrideReason,
+			CurrentPRMerged:     false,
+			NewPRAuthorVerified: true,
+		}
+	}
+
+	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, item, prURL, prNumber, summary, guard); setErr != nil {
 		if errors.Is(setErr, session.ErrPreconditionFailed) {
 			// AC8: the item's status changed out from under this call between
 			// our read above and the atomic write (another action resolved it,
@@ -1042,17 +1065,30 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 			// report_duplicate's identical CAS-failure message).
 			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it, or a concurrent report_pr_created call won first) — call get_backlog_item to see its current status", ""), nil
 		}
+		if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
+			// Should be unreachable — this handler always constructs a valid
+			// guard whenever isReassignment is true — but surfaces distinctly
+			// rather than as a generic internal error if storage's own
+			// contract check ever disagrees with the handler's.
+			return errResult(ErrInternalError, fmt.Sprintf("reassignment rejected by storage layer: %v", setErr), ""), nil
+		}
 		return errResult(ErrInternalError, fmt.Sprintf("record PR: %v", setErr), ""), nil
 	}
 
 	log.InfoLog.Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
 
-	if !verification.Matched {
+	if isReassignment || !verification.Matched {
 		// The override path was actually taken (not the fast path) — audit
-		// it, since this path has no technical human gate.
-		log.Warn("report_pr_created: recording PR via override (head branch differs from tracked branch)",
+		// it, since this path has no technical human gate. Gated on
+		// isReassignment too (not just !verification.Matched): a
+		// same-branch reassignment still went through the mandatory
+		// override_reason + author-identity check (forceOverride), so it
+		// must be audited even though verification.Matched is true.
+		log.Warn("report_pr_created: recording PR via override",
 			"session", callerUUID,
 			"item", itemID,
+			"reassignment", isReassignment,
+			"previous_pr_number", item.PrNumber,
 			"pr_number", prNumber,
 			"actual_head_branch", verification.ActualHeadBranch,
 			"tracked_branch", branch,

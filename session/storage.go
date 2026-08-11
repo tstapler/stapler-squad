@@ -783,7 +783,23 @@ func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, to
 // this is a no-op success — a retried report_pr_created call (network blip)
 // or the reconciliation backstop re-scanning an item it already fixed on a
 // prior tick must not error.
-func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string) error {
+//
+// guard is required whenever observed is already pr_pending (a
+// reassignment): the caller must supply a PRReassignmentGuard attesting it
+// already verified override_reason, the currently-tracked PR's merged
+// state, and the new PR's author — nil (or a guard failing any of those
+// checks) is rejected outright with ErrPRReassignmentNotAllowed. This
+// function does not itself call GitHub — that verification stays in the
+// caller (server/mcp/tools_backlog.go's reportPRCreated is the only caller
+// today with that machinery) — but centralizing the *requirement* here
+// means every caller of this shared primitive gets the same guarantee: a
+// caller with no way to produce a valid guard (e.g. the manual-override RPC
+// in server/services/backlog_service_lifecycle.go, which by design never
+// calls GitHub — see its own doc comment) simply cannot reassign, rather
+// than silently succeeding because the check only lived in one handler.
+// guard is ignored (may be nil) when observed.Status is review — a
+// first-time recording never needs one.
+func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error {
 	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}
@@ -791,6 +807,18 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 		return fmt.Errorf("%w: expected status %q or %q, got %q", ErrPreconditionFailed, BacklogStatusReview, BacklogStatusPRPending, observed.Status)
 	}
 	isReassignment := observed.Status == string(BacklogStatusPRPending)
+	if isReassignment {
+		switch {
+		case guard == nil:
+			return fmt.Errorf("%w: item already has PR #%d tracked (status pr_pending) — this caller did not supply a PRReassignmentGuard", ErrPRReassignmentNotAllowed, observed.PrNumber)
+		case guard.OverrideReason == "":
+			return fmt.Errorf("%w: override_reason is required to reassign PR #%d to a different PR", ErrPRReassignmentNotAllowed, observed.PrNumber)
+		case guard.CurrentPRMerged:
+			return fmt.Errorf("%w: currently tracked PR #%d is already merged — its association cannot be changed", ErrPRReassignmentNotAllowed, observed.PrNumber)
+		case !guard.NewPRAuthorVerified:
+			return fmt.Errorf("%w: the new PR's author must be verified to match the caller's identity before reassigning PR #%d", ErrPRReassignmentNotAllowed, observed.PrNumber)
+		}
+	}
 
 	// The status transition (review -> pr_pending, or pr_pending ->
 	// pr_pending on reassignment) and the PrURL/PrNumber field write must

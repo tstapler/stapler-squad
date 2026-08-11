@@ -17,6 +17,35 @@ var ErrNotFound = errors.New("not found")
 // ErrConflict is returned when an operation would violate a uniqueness constraint.
 var ErrConflict = errors.New("conflict")
 
+// ErrPRReassignmentNotAllowed is returned by SetBacklogItemPRAndTransition
+// when a caller attempts to reassign an already-pr_pending item's tracked
+// PR to a different PR number without a valid PRReassignmentGuard.
+var ErrPRReassignmentNotAllowed = errors.New("PR reassignment not allowed")
+
+// PRReassignmentGuard carries the caller-verified preconditions required
+// before SetBacklogItemPRAndTransition (session/storage.go) will accept a
+// reassignment — a call where the observed item is already pr_pending with
+// a DIFFERENT PR number than the one being recorded now. This function
+// itself never calls GitHub; a caller supplies this guard to attest it
+// already did that verification. A caller with no way to produce a valid
+// guard (e.g. the manual-override RPC in
+// server/services/backlog_service_lifecycle.go, which by design never
+// calls GitHub) passes nil and gets a clear rejection instead of silently
+// reassigning an unverified PR.
+type PRReassignmentGuard struct {
+	// OverrideReason must be non-empty — the caller's own already-validated
+	// reason for the reassignment.
+	OverrideReason string
+	// CurrentPRMerged must reflect the caller's verified state of the
+	// CURRENTLY tracked PR. true hard-blocks the reassignment
+	// unconditionally — a merged PR's association must never be silently
+	// swapped, even with OverrideReason set.
+	CurrentPRMerged bool
+	// NewPRAuthorVerified must be true only when the caller has verified the
+	// new PR's GitHub author matches the caller's own verified identity.
+	NewPRAuthorVerified bool
+}
+
 // Repository defines the interface for session persistence operations.
 // This abstraction allows multiple storage backends (SQLite, JSON, etc.)
 // while maintaining a consistent API for session management.
