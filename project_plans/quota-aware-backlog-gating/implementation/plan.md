@@ -360,6 +360,20 @@ Visualization diagram for the explicit cross-phase arrow.
   `sessionService.SetQuotaGate(quotaGate)`.
 - Files: `server/dependencies.go`
 
+##### Task 1.3.2d: Canary log for undetected quota/limit wording (~5 min) — pre-mortem Failure #2
+- Since the hard/reactive signal is the only one active by default (`AssumedWindowTokenBudget`
+  ships at `0`), a drift in Anthropic's rate-limit message wording that the existing
+  `session/detection/ratelimit` regex set doesn't match would silently defeat this feature's sole
+  active-by-default protection with no signal that anything is wrong (`pre-mortem.md` Failure #2,
+  P1). In the same session-output scan path the ratelimit `Manager` already uses, add a narrow
+  secondary check: if a line contains any of a small generic keyword list (`"usage limit"`,
+  `"rate limit"`, `"quota"`) but the configured detector regex set did *not* match it, `log.Warn`
+  once per session ("QuotaGate: possible undetected rate-limit wording", with the raw line
+  truncated). This is a detection-drift canary, not a new parser — it does not feed
+  `RateLimitAggregate` (a false-positive keyword hit must never itself pause backlog), it only
+  makes a silent detector-drift failure observable in logs instead of invisible.
+- Files: `session/detection/ratelimit/manager.go`
+
 ---
 
 ## Phase 2: Gate Logic & Provenance
@@ -368,6 +382,15 @@ Visualization diagram for the explicit cross-phase arrow.
 **Goal**: The single decision-making loop: read both signals, apply hysteresis, detect manual
 overrides, drive `BacklogController`, without ever becoming a second independent writer racing the
 manual toggle.
+
+**Scoping note (validation-pass finding, BLOCKER, resolved)**: requirements.md's Success Metric
+"disabled within one reconcile-ticker interval" is guaranteed only by the **hard/reactive** signal
+(Task 2.1.2a disables immediately, no hysteresis delay). The **soft/percentage** signal is
+intentionally debounced — `ConsecutiveTicksToPause` (default 2) means up to ~2 ticks (~120s at the
+default 60s cadence) before a threshold-crossing pause fires, per the Schmitt-trigger hysteresis
+design (see Pattern Decisions' Hysteresis row) that exists specifically to avoid flapping on a
+single noisy tick. The success metric describes the worst-case *reactive* guarantee, not the
+soft signal's debounced behavior; both are correct by design, not in conflict.
 
 #### Story 2.1.1: `QuotaGate` struct + constructor
 **As a** maintainer, **I want** `QuotaGate`'s dependencies expressed as narrow, consumer-defined
@@ -959,8 +982,21 @@ it's off.
 - `func (g *QuotaGate) StatusDetail() string`: under `g.mu`, if `state.pausedByQuota`, return a
   short reason string (reuse the same wording style as the pause notification, minus the "resumes
   automatically" boilerplate — keep it to one line); if `ShouldThrottleForeground()`, return
-  "Throttled — foreground session active, dispatch resumes automatically once idle."; otherwise
-  return `""`.
+  "Throttled — foreground session active, dispatch resumes automatically once idle."; else if
+  `cfg.Enabled && cfg.AssumedWindowTokenBudget <= 0` (pre-mortem Failure #1 fix — see
+  `implementation/pre-mortem.md`), return "Reactive-only mode — proactive quota threshold not
+  calibrated (set `Quota.AssumedWindowTokenBudget` in config.json to enable)." so an operator can
+  tell, without reading logs, that the soft/proactive signal is structurally inert rather than
+  silently never firing; otherwise return `""`.
+- Files: `server/services/quota_gate.go`
+
+##### Task 3.2.2d: Log observed peak 5h token usage for calibration (~4 min) — pre-mortem Failure #1
+- In `Reconcile`, when `cfg.AssumedWindowTokenBudget <= 0` (soft signal inert), compute the raw
+  windowed token sum anyway (reuse `computeHeadroom`'s internal bucketing, ignoring its
+  `Valid`/budget gate) and `log.Info` it at most once per hour: `"QuotaGate: observed 5h token
+  usage (soft signal uncalibrated)", "tokens_5h", sum`. Gives the operator real numbers to plug
+  into `AssumedWindowTokenBudget` instead of guessing blind, closing pre-mortem Failure #1's
+  second half ("add a task that logs observed peak 5h usage for a week").
 - Files: `server/services/quota_gate.go`
 
 ##### Task 3.2.2b: Extend `FeatureFlagService` to consult a status-detail provider (~5 min)

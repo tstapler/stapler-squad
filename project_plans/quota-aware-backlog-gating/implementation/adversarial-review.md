@@ -1,10 +1,17 @@
 # Adversarial Review: quota-aware-backlog-gating
 **Date**: 2026-08-10
-**Verdict**: BLOCKED
+**Verdict**: RESOLVED (re-checked during `sdd:4-validate`, 2026-08-10) — all three Blockers below
+are addressed by the current plan.md text (Task 2.2.1a's "Scope correction" note, Task 1.2.1a's
+`isLoading` handling in `computeHeadroom`, and Task 2.1.2b's explicit `!hard` resume gate). Concerns
+and Minors below remain open as non-blocking follow-ups; none gate implementation readiness.
 
 ## Blockers
 
-- [ ] **The boot-sequence reordering (Epic 2.2, Task 2.2.1a) is mis-scoped and, as literally
+- [x] **RESOLVED — plan.md Task 2.2.1a now carries a "Scope correction (was a Blocker in
+  adversarial review)" note with the corrected `server/dependencies.go:1152-1225` range, and moves
+  only the two `tokenStore` construction/`Start` lines early, leaving `backlogSvc.SetTokenStore`/
+  ArtifactExtractor wiring in place.** Original finding: **The boot-sequence reordering (Epic 2.2,
+  Task 2.2.1a) is mis-scoped and, as literally
   specified, will not compile.** The task cites the block to relocate as
   `server/dependencies.go:1150-1170`, but the actual `if homeDir, homeDirErr := ...; homeDirErr ==
   nil { ... }` block spans **lines 1152–1225** (verified by brace-matching the real file) and
@@ -22,7 +29,10 @@
   the `backlogSvc.SetTokenStore`/InsightsService/ArtifactExtractor wiring at its current position,
   and correct the cited line range.
 
-- [ ] **Even with the reordering fixed, the boot-time synchronous `Reconcile` call (Task 2.2.2a)
+- [x] **RESOLVED — plan.md's Task 1.2.1a `computeHeadroom` now takes an `isLoading bool` parameter
+  and forces `Valid: false` immediately when true, closing the boot-time/restart-adjacent gap (see
+  Domain Glossary's `computeHeadroom` entry and Task 2.1.2b's call site passing
+  `g.tokenStore.IsLoading()`).** Original finding: **Even with the reordering fixed, the boot-time synchronous `Reconcile` call (Task 2.2.2a)
   provides no real protection — both signals are structurally guaranteed to be empty/near-empty at
   that exact call site.** `TokenStore.Start()` (`session/tokens/store.go:65-76`) launches the
   initial directory walk in a background goroutine (`go ts.walkAndEnqueue(ctx)`) and returns
@@ -43,7 +53,10 @@
   evaluation, matching the existing "uncalibrated" no-op path) so the boot call is at least honest
   about not having data yet instead of silently reading "healthy."
 
-- [ ] **`Reconcile`'s hard-override guard (`hard && backlogCtrl.IsEnabled()`, Task 2.1.2a) lets the
+- [x] **RESOLVED — plan.md's Task 2.1.2b now gates the resume branch on `!hard` unconditionally
+  (explicitly flagged inline as "the BLOCKER fix"), and Story 2.1.2/2.1.3 add the requested GWT case
+  plus Task 2.1.3c's dedicated regression test asserting `Enable()` is never called on any tick while
+  `hard` remains true.** Original finding: **`Reconcile`'s hard-override guard (`hard && backlogCtrl.IsEnabled()`, Task 2.1.2a) lets the
   soft-signal resume path fire while the hard/reactive signal is still active**, contradicting
   ADR-001's explicit design ("hard signal ... unconditional, hysteresis-free hard override, always
   wins") and the Pattern Decisions table's stated control flow (`if hard { ... } else if soft { ...

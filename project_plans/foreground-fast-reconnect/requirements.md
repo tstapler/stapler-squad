@@ -72,6 +72,23 @@ terminal reconnects snappier than a backgrounded one.
 7. No regression to existing `useTerminalStream`/`useTerminalStream.resync.integration` test
    suites (`web-app/src/lib/hooks/__tests__/`).
 
+## Target user and success metric (added per triad Product-lens review)
+
+- **Target user**: any stapler-squad user switching between sessions in the web UI whose
+  previously-backgrounded terminal has gone stale/disconnected — the reporter (`@TylerStaplerAtFanatics`,
+  the primary/sole active user of this app today) is both the source of the complaint and the
+  first person who will notice whether it's fixed. This is a personal-tool latency complaint,
+  not a segment-targeted feature; "target user" here means "whoever has `NEXT_PUBLIC_RECONNECT_V2`
+  enabled and switches sessions often enough to notice reconnect lag," which in practice is a
+  small, known population.
+- **Success metric (qualitative, since no client metrics pipeline exists — see plan.md's
+  Observability Plan)**: after `NEXT_PUBLIC_RECONNECT_V2` is enabled for dogfooding, a
+  session-switch onto a disconnected terminal visibly reconnects in ~1-2s instead of up to ~3.5s+,
+  confirmed by manual observation (and, if pre-mortem Failure #2's flappiness risk shows up
+  instead, that failure mode is the counter-signal that the metric was wrong to skip). No
+  automated metric is added in this change — see Risk Control in plan.md for the explicit
+  follow-up if manual dogfooding is inconclusive.
+
 ## Non-goals
 
 - Does not change the WebSocket close-code retriability rules (`NON_RETRIABLE_WS_CODES`).

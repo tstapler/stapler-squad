@@ -12,5 +12,11 @@
 | 5 | Task 2.1.2b resets `consecutiveBelow`/`consecutiveAbove` to `0` on any tick that doesn't match the current direction, with no dead-band on the pause side; a headroom estimate that's genuinely trending down but noisy near `PauseBelowHeadroomPct` (realistic for a 5h rolling window recomputed every 60s) can perpetually fail to reach `ConsecutiveTicksToPause` consecutive ticks, so the proactive pause never fires — and conversely a single noisy dip after resuming re-resets the resume streak, unpredictably extending downtime | Headroom hovers just under threshold for extended periods with no pause notification ever firing, or backlog stays disabled far longer than expected after usage clearly dropped, prompting the operator to give up and flip the manual override | Add a symmetric dead-band/margin on the pause side (not just resume), and add a unit test with a synthetic noisy-but-trending series — Story 2.1.2/2.1.3's GWT cases are all clean step functions today, none exercise oscillation near the threshold | P3 |
 
 ## P1 Items (address before implementation)
-- [ ] Failure #1 — Add a `status_detail`/log line that makes "soft signal disabled, reactive-only mode" visible whenever `AssumedWindowTokenBudget==0`, and add a Phase 4 task to log observed 5h peak usage so the operator has data to calibrate a real budget, instead of leaving it as an indefinitely-deferred manual step in Unresolved Questions.
-- [ ] Failure #2 — Add a canary check (log warning when session output contains generic quota/limit keywords the configured rate-limit regex doesn't match) so drift in Anthropic's rate-limit message wording is caught structurally rather than silently defeating the feature's only active-by-default signal.
+- [x] Failure #1 — Addressed in plan.md: Task 3.2.2a's `StatusDetail()` now returns a
+  "Reactive-only mode — proactive quota threshold not calibrated" line whenever
+  `Enabled && AssumedWindowTokenBudget<=0`, and new Task 3.2.2d logs observed 5h peak token usage
+  hourly while uncalibrated, giving the operator real numbers to set a budget.
+- [x] Failure #2 — Addressed in plan.md: new Task 1.3.2d adds a canary `log.Warn` in
+  `session/detection/ratelimit/manager.go` when session output contains generic quota/limit
+  keywords the configured regex set doesn't match, surfacing detector-wording drift instead of
+  silently defeating the feature's only active-by-default signal.

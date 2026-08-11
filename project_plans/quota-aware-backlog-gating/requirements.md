@@ -12,6 +12,21 @@ Stapler Squad has no proactive signal for the account/session-wide Claude Code u
 
 Result: backlog automation keeps spinning up new work sessions with no awareness of remaining account quota, so sessions get rate-limited mid-task, and a human's foreground session competes equally with backlog's background sessions for the same shared quota.
 
+**Evidence basis (triad-review Product-lens gap, addressed)**: this harm is currently observed
+anecdotally by the operator and structurally, via the `session/detection/ratelimit/` mechanism's
+existence and the backlog WIP-limit-at-2 precedent (`feedback_backlog_wip_limit.md`, imposed after
+a prior OOM/resource-contention incident) — a human is already manually compensating for a related
+resource-contention gap. No incident-count log query was run to quantify frequency before scoping this
+work. **Correction (triad-review round 2 fact-check)**: `session/detection/ratelimit/detector.go:202`
+does already log a structured "detected rate limit" entry per detection event, so a real baseline
+count is technically queryable — the actual constraint is retention (no confirmed log
+rotation/archive policy was found for these entries), not total absence of a log. A real baseline
+was still not pulled for this planning pass; a fast-follow is to grep this log line over the
+implementation window instead of relying solely on the qualitative outcome metric below. This is accepted as sufficient evidence for a Medium-appetite investment; if the live
+smoke test in Phase 4 doesn't reproduce a real rate-limit-adjacent scenario, treat that as a signal
+to reduce future investment in this feature, not as grounds to block shipping the low-risk,
+feature-flagged, default-off first increment.
+
 ## Baseline
 Today, quota exhaustion is only discovered reactively, per-session, once a session's terminal output already shows a rate-limit message (`session/detection/ratelimit`). There is no polled or inferred account-wide "quota remaining" signal, and `BacklogController.IsEnabled()` cannot be influenced by quota state at all — it is flipped only by whatever currently calls it (manual/static today).
 
@@ -23,10 +38,23 @@ The single user of this self-hosted instance (Tyler), via backlog automation beh
 - When headroom recovers above the threshold (plus hysteresis), backlog automation automatically re-enables, and a visible notification is posted for both the pause and the resume transitions (not a silent flip).
 - While a human-driven (non-backlog) session is actively active, new backlog session creation is throttled/delayed rather than competing 1:1 for quota headroom.
 - Verification: since Claude Code does not expose a first-class "quota remaining" API today (see Feasibility Risks), the ship-time check is that the chosen detection/inference source correctly reflects observed rate-limit events during a real session in a live smoke test, and that toggling the inferred headroom below/above threshold in that test measurably pauses/resumes `BacklogController.IsEnabled()`.
+- **Outcome metric (triad-review Product-lens gap, addressed)**: over the 4 weeks following ship, the count of backlog-originated sessions that hit a rate-limit message mid-task (visible via existing `session/detection/ratelimit` notifications tagged to backlog-category sessions) trends toward zero relative to the pre-ship baseline of "no gating, unknown incident count" — this is a directional/qualitative check (no baseline count exists to compute a percentage against, per the Evidence basis note in Problem Statement), not a hit/miss numeric target.
+- **Definition of done at ship time (triad-review Product-lens gap, addressed)**: per Risk Control's staged rollout, the feature ships with `Quota.Enabled=false` (stage 1, pure no-op) then `AssumedWindowTokenBudget=0` (stage 2, reactive-hard-signal-only — ADR-001's "Fallback Increment"). The first three Success Metrics bullets above are fully met by stage 2 alone; the proactive/percentage-threshold behavior implied by "headroom drops below the configured threshold" is **not** live until the operator calibrates a real `AssumedWindowTokenBudget` (stage 3, explicit post-ship follow-up per Unresolved Questions) — the new `status_detail` "Reactive-only mode" line (plan.md Task 3.2.2a) makes this gap visible rather than silently assuming stage 3 is done at ship.
 
 ## Appetite
 Medium (1–2 weeks)
 *(Scope must fit the appetite. If it doesn't fit, cut scope — do not move the deadline.)*
+
+**Appetite reconciliation (triad-review Product-lens gap, addressed)**: `implementation/plan.md`'s
+task-level time estimates sum to ~3 hours (51 tasks × 2-6 min each), which is a code-generation-speed
+unit, not the operative estimate — the real cost driver is the review/verification loop (adversarial
+review, architecture review, this triad review, and human review of a `server/dependencies.go`
+boot-order change), which the Medium/1-2-week appetite was set for and still fits, per the plan's
+own staged/feature-flagged rollout keeping the actual production risk surface small at each stage.
+If implementation reveals the boot-sequence reordering (Epic 2.2) or the `status_detail` UI surface
+(Epic 3.2) is eating disproportionate time, cut Epic 3.2 first (Concern already flagged in
+`implementation/adversarial-review.md` as broader than this doc's original notification-only scope)
+before extending the deadline.
 
 **Fallback increment**: if a real quota-headroom source proves unavailable (see Feasibility Risks), ship only the hard pause/resume gate driven by the existing reactive `session/detection/ratelimit` signal promoted to account-wide scope (i.e., "any active session recently hit a rate limit" pauses backlog), deferring soft-throttle/priority-demotion (requirement 2) and any predictive/percentage-based threshold to a follow-up.
 
@@ -56,6 +84,25 @@ Medium (1–2 weeks)
 - Changing per-provider/per-model API rate-limit monitoring in `capacity_monitor.go`/`provider_limits.go` (different problem: per-session token/context budget, not account-wide session quota).
 - Any change to `maxAutoReworkIterations` or other backlog policy knobs unrelated to quota.
 - Building a new UI dashboard for quota headroom — visibility here is scoped to notifications, not a persistent browsable view (unless research finds this trivial to fold into existing capacity-alert UI).
+
+## RICE Priority Score (triad-review Product-lens gap, addressed)
+Qualitative, per this repo's no-fabricated-precision convention — carried over from the original
+backlog item's RICE-style signal, not re-derived from scratch:
+- **Reach**: every operator running backlog automation alongside foreground session work — the
+  primary intended usage pattern of this subsystem (single-user instance, so Reach=1 here, but
+  100% of the relevant population).
+- **Impact**: Medium-high — not data loss, but wasted quota, stranded mid-task backlog sessions,
+  and foreground work starved/rate-limited unexpectedly, all eroding trust in unattended backlog
+  automation.
+- **Confidence**: Medium — the problem and grounding are well-evidenced structurally (see Evidence
+  basis note above); the *quantified* incident frequency is not (no queryable log exists yet — see
+  Evidence basis).
+- **Effort**: Medium, ~1-2 weeks appetite (see Appetite reconciliation above) — architecture-
+  dependent, confirmed compatible with existing patterns (`CapacityConfig`, `BacklogController`,
+  the 60s reconcile ticker) per `research/architecture.md`, no new infrastructure required.
+- **Net**: proceed at Medium priority — not urgent/blocking (no active incident), but a real,
+  structurally-evidenced gap with a bounded, low-risk (feature-flagged, default-off) implementation
+  path already validated across two review passes.
 
 ## Rabbit Holes
 - **No confirmed first-class quota API.** Claude Code's account/session-wide quota (5-hour/weekly-style limit) is not known to be exposed via any documented API today — research must confirm whether it's observable at all, or must be inferred/polled some other way, before design proceeds. Do not assume a clean polling endpoint exists.
