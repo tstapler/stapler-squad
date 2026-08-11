@@ -281,7 +281,7 @@ describe("Omnibar Alias submit resets isSubmitting", () => {
     const buttons = screen.getAllByRole("button", { name: /create session/i });
     expect(buttons.length).toBeGreaterThan(0);
     for (const btn of buttons) {
-      expect(btn).not.toHaveAttribute("disabled");
+      expect(btn).toBeEnabled();
     }
   });
 
@@ -318,7 +318,7 @@ describe("Omnibar Alias submit resets isSubmitting", () => {
 
     const buttons = screen.getAllByRole("button", { name: /create session/i });
     for (const btn of buttons) {
-      expect(btn).not.toHaveAttribute("disabled");
+      expect(btn).toBeEnabled();
     }
   });
 });
@@ -363,7 +363,7 @@ describe("Omnibar defense-in-depth reset on close", () => {
 
     const buttons = screen.getAllByRole("button", { name: /create session/i });
     for (const btn of buttons) {
-      expect(btn).not.toHaveAttribute("disabled");
+      expect(btn).toBeEnabled();
     }
 
     // Clean up the dangling promise so it doesn't leak into a later test.
