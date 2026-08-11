@@ -175,6 +175,12 @@ export function useTerminalStream({
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+        // !isDisconnectingRef.current is unreachable via any path today — disconnect()
+        // always clears reconnectTimerRef before setting isDisconnectingRef, so this
+        // branch can never observe both truthy at once — but it's cheap, matches
+        // handleVisibilityOrOnline's analogous guard below, and protects a future
+        // refactor of disconnect()'s ordering from silently reintroducing a race.
+        // Not independently unit-tested for that reason (see sdd:6-verify PR review).
         if (shouldReconnectRef.current && !isConnectingRef.current && !isConnectedRef.current && !isDisconnectingRef.current) {
           connectRef.current?.();
         }

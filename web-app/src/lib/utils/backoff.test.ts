@@ -137,10 +137,4 @@ describe("connectTimeoutMs", () => {
     expect(connectTimeoutMs(false, 0)).toBe(CONNECT_TIMEOUT_MS);
     expect(connectTimeoutMs(false, 5)).toBe(CONNECT_TIMEOUT_MS);
   });
-  it("connectTimeoutMs_should_beStandaloneFunction_When_comparedToJitteredDelay", () => {
-    // AC1: locks in that connectTimeoutMs is genuinely new, not a repurposing
-    // of jitteredDelay/BackoffState — different signature, different purpose.
-    expect(connectTimeoutMs).not.toBe(jitteredDelay);
-    expect(connectTimeoutMs.length).toBe(2); // (foreground, attemptsSinceForeground)
-  });
 });

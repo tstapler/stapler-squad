@@ -1023,4 +1023,51 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS + 1000); }); // well past both timeouts
     expect(capturedSignal?.aborted).toBe(false);
   });
+
+  it('connect_should_clearConnectTimeout_When_synchronousThrowBeforeMessageLoopStarts', async () => {
+    // Regression test for the sdd:6-verify MUST FIX: the connect-timeout timer is
+    // scheduled before streamTerminal() is called; if that call throws synchronously
+    // (e.g. proto validation, MessageQueue construction) the outer catch block must
+    // still clear the timer, or it fires a stale trigger=connect-timeout warning
+    // against an attempt that's already dead.
+    mockStreamTerminal.mockImplementation(() => {
+      throw new Error('synchronous setup failure');
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    const warnSpy = console.warn as jest.Mock;
+    warnSpy.mockClear();
+
+    await act(async () => { result.current.connect(); });
+    expect(result.current.isConnected).toBe(false);
+
+    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS + 1000); });
+    const timeoutWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('trigger=connect-timeout'));
+    expect(timeoutWarnings.length).toBe(0);
+  });
+
+  it('connect_should_beNoOp_When_calledAgainWhileAlreadyConnecting', async () => {
+    // Regression guard for the invariant firstMessageRef/connectTimeoutRef rely on
+    // (documented at their declaration): connect()'s own isConnectedRef/isConnectingRef
+    // re-entrancy guard must prevent two attempts from touching that shared state at once.
+    let callCount = 0;
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      callCount++;
+      return makePushStream(opts?.signal).iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    await act(async () => {
+      result.current.connect();
+      result.current.connect();
+    });
+
+    expect(callCount).toBe(1);
+  });
 });
