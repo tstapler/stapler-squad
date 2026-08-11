@@ -747,6 +747,43 @@ func TestRequestReview_RejectsWhenSessionNotLinked(t *testing.T) {
 	require.Equal(t, ErrPermissionDenied, errObj["code"])
 }
 
+// TestFormatDirtyPathsRejectionMessage_ListsEachPath verifies the message names the
+// specific dirty paths instead of a blanket "git add -A" instruction.
+func TestFormatDirtyPathsRejectionMessage_ListsEachPath(t *testing.T) {
+	msg := formatDirtyPathsRejectionMessage([]string{"server/handler.go", "scratch.txt"})
+	assert.Contains(t, msg, "server/handler.go")
+	assert.Contains(t, msg, "scratch.txt")
+	assert.NotContains(t, msg, "git add -A")
+}
+
+// TestFormatDirtyPathsRejectionMessage_CapsAtMaxPaths verifies a large path list is
+// capped with an "...and N more" suffix rather than listed in full.
+func TestFormatDirtyPathsRejectionMessage_CapsAtMaxPaths(t *testing.T) {
+	paths := make([]string, 15)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("file-%d.txt", i)
+	}
+
+	msg := formatDirtyPathsRejectionMessage(paths)
+
+	for i := 0; i < maxRejectionMessagePaths; i++ {
+		assert.Contains(t, msg, paths[i])
+	}
+	for i := maxRejectionMessagePaths; i < len(paths); i++ {
+		assert.NotContains(t, msg, paths[i])
+	}
+	assert.Contains(t, msg, "...and 5 more")
+}
+
+// TestFormatDirtyPathsRejectionMessage_EmptyPaths_UsesGenericWording verifies the
+// fallback wording when no specific paths are available (e.g. GetWorktreeDirtyPaths
+// itself errored).
+func TestFormatDirtyPathsRejectionMessage_EmptyPaths_UsesGenericWording(t *testing.T) {
+	msg := formatDirtyPathsRejectionMessage(nil)
+	assert.Contains(t, msg, "uncommitted changes")
+	assert.NotContains(t, msg, "git add -A")
+}
+
 // TestSubmitTriageResult_NoNotificationWhenEventBusNil verifies that submitTriageResult
 // does not panic when eventBus is nil and still returns a success result.
 func TestSubmitTriageResult_NoNotificationWhenEventBusNil(t *testing.T) {

@@ -44,6 +44,27 @@ func setupTestGitRepo(t *testing.T) string {
 	return dir
 }
 
+// setupLinkedWorktree builds a real linked worktree (git worktree add topology)
+// on top of an existing main repo — the topology where --git-dir and
+// --git-common-dir resolve to different directories, which a plain setupTestGitRepo
+// fixture cannot exercise.
+func setupLinkedWorktree(t *testing.T, repoPath, sessionName string) string {
+	t.Helper()
+	worktree, _, err := git.NewGitWorktree(repoPath, sessionName)
+	if err != nil {
+		t.Fatalf("git.NewGitWorktree failed: %v", err)
+	}
+	if err := worktree.Setup(); err != nil {
+		t.Fatalf("worktree.Setup failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := worktree.Cleanup(); err != nil {
+			t.Logf("worktree.Cleanup failed (non-fatal): %v", err)
+		}
+	})
+	return worktree.GetWorktreePath()
+}
+
 // gitLsFiles returns the list of paths currently tracked in the git index at dir.
 func gitLsFiles(t *testing.T, dir string) []string {
 	t.Helper()
@@ -514,5 +535,88 @@ func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T
 	after := gitLsFiles(t, repo)
 	if !containsPath(after, "README.md") {
 		t.Errorf("README.md was unexpectedly untracked")
+	}
+}
+
+// TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles is the regression test
+// for the bug this item fixes: addWorktreeExcludes must write to the git-COMMON info/exclude
+// (shared by every worktree), not the worktree-private admin dir's info/exclude (which
+// `git status` never reads). A plain setupTestGitRepo fixture can't detect this bug class —
+// --git-dir and --git-common-dir resolve identically there. This test only fails against the
+// pre-fix code (--git-dir); see the accompanying commit message for the RED/GREEN record.
+func TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles(t *testing.T) {
+	repoPath := setupTestGitRepo(t)
+	worktreePath := setupLinkedWorktree(t, repoPath, "excludes-regression")
+
+	if err := os.WriteFile(filepath.Join(worktreePath, ".backlog-context.md"), []byte("scaffolding"), 0o644); err != nil {
+		t.Fatalf("failed to write .backlog-context.md: %v", err)
+	}
+
+	addWorktreeExcludes(worktreePath)
+
+	dirty, err := IsWorktreeDirty(context.Background(), worktreePath)
+	if err != nil {
+		t.Fatalf("IsWorktreeDirty returned error: %v", err)
+	}
+	if dirty {
+		t.Errorf("expected worktree to be clean after addWorktreeExcludes, but IsWorktreeDirty returned true — " +
+			"the exclude pattern likely landed in the worktree-private admin dir instead of the shared git-common-dir")
+	}
+}
+
+// TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir pins the mechanism by which
+// the --git-common-dir fix is a no-op for plain (non-worktree) repos: both flags must
+// resolve to the same directory there.
+func TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir(t *testing.T) {
+	repoPath := setupTestGitRepo(t)
+
+	gitDir := runGitRevParse(t, repoPath, "--git-dir")
+	commonDir := runGitRevParse(t, repoPath, "--path-format=absolute", "--git-common-dir")
+
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(repoPath, gitDir)
+	}
+	if gitDir != commonDir {
+		t.Errorf("expected --git-dir (%s) and --git-common-dir (%s) to resolve identically for a plain repo", gitDir, commonDir)
+	}
+}
+
+func runGitRevParse(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"rev-parse"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %v failed: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestGetWorktreeDirtyPaths_EmptyForScaffoldingOnlyLinkedWorktree proves Epic 1.2's
+// exclude-path fix and GetWorktreeDirtyPaths compose correctly end-to-end: a linked
+// worktree containing only scaffolding files must never be reported dirty.
+func TestGetWorktreeDirtyPaths_EmptyForScaffoldingOnlyLinkedWorktree(t *testing.T) {
+	repoPath := setupTestGitRepo(t)
+	worktreePath := setupLinkedWorktree(t, repoPath, "scaffolding-only")
+
+	addWorktreeExcludes(worktreePath)
+
+	if err := os.WriteFile(filepath.Join(worktreePath, ".backlog-context.md"), []byte("scaffolding"), 0o644); err != nil {
+		t.Fatalf("failed to write .backlog-context.md: %v", err)
+	}
+	cmdDir := filepath.Join(worktreePath, ".claude", "commands", "backlog")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatalf("failed to create .claude/commands/backlog: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cmdDir, "status.md"), []byte("status"), 0o644); err != nil {
+		t.Fatalf("failed to write status.md: %v", err)
+	}
+
+	paths, err := GetWorktreeDirtyPaths(worktreePath)
+	if err != nil {
+		t.Fatalf("GetWorktreeDirtyPaths returned error: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("expected no dirty paths for a scaffolding-only worktree, got %v", paths)
 	}
 }
