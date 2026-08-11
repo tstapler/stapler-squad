@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -202,6 +204,165 @@ func TestImportService_CancelPendingKill_ReturnsInvalidArgument_When_InstanceIdE
 	_, err := svc.CancelPendingKill(context.Background(), connect.NewRequest(&sessionv1.CancelPendingKillRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// fakeImportCollisionStore is a session.InstanceStore test double scoped to
+// this file's well-formed-request tests (Finding #13). It is distinct from
+// session_image_upload_handler_test.go's fakeInstanceStore, whose
+// ListInstanceData is hardcoded to return nil -- that fixed behavior is
+// depended on by the upload-handler tests, so this file uses its own
+// configurable fake instead of generalizing the shared one.
+type fakeImportCollisionStore struct {
+	instances []session.InstanceData
+
+	added        []*session.Instance
+	deletedTitle string
+}
+
+func (f *fakeImportCollisionStore) LoadInstances() ([]*session.Instance, error) { return nil, nil }
+func (f *fakeImportCollisionStore) ListInstanceData() ([]session.InstanceData, error) {
+	return f.instances, nil
+}
+func (f *fakeImportCollisionStore) SaveInstances([]*session.Instance) error { return nil }
+func (f *fakeImportCollisionStore) AddInstance(inst *session.Instance) error {
+	f.added = append(f.added, inst)
+	return nil
+}
+func (f *fakeImportCollisionStore) DeleteInstance(title string) error {
+	f.deletedTitle = title
+	return nil
+}
+func (f *fakeImportCollisionStore) UpdateInstanceLastUserResponse(string, time.Time) error {
+	return nil
+}
+
+// fakeAliveChecker lets ConfirmKillExternalSession tests control whether the
+// original PID is still considered the same process, mirroring
+// session/import_kill_test.go's fake of the same name (different package, no
+// conflict).
+type fakeAliveChecker struct {
+	alive bool
+}
+
+func (f *fakeAliveChecker) IsAlive(pid int32, expectedCreateTimeMs int64) bool {
+	return f.alive
+}
+
+// TestImportService_CommitImportExternalSession_ReturnsFailedStatus_When_PathAlreadyManaged
+// exercises a well-formed CommitImportExternalSession request end to end
+// through the RPC handler (Finding #13): unlike the CandidateNil test above,
+// this drives a real domain-level outcome (ErrPathAlreadyManaged) rather than
+// only hitting the request-validation guard.
+func TestImportService_CommitImportExternalSession_ReturnsFailedStatus_When_PathAlreadyManaged(t *testing.T) {
+	tmpHome := t.TempDir()
+	collidingPath := t.TempDir()
+	store := &fakeImportCollisionStore{
+		instances: []session.InstanceData{{Title: "existing", Path: collidingPath}},
+	}
+	detector := session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, tmpHome)
+	svc := &ImportService{detector: detector, storage: store}
+
+	req := connect.NewRequest(&sessionv1.CommitImportExternalSessionRequest{
+		Candidate: &sessionv1.ExternalSessionCandidateRef{
+			SourceKind: sessionv1.ImportSourceKind_IMPORT_SOURCE_KIND_MUX_DISCOVERED,
+			Path:       collidingPath,
+			Program:    "claude",
+		},
+	})
+
+	resp, err := svc.CommitImportExternalSession(context.Background(), req)
+	require.NoError(t, err, "domain-level failures are reported via response.Status, not an RPC error")
+	assert.Equal(t, sessionv1.ImportStatus_IMPORT_STATUS_FAILED, resp.Msg.Status)
+	assert.NotEmpty(t, resp.Msg.Error)
+	assert.Empty(t, store.added, "no instance should be persisted when the path is already managed")
+}
+
+// TestImportService_ConfirmKillExternalSession_ReturnsAlreadyGone_When_AliveCheckerReportsProcessGone
+// exercises a well-formed ConfirmKillExternalSession request through the RPC
+// handler (Finding #13), reaching session.KillExternalOriginalProcess's
+// deterministic AlreadyGone branch and asserting the persisted
+// SuspendedProcessRecord is cleaned up as a result.
+func TestImportService_ConfirmKillExternalSession_ReturnsAlreadyGone_When_AliveCheckerReportsProcessGone(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	suspended, err := session.NewSuspendedProcessStore()
+	require.NoError(t, err)
+	require.NoError(t, suspended.Add(session.SuspendedProcessRecord{
+		PID:        4242,
+		InstanceID: "inst-1",
+		Candidate:  session.ExternalSessionCandidate{TmuxSession: "sess-1"},
+	}))
+
+	svc := &ImportService{aliveChecker: &fakeAliveChecker{alive: false}, suspended: suspended}
+
+	req := connect.NewRequest(&sessionv1.ConfirmKillExternalSessionRequest{
+		InstanceId:  "inst-1",
+		PidIdentity: &sessionv1.PIDIdentity{Pid: 4242, CreateTimeMs: 1000},
+	})
+
+	resp, err := svc.ConfirmKillExternalSession(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, sessionv1.KillStatus_KILL_STATUS_ALREADY_GONE, resp.Msg.Status)
+
+	_, found, err := suspended.Get("inst-1")
+	require.NoError(t, err)
+	assert.False(t, found, "expected the suspended-process record to be removed once the original process is confirmed already gone")
+}
+
+// TestImportService_CancelPendingKill_PrefersPersistedRecordPID_When_RecordExists
+// exercises Finding #11's fix at the RPC layer: the persisted
+// SuspendedProcessRecord's PID must be preferred over a client-supplied
+// pid_identity.pid. The record here holds the PID of a real (SIGSTOP'd)
+// process while the client supplies a bogus/nonexistent PID; a correct
+// implementation resumes the real process and reports success. If the fix
+// regressed and the client-supplied PID were used instead,
+// ResumeOriginalProcess would fail (ESRCH) and resumed would be false.
+func TestImportService_CancelPendingKill_PrefersPersistedRecordPID_When_RecordExists(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	suspended, err := session.NewSuspendedProcessStore()
+	require.NoError(t, err)
+
+	cmd := spawnSleeperForTest(t)
+	pid := int32(cmd.Process.Pid)
+	require.NoError(t, session.SuspendOriginalProcess(pid))
+
+	require.NoError(t, suspended.Add(session.SuspendedProcessRecord{
+		PID:        pid,
+		InstanceID: "inst-1",
+	}))
+
+	store := &fakeImportCollisionStore{}
+	svc := &ImportService{storage: store, suspended: suspended}
+
+	const bogusClientPID = int32(1<<31 - 1)
+	req := connect.NewRequest(&sessionv1.CancelPendingKillRequest{
+		InstanceId:  "inst-1",
+		PidIdentity: &sessionv1.PIDIdentity{Pid: bogusClientPID},
+	})
+
+	resp, err := svc.CancelPendingKill(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Resumed, "expected resumed=true: the persisted record's real PID must be preferred over the bogus client-supplied PID")
+	assert.Empty(t, resp.Msg.Error)
+	assert.Equal(t, "inst-1", store.deletedTitle)
+
+	_, found, err := suspended.Get("inst-1")
+	require.NoError(t, err)
+	assert.False(t, found, "expected the suspended-process record to be removed after a successful cancel")
+}
+
+// spawnSleeperForTest spawns a short-lived real process for tests that need
+// to exercise a genuine SIGSTOP/SIGCONT round-trip, mirroring
+// session/import_cancel_test.go's spawnSleeper (unexported there, so this
+// file needs its own copy).
+func spawnSleeperForTest(t *testing.T) *exec.Cmd {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "sleep", "30")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	return cmd
 }
 
 // newGatedImportTestServer wires ImportService behind the same
