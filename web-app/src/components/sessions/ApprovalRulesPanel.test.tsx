@@ -22,9 +22,13 @@ const mockRefresh = jest.fn();
 const mockUpsertRule = jest.fn();
 const mockDeleteRule = jest.fn();
 
+// Mutable — reassigned by individual tests (e.g. the Risk column tests below) before
+// rendering. Must start with "mock" per babel-plugin-jest-hoist's out-of-scope-variable rule.
+let mockRules: unknown[] = [];
+
 jest.mock("@/lib/hooks/useApprovalRules", () => ({
   useApprovalRules: () => ({
-    rules: [],
+    rules: mockRules,
     loading: false,
     error: null,
     upsertRule: mockUpsertRule,
@@ -182,6 +186,8 @@ function resetHookConfig() {
   hookConfig.cmd.generate = jest.fn().mockResolvedValue(undefined);
   hookConfig.cmd.cancel = jest.fn();
   hookConfig.cmd.clear = jest.fn();
+
+  mockRules = [];
 
   mockRefresh.mockClear();
   mockUpsertRule.mockClear();
@@ -515,6 +521,58 @@ describe("ApprovalRulesPanel", () => {
       const emptyState = screen.getByTestId("empty-state");
       expect(emptyState).toHaveTextContent(/Add Rule/);
       expect(emptyState).toHaveTextContent(/Import YAML/);
+    });
+  });
+
+  // ── Risk column (review-queue-severity Epic 7 — riskLevel was already threaded through
+  // upsertRule/ApprovalRuleProto but never rendered) ────────────────────────────────────
+  describe("Risk column", () => {
+    function makeApprovalRule(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        id: "rule-1",
+        name: "Test Rule",
+        toolName: "Bash",
+        toolPattern: "",
+        toolCategory: "",
+        commandPattern: "",
+        filePattern: "",
+        decision: AutoDecision.ESCALATE,
+        riskLevel: "critical",
+        reason: "",
+        alternative: "",
+        priority: 500,
+        enabled: true,
+        source: "seed",
+        programs: [],
+        subcommands: [],
+        blockedSubcommands: [],
+        requiredFlags: [],
+        forbiddenFlags: [],
+        pythonModes: [],
+        safePythonImportsOnly: false,
+        requiredFlagPrefixes: [],
+        requireCiPassing: false,
+        ...overrides,
+      };
+    }
+
+    it("ApprovalRulesPanel_should_RenderRiskColumnWithSeverityBadge_When_RuleHasRiskLevel", () => {
+      mockRules = [makeApprovalRule({ riskLevel: "critical" })];
+      render(<ApprovalRulesPanel />);
+      expect(screen.getByTestId("severity-badge-critical")).toHaveAttribute("aria-label", "Critical risk");
+    });
+
+    it("ApprovalRulesPanel_should_RenderNotRecordedBadge_When_RuleRiskLevelIsEmpty", () => {
+      mockRules = [makeApprovalRule({ riskLevel: "" })];
+      render(<ApprovalRulesPanel />);
+      expect(screen.getByTestId("severity-badge-unrecorded")).toHaveAttribute("aria-label", "Severity not recorded");
+    });
+
+    it("ApprovalRulesPanel_should_ExposeRiskColumnWithoutAnyInteraction_When_TableRenders", () => {
+      mockRules = [makeApprovalRule({ riskLevel: "high" })];
+      render(<ApprovalRulesPanel />);
+      expect(screen.getByText("Risk")).toBeInTheDocument();
+      expect(screen.getByTestId("severity-badge-high")).toBeInTheDocument();
     });
   });
 

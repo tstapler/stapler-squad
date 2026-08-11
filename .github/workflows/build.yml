@@ -105,6 +105,16 @@ jobs:
         with:
           version: '1.41.0'
 
+      # See .github/actions/prepare/action.yml for why this cache exists.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-smoke-${{ runner.os }}-
+
       - name: make web-build (no manual pre-steps)
         run: make web-build
 

@@ -370,7 +370,15 @@ func Test_validatePluginFile(t *testing.T) {
 		errs := validatePluginFile("/tmp/detectors/expensive.toml", pf)
 		elapsed := time.Since(start)
 
-		if elapsed > 5*time.Second {
+		// maxPluginCompileTime only bounds cumulative compile time *between*
+		// regexp.Compile calls — it can't preempt a single in-progress call,
+		// so this test's first (and only) compile of the pathological regex
+		// is itself the whole cost. Under `go test -race` with the full
+		// suite running in parallel (make ci), CPU contention has measured
+		// this single call at 11.3s though it takes 0.5s in isolation; the
+		// assertion just needs to catch a genuine hang (minutes), not
+		// enforce a tight SLA under contention.
+		if elapsed > 60*time.Second {
 			t.Fatalf("validatePluginFile() took %s, want it to reject well before hanging", elapsed)
 		}
 

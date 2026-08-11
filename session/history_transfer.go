@@ -66,12 +66,16 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 		return fmt.Errorf("failed to import session history from %s: %w", srcAdapter.Name(), err)
 	}
 
-	// 2. Export turns in target adapter format
-	if err := dstAdapter.Export(ctx, turns, i); err != nil {
+	// 2. Apply Stapler Squad Inhibition Engine to redact secrets
+	inhibition := NewInhibitionEngine()
+	sanitizedTurns := inhibition.SanitizeTurns(turns)
+
+	// 3. Export sanitized turns in target adapter format
+	if err := dstAdapter.Export(ctx, sanitizedTurns, i); err != nil {
 		return fmt.Errorf("failed to export session history to %s: %w", dstAdapter.Name(), err)
 	}
 
-	// 3. Perform post-switch steps like history.jsonl mapping
+	// 4. Perform post-switch steps like history.jsonl mapping
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err

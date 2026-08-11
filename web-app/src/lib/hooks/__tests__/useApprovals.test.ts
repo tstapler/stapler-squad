@@ -34,6 +34,7 @@ function makeApproval(overrides: Partial<PlainApproval> = {}): PlainApproval {
     permissionMode: "default",
     createdAt: undefined,
     expiresAt: undefined,
+    riskLevel: "",
     ...overrides,
   };
 }
