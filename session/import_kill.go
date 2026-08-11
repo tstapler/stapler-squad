@@ -37,10 +37,12 @@ type AliveChecker interface {
 
 // KillExternalOriginalProcess re-verifies pid/createTimeMs are still the
 // same process (guarding against PID reuse in the window between commit and
-// this call) and, if so, kills its tmux session via a throwaway
+// this call) and, if so, resumes it (it was SIGSTOP'd at commit time -- a
+// stopped process ignores signals sent by "tmux kill-session" until it's
+// running again) and kills its tmux session via a throwaway
 // InstanceTypeExternal Instance's KillExternalSession. On success, the
 // caller is responsible for removing the SuspendedProcessRecord -- this
-// function only performs the kill, it does not touch persisted state.
+// function only performs the resume+kill, it does not touch persisted state.
 func KillExternalOriginalProcess(checker AliveChecker, pid int32, createTimeMs int64, tmuxSession string) KillOutcome {
 	if checker == nil {
 		return KillOutcome{Status: KillOutcomeFailed, Err: fmt.Errorf("kill external process: AliveChecker is required")}
@@ -48,6 +50,12 @@ func KillExternalOriginalProcess(checker AliveChecker, pid int32, createTimeMs i
 	if !checker.IsAlive(pid, createTimeMs) {
 		return KillOutcome{Status: KillOutcomeAlreadyGone}
 	}
+
+	// Best-effort: the process was SIGSTOP'd at commit time. It must be
+	// running again before the kill signal can take effect. Ignore errors --
+	// if the process already exited or was never actually stopped, the kill
+	// below will simply be a no-op / fail on its own terms.
+	_ = ResumeOriginalProcess(pid)
 
 	throwaway := &Instance{
 		InstanceType: InstanceTypeExternal,

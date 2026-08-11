@@ -104,12 +104,13 @@ func TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSu
 	}
 
 	result, err := CommitImportExternalSession(context.Background(), CommitImportParams{
-		Detector:    detector,
-		Storage:     store,
-		Linker:      linker,
-		Suspended:   suspended,
-		Candidate:   candidate,
-		OriginalPID: pid,
+		Detector:     detector,
+		Storage:      store,
+		Linker:       linker,
+		Suspended:    suspended,
+		AliveChecker: &fakeAliveChecker{alive: true},
+		Candidate:    candidate,
+		OriginalPID:  pid,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result.Instance)
@@ -163,12 +164,13 @@ func TestCommitImportExternalSession_CompensatingDeletesInstance_When_SuspendOri
 	}
 
 	result, err := CommitImportExternalSession(context.Background(), CommitImportParams{
-		Detector:    detector,
-		Storage:     store,
-		Linker:      linker,
-		Suspended:   suspended,
-		Candidate:   candidate,
-		OriginalPID: nonexistentPID,
+		Detector:     detector,
+		Storage:      store,
+		Linker:       linker,
+		Suspended:    suspended,
+		AliveChecker: &fakeAliveChecker{alive: true},
+		Candidate:    candidate,
+		OriginalPID:  nonexistentPID,
 	})
 	if store.deletedInstance != nil {
 		t.Cleanup(func() { _ = store.deletedInstance.Kill() })
@@ -196,5 +198,88 @@ func TestCommitImportExternalSession_CompensatingDeletesInstance_When_SuspendOri
 		t.Fatalf("failed to read suspended process store: %v", gerr)
 	} else if found {
 		t.Fatal("expected suspended-process record to be removed after suspend failure")
+	}
+}
+
+// TestCommitImportExternalSession_ReturnsError_When_AliveCheckerRejectsOriginalPID
+// guards against committing (and suspending) the wrong process on PID reuse:
+// if AliveChecker.IsAlive reports that OriginalPID/OriginalCreateTimeMs no
+// longer identify the same process, CommitImportExternalSession must error
+// out and must never reach SuspendOriginalProcess/Suspended.Add.
+func TestCommitImportExternalSession_ReturnsError_When_AliveCheckerRejectsOriginalPID(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	suspended, err := NewSuspendedProcessStore()
+	require.NoError(t, err)
+
+	linker := NewHistoryLinker(newNotFoundDetector(t), nil)
+
+	store := &fakeInstanceStore{}
+	detector := newNotFoundDetector(t)
+
+	cmd := spawnSleeper(t)
+	pid := int32(cmd.Process.Pid)
+
+	path := t.TempDir()
+	candidate := ExternalSessionCandidate{
+		Path:    path,
+		Program: "true",
+		PID:     0,
+	}
+
+	result, err := CommitImportExternalSession(context.Background(), CommitImportParams{
+		Detector:             detector,
+		Storage:              store,
+		Linker:               linker,
+		Suspended:            suspended,
+		AliveChecker:         &fakeAliveChecker{alive: false},
+		Candidate:            candidate,
+		OriginalPID:          pid,
+		OriginalCreateTimeMs: 12345,
+	})
+	if store.deletedInstance != nil {
+		t.Cleanup(func() { _ = store.deletedInstance.Kill() })
+	}
+
+	if err == nil {
+		t.Fatal("expected an error when AliveChecker rejects the original PID, got nil")
+	}
+	if result.Instance != nil {
+		t.Fatal("expected CommitImportResult.Instance to be nil on failure")
+	}
+	if store.deletedTitle == "" {
+		t.Fatal("expected DeleteInstance to have been called as part of compensating delete")
+	}
+
+	if list, lerr := suspended.List(); lerr != nil {
+		t.Fatalf("failed to list suspended process store: %v", lerr)
+	} else if len(list) != 0 {
+		t.Fatalf("expected SuspendOriginalProcess/Suspended.Add to never be reached, got %d suspended record(s)", len(list))
+	}
+}
+
+// TestCommitImportExternalSession_ReturnsErrTmuxSessionNotFound_When_CandidateTmuxSessionMissing
+// guards against persisting (and later using to run "tmux kill-session")
+// a candidate's client-supplied TmuxSession name without confirming it
+// actually corresponds to a live tmux session at commit time.
+func TestCommitImportExternalSession_ReturnsErrTmuxSessionNotFound_When_CandidateTmuxSessionMissing(t *testing.T) {
+	store := &fakeInstanceStore{}
+	detector := newNotFoundDetector(t)
+
+	_, err := CommitImportExternalSession(context.Background(), CommitImportParams{
+		Detector:    detector,
+		Storage:     store,
+		TmuxQuerier: newFakeTmuxSocketQuerier(),
+		Candidate: ExternalSessionCandidate{
+			Path:        t.TempDir(),
+			TmuxSession: "gone-session",
+		},
+	})
+
+	if !errors.Is(err, ErrTmuxSessionNotFound) {
+		t.Fatalf("expected ErrTmuxSessionNotFound, got %v", err)
+	}
+	if len(store.added) != 0 {
+		t.Fatal("expected no instance to be persisted when candidate's tmux session no longer exists")
 	}
 }

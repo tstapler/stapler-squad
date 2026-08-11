@@ -23,7 +23,7 @@ func TestReconcileSuspendedProcesses_ResumesProcessAndRemovesRecord_When_Process
 		t.Fatalf("failed to suspend original process: %v", err)
 	}
 
-	if err := ReconcileSuspendedProcesses(context.Background(), suspended); err != nil {
+	if err := ReconcileSuspendedProcesses(context.Background(), suspended, nil); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestReconcileSuspendedProcesses_ReturnsErrorButContinues_When_OneResumeFail
 		t.Fatalf("failed to suspend original process: %v", err)
 	}
 
-	err = ReconcileSuspendedProcesses(context.Background(), suspended)
+	err = ReconcileSuspendedProcesses(context.Background(), suspended, nil)
 	if err == nil {
 		t.Fatal("expected an error from the failed resume, got nil")
 	}
@@ -77,7 +77,48 @@ func TestReconcileSuspendedProcesses_ReturnsErrorButContinues_When_OneResumeFail
 }
 
 func TestReconcileSuspendedProcesses_ReturnsNil_When_StoreIsNil(t *testing.T) {
-	if err := ReconcileSuspendedProcesses(context.Background(), nil); err != nil {
+	if err := ReconcileSuspendedProcesses(context.Background(), nil, nil); err != nil {
 		t.Fatalf("expected nil error for nil store, got %v", err)
+	}
+}
+
+// TestReconcileSuspendedProcesses_LeavesProcessSuspended_When_CommittedInstanceStillManaged
+// guards against unconditionally SIGCONT-ing every suspended process on
+// restart: when the committed Instance for a record is still present in
+// storage, resuming here would race with whatever legitimately manages that
+// Instance's lifecycle (confirm-kill/cancel), risking a dual-writer scenario.
+// The record must be left untouched instead.
+func TestReconcileSuspendedProcesses_LeavesProcessSuspended_When_CommittedInstanceStillManaged(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	suspended, err := NewSuspendedProcessStore()
+	if err != nil {
+		t.Fatalf("failed to create suspended process store: %v", err)
+	}
+
+	cmd := spawnSleeper(t)
+	pid := int32(cmd.Process.Pid)
+
+	const instanceID = "imported-reconcile-still-managed"
+	if err := suspended.Add(SuspendedProcessRecord{PID: pid, InstanceID: instanceID}); err != nil {
+		t.Fatalf("failed to seed suspended process record: %v", err)
+	}
+	if err := SuspendOriginalProcess(pid); err != nil {
+		t.Fatalf("failed to suspend original process: %v", err)
+	}
+	t.Cleanup(func() { _ = ResumeOriginalProcess(pid) })
+
+	store := &fakeInstanceStore{
+		instances: []InstanceData{{Title: instanceID}},
+	}
+
+	if err := ReconcileSuspendedProcesses(context.Background(), suspended, store); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if _, found, err := suspended.Get(instanceID); err != nil {
+		t.Fatalf("failed to read suspended process store: %v", err)
+	} else if !found {
+		t.Fatal("expected the record for a still-managed Instance to remain, not be resumed/removed")
 	}
 }

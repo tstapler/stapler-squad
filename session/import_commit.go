@@ -4,7 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 )
+
+// commitMu serializes the collision-check-then-create critical section in
+// CommitImportExternalSession (CheckPathNotAlreadyManaged followed by
+// CreateManagedInstance) across concurrent commit calls for the same
+// process. Without this, two concurrent commits for the same path can both
+// pass the collision check before either has persisted its Instance,
+// resulting in two managed Instances for one path.
+var commitMu sync.Mutex
+
+// ErrTmuxSessionNotFound is returned when a candidate names a tmux session
+// that is no longer present on the tmux server at commit time. The
+// candidate's TmuxSession is later reused verbatim to run "tmux
+// kill-session -t <name>", so it must be validated against a real,
+// currently-existing session rather than trusted as client-supplied data.
+var ErrTmuxSessionNotFound = errors.New("commit import: candidate's tmux session no longer exists")
 
 // ErrCorrelationDrifted is returned when a fresh CorrelateCandidate result
 // (re-run at commit time) disagrees with the CorrelationResult the caller
@@ -31,26 +47,31 @@ var ErrAmbiguousWithoutChoice = errors.New("import commit: correlation is ambigu
 // persist a managed Instance for an external candidate, start it resumed,
 // and suspend the original process.
 type CommitImportParams struct {
-	Detector  *HistoryFileDetector
-	Storage   InstanceStore
-	Registry  *Registry
-	Linker    *HistoryLinker
-	Suspended *SuspendedProcessStore
+	Detector     *HistoryFileDetector
+	Storage      InstanceStore
+	Registry     *Registry
+	Linker       *HistoryLinker
+	Suspended    *SuspendedProcessStore
+	AliveChecker AliveChecker
+	TmuxQuerier  TmuxSocketQuerier
 
-	Candidate             ExternalSessionCandidate
-	ExpectedCorrelation   CorrelationResult
-	DisambiguationChoice  string
-	OriginalPID           int32
-	OriginalCreateTimeMs  int64
+	Candidate            ExternalSessionCandidate
+	ExpectedCorrelation  CorrelationResult
+	DisambiguationChoice string
+	OriginalPID          int32
+	OriginalCreateTimeMs int64
 }
 
 // CommitImportResult is the domain-level outcome of a successful commit.
 type CommitImportResult struct {
 	Instance *Instance
-	// FreshCreateTimeMs is a newly re-read create-time for OriginalPID, taken
-	// immediately after suspension, for the caller to mint a fresh
-	// PIDIdentity in the RPC response (per import.proto's doc comment on
-	// CommitImportExternalSessionResponse.pid_identity).
+	// FreshCreateTimeMs is the caller-supplied OriginalCreateTimeMs, echoed
+	// back for the caller to mint a fresh PIDIdentity in the RPC response
+	// (per import.proto's doc comment on
+	// CommitImportExternalSessionResponse.pid_identity). Trustworthy because
+	// startAndSuspend re-verifies OriginalPID/OriginalCreateTimeMs against
+	// the live process (via AliveChecker) immediately before suspending it
+	// -- it is not a fresh OS re-read taken at this point.
 	FreshCreateTimeMs int64
 }
 
@@ -83,21 +104,39 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 		return CommitImportResult{}, err
 	}
 
-	if err := CheckPathNotAlreadyManaged(params.Candidate.Path, params.Storage); err != nil {
-		return CommitImportResult{}, err
+	if params.Candidate.TmuxSession != "" {
+		if params.TmuxQuerier == nil {
+			return CommitImportResult{}, fmt.Errorf("commit import: TmuxQuerier is required when candidate names a tmux session")
+		}
+		liveSessions, err := params.TmuxQuerier.ListSessions(params.Candidate.SocketPath)
+		if err != nil {
+			return CommitImportResult{}, fmt.Errorf("commit import: failed to list tmux sessions: %w", err)
+		}
+		if !liveSessions[params.Candidate.TmuxSession] {
+			return CommitImportResult{}, ErrTmuxSessionNotFound
+		}
 	}
 
-	instance, err := CreateManagedInstance(ctx, CreateManagedInstanceParams{
-		Options: InstanceOptions{
-			Title:       importInstanceTitle(params.Candidate),
-			Path:        params.Candidate.Path,
-			Program:     params.Candidate.Program,
-			SessionType: SessionTypeDirectory,
-		},
-		Storage:  params.Storage,
-		Registry: params.Registry,
-		ResumeID: resumeUUID,
-	})
+	commitMu.Lock()
+	instance, err := func() (*Instance, error) {
+		defer commitMu.Unlock()
+
+		if err := CheckPathNotAlreadyManaged(params.Candidate.Path, params.Storage); err != nil {
+			return nil, err
+		}
+
+		return CreateManagedInstance(ctx, CreateManagedInstanceParams{
+			Options: InstanceOptions{
+				Title:       importInstanceTitle(params.Candidate),
+				Path:        params.Candidate.Path,
+				Program:     params.Candidate.Program,
+				SessionType: SessionTypeDirectory,
+			},
+			Storage:  params.Storage,
+			Registry: params.Registry,
+			ResumeID: resumeUUID,
+		})
+	}()
 	if err != nil {
 		return CommitImportResult{}, fmt.Errorf("commit import: %w", err)
 	}
@@ -171,6 +210,18 @@ func startAndSuspend(_ context.Context, params CommitImportParams, instance *Ins
 		// No original process to suspend (e.g. candidate had no PID) --
 		// nothing further to do.
 		return nil
+	}
+
+	// Re-verify the original process's identity immediately before
+	// suspending it, mirroring KillExternalOriginalProcess's re-verification
+	// on the kill path. Without this, a PID reuse in the window between
+	// preview/commit and this call would suspend an unrelated process that
+	// happens to now hold params.OriginalPID.
+	if params.AliveChecker == nil {
+		return fmt.Errorf("commit import: AliveChecker is required to suspend original process")
+	}
+	if !params.AliveChecker.IsAlive(params.OriginalPID, params.OriginalCreateTimeMs) {
+		return fmt.Errorf("commit import: original process %d is no longer the same process (PID reuse or process exited)", params.OriginalPID)
 	}
 
 	if params.Suspended != nil {

@@ -437,7 +437,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	suspendedStore, err := session.NewSuspendedProcessStore()
 	if err != nil {
 		log.Error("failed to create suspended process store, import-external-session disabled", "error", err)
-	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore); err != nil {
+	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
 		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
 	}
 	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
