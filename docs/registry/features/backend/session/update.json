@@ -14,7 +14,6 @@
     "TestUpdateSession_ProgramUpdate_ActiveSession_RestartFailure_ReturnsInternal",
     "TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart",
     "TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault",
-    "TestUpdateSession_ProgramUpdate_SameValue_NoOp",
     "TestUpdateSession_ProgramAndOtherField_SinglePublish",
     "TestUpdateSessionProgram_RealInstance_SwitchesAndPersists",
     "TestUpdateSessionProgram_NotFound",

@@ -1849,11 +1849,9 @@ func (s *SessionService) UpdateSession(
 
 	// Find the instance to update
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -1861,6 +1859,11 @@ func (s *SessionService) UpdateSession(
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
+
+	// Captured before any rename below mutates instance.Title in-memory. A narrow
+	// metadata update must key its WHERE clause off the pre-rename title, or it misses
+	// the DB row entirely once instance.Title has already moved to the new value.
+	currentTitle := instance.Title
 
 	// Validate the note length before any field below mutates live in-memory state
 	// (SetTitleDirect/SetCategory publish immediately via snapshot.Store, not staged
@@ -1874,6 +1877,16 @@ func (s *SessionService) UpdateSession(
 	// Track which fields are being updated for event publishing
 	var updatedFields []string
 
+	// Metadata fields (title/category/note/working_dir) persist via a single narrow
+	// UPDATE (UpdateInstanceMetadata) instead of the full-row SaveInstances rewrite.
+	// A non-nil pointer here means "this field was part of the request".
+	var metaTitle, metaCategory, metaNote, metaWorkingDir *string
+
+	// sideEffectChanged tracks fields (tags, status, rate_limit_enabled, autonomous_mode)
+	// that still need the full-row SaveInstances write — e.g. tags requires managing the
+	// tags M2M relation, which a narrow column UPDATE can't replicate.
+	var sideEffectChanged bool
+
 	// Handle title update (before status change so rename is atomic with resume)
 	if req.Msg.Title != nil && *req.Msg.Title != "" && *req.Msg.Title != instance.Title {
 		// Check if new title already exists
@@ -1884,12 +1897,21 @@ func (s *SessionService) UpdateSession(
 		}
 		instance.SetTitleDirect(*req.Msg.Title)
 		updatedFields = append(updatedFields, "title")
+		metaTitle = req.Msg.Title
 	}
 
 	// Handle category update
 	if req.Msg.Category != nil {
 		instance.SetCategory(*req.Msg.Category)
 		updatedFields = append(updatedFields, "category")
+		metaCategory = req.Msg.Category
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
+		metaNote = req.Msg.Note
 	}
 
 	// Handle note update. Length already validated above.
@@ -1910,6 +1932,7 @@ func (s *SessionService) UpdateSession(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update tags: %w", err))
 		}
 		updatedFields = append(updatedFields, "tags")
+		sideEffectChanged = true
 	}
 
 	// Handle program update. Empty string means "System default" — resolve to the
@@ -1917,9 +1940,26 @@ func (s *SessionService) UpdateSession(
 	// the capacity-monitor auto-fallback path (UpdateSessionProgram below) via
 	// Instance.SwitchProgram so the two entry points can't drift or double-restart.
 	if req.Msg.Program != nil {
+		// Flush any pending title/category/note rename now, keyed on currentTitle,
+		// before SwitchProgram's callback below can trigger its own SaveInstances
+		// call. That call persists via instance.ToInstanceData(), whose Title is
+		// already the in-memory-renamed value — looking the DB row up by that new
+		// title (before the narrow rename below has run) misses the still-old-titled
+		// row and duplicates it via saveInstancesToRepo's Create fallback, exactly
+		// the orphaned/duplicate-row bug this file's UpdateSessionMetadata exists to
+		// avoid. Flushing here first keeps every later persist call in this handler
+		// looking up the same, already-correct row.
+		if metaTitle != nil || metaCategory != nil || metaNote != nil {
+			if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, nil); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+			}
+			if metaTitle != nil {
+				currentTitle = *metaTitle
+			}
+			metaTitle, metaCategory, metaNote = nil, nil, nil
+		}
 		changed, _, switchErr := instance.SwitchProgram(ctx, *req.Msg.Program, func() error {
-			instances[instanceIndex] = instance
-			return s.storage.SaveInstances(instances)
+			return s.storage.SaveInstances([]*session.Instance{instance})
 		})
 		if changed {
 			updatedFields = append(updatedFields, "program")
@@ -1934,6 +1974,7 @@ func (s *SessionService) UpdateSession(
 	if req.Msg.WorkingDir != nil {
 		instance.SetWorkingDir(*req.Msg.WorkingDir)
 		updatedFields = append(updatedFields, "working_dir")
+		metaWorkingDir = req.Msg.WorkingDir
 	}
 
 	// Handle rate limit enabled toggle. SetRateLimitEnabled persists to the
@@ -1947,6 +1988,7 @@ func (s *SessionService) UpdateSession(
 			}
 		}
 		updatedFields = append(updatedFields, "rate_limit_enabled")
+		sideEffectChanged = true
 	}
 
 	// Handle autonomous mode toggle. Starting/stopping the AutonomousDriver is a
@@ -1963,6 +2005,7 @@ func (s *SessionService) UpdateSession(
 			s.autonomousSvc.stopAndDeregisterDriver(instance.Title)
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
+		sideEffectChanged = true
 	}
 
 	// Handle steering: inject a message into an active autonomous session.
@@ -2008,6 +2051,7 @@ func (s *SessionService) UpdateSession(
 				instance.SetPauseReason(*req.Msg.PauseReason)
 			}
 			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
 		} else if targetStatus != session.Paused && instance.Status == session.Paused {
 			// Resume from paused state
 			if err := instance.Resume(); err != nil {
@@ -2016,13 +2060,24 @@ func (s *SessionService) UpdateSession(
 			// Clear pause reason only after a successful resume.
 			instance.SetPauseReason("")
 			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
 		}
 	}
 
-	// Update the instance in the list and save
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	// Persist changes. The narrow metadata UPDATE runs first so a title rename lands
+	// under currentTitle in the DB before any side-effecting SaveInstances call below
+	// looks the row up by the already-in-memory-mutated new title — doing it in the
+	// other order would miss the still-old-titled DB row and orphan it via
+	// SaveInstances' Update-fails-so-Create fallback (see UpdateSessionMetadata).
+	if metaTitle != nil || metaCategory != nil || metaNote != nil || metaWorkingDir != nil {
+		if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, metaWorkingDir); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+		}
+	}
+	if sideEffectChanged {
+		if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+		}
 	}
 
 	// Publish events based on what was updated
@@ -2052,11 +2107,9 @@ func (s *SessionService) HibernateSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -2083,8 +2136,7 @@ func (s *SessionService) HibernateSession(
 	// session does not linger with a stale queue entry until reconcileSessions fires.
 	s.removeFromAllPollers(instance.Title)
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -2112,11 +2164,9 @@ func (s *SessionService) ResumeHibernatedSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -2128,8 +2178,7 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -2160,11 +2209,9 @@ func (s *SessionService) ResumeCrashedSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -2176,8 +2223,7 @@ func (s *SessionService) ResumeCrashedSession(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -3082,11 +3128,9 @@ func (s *SessionService) RenameSession(
 
 	// Find the instance to rename
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -3111,9 +3155,11 @@ func (s *SessionService) RenameSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to rename session: %w", err))
 	}
 
-	// Update the instance in the list and save
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	// Narrow single-row rename, keyed on the pre-mutation title. The generic
+	// SaveInstances path looks the DB row up by the (already renamed) in-memory
+	// title, misses the still-old-titled row, and falls into a Create fallback that
+	// orphans it — using oldTitle as the WHERE key avoids that.
+	if err := s.storage.UpdateInstanceMetadata(oldTitle, &req.Msg.NewTitle, nil, nil, nil); err != nil {
 		// Try to rollback the rename
 		instance.SetTitleDirect(oldTitle)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save renamed instance: %w", err))

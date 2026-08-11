@@ -81,6 +81,15 @@ type Repository interface {
 	// Issues a single UPDATE WHERE title=? without a prior SELECT.
 	UpdateLastViewed(ctx context.Context, title string, t time.Time) error
 
+	// UpdateSessionMetadata efficiently updates only title/category/note/working_dir
+	// fields for a session, issuing a single UPDATE WHERE title=? without a prior SELECT
+	// and without touching worktree/diffstats/tags/claude_session rows (unlike Update).
+	// currentTitle must be the row's title from before any rename applied in this same
+	// call — see the EntRepository implementation for why. A nil field pointer leaves
+	// that field untouched; Note is written whenever non-nil (including "") since an
+	// empty note is a meaningful cleared state, not "unset".
+	UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error
+
 	// Close performs cleanup and releases resources
 	Close() error
 
