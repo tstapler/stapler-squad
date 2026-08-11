@@ -225,6 +225,7 @@ func TestHistoryFileDetector_DetectByPath_PicksMostRecentWhenMultiple(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, info)
 	assert.Equal(t, uuid2, info.ConversationUUID, "should return most recently modified file")
+	assert.WithinDuration(t, future, info.ModTime, time.Second, "ModTime should reflect the winning candidate's mtime")
 }
 
 func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
