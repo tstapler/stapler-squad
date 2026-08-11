@@ -255,5 +255,6 @@ kill %1   # stop it when done
 | Commit SDD planning artifacts before ending a session | `.claude/rules/sdd-planning-artifacts-commit.md` |
 | Prefer go-git over shelling out to git CLI | `.claude/rules/prefer-go-git-over-subshells.md` |
 | Service restart kills every live tmux session without `--tmux-keep-server` | `.claude/rules/tmux-keep-server-on-restart.md` |
+| Package manager: always pnpm in web-app/, never npm/yarn | `.claude/rules/package-manager.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `.claude/rules/service-restart-orphan-process.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `.claude/rules/fix-flaky-tests-dont-defer.md` |

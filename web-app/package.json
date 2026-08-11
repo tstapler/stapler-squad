@@ -11,6 +11,7 @@
     ]
   },
   "scripts": {
+    "preinstall": "npx only-allow pnpm",
     "dev": "next dev --port ${PORT:-3001} --hostname localhost",
     "build": "next build",
     "start": "next start --port ${PORT:-3001}",
