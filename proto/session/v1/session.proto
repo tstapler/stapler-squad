@@ -2170,6 +2170,9 @@ message FeatureFlag {
   bool enabled = 2;
   // Human-readable description of what the feature does.
   string description = 3;
+  // Optional human-readable status line (e.g. why a controller-backed flag is
+  // currently off). Empty when not applicable.
+  string status_detail = 4;
 }
 
 message GetFeatureFlagsRequest {}

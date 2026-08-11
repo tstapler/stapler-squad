@@ -216,15 +216,30 @@ Backlog items and other automation depend on the systemd-managed instance at `:8
 
 ```bash
 go build -o /tmp/ssq-manual-test .
-PORT=8999 STAPLER_SQUAD_INSTANCE=claude-manual-test /tmp/ssq-manual-test --tmux-keep-server &
-# ...test in a browser at http://localhost:8999...
+PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test /tmp/ssq-manual-test --tmux-keep-server &
+# ...test in a browser at http://localhost:62871...
+# for --remote-access, also pass: --remote-port 62872   (its default, 8444, collides with the live instance)
 kill %1   # stop it when done
 ```
 
 - Build to a distinct output path (not `./stapler-squad`) — that path is the live systemd unit's `ExecStart` binary; overwriting it in place is confusing even though a running process keeps its old inode open.
-- `PORT` must differ from `:8543` (and from any other manual/e2e instance you already have running) or the bind will fail.
+- Use ports from the **manual dev port block** below — `PORT` must differ from `:8543` (and `--remote-port` from `:8444`) or the bind will fail.
 - `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `.claude/docs/state-isolation.md`) — it will not see or affect the live deployed instance's sessions, backlog items, or config.
 - `--tmux-keep-server` still applies here: without it, stopping this manual instance kills its tmux server too (fine for a throwaway instance, but keep the flag if you want to leave sessions running between restarts of it).
+
+#### Manual dev port block
+
+Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reserved for this project's manual/interactive dev instances, so ad hoc `PORT=8999`-style choices stop colliding with each other and with the live instance's fixed ports (`:8543` main, `:8444` remote-access — those two are user-facing and documented elsewhere, so they stay put). Base `62871` = `61000 + CRC32("stapler-squad") % 4525`, run `make ports` to recompute/display.
+
+| Port | Use |
+|---|---|
+| 62871 | Manual instance #1 — `PORT` |
+| 62872 | Manual instance #1 — `--remote-port` |
+| 62873 | Manual instance #2 — `PORT` (when a second concurrent instance is needed, e.g. comparing before/after) |
+| 62874 | Manual instance #2 — `--remote-port` |
+| 62875–62880 | Spare |
+
+`tests/e2e/` doesn't use this block — it allocates a free ephemeral port per run via `findFreePort()` (`tests/e2e/helpers/test-server.ts`), which needs no fixed reservation.
 
 ---
 

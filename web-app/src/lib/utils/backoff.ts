@@ -66,3 +66,37 @@ export function getWsCloseCode(err: unknown): number | null {
   const code = parseInt(raw, 10);
   return isNaN(code) ? null : code;
 }
+
+// ---------------------------------------------------------------------------
+// Connect-timeout policy: per-attempt duration cap (foreground vs. background),
+// distinct from BackoffState's delay-between-attempts above.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fast connect-timeout for the first FOREGROUND_FAST_ATTEMPTS attempts since a
+ * terminal became foreground. Unvalidated starting guess (herdr-web's real value
+ * isn't inspectable) — validate against real p95/p99 connect-to-first-message
+ * latency on VPN/high-RTT links before enabling NEXT_PUBLIC_RECONNECT_V2 broadly.
+ */
+export const FOREGROUND_CONNECT_TIMEOUT_MS = 1200;
+
+/** Normal connect-timeout: background attempts, and foreground attempts beyond FOREGROUND_FAST_ATTEMPTS. */
+export const CONNECT_TIMEOUT_MS = 3500;
+
+/** Number of connect attempts (since the most recent foreground transition) eligible for the fast timeout. */
+export const FOREGROUND_FAST_ATTEMPTS = 2;
+
+/**
+ * Returns the connect-timeout (ms) for a reconnect attempt: the maximum time
+ * to wait for the first stream message before abandoning the attempt.
+ * Foreground terminals get a shorter timeout for their first
+ * FOREGROUND_FAST_ATTEMPTS attempts since becoming foreground; all other
+ * attempts (background, or foreground beyond the fast window) use the
+ * normal timeout.
+ */
+export function connectTimeoutMs(foreground: boolean, attemptsSinceForeground: number): number {
+  if (foreground && attemptsSinceForeground < FOREGROUND_FAST_ATTEMPTS) {
+    return FOREGROUND_CONNECT_TIMEOUT_MS;
+  }
+  return CONNECT_TIMEOUT_MS;
+}

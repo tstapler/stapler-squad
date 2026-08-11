@@ -11170,7 +11170,10 @@ type FeatureFlag struct {
 	// Whether the feature is currently enabled.
 	Enabled bool `protobuf:"varint,2,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	// Human-readable description of what the feature does.
-	Description   string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	// Optional human-readable status line (e.g. why a controller-backed flag is
+	// currently off). Empty when not applicable.
+	StatusDetail  string `protobuf:"bytes,4,opt,name=status_detail,json=statusDetail,proto3" json:"status_detail,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11222,6 +11225,13 @@ func (x *FeatureFlag) GetEnabled() bool {
 func (x *FeatureFlag) GetDescription() string {
 	if x != nil {
 		return x.Description
+	}
+	return ""
+}
+
+func (x *FeatureFlag) GetStatusDetail() string {
+	if x != nil {
+		return x.StatusDetail
 	}
 	return ""
 }
@@ -16222,11 +16232,12 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"T\n" +
 	"\x1eClearConversationStateResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"]\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x82\x01\n" +
 	"\vFeatureFlag\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aenabled\x18\x02 \x01(\bR\aenabled\x12 \n" +
-	"\vdescription\x18\x03 \x01(\tR\vdescription\"\x18\n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12#\n" +
+	"\rstatus_detail\x18\x04 \x01(\tR\fstatusDetail\"\x18\n" +
 	"\x16GetFeatureFlagsRequest\"H\n" +
 	"\x17GetFeatureFlagsResponse\x12-\n" +
 	"\x05flags\x18\x01 \x03(\v2\x17.session.v1.FeatureFlagR\x05flags\"\x16\n" +
