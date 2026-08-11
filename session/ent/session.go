@@ -43,6 +43,8 @@ type Session struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	// AutoYes holds the value of the "auto_yes" field.
 	AutoYes bool `json:"auto_yes,omitempty"`
+	// Independent of auto_yes: injects a per-agent CLI flag (--dangerously-skip-permissions for Claude, --yes-always for Aider) that skips permission prompts entirely. See auto_yes for the separate TapEnter/daemon keystroke mechanism.
+	AutoApprove bool `json:"auto_approve,omitempty"`
 	// Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation.
 	AutonomousMode bool `json:"autonomous_mode,omitempty"`
 	// Prompt holds the value of the "prompt" field.
@@ -211,7 +213,7 @@ func (*Session) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case session.FieldAutoYes, session.FieldAutonomousMode, session.FieldIsExpanded, session.FieldOneShot, session.FieldHidden:
+		case session.FieldAutoYes, session.FieldAutoApprove, session.FieldAutonomousMode, session.FieldIsExpanded, session.FieldOneShot, session.FieldHidden:
 			values[i] = new(sql.NullBool)
 		case session.FieldID, session.FieldStatus, session.FieldHeight, session.FieldWidth, session.FieldGithubPrNumber:
 			values[i] = new(sql.NullInt64)
@@ -307,6 +309,12 @@ func (_m *Session) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field auto_yes", values[i])
 			} else if value.Valid {
 				_m.AutoYes = value.Bool
+			}
+		case session.FieldAutoApprove:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field auto_approve", values[i])
+			} else if value.Valid {
+				_m.AutoApprove = value.Bool
 			}
 		case session.FieldAutonomousMode:
 			if value, ok := values[i].(*sql.NullBool); !ok {
@@ -619,6 +627,9 @@ func (_m *Session) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("auto_yes=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AutoYes))
+	builder.WriteString(", ")
+	builder.WriteString("auto_approve=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AutoApprove))
 	builder.WriteString(", ")
 	builder.WriteString("autonomous_mode=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AutonomousMode))

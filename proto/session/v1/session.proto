@@ -581,6 +581,13 @@ message CreateSessionRequest {
   // alias_name, when non-empty, resolves session defaults via the named alias preset.
   // Path and profile are resolved from the alias config; path from req is used as override if non-empty.
   string alias_name = 27;
+
+  // auto_approve injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
+  // Independent of auto_yes — see auto_yes's own comment for the distinction.
+  // Defaults to false; never implicitly set true. Rejected server-side if the
+  // resolved program isn't a supported agent (see AutoApproveSupported).
+  bool auto_approve = 28;
 }
 
 message CreateSessionResponse {
@@ -628,6 +635,13 @@ message UpdateSessionRequest {
 
   // Update the session's free-form note. Capped at 10,000 bytes.
   optional string note = 12;
+
+  // Enable or disable auto-approve (yolo mode) on a session. Injects a
+  // per-agent CLI flag that skips permission/approval prompts entirely.
+  // Independent of autonomous_mode and of auto_yes (create-time only,
+  // not updatable). Toggling this on an Active session restarts it so the
+  // flag takes effect (see SetAutoApprove's doc comment).
+  optional bool auto_approve = 13;
 }
 
 message UpdateSessionResponse {

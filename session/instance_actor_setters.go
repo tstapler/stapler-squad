@@ -448,3 +448,45 @@ func (i *Instance) SetExitReason(reason string) {
 		return nil
 	})
 }
+
+// ---- AutoApprove ------------------------------------------------------------------
+
+func setAutoApproveLocked(s *instanceState, v bool) {
+	s.inst.mu.Lock()
+	s.inst.AutoApprove = v
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetAutoApprove sets the AutoApprove flag and, if the session is currently Active,
+// restarts it so the flag takes effect immediately (the flag is baked into the launch
+// command at spawn time, like Program -- not re-checked live, unlike AutonomousMode).
+// persist is called before the restart so a crash between setting and restarting doesn't
+// lose the change; the field mutation and persist survive even if the subsequent restart
+// fails (matching SwitchProgram's documented ordering).
+//
+// The full set->persist->restart sequence runs under restartTriggerMu, the same lock
+// SwitchProgram holds for its own restart sequence, so a program switch and an
+// auto-approve toggle firing near-simultaneously on the same instance serialize instead
+// of both observing Status == Active and double-restarting the tmux session.
+func (i *Instance) SetAutoApprove(v bool, persist func() error) error {
+	i.restartTriggerMu.Lock()
+	defer i.restartTriggerMu.Unlock()
+
+	if err := i.sendSyncErr(func(s *instanceState) error {
+		setAutoApproveLocked(s, v)
+		return nil
+	}); err != nil {
+		return err
+	}
+	if persist != nil {
+		if err := persist(); err != nil {
+			return err
+		}
+	}
+	if i.Status == Active {
+		return i.Restart(true)
+	}
+	return nil
+}

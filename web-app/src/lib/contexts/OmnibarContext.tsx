@@ -220,6 +220,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         category: data.category,
         prompt: data.prompt,
         autoYes: data.autoYes,
+        autoApprove: data.autoApprove ?? false,
         workingDir: data.workingDir,
         existingWorktree: data.existingWorktree,
         sessionType: effectiveSessionType,

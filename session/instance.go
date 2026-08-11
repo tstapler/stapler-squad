@@ -141,6 +141,11 @@ type Instance struct {
 	UpdatedAt time.Time
 	// AutoYes is true if the instance should automatically press enter when prompted.
 	AutoYes bool
+	// AutoApprove is true if the launch command should get a per-agent CLI flag
+	// that skips permission/approval prompts entirely (e.g.
+	// --dangerously-skip-permissions for Claude). Independent of AutoYes (see
+	// its doc comment above) -- resolved via yoloFlagFor in instance_tmux.go.
+	AutoApprove bool
 	// Prompt is passed as a CLI argument to the program at process-spawn time (buildClaudeCommand),
 	// so it only takes effect on a truly fresh spawn (claudeSessionID == "", no --resume) or OneShot.
 	// Use for content that must exist before the process's first turn, e.g. backlog task context.
@@ -404,10 +409,14 @@ type Instance struct {
 	recentRestartTimes []time.Time
 	restartMu          deadlock.Mutex
 
-	// programSwitchMu serializes SwitchProgram calls so a manual program-switch
-	// request and an automatic capacity-monitor fallback can't race on the same
-	// instance and double-restart or double-port history.
-	programSwitchMu deadlock.Mutex
+	// restartTriggerMu serializes every setter that can trigger a restart on an
+	// Active instance (SwitchProgram, SetAutoApprove) so a manual program-switch
+	// request, an automatic capacity-monitor fallback, and a post-creation
+	// auto-approve toggle can't race on the same instance and double-restart or
+	// double-port history. Originally programSwitchMu (SwitchProgram-only);
+	// renamed and widened to cover SetAutoApprove, which restarts on the same
+	// Active-session-change trigger but was not previously serialized against it.
+	restartTriggerMu deadlock.Mutex
 
 	// lifecycleListeners receives EventStarted / EventExited notifications.
 	lifecycleListeners   []LifecycleListener
@@ -485,6 +494,8 @@ type InstanceOptions struct {
 	Program string
 	// If AutoYes is true, automatically accept prompts
 	AutoYes bool
+	// AutoApprove mirrors Instance.AutoApprove — see its doc comment.
+	AutoApprove bool
 	// Prompt is passed as a CLI argument at process-spawn time — only takes effect on a fresh
 	// spawn or OneShot. See InitialPrompt for the tmux-typed alternative; the two are independent
 	// and may both be set (see Instance.Prompt/Instance.InitialPrompt for the full explanation).
@@ -625,6 +636,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CreatedAt:        t,
 		UpdatedAt:        t,
 		AutoYes:          opts.AutoYes,
+		AutoApprove:      opts.AutoApprove,
 		Prompt:           opts.Prompt,
 		InitialPrompt:    opts.InitialPrompt,
 		ExistingWorktree: opts.ExistingWorktree,

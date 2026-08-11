@@ -64,6 +64,24 @@ export const SESSION_TYPES = [
 export const AUTONOMOUS_MODE_HINT =
   "Hand off a well-defined task and walk away — e.g. a small bug fix or chore. An LLM reviewer approves risky tool calls instead of you; you'll be notified when it's done. To stop it, delete or hibernate the session.";
 
+// Agents auto-approve (yolo mode) can inject a bypass flag for. Mirrors the backend's
+// yoloFlagByAgent map (session/instance_tmux.go) — keep in sync manually; small enough
+// surface that a shared RPC isn't warranted for two agents.
+const AUTO_APPROVE_SUPPORTED_AGENTS = ["claude", "aider"];
+
+// isAutoApproveSupported reports whether program is a recognized agent auto-approve can
+// inject a bypass flag for, so the checkbox can be disabled (with a hint) instead of
+// silently no-opping for an unrecognized agent. An empty program ("System default") is
+// treated as supported -- the "System default" option's own label documents it resolves
+// to claude, and the server re-validates against the actually-resolved program anyway
+// (CreateSession's AutoApproveSupported guard), so this is only an optimistic UI default,
+// not a correctness gap.
+export function isAutoApproveSupported(program: string): boolean {
+  if (program.trim() === "") return true;
+  const base = program.trim().split(/\s+/)[0]?.split("/").pop() ?? "";
+  return AUTO_APPROVE_SUPPORTED_AGENTS.includes(base);
+}
+
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
 
 const PRIMARY_TYPES = SESSION_TYPES.slice(0, 2).concat([SESSION_TYPES[3]]); // new_worktree, directory, one_off
@@ -179,11 +197,20 @@ export function OmnibarCreationPanel({
   isDestinationPreviewLoading = false,
 }: OmnibarCreationPanelProps) {
   const {
-    sessionName, branch, program, category, autoYes,
+    sessionName, branch, program, category, autoYes, autoApprove,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
     parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
     autonomousMode,
   } = formState;
+
+  // If the program changes to an unsupported agent after auto-approve was checked
+  // (e.g. user picks "claude", checks the box, then switches to "codex"), force it back
+  // off rather than silently submitting a checked-but-disabled checkbox's stale true value.
+  useEffect(() => {
+    if (autoApprove && !isAutoApproveSupported(program)) {
+      setFormField("autoApprove", false);
+    }
+  }, [program, autoApprove, setFormField]);
 
   // Slash command autocomplete for the firstPrompt textarea.
   const firstPromptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -821,15 +848,35 @@ export function OmnibarCreationPanel({
                 />
               </div>
 
-              {/* Auto-Yes */}
+              {/* Auto-Yes: TapEnter keystroke fallback + --permission-mode bypassPermissions.
+                  Distinct mechanism from Auto-Approve below (auto_approve field) -- label
+                  deliberately avoids the word "approve" so the two aren't misread as the
+                  same setting; see session/instance.go's AutoApprove doc comment. */}
               <label className={checkboxClass}>
                 <input
                   type="checkbox"
                   checked={autoYes}
                   onChange={(e) => setFormField("autoYes", e.target.checked)}
                 />
-                <span>Auto-approve prompts (experimental)</span>
+                <span>Auto-accept prompts (Enter-key fallback, experimental)</span>
               </label>
+
+              {/* Auto-Approve (yolo mode) -- independent of Auto-Yes above; injects a
+                  per-agent CLI flag that skips permission/approval prompts entirely. */}
+              <label className={checkboxClass}>
+                <input
+                  type="checkbox"
+                  checked={autoApprove}
+                  disabled={!isAutoApproveSupported(program)}
+                  onChange={(e) => setFormField("autoApprove", e.target.checked)}
+                />
+                <span>⚡ Auto-approve (skip permission prompts)</span>
+              </label>
+              <span className={hint}>
+                {isAutoApproveSupported(program)
+                  ? "Skips ALL permission/approval prompts for this agent. Risk of unintended file changes — use only in disposable/sandboxed workspaces."
+                  : `Not supported for "${program || "this agent"}" yet.`}
+              </span>
             </div>
           </div>
         </div>

@@ -114,6 +114,37 @@ func TestCreateSession_EmptyPath_NonOneOff_ReturnsInvalidArgument(t *testing.T) 
 	assert.Contains(t, err.Error(), "path is required")
 }
 
+func TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "my-session",
+		Path:        t.TempDir(),
+		Program:     "codex",
+		AutoApprove: true,
+	}))
+
+	require.Error(t, err)
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	assert.Contains(t, err.Error(), "auto_approve")
+}
+
+func TestCreateSession_should_SetAutoApprove_When_ProgramIsClaude(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "my-session",
+		Path:        t.TempDir(),
+		Program:     "claude",
+		AutoApprove: true,
+	}))
+
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Session.AutoApprove)
+}
+
 func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	// one_off=true must NOT fail with "path is required".
 	// If tmux is available the call succeeds (err == nil); if not, it fails with
