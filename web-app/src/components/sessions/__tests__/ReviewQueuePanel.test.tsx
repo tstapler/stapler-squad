@@ -762,6 +762,112 @@ describe("ReviewQueuePanel — combinable filters", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Severity (review-queue-severity Epic 6)
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — severity", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function openFilters() {
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+  }
+
+  function makeApprovalItem(overrides: Partial<ReviewItem> & { riskLevel?: string } = {}): ReviewItem {
+    const { riskLevel, ...rest } = overrides;
+    const metadata: Record<string, string> = { pending_approval_id: "appr-1" };
+    if (riskLevel !== undefined) metadata["risk_level"] = riskLevel;
+    return makeReviewItem({
+      reason: AttentionReason.APPROVAL_PENDING,
+      metadata,
+      ...rest,
+    } as Partial<ReviewItem>);
+  }
+
+  it("ReviewQueuePanel_should_SortItemsBySeverityDescending_When_DefaultSortFieldIsSeverity", () => {
+    const low = makeApprovalItem({ sessionId: "s-low", sessionName: "Low Item", riskLevel: "low" });
+    const critical = makeApprovalItem({ sessionId: "s-critical", sessionName: "Critical Item", riskLevel: "critical" });
+    const medium = makeApprovalItem({ sessionId: "s-medium", sessionName: "Medium Item", riskLevel: "medium" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([low, critical, medium]));
+
+    renderPanel();
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-critical", "s-medium", "s-low"]);
+  });
+
+  it("should render unrecorded-severity item between Critical and Medium in default sort (fail-safe)", () => {
+    const critical = makeApprovalItem({ sessionId: "s-critical", sessionName: "Critical Item", riskLevel: "critical" });
+    const unrecorded = makeApprovalItem({ sessionId: "s-unrecorded", sessionName: "Unrecorded Item" });
+    const medium = makeApprovalItem({ sessionId: "s-medium", sessionName: "Medium Item", riskLevel: "medium" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([medium, unrecorded, critical]));
+
+    renderPanel();
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-critical", "s-unrecorded", "s-medium"]);
+  });
+
+  it("ReviewQueuePanel_should_ShowOnlyCriticalItems_When_CriticalSeverityChipClicked", () => {
+    const critical = makeApprovalItem({ sessionId: "s-critical", sessionName: "Critical Item", riskLevel: "critical" });
+    const low = makeApprovalItem({ sessionId: "s-low", sessionName: "Low Item", riskLevel: "low" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([critical, low]));
+
+    renderPanel();
+    openFilters();
+
+    const criticalChip = screen.getByRole("button", { name: /Critical \(1\)/ });
+    fireEvent.click(criticalChip);
+
+    expect(criticalChip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-critical")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+  });
+
+  it("ReviewQueuePanel_should_ShowSharedEmptyState_When_SeverityFilterMatchesZeroItems", () => {
+    // Low-severity approval-pending item, plus an unrelated Idle-reason item with no
+    // risk_level metadata at all. Low (severity dim) AND Idle (reason dim) each individually
+    // match one item, but their combination (AND across dimensions) matches zero.
+    const low = makeApprovalItem({ sessionId: "s-low", sessionName: "Low Item", riskLevel: "low" });
+    const idle = makeReviewItem({ sessionId: "s-idle", sessionName: "Idle Item", reason: AttentionReason.IDLE });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([low, idle]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: /Low \(1\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Idle \(1\)/ }));
+
+    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-idle")).not.toBeInTheDocument();
+    expect(screen.getByText(/No items match the current filter/i)).toBeInTheDocument();
+  });
+
+  it("renders a compact SeverityBadge next to the escalation reason for an approval-pending item", () => {
+    const item = makeApprovalItem({ sessionId: "s-1", sessionName: "S1", riskLevel: "critical" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("severity-badge-critical")).toHaveAttribute("aria-label", "Critical risk");
+  });
+
+  it("renders the not-recorded badge state when risk_level metadata key is absent", () => {
+    const item = makeApprovalItem({ sessionId: "s-1", sessionName: "S1" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("severity-badge-unrecorded")).toHaveAttribute("aria-label", "Severity not recorded");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Group by (reuses groupSessions()) + URL-persisted filter state (reuses useFilterState)
 // ---------------------------------------------------------------------------
 
