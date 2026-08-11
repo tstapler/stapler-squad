@@ -220,7 +220,19 @@ func writeAntigravityHookDecision(result classifier.ClassificationResult) {
 //
 //	Variant A (Gemini CLI open-source): {"name": "run_shell_command", "args": {"command": "..."}}
 //	Variant B (Claude-compatible):      {"tool_name": "...", "tool_input": {...}}
-//	Variant C (Antigravity toolCall):   {"toolCall": {"name": "...", "args": {...}}, "cwd": "..."}
+//	Variant C (Antigravity toolCall):   {"toolCall": {"name": "...", "args": {...}}, "workspacePaths": [...], "cwd": "..."}
+//
+// Variant C's cwd resolves through up to four layers, in priority order:
+//  1. top-level "cwd"
+//  2. args.Cwd (shell-command tools only, pulled up into the top-level cwd during name normalization)
+//  3. workspacePaths[0]
+//  4. os.Getwd(), applied by the caller (handleCheck) — not by this function, which can
+//     return Cwd == "" if the first three layers are all absent.
+//
+// Variant C's shape was captured from commit b12652f78 but has never been confirmed
+// against a live Antigravity payload — Story 4.1.2 in
+// project_plans/agy-support/implementation/plan.md was never completed with a real
+// captured fixture.
 //
 // Falls back gracefully to PermissionRequestPayload{ToolName: "Unknown"} on any
 // parse error or unrecognized schema — results in Escalate (not crash, not false-allow).
@@ -247,7 +259,8 @@ func parseGeminiPayload() classifier.PermissionRequestPayload {
 		// Variant B: {"tool_name": "...", "tool_input": {...}}
 		ToolName  string                 `json:"tool_name"`
 		ToolInput map[string]interface{} `json:"tool_input"`
-		// Variant C (Antigravity toolCall): {"toolCall": {"name": "...", "args": {...}}, "workspacePaths": [...]}
+		// Variant C (Antigravity toolCall) — see the parseGeminiPayload doc comment
+		// above for the full 4-layer cwd-resolution order.
 		ToolCall       *ToolCall `json:"toolCall,omitempty"`
 		WorkspacePaths []string  `json:"workspacePaths,omitempty"`
 		// Context fields
