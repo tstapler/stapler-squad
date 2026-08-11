@@ -141,6 +141,38 @@ func TestListPendingApprovals_FilterBySessionID(t *testing.T) {
 	assert.Equal(t, "a1", resp.Msg.Approvals[0].Id)
 }
 
+// TestListPendingApprovals_should_IncludeRiskLevelInProto_When_ApprovalHasClassifiedRisk
+// covers plan.md Task 2.1.2: PendingApproval.RiskLevel must be set on the wire proto.
+func TestListPendingApprovals_should_IncludeRiskLevelInProto_When_ApprovalHasClassifiedRisk(t *testing.T) {
+	store := NewApprovalStore("")
+	svc := NewApprovalService(store)
+
+	a := newTestPendingApproval("a-risk", "session-A", "Bash")
+	a.RiskLevel = "critical"
+	require.NoError(t, store.Create(a))
+
+	resp, err := svc.ListPendingApprovals(t.Context(), connect.NewRequest(&sessionv1.ListPendingApprovalsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Approvals, 1)
+	assert.Equal(t, "critical", resp.Msg.Approvals[0].RiskLevel)
+}
+
+// TestListPendingApprovals_should_ReturnEmptyRiskLevel_When_ApprovalPredatesFeature covers
+// the legacy/not-recorded case: a PendingApproval with RiskLevel == "" (Go zero value, as a
+// pre-feature approval would have) must serialize as "", never fall back to "low".
+func TestListPendingApprovals_should_ReturnEmptyRiskLevel_When_ApprovalPredatesFeature(t *testing.T) {
+	store := NewApprovalStore("")
+	svc := NewApprovalService(store)
+
+	a := newTestPendingApproval("a-legacy", "session-A", "Bash")
+	require.NoError(t, store.Create(a))
+
+	resp, err := svc.ListPendingApprovals(t.Context(), connect.NewRequest(&sessionv1.ListPendingApprovalsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Approvals, 1)
+	assert.Equal(t, "", resp.Msg.Approvals[0].RiskLevel)
+}
+
 // ─── ListApprovalRules ───────────────────────────────────────────────────────
 
 func TestListApprovalRules_ReturnsSeedRules(t *testing.T) {
@@ -371,6 +403,15 @@ func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 		"unclassifiable": 1,
 		"explicit-rule":  1,
 	}, resp.Msg.Summary.EscalationReasonCounts)
+
+	// AC5 (plan.md Task 3.1.2/3.1.3): risk_level_counts must survive the same
+	// ComputeSummary -> summaryToProto chain, scoped identically to EscalationReasonCounts
+	// (the auto_allow s7 entry, RiskLevel "low", must not appear).
+	assert.Equal(t, map[string]int32{
+		"medium":   4,
+		"high":     1,
+		"critical": 1,
+	}, resp.Msg.Summary.RiskLevelCounts)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -642,6 +683,44 @@ func TestApprovalStore_LoadFromDisk_PreservesEscalationReason(t *testing.T) {
 	assert.Equal(t, "Branch deletion modifies repository structure and should be reviewed.", metas[0].EscalationReason)
 	assert.Equal(t, "explicit-rule", metas[0].EscalationCategory)
 	assert.True(t, metas[0].Orphaned, "approvals loaded from disk after a restart must be marked Orphaned")
+}
+
+// TestApprovalStore_should_PreserveRiskLevelAcrossPersistAndReload_When_ApprovalIsOrphaned
+// covers plan.md Task 1.2.2(a): a PendingApproval created with a classified RiskLevel must
+// survive a persist-then-reload (simulated server restart) round trip intact.
+func TestApprovalStore_should_PreserveRiskLevelAcrossPersistAndReload_When_ApprovalIsOrphaned(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pending_approvals.json")
+
+	store := NewApprovalStore(path)
+	a := newTestPendingApproval("appr-risk-1", "session-risk", "Bash")
+	a.RiskLevel = "high"
+	require.NoError(t, store.Create(a))
+
+	// Simulate a server restart: a fresh ApprovalStore constructed against the same file.
+	reloaded := NewApprovalStore(path)
+	metas := reloaded.GetApprovalMetadataBySession("session-risk")
+	require.Len(t, metas, 1)
+	assert.Equal(t, "high", metas[0].RiskLevel)
+	assert.True(t, metas[0].Orphaned)
+}
+
+// TestApprovalStore_should_LoadEmptyRiskLevel_When_LegacyJSONHasNoRiskLevelKey covers
+// pre-mortem.md Failure #1's persistence half: a pending_approvals.json written by a
+// pre-feature binary (no "risk_level" key at all) must deserialize to RiskLevel == "" --
+// the "not recorded" sentinel -- never fall back to "low".
+func TestApprovalStore_should_LoadEmptyRiskLevel_When_LegacyJSONHasNoRiskLevelKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pending_approvals.json")
+
+	// Deliberately hand-written JSON with no risk_level key, mirroring a pre-feature file.
+	legacyJSON := `[{"id":"appr-legacy-1","session_id":"session-legacy","tool_name":"Bash","cwd":"/tmp","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-01T00:05:00Z","orphaned":false}]`
+	require.NoError(t, os.WriteFile(path, []byte(legacyJSON), 0600))
+
+	store := NewApprovalStore(path)
+	metas := store.GetApprovalMetadataBySession("session-legacy")
+	require.Len(t, metas, 1)
+	assert.Equal(t, "", metas[0].RiskLevel, "legacy JSON with no risk_level key must load as not-recorded, not \"low\"")
 }
 
 // TestApprovalStore_Create_ConcurrentEscalations_NoDataRace is the pre-mortem P2
