@@ -369,13 +369,22 @@ func (i *Instance) tryExtractConversationUUID() {
 		return
 	}
 
+	// See SetHistoryInfo's comment: nest i.mu inside claudeSessionMu, around the
+	// writes AND the buildSnapshot call, so this is ordered against legacy
+	// direct-lock setters and the actor's buildSnapshot read, and the cached
+	// snapshot reflects the recovered UUID immediately rather than staying
+	// stale until an unrelated mutation rebuilds it.
 	i.claudeSessionMu.Lock()
+	i.mu.Lock()
 	if i.claudeSession == nil {
 		i.claudeSession = &ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = info.ConversationUUID
 	i.HistoryFilePath = info.HistoryFilePath
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
 	i.claudeSessionMu.Unlock()
+	i.snapshot.Store(snap)
 	log.ForSession(i.Title).Info("uuid assigned via tryextractconversationuuid", "uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 }
 

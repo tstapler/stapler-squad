@@ -361,6 +361,10 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 	}{
 		{name: "predates clear is not resurrected", offset: -1 * time.Hour, wantUUID: "", wantReason: "a JSONL predating the explicit clear must not be resurrected"},
 		{name: "postdates clear is still recovered", offset: 1 * time.Hour, wantUUID: fixtureUUID, wantReason: "a JSONL postdating the explicit clear must still be recovered"},
+		// The guard is `!info.ModTime.After(clearedAt)`, an inclusive comparison:
+		// a JSONL with the exact same mtime as the clear is treated as predating
+		// it (safe default — do not resurrect on a tie) rather than recovered.
+		{name: "exactly at clear time is not resurrected", offset: 0, wantUUID: "", wantReason: "a JSONL with the same mtime as the clear must not be resurrected (inclusive boundary)"},
 	}
 
 	for _, tt := range tests {
