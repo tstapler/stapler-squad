@@ -5,7 +5,7 @@ import { vars, breakpoints, zIndex } from "@/styles/theme.css";
 // 900px), which PaneSplitRenderer uses to decide mobile pane chrome. Keep in
 // sync — a mismatch reintroduces the 768-900px gap where the tab row and pane
 // chrome disagreed on whether the viewport is "mobile".
-const mobileMediaQuery = `screen and (max-width: calc(${breakpoints.inner} - 1px))`;
+const mobileMediaQuery = `screen and (max-width: ${parseInt(breakpoints.inner, 10) - 1}px)`;
 
 const tabFadeIn = keyframes({
   from: { opacity: 0, transform: "translateY(4px)" },
