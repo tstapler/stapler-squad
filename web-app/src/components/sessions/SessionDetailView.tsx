@@ -858,7 +858,7 @@ export function SessionDetailView({
           role="tabpanel"
           aria-labelledby="tab-files"
           aria-hidden={activeTab !== "files"}
-          style={{ display: activeTab === "files" ? undefined : 'none' }}
+          data-active={activeTab === "files"}
         >
           <FilesTab
             sessionId={session.id}
