@@ -3,6 +3,15 @@
 Backlog item: a6c87dbf-2ebb-4c6c-8fab-032d76fef1e7 (SDD pipeline, non-interactive — derived
 directly from item description + acceptance criteria, ideation interview skipped).
 
+## Complexity
+
+**1 (quick task).** Root cause is already identified and confirmed by direct code inspection
+(missing `finally` on two of three near-identical branches, matched against a working
+third branch in the same function). The fix is a mechanical pattern match — no new
+architecture, no new dependencies, no multi-actor business logic. Research should be scoped
+accordingly (Agents 1, 4, 6 only — stack/pitfalls/build-vs-buy); architecture and UX research
+are not warranted for a same-file, same-pattern fix with no new user-facing surface.
+
 ## Problem
 
 `handleSubmit` in `web-app/src/components/sessions/Omnibar.tsx` has three session-creation
