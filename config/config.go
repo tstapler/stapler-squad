@@ -337,6 +337,9 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// Quota holds configuration for the account-wide session-quota gate that
+	// pauses/resumes backlog automation based on inferred quota headroom.
+	Quota QuotaConfig `json:"quota,omitempty"`
 	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
@@ -461,6 +464,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		RetentionDays:             30,
 	}
 	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
+	cfg.Quota = QuotaConfig{}.QuotaConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
 	// LoadConfigFromPath applies the same guards after JSON decode; DefaultConfig
 	// must mirror them so the two code paths are equivalent.
@@ -914,6 +918,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
+	cfg.Quota = cfg.Quota.QuotaConfigOrDefault()
 
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {

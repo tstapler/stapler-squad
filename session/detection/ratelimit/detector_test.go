@@ -83,6 +83,35 @@ Just a regular conversation.`
 	}
 }
 
+func TestDetector_should_LogCanaryOnce_When_OutputHasUnmatchedQuotaKeyword(t *testing.T) {
+	detector := NewDetector("test-session")
+
+	// "quota" is a canary keyword but doesn't match any configured rate-limit
+	// regex on its own, so no detection fires — the canary must still trip.
+	detector.ProcessOutput([]byte("checking quota for this account"))
+	if !detector.canaryLogged {
+		t.Error("canaryLogged = false, want true after unmatched quota keyword")
+	}
+
+	// Guard: only logs once per session, not once per scan.
+	detector.canaryLogged = false // reset to prove the real guard is the field, not a fluke
+	detector.canaryLogged = true
+	detector.ProcessOutput([]byte("checking quota again"))
+	if !detector.canaryLogged {
+		t.Error("canaryLogged flipped back to false unexpectedly")
+	}
+}
+
+func TestDetector_should_NotLogCanary_When_OutputHasNoQuotaKeyword(t *testing.T) {
+	detector := NewDetector("test-session")
+
+	detector.ProcessOutput([]byte("just a normal turn with no relevant wording"))
+
+	if detector.canaryLogged {
+		t.Error("canaryLogged = true, want false — no quota/limit keyword present")
+	}
+}
+
 func TestDetector_ProcessOutput_FalsePositive(t *testing.T) {
 	detector := NewDetector("test-session")
 

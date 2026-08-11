@@ -65,6 +65,40 @@ type Detector struct {
 	resetBufferSecs  int
 
 	onDetection func(Detection)
+
+	// canaryLogged guards the undetected-wording canary (see maybeLogUndetectedWording)
+	// so it fires at most once per session, not once per scan.
+	canaryLogged bool
+}
+
+// quotaKeywords are generic terms that plausibly indicate a rate-limit/usage-limit
+// message, used only as a drift canary — never to feed detection itself, since a
+// false-positive keyword hit here must never trigger a real rate-limit action.
+var quotaKeywords = []string{"usage limit", "rate limit", "quota"}
+
+// maybeLogUndetectedWording logs a warning, once per session, if output contains a
+// generic quota/limit keyword that none of the configured rate-limit regex patterns
+// matched. This is the QuotaGate feature's only active-by-default protection
+// (server/services/quota_gate.go's hard/reactive signal) depends entirely on this
+// package's regex set — a wording variant Anthropic ships later that the regex set
+// misses would otherwise silently defeat that protection with no signal anything is
+// wrong. Must be called with d.mu held.
+func (d *Detector) maybeLogUndetectedWording(output string) {
+	if d.canaryLogged {
+		return
+	}
+	lower := strings.ToLower(output)
+	for _, kw := range quotaKeywords {
+		if strings.Contains(lower, kw) {
+			d.canaryLogged = true
+			truncated := output
+			if len(truncated) > 200 {
+				truncated = truncated[:200]
+			}
+			log.Warn("QuotaGate: possible undetected rate-limit wording", "session", d.sessionID, "line", truncated)
+			return
+		}
+	}
 }
 
 var defaultRateLimitPatterns = []*regexp.Regexp{
@@ -206,6 +240,8 @@ func (d *Detector) ProcessOutput(data []byte) {
 		if d.onDetection != nil {
 			go d.onDetection(*detection)
 		}
+	} else {
+		d.maybeLogUndetectedWording(output)
 	}
 }
 
