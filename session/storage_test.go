@@ -675,7 +675,7 @@ func TestSetBacklogItemPRAndTransition_should_TransitionAndPersistPR_When_ItemIn
 	})
 	require.NoError(t, err)
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item.ID, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.")
+	err = storage.SetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.")
 	require.NoError(t, err)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -699,10 +699,10 @@ func TestSetBacklogItemPRAndTransition_should_NoOp_When_AlreadyPRPendingSamePR(t
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/55"
 	prNum := 55
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
 	require.NoError(t, err)
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item.ID, prURL, prNum, "Implemented the feature.")
+	err = storage.SetBacklogItemPRAndTransition(ctx, updated, prURL, prNum, "Implemented the feature.")
 	require.NoError(t, err, "repeating the same PR on an already-pr_pending item must be a no-op success, not an error")
 }
 
@@ -732,6 +732,6 @@ func TestSetBacklogItemPRAndTransition_should_ReturnError_When_StorageWriteFails
 
 	require.NoError(t, repo.Close())
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item.ID, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.")
+	err = storage.SetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.")
 	require.Error(t, err, "a storage write failure must be returned to the caller, not silently swallowed")
 }

@@ -285,7 +285,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 		}
 
 		summary := fmt.Sprintf("Reconciliation backstop: found an existing open PR #%d for this item's branch %q with no report_pr_created call on record.", info.Number, wt.BranchName)
-		if setErr := l.storage.SetBacklogItemPRAndTransition(ctx, item.ID, info.HTMLURL, info.Number, summary); setErr != nil {
+		if setErr := l.storage.SetBacklogItemPRAndTransition(ctx, &item, info.HTMLURL, info.Number, summary); setErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedAgentPRs SetBacklogItemPRAndTransition item=%s pr=%d: %v", item.ID, info.Number, setErr)
 			continue
 		}

@@ -413,7 +413,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		// both would be surprised — flagged in code review, not silently
 		// left unstated.
 		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
-		if setErr := s.storage.SetBacklogItemPRAndTransition(ctx, req.Msg.ItemId, prURL, prNumber, note); setErr != nil {
+		if setErr := s.storage.SetBacklogItemPRAndTransition(ctx, updated, prURL, prNumber, note); setErr != nil {
 			if errors.Is(setErr, session.ErrPreconditionFailed) {
 				current, reloadErr := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 				status := "unknown"
