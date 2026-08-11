@@ -2868,11 +2868,16 @@ func TestTriggerTriage_Success(t *testing.T) {
 	assert.Equal(t, headless.FeatureKeyTriage, pool.firstCall().key)
 	assert.Equal(t, repoPath, pool.firstCall().workDir)
 
-	// ItemSession should be ended.
-	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
-	require.NoError(t, listErr)
-	require.Len(t, sessions, 1)
-	assert.NotNil(t, sessions[0].EndedAt, "triage item session should be marked ended on success")
+	// ItemSession should be ended. This is a SEPARATE, LATER write than the
+	// status transition polled above — TriggerTriage's cleanup goroutine
+	// transitions the item to Ready first, then (after the auto-spawn
+	// branch) calls UpdateItemSessionEnded — so polling only on status
+	// leaves a real race window where EndedAt hasn't landed yet. Poll for
+	// it too, the same way, rather than asserting immediately.
+	require.Eventually(t, func() bool {
+		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+		return listErr == nil && len(sessions) == 1 && sessions[0].EndedAt != nil
+	}, 5*time.Second, 50*time.Millisecond, "triage item session should be marked ended on success")
 }
 
 // TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo guards the
