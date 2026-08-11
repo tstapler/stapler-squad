@@ -171,34 +171,66 @@ describe('CircularBuffer', () => {
 
   describe('Performance', () => {
     it('should handle large buffers efficiently', () => {
-      const buffer = new CircularBuffer<number>(10000);
+      // Root cause of the original flakiness: CircularBuffer.push()/get() are
+      // both genuinely O(1) (index write + modulo, single array read — see
+      // CircularBuffer.ts), so there is no algorithmic bug to fix here. The
+      // flakiness came from asserting against fixed millisecond ceilings
+      // (originally 10ms/5ms, later loosened to 500ms/100ms without a stated
+      // reason) on a shared CI runner, where GC pauses / JIT warmup /
+      // parallel-Jest-worker scheduler contention can inflate a single
+      // `performance.now()` delta by 100x with zero change to the algorithm.
+      // Fixed thresholds can't distinguish "the machine was busy" from "push
+      // became O(n)".
+      //
+      // Fix: calibrate against a same-run baseline that does equivalent
+      // primitive work (array index write / modulo, plain array read) in the
+      // same process invocation. Both the baseline and the buffer operation
+      // ride the same GC/JIT/contention conditions, so their *ratio* stays
+      // stable even when absolute timings balloon under load — while an
+      // actual O(n) regression in push/get would blow past any reasonable
+      // ratio bound as N grows, so this still catches a real regression.
+      const N = 10000;
+      const buffer = new CircularBuffer<number>(N);
+      const baselineArray = new Array<number>(N);
 
-      const start = performance.now();
+      const baselineWriteStart = performance.now();
+      for (let i = 0; i < N; i++) {
+        baselineArray[i % N] = i;
+      }
+      const baselineWriteTime = performance.now() - baselineWriteStart;
 
-      // Push 10,000 items
-      for (let i = 0; i < 10000; i++) {
+      const pushStart = performance.now();
+      for (let i = 0; i < N; i++) {
         buffer.push(i);
       }
+      const pushTime = performance.now() - pushStart;
 
-      const pushTime = performance.now() - start;
-
-      // O(1) push of 10k items normally completes in ~1ms, but under
-      // full-suite parallel-worker CPU contention (4 Jest projects racing
-      // for cores) this has been observed spiking to 140ms+ with no
-      // algorithmic change — widen generously so the assertion still
-      // catches a real regression (e.g. push becoming O(n)) without
-      // flaking on scheduler contention.
-      expect(pushTime).toBeLessThan(500);
+      // Generous multiplier (push does a little more work than the raw
+      // array write: size bookkeeping, an extra modulo) plus a floor so the
+      // ratio doesn't blow up when both timings round to ~0ms on a fast,
+      // idle machine.
+      const pushFloorMs = 5;
+      expect(pushTime).toBeLessThan(Math.max(baselineWriteTime * 20, pushFloorMs));
 
       // Access items
+      const ACCESS_N = 1000;
+      const baselineReadStart = performance.now();
+      let baselineSum = 0;
+      for (let i = 0; i < ACCESS_N; i++) {
+        baselineSum += baselineArray[i % N];
+      }
+      const baselineReadTime = performance.now() - baselineReadStart;
+      // Prevent the baseline read loop from being optimized away as dead code.
+      expect(baselineSum).toBeGreaterThanOrEqual(0);
+
       const accessStart = performance.now();
-      for (let i = 0; i < 1000; i++) {
+      for (let i = 0; i < ACCESS_N; i++) {
         buffer.get(i);
       }
       const accessTime = performance.now() - accessStart;
 
-      // Same contention rationale as pushTime above.
-      expect(accessTime).toBeLessThan(100);
+      const accessFloorMs = 5;
+      expect(accessTime).toBeLessThan(Math.max(baselineReadTime * 20, accessFloorMs));
     });
 
     it('should maintain constant memory after filling', () => {
