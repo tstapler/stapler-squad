@@ -510,13 +510,17 @@ For each (T1–T6):
 
 ---
 
-## E7: Document opencode proxy approach
+## E7: Replace opencode proxy wrapper with a native plugin hook
+
+**SUPERSEDED 2026-08-11 — this epic's original scope (document why the proxy is correct) no longer applies.** The E7.S1 comment below was never actually written (`installOpenCode()` at HEAD still only carries its original one-line comment; no `main_test.go` coverage exists for it either) — that gap is part of why this needed re-examination. `research/features.md`'s R4 addendum found that `@opencode-ai/plugin`'s `Hooks.tool.execute.before` is a real, throw-to-block, pre-execute hook that the original R4 research missed by only reading `@opencode-ai/sdk`'s static config types. E7 is now: replace the proxy with a native plugin hook, implemented via `patchOpenCodeHooks()` in `cmd/ssq-hooks/main.go`, mirroring the existing `patchBeforeToolHook()`/`patchAntigravityHooks()` installer pattern (config/plugin-file writer → fourth `check` adapter → decision writer). See the `docs/adr/` entry for the `Escalate`→binary-channel mapping decision this hook forces, and the backlog item "Implement patchOpenCodeHooks(): replace open-code proxy wrapper with native plugin hook" for the full implementation task breakdown; this plan file is retained for historical context on the original (superseded) E7.S1 comment-only scope below.
+
+**Original (superseded) scope:**
 
 **Context (requirement R4):** Research confirmed opencode v1.4.0 has no PreToolUse hook system — only `file_edited` and `session_completed` hooks, which are not permission gates. The proxy wrapper in `installOpenCode()` is the correct approach. This decision must be documented so future contributors know when to revisit it.
 
 **Affected file:** `cmd/ssq-hooks/main.go`
 
-### E7.S1: Add explanatory comment to installOpenCode()
+### E7.S1: Add explanatory comment to installOpenCode() — SUPERSEDED, not implemented as written
 
 **E7.S1.T1: Add architectural rationale comment above installOpenCode()**
 
@@ -542,6 +546,7 @@ For each (T1–T6):
   func installOpenCode() {
   ```
 - AC: Comment is present; code is unchanged. `go build ./cmd/ssq-hooks/` passes.
+- **Status: not implemented — the proxy this comment would have documented is itself being replaced. Do not implement this task; it is retained only as a record of what was originally planned and never landed.**
 
 ---
 
@@ -574,7 +579,7 @@ Recommended implementation order for a single developer:
 | R1 | `agy --print "prompt"` is invoked correctly from CLIAIClient | E1, E2 |
 | R2 | `ssq-hooks install agy` patches exactly ONE hooks file | E3 |
 | R3 | `AgyDetector` has Idle and Active patterns; Error/Success have TODO comments | E4 |
-| R4 | `installOpenCode()` comment explains why proxy is correct for v1.4.0 | E7 |
+| R4 | SUPERSEDED: `patchOpenCodeHooks()` installs a native plugin hook (`tool.execute.before`), replacing the proxy wrapper — see R4 addendum in `research/features.md` and E7 above | E7 (revised) |
 | R5 | `OpencodeDetector` has braille spinner Active pattern; Ready/Idle/Success have TODO | E5 |
 | R6 | opencode spec uses `PromptAsArg: true` | E1.S1.T3 |
 | R7 | All new patterns have positive+negative regex tests; installAgy has 3 new path tests | E3, E6 |

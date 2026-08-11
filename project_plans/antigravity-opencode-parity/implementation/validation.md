@@ -28,7 +28,7 @@ Requirements coverage: **7/7** (R1–R7 each have at least one test case).
 | R1 | Agy one-shot AI client (`agy --print` in `knownCLIAgents`) | UT-01, UT-02, UT-03 |
 | R2 | Agy hook install single-path logic | IT-01, IT-02, IT-03, IT-04, IT-05, IT-06 |
 | R3 | Agy detection patterns (Idle, Active; Error/Success TODO) | UT-05–UT-12, ST-01, ST-02 |
-| R4 | Open Code proxy approach documented (no native hooks) | ST-03, IT-07 |
+| R4 | SUPERSEDED 2026-08-11 — `@opencode-ai/plugin`'s `tool.execute.before` is a real native hook; proxy replaced by `patchOpenCodeHooks()` | ST-03 (superseded; see revised entry) |
 | R5 | Open Code detection patterns (braille spinner, error prefix) | UT-13–UT-18 |
 | R6 | Open Code one-shot `opencode run` with `PromptAsArg: true` | UT-01, UT-04 |
 | R7 | Test coverage parity: all new patterns have positive+negative tests | All UT-01–UT-18 |
@@ -274,12 +274,14 @@ These verify non-behavioral artifacts: fixture files, doc comments, and TODO ann
 - Requirements: R3
 - Plan ref: E4.S4.T2
 
-**ST-03: `installOpenCode()` in `cmd/ssq-hooks/main.go` has proxy rationale comment**
+**ST-03: SUPERSEDED — `installOpenCode()` now installs a native plugin hook, not a rationale comment**
 
-- Method: Read `cmd/ssq-hooks/main.go`; locate `func installOpenCode()`. Assert that the preceding block comment contains the string `"file_edited"` and `"session_completed"` (naming the two hook types confirmed by research), and contains `"no PreToolUse"` or equivalent phrasing.
-- This can be verified by `grep` in CI or as part of code review; it is listed here as a structural requirement so reviewers know to look for it.
-- Requirements: R4
-- Plan ref: E7.S1.T1
+**Revised 2026-08-11.** This test was marked PASS in the original readiness gate below despite the comment it asserts on never actually being written (`cmd/ssq-hooks/main.go`'s `installOpenCode()` at HEAD carries only its original one-line comment; no grep-based test for it exists in `main_test.go`) — a validation gap: a structural test that was never run against the real code, marked PASS anyway. R4's premise also changed (see `research/features.md`'s R4 addendum): `@opencode-ai/plugin`'s `tool.execute.before` is a real pre-execute hook, so the "proxy is correct, document why" scope this test covered no longer applies at all.
+
+ST-03 is replaced by real behavioral tests against `patchOpenCodeHooks()` and the new `--opencode` check adapter — see the triage validation plan for "Implement patchOpenCodeHooks()" (`TestPatchOpenCodeHooks_NewFile`/`_Idempotent`, `TestInstallOpenCode_RemovesStaleWrapper`, `TestWriteOpenCodeHookDecision_*`, `TestParseOpenCodePayload_*`, plus the mandatory live-session verification that throwing inside `tool.execute.before` actually blocks a tool call — this repo's own evidence rules require running it, not asserting file contents, precisely because of the gap this ST-03 entry represents).
+
+- Requirements: R4 (revised)
+- Plan ref: E7 (revised)
 
 ---
 
@@ -316,7 +318,7 @@ Fix the opencode config error and run `opencode run "say hello"` to confirm one-
 | R1 | UT-01, UT-02, UT-03 | PASS |
 | R2 | IT-01 through IT-06 | PASS |
 | R3 | UT-05–UT-12, ST-01, ST-02 | PASS |
-| R4 | ST-03, IT-07 | PASS |
+| R4 | ST-03 (superseded 2026-08-11 — see revised entry above) | SUPERSEDED |
 | R5 | UT-13–UT-18 | PASS |
 | R6 | UT-01, UT-04 | PASS |
 | R7 | All UT-01–UT-18 | PASS |

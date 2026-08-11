@@ -39,7 +39,7 @@ Fix `installAgy()` to use first-found path logic (like Gemini's `installGemini()
 Research actual agy v1.0.13 TUI output strings. Add patterns for states currently missing: InputRequired, Error, Idle, Success. Update `AgyDetector.Patterns()` in `session/detection/binaries/agy.go`.
 
 ### R4: Open Code native hooks
-Research whether opencode has a native hooks system (hooks.json or settings.json). If yes, implement `patchOpenCodeHooks()` and `writeOpenCodeHookDecision()` and replace the proxy wrapper with native hook registration. If no, document why proxy is the right approach.
+**Revised 2026-08-11.** Research initially found no native `hooks.json`/`settings.json` PreToolUse hook and concluded the proxy wrapper was correct (`research/features.md` R4, original). That conclusion only examined `@opencode-ai/sdk`'s static config `hook` key. The separate `@opencode-ai/plugin` package exposes a code-based `Hooks` interface whose `tool.execute.before` hook fires before tool execution and blocks on `throw` — a real PreToolUse-equivalent (see `research/features.md`'s R4 addendum). `patchOpenCodeHooks()` and `writeOpenCodeHookDecision()` are implemented, replacing the proxy wrapper with native plugin-hook registration under `~/.config/opencode/plugins/` (see `implementation/plan.md` E7, revised, and the `docs/adr/` entry recording the `Escalate`-mapping decision this hook's binary throw/no-throw channel forces).
 
 ### R5: Open Code detection patterns
 Add missing detection pattern categories to `OpencodeDetector`: Ready (idle input prompt), Error, Idle, Success. Research opencode TUI output strings from opencode.ai docs and GitHub.
