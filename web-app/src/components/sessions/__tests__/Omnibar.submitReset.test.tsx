@@ -177,26 +177,34 @@ async function typeAndDetect(input: Element, value: string) {
 
 // ---------------------------------------------------------------------------
 // Tests
+//
+// Fake-timer setup and mock/registry cleanup are identical across all three
+// describe blocks below, so they're hoisted to a file-level beforeEach/
+// afterEach. Each describe's own beforeEach only sets what's distinct for
+// that suite (path-completion fixture, alias data, detector registration).
 // ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  jest.useFakeTimers();
+  mockUsePathHistory.mockReturnValue(defaultHistory);
+  resetDefaultRegistry();
+});
+
+afterEach(() => {
+  act(() => {
+    jest.runOnlyPendingTimers();
+  });
+  jest.useRealTimers();
+  jest.clearAllMocks();
+  resetDefaultRegistry();
+});
 
 describe("Omnibar SpawnShell submit resets isSubmitting", () => {
   beforeEach(() => {
-    jest.useFakeTimers();
     mockUsePathCompletions.mockReturnValue(defaultCompletions);
-    mockUsePathHistory.mockReturnValue(defaultHistory);
     mockUseAliases.mockReturnValue({ aliases: [], loading: false, error: null, refetch: jest.fn() });
     // CommandDetector (which detects ">shell") is already in createDefaultRegistry(),
-    // so no manual registration is needed here — reset restores it.
-    resetDefaultRegistry();
-  });
-
-  afterEach(() => {
-    act(() => {
-      jest.runOnlyPendingTimers();
-    });
-    jest.useRealTimers();
-    jest.clearAllMocks();
-    resetDefaultRegistry();
+    // restored by the file-level resetDefaultRegistry() above — no manual registration needed.
   });
 
   it("allows a second submission after a successful SpawnShell create, even when onClose is a no-op", async () => {
@@ -250,21 +258,9 @@ describe("Omnibar SpawnShell submit resets isSubmitting", () => {
 
 describe("Omnibar Alias submit resets isSubmitting", () => {
   beforeEach(() => {
-    jest.useFakeTimers();
     mockUsePathCompletions.mockReturnValue(defaultCompletions);
-    mockUsePathHistory.mockReturnValue(defaultHistory);
     mockUseAliases.mockReturnValue({ aliases: [SSQ_ALIAS], loading: false, error: null, refetch: jest.fn() });
-    resetDefaultRegistry();
     getDefaultRegistry().register(new AliasDetector([SSQ_ALIAS]));
-  });
-
-  afterEach(() => {
-    act(() => {
-      jest.runOnlyPendingTimers();
-    });
-    jest.useRealTimers();
-    jest.clearAllMocks();
-    resetDefaultRegistry();
   });
 
   it("re-enables both Create Session buttons after a successful alias create, even when onClose is a no-op", async () => {
@@ -334,20 +330,8 @@ describe("Omnibar defense-in-depth reset on close", () => {
   const existingPathCompletions = { ...defaultCompletions, pathExists: true, baseDirExists: true };
 
   beforeEach(() => {
-    jest.useFakeTimers();
     mockUsePathCompletions.mockReturnValue(existingPathCompletions);
-    mockUsePathHistory.mockReturnValue(defaultHistory);
     mockUseAliases.mockReturnValue({ aliases: [], loading: false, error: null, refetch: jest.fn() });
-    resetDefaultRegistry();
-  });
-
-  afterEach(() => {
-    act(() => {
-      jest.runOnlyPendingTimers();
-    });
-    jest.useRealTimers();
-    jest.clearAllMocks();
-    resetDefaultRegistry();
   });
 
   it("does not leave isSubmitting stuck if the modal is closed while a submission is in flight", async () => {
