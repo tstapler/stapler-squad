@@ -163,3 +163,21 @@ describe("ApprovalCard — tool input preview", () => {
     expect(screen.getByText("/src/index.ts")).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Severity badge (review-queue-severity Epic 5, Story 5.1)
+// ---------------------------------------------------------------------------
+
+describe("ApprovalCard — severity badge", () => {
+  it("ApprovalCard_should_RenderSeverityBadgeInHeader_When_ApprovalHasRiskLevel", () => {
+    const approval = makeApproval({ riskLevel: "critical" });
+    render(<ApprovalCard approval={approval} onApprove={jest.fn()} onDeny={jest.fn()} />);
+    expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Critical risk");
+  });
+
+  it("renders the not-recorded state when riskLevel is empty", () => {
+    const approval = makeApproval({ riskLevel: "" });
+    render(<ApprovalCard approval={approval} onApprove={jest.fn()} onDeny={jest.fn()} />);
+    expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Severity not recorded");
+  });
+});
