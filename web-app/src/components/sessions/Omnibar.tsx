@@ -626,6 +626,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setFormState(INITIAL_FORM_STATE);
       setUIState({ showAdvanced: false, dropdownIndex: -1, dropdownDismissed: false, resultHighlightIndex: -1, atSuggestIndex: -1 });
       setError(null);
+      setIsSubmitting(false);
       lastSuggestedNameRef.current = "";
       prevDetectionTypeRef.current = null;
       dispatchMode({ kind: "reset_to_discovery" });
@@ -1055,6 +1056,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
+      } finally {
         setIsSubmitting(false);
       }
       return;
@@ -1099,6 +1101,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
+      } finally {
         setIsSubmitting(false);
       }
       return;
