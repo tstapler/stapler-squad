@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -813,6 +814,122 @@ func TestUpdateSession_UnrelatedFieldUpdate_PreservesExistingNote(t *testing.T) 
 	}
 	require.NotNil(t, found)
 	assert.Equal(t, existingNote, found.Note, "note must survive an unrelated field update across reload")
+}
+
+// TestUpdateSession_NoteOnlyEdit_DoesNotTouchOtherSessions is the regression test for the
+// write-amplification bug: UpdateSession used to call SaveInstances with the ENTIRE live
+// instance list, issuing one full-row UPDATE per OTHER started session even though only the
+// target session's field changed. This asserts that N other sessions' UpdatedAt timestamps
+// are untouched by a single-field edit to one session.
+func TestUpdateSession_NoteOnlyEdit_DoesNotTouchOtherSessions(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "target-session")
+	addPausedSession(t, fix, "other-session-1")
+	addPausedSession(t, fix, "other-session-2")
+
+	before, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	beforeUpdatedAt := make(map[string]time.Time, len(before))
+	for _, inst := range before {
+		beforeUpdatedAt[inst.Title] = inst.UpdatedAt
+	}
+
+	note := "left this waiting on CI"
+	_, err = fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "target-session",
+		Note: &note,
+	}))
+	require.NoError(t, err)
+
+	after, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	for _, inst := range after {
+		if inst.Title == "target-session" {
+			continue
+		}
+		assert.True(t, inst.UpdatedAt.Equal(beforeUpdatedAt[inst.Title]),
+			"session %q must not be rewritten by an edit to a different session (before=%v after=%v)",
+			inst.Title, beforeUpdatedAt[inst.Title], inst.UpdatedAt)
+	}
+}
+
+// TestUpdateSession_TitleRename_DoesNotOrphanOldRow is the regression test for the
+// title-rename identity bug: the generic SaveInstances path looks the DB row up by the
+// already-in-memory-renamed title, misses the still-old-titled row, and falls into a
+// Create fallback that leaves the old row behind as an orphan. Asserts exactly one row
+// (under the new title) exists after a rename, not two.
+func TestUpdateSession_TitleRename_DoesNotOrphanOldRow(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "old-title")
+
+	newTitle := "new-title"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:    "old-title",
+		Title: &newTitle,
+	}))
+	require.NoError(t, err)
+
+	data, err := fix.storage.ListInstanceData()
+	require.NoError(t, err)
+
+	var matches []string
+	for _, d := range data {
+		if d.Title == "old-title" || d.Title == newTitle {
+			matches = append(matches, d.Title)
+		}
+	}
+	assert.Equal(t, []string{newTitle}, matches,
+		"rename must not leave an orphaned row under the old title (found: %v)", matches)
+}
+
+// TestUpdateSession_ConcurrentDifferentFieldEdits_BothPersist verifies that two concurrent
+// UpdateSession calls touching different fields (note, category) of the same session both
+// land — neither narrow metadata write should lose the other's update.
+func TestUpdateSession_ConcurrentDifferentFieldEdits_BothPersist(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "concurrent-session")
+
+	note := "concurrent note"
+	category := "concurrent-category"
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+			Id:   "concurrent-session",
+			Note: &note,
+		}))
+		assert.NoError(t, err)
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+			Id:       "concurrent-session",
+			Category: &category,
+		}))
+		assert.NoError(t, err)
+	}()
+	wg.Wait()
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == "concurrent-session" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, note, found.Note, "note update must not be lost to the concurrent category update")
+	assert.Equal(t, category, found.Category, "category update must not be lost to the concurrent note update")
 }
 
 // --------------------------------------------------------------------------

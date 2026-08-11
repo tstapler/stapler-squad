@@ -214,6 +214,7 @@ type InstanceStore interface {
 	AddInstance(*Instance) error
 	DeleteInstance(title string) error
 	UpdateInstanceLastUserResponse(title string, t time.Time) error
+	UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error
 }
 
 // Compile-time assertion: *Storage must satisfy InstanceStore.
@@ -488,6 +489,16 @@ func (s *Storage) AddInstance(instance *Instance) error {
 // UpdateInstance updates an existing instance in storage.
 func (s *Storage) UpdateInstance(instance *Instance) error {
 	return s.repo.Update(context.Background(), instance.ToInstanceData())
+}
+
+// UpdateInstanceMetadata persists a narrow set of session metadata fields (title rename,
+// category, note, working dir) via a single UPDATE, avoiding the full-row rewrite (and
+// worktree/diffstats/tags/claude_session churn) that SaveInstances performs for every
+// started session. currentTitle must be the title from before any rename already applied
+// in-memory by the caller — see EntRepository.UpdateSessionMetadata for why. A nil field
+// pointer leaves that field untouched.
+func (s *Storage) UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error {
+	return s.repo.UpdateSessionMetadata(context.Background(), currentTitle, newTitle, category, note, workingDir)
 }
 
 // DeleteAllInstances removes all stored instances.

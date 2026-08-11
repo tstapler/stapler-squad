@@ -1016,6 +1016,45 @@ func (r *EntRepository) UpdateLastViewed(ctx context.Context, title string, t ti
 	return nil
 }
 
+// UpdateSessionMetadata efficiently updates only title/category/note/working_dir fields
+// for a session, issuing a single UPDATE WHERE title=? without a prior SELECT and without
+// the worktree/diffstats/tags/claude_session writes the full Update method performs —
+// mirrors UpdateLastViewed's shape. currentTitle must be the row's title from BEFORE any
+// rename already applied to the caller's in-memory Instance in this same request: Update
+// looks the row up by data.Title (the post-rename value), which misses the still-old-titled
+// DB row and falls into Update's Create fallback, orphaning it under the new title. Using
+// currentTitle as the WHERE key avoids that. Category/WorkingDir are only set when non-nil
+// AND non-empty, matching Update's existing guarded (`data.Category != ""`) semantics;
+// Note is set whenever non-nil (including ""), since an empty note is a meaningful cleared
+// state, not "unset" — same asymmetry as Update's unconditional SetNote(data.Note).
+func (r *EntRepository) UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error {
+	update := r.client.Session.Update().
+		Where(session.Title(currentTitle)).
+		SetUpdatedAt(time.Now())
+
+	if newTitle != nil && *newTitle != "" {
+		update.SetTitle(*newTitle)
+	}
+	if category != nil && *category != "" {
+		update.SetCategory(*category)
+	}
+	if note != nil {
+		update.SetNote(*note)
+	}
+	if workingDir != nil && *workingDir != "" {
+		update.SetWorkingDir(*workingDir)
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update session metadata: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", currentTitle)
+	}
+	return nil
+}
+
 // Close performs cleanup and releases resources
 func (r *EntRepository) Close() error {
 	if r.client != nil {
