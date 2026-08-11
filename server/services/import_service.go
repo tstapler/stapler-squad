@@ -78,6 +78,8 @@ func NewImportServiceWithRealInspector(
 // PreviewImportExternalSession runs correlation against the candidate and
 // reports what an import WOULD do. Side-effect-free: no process signaling,
 // no persistence.
+//
+// +api: import:preview
 func (s *ImportService) PreviewImportExternalSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PreviewImportExternalSessionRequest],
@@ -135,6 +137,8 @@ func (s *ImportService) PreviewImportExternalSession(
 // other domain-level failure (ambiguous choice, path collision, start
 // failure) is reported inside the response body via status=FAILED so the
 // client always gets a structured result to update UI state from.
+//
+// +api: import:commit
 func (s *ImportService) CommitImportExternalSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CommitImportExternalSessionRequest],
@@ -187,6 +191,8 @@ func (s *ImportService) CommitImportExternalSession(
 // the request (import.proto's ConfirmKillExternalSessionRequest carries only
 // instance_id + pid_identity) so it's recovered from the SuspendedProcessRecord
 // persisted by CommitImportExternalSession.
+//
+// +api: import:confirm_kill
 func (s *ImportService) ConfirmKillExternalSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ConfirmKillExternalSessionRequest],
@@ -241,6 +247,8 @@ func (s *ImportService) ConfirmKillExternalSession(
 // Instance and, only if that succeeds, resumes the original process (Story
 // 1.3.3). See session.CancelPendingKill's doc comment for why deletion must
 // happen strictly before resumption.
+//
+// +api: import:cancel_pending_kill
 func (s *ImportService) CancelPendingKill(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CancelPendingKillRequest],
