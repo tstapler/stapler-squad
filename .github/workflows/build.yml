@@ -104,6 +104,7 @@ jobs:
         uses: bufbuild/buf-setup-action@v1
         with:
           version: '1.41.0'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # See .github/actions/prepare/action.yml for why this cache exists.
       - name: Cache Next.js build cache
