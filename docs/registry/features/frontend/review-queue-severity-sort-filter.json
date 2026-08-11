@@ -5,7 +5,7 @@
   "component": "ReviewQueuePanel",
   "path": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
   "filePath": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
-  "markerLine": 2,
+  "markerLine": 3,
   "tested": true,
   "testIds": [
     "ReviewQueuePanel — severity > ReviewQueuePanel_should_SortItemsBySeverityDescending_When_DefaultSortFieldIsSeverity",

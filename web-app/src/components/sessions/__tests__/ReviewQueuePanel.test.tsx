@@ -799,7 +799,7 @@ describe("ReviewQueuePanel — severity", () => {
     expect(ids).toEqual(["s-critical", "s-medium", "s-low"]);
   });
 
-  it("should render unrecorded-severity item between Critical and Medium in default sort (fail-safe)", () => {
+  it("ReviewQueuePanel_should_RankUnrecordedBetweenCriticalAndMedium_When_DefaultSortApplied", () => {
     const critical = makeApprovalItem({ sessionId: "s-critical", sessionName: "Critical Item", riskLevel: "critical" });
     const unrecorded = makeApprovalItem({ sessionId: "s-unrecorded", sessionName: "Unrecorded Item" });
     const medium = makeApprovalItem({ sessionId: "s-medium", sessionName: "Medium Item", riskLevel: "medium" });
@@ -848,7 +848,7 @@ describe("ReviewQueuePanel — severity", () => {
     expect(screen.getByText(/No items match the current filter/i)).toBeInTheDocument();
   });
 
-  it("renders a compact SeverityBadge next to the escalation reason for an approval-pending item", () => {
+  it("ReviewQueuePanel_should_RenderCompactSeverityBadgeNextToEscalationReason_When_ApprovalPendingItemRenders", () => {
     const item = makeApprovalItem({ sessionId: "s-1", sessionName: "S1", riskLevel: "critical" });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
@@ -857,7 +857,7 @@ describe("ReviewQueuePanel — severity", () => {
     expect(screen.getByTestId("severity-badge-critical")).toHaveAttribute("aria-label", "Critical risk");
   });
 
-  it("renders the not-recorded badge state when risk_level metadata key is absent", () => {
+  it("ReviewQueuePanel_should_RenderNotRecordedBadgeState_When_RiskLevelMetadataKeyIsAbsent", () => {
     const item = makeApprovalItem({ sessionId: "s-1", sessionName: "S1" });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 

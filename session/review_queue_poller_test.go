@@ -1161,6 +1161,29 @@ func TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium(t
 	}
 }
 
+// TestRiskLevelRank_MatchesTypeScriptMirror pins the exact rank values so a one-sided edit
+// to either this map or web-app/src/lib/sessions/riskLevel.ts's RISK_LEVEL_RANK fails loudly
+// here instead of silently desyncing default sort order between the Go-side GAP-004
+// tie-break and the frontend's default severity sort (sdd:6-verify Layer 2 finding,
+// review-queue-severity). If this test ever needs to change, the TS mirror must change too.
+func TestRiskLevelRank_MatchesTypeScriptMirror(t *testing.T) {
+	want := map[string]int{
+		"critical": 4,
+		"high":     3,
+		"":         3,
+		"medium":   2,
+		"low":      1,
+	}
+	for level, wantRank := range want {
+		if got := riskLevelRank[level]; got != wantRank {
+			t.Errorf("riskLevelRank[%q] = %d, want %d", level, got, wantRank)
+		}
+	}
+	if len(riskLevelRank) != len(want) {
+		t.Errorf("riskLevelRank has %d entries, want %d — update this test's `want` map and riskLevel.ts's RISK_LEVEL_RANK together", len(riskLevelRank), len(want))
+	}
+}
+
 // TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback covers the second half of
 // checkSession's UUID-then-Title lookup: when a session has no UUID (or the UUID lookup
 // misses), the provider must still be queried by Title so approvals keyed the old/fallback
