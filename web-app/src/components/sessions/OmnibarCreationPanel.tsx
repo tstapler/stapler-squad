@@ -9,6 +9,7 @@ import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 import type { OmnibarFormState } from "./Omnibar";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { getConnectTransport } from "@/lib/api/transport";
+import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
@@ -64,23 +65,6 @@ export const SESSION_TYPES = [
 export const AUTONOMOUS_MODE_HINT =
   "Hand off a well-defined task and walk away — e.g. a small bug fix or chore. An LLM reviewer approves risky tool calls instead of you; you'll be notified when it's done. To stop it, delete or hibernate the session.";
 
-// Agents auto-approve (yolo mode) can inject a bypass flag for. Mirrors the backend's
-// yoloFlagByAgent map (session/instance_tmux.go) — keep in sync manually; small enough
-// surface that a shared RPC isn't warranted for two agents.
-const AUTO_APPROVE_SUPPORTED_AGENTS = ["claude", "aider"];
-
-// isAutoApproveSupported reports whether program is a recognized agent auto-approve can
-// inject a bypass flag for, so the checkbox can be disabled (with a hint) instead of
-// silently no-opping for an unrecognized agent. An empty program ("System default") is
-// treated as supported -- the "System default" option's own label documents it resolves
-// to claude, and the server re-validates against the actually-resolved program anyway
-// (CreateSession's AutoApproveSupported guard), so this is only an optimistic UI default,
-// not a correctness gap.
-export function isAutoApproveSupported(program: string): boolean {
-  if (program.trim() === "") return true;
-  const base = program.trim().split(/\s+/)[0]?.split("/").pop() ?? "";
-  return AUTO_APPROVE_SUPPORTED_AGENTS.includes(base);
-}
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
 

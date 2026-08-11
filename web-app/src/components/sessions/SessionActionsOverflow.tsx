@@ -9,6 +9,7 @@ import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
+import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 import {
   desktopActions,
   overflowContainer,
@@ -65,17 +66,6 @@ export interface SessionActionsOverflowProps {
   onWorkspaceSwitchRequest?: () => void;
   /** Save a new program for the session. Empty string = system default. */
   onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
-}
-
-// Agents auto-approve can inject a bypass flag for. Mirrors the backend's
-// yoloFlagByAgent map (session/instance_tmux.go), OmnibarCreationPanel's, and
-// SessionCard's own copies — keep in sync manually (pre-mortem #2: the post-creation
-// toggle needs the same support gate the create-time checkbox has, or a user can enable
-// auto-approve on an unsupported-agent session and trigger a no-op restart).
-const AUTO_APPROVE_SUPPORTED_AGENTS = ["claude", "aider"];
-function isAutoApproveSupported(program: string): boolean {
-  const base = program.trim().split(/\s+/)[0]?.split("/").pop() ?? "";
-  return AUTO_APPROVE_SUPPORTED_AGENTS.includes(base);
 }
 
 const menuSeparator = (
@@ -450,9 +440,11 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
         document.body
       )}
 
-      {/* Auto-approve toggle: restart notice shown on BOTH enable and disable for an
-          Active session, since SetAutoApprove restarts unconditionally either direction
-          (the flag is baked into the launch command at spawn time, not re-checked live). */}
+      {/* Auto-approve toggle: enabling always confirms with a danger warning (matches the
+          original asymmetric-friction design -- unsafe regardless of run state). Disabling
+          only reaches this dialog when Active, where it also shows a restart notice (AC6:
+          SetAutoApprove restarts unconditionally on ANY change while Active); disabling a
+          non-Active session applies immediately with no dialog (see the menu item above). */}
       {isAutoApproveConfirmOpen && createPortal(
         <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsAutoApproveConfirmOpen(false); }}>
           <div
@@ -468,7 +460,10 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             {pendingAutoApproveValue ? (
               <>
                 <p>&quot;{session.title}&quot; will skip ALL permission/approval prompts for its agent (e.g. file edits, shell commands).</p>
-                <p className={warningText}>This is genuinely unsafe outside a disposable/sandboxed workspace — unintended file modifications or data loss are possible. The session will restart to apply this. You can disable it at any time from this menu.</p>
+                <p className={warningText}>
+                  This is genuinely unsafe outside a disposable/sandboxed workspace — unintended file modifications or data loss are possible.
+                  {isRunning ? " The session will restart to apply this." : ""} You can disable it at any time from this menu.
+                </p>
               </>
             ) : (
               <p className={warningText}>&quot;{session.title}&quot; will restart to apply this change.</p>
@@ -806,7 +801,12 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                     e.stopPropagation();
                     close();
                     const next = !session.autoApprove;
-                    if (isRunning) {
+                    // Enabling always confirms (the danger warning applies regardless of
+                    // run state -- matches the original asymmetric-friction design).
+                    // Disabling only confirms when Active, where it also restarts
+                    // (AC6); disabling a non-Active session is the safe direction and
+                    // never restarts, so it applies immediately.
+                    if (next || isRunning) {
                       setPendingAutoApproveValue(next);
                       setIsAutoApproveConfirmOpen(true);
                     } else {

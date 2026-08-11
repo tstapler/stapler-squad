@@ -13,6 +13,7 @@ import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
+import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -41,14 +42,6 @@ export function hasPendingAutoApproveChange(session: Pick<Session, "status" | "a
   return session.autoApprove !== flagPresent;
 }
 
-// Agents auto-approve can inject a bypass flag for. Mirrors the backend's
-// yoloFlagByAgent map (session/instance_tmux.go) and OmnibarCreationPanel's own copy —
-// keep in sync manually.
-const AUTO_APPROVE_SUPPORTED_AGENTS = ["claude", "aider"];
-function isAutoApproveSupported(program: string): boolean {
-  const base = program.trim().split(/\s+/)[0]?.split("/").pop() ?? "";
-  return AUTO_APPROVE_SUPPORTED_AGENTS.includes(base);
-}
 import {
   card,
   cardDeleting,

@@ -497,3 +497,33 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 			"loop to silently auto-resume this crashed session on next restart")
 	}
 }
+
+// TestFromInstanceData_RestoresAutoYesAndAutoApprove is a regression guard for a bug
+// found while adding AutoApprove: fromInstanceData's Instance{} literal never copied
+// AutoYes from the persisted InstanceData at all, silently losing it on every server
+// restart (LoadInstances always calls fromInstanceData). Fixed alongside wiring
+// AutoApprove through the same literal -- this pins both fields survive the round trip.
+func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
+	data := InstanceData{
+		Title:       "auto-yes-approve-restore-test",
+		Path:        "/tmp/auto-yes-approve-restore-test",
+		Status:      Stopped,
+		Program:     "claude",
+		AutoYes:     true,
+		AutoApprove: true,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	if err != nil {
+		t.Fatalf("fromInstanceData returned error: %v", err)
+	}
+
+	if !instance.AutoYes {
+		t.Error("expected AutoYes=true restored from InstanceData, got false")
+	}
+	if !instance.AutoApprove {
+		t.Error("expected AutoApprove=true restored from InstanceData, got false")
+	}
+}

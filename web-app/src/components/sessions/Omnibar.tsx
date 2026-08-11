@@ -1237,6 +1237,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     onClose,
     onRunWorkflow,
     formState.firstPrompt,
+    formState.autonomousMode,
     router,
     setTheme,
   ]);

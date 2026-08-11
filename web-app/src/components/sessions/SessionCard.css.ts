@@ -843,7 +843,7 @@ export const autoApproveBadge = style({
   display: "inline-flex",
   alignItems: "center",
   gap: vars.space["1"],
-  padding: `${vars.space["1"]} 8px`,
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
   background: vars.color.warningBg,
   color: vars.color.warningText,
   borderRadius: vars.radii.full,
