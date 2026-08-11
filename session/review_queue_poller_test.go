@@ -1024,6 +1024,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 				ToolName:           "Bash",
 				EscalationReason:   "No matching rule; escalated for manual review.",
 				EscalationCategory: "no-match",
+				RiskLevel:          "medium",
 			}},
 		},
 	}
@@ -1044,6 +1045,119 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 	}
 	if got := item.Metadata["escalation_reason_category"]; got != "no-match" {
 		t.Errorf("escalation_reason_category = %q, want %q", got, "no-match")
+	}
+	if got := item.Metadata["risk_level"]; got != "medium" {
+		t.Errorf("risk_level = %q, want %q", got, "medium")
+	}
+}
+
+// TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataHasClassifiedRisk
+// and TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadataRiskLevelEmpty
+// cover plan.md Task 2.2.2: item.Metadata["risk_level"] is set only when the underlying
+// ApprovalMetadata.RiskLevel is non-empty -- an absent key (not an empty-string value) is the
+// frontend's "not recorded" signal, mirroring the existing escalation_reason guard pattern.
+func TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataHasClassifiedRisk(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{Title: "session-risk-set", UUID: "session-risk-set-uuid", Status: Running}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.UUID: {{ApprovalID: "approval-risk-set", RiskLevel: "critical"}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if got := item.Metadata["risk_level"]; got != "critical" {
+		t.Errorf("risk_level = %q, want %q", got, "critical")
+	}
+}
+
+func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadataRiskLevelEmpty(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{Title: "session-risk-empty", UUID: "session-risk-empty-uuid", Status: Running}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.UUID: {{ApprovalID: "approval-risk-empty", RiskLevel: ""}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if _, ok := item.Metadata["risk_level"]; ok {
+		t.Errorf("risk_level key must be absent (not empty-string) when RiskLevel is not recorded, got %q", item.Metadata["risk_level"])
+	}
+}
+
+// TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrentApprovalsAtMixedRisk
+// covers GAP-004 (docs/bugs/open/review-queue-gaps.md): when a session has multiple concurrent
+// pending approvals, the queue must surface the most dangerous one, not just the first.
+func TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrentApprovalsAtMixedRisk(t *testing.T) {
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "a-medium", RiskLevel: "medium"},
+		{ApprovalID: "b-critical", RiskLevel: "critical"},
+		{ApprovalID: "c-low", RiskLevel: "low"},
+	}
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "b-critical" {
+		t.Errorf("highestRiskApproval() = %q, want %q", got.ApprovalID, "b-critical")
+	}
+}
+
+// TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShareTopRisk covers
+// the tiebreak rule: ties keep the earliest (first-inserted) approval.
+func TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShareTopRisk(t *testing.T) {
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "first-high"},
+		{ApprovalID: "second-high"},
+	}
+	approvals[0].RiskLevel = "high"
+	approvals[1].RiskLevel = "high"
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "first-high" {
+		t.Errorf("highestRiskApproval() = %q, want %q (tie must keep the earliest)", got.ApprovalID, "first-high")
+	}
+}
+
+// TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium covers the
+// fail-safe rank: "" (not recorded) must rank alongside "high", never sort below "medium".
+func TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium(t *testing.T) {
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "medium-item", RiskLevel: "medium"},
+		{ApprovalID: "unrecorded-item", RiskLevel: ""},
+	}
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "unrecorded-item" {
+		t.Errorf("highestRiskApproval() = %q, want %q (unrecorded must outrank medium)", got.ApprovalID, "unrecorded-item")
 	}
 }
 

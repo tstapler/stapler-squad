@@ -65,6 +65,10 @@ type ApprovalMetadata struct {
 	// ApprovalStore.GetApprovalMetadataBySession.
 	EscalationReason   string
 	EscalationCategory string
+
+	// RiskLevel is the classifier-assigned risk level ("low"/"medium"/"high"/"critical"),
+	// copied from PendingApproval.RiskLevel. "" means not recorded — never treated as "low".
+	RiskLevel string
 }
 
 // ApprovalMetadataProvider provides approval metadata for enriching review queue items.
@@ -73,6 +77,30 @@ type ApprovalMetadataProvider interface {
 	// GetApprovalMetadataBySession returns approval metadata for the given session ID.
 	// Returns nil if no approvals exist for the session.
 	GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata
+}
+
+// riskLevelRank orders RiskLevel strings by severity, highest first. Unrecorded ("") ranks
+// alongside "high" — fail-safe, since an unclassified request must never be treated as safe.
+var riskLevelRank = map[string]int{
+	"critical": 4,
+	"high":     3,
+	"":         3,
+	"medium":   2,
+	"low":      1,
+}
+
+// highestRiskApproval returns the most dangerous of a session's concurrent pending approvals
+// (GAP-004, docs/bugs/open/review-queue-gaps.md) so the review queue surfaces the item most
+// in need of attention rather than an arbitrary one. Ties keep the earliest (first-inserted)
+// approval, since approvals is already in creation order.
+func highestRiskApproval(approvals []ApprovalMetadata) ApprovalMetadata {
+	best := approvals[0]
+	for _, a := range approvals[1:] {
+		if riskLevelRank[a.RiskLevel] > riskLevelRank[best.RiskLevel] {
+			best = a
+		}
+	}
+	return best
 }
 
 // ReviewQueuePoller automatically monitors sessions and adds them to the review queue
@@ -884,7 +912,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				approvals = provider.GetApprovalMetadataBySession(snap.Title)
 			}
 			if len(approvals) > 0 {
-				a := approvals[0] // Use the most recent/first approval
+				a := highestRiskApproval(approvals) // GAP-004: surface the most dangerous concurrent approval, not just the first
 				if item.Metadata == nil {
 					item.Metadata = make(map[string]string)
 				}
@@ -908,7 +936,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				if a.EscalationCategory != "" {
 					item.Metadata["escalation_reason_category"] = a.EscalationCategory
 				}
-				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID, "escalation_category", item.Metadata["escalation_reason_category"])
+				if a.RiskLevel != "" {
+					item.Metadata["risk_level"] = a.RiskLevel
+				}
+				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID, "escalation_category", item.Metadata["escalation_reason_category"], "risk_level", item.Metadata["risk_level"])
 			}
 		}
 

@@ -4341,8 +4341,11 @@ type PendingApprovalProto struct {
 	ExpiresAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	// Seconds remaining before expiry (convenience field for countdown timers).
 	SecondsRemaining int32 `protobuf:"varint,9,opt,name=seconds_remaining,json=secondsRemaining,proto3" json:"seconds_remaining,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Classifier-assigned risk level ("low"/"medium"/"high"/"critical"), captured once at
+	// creation time. Empty for approvals that predate this field.
+	RiskLevel     string `protobuf:"bytes,10,opt,name=risk_level,json=riskLevel,proto3" json:"risk_level,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PendingApprovalProto) Reset() {
@@ -4436,6 +4439,13 @@ func (x *PendingApprovalProto) GetSecondsRemaining() int32 {
 		return x.SecondsRemaining
 	}
 	return 0
+}
+
+func (x *PendingApprovalProto) GetRiskLevel() string {
+	if x != nil {
+		return x.RiskLevel
+	}
+	return ""
 }
 
 // ApprovalRuleProto represents a single auto-approval rule.
@@ -4704,8 +4714,12 @@ type AnalyticsSummaryProto struct {
 	// Escalation-reason breakdown: counts per category ("no-match", "explicit-rule",
 	// "domain-age", "secret-scan", "unclassifiable") — see classifier.EscalationCategory.
 	EscalationReasonCounts map[string]int32 `protobuf:"bytes,17,rep,name=escalation_reason_counts,json=escalationReasonCounts,proto3" json:"escalation_reason_counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Risk-level breakdown: counts per classifier.RiskLevel string ("low"/"medium"/"high"/
+	// "critical"), scoped to escalated decisions only (matching escalation_reason_counts'
+	// scope) so both tables share the same denominator.
+	RiskLevelCounts map[string]int32 `protobuf:"bytes,18,rep,name=risk_level_counts,json=riskLevelCounts,proto3" json:"risk_level_counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AnalyticsSummaryProto) Reset() {
@@ -4853,6 +4867,13 @@ func (x *AnalyticsSummaryProto) GetCommandSubcommandStats() []*SubcommandStatPro
 func (x *AnalyticsSummaryProto) GetEscalationReasonCounts() map[string]int32 {
 	if x != nil {
 		return x.EscalationReasonCounts
+	}
+	return nil
+}
+
+func (x *AnalyticsSummaryProto) GetRiskLevelCounts() map[string]int32 {
+	if x != nil {
+		return x.RiskLevelCounts
 	}
 	return nil
 }
@@ -6878,7 +6899,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x10current_bookmark\x18\x06 \x01(\tR\x0fcurrentBookmark\x12)\n" +
 	"\x10current_revision\x18\a \x01(\tR\x0fcurrentRevision\x126\n" +
 	"\x17has_uncommitted_changes\x18\b \x01(\bR\x15hasUncommittedChanges\x12.\n" +
-	"\x13modified_file_count\x18\t \x01(\x05R\x11modifiedFileCount\"\xce\x03\n" +
+	"\x13modified_file_count\x18\t \x01(\x05R\x11modifiedFileCount\"\xed\x03\n" +
 	"\x14PendingApprovalProto\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -6892,7 +6913,10 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12+\n" +
-	"\x11seconds_remaining\x18\t \x01(\x05R\x10secondsRemaining\x1a<\n" +
+	"\x11seconds_remaining\x18\t \x01(\x05R\x10secondsRemaining\x12\x1d\n" +
+	"\n" +
+	"risk_level\x18\n" +
+	" \x01(\tR\triskLevel\x1a<\n" +
 	"\x0eToolInputEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xff\x06\n" +
@@ -6923,8 +6947,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x18safe_python_imports_only\x18\x1a \x01(\bR\x15safePythonImportsOnly\x124\n" +
 	"\x16required_flag_prefixes\x18\x1b \x03(\tR\x14requiredFlagPrefixes\x12#\n" +
 	"\rtool_category\x18\x1c \x01(\tR\ftoolCategory\x12,\n" +
-	"\x12require_ci_passing\x18\x1d \x01(\bR\x10requireCiPassing\"\xbb\n" +
-	"\n" +
+	"\x12require_ci_passing\x18\x1d \x01(\bR\x10requireCiPassing\"\xe3\v\n" +
 	"\x15AnalyticsSummaryProto\x12'\n" +
 	"\x0ftotal_decisions\x18\x01 \x01(\x05R\x0etotalDecisions\x12^\n" +
 	"\x0fdecision_counts\x18\x02 \x03(\v25.session.v1.AnalyticsSummaryProto.DecisionCountsEntryR\x0edecisionCounts\x126\n" +
@@ -6944,11 +6967,15 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x13top_uncovered_tools\x18\x0e \x03(\v2\x19.session.v1.ToolStatProtoR\x11topUncoveredTools\x12R\n" +
 	"\x16top_uncovered_programs\x18\x0f \x03(\v2\x1c.session.v1.ProgramStatProtoR\x14topUncoveredPrograms\x12Y\n" +
 	"\x18command_subcommand_stats\x18\x10 \x03(\v2\x1f.session.v1.SubcommandStatProtoR\x16commandSubcommandStats\x12w\n" +
-	"\x18escalation_reason_counts\x18\x11 \x03(\v2=.session.v1.AnalyticsSummaryProto.EscalationReasonCountsEntryR\x16escalationReasonCounts\x1aA\n" +
+	"\x18escalation_reason_counts\x18\x11 \x03(\v2=.session.v1.AnalyticsSummaryProto.EscalationReasonCountsEntryR\x16escalationReasonCounts\x12b\n" +
+	"\x11risk_level_counts\x18\x12 \x03(\v26.session.v1.AnalyticsSummaryProto.RiskLevelCountsEntryR\x0friskLevelCounts\x1aA\n" +
 	"\x13DecisionCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\x1aI\n" +
 	"\x1bEscalationReasonCountsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\x1aB\n" +
+	"\x14RiskLevelCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\x86\x01\n" +
 	"\rToolStatProto\x12\x1b\n" +
@@ -7324,7 +7351,7 @@ func file_session_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_session_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 22)
-var file_session_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
+var file_session_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
 var file_session_v1_types_proto_goTypes = []any{
 	(VNCStatus)(0),                    // 0: session.v1.VNCStatus
 	(CDPStatus)(0),                    // 1: session.v1.CDPStatus
@@ -7397,58 +7424,59 @@ var file_session_v1_types_proto_goTypes = []any{
 	nil,                               // 68: session.v1.PendingApprovalProto.ToolInputEntry
 	nil,                               // 69: session.v1.AnalyticsSummaryProto.DecisionCountsEntry
 	nil,                               // 70: session.v1.AnalyticsSummaryProto.EscalationReasonCountsEntry
-	(*timestamppb.Timestamp)(nil),     // 71: google.protobuf.Timestamp
+	nil,                               // 71: session.v1.AnalyticsSummaryProto.RiskLevelCountsEntry
+	(*timestamppb.Timestamp)(nil),     // 72: google.protobuf.Timestamp
 }
 var file_session_v1_types_proto_depIdxs = []int32{
 	2,  // 0: session.v1.Session.status:type_name -> session.v1.SessionStatus
-	71, // 1: session.v1.Session.created_at:type_name -> google.protobuf.Timestamp
-	71, // 2: session.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
-	71, // 3: session.v1.Session.last_terminal_update:type_name -> google.protobuf.Timestamp
-	71, // 4: session.v1.Session.last_meaningful_output:type_name -> google.protobuf.Timestamp
+	72, // 1: session.v1.Session.created_at:type_name -> google.protobuf.Timestamp
+	72, // 2: session.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
+	72, // 3: session.v1.Session.last_terminal_update:type_name -> google.protobuf.Timestamp
+	72, // 4: session.v1.Session.last_meaningful_output:type_name -> google.protobuf.Timestamp
 	3,  // 5: session.v1.Session.session_type:type_name -> session.v1.SessionType
 	28, // 6: session.v1.Session.diff_stats:type_name -> session.v1.DiffStats
 	29, // 7: session.v1.Session.git_worktree:type_name -> session.v1.GitWorktree
 	30, // 8: session.v1.Session.claude_session:type_name -> session.v1.ClaudeSession
 	4,  // 9: session.v1.Session.instance_type:type_name -> session.v1.InstanceType
 	27, // 10: session.v1.Session.external_metadata:type_name -> session.v1.ExternalInstanceMetadata
-	71, // 11: session.v1.Session.last_pr_status_check:type_name -> google.protobuf.Timestamp
+	72, // 11: session.v1.Session.last_pr_status_check:type_name -> google.protobuf.Timestamp
 	8,  // 12: session.v1.Session.rate_limit_state:type_name -> session.v1.RateLimitState
-	71, // 13: session.v1.Session.rate_limit_reset_time:type_name -> google.protobuf.Timestamp
+	72, // 13: session.v1.Session.rate_limit_reset_time:type_name -> google.protobuf.Timestamp
 	6,  // 14: session.v1.Session.working_state:type_name -> session.v1.WorkingState
 	25, // 15: session.v1.Session.vnc_state:type_name -> session.v1.VNCState
 	26, // 16: session.v1.Session.cdp_state:type_name -> session.v1.CDPState
 	7,  // 17: session.v1.Session.sub_status:type_name -> session.v1.SubStatus
 	24, // 18: session.v1.Session.goal:type_name -> session.v1.SessionGoalSummary
-	71, // 19: session.v1.Session.archived_at:type_name -> google.protobuf.Timestamp
+	72, // 19: session.v1.Session.archived_at:type_name -> google.protobuf.Timestamp
 	5,  // 20: session.v1.Session.detected_status:type_name -> session.v1.DetectedStatus
 	23, // 21: session.v1.Session.artifacts:type_name -> session.v1.SessionArtifacts
-	71, // 22: session.v1.SessionArtifacts.last_scanned_at:type_name -> google.protobuf.Timestamp
-	71, // 23: session.v1.SessionGoalSummary.updated_at:type_name -> google.protobuf.Timestamp
+	72, // 22: session.v1.SessionArtifacts.last_scanned_at:type_name -> google.protobuf.Timestamp
+	72, // 23: session.v1.SessionGoalSummary.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 24: session.v1.VNCState.status:type_name -> session.v1.VNCStatus
 	1,  // 25: session.v1.CDPState.status:type_name -> session.v1.CDPStatus
-	71, // 26: session.v1.ExternalInstanceMetadata.discovered_at:type_name -> google.protobuf.Timestamp
-	71, // 27: session.v1.ExternalInstanceMetadata.last_seen:type_name -> google.protobuf.Timestamp
-	71, // 28: session.v1.ClaudeSession.last_attached:type_name -> google.protobuf.Timestamp
+	72, // 26: session.v1.ExternalInstanceMetadata.discovered_at:type_name -> google.protobuf.Timestamp
+	72, // 27: session.v1.ExternalInstanceMetadata.last_seen:type_name -> google.protobuf.Timestamp
+	72, // 28: session.v1.ClaudeSession.last_attached:type_name -> google.protobuf.Timestamp
 	31, // 29: session.v1.ClaudeSession.settings:type_name -> session.v1.ClaudeSettings
 	63, // 30: session.v1.ClaudeSession.metadata:type_name -> session.v1.ClaudeSession.MetadataEntry
 	10, // 31: session.v1.ReviewItem.reason:type_name -> session.v1.AttentionReason
 	9,  // 32: session.v1.ReviewItem.priority:type_name -> session.v1.Priority
-	71, // 33: session.v1.ReviewItem.detected_at:type_name -> google.protobuf.Timestamp
+	72, // 33: session.v1.ReviewItem.detected_at:type_name -> google.protobuf.Timestamp
 	64, // 34: session.v1.ReviewItem.metadata:type_name -> session.v1.ReviewItem.MetadataEntry
 	2,  // 35: session.v1.ReviewItem.status:type_name -> session.v1.SessionStatus
 	28, // 36: session.v1.ReviewItem.diff_stats:type_name -> session.v1.DiffStats
-	71, // 37: session.v1.ReviewItem.last_activity:type_name -> google.protobuf.Timestamp
+	72, // 37: session.v1.ReviewItem.last_activity:type_name -> google.protobuf.Timestamp
 	6,  // 38: session.v1.ReviewItem.working_state:type_name -> session.v1.WorkingState
 	7,  // 39: session.v1.ReviewItem.sub_status:type_name -> session.v1.SubStatus
-	71, // 40: session.v1.PRInfo.created_at:type_name -> google.protobuf.Timestamp
-	71, // 41: session.v1.PRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	71, // 42: session.v1.PRComment.created_at:type_name -> google.protobuf.Timestamp
+	72, // 40: session.v1.PRInfo.created_at:type_name -> google.protobuf.Timestamp
+	72, // 41: session.v1.PRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	72, // 42: session.v1.PRComment.created_at:type_name -> google.protobuf.Timestamp
 	32, // 43: session.v1.ReviewQueue.items:type_name -> session.v1.ReviewItem
 	65, // 44: session.v1.ReviewQueue.by_priority:type_name -> session.v1.ReviewQueue.ByPriorityEntry
 	66, // 45: session.v1.ReviewQueue.by_reason:type_name -> session.v1.ReviewQueue.ByReasonEntry
 	11, // 46: session.v1.Notification.notification_type:type_name -> session.v1.NotificationType
 	12, // 47: session.v1.Notification.priority:type_name -> session.v1.NotificationPriority
-	71, // 48: session.v1.Notification.timestamp:type_name -> google.protobuf.Timestamp
+	72, // 48: session.v1.Notification.timestamp:type_name -> google.protobuf.Timestamp
 	67, // 49: session.v1.Notification.metadata:type_name -> session.v1.Notification.MetadataEntry
 	14, // 50: session.v1.FileChange.status:type_name -> session.v1.FileStatus
 	13, // 51: session.v1.VCSStatus.type:type_name -> session.v1.VCSType
@@ -7456,46 +7484,47 @@ var file_session_v1_types_proto_depIdxs = []int32{
 	37, // 53: session.v1.VCSStatus.unstaged_files:type_name -> session.v1.FileChange
 	37, // 54: session.v1.VCSStatus.untracked_files:type_name -> session.v1.FileChange
 	37, // 55: session.v1.VCSStatus.conflict_files:type_name -> session.v1.FileChange
-	71, // 56: session.v1.RevisionTarget.timestamp:type_name -> google.protobuf.Timestamp
+	72, // 56: session.v1.RevisionTarget.timestamp:type_name -> google.protobuf.Timestamp
 	13, // 57: session.v1.AvailableWorkspaceTargets.vcs_type:type_name -> session.v1.VCSType
 	39, // 58: session.v1.AvailableWorkspaceTargets.bookmarks:type_name -> session.v1.BookmarkTarget
 	40, // 59: session.v1.AvailableWorkspaceTargets.recent_revisions:type_name -> session.v1.RevisionTarget
 	41, // 60: session.v1.AvailableWorkspaceTargets.worktrees:type_name -> session.v1.WorktreeTarget
 	13, // 61: session.v1.VCSInfo.vcs_type:type_name -> session.v1.VCSType
 	68, // 62: session.v1.PendingApprovalProto.tool_input:type_name -> session.v1.PendingApprovalProto.ToolInputEntry
-	71, // 63: session.v1.PendingApprovalProto.created_at:type_name -> google.protobuf.Timestamp
-	71, // 64: session.v1.PendingApprovalProto.expires_at:type_name -> google.protobuf.Timestamp
+	72, // 63: session.v1.PendingApprovalProto.created_at:type_name -> google.protobuf.Timestamp
+	72, // 64: session.v1.PendingApprovalProto.expires_at:type_name -> google.protobuf.Timestamp
 	17, // 65: session.v1.ApprovalRuleProto.decision:type_name -> session.v1.AutoDecision
-	71, // 66: session.v1.ApprovalRuleProto.created_at:type_name -> google.protobuf.Timestamp
+	72, // 66: session.v1.ApprovalRuleProto.created_at:type_name -> google.protobuf.Timestamp
 	69, // 67: session.v1.AnalyticsSummaryProto.decision_counts:type_name -> session.v1.AnalyticsSummaryProto.DecisionCountsEntry
 	47, // 68: session.v1.AnalyticsSummaryProto.top_tools:type_name -> session.v1.ToolStatProto
 	48, // 69: session.v1.AnalyticsSummaryProto.top_denied_commands:type_name -> session.v1.CommandStatProto
 	49, // 70: session.v1.AnalyticsSummaryProto.top_triggered_rules:type_name -> session.v1.RuleStatProto
-	71, // 71: session.v1.AnalyticsSummaryProto.window_start:type_name -> google.protobuf.Timestamp
-	71, // 72: session.v1.AnalyticsSummaryProto.window_end:type_name -> google.protobuf.Timestamp
+	72, // 71: session.v1.AnalyticsSummaryProto.window_start:type_name -> google.protobuf.Timestamp
+	72, // 72: session.v1.AnalyticsSummaryProto.window_end:type_name -> google.protobuf.Timestamp
 	50, // 73: session.v1.AnalyticsSummaryProto.top_command_programs:type_name -> session.v1.ProgramStatProto
 	51, // 74: session.v1.AnalyticsSummaryProto.top_python_imports:type_name -> session.v1.ImportStatProto
 	47, // 75: session.v1.AnalyticsSummaryProto.top_uncovered_tools:type_name -> session.v1.ToolStatProto
 	50, // 76: session.v1.AnalyticsSummaryProto.top_uncovered_programs:type_name -> session.v1.ProgramStatProto
 	52, // 77: session.v1.AnalyticsSummaryProto.command_subcommand_stats:type_name -> session.v1.SubcommandStatProto
 	70, // 78: session.v1.AnalyticsSummaryProto.escalation_reason_counts:type_name -> session.v1.AnalyticsSummaryProto.EscalationReasonCountsEntry
-	71, // 79: session.v1.DatabaseInfo.last_used:type_name -> google.protobuf.Timestamp
-	71, // 80: session.v1.CheckpointProto.timestamp:type_name -> google.protobuf.Timestamp
-	71, // 81: session.v1.UnfinishedWorktree.last_modified:type_name -> google.protobuf.Timestamp
-	71, // 82: session.v1.UnfinishedWorktree.scan_time:type_name -> google.protobuf.Timestamp
-	18, // 83: session.v1.UnfinishedWorktree.scan_status:type_name -> session.v1.ScanStatus
-	20, // 84: session.v1.Shell.status:type_name -> session.v1.ShellStatus
-	71, // 85: session.v1.Shell.started_at:type_name -> google.protobuf.Timestamp
-	71, // 86: session.v1.Shell.stopped_at:type_name -> google.protobuf.Timestamp
-	17, // 87: session.v1.SuggestedRuleProto.decision:type_name -> session.v1.AutoDecision
-	71, // 88: session.v1.UserPR.updated_at:type_name -> google.protobuf.Timestamp
-	71, // 89: session.v1.UserPR.closed_at:type_name -> google.protobuf.Timestamp
-	71, // 90: session.v1.UserPR.merged_at:type_name -> google.protobuf.Timestamp
-	91, // [91:91] is the sub-list for method output_type
-	91, // [91:91] is the sub-list for method input_type
-	91, // [91:91] is the sub-list for extension type_name
-	91, // [91:91] is the sub-list for extension extendee
-	0,  // [0:91] is the sub-list for field type_name
+	71, // 79: session.v1.AnalyticsSummaryProto.risk_level_counts:type_name -> session.v1.AnalyticsSummaryProto.RiskLevelCountsEntry
+	72, // 80: session.v1.DatabaseInfo.last_used:type_name -> google.protobuf.Timestamp
+	72, // 81: session.v1.CheckpointProto.timestamp:type_name -> google.protobuf.Timestamp
+	72, // 82: session.v1.UnfinishedWorktree.last_modified:type_name -> google.protobuf.Timestamp
+	72, // 83: session.v1.UnfinishedWorktree.scan_time:type_name -> google.protobuf.Timestamp
+	18, // 84: session.v1.UnfinishedWorktree.scan_status:type_name -> session.v1.ScanStatus
+	20, // 85: session.v1.Shell.status:type_name -> session.v1.ShellStatus
+	72, // 86: session.v1.Shell.started_at:type_name -> google.protobuf.Timestamp
+	72, // 87: session.v1.Shell.stopped_at:type_name -> google.protobuf.Timestamp
+	17, // 88: session.v1.SuggestedRuleProto.decision:type_name -> session.v1.AutoDecision
+	72, // 89: session.v1.UserPR.updated_at:type_name -> google.protobuf.Timestamp
+	72, // 90: session.v1.UserPR.closed_at:type_name -> google.protobuf.Timestamp
+	72, // 91: session.v1.UserPR.merged_at:type_name -> google.protobuf.Timestamp
+	92, // [92:92] is the sub-list for method output_type
+	92, // [92:92] is the sub-list for method input_type
+	92, // [92:92] is the sub-list for extension type_name
+	92, // [92:92] is the sub-list for extension extendee
+	0,  // [0:92] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_types_proto_init() }
@@ -7510,7 +7539,7 @@ func file_session_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_v1_types_proto_rawDesc), len(file_session_v1_types_proto_rawDesc)),
 			NumEnums:      22,
-			NumMessages:   49,
+			NumMessages:   50,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
