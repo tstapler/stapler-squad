@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// ErrNoHistoryAdapter indicates PortSessionHistory was asked to port history for a program
+// pair where no registered HistoryAdapter claims one (or both) sides — e.g. opencode, aider,
+// or bash, none of which have a canonical history format to port. Callers should treat this
+// as an expected, low-severity no-op (log and continue), not a hard failure.
+var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
 
 // ConversationID represents a validated Claude/Antigravity conversation UUID.
 type ConversationID string
@@ -39,24 +46,13 @@ func NewWorkspacePath(s string) (WorkspacePath, error) {
 
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
-	var srcAdapter, dstAdapter HistoryAdapter
+	srcAdapter := resolveHistoryAdapter(oldProgram)
+	dstAdapter := resolveHistoryAdapter(newProgram)
 
-	claude := NewClaudeAdapter()
-	agy := NewAgyAdapter()
-
-	if claude.CanHandle(oldProgram) {
-		srcAdapter = claude
-	} else if agy.CanHandle(oldProgram) {
-		srcAdapter = agy
+	if srcAdapter == nil || dstAdapter == nil {
+		return ErrNoHistoryAdapter
 	}
-
-	if claude.CanHandle(newProgram) {
-		dstAdapter = claude
-	} else if agy.CanHandle(newProgram) {
-		dstAdapter = agy
-	}
-
-	if srcAdapter == nil || dstAdapter == nil || srcAdapter.Name() == dstAdapter.Name() {
+	if srcAdapter.Name() == dstAdapter.Name() {
 		return nil
 	}
 

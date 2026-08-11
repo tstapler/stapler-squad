@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,31 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel verifies that a program pair
+// with no matching HistoryAdapter on either side (e.g. opencode/bash, neither of which has a
+// canonical history format) returns the explicit ErrNoHistoryAdapter sentinel rather than a
+// bare, unexplained nil.
+func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) {
+	inst := &Instance{Title: "test-session"}
+
+	err := PortSessionHistory(context.Background(), "opencode", "bash", inst)
+	if !errors.Is(err, ErrNoHistoryAdapter) {
+		t.Fatalf("PortSessionHistory(opencode, bash) = %v, want ErrNoHistoryAdapter", err)
+	}
+}
+
+// TestPortSessionHistory_GeminiPair_ReturnsSentinel verifies that gemini — the real Gemini
+// CLI, whose history format is not the Antigravity storage AgyAdapter reads/writes — is
+// resolved as unmatched, not silently misrouted through AgyAdapter.
+func TestPortSessionHistory_GeminiPair_ReturnsSentinel(t *testing.T) {
+	inst := &Instance{Title: "test-session"}
+
+	err := PortSessionHistory(context.Background(), "claude", "gemini", inst)
+	if !errors.Is(err, ErrNoHistoryAdapter) {
+		t.Fatalf("PortSessionHistory(claude, gemini) = %v, want ErrNoHistoryAdapter", err)
+	}
+}
 
 func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	// Create temporary directory for home

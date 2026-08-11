@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -58,7 +59,13 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 	switch {
 	case isClaudeAntigravityCrossSwitch(oldProgram, resolvedProgram):
 		if portErr := PortSessionHistory(ctx, oldProgram, resolvedProgram, i); portErr != nil {
-			log.Error("[SwitchProgram] failed to port session history during program switch", "session", i.Title, "old", oldProgram, "new", resolvedProgram, "err", portErr)
+			if errors.Is(portErr, ErrNoHistoryAdapter) {
+				// Low-severity: the family-gate above and each adapter's CanHandle
+				// have drifted out of sync. Best-effort porting still no-ops safely.
+				log.Warn("[SwitchProgram] no history adapter resolved for program pair; skipping history port", "session", i.Title, "old", oldProgram, "new", resolvedProgram)
+			} else {
+				log.Error("[SwitchProgram] failed to port session history during program switch", "session", i.Title, "old", oldProgram, "new", resolvedProgram, "err", portErr)
+			}
 		}
 	case isClaudeAntigravityFamily(oldProgram) && !isClaudeAntigravityFamily(resolvedProgram):
 		// Leaving the Claude/Antigravity family entirely: a stale --resume UUID

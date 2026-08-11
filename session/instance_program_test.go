@@ -178,6 +178,36 @@ func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T)
 	assert.False(t, isClaudeAntigravityFamily("aider"))
 }
 
+// TestGeminiFamilyGate_ConsistentWithAdapterResolution verifies the fix for the reported
+// claude<->gemini asymmetry: gemini (the standalone Gemini CLI) is excluded from both the
+// family gate here AND from AgyAdapter.CanHandle (session/agy_adapter.go), since Antigravity's
+// adapter only reads/writes its own ~/.gemini/antigravity-cli/... storage, not the real
+// Gemini CLI's format. If either side of this check is ever widened to include gemini without
+// the other, this test catches the drift.
+func TestGeminiFamilyGate_ConsistentWithAdapterResolution(t *testing.T) {
+	assert.False(t, isClaudeAntigravityFamily("gemini"))
+	assert.False(t, isClaudeAntigravityCrossSwitch("claude", "gemini"))
+	assert.False(t, isClaudeAntigravityCrossSwitch("gemini", "claude"))
+	assert.False(t, NewAgyAdapter().CanHandle("gemini"))
+}
+
+// TestSwitchProgram_ClaudeToGemini_CleanlyClearsConversationState verifies AC0: a
+// claude->gemini switch never silently falls into an unhandled state. Since gemini isn't
+// history-portable via AgyAdapter, it takes the leaving-the-family ClearConversationState()
+// branch — same as any other non-family program — rather than being dropped on the floor.
+func TestSwitchProgram_ClaudeToGemini_CleanlyClearsConversationState(t *testing.T) {
+	inst := minimalInstance(t)
+	inst.Program = "claude"
+	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
+
+	changed, resolved, err := inst.SwitchProgram(context.Background(), "gemini", nil)
+
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, "gemini", resolved)
+	assert.Empty(t, inst.GetClaudeConversationUUID(), "switching to gemini must clear the stale claude UUID, not silently keep it")
+}
+
 // TestSwitchProgram_ConcurrentCalls_Serialize is a race-detector regression guard (run
 // under `go test -race`, part of `make ci`'s test-race target) for AC3: two goroutines
 // calling SwitchProgram on the same instance concurrently — mimicking a manual
