@@ -93,6 +93,8 @@ var riskLevelRank = map[string]int{
 // (GAP-004, docs/bugs/open/review-queue-gaps.md) so the review queue surfaces the item most
 // in need of attention rather than an arbitrary one. Ties keep the earliest (first-inserted)
 // approval, since approvals is already in creation order.
+//
+// Panics if approvals is empty — the only call site guards with len(approvals) > 0 first.
 func highestRiskApproval(approvals []ApprovalMetadata) ApprovalMetadata {
 	best := approvals[0]
 	for _, a := range approvals[1:] {

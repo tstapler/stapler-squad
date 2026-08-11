@@ -10,6 +10,7 @@ import { DailyBucketProto, SubcommandStatProto, AutoDecision, SuggestionSource }
 import { ProgramDetailPanel } from "./ProgramDetailPanel";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
+import { RISK_LEVEL_LABELS as BASE_RISK_LEVEL_LABELS } from "@/lib/sessions/riskLevel";
 import {
   panel, titleRow, title, refreshButton,
   windowSelector, windowBtn, windowBtnActive,
@@ -106,14 +107,11 @@ const ESCALATION_CATEGORY_LABELS: Record<EscalationCategory, string> = {
 };
 
 // Maps `risk_level` values (classifier.RiskLevel string form) to the human-readable labels
-// shown in the "Risk Level Breakdown" table. Same fallback contract as
-// ESCALATION_CATEGORY_LABELS above — unmapped keys render the raw string, never "undefined".
-const RISK_LEVEL_LABELS: Record<string, string> = {
-  critical: "Critical",
-  high: "High",
-  medium: "Medium",
-  low: "Low",
-};
+// shown in the "Risk Level Breakdown" table, sourced from riskLevel.ts's shared base labels
+// (also consumed by SeverityBadge.tsx). Same fallback contract as ESCALATION_CATEGORY_LABELS
+// above — unmapped keys render the raw string, never "undefined" — which is why this is typed
+// as Record<string, string> here rather than the narrower Record<RiskLevel, string>.
+const RISK_LEVEL_LABELS: Record<string, string> = BASE_RISK_LEVEL_LABELS;
 
 /**
  * ApprovalAnalyticsPanel displays time-series and aggregate data for

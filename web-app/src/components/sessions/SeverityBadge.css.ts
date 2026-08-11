@@ -6,10 +6,13 @@ export const badge = recipe({
   base: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "4px",
+    gap: vars.space[1],
+    // ponytail: padding stays sub-token-grain (the space scale starts at 4px, too coarse
+    // for a tight badge) — matches StatusBadge.css.ts's identical "3px 10px", not a new
+    // one-off value.
     padding: "3px 10px",
-    borderRadius: "12px",
-    fontSize: "0.75rem",
+    borderRadius: vars.radii.lg,
+    fontSize: vars.fontSize.xs,
     fontWeight: 600,
     whiteSpace: "nowrap",
   },
@@ -18,6 +21,7 @@ export const badge = recipe({
       critical: {
         background: vars.color.criticalBg,
         color: vars.color.criticalText,
+        border: `1px solid ${vars.color.critical}`,
       },
       high: {
         background: vars.color.errorBg,
@@ -45,6 +49,6 @@ export const badge = recipe({
 });
 
 export const icon = style({
-  fontSize: "0.8125rem",
+  fontSize: vars.fontSize.sm,
   lineHeight: 1,
 });

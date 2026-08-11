@@ -17,3 +17,14 @@ const RISK_LEVEL_RANK: Record<string, number> = {
 export function riskLevelRank(riskLevel: string): number {
   return RISK_LEVEL_RANK[riskLevel] ?? RISK_LEVEL_RANK[""];
 }
+
+// Single source for the 4 base human-readable labels — consumed by both SeverityBadge.tsx
+// (which layers its own "Severity not recorded" fallback on top for "") and
+// ApprovalAnalyticsPanel.tsx (which falls back to the raw string for forward-compat with an
+// unrecognized future level). Keep the fallback logic at each call site, not here.
+export const RISK_LEVEL_LABELS: Record<RiskLevel, string> = {
+  critical: "Critical",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};

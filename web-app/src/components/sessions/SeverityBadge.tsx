@@ -1,6 +1,7 @@
 "use client";
 // +feature: severity-badge
 
+import { RISK_LEVEL_LABELS } from "@/lib/sessions/riskLevel";
 import * as styles from "./SeverityBadge.css";
 
 type SeverityVariant = "critical" | "high" | "medium" | "low" | "unknown";
@@ -18,13 +19,13 @@ interface SeverityInfo {
 export function getRiskLevelInfo(riskLevel: string): SeverityInfo {
   switch (riskLevel) {
     case "critical":
-      return { label: "Critical", abbr: "CRIT", icon: "⛔", variant: "critical" };
+      return { label: RISK_LEVEL_LABELS.critical, abbr: "CRIT", icon: "⛔", variant: "critical" };
     case "high":
-      return { label: "High", abbr: "HIGH", icon: "🔴", variant: "high" };
+      return { label: RISK_LEVEL_LABELS.high, abbr: "HIGH", icon: "🔴", variant: "high" };
     case "medium":
-      return { label: "Medium", abbr: "MED", icon: "🟠", variant: "medium" };
+      return { label: RISK_LEVEL_LABELS.medium, abbr: "MED", icon: "🟠", variant: "medium" };
     case "low":
-      return { label: "Low", abbr: "LOW", icon: "🟢", variant: "low" };
+      return { label: RISK_LEVEL_LABELS.low, abbr: "LOW", icon: "🟢", variant: "low" };
     default:
       return { label: "Severity not recorded", abbr: "N/A", icon: "⚪", variant: "unknown" };
   }
@@ -40,9 +41,14 @@ export function SeverityBadge({ riskLevel, compact = false }: SeverityBadgeProps
   const ariaLabel = info.variant === "unknown" ? info.label : `${info.label} risk`;
 
   return (
+    // role="img" (not "status"): this badge is static once mounted, not a live region.
+    // role="status" implies aria-live="polite" — with many badges on one page (every
+    // ReviewQueuePanel row, every ApprovalRulesPanel row), that risks a burst of
+    // screen-reader announcements on initial render/re-sort instead of announcing only
+    // genuine changes. "img" still exposes aria-label as a single readable unit.
     <span
       className={styles.badge({ level: info.variant, compact })}
-      role="status"
+      role="img"
       aria-label={ariaLabel}
       title={ariaLabel}
       data-testid={`severity-badge-${riskLevel || "unrecorded"}`}

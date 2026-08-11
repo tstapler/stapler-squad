@@ -15,29 +15,29 @@ import { SeverityBadge, getRiskLevelInfo } from "../SeverityBadge";
 describe("SeverityBadge", () => {
   it("SeverityBadge_should_RenderCriticalBadgeWithIconAndLabel_When_RiskLevelIsCritical", () => {
     render(<SeverityBadge riskLevel="critical" />);
-    const el = screen.getByRole("status");
+    const el = screen.getByRole("img");
     expect(el).toHaveAttribute("aria-label", "Critical risk");
     expect(screen.getByText("Critical")).toBeInTheDocument();
   });
 
   it("renders High/Medium/Low with correct label and aria-label", () => {
     const { rerender } = render(<SeverityBadge riskLevel="high" />);
-    expect(screen.getByRole("status")).toHaveAttribute("aria-label", "High risk");
+    expect(screen.getByRole("img")).toHaveAttribute("aria-label", "High risk");
     expect(screen.getByText("High")).toBeInTheDocument();
 
     rerender(<SeverityBadge riskLevel="medium" />);
-    expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Medium risk");
+    expect(screen.getByRole("img")).toHaveAttribute("aria-label", "Medium risk");
     expect(screen.getByText("Medium")).toBeInTheDocument();
 
     rerender(<SeverityBadge riskLevel="low" />);
-    expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Low risk");
+    expect(screen.getByRole("img")).toHaveAttribute("aria-label", "Low risk");
     expect(screen.getByText("Low")).toBeInTheDocument();
   });
 
   it("SeverityBadge_should_RenderNotRecordedState_When_RiskLevelIsEmptyString", () => {
     render(<SeverityBadge riskLevel="" />);
     expect(screen.getByText("Severity not recorded")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Severity not recorded");
+    expect(screen.getByRole("img")).toHaveAttribute("aria-label", "Severity not recorded");
     expect(screen.queryByText("Low")).not.toBeInTheDocument();
   });
 
@@ -54,8 +54,8 @@ describe("SeverityBadge", () => {
 
     const { container: unrecordedContainer } = render(<SeverityBadge riskLevel="" />);
     const { container: lowContainer } = render(<SeverityBadge riskLevel="low" />);
-    expect(unrecordedContainer.querySelector('[role="status"]')!.getAttribute("aria-label"))
-      .not.toBe(lowContainer.querySelector('[role="status"]')!.getAttribute("aria-label"));
+    expect(unrecordedContainer.querySelector('[role="img"]')!.getAttribute("aria-label"))
+      .not.toBe(lowContainer.querySelector('[role="img"]')!.getAttribute("aria-label"));
   });
 
   it("renders the compact abbreviation instead of the full label", () => {

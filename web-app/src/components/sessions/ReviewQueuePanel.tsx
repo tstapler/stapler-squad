@@ -138,6 +138,11 @@ const REVIEW_GROUPING_STRATEGIES = [
 
 const SORT_FIELDS: SortField[] = ["severity", "priority", "age", "diffSize", "name"];
 
+// The baseline default sort (AC3: severity-first). Referenced everywhere "severity is the
+// no-filter-applied sort" matters (initial state fallback, URL suppression, clear-all reset,
+// active-filter-count exemption) so a future change to the default only needs one edit.
+const DEFAULT_SORT_FIELD: SortField = "severity";
+
 // Sentinel Set/URL member for "risk_level metadata key absent" — kept distinct from the
 // literal empty string since parseStrSet/joinSet drop empty strings on the comma-joined
 // URL round trip. Never confused with a real RiskLevel value.
@@ -208,6 +213,16 @@ function parseNumSet(v: string | undefined): Set<number> {
 
 function parseStrSet(v: string | undefined): Set<string> {
   return new Set(v ? v.split(",").filter(Boolean) : []);
+}
+
+// Resolves the initial sortField from the URL. "default" (natural queue order) is a valid,
+// explicitly-selectable SortField that SORT_FIELDS deliberately excludes (it's the pre-AC3
+// baseline this feature replaced) — checked first so an old bookmarked `?sort=default` URL
+// still round-trips. Any other missing/unrecognized value falls back to DEFAULT_SORT_FIELD.
+function resolveInitialSortField(urlSort: string | undefined): SortField {
+  if (urlSort === "default") return "default";
+  if (urlSort && (SORT_FIELDS as string[]).includes(urlSort)) return urlSort as SortField;
+  return DEFAULT_SORT_FIELD;
 }
 
 // Minimal Session shape for groupSessions() — only the fields grouping strategies read.
@@ -287,13 +302,7 @@ export function ReviewQueuePanel({
   // Default sort is "severity" (highest risk first, AC3) — "default" (natural
   // server/queue order) remains a selectable option but is no longer the fallback when no
   // sort param is present in the URL.
-  const [sortField, setSortField] = useState<SortField>(() =>
-    urlFilters.sort === "default"
-      ? "default"
-      : urlFilters.sort && (SORT_FIELDS as string[]).includes(urlFilters.sort)
-      ? (urlFilters.sort as SortField)
-      : "severity"
-  );
+  const [sortField, setSortField] = useState<SortField>(() => resolveInitialSortField(urlFilters.sort));
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">(() => (urlFilters.dir === "desc" ? "desc" : "asc"));
   const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
     urlFilters.group && REVIEW_GROUPING_STRATEGIES.includes(urlFilters.group as GroupingStrategy)
@@ -706,9 +715,9 @@ export function ReviewQueuePanel({
 
   const handleSortFieldChange = (value: SortField) => {
     setSortField(value);
-    // "severity" is the baseline default (AC3) — omit from the URL like "default" used to be,
-    // so a plain/no-param URL still resolves to severity sort via the initial-state fallback.
-    setUrlFilter("sort", value === "severity" ? undefined : value);
+    // DEFAULT_SORT_FIELD is omitted from the URL like "default" used to be, so a plain/
+    // no-param URL still resolves to severity sort via resolveInitialSortField's fallback.
+    setUrlFilter("sort", value === DEFAULT_SORT_FIELD ? undefined : value);
   };
 
   const handleSortDirectionChange = (value: "asc" | "desc") => {
@@ -735,7 +744,7 @@ export function ReviewQueuePanel({
     setPrFilter("all");
     setDivergedOnly(false);
     setSearchText("");
-    setSortField("severity");
+    setSortField(DEFAULT_SORT_FIELD);
     setSortDirection("asc");
     setGroupingStrategy(GroupingStrategy.None);
     clearUrlFilters();
@@ -771,9 +780,9 @@ export function ReviewQueuePanel({
     (prFilter !== "all" ? 1 : 0) +
     (divergedOnly ? 1 : 0) +
     (searchText.trim() ? 1 : 0) +
-    // "severity" is the baseline default sort (AC3) — only count as an active filter when
-    // the user has deviated from it (mirrors "default"'s old exemption before this feature).
-    (sortField !== "severity" ? 1 : 0) +
+    // Only count as an active filter when the user has deviated from DEFAULT_SORT_FIELD
+    // (mirrors "default"'s old exemption before this feature).
+    (sortField !== DEFAULT_SORT_FIELD ? 1 : 0) +
     (groupingStrategy !== GroupingStrategy.None ? 1 : 0);
 
   const activeFilterLabel = activeFilterCount > 0 ? `Filter (${activeFilterCount})` : "Filter";
