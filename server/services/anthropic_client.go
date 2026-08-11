@@ -1,0 +1,143 @@
+package services
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+const (
+	anthropicAPIURL  = "https://api.anthropic.com/v1/messages"
+	anthropicModel   = "claude-haiku-4-5-20251001"
+	anthropicVersion = "2023-06-01"
+)
+
+// AnthropicAIClient implements AIClient using the Anthropic Messages API.
+// It accepts a Credential rather than a raw API key string so that both
+// API-key users and Claude subscription (OAuth) users are supported.
+type AnthropicAIClient struct {
+	cred              Credential
+	client            *http.Client
+	model             string
+	OnResponseHeaders func(http.Header)
+}
+
+// NewAnthropicAIClient creates an AnthropicAIClient from a resolved Credential.
+// Returns an error if the credential is not valid for Anthropic.
+func NewAnthropicAIClient(cred Credential) (*AnthropicAIClient, error) {
+	if !cred.IsValid() {
+		return nil, fmt.Errorf("AnthropicAIClient: credential is empty (source: %q)", cred.Source)
+	}
+	return &AnthropicAIClient{
+		cred:   cred,
+		model:  anthropicModel,
+		client: &http.Client{Timeout: 30 * time.Second},
+	}, nil
+}
+
+// NewAnthropicAIClientFromKey is a convenience constructor for callers that
+// already have a raw API key string (e.g. tests, legacy wiring).
+// Prefer NewAnthropicAIClient + CredentialChain for new code.
+func NewAnthropicAIClientFromKey(apiKey string) (*AnthropicAIClient, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("AnthropicAIClient: apiKey must not be empty")
+	}
+	return NewAnthropicAIClient(Credential{
+		Provider: "anthropic",
+		APIKey:   apiKey,
+		Source:   "direct_key",
+	})
+}
+
+// authHeaders sets the appropriate authentication headers on req.
+// Anthropic accepts two auth styles:
+//   - API key users:        x-api-key: <key>
+//   - Subscription (OAuth): Authorization: Bearer <token>
+func (c *AnthropicAIClient) authHeaders(req *http.Request) {
+	req.Header.Set("anthropic-version", anthropicVersion)
+	req.Header.Set("Content-Type", "application/json")
+	key, val, _ := c.cred.AnthropicAuthHeader()
+	if key != "" {
+		req.Header.Set(key, val)
+	}
+}
+
+// anthropicRequest is the JSON body sent to the Anthropic Messages API.
+type anthropicRequest struct {
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    string             `json:"system"`
+	Messages  []anthropicMessage `json:"messages"`
+}
+
+type anthropicMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// anthropicResponse is the minimal JSON shape returned by the Anthropic Messages API.
+type anthropicResponse struct {
+	Content []struct {
+		Text string `json:"text"`
+		Type string `json:"type"`
+	} `json:"content"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// Complete sends systemPrompt and userPrompt to the Anthropic API and returns the response text.
+// ctx cancellation aborts the outbound HTTP request.
+func (c *AnthropicAIClient) Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	reqBody := anthropicRequest{
+		Model:     c.model,
+		MaxTokens: 2048,
+		System:    systemPrompt,
+		Messages: []anthropicMessage{
+			{Role: "user", Content: userPrompt},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("anthropic: marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("anthropic: create request: %w", err)
+	}
+	c.authHeaders(httpReq)
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("anthropic: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if c.OnResponseHeaders != nil {
+		c.OnResponseHeaders(resp.Header)
+	}
+
+	var apiResp anthropicResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return "", fmt.Errorf("anthropic: decode response (status %d): %w", resp.StatusCode, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		msg := fmt.Sprintf("status %d", resp.StatusCode)
+		if apiResp.Error != nil {
+			msg = fmt.Sprintf("status %d: %s: %s", resp.StatusCode, apiResp.Error.Type, apiResp.Error.Message)
+		}
+		return "", fmt.Errorf("anthropic: API error: %s", msg)
+	}
+
+	if len(apiResp.Content) == 0 {
+		return "", fmt.Errorf("anthropic: empty content in response")
+	}
+	return apiResp.Content[0].Text, nil
+}

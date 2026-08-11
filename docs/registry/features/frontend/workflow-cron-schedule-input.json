@@ -1,0 +1,20 @@
+{
+  "id": "workflow-cron-schedule-input",
+  "type": "frontend",
+  "component": "CronScheduleInput",
+  "path": "web-app/src/components/workflows/CronScheduleInput.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "CronScheduleInput starts in Simple mode for an empty value and builds a daily cron string",
+    "CronScheduleInput Simple dropdowns call onChange with the correct cron string per frequency",
+    "CronScheduleInput shows an inline error for an invalid Advanced expression",
+    "CronScheduleInput Advanced -> Simple falls back to a raw-editor notice instead of discarding a step expression",
+    "CronScheduleInput Simple -> Advanced preserves the exact cron string the builder computed",
+    "CronScheduleInput renders the accessible pieces: radiogroup, aria-live explanation, timezone note",
+    "workflow-cron-schedule-input_should_acceptRawCronText_When_powerUserTypesInAdvancedMode",
+    "workflow-cron-schedule-input_should_buildCronFromDropdowns_When_userHasNoCronKnowledge",
+    "workflow-cron-schedule-input_should_blockSubmit_When_advancedExpressionIsInvalid"
+  ],
+  "lastModified": "2026-07-24T00:00:00Z"
+}

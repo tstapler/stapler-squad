@@ -1,0 +1,214 @@
+package services
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
+)
+
+const (
+	sessionUploadMaxBytes = 10 * 1024 * 1024 // 10 MB
+	sessionUploadDirMode  = 0o750
+	sessionUploadFileMode = 0o600
+)
+
+// instanceFinder resolves a session by ID without restarting sessions.
+// Implemented by ReviewQueuePoller.
+type instanceFinder interface {
+	FindInstance(sessionID string) *session.Instance
+}
+
+// SessionImageUploadHandler saves uploaded files to a session's uploads/ directory
+// and returns the absolute path so the terminal process can reference the file.
+type SessionImageUploadHandler struct {
+	storage session.InstanceStore
+	finder  instanceFinder // preferred: in-memory lookup via poller
+}
+
+// NewSessionImageUploadHandler creates a new handler backed by the given InstanceStore.
+// Pass the ReviewQueuePoller as finder to avoid the LoadInstances() restart side-effect.
+// The handler accepts any file type (not limited to images) up to 10 MB.
+func NewSessionImageUploadHandler(storage session.InstanceStore, finder instanceFinder) *SessionImageUploadHandler {
+	return &SessionImageUploadHandler{storage: storage, finder: finder}
+}
+
+// sessionImageUploadResponse is the JSON returned on success.
+type sessionImageUploadResponse struct {
+	Path     string `json:"path"`
+	Filename string `json:"filename"`
+}
+
+// sanitizeFilename strips path components and limits length to 100 characters.
+// Returns "upload" if the sanitized result is empty or a reserved name.
+func sanitizeFilename(name string) string {
+	// filepath.Base removes any directory component (path traversal defense).
+	name = filepath.Base(name)
+	// Replace any remaining path separators and null bytes.
+	name = strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == 0 {
+			return '_'
+		}
+		return r
+	}, name)
+	// Limit to 100 characters preserving the extension when feasible.
+	if len(name) > 100 {
+		ext := filepath.Ext(name)
+		prefixLen := 100 - len(ext)
+		if prefixLen > 0 {
+			name = name[:prefixLen] + ext
+		} else {
+			// Extension itself is too long — truncate the whole thing.
+			name = name[:100]
+		}
+	}
+	if name == "" || name == "." || name == ".." {
+		name = "upload"
+	}
+	return name
+}
+
+// +http: POST /api/v1/upload-image upload:file
+// HandleUpload processes a multipart/form-data POST with fields "session_id" and "file",
+// saves the file to <session_path>/uploads/ and returns the absolute path as JSON.
+// Any file type is accepted (not limited to images); the per-file size cap is 10 MB.
+func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Limit body to 10 MB file + multipart overhead (boundaries, headers, session_id field).
+	r.Body = http.MaxBytesReader(w, r.Body, sessionUploadMaxBytes+64*1024)
+	if err := r.ParseMultipartForm(sessionUploadMaxBytes); err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			http.Error(w, "file too large (max 10 MB)", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "bad multipart form", http.StatusBadRequest)
+		return
+	}
+
+	sessionID := r.FormValue("session_id")
+	if sessionID == "" {
+		http.Error(w, "session_id is required", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file field required: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Read first 512 bytes to detect empty uploads, then seek back so the full
+	// file (including the first 512 bytes) is written to disk.
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	buf = buf[:n]
+
+	if len(buf) == 0 {
+		http.Error(w, "uploaded file is empty", http.StatusBadRequest)
+		return
+	}
+
+	// Seek back so the full file (including the first 512 bytes) is written to disk.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Resolve session using live in-memory state when available (avoids restarting
+	// all sessions as a side-effect of LoadInstances → FromInstanceData → Start).
+	var inst *session.Instance
+	if h.finder != nil {
+		inst = h.finder.FindInstance(sessionID)
+	}
+	if inst == nil {
+		// Fallback: storage scan (also covers the no-poller test path).
+		instances, err := h.storage.LoadInstances()
+		if err != nil {
+			log.Error("[SessionImageUpload] LoadInstances", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		for _, i := range instances {
+			if i.MatchesID(sessionID) {
+				inst = i
+				break
+			}
+		}
+	}
+	if inst == nil {
+		log.Error("[SessionImageUpload] session not found", "session", sessionID)
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	if inst.Path == "" {
+		http.Error(w, "session has no working directory", http.StatusUnprocessableEntity)
+		return
+	}
+
+	// Verify the session's working directory exists on disk before attempting
+	// to create the uploads/ subdirectory — paused sessions may have had their
+	// worktree removed.
+	if _, statErr := os.Stat(inst.Path); statErr != nil {
+		http.Error(w, "session working directory is not accessible", http.StatusUnprocessableEntity)
+		return
+	}
+
+	uploadsDir := filepath.Join(inst.Path, "uploads")
+	if err := os.MkdirAll(uploadsDir, sessionUploadDirMode); err != nil {
+		log.Error("[SessionImageUpload] MkdirAll failed", "dir", uploadsDir, "err", err)
+		http.Error(w, "failed to create uploads directory", http.StatusInternalServerError)
+		return
+	}
+
+	safeName := sanitizeFilename(header.Filename)
+	ts := time.Now().UnixMilli()
+	pattern := fmt.Sprintf("%d-*-%s", ts, safeName)
+
+	f, err := os.CreateTemp(uploadsDir, pattern)
+	if err != nil {
+		log.Error("[SessionImageUpload] CreateTemp failed", "dir", uploadsDir, "err", err)
+		http.Error(w, "failed to save file", http.StatusInternalServerError)
+		return
+	}
+	savedPath := f.Name()
+
+	// Deferred cleanup on write error — avoids partial files on disk.
+	var writeErr error
+	defer func() {
+		if writeErr != nil {
+			os.Remove(savedPath) //nolint:errcheck
+		}
+	}()
+
+	if _, writeErr = io.Copy(f, file); writeErr != nil {
+		f.Close()
+		log.Error("[SessionImageUpload] write failed", "err", writeErr)
+		http.Error(w, "failed to save file", http.StatusInternalServerError)
+		return
+	}
+	f.Close()
+
+	if err := os.Chmod(savedPath, sessionUploadFileMode); err != nil {
+		log.Error("[SessionImageUpload] chmod failed (non-fatal)", "err", err)
+	}
+
+	log.Info("[SessionImageUpload] saved file", "session", sessionID, "path", savedPath)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(sessionImageUploadResponse{
+		Path:     savedPath,
+		Filename: filepath.Base(savedPath),
+	})
+}

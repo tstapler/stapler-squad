@@ -1,0 +1,156 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "plugins": ["boundaries", "analytics", "@typescript-eslint"],
+  "settings": {
+    "boundaries/elements": [
+      { "type": "app",        "pattern": "src/app/**" },
+      { "type": "layout",    "pattern": "src/components/layout/**" },
+      { "type": "providers", "pattern": "src/components/providers/**" },
+      { "type": "sessions",  "pattern": "src/components/sessions/**" },
+      { "type": "unfinished","pattern": "src/components/unfinished/**" },
+      { "type": "history",   "pattern": "src/components/history/**" },
+      { "type": "logs",      "pattern": "src/components/logs/**" },
+      { "type": "settings",  "pattern": "src/components/settings/**" },
+      { "type": "telemetry", "pattern": "src/components/telemetry/**" },
+      { "type": "ui",        "pattern": "src/components/ui/**" },
+      { "type": "shared",    "pattern": "src/components/shared/**" },
+      { "type": "lib",       "pattern": "src/lib/**" },
+      { "type": "gen",       "pattern": "src/gen/**" }
+    ],
+    "boundaries/ignore": [
+      "**/*.test.*",
+      "**/*.spec.*",
+      "src/lib/__tests__/**",
+      "src/lib/test-generators/**"
+    ]
+  },
+  "rules": {
+    "react/jsx-max-props-per-line": "off",
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "Literal[value='100vh']",
+        "message": "Use var(--viewport-height) instead of '100vh'. iOS virtual keyboard shrinks the visual viewport but not 100vh, hiding content behind the keyboard. ViewportProvider updates --viewport-height via the visualViewport API. See project_plans/ux-overhaul/."
+      },
+      {
+        "selector": "TemplateElement[value.raw=/\\b100vh\\b/]",
+        "message": "Use var(--viewport-height) instead of '100vh' in template literals. See project_plans/ux-overhaul/."
+      },
+      {
+        "selector": "Literal[value='100dvh']",
+        "message": "Use var(--viewport-height, 100dvh) instead of bare '100dvh'. dvh alone bypasses ViewportProvider's iOS keyboard handling (visualViewport API). The CSS variable is the single source of truth for both Android URL-bar and iOS keyboard shrinkage."
+      },
+      {
+        "selector": "TemplateElement[value.raw=/\\b100dvh\\b/]",
+        "message": "Use var(--viewport-height, 100dvh) instead of bare '100dvh' in template literals. See previous note on ViewportProvider."
+      },
+      {
+        "selector": "Literal[value='100lvh']",
+        "message": "Do not use '100lvh' — it equals the large (URL-bar-hidden) viewport height, the same problematic behaviour as '100vh' on Android Chrome. Use var(--viewport-height, 100dvh) instead."
+      },
+      {
+        "selector": "TemplateElement[value.raw=/\\b100lvh\\b/]",
+        "message": "Do not use '100lvh' in template literals — same issue as '100vh' on Android Chrome. Use var(--viewport-height, 100dvh)."
+      },
+      {
+        "selector": "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property > Literal[value=/^#[0-9a-fA-F]{3,8}$/]",
+        "message": "Use vars.color.* tokens from theme.css.ts instead of hardcoded hex values in style props."
+      },
+      {
+        "selector": "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property[key.name=/^(flexDirection|flexWrap|display|alignItems|alignSelf|justifyContent|justifySelf|order|flex|float|clear|gridColumn|gridRow|gridArea)$/]",
+        "message": "Avoid inline style for layout-managed properties. Use a data-* attribute + selectors in the matching .css.ts file so CSS cascade and theme overrides can win. See .claude/rules/css-architecture.md."
+      },
+      {
+        "selector": "ImportDeclaration[source.value='@/lib/telemetry']",
+        "message": "Use useAnalytics().track() instead of the legacy track() from lib/telemetry."
+      }
+    ],
+    "analytics/require-on-click":         "warn",
+    "analytics/require-omnibar-dispatch": "error",
+    "analytics/require-page-analytics":   "error",
+    "analytics/require-rpc-analytics":    "error",
+    "boundaries/dependencies": [
+      "error",
+      {
+        "default": "disallow",
+        "rules": [
+          {
+            "from": "app",
+            "allow": ["layout", "providers", "sessions", "unfinished", "history", "logs", "settings", "telemetry", "ui", "shared", "lib", "gen"]
+          },
+          {
+            "from": "layout",
+            "allow": ["providers", "sessions", "unfinished", "history", "logs", "settings", "telemetry", "ui", "shared", "lib", "gen"]
+          },
+          {
+            "from": "providers",
+            "allow": ["ui", "shared", "lib", "gen"]
+          },
+          {
+            "from": ["sessions", "unfinished", "history", "logs", "settings", "telemetry"],
+            "allow": ["providers", "ui", "shared", "lib", "gen"]
+          },
+          { "from": "ui",     "allow": ["lib", "gen"] },
+          { "from": "shared", "allow": ["lib", "gen"] },
+          { "from": "lib",    "allow": ["ui", "sessions", "gen"] },
+          { "from": "gen",    "allow": [] }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["**/*.ts", "**/*.tsx"],
+      "rules": {
+        "@typescript-eslint/no-non-null-assertion": "warn",
+        "@typescript-eslint/consistent-type-imports": "warn"
+      }
+    },
+    {
+      "files": ["src/app/test/**/*.tsx", "src/app/test/**/*.ts"],
+      "rules": {
+        "no-restricted-syntax": "off"
+      }
+    },
+    {
+      "files": ["**/*.css.ts"],
+      "rules": {
+        "no-restricted-syntax": [
+          "warn",
+          {
+            "selector": "Property > Literal[value=/^#[0-9a-fA-F]{3,8}$/]",
+            "message": "Hardcoded hex colors are not allowed in .css.ts files. Use vars.color.* tokens from theme-contract.css.ts."
+          },
+          {
+            "selector": "Property[key.name='zIndex'] > Literal[raw=/^[0-9]/]",
+            "message": "Hardcoded z-index numbers are not allowed. Add a named slot to zIndex in web-app/src/styles/theme-contract.css.ts and reference zIndex.yourSlot. This prevents invisible ordering collisions."
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/components/**/*.tsx"],
+      "rules": {
+        "no-restricted-syntax": [
+          "warn",
+          {
+            "selector": "TSInterfaceDeclaration[id.name=/Props$/] > TSInterfaceBody > TSPropertySignature:nth-child(13) ~ TSPropertySignature",
+            "message": "Component props interface has >12 props. Consider splitting the component or grouping props into a sub-interface."
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/lib/**/*.ts", "src/lib/**/*.tsx", "src/app/**/*.ts", "src/app/**/*.tsx"],
+      "rules": {
+        "no-restricted-syntax": [
+          "warn",
+          {
+            "selector": "Literal[value=/^(Executing|Processing|Needs Approval|Input Required|Idle|Unknown|Success|Error|Tests Failing|Rate Limited|Waiting for Agent)$/]",
+            "message": "Use DetectedStatus enum from @/gen/session/v1/types_pb instead of raw strings for detected status values."
+          }
+        ]
+      }
+    }
+  ]
+}

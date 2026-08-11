@@ -1,0 +1,62 @@
+name: 'Prepare: Protos, Ent ORM, and Web UI'
+description: 'Generates protobuf code, ent ORM code, and builds the web UI into server/web/dist'
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25.0'
+
+    - name: Set up pnpm
+      uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 10.27.0
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'pnpm'
+        cache-dependency-path: web-app/pnpm-lock.yaml
+
+    - name: Install web dependencies
+      shell: bash
+      run: cd web-app && pnpm install --frozen-lockfile
+
+    - name: Set up buf
+      uses: bufbuild/buf-setup-action@v1
+      with:
+        version: '1.41.0'
+
+    - name: Generate protobuf code
+      shell: bash
+      run: buf generate
+
+    - name: Generate ent ORM code
+      shell: bash
+      run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
+    # Warms webpack's persistent cache (which holds next/font's downloaded
+    # font files) across runs, so most builds skip the fonts.gstatic.com
+    # network fetch entirely instead of relying on the retry below.
+    - name: Cache Next.js build cache
+      uses: actions/cache@v4
+      with:
+        path: web-app/.next/cache
+        key: nextjs-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+        restore-keys: |
+          nextjs-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+          nextjs-${{ runner.os }}-
+
+    - name: Build web UI
+      shell: bash
+      working-directory: web-app
+      # next/font fetches fonts from fonts.gstatic.com at build time; retry
+      # with backoff since that's an external network call, not our code.
+      run: ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
+
+    - name: Copy web UI to dist
+      shell: bash
+      run: cp -r web-app/out server/web/dist

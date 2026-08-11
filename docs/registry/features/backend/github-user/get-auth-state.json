@@ -1,0 +1,12 @@
+{
+  "id": "github-user:get-auth-state",
+  "type": "backend",
+  "service": "GitHubUserService",
+  "method": "GetGitHubAuthState",
+  "protoFile": "proto/session/v1/github_user.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/github_user_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-29T15:52:12.946168548-07:00"
+}

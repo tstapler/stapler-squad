@@ -1,0 +1,8 @@
+Here is how to set up the project locally:
+
+> 1. Clone the repository with `git clone https://github.com/example/repo`
+> 2. Install dependencies by running `npm install`
+> 3. Copy `.env.example` to `.env` and fill in your credentials
+> 4. Start the development server with `npm run dev`
+
+Let me know if you run into any issues with these steps.

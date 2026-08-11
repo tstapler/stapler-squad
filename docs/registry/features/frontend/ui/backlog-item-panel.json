@@ -1,0 +1,15 @@
+{
+  "id": "backlog-item-panel",
+  "type": "frontend",
+  "component": "BacklogItemPanel",
+  "path": "web-app/src/components/backlog/BacklogItemPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "BacklogItemPanel — live updates (Task 5.4.1b) — reflects a status change applied to the store without re-fetching",
+    "BacklogItemPanel — terminal state (Task 5.4.1c) — replaces the View full item action with an InlineNotice when the linked item is archived",
+    "BacklogItemPanel — terminal state (Task 5.4.1c) — replaces the View full item action with an InlineNotice when the linked item is removed",
+    "BacklogItemPanel — terminal state (Task 5.4.1c) — ignores archive/removed events for a different item"
+  ],
+  "lastModified": "2026-07-22T00:00:00Z"
+}

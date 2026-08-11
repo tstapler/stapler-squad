@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package session.v1;
+
+// HeadlessService provides streaming LLM calls via the headless pool.
+service HeadlessService {
+  // RunHeadlessCall runs a headless LLM call and streams chunks back to the client.
+  rpc RunHeadlessCall(RunHeadlessCallRequest) returns (stream RunHeadlessCallResponse) {}
+}
+
+// RunHeadlessCallRequest specifies the parameters for a headless LLM call.
+message RunHeadlessCallRequest {
+  // feature_key identifies which AI feature session pool to use.
+  // Allowed values: "review", "summarize", "pr-description", "commit-message", "custom".
+  string feature_key = 1;
+
+  // system_prompt is the stable system-level instruction sent on first call.
+  string system_prompt = 2;
+
+  // user_prompt is the per-call user message.
+  string user_prompt = 3;
+
+  // model overrides the pool's default model for this call.
+  string model = 4;
+
+  // timeout_seconds overrides the default timeout (default: 900s, max: 1800s).
+  int32 timeout_seconds = 5;
+}
+
+// RunHeadlessCallResponse is a single streaming chunk from the LLM response.
+message RunHeadlessCallResponse {
+  // text is the streamed text fragment. May be empty for error/done-only messages.
+  string text = 1;
+
+  // done is true when this is the final chunk.
+  bool done = 2;
+
+  // is_error is true when an error occurred.
+  bool is_error = 3;
+
+  // error_message contains the error description when is_error is true.
+  string error_message = 4;
+
+  // cost_usd is the estimated cost for this call (only set on the final chunk).
+  double cost_usd = 5;
+}

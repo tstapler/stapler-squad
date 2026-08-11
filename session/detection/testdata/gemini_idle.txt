@@ -1,0 +1,3 @@
+Shift+Tab to accept edits                                          1 GEMINI.md file · 63 skills
+> ▌
+[INSERT]         ~/dotfiles          master          untrusted          Auto (Gemini 3)          528.8 MB

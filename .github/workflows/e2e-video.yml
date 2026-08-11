@@ -1,0 +1,320 @@
+name: E2E Feature Video Capture
+
+# Runs on PRs that touch feature-marked files.
+# Only records feature demo specs (not benchmarks or a11y).
+# Sharded across 2 runners for faster execution.
+# GIFs are bundled into a single self-contained HTML preview page (archive:false)
+# so reviewers can view demos directly in the browser without downloading a ZIP.
+# Raw WebM recordings are uploaded as a ZIP for debugging.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+
+# Feature specs recorded — excludes:
+#   terminal-flickering.spec.ts  (benchmarks/stress tests)
+#   accessibility.spec.ts        (handled by ux-analysis workflow)
+#   smoke.spec.ts                (too short for meaningful video)
+env:
+  FEATURE_SPECS: >-
+    demo.spec.ts
+    review-queue.spec.ts
+    session-lifecycle.spec.ts
+    history-search.spec.ts
+    workspace-management.spec.ts
+
+jobs:
+  detect-feature-changes:
+    name: Detect Feature Changes
+    runs-on: ubuntu-latest
+    outputs:
+      record_features: ${{ steps.detect.outputs.record_features }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect feature-marked file changes
+        id: detect
+        run: |
+          set +e
+          ./tools/ci/detect-feature-changes.sh origin/main
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "record_features=true" >> $GITHUB_OUTPUT
+            echo "Feature changes detected — video recording will be enabled"
+          else
+            echo "record_features=false" >> $GITHUB_OUTPUT
+            echo "No feature changes — skipping video recording"
+          fi
+
+  e2e-video:
+    name: Record E2E Feature Videos (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-22.04  # Pinned to avoid VP8/VP9 codec surprises
+    needs: detect-feature-changes
+    if: needs.detect-feature-changes.outputs.record_features == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate protos and build web UI
+        uses: ./.github/actions/prepare
+
+      - name: Build binary
+        run: go build -o stapler-squad .
+
+      - name: Install Playwright dependencies
+        run: |
+          cd tests/e2e
+          pnpm install --frozen-lockfile
+          npx playwright install chromium --with-deps
+
+      - name: Run feature E2E specs (shard ${{ matrix.shard }}/2)
+        env:
+          RECORD_FEATURES: 'true'
+          TEST_SERVER_URL: http://localhost:8543
+        run: |
+          DEMO_DIR=$(mktemp -d)
+          go run ./tests/demo/seed "$DEMO_DIR" 6
+          echo "Seeded demo data into $DEMO_DIR"
+
+          STAPLER_SQUAD_USE_CONTROL_MODE=false \
+            ./stapler-squad --tmux-keep-server --test-mode --test-dir "$DEMO_DIR" &
+          SERVER_PID=$!
+
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8543/ > /dev/null 2>&1; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          cd tests/e2e
+          npx playwright test ${{ env.FEATURE_SPECS }} \
+            --shard=${{ matrix.shard }}/2 \
+            --reporter=list || true
+
+          kill $SERVER_PID 2>/dev/null || true
+          rm -rf "$DEMO_DIR"
+
+      - name: Validate video files were created
+        id: validate-videos
+        run: |
+          VIDEO_COUNT=$(find tests/e2e/test-results -name "*.webm" 2>/dev/null | wc -l || echo 0)
+          echo "video_count=${VIDEO_COUNT}" >> $GITHUB_OUTPUT
+          echo "Found ${VIDEO_COUNT} video file(s) in shard ${{ matrix.shard }}"
+
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Convert videos to GIFs
+        id: convert-gifs
+        if: steps.validate-videos.outputs.video_count != '0'
+        run: |
+          mkdir -p /tmp/demo-gifs
+          NAMES=""
+          WEBMS=$(
+            # demo first (likely in shard 1)
+            find tests/e2e/test-results/demo-Demo-Flow-chromium \
+              -maxdepth 1 -name "video.webm" 2>/dev/null | head -1
+            # remaining feature flows
+            find tests/e2e/test-results -maxdepth 2 -name "video.webm" 2>/dev/null \
+              | grep -v "demo-Demo-Flow" \
+              | grep -iv "\-retry[0-9]"
+          )
+          for webm in $WEBMS; do
+            dir=$(basename "$(dirname "$webm")")
+            name=$(echo "$dir" | sed 's/-chromium$//;s/-firefox$//;s/-webkit$//')
+            gif="/tmp/demo-gifs/${name}.gif"
+            duration=$(ffprobe -v quiet -show_entries format=duration \
+              -of default=noprint_wrappers=1:nokey=1 "$webm" 2>/dev/null)
+            if [ -z "$duration" ] || awk "BEGIN{exit !(${duration:-0} < 1.0)}"; then
+              echo "Skipping $webm (too short: ${duration:-unknown}s)"
+              continue
+            fi
+            palette=$(mktemp --suffix=.png)
+            echo "Converting $webm -> $gif"
+            if ffmpeg -y -i "$webm" -vf "fps=8,scale=960:-2,palettegen=max_colors=128" -t 30 "$palette" 2>&1 \
+               && ffmpeg -y -i "$webm" -i "$palette" \
+                 -lavfi "fps=8,scale=960:-2[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=3" \
+                 -loop 0 -t 30 "$gif" 2>&1; then
+              NAMES="${NAMES}${name},"
+              echo "Created $gif ($(du -h "$gif" | cut -f1))"
+            else
+              echo "Warning: ffmpeg conversion failed for $webm"
+            fi
+            rm -f "$palette"
+          done
+          echo "names=${NAMES%,}" >> $GITHUB_OUTPUT
+          if [ -z "$NAMES" ]; then
+            echo "::warning::No GIFs produced in shard ${{ matrix.shard }} — WebM artifacts still available"
+          fi
+
+      - name: Bundle GIFs into HTML preview (shard ${{ matrix.shard }})
+        id: bundle-preview
+        if: steps.convert-gifs.outputs.names != ''
+        run: |
+          PREVIEW="/tmp/demo-preview-shard${{ matrix.shard }}.html"
+          cat > "$PREVIEW" << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>E2E Feature Demos</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                   max-width: 1100px; margin: 0 auto; padding: 24px;
+                   background: #0d1117; color: #e6edf3; }
+            h1   { color: #58a6ff; margin-bottom: 4px; }
+            p.sub { color: #8b949e; margin-top: 0; font-size: .9em; }
+            .demo { margin: 32px 0; }
+            .demo h2 { color: #79c0ff; font-size: 1em; margin-bottom: 8px; }
+            img  { width: 100%; border-radius: 6px; border: 1px solid #30363d; }
+          </style>
+          </head>
+          <body>
+          <h1>🎬 E2E Feature Demos</h1>
+          <p class="sub">Shard ${{ matrix.shard }}/2 — auto-generated from CI run</p>
+          HTMLEOF
+
+          for gif in /tmp/demo-gifs/*.gif; do
+            [ -f "$gif" ] || continue
+            name=$(basename "$gif" .gif)
+            b64=$(base64 -w0 < "$gif")
+            printf '<div class="demo"><h2>%s</h2><img src="data:image/gif;base64,%s" alt="%s"></div>\n' \
+              "$name" "$b64" "$name" >> "$PREVIEW"
+          done
+
+          echo "</body></html>" >> "$PREVIEW"
+          SIZE=$(du -h "$PREVIEW" | cut -f1)
+          echo "Created $PREVIEW ($SIZE)"
+          echo "preview_path=$PREVIEW" >> $GITHUB_OUTPUT
+
+      - name: Upload GIF preview (shard ${{ matrix.shard }})
+        id: upload-gifs
+        if: steps.bundle-preview.outputs.preview_path != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-preview-pr${{ github.event.number }}-shard${{ matrix.shard }}
+          path: ${{ steps.bundle-preview.outputs.preview_path }}
+          retention-days: 30
+          archive: false
+        continue-on-error: true
+
+      - name: Upload videos (shard ${{ matrix.shard }})
+        id: upload-videos
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-videos-pr${{ github.event.number }}-shard${{ matrix.shard }}
+          path: tests/e2e/test-results/
+          retention-days: 30
+        continue-on-error: true
+
+  notify:
+    name: Post PR Comment
+    runs-on: ubuntu-latest
+    needs: [detect-feature-changes, e2e-video]
+    if: always() && github.event_name == 'pull_request' && needs.detect-feature-changes.outputs.record_features == 'true'
+    steps:
+      - name: Post PR comment with artifact links
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- e2e-videos -->';
+            const pr = context.issue.number;
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            // Find all artifacts for this run matching our naming pattern
+            const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+
+            const gifArtifacts = artifacts
+              .filter(a => a.name.startsWith(`e2e-preview-pr${pr}-shard`))
+              .sort((a, b) => a.name.localeCompare(b.name));
+
+            const videoArtifacts = artifacts
+              .filter(a => a.name.startsWith(`e2e-videos-pr${pr}-shard`))
+              .sort((a, b) => a.name.localeCompare(b.name));
+
+            const shardLinks = videoArtifacts.map((a, i) => {
+              const gifArtifact = gifArtifacts[i];
+              const shard = i + 1;
+              const parts = [];
+              if (gifArtifact) parts.push(`[▶ Demo preview shard ${shard}](${gifArtifact.url})`);
+              parts.push(`[recordings shard ${shard}](${a.url})`);
+              return parts.join(' · ');
+            });
+
+            let lines;
+            if (videoArtifacts.length === 0) {
+              lines = [
+                '## ⚠️ E2E Video Recording',
+                '',
+                'No video artifacts were produced. Check the workflow run for details.',
+                '',
+                `[View workflow run](${runUrl})`,
+              ];
+            } else {
+              lines = [
+                '## 🎬 E2E Feature Demos',
+                '',
+                `**${videoArtifacts.length} shard(s)** recorded feature flows for this PR.`,
+                '',
+                ...shardLinks,
+                '',
+                '_Demo preview opens directly in browser (single-file HTML). Raw WebM recordings in ZIP. Expires after 30 days._',
+              ];
+            }
+
+            const body = [marker, ...lines].join('\n');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr,
+                body,
+              });
+            }

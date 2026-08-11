@@ -1,0 +1,41 @@
+# Claude Code Status Detection Patterns
+# Only detect what REQUIRES attention - everything else is idle/done by default
+
+# Claude is actively working
+active:
+  - name: esc_to_interrupt
+    pattern: "\\(esc to interrupt\\)"
+    description: "Claude actively processing"
+    priority: 25
+
+# Claude needs permission
+needs_approval:
+  - name: claude_permission
+    pattern: "(?i)(Yes, allow reading|Yes, allow writing|Yes, allow once|No, and tell Claude)"
+    description: "Claude Code permission prompt"
+    priority: 20
+
+  - name: proceed_confirmation
+    pattern: "(?i)Do you want to proceed\\?"
+    description: "Confirmation prompt"
+    priority: 19
+
+# Errors only
+error:
+  - name: error_message
+    pattern: "(?i)\\b(error|failed|exception|fatal)\\b"
+    description: "Error occurred"
+    priority: 30
+
+  - name: validation_error
+    pattern: "(?i)\\b(unrecognized|invalid|unsupported|unexpected|unknown)\\b"
+    description: "Validation/configuration error"
+    priority: 30
+
+# Disable everything else - if none of the above match, it's idle/done (default state)
+tests_failing: []
+processing: []
+input_required: []
+success: []
+ready: []
+idle: []

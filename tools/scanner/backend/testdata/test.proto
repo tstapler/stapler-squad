@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package session.v1;
+
+message CreateSessionRequest {
+  string name = 1;
+}
+
+message CreateSessionResponse {
+  string id = 1;
+}
+
+message ListSessionsRequest {}
+
+message ListSessionsResponse {
+  repeated string ids = 1;
+}
+
+message DeleteSessionRequest {
+  string id = 1;
+}
+
+message DeleteSessionResponse {}
+
+service SessionService {
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse) {}
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse) {}
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse) {}
+}

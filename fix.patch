@@ -1,0 +1,28 @@
+--- session/mux/multiplexer.go
++++ session/mux/multiplexer.go
+@@ -691,12 +691,12 @@
+		return 1, err
+	}
+
+-	// Handle terminal resize (SIGWINCH)
++	// Handle terminal resize (SIGWINCH) - uses local signal handler wrapper for cross-platform support
+	sigwinch := make(chan os.Signal, 1)
+-	signal.Notify(sigwinch, syscall.SIGWINCH)
++	notifyWinch(sigwinch)
+
+	// Handle termination signals
+	sigterm := make(chan os.Signal, 1)
+	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
+
+@@ -738,12 +738,12 @@
+		return 1, err
+	}
+
+-	// Handle terminal resize (SIGWINCH)
++	// Handle terminal resize (SIGWINCH) - uses local signal handler wrapper for cross-platform support
+	sigwinch := make(chan os.Signal, 1)
+-	signal.Notify(sigwinch, syscall.SIGWINCH)
++	notifyWinch(sigwinch)
+
+	// Handle termination signals
+	sigterm := make(chan os.Signal, 1)

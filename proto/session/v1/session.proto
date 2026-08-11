@@ -1,0 +1,2648 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+import "session/v1/types.proto";
+import "session/v1/events.proto";
+
+// SessionService manages AI agent session lifecycle operations.
+// Provides CRUD operations and real-time streaming for session management.
+service SessionService {
+  // ListSessions returns all sessions with optional filtering.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse) {}
+
+  // GetSession retrieves a specific session by ID.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse) {}
+
+  // CreateSession initializes a new AI agent session with tmux and git worktree.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse) {}
+
+  // UpdateSession modifies session properties (pause/resume, category, etc).
+  rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse) {}
+
+  // DeleteSession stops and removes a session, cleaning up resources.
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse) {}
+
+  // WatchSessions streams real-time session events (created/updated/deleted).
+  // Server-streaming RPC for live updates without polling.
+  rpc WatchSessions(WatchSessionsRequest) returns (stream SessionEvent) {}
+
+  // StreamTerminal provides bidirectional streaming for terminal I/O.
+  // Clients can send input and receive output from the tmux PTY.
+  rpc StreamTerminal(stream TerminalData) returns (stream TerminalData) {}
+
+  // GetSessionDiff retrieves the current git diff for a session.
+  rpc GetSessionDiff(GetSessionDiffRequest) returns (GetSessionDiffResponse) {}
+
+  // GetVCSStatus retrieves the current version control status for a session.
+  // Returns branch info, changed files, staged/unstaged status, and remote sync state.
+  rpc GetVCSStatus(GetVCSStatusRequest) returns (GetVCSStatusResponse) {}
+
+  // GetReviewQueue returns sessions needing user attention with priority ordering.
+  rpc GetReviewQueue(GetReviewQueueRequest) returns (GetReviewQueueResponse) {}
+
+  // AcknowledgeSession marks a session as acknowledged in the review queue.
+  // The session won't reappear in the queue until it receives an update.
+  rpc AcknowledgeSession(AcknowledgeSessionRequest) returns (AcknowledgeSessionResponse) {}
+
+  // GetLogs retrieves application logs with optional filtering and search.
+  rpc GetLogs(GetLogsRequest) returns (GetLogsResponse) {}
+
+  // WatchReviewQueue streams real-time review queue events (items added/removed/updated).
+  // Server-streaming RPC for live queue updates without polling.
+  rpc WatchReviewQueue(WatchReviewQueueRequest) returns (stream ReviewQueueEvent) {}
+
+  // LogUserInteraction logs a user interaction event for audit trail.
+  // Records user actions for compliance, debugging, and analytics.
+  rpc LogUserInteraction(LogUserInteractionRequest) returns (LogUserInteractionResponse) {}
+
+  // GetClaudeConfig retrieves a Claude configuration file by name (CLAUDE.md, settings.json, agents.md).
+  rpc GetClaudeConfig(GetClaudeConfigRequest) returns (GetClaudeConfigResponse) {}
+
+  // ListClaudeConfigs returns all configuration files in the ~/.claude directory.
+  rpc ListClaudeConfigs(ListClaudeConfigsRequest) returns (ListClaudeConfigsResponse) {}
+
+  // UpdateClaudeConfig updates a Claude configuration file with atomic write and backup.
+  rpc UpdateClaudeConfig(UpdateClaudeConfigRequest) returns (UpdateClaudeConfigResponse) {}
+
+  // ListClaudeHistory returns Claude session history entries with optional filtering.
+  rpc ListClaudeHistory(ListClaudeHistoryRequest) returns (ListClaudeHistoryResponse) {}
+
+  // GetClaudeHistoryDetail retrieves detailed information for a specific history entry.
+  rpc GetClaudeHistoryDetail(GetClaudeHistoryDetailRequest) returns (GetClaudeHistoryDetailResponse) {}
+
+  // GetClaudeHistoryMessages retrieves messages from a specific conversation.
+  rpc GetClaudeHistoryMessages(GetClaudeHistoryMessagesRequest) returns (GetClaudeHistoryMessagesResponse) {}
+
+  // SearchClaudeHistory performs full-text search across Claude conversation history.
+  // Returns ranked results with contextual snippets showing where query terms appear.
+  rpc SearchClaudeHistory(SearchClaudeHistoryRequest) returns (SearchClaudeHistoryResponse) {}
+
+  // PR Info and management RPCs
+  rpc GetPRInfo(GetPRInfoRequest) returns (GetPRInfoResponse) {}
+  rpc GetPRComments(GetPRCommentsRequest) returns (GetPRCommentsResponse) {}
+  rpc PostPRComment(PostPRCommentRequest) returns (PostPRCommentResponse) {}
+  rpc MergePR(MergePRRequest) returns (MergePRResponse) {}
+  rpc ClosePR(ClosePRRequest) returns (ClosePRResponse) {}
+
+  // SendNotification allows tmux sessions to send notifications to the server.
+  // Notifications are broadcast to all connected clients (web UI and TUI).
+  // Requires session_id to identify the source session.
+  // Enforces localhost-only restriction and rate limiting (10/sec per session).
+  rpc SendNotification(SendNotificationRequest) returns (SendNotificationResponse) {}
+
+  // FocusWindow activates a window for the specified application.
+  // Used for deep linking from notifications to bring the source IDE/terminal to front.
+  // Only works on macOS via AppleScript. Requires localhost origin.
+  rpc FocusWindow(FocusWindowRequest) returns (FocusWindowResponse) {}
+
+  // RenameSession changes the title of an existing session.
+  // Validates that the new title doesn't conflict with existing sessions.
+  rpc RenameSession(RenameSessionRequest) returns (RenameSessionResponse) {}
+
+  // RestartSession restarts a session by killing and recreating the tmux session.
+  // Optionally preserves terminal output for debugging purposes.
+  rpc RestartSession(RestartSessionRequest) returns (RestartSessionResponse) {}
+
+  // GetWorkspaceInfo retrieves VCS and workspace information for a session.
+  // Returns VCS type (Git/JJ), current branch, revision, and uncommitted changes status.
+  rpc GetWorkspaceInfo(GetWorkspaceInfoRequest) returns (GetWorkspaceInfoResponse) {}
+
+  // ListWorkspaceTargets returns available switch targets for a session.
+  // Includes bookmarks/branches, recent revisions, and worktrees.
+  rpc ListWorkspaceTargets(ListWorkspaceTargetsRequest) returns (ListWorkspaceTargetsResponse) {}
+
+  // SwitchWorkspace switches a session's workspace to a different branch, revision, or worktree.
+  // The session is restarted with Claude --resume to preserve conversation context.
+  rpc SwitchWorkspace(SwitchWorkspaceRequest) returns (SwitchWorkspaceResponse) {}
+
+  // ResolveApproval allows the web UI to approve or deny a pending Claude Code tool use request.
+  // This unblocks the HTTP hook handler that is waiting for the user's decision.
+  rpc ResolveApproval(ResolveApprovalRequest) returns (ResolveApprovalResponse) {}
+
+  // ListPendingApprovals returns all pending Claude Code tool approval requests.
+  // Used by the web UI to populate the approval panel on initial load.
+  rpc ListPendingApprovals(ListPendingApprovalsRequest) returns (ListPendingApprovalsResponse) {}
+
+  // CreateDebugSnapshot captures diagnostic information and writes it to a JSON file.
+  // Gathers session state, tmux info, pending approvals, and recent logs.
+  // The file is written to ~/.claude-squad/logs/debug-snapshot-{timestamp}.json.
+  rpc CreateDebugSnapshot(CreateDebugSnapshotRequest) returns (CreateDebugSnapshotResponse) {}
+
+  // GetNotificationHistory returns persisted notification history with optional filtering.
+  // Notifications survive server restarts and page refreshes.
+  rpc GetNotificationHistory(GetNotificationHistoryRequest) returns (GetNotificationHistoryResponse) {}
+
+  // MarkNotificationRead marks specific notifications as read.
+  // If notification_ids is empty, marks all notifications as read.
+  rpc MarkNotificationRead(MarkNotificationReadRequest) returns (MarkNotificationReadResponse) {}
+
+  // ClearNotificationHistory removes notifications from the history.
+  // Optionally filters by timestamp to only clear older notifications.
+  rpc ClearNotificationHistory(ClearNotificationHistoryRequest) returns (ClearNotificationHistoryResponse) {}
+
+  // ListApprovalRules returns all auto-approval rules (user, seed, and claude-settings).
+  rpc ListApprovalRules(ListApprovalRulesRequest) returns (ListApprovalRulesResponse) {}
+
+  // UpsertApprovalRule creates or updates a user-defined auto-approval rule.
+  rpc UpsertApprovalRule(UpsertApprovalRuleRequest) returns (UpsertApprovalRuleResponse) {}
+
+  // DeleteApprovalRule removes a user-defined auto-approval rule by ID.
+  rpc DeleteApprovalRule(DeleteApprovalRuleRequest) returns (DeleteApprovalRuleResponse) {}
+
+  // GetApprovalAnalytics returns aggregated analytics for classification decisions.
+  rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
+
+  // GetProgramAnalytics returns drill-down analytics for a single command program.
+  // Shows subcommand breakdown, recent examples, and daily trend for the time window.
+  rpc GetProgramAnalytics(GetProgramAnalyticsRequest) returns (GetProgramAnalyticsResponse) {}
+
+  // GenerateSuggestedRule asks an AI agent to propose a new auto-approval rule.
+  // Analyzes existing rules, seed examples, and analytics data to produce a
+  // pre-filled SuggestedRuleProto. May take 5–30 seconds; callers must set a
+  // 60-second deadline via AbortController.
+  rpc GenerateSuggestedRule(GenerateSuggestedRuleRequest) returns (GenerateSuggestedRuleResponse) {}
+
+  // ValidateRules parses and validates a YAML rules file without applying it.
+  // Returns per-rule results including any parse or validation errors.
+  rpc ValidateRules(ValidateRulesRequest) returns (ValidateRulesResponse) {}
+
+  // ExportRules serializes user-authored rules to YAML format for download.
+  // Passing rule_ids limits export to those rules; empty = export all user rules.
+  rpc ExportRules(ExportRulesRequest) returns (ExportRulesResponse) {}
+
+  // BulkUpsertRules creates or updates multiple user-defined rules in one call.
+  // Rebuilds the in-memory classifier exactly once after all rules are stored.
+  rpc BulkUpsertRules(BulkUpsertRulesRequest) returns (BulkUpsertRulesResponse) {}
+
+  // GetConfigFileRules returns rules persisted in the shared YAML config file.
+  rpc GetConfigFileRules(GetConfigFileRulesRequest) returns (GetConfigFileRulesResponse) {}
+
+  // SaveRulesToConfigFile exports one or more rules to the shared YAML config file.
+  rpc SaveRulesToConfigFile(SaveRulesToConfigFileRequest) returns (SaveRulesToConfigFileResponse) {}
+
+  // ListDatabases returns all discovered workspace databases with metadata.
+  // Used by the workspace switcher UI to show available workspaces.
+  rpc ListDatabases(ListDatabasesRequest) returns (ListDatabasesResponse) {}
+
+  // GetCurrentDatabase returns metadata for the currently active workspace database.
+  rpc GetCurrentDatabase(GetCurrentDatabaseRequest) returns (GetCurrentDatabaseResponse) {}
+
+  // SwitchDatabase switches to a different workspace database and restarts the server.
+  // The server will exec-restart itself after writing a preference file.
+  // The client should poll until the server is back up, then reload.
+  rpc SwitchDatabase(SwitchDatabaseRequest) returns (SwitchDatabaseResponse) {}
+
+  // MergeDatabase copies all sessions from a source workspace database into the
+  // currently active database. Skips sessions whose titles already exist.
+  // No server restart required — changes are immediately visible.
+  rpc MergeDatabase(MergeDatabaseRequest) returns (MergeDatabaseResponse) {}
+
+  // Checkpoint RPCs
+
+  // CreateCheckpoint captures the current state of a session as a named bookmark.
+  // Records scrollback position, git HEAD SHA, and conversation UUID.
+  rpc CreateCheckpoint(CreateCheckpointRequest) returns (CreateCheckpointResponse) {}
+
+  // ListCheckpoints returns all checkpoints for the specified session.
+  rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse) {}
+
+  // ForkSession creates a new independent session branched from a checkpoint.
+  // The fork receives truncated scrollback, conversation history, and a git worktree
+  // based on the checkpoint's recorded state.
+  rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse) {}
+
+  // ClearConversationState removes the stored Claude conversation UUID from a session
+  // so that the next Resume starts a fresh conversation instead of attempting --resume
+  // with a stale or path-mismatched UUID. Useful when a session is stuck in a crash
+  // loop with "No conversation found" errors.
+  rpc ClearConversationState(ClearConversationStateRequest) returns (ClearConversationStateResponse) {}
+
+  // File Viewer RPCs
+
+  // ListFiles returns the immediate children of a directory in a session's worktree.
+  // Directories are returned first, then files, both alphabetically sorted.
+  // Gitignored entries are excluded unless include_ignored is true.
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse) {}
+
+  // GetFileContent retrieves the text content of a file in a session's worktree.
+  // Binary files return is_binary=true with empty content.
+  // Files over 10MB are rejected; files over 1MB are served truncated with is_truncated=true.
+  rpc GetFileContent(GetFileContentRequest) returns (GetFileContentResponse) {}
+
+  // SearchFiles performs a recursive name-substring search in a session's worktree.
+  // Returns matching files with full relative paths for frontend tree reconstruction.
+  // Results are capped at max_results (default 500). Minimum query length is 2 characters.
+  rpc SearchFiles(SearchFilesRequest) returns (SearchFilesResponse) {}
+
+  // Path Completion RPCs
+
+  // ListPathCompletions returns filesystem directory entries matching a path prefix.
+  // Used by the Omnibar for real-time path completion and inline path validation.
+  rpc ListPathCompletions(ListPathCompletionsRequest) returns (ListPathCompletionsResponse) {}
+
+  // Session Defaults RPCs
+
+  // GetSessionDefaults returns the full session defaults configuration (global, profiles, directory rules).
+  rpc GetSessionDefaults(GetSessionDefaultsRequest) returns (GetSessionDefaultsResponse) {}
+
+  // ResolveDefaults merges all default layers for a given working directory and optional profile.
+  // Returns the resolved values plus source metadata for per-field badges in the UI.
+  rpc ResolveDefaults(ResolveDefaultsRequest) returns (ResolveDefaultsResponse) {}
+
+  // PreviewDestinationPath computes where a session's checkout/worktree would land,
+  // without performing any git or filesystem mutation. Used by the Omnibar to show a
+  // live destination hint before the user submits session creation.
+  rpc PreviewDestinationPath(PreviewDestinationPathRequest) returns (PreviewDestinationPathResponse) {}
+
+  // UpdateGlobalDefaults replaces the global default fields.
+  rpc UpdateGlobalDefaults(UpdateGlobalDefaultsRequest) returns (UpdateGlobalDefaultsResponse) {}
+
+  // UpsertProfile creates or updates a named profile.
+  rpc UpsertProfile(UpsertProfileRequest) returns (UpsertProfileResponse) {}
+
+  // DeleteProfile removes a named profile by name.
+  rpc DeleteProfile(DeleteProfileRequest) returns (DeleteProfileResponse) {}
+
+  // UpsertDirectoryRule creates or updates a directory rule (matched by path).
+  rpc UpsertDirectoryRule(UpsertDirectoryRuleRequest) returns (UpsertDirectoryRuleResponse) {}
+
+  // DeleteDirectoryRule removes a directory rule by path.
+  rpc DeleteDirectoryRule(DeleteDirectoryRuleRequest) returns (DeleteDirectoryRuleResponse) {}
+
+  // ListWorktrees returns the git worktrees for a given repository path.
+  // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
+  rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse) {}
+
+  // Prompt history RPCs (S1)
+  rpc ListPromptHistory(ListPromptHistoryRequest) returns (ListPromptHistoryResponse) {}
+  rpc DeletePromptHistory(DeletePromptHistoryRequest) returns (DeletePromptHistoryResponse) {}
+
+  // Batch session creation (S2)
+  rpc BatchCreateSessions(BatchCreateSessionsRequest) returns (BatchCreateSessionsResponse) {}
+
+  // One-shot PR creation (S3)
+  rpc RunOneShot(RunOneShotRequest) returns (RunOneShotResponse) {}
+
+  // Project CRUD (S4)
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {}
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse) {}
+  rpc UpdateProject(UpdateProjectRequest) returns (UpdateProjectResponse) {}
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse) {}
+  rpc AssignSessionsToProject(AssignSessionsToProjectRequest) returns (AssignSessionsToProjectResponse) {}
+
+  // ListBranches returns the git branches for a given repository path.
+  // Used by the SessionWizard branch autocomplete field.
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse) {}
+
+  // GetTerminalSnapshot returns the last N lines of terminal output for a session
+  // without requiring an active stream. Suitable for session card previews.
+  rpc GetTerminalSnapshot(GetTerminalSnapshotRequest) returns (GetTerminalSnapshotResponse) {}
+
+  // WriteToSession sends raw text input to a running session's PTY.
+  // Use for unblocking approval prompts or injecting ad-hoc input.
+  // Returns immediately after queueing the write; does not wait for output.
+  rpc WriteToSession(WriteToSessionRequest) returns (WriteToSessionResponse) {}
+
+  // LogClientEvents receives batched browser console log entries from the web UI.
+  // Used for remote debugging of mobile browser sessions where DevTools are unavailable.
+  // Always returns an empty response; malformed entries are silently discarded.
+  rpc LogClientEvents(LogClientEventsRequest) returns (LogClientEventsResponse) {}
+
+  // Error Registry RPCs (E2-S5)
+
+  // ListErrors returns persisted RPC error events ordered by last_seen descending.
+  // Unacknowledged errors are returned by default; set include_acknowledged=true
+  // to include all events.
+  rpc ListErrors(ListErrorsRequest) returns (ListErrorsResponse) {}
+
+  // AcknowledgeError marks an error event as acknowledged so it no longer appears
+  // in the default (unacknowledged) listing.
+  rpc AcknowledgeError(AcknowledgeErrorRequest) returns (AcknowledgeErrorResponse) {}
+
+  // GetFeatureFlags returns all known feature flags and their current state.
+  rpc GetFeatureFlags(GetFeatureFlagsRequest) returns (GetFeatureFlagsResponse) {}
+
+  // UpdateFeatureFlag enables or disables a named feature flag.
+  rpc UpdateFeatureFlag(UpdateFeatureFlagRequest) returns (UpdateFeatureFlagResponse) {}
+
+  // QueryEscapeAnalytics returns paginated escape event records for a session.
+  rpc QueryEscapeAnalytics(QueryEscapeAnalyticsRequest) returns (QueryEscapeAnalyticsResponse) {}
+
+  // GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
+  rpc GetEscapeAnalyticsSummary(GetEscapeAnalyticsSummaryRequest) returns (GetEscapeAnalyticsSummaryResponse) {}
+
+  // HibernateSession checkpoints the session state, kills the AI process, and
+  // transitions the session to Hibernated status.
+  rpc HibernateSession(HibernateSessionRequest) returns (HibernateSessionResponse) {}
+
+  // ResumeHibernatedSession re-launches the AI process for a Hibernated session,
+  // transitioning it back to Active status.
+  rpc ResumeHibernatedSession(ResumeHibernatedSessionRequest) returns (ResumeHibernatedSessionResponse) {}
+
+  // ResumeCrashedSession re-launches the AI process for a Crashed session
+  // (dead tmux pane detected by SessionHealthChecker), transitioning it back
+  // to Active status. Threads --resume automatically when a conversation UUID
+  // is known.
+  rpc ResumeCrashedSession(ResumeCrashedSessionRequest) returns (ResumeCrashedSessionResponse) {}
+
+  // ============================================================================
+  // Custom Shell RPCs
+  // ============================================================================
+
+  // SpawnShell creates and starts a new custom shell attached to a session.
+  // The shell runs as an independent sibling tmux session.
+  rpc SpawnShell(SpawnShellRequest) returns (SpawnShellResponse) {}
+
+  // StopShell stops a running custom shell.
+  rpc StopShell(StopShellRequest) returns (StopShellResponse) {}
+
+  // RestartShell stops a shell (if running) and relaunches it with the same command.
+  rpc RestartShell(RestartShellRequest) returns (RestartShellResponse) {}
+
+  // ListShells returns all custom shells for a session, sorted by order_index.
+  rpc ListShells(ListShellsRequest) returns (ListShellsResponse) {}
+
+  // DeleteShell stops a shell and removes it from storage.
+  rpc DeleteShell(DeleteShellRequest) returns (DeleteShellResponse) {}
+
+  // ============================================================================
+  // Workflow RPCs
+  // ============================================================================
+
+  // CreateWorkflow creates a new workflow definition.
+  rpc CreateWorkflow(CreateWorkflowRequest) returns (CreateWorkflowResponse) {}
+
+  // UpdateWorkflow modifies an existing workflow definition.
+  rpc UpdateWorkflow(UpdateWorkflowRequest) returns (UpdateWorkflowResponse) {}
+
+  // DeleteWorkflow removes a workflow definition permanently.
+  rpc DeleteWorkflow(DeleteWorkflowRequest) returns (DeleteWorkflowResponse) {}
+
+  // ListWorkflows returns all saved workflow definitions.
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse) {}
+
+  // RunWorkflow immediately fires a workflow (outside of cron schedule).
+  rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
+
+  // GetDetectionEvents returns recent status-detection events for a session.
+  // Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
+  rpc GetDetectionEvents(GetDetectionEventsRequest) returns (GetDetectionEventsResponse) {}
+
+  // ListSlashCommands returns slash commands available in the given directory.
+  // Walks target_directory/.claude/commands/ (project) and ~/.claude/commands/ (user),
+  // merging both with a small set of built-in Claude Code commands.
+  rpc ListSlashCommands(ListSlashCommandsRequest) returns (ListSlashCommandsResponse) {}
+
+  // ListAliases returns all configured alias presets from config.json.
+  rpc ListAliases(ListAliasesRequest) returns (ListAliasesResponse) {}
+
+  // UpsertAlias creates or updates a named alias preset (matched by name).
+  rpc UpsertAlias(UpsertAliasRequest) returns (UpsertAliasResponse) {}
+
+  // DeleteAlias removes an alias preset by name.
+  rpc DeleteAlias(DeleteAliasRequest) returns (DeleteAliasResponse) {}
+
+  // ArchiveSession soft-archives a session by setting archived_at.
+  // Archived sessions are excluded from the default session list.
+  rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse) {}
+
+  // UnarchiveSession clears archived_at, restoring the session to the default list.
+  rpc UnarchiveSession(UnarchiveSessionRequest) returns (UnarchiveSessionResponse) {}
+
+  // ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
+  // Active, Creating, and Paused sessions are silently skipped.
+  // Returns the count of sessions that were archived.
+  rpc ArchiveWorkflowSessions(ArchiveWorkflowSessionsRequest) returns (ArchiveWorkflowSessionsResponse) {}
+
+  // DeleteWorkflowFailedSessions archives (soft-deletes) sessions that appear to have
+  // failed — specifically: Stopped sessions with no meaningful terminal output.
+  // Returns the count of sessions that were archived.
+  rpc DeleteWorkflowFailedSessions(DeleteWorkflowFailedSessionsRequest) returns (DeleteWorkflowFailedSessionsResponse) {}
+
+  // GetProviderLimits returns the rate limit and usage details for a session.
+  rpc GetProviderLimits(GetProviderLimitsRequest) returns (GetProviderLimitsResponse) {}
+
+  // GetHookStatus reports whether the global Claude Code hooks (rule enforcement
+  // and notifications) are installed in ~/.claude/settings.json.
+  // +api: hooks:status
+  rpc GetHookStatus(GetHookStatusRequest) returns (GetHookStatusResponse) {}
+
+  // InstallHooks installs the requested global Claude Code hooks into
+  // ~/.claude/settings.json. Idempotent per hook.
+  // +api: hooks:install
+  rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
+}
+
+// ListSessionsRequest allows filtering sessions by various criteria.
+message ListSessionsRequest {
+  // Filter by session status (e.g., RUNNING, PAUSED).
+  optional SessionStatus status = 1;
+
+  // Filter by category name.
+  optional string category = 2;
+
+  // Hide paused sessions from results.
+  bool hide_paused = 3;
+
+  // Search query for fuzzy matching across title, path, branch.
+  optional string search_query = 4;
+
+  // Filter by project ID (only return sessions in this project).
+  optional string project_id = 5;
+
+  // When true, include hidden (system/background) sessions in results.
+  // Defaults to false — hidden sessions are excluded unless explicitly requested.
+  bool include_hidden = 6;
+
+  // Filter by the workflow that created the session.
+  optional string workflow_id = 7;
+
+  // When true, include archived sessions in results.
+  // Defaults to false — archived sessions are excluded unless explicitly requested.
+  bool include_archived = 8;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  // System-wide memory usage percentage (0–100). Populated by the server on each response.
+  // Zero when measurement is unavailable (e.g., macOS without /proc).
+  float system_memory_pct = 2;
+}
+
+message GetSessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message CreateSessionRequest {
+  // Required: Human-readable session title.
+  string title = 1;
+
+  // Required: Path to workspace repository root.
+  string path = 2;
+
+  // Optional: Directory within repository to start in.
+  string working_dir = 3;
+
+  // Optional: Git branch name (creates new branch if doesn't exist).
+  string branch = 4;
+
+  // Optional: Program to run (default: "claude").
+  string program = 5;
+
+  // Optional: Category for organization.
+  string category = 6;
+
+  // Optional: prompt passed as a CLI argument at process-spawn time (fresh spawns / one-shot
+  // only). See initial_prompt for the tmux-typed alternative used for resume/attach flows —
+  // the two are independent and may both be set on the same request.
+  string prompt = 7;
+
+  // Optional: Auto-approve prompts without user interaction.
+  bool auto_yes = 8;
+
+  // Optional: Reuse existing worktree at this path.
+  string existing_worktree = 9;
+
+  // Optional: Resume an existing Claude conversation by ID.
+  // This ID comes from ClaudeHistoryEntry.id and will use Claude's --resume flag.
+  string resume_id = 10;
+
+  // Optional: Apply a named profile's defaults before creation.
+  string profile = 11;
+
+  // Optional: Skip all session defaults (explicit override — form values used as-is).
+  bool skip_defaults = 12;
+
+  // Optional: Session type (directory, new_worktree, existing_worktree).
+  // If not specified, backend will infer from other fields (branch, existing_worktree).
+  SessionType session_type = 13;
+
+  // Deprecated: use session_type = SESSION_TYPE_ONE_OFF instead.
+  // Field 14 is reserved for backward compatibility; server ignores it.
+  reserved 14;
+  reserved "one_off";
+
+  // Optional: prompt typed into the tmux pane as simulated keystrokes once the session reaches
+  // Ready state (no size limit; shell-safe) — used for resume/attach flows where a CLI arg can
+  // no longer be injected. See prompt (field 7) for the CLI-arg alternative.
+  string initial_prompt = 15;
+
+  // Optional: Run claude in one-shot mode (-p flag); session exits after task completes.
+  bool one_shot = 16;
+
+  // Optional: Associate session with a project ID.
+  string project_id = 17;
+
+  // Optional: When session_type is DIRECTORY and the path does not exist,
+  // setting this to true will create the directory and initialize a git repo.
+  // The backend returns CodeNotFound when path is missing and this is false.
+  bool create_if_missing = 18;
+
+  // Optional: History entry ID to fork from (ClaudeHistoryEntry.id).
+  // When set, the handler calls ForkClaudeConversation to produce a new
+  // conversation file, sets resume_id to the forked UUID, and proceeds
+  // with the normal session-start flow.
+  string fork_source_id = 19;
+
+  // Optional: Truncate the forked conversation to the first N messages.
+  // 0 means copy all messages. Only meaningful when fork_source_id is set.
+  int32 fork_at_message = 20;
+
+  // allowed_tools pre-approves specific Claude Code tool calls, avoiding permission prompts.
+  // Format: "Bash,Read,Edit" or "Bash(git commit *),Read".
+  string allowed_tools = 21;
+
+  // permission_mode sets Claude Code's permission handling mode.
+  // Values: "default", "acceptEdits", "bypassPermissions", "auto".
+  string permission_mode = 22;
+
+  // Optional: If true, start an AutonomousDriver that injects orchestrator
+  // prompts when the session is idle, running the session to completion.
+  bool autonomous_mode = 23;
+
+  // workflow_id associates the new session with a workflow.
+  // Set by the scheduler when firing a workflow; not intended for direct client use.
+  string workflow_id = 24;
+
+  // env_vars are additional environment variables passed to the new session.
+  // Applied on top of any defaults-resolved env vars.
+  map<string, string> env_vars = 25;
+  // cli_flags are additional CLI flags appended to the program launch command.
+  // Applied on top of any defaults-resolved flags.
+  string cli_flags = 26;
+
+  // alias_name, when non-empty, resolves session defaults via the named alias preset.
+  // Path and profile are resolved from the alias config; path from req is used as override if non-empty.
+  string alias_name = 27;
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+}
+
+message UpdateSessionRequest {
+  // Session identifier.
+  string id = 1;
+
+  // Update session status (pause/resume).
+  optional SessionStatus status = 2;
+
+  // Update category.
+  optional string category = 3;
+
+  // Update title.
+  optional string title = 4;
+
+  // Update program command.
+  optional string program = 5;
+
+  // Update session tags. If non-empty, replaces all existing tags.
+  // To clear all tags, send tags=[""] (single empty string).
+  repeated string tags = 6;
+
+  // Update working directory. Empty string clears the override (uses workspace root).
+  optional string working_dir = 7;
+
+  // Update whether rate limit auto-resume is enabled for this session.
+  optional bool rate_limit_enabled = 8;
+
+  // Reason for pausing (only meaningful when status is set to PAUSED).
+  // If empty when pausing, defaults to "manual" in the backend handler.
+  optional string pause_reason = 9;
+
+  // Enable or disable autonomous mode (AutonomousDriver) on a running session.
+  // When set to true, an AutonomousDriver is started if one is not already running.
+  // When set to false, the running driver is stopped.
+  optional bool autonomous_mode = 10;
+
+  // Steering message to inject into an autonomous session mid-run.
+  // Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
+  optional string steer_message = 11;
+
+  // Update the session's free-form note. Capped at 10,000 bytes.
+  optional string note = 12;
+}
+
+message UpdateSessionResponse {
+  Session session = 1;
+}
+
+message DeleteSessionRequest {
+  // Session identifier.
+  string id = 1;
+
+  // Force deletion even if session is running.
+  bool force = 2;
+}
+
+message DeleteSessionResponse {
+  // Whether deletion was successful.
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message WatchSessionsRequest {
+  // Optional: Only watch sessions matching this category.
+  optional string category_filter = 1;
+
+  // Optional: Only watch sessions with this status.
+  optional SessionStatus status_filter = 2;
+
+  // Optional: If non-zero, replay buffered events with seq > after_seq before
+  // going live. Pass the last seq received before disconnecting. Events up to
+  // one hour old are available; older events are not guaranteed to be present.
+  uint64 after_seq = 3;
+}
+
+message GetSessionDiffRequest {
+  // Session identifier.
+  string id = 1;
+}
+
+message GetSessionDiffResponse {
+  // Git diff statistics.
+  DiffStats diff_stats = 1;
+}
+
+message GetVCSStatusRequest {
+  // Session identifier.
+  string id = 1;
+}
+
+message GetVCSStatusResponse {
+  // VCS status for the session's working directory.
+  VCSStatus vcs_status = 1;
+
+  // Error message if VCS status couldn't be retrieved.
+  string error = 2;
+}
+
+message GetReviewQueueRequest {
+  // Optional: Filter by priority level.
+  optional Priority priority_filter = 1;
+
+  // Optional: Filter by attention reason.
+  optional AttentionReason reason_filter = 2;
+}
+
+message GetReviewQueueResponse {
+  // Review queue with all items and statistics.
+  ReviewQueue review_queue = 1;
+}
+
+message AcknowledgeSessionRequest {
+  // Session identifier to acknowledge.
+  string id = 1;
+}
+
+message AcknowledgeSessionResponse {
+  // Whether acknowledgment was successful.
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message GetLogsRequest {
+  // Optional: Search query to filter log entries by content.
+  optional string search_query = 1;
+
+  // Optional: Filter by log level (DEBUG, INFO, WARNING, ERROR).
+  // Deprecated: prefer levels for multi-level filtering. If both are set, levels takes precedence.
+  optional string level = 2;
+
+  // Optional: Start time for log range (RFC3339 format).
+  optional google.protobuf.Timestamp start_time = 3;
+
+  // Optional: End time for log range (RFC3339 format).
+  optional google.protobuf.Timestamp end_time = 4;
+
+  // Optional: Maximum number of log entries to return (default: 100).
+  optional int32 limit = 5;
+
+  // Optional: Number of entries to skip for pagination (default: 0).
+  optional int32 offset = 6;
+
+  // Optional: Filter to a specific session's log file. Uses session title/id.
+  optional string session_id = 7;
+
+  // Optional: Filter by multiple log levels using OR logic (e.g., ["ERROR", "WARN"]).
+  // Takes precedence over the single level field when non-empty.
+  repeated string levels = 8;
+}
+
+message GetLogsResponse {
+  // Log entries matching the filter criteria.
+  repeated LogEntry entries = 1;
+
+  // Total number of log entries matching the filter (before limit/offset).
+  int32 total_count = 2;
+
+  // Whether there are more logs available to fetch.
+  bool has_more = 3;
+}
+
+message LogEntry {
+  // Timestamp of the log entry.
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Log level (DEBUG, INFO, WARNING, ERROR).
+  string level = 2;
+
+  // Log message content.
+  string message = 3;
+
+  // Source file and line number (e.g., "app.go:123").
+  optional string source = 4;
+}
+
+message WatchReviewQueueRequest {
+  // Optional: Filter by priority level (only receive events for these priorities).
+  repeated Priority priority_filter = 1;
+
+  // Optional: Filter by attention reason.
+  repeated AttentionReason reason_filter = 2;
+
+  // Include statistics events (aggregate queue stats).
+  bool include_statistics = 3;
+
+  // Send initial snapshot of current queue state.
+  bool initial_snapshot = 4;
+
+  // Optional: Only events for specific sessions.
+  repeated string session_ids = 5;
+}
+
+message LogUserInteractionRequest {
+  // Session identifier (optional - may be empty for panel-level actions).
+  optional string session_id = 1;
+
+  // Type of interaction (from UserInteractionEvent.InteractionType enum).
+  UserInteractionEvent.InteractionType interaction_type = 2;
+
+  // Additional context about the interaction.
+  optional string context = 3;
+
+  // Optional: Notification ID if this interaction involves a notification.
+  optional string notification_id = 4;
+
+  // Optional: Additional metadata as key-value pairs.
+  map<string, string> metadata = 5;
+}
+
+message LogUserInteractionResponse {
+  // Whether the log was successfully recorded.
+  bool success = 1;
+
+  // Optional: Error message if logging failed.
+  optional string error = 2;
+}
+
+
+
+// Claude Config Management Messages
+
+message GetClaudeConfigRequest {
+  // Filename to retrieve (e.g., "CLAUDE.md", "settings.json", "agents.md")
+  string filename = 1;
+}
+
+message GetClaudeConfigResponse {
+  // Configuration file data
+  ClaudeConfigFile config = 1;
+}
+
+message ListClaudeConfigsRequest {
+  // Empty request - returns all config files
+}
+
+message ListClaudeConfigsResponse {
+  // List of all configuration files
+  repeated ClaudeConfigFile configs = 1;
+}
+
+message UpdateClaudeConfigRequest {
+  // Filename to update
+  string filename = 1;
+  // New file content
+  string content = 2;
+  // If true, validate JSON content before writing (for .json files)
+  bool validate = 3;
+}
+
+message UpdateClaudeConfigResponse {
+  // Updated configuration file data
+  ClaudeConfigFile config = 1;
+}
+
+message ClaudeConfigFile {
+  // Filename (e.g., "CLAUDE.md", "settings.json")
+  string name = 1;
+  // Absolute path to the file
+  string path = 2;
+  // File content
+  string content = 3;
+  // Last modification timestamp
+  google.protobuf.Timestamp mod_time = 4;
+}
+
+// Claude Session History Messages
+
+message ListClaudeHistoryRequest {
+  // Optional project path filter
+  optional string project = 1;
+  // Optional search query (searches name and project)
+  optional string search_query = 2;
+  // Legacy limit field; prefer page_size for new callers.
+  int32 limit = 3;
+  // Maximum number of results per page (default 100, max 500).
+  // When combined with page_token this enables cursor-based pagination.
+  int32 page_size = 4;
+  // Opaque pagination token returned by a previous ListClaudeHistory call.
+  // When set, returns the page of results after the cursor position.
+  // Leave empty to start from the beginning.
+  string page_token = 5;
+}
+
+message ListClaudeHistoryResponse {
+  // List of history entries for this page
+  repeated ClaudeHistoryEntry entries = 1;
+  // Total count of matching entries across all pages
+  int32 total_count = 2;
+  // Opaque token to pass as page_token in the next request.
+  // Empty string indicates this is the last page.
+  string next_page_token = 3;
+}
+
+message GetClaudeHistoryDetailRequest {
+  // History entry ID
+  string id = 1;
+}
+
+message GetClaudeHistoryDetailResponse {
+  // Detailed history entry
+  ClaudeHistoryEntry entry = 1;
+}
+
+message ClaudeHistoryEntry {
+  // Unique conversation identifier
+  string id = 1;
+  // Conversation title/name
+  string name = 2;
+  // Project/directory path
+  string project = 3;
+  // Conversation creation timestamp
+  google.protobuf.Timestamp created_at = 4;
+  // Last update timestamp
+  google.protobuf.Timestamp updated_at = 5;
+  // Claude model used (e.g., "claude-sonnet-4")
+  string model = 6;
+  // Number of messages in the conversation
+  int32 message_count = 7;
+
+  // VCS state for the project directory — populated only by GetClaudeHistoryDetail
+  // (lazy enrichment, not included in list responses).  Null/absent means the
+  // directory is not a version-controlled repo or state was not requested.
+  VCSStatus vcs_status = 8;
+
+  // Git branch the project directory was on when last observed (60s TTL cache).
+  // Empty when the directory is not a git repo or branch could not be resolved.
+  string branch = 9;
+
+  // Live session status, cross-referenced with in-memory session store via ResumeId.
+  // SESSION_STATUS_UNSPECIFIED means no live session matches this history entry.
+  SessionStatus session_status = 10;
+
+  // Short git status summary (e.g. "2 modified, 1 untracked").
+  // Only populated when a live worktree exists for this entry.
+  string git_status_summary = 11;
+
+  // Message of the most recent git commit in the project directory.
+  // Only populated when a live worktree exists for this entry.
+  string last_commit_message = 12;
+
+  // Number of files changed in the worktree diff vs HEAD.
+  // Only populated when a live worktree exists for this entry.
+  int32 diff_file_count = 13;
+}
+
+message GetClaudeHistoryMessagesRequest {
+  // History entry ID (session ID)
+  string id = 1;
+  // Optional limit on number of messages to return
+  int32 limit = 2;
+  // Optional offset for pagination (reads from the start of the conversation)
+  int32 offset = 3;
+  // When true and limit > 0, return the last `limit` messages instead of the
+  // first `limit` messages.  Used by the preview panel to efficiently read
+  // the tail of a large conversation file without loading the whole file.
+  // Mutually exclusive with offset.
+  bool tail = 4;
+}
+
+message GetClaudeHistoryMessagesResponse {
+  // Messages from the conversation
+  repeated ClaudeMessage messages = 1;
+  // Total number of messages in the conversation
+  int32 total_count = 2;
+}
+
+message ClaudeMessage {
+  // Message role (user or assistant)
+  string role = 1;
+  // Message content (text or JSON string)
+  string content = 2;
+  // Message timestamp
+  google.protobuf.Timestamp timestamp = 3;
+  // Model used (for assistant messages)
+  string model = 4;
+}
+
+// Full-Text Search Messages
+
+message SearchClaudeHistoryRequest {
+  // Search query (required). Supports natural language queries.
+  string query = 1;
+  // Optional project path filter.
+  optional string project = 2;
+  // Optional model filter (e.g., "claude-sonnet-4").
+  optional string model = 3;
+  // Optional start of date range filter.
+  optional google.protobuf.Timestamp start_time = 4;
+  // Optional end of date range filter.
+  optional google.protobuf.Timestamp end_time = 5;
+  // Maximum number of results to return (default: 20, max: 100).
+  int32 limit = 6;
+  // Number of results to skip for pagination (default: 0).
+  int32 offset = 7;
+}
+
+message SearchClaudeHistoryResponse {
+  // List of search results, ranked by relevance.
+  repeated SearchResult results = 1;
+  // Total number of matching documents (before pagination).
+  int32 total_matches = 2;
+  // Query execution time in milliseconds.
+  int64 query_time_ms = 3;
+  // Indicates if there are more results available.
+  bool has_more = 4;
+}
+
+message SearchResult {
+  // The conversation/session ID containing this match.
+  string session_id = 1;
+  // Conversation name/title.
+  string session_name = 2;
+  // Project/directory path.
+  string project = 3;
+  // Index of the matched message within the conversation.
+  int32 message_index = 4;
+  // BM25 relevance score (higher is more relevant).
+  float score = 5;
+  // Contextual snippets showing where the query terms appear.
+  repeated SearchSnippet snippets = 6;
+  // Metadata about the match source.
+  SearchResultMetadata metadata = 7;
+}
+
+message SearchSnippet {
+  // Snippet text with surrounding context.
+  string text = 1;
+  // Ranges within text that should be highlighted.
+  repeated HighlightRange highlight_ranges = 2;
+  // Role of the message (user, assistant, system).
+  string message_role = 3;
+  // When the message was created.
+  google.protobuf.Timestamp message_time = 4;
+}
+
+message HighlightRange {
+  // Start position in text (character offset).
+  int32 start = 1;
+  // End position in text (character offset).
+  int32 end = 2;
+}
+
+message SearchResultMetadata {
+  // True if match is in session name/project (vs message content).
+  bool is_metadata_match = 1;
+  // Source of the match: "session_name", "project", "message_content".
+  string match_source = 2;
+  // Claude model used in this conversation.
+  string model = 3;
+  // Conversation creation timestamp.
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// PR Tracking Messages
+
+message GetPRInfoRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+}
+
+message GetPRInfoResponse {
+  // PR metadata
+  PRInfo pr_info = 1;
+}
+
+message GetPRCommentsRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+}
+
+message GetPRCommentsResponse {
+  // List of PR comments
+  repeated PRComment comments = 1;
+}
+
+message PostPRCommentRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+  // Comment body (required)
+  string body = 2;
+}
+
+message PostPRCommentResponse {
+  // Whether the comment was successfully posted
+  bool success = 1;
+  // Human-readable message
+  string message = 2;
+}
+
+message MergePRRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+  // Merge method: "merge", "squash", or "rebase" (default: "merge")
+  optional string method = 2;
+}
+
+message MergePRResponse {
+  // Whether the PR was successfully merged
+  bool success = 1;
+  // Human-readable message
+  string message = 2;
+}
+
+message ClosePRRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+}
+
+message ClosePRResponse {
+  // Whether the PR was successfully closed
+  bool success = 1;
+  // Human-readable message
+  string message = 2;
+}
+
+// SendNotificationRequest allows tmux sessions to send notifications.
+message SendNotificationRequest {
+  // Session identifier sending the notification (required)
+  string session_id = 1;
+
+  // Type of notification (determines default priority and UI treatment)
+  NotificationType notification_type = 2;
+
+  // Priority level (optional, overrides default for notification type)
+  NotificationPriority priority = 3;
+
+  // Human-readable title (required)
+  string title = 4;
+
+  // Detailed message (optional)
+  string message = 5;
+
+  // Optional metadata (key-value pairs for additional context)
+  // Common keys: "command", "file", "duration", "error_code"
+  map<string, string> metadata = 6;
+}
+
+// SendNotificationResponse confirms notification was received.
+message SendNotificationResponse {
+  // Whether notification was accepted and broadcast
+  bool success = 1;
+
+  // Human-readable response message
+  string message = 2;
+
+  // Notification ID (for tracking/debugging)
+  string notification_id = 3;
+}
+
+// FocusWindowRequest specifies which application window to bring to front.
+message FocusWindowRequest {
+  // macOS bundle identifier (e.g., "com.jetbrains.intellij", "com.microsoft.VSCode")
+  // This is the preferred method for window activation.
+  optional string bundle_id = 1;
+
+  // Application name (e.g., "IntelliJ IDEA", "Visual Studio Code")
+  // Used as fallback if bundle_id is not provided.
+  optional string app_name = 2;
+
+  // Process ID (optional, for more specific targeting)
+  optional int32 pid = 3;
+
+  // Project name/path (for IDEs that support project-specific activation)
+  optional string project = 4;
+}
+
+// FocusWindowResponse indicates whether window activation succeeded.
+message FocusWindowResponse {
+  // Whether the window was successfully activated
+  bool success = 1;
+
+  // Human-readable message (error details if failed)
+  string message = 2;
+
+  // Platform (e.g., "darwin", "linux", "windows")
+  string platform = 3;
+}
+
+// RenameSessionRequest changes the title of an existing session.
+message RenameSessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+
+  // New title for the session (must be unique).
+  string new_title = 2;
+}
+
+// RenameSessionResponse returns the updated session.
+message RenameSessionResponse {
+  // Updated session with new title.
+  Session session = 1;
+}
+
+// RestartSessionRequest restarts a session.
+message RestartSessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+
+  // Optional: preserve terminal output before restart (default: false).
+  bool preserve_output = 2;
+}
+
+// RestartSessionResponse indicates restart success.
+message RestartSessionResponse {
+  // Restarted session.
+  Session session = 1;
+
+  // Whether the restart was successful.
+  bool success = 2;
+
+  // Human-readable message (error details if failed).
+  string message = 3;
+}
+
+// GetWorkspaceInfoRequest retrieves VCS information for a session.
+message GetWorkspaceInfoRequest {
+  // Session identifier.
+  string id = 1;
+}
+
+// GetWorkspaceInfoResponse returns VCS and workspace information.
+message GetWorkspaceInfoResponse {
+  // VCS and workspace information.
+  VCSInfo vcs_info = 1;
+
+  // Error message if VCS info couldn't be retrieved.
+  string error = 2;
+}
+
+// ListWorkspaceTargetsRequest retrieves available switch targets for a session.
+message ListWorkspaceTargetsRequest {
+  // Session identifier.
+  string id = 1;
+}
+
+// ListWorkspaceTargetsResponse returns available workspace switch targets.
+message ListWorkspaceTargetsResponse {
+  // Available switch targets.
+  AvailableWorkspaceTargets targets = 1;
+
+  // Error message if targets couldn't be retrieved.
+  string error = 2;
+}
+
+// SwitchWorkspaceRequest initiates a workspace switch for a session.
+message SwitchWorkspaceRequest {
+  // Session identifier.
+  string id = 1;
+
+  // Type of switch operation.
+  WorkspaceSwitchType switch_type = 2;
+
+  // Target destination (branch name, revision ID, worktree path, or directory path).
+  string target = 3;
+
+  // Strategy for handling uncommitted changes.
+  ChangeStrategy change_strategy = 4;
+
+  // Create the bookmark/branch/worktree if it doesn't exist.
+  bool create_if_missing = 5;
+
+  // Base revision for new bookmark creation (empty = current).
+  string base_revision = 6;
+}
+
+// ResolveApprovalRequest approves or denies a pending tool use request.
+message ResolveApprovalRequest {
+  // Unique approval ID (from notification metadata.approval_id).
+  string approval_id = 1;
+
+  // User's decision: "allow" or "deny".
+  string decision = 2;
+
+  // Optional reason shown to Claude when denying.
+  optional string message = 3;
+
+  // When true, the caller explicitly acknowledges failing CI and re-submits an
+  // already-blocked approval; the server skips the CI-red guard for this request only.
+  bool override_ci_block = 4;
+}
+
+// ResolveApprovalResponse confirms the decision was received.
+message ResolveApprovalResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ListPendingApprovalsRequest filters pending approvals.
+message ListPendingApprovalsRequest {
+  // Optional: only return approvals for this session.
+  optional string session_id = 1;
+}
+
+// ListPendingApprovalsResponse returns pending approvals.
+message ListPendingApprovalsResponse {
+  repeated PendingApprovalProto approvals = 1;
+}
+
+// SwitchWorkspaceResponse returns the result of a workspace switch operation.
+message SwitchWorkspaceResponse {
+  // Whether the switch was successful.
+  bool success = 1;
+
+  // Human-readable message (error details if failed).
+  string message = 2;
+
+  // Revision before the switch.
+  string previous_revision = 3;
+
+  // Revision after the switch.
+  string current_revision = 4;
+
+  // VCS type that was used.
+  VCSType vcs_type = 5;
+
+  // Description of how uncommitted changes were handled.
+  string changes_handled = 6;
+
+  // Updated session after the switch.
+  Session session = 7;
+}
+
+// CreateDebugSnapshotRequest triggers a server-side diagnostic snapshot.
+message CreateDebugSnapshotRequest {
+  // Optional user note describing the issue being diagnosed.
+  optional string note = 1;
+
+  // Optional: Maximum number of recent log lines to include (default: 200).
+  optional int32 log_lines = 2;
+}
+
+// CreateDebugSnapshotResponse returns the path and summary of the written snapshot.
+message CreateDebugSnapshotResponse {
+  // Absolute path to the written snapshot JSON file.
+  string file_path = 1;
+
+  // Human-readable summary (e.g., "Captured 5 sessions, 2 pending approvals, 200 log lines").
+  string summary = 2;
+
+  // Timestamp when the snapshot was created (RFC3339).
+  string timestamp = 3;
+
+  // Size of the snapshot file in bytes.
+  int64 file_size_bytes = 4;
+}
+
+// ============================================================================
+// Notification History Messages
+// ============================================================================
+
+// NotificationHistoryRecord represents a persisted notification.
+message NotificationHistoryRecord {
+  string id = 1;
+  string session_id = 2;
+  string session_name = 3;
+  NotificationType notification_type = 4;
+  NotificationPriority priority = 5;
+  string title = 6;
+  string message = 7;
+  map<string, string> metadata = 8;
+  google.protobuf.Timestamp created_at = 9;
+  bool is_read = 10;
+  optional google.protobuf.Timestamp read_at = 11;
+
+  // Number of deduplicated occurrences this record represents.
+  // Default 0 means "1 occurrence" (backward-compatible with old clients).
+  int32 occurrence_count = 12;
+
+  // Timestamp of the most recent occurrence (may differ from created_at
+  // which tracks the first occurrence).
+  optional google.protobuf.Timestamp last_occurred_at = 13;
+}
+
+// GetNotificationHistoryRequest filters and paginates notification history.
+message GetNotificationHistoryRequest {
+  optional int32 limit = 1;
+  optional int32 offset = 2;
+  optional NotificationType type_filter = 3;
+  optional string session_id = 4;
+  optional bool unread_only = 5;
+}
+
+// GetNotificationHistoryResponse contains notification history results.
+message GetNotificationHistoryResponse {
+  repeated NotificationHistoryRecord notifications = 1;
+  int32 total_count = 2;
+  int32 unread_count = 3;
+  bool has_more = 4;
+}
+
+// MarkNotificationReadRequest marks notifications as read.
+// If notification_ids is empty, all notifications are marked as read.
+message MarkNotificationReadRequest {
+  repeated string notification_ids = 1;
+}
+
+// MarkNotificationReadResponse confirms how many notifications were marked.
+message MarkNotificationReadResponse {
+  bool success = 1;
+  int32 marked_count = 2;
+}
+
+// ClearNotificationHistoryRequest removes notifications from history.
+message ClearNotificationHistoryRequest {
+  // Optional: Clear notifications older than this timestamp (RFC3339 string).
+  optional string before_timestamp = 1;
+}
+
+// ClearNotificationHistoryResponse confirms how many notifications were cleared.
+message ClearNotificationHistoryResponse {
+  bool success = 1;
+  int32 cleared_count = 2;
+}
+
+// ============================================================================
+// Auto-Approval Rules & Analytics Messages
+// ============================================================================
+
+message ListApprovalRulesRequest {
+  // Optional: filter by source ("user", "seed", "claude-settings"). Empty = all.
+  optional string source_filter = 1;
+}
+
+message ListApprovalRulesResponse {
+  repeated ApprovalRuleProto rules = 1;
+}
+
+message UpsertApprovalRuleRequest {
+  ApprovalRuleProto rule = 1;
+}
+
+message UpsertApprovalRuleResponse {
+  ApprovalRuleProto rule = 1;
+  bool created = 2;
+}
+
+message DeleteApprovalRuleRequest {
+  string id = 1;
+}
+
+message DeleteApprovalRuleResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GetApprovalAnalyticsRequest {
+  // Time window in days (default 7, max 90).
+  optional int32 window_days = 1;
+}
+
+message GetApprovalAnalyticsResponse {
+  AnalyticsSummaryProto summary = 1;
+  // Daily breakdown sorted ascending by date, covering the requested window.
+  repeated DailyBucketProto daily_buckets = 2;
+}
+
+// ============================================================================
+// Program Analytics Drill-Down Messages
+// ============================================================================
+
+message GetProgramAnalyticsRequest {
+  // program is the executable name (e.g., "git", "gh", "npm").
+  string program = 1;
+  // window_days controls the time window (default 7, max 90).
+  optional int32 window_days = 2;
+}
+
+message GetProgramAnalyticsResponse {
+  // program echoed from the request.
+  string program = 1;
+  // category is the program's category (e.g., "vcs", "node").
+  string category = 2;
+  // subcommands contains per-subcommand decision breakdown, sorted by total descending.
+  repeated SubcommandBreakdownProto subcommands = 3;
+  // recent_examples contains the last 20 raw command_preview strings across all subcommands.
+  repeated string recent_examples = 4;
+  // trend contains per-day counts for the whole program in the window.
+  repeated DailyBucketProto trend = 5;
+}
+
+// ============================================================================
+// Database / Workspace Switcher Messages
+// ============================================================================
+
+message ListDatabasesRequest {}
+
+message ListDatabasesResponse {
+  // All discovered workspace databases.
+  repeated DatabaseInfo databases = 1;
+
+  // Workspace ID of the currently active database.
+  string current_workspace_id = 2;
+}
+
+message GetCurrentDatabaseRequest {}
+
+message GetCurrentDatabaseResponse {
+  // Metadata for the currently active workspace database.
+  DatabaseInfo database = 1;
+}
+
+// SwitchDatabaseRequest specifies the target workspace to switch to.
+message SwitchDatabaseRequest {
+  // Absolute path to the target workspace config directory.
+  // Must be under ~/.stapler-squad/ for security.
+  string config_dir = 1;
+}
+
+// SwitchDatabaseResponse confirms the switch was initiated.
+message SwitchDatabaseResponse {
+  // Whether the switch was successfully initiated.
+  bool success = 1;
+
+  // Human-readable status message.
+  string message = 2;
+}
+
+// MergeDatabaseRequest specifies the source workspace to merge sessions from.
+message MergeDatabaseRequest {
+  // Absolute path to the source workspace config directory.
+  // Must be under ~/.stapler-squad/ for security.
+  string config_dir = 1;
+}
+
+// MergeDatabaseResponse reports how many sessions were imported.
+message MergeDatabaseResponse {
+  // Whether the merge completed without error.
+  bool success = 1;
+
+  // Human-readable status message.
+  string message = 2;
+
+  // Number of sessions copied into the current database.
+  int32 sessions_imported = 3;
+
+  // Number of sessions skipped due to title conflicts.
+  int32 sessions_skipped = 4;
+}
+
+// ============================================================================
+// Checkpoint Messages
+// ============================================================================
+
+message CreateCheckpointRequest {
+  // Session ID to checkpoint (uses session title as ID).
+  string session_id = 1;
+
+  // Human-readable label for this checkpoint.
+  string label = 2;
+}
+
+message CreateCheckpointResponse {
+  // The newly created checkpoint.
+  CheckpointProto checkpoint = 1;
+}
+
+message ListCheckpointsRequest {
+  // Session ID to list checkpoints for.
+  string session_id = 1;
+}
+
+message ListCheckpointsResponse {
+  // All checkpoints for the session, ordered by timestamp ascending.
+  repeated CheckpointProto checkpoints = 1;
+}
+
+message ForkSessionRequest {
+  // Source session ID to fork from.
+  string session_id = 1;
+
+  // Checkpoint ID on the source session to fork from.
+  string checkpoint_id = 2;
+
+  // Title for the new forked session. Must be unique.
+  string new_title = 3;
+}
+
+message ForkSessionResponse {
+  // The newly created forked session.
+  Session session = 1;
+}
+
+// ============================================================================
+// File Viewer Request/Response Messages
+// ============================================================================
+
+message ListFilesRequest {
+  // Session ID whose worktree to browse.
+  string session_id = 1;
+
+  // Directory path relative to session worktree root. Use "." for root.
+  string path = 2;
+
+  // If true, gitignored files are included in the response with is_ignored=true.
+  bool include_ignored = 3;
+}
+
+message ListFilesResponse {
+  // Immediate children of the requested directory (dirs first, then files, alphabetical).
+  repeated FileNode files = 1;
+
+  // Resolved base path that was listed.
+  string base_path = 2;
+
+  // True if the directory had more than 10,000 entries and the response was capped.
+  bool truncated = 3;
+
+  // Total entry count before the cap was applied.
+  int32 total_count = 4;
+}
+
+message GetFileContentRequest {
+  // Session ID whose worktree to read from.
+  string session_id = 1;
+
+  // File path relative to session worktree root.
+  string path = 2;
+}
+
+message GetFileContentResponse {
+  // UTF-8 file content. Empty when is_binary=true.
+  string content = 1;
+
+  // Content encoding (always "utf-8" for text files).
+  string encoding = 2;
+
+  // True if the file was detected as binary (no content returned).
+  bool is_binary = 3;
+
+  // File size in bytes.
+  int64 size = 4;
+
+  // MIME content type detected from extension and content sniffing.
+  string content_type = 5;
+
+  // True if the file exceeded 1MB and was truncated to the first 1MB.
+  bool is_truncated = 6;
+}
+
+message SearchFilesRequest {
+  // Session ID whose worktree to search.
+  string session_id = 1;
+
+  // Substring to match against file names and relative paths (case-insensitive).
+  // Minimum 2 characters; shorter queries return empty results.
+  string query = 2;
+
+  // If true, gitignored files are included in search results.
+  bool include_ignored = 3;
+
+  // Maximum number of results to return. 0 uses the server default (500).
+  int32 max_results = 4;
+}
+
+message SearchFilesResponse {
+  // Matching files with full relative paths from worktree root.
+  repeated FileNode files = 1;
+
+  // True if the result set was capped at max_results.
+  bool truncated = 2;
+
+  // Total matches found before the cap was applied.
+  int32 total_matches = 3;
+}
+
+// ============================================================================
+// Path Completion Messages
+// ============================================================================
+
+message ListPathCompletionsRequest {
+  // Path prefix to complete. The server splits at the last '/' to determine
+  // the base directory and filter prefix. Supports ~ expansion.
+  // Examples: "/home/", "/home/ty", "~/projects/my"
+  string path_prefix = 1;
+
+  // Maximum entries to return. Default: 50, server cap: 500.
+  // Use 0 for server default.
+  int32 max_results = 2;
+
+  // If true, only return directory entries (not regular files).
+  bool directories_only = 3;
+}
+
+message ListPathCompletionsResponse {
+  // Matching filesystem entries, sorted alphabetically.
+  repeated PathEntry entries = 1;
+
+  // The resolved base directory that was listed (after ~ expansion, filepath.Clean).
+  string base_dir = 2;
+
+  // True if results were capped at max_results.
+  bool truncated = 3;
+
+  // True if base_dir exists and is a readable directory.
+  bool base_dir_exists = 4;
+
+  // True if the full path_prefix (including partial filename) exists on disk.
+  bool path_exists = 5;
+}
+
+message PathEntry {
+  // Full absolute path to the entry.
+  string path = 1;
+
+  // Filename component only.
+  string name = 2;
+
+  // True if this entry is a directory (symlinks resolved).
+  bool is_directory = 3;
+}
+
+// ─── Session Defaults Messages ──────────────────────────────────────────────
+
+// ProfileDefaultsProto holds the configurable fields for a named profile.
+message ProfileDefaultsProto {
+  string name = 1;
+  string description = 2;
+  string program = 3;
+  bool auto_yes = 4;
+  repeated string tags = 5;
+  map<string, string> env_vars = 6;
+  string cli_flags = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// DirectoryRuleProto associates a working-directory path prefix with defaults.
+message DirectoryRuleProto {
+  string path = 1;
+  string profile = 2;
+  ProfileDefaultsProto overrides = 3;
+}
+
+// SessionDefaultsConfig is the full defaults configuration returned by GetSessionDefaults.
+message SessionDefaultsConfig {
+  string program = 1;
+  bool auto_yes = 2;
+  repeated string tags = 3;
+  map<string, string> env_vars = 4;
+  string cli_flags = 5;
+  map<string, ProfileDefaultsProto> profiles = 6;
+  repeated DirectoryRuleProto directory_rules = 7;
+  string one_off_base_dir = 8;
+  // Base directory where new project folders are created. Defaults to ~/Projects.
+  string new_project_base_dir = 9;
+  // Max automated rework iterations before a backlog item's auto-reopen loop
+  // leaves it in review for manual action. 0 in a request means "use the
+  // server default (3)"; the response always echoes the resolved value.
+  int32 max_auto_rework_iterations = 10;
+  // Max backlog items that may be in_progress at once. 0 in a request means
+  // "use the server default (2)"; the response always echoes the resolved value.
+  int32 max_concurrent_backlog_work_items = 11;
+}
+
+// GetSessionDefaults
+
+message GetSessionDefaultsRequest {}
+
+message GetSessionDefaultsResponse {
+  SessionDefaultsConfig defaults = 1;
+}
+
+// PreviewDestinationPath
+
+message PreviewDestinationPathRequest {
+  string input = 1;         // raw omnibar text (URL/shorthand or local path)
+  string mode = 2;          // "github_url" | "new_worktree" - client already knows which
+  string repo_path = 3;     // new_worktree only: resolved local repo path
+  string session_name = 4;  // new_worktree only: source string for the sanitized dir name
+}
+
+message PreviewDestinationPathResponse {
+  string path = 1;              // exact for github_url; a directory prefix for new_worktree
+  bool is_exact = 2;            // true only for github_url
+  string unresolved_reason = 3; // set (non-error) when input isn't resolvable yet
+}
+
+// ResolveDefaults
+
+message ResolveDefaultsRequest {
+  string working_dir = 1;
+  string profile_name = 2;
+}
+
+message ResolveDefaultsResponse {
+  string program = 1;
+  bool auto_yes = 2;
+  repeated string tags = 3;
+  map<string, string> env_vars = 4;
+  string cli_flags = 5;
+  // Source tracking
+  bool used_global = 6;
+  bool used_directory = 7;
+  bool used_profile = 8;
+  string matched_directory = 9;
+}
+
+// UpdateGlobalDefaults
+
+message UpdateGlobalDefaultsRequest {
+  string program = 1;
+  bool auto_yes = 2;
+  repeated string tags = 3;
+  map<string, string> env_vars = 4;
+  string cli_flags = 5;
+  string one_off_base_dir = 6;
+  // Base directory where new project folders are created. Defaults to ~/Projects.
+  string new_project_base_dir = 7;
+  // 0 = use the server default (3). See SessionDefaultsConfig.max_auto_rework_iterations.
+  int32 max_auto_rework_iterations = 8;
+  // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
+  int32 max_concurrent_backlog_work_items = 9;
+}
+
+message UpdateGlobalDefaultsResponse {
+  SessionDefaultsConfig defaults = 1;
+}
+
+// UpsertProfile
+
+message UpsertProfileRequest {
+  ProfileDefaultsProto profile = 1;
+}
+
+message UpsertProfileResponse {
+  ProfileDefaultsProto profile = 1;
+}
+
+// DeleteProfile
+
+message DeleteProfileRequest {
+  string name = 1;
+}
+
+message DeleteProfileResponse {}
+
+// UpsertDirectoryRule
+
+message UpsertDirectoryRuleRequest {
+  DirectoryRuleProto rule = 1;
+}
+
+message UpsertDirectoryRuleResponse {
+  DirectoryRuleProto rule = 1;
+}
+
+// DeleteDirectoryRule
+
+message DeleteDirectoryRuleRequest {
+  string path = 1;
+}
+
+message DeleteDirectoryRuleResponse {}
+
+// AliasProto represents a named session preset configured in config.json.
+message AliasProto {
+  string name = 1;
+  string group = 2;
+  string path = 3;
+  string description = 4;
+  string profile = 5;
+  string program = 6;
+  bool auto_yes = 7;
+  repeated string tags = 8;
+  map<string, string> env_vars = 9;
+  string cli_flags = 10;
+  // session_type overrides the default session creation mode for this alias.
+  // Unspecified means the default (directory) is used.
+  SessionType session_type = 11;
+  // name_prefix is prepended to the user-supplied session label when naming sessions.
+  // For example, prefix "ssq-" + label "my-feature" → session name "ssq-my-feature".
+  string name_prefix = 12;
+}
+
+message ListAliasesRequest {}
+
+message ListAliasesResponse {
+  repeated AliasProto aliases = 1;
+}
+
+message UpsertAliasRequest {
+  AliasProto alias = 1;
+}
+
+message UpsertAliasResponse {
+  AliasProto alias = 1;
+}
+
+message DeleteAliasRequest {
+  string name = 1;
+}
+
+message DeleteAliasResponse {}
+
+message ListWorktreesRequest {
+  // Absolute path to the git repository root. Supports ~ expansion.
+  string repo_path = 1;
+}
+
+message WorktreeEntry {
+  // Absolute path to the worktree directory.
+  string path = 1;
+
+  // Branch checked out in this worktree (empty for detached HEAD).
+  string branch = 2;
+
+  // True if this is the main worktree (not an added worktree).
+  bool is_main = 3;
+}
+
+message ListWorktreesResponse {
+  repeated WorktreeEntry worktrees = 1;
+}
+
+// ============================================================================
+// S1: Prompt History Messages
+// ============================================================================
+
+message PromptHistoryEntry {
+  string id = 1;
+  string text = 2;
+  string label = 3;
+  int32 used_count = 4;
+  google.protobuf.Timestamp last_used = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message ListPromptHistoryRequest {
+  int32 limit = 1;
+}
+
+message ListPromptHistoryResponse {
+  repeated PromptHistoryEntry entries = 1;
+}
+
+message DeletePromptHistoryRequest {
+  string id = 1;
+}
+
+message DeletePromptHistoryResponse {}
+
+// ============================================================================
+// S2: Batch Session Creation Messages
+// ============================================================================
+
+message BatchSessionRequest {
+  string title = 1;
+  string path = 2;
+  string working_dir = 3;
+  string branch = 4;
+  string program = 5;
+  string category = 6;
+  string initial_prompt = 7;
+  bool auto_yes = 8;
+  SessionType session_type = 9;
+  string project_id = 10;
+  repeated string tags = 11;
+}
+
+message BatchCreateResult {
+  bool success = 1;
+  string session_id = 2;
+  string error = 3;
+  string title = 4;
+}
+
+message BatchCreateSessionsRequest {
+  repeated BatchSessionRequest sessions = 1;
+  // Max concurrent worktree creations (capped at 3 server-side).
+  int32 max_concurrency = 2;
+}
+
+message BatchCreateSessionsResponse {
+  repeated BatchCreateResult results = 1;
+  int32 succeeded = 2;
+  int32 failed = 3;
+}
+
+// ============================================================================
+// S3: One-Shot PR Creation Messages
+// ============================================================================
+
+message RunOneShotRequest {
+  string session_id = 1;
+  string prompt = 2;
+  // Timeout in seconds (default: 120, max: 300).
+  int32 timeout_seconds = 3;
+}
+
+message RunOneShotResponse {
+  string output = 1;
+  string error = 2;
+  int32 exit_code = 3;
+  string pr_url = 4;
+  bool branch_diverged_from_base = 5;
+}
+
+// ============================================================================
+// S4: Project Messages
+// ============================================================================
+
+message Project {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  // Aggregate session counts.
+  int32 session_count = 6;
+  int32 running_count = 7;
+  int32 complete_count = 8;
+  int32 review_ready_count = 9;
+}
+
+message CreateProjectRequest {
+  string name = 1;
+  string description = 2;
+}
+
+message CreateProjectResponse {
+  Project project = 1;
+}
+
+message ListProjectsRequest {}
+
+message ListProjectsResponse {
+  repeated Project projects = 1;
+}
+
+message UpdateProjectRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message UpdateProjectResponse {
+  Project project = 1;
+}
+
+message DeleteProjectRequest {
+  string id = 1;
+}
+
+message DeleteProjectResponse {
+  bool success = 1;
+}
+
+message AssignSessionsToProjectRequest {
+  string project_id = 1;
+  repeated string session_ids = 2;
+}
+
+message AssignSessionsToProjectResponse {
+  int32 updated_count = 1;
+}
+
+// ListBranches
+
+message ListBranchesRequest {
+  // Absolute path to the git repository root.
+  string repo_path = 1;
+  // Optional substring filter applied in Go (case-insensitive).
+  string filter = 2;
+  // Maximum number of branches to return (default 200).
+  int32 max_results = 3;
+  // Whether to include remote-tracking branches (default false).
+  bool include_remote = 4;
+}
+
+message ListBranchesResponse {
+  repeated string branches = 1;
+  int32 total_count = 2;
+  // True if the command timed out before all branches were collected.
+  bool truncated = 3;
+}
+
+// GetTerminalSnapshot
+
+message GetTerminalSnapshotRequest {
+  // ID of the session to snapshot.
+  string session_id = 1;
+  // Number of trailing lines to return (default 20).
+  int32 last_n_lines = 2;
+}
+
+message GetTerminalSnapshotResponse {
+  // Terminal content (may include ANSI escape sequences).
+  string content = 1;
+  // True when content is entirely whitespace (cleared terminal).
+  bool is_empty = 2;
+}
+
+// WriteToSession
+
+message WriteToSessionRequest {
+  // ID (title) of the session to write to.
+  string session_id = 1;
+  // Text to send to the terminal PTY.
+  string input = 2;
+  // When true, append a newline after input. Callers should set this explicitly.
+  bool press_enter = 3;
+}
+
+message WriteToSessionResponse {
+  // True when write was queued successfully.
+  bool success = 1;
+}
+
+// LogClientEvents
+
+message ClientLogEntry {
+  string level = 1;
+  string message = 2;
+  string timestamp = 3;
+  string url = 4;
+  string user_agent = 5;
+  string session_id = 6;
+}
+
+message LogClientEventsRequest {
+  repeated ClientLogEntry entries = 1;
+}
+
+message LogClientEventsResponse {}
+
+// ============================================================================
+// E2-S5: Error Registry Messages
+// ============================================================================
+
+message ListErrorsRequest {
+  // When true, acknowledged error events are included in the response.
+  bool include_acknowledged = 1;
+}
+
+// ErrorEventRecord is the wire representation of a persisted RPC error.
+message ErrorEventRecord {
+  string fingerprint = 1;
+  string error_type = 2;
+  string message = 3;
+  string stack_trace = 4;
+  string rpc_procedure = 5;
+  int32 occurrence_count = 6;
+  google.protobuf.Timestamp first_seen = 7;
+  google.protobuf.Timestamp last_seen = 8;
+  bool acknowledged = 9;
+}
+
+message ListErrorsResponse {
+  repeated ErrorEventRecord errors = 1;
+}
+
+message AcknowledgeErrorRequest {
+  string fingerprint = 1;
+}
+
+message AcknowledgeErrorResponse {}
+
+// ClearConversationStateRequest identifies the session whose conversation UUID should be cleared.
+message ClearConversationStateRequest {
+  // Session identifier (title or stable UUID).
+  string id = 1;
+}
+
+// ClearConversationStateResponse reports whether the state was cleared.
+message ClearConversationStateResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ============================================================================
+// Feature Flag Messages
+// ============================================================================
+
+message FeatureFlag {
+  // Machine name of the feature (e.g. "backlog").
+  string name = 1;
+  // Whether the feature is currently enabled.
+  bool enabled = 2;
+  // Human-readable description of what the feature does.
+  string description = 3;
+  // Optional human-readable status line (e.g. why a controller-backed flag is
+  // currently off). Empty when not applicable.
+  string status_detail = 4;
+}
+
+message GetFeatureFlagsRequest {}
+
+message GetFeatureFlagsResponse {
+  repeated FeatureFlag flags = 1;
+}
+
+message GetHookStatusRequest {}
+
+message GetHookStatusResponse {
+  // Whether the PreToolUse rule-enforcement hook (ssq-hooks check) is installed globally.
+  bool rules_installed = 1;
+  // Whether the Notification/Stop notification hooks (ssq-hook-handler) are installed globally.
+  bool notifications_installed = 2;
+  // True when the ssq-hooks binary is available to install the rules hook.
+  bool rules_available = 3;
+  // True when the ssq-hook-handler is available to install the notification hooks.
+  bool notifications_available = 4;
+}
+
+message InstallHooksRequest {
+  // Install the PreToolUse rule-enforcement hook.
+  bool install_rules = 1;
+  // Install the Notification/Stop notification hooks.
+  bool install_notifications = 2;
+}
+
+message InstallHooksResponse {
+  // Hook status after the install attempt.
+  GetHookStatusResponse status = 1;
+  // Human-readable per-hook result messages (e.g. a manual fallback command when a binary is missing).
+  repeated string messages = 2;
+}
+
+message UpdateFeatureFlagRequest {
+  // The feature name to update (e.g. "backlog").
+  string name = 1;
+  // The new enabled state.
+  bool enabled = 2;
+}
+
+message UpdateFeatureFlagResponse {
+  // The updated flag state.
+  FeatureFlag flag = 1;
+}
+
+// ============================================================================
+// Escape Analytics Messages (Epic 6)
+// ============================================================================
+
+message EscapeEventProto {
+  string id = 1;
+  string session_id = 2;
+  string stage = 3;
+  string sequence_type = 4;
+  string sequence_subtype = 5;
+  int32 byte_length = 6;
+  string payload_hash = 7;
+  bytes raw_bytes = 8;
+  bool mangled = 9;
+  string mangle_type = 10;
+  google.protobuf.Timestamp wall_time = 11;
+  int64 session_seq = 12;
+}
+
+message QueryEscapeAnalyticsRequest {
+  string session_id = 1;
+  string stage = 2;
+  string sequence_type = 3;
+  bool mangled_only = 4;
+  google.protobuf.Timestamp start_time = 5;
+  google.protobuf.Timestamp end_time = 6;
+  int32 page_size = 7;
+  string page_token = 8;
+}
+
+message QueryEscapeAnalyticsResponse {
+  repeated EscapeEventProto events = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message EscapeSequenceCount {
+  string sequence_type = 1;
+  int64 count = 2;
+  int64 mangled_count = 3;
+}
+
+message GetEscapeAnalyticsSummaryRequest {
+  string session_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+
+message GetEscapeAnalyticsSummaryResponse {
+  repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+}
+
+// ============================================================================
+// Custom Shell Request / Response Messages
+// ============================================================================
+
+message SpawnShellRequest {
+  // Session to attach the shell to (uses session title as ID).
+  string session_id = 1;
+
+  // Human-readable name for the shell tab (defaults to basename of command).
+  string name = 2;
+
+  // Command to run (defaults to $SHELL or /bin/sh).
+  string command = 3;
+
+  // Working directory (defaults to session workspace root).
+  string working_dir = 4;
+}
+
+message SpawnShellResponse {
+  // The newly created shell.
+  Shell shell = 1;
+}
+
+message StopShellRequest {
+  // Session identifier.
+  string session_id = 1;
+
+  // Shell identifier.
+  string shell_id = 2;
+}
+
+message StopShellResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RestartShellRequest {
+  // Session identifier.
+  string session_id = 1;
+
+  // Shell identifier.
+  string shell_id = 2;
+}
+
+message RestartShellResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ListShellsRequest {
+  // Session identifier.
+  string session_id = 1;
+}
+
+message ListShellsResponse {
+  // All shells for the session, sorted by order_index ascending.
+  repeated Shell shells = 1;
+}
+
+message DeleteShellRequest {
+  // Session identifier.
+  string session_id = 1;
+
+  // Shell identifier.
+  string shell_id = 2;
+}
+
+message DeleteShellResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GenerateSuggestedRuleRequest {
+  SuggestionSource source = 1;
+  // For ANALYTICS_GAPS: number of days of history to analyze (1–90, default 7).
+  optional int32 window_days = 2;
+  // For COMMAND_SAMPLE: the raw command string the user pasted.
+  string command_sample = 3;
+  // For REVIEW_QUEUE_ITEM: the analytics entry ID of the review item.
+  string analytics_item_id = 4;
+  // For ANALYTICS_GAPS scoped to a single tool/program: optional filter.
+  string tool_name_filter = 5;
+  string program_name_filter = 6;
+}
+
+message GenerateSuggestedRuleResponse {
+  // Multiple suggestions are returned so the user can review a batch at once.
+  // Analytics-gaps calls return up to 5 suggestions (one per top gap cluster).
+  // Command-sample and review-queue-item calls return exactly 1.
+  repeated SuggestedRuleProto suggestions = 1;
+}
+
+// HibernateSession messages
+message HibernateSessionRequest {
+  string id = 1;
+  // reason identifies why the session is being hibernated.
+  // Values: "manual", "idle", "resource_pressure". Defaults to "manual".
+  string reason = 2;
+}
+
+message HibernateSessionResponse {
+  Session session = 1;
+}
+
+// ResumeHibernatedSession messages
+message ResumeHibernatedSessionRequest {
+  string id = 1;
+}
+
+message ResumeHibernatedSessionResponse {
+  Session session = 1;
+}
+
+// ResumeCrashedSession messages
+message ResumeCrashedSessionRequest {
+  string id = 1;
+}
+
+message ResumeCrashedSessionResponse {
+  Session session = 1;
+}
+
+// ValidateRules messages
+message ValidateRulesRequest {
+  string yaml_content = 1;
+}
+
+message ValidateRulesResponse {
+  repeated ParsedRuleResult results = 1;
+  int32 valid_count = 2;
+  int32 error_count = 3;
+}
+
+message ParsedRuleResult {
+  ApprovalRuleProto rule = 1;
+  repeated string errors = 2;
+  bool valid = 3;
+  string original_name = 4;
+}
+
+// ExportRules messages
+message ExportRulesRequest {
+  repeated string rule_ids = 1;
+}
+
+message ExportRulesResponse {
+  string yaml_content = 1;
+}
+
+// BulkUpsertRules messages
+message BulkUpsertRulesRequest {
+  repeated ApprovalRuleProto rules = 1;
+  bool overwrite_duplicates = 2;
+}
+
+message BulkUpsertRulesResponse {
+  int32 created = 1;
+  int32 updated = 2;
+  int32 skipped = 3;
+  repeated string errors = 4;
+}
+
+// GetConfigFileRules messages
+message GetConfigFileRulesRequest {}
+
+message GetConfigFileRulesResponse {
+  repeated ApprovalRuleProto rules = 1;
+  string file_path = 2;
+}
+
+// SaveRulesToConfigFile messages
+message SaveRulesToConfigFileRequest {
+  repeated string rule_ids = 1;
+  ApprovalRuleProto rule = 2;
+}
+
+message SaveRulesToConfigFileResponse {
+  string file_path = 1;
+}
+
+// ============================================================================
+// Workflow messages
+// ============================================================================
+
+message WorkflowProto {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  string command = 5;
+  string target_directory = 6;
+  string input_template = 7;
+  string session_type = 8;
+  string model = 9;
+  string agent_type = 10;
+  string cron_expression = 11;
+  bool cron_enabled = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  // Retention: keep only the N most recent sessions (0 = keep all, i.e. disabled).
+  optional int32 keep_sessions = 15;
+  // Retention: auto-archive completed sessions after this many hours (0 = disabled).
+  optional int32 archive_after_hours = 16;
+}
+
+message CreateWorkflowRequest {
+  string slug = 1;
+  string name = 2;
+  string description = 3;
+  string command = 4;
+  string target_directory = 5;
+  string input_template = 6;
+  string session_type = 7;
+  string model = 8;
+  string agent_type = 9;
+  string cron_expression = 10;
+  bool cron_enabled = 11;
+  // Retention: keep only the N most recent sessions (0 = keep all).
+  optional int32 keep_sessions = 12;
+  // Retention: auto-archive completed sessions after this many hours (0 = disabled).
+  optional int32 archive_after_hours = 13;
+}
+
+message CreateWorkflowResponse {
+  WorkflowProto workflow = 1;
+}
+
+message UpdateWorkflowRequest {
+  string id = 1;
+  // All fields optional — only provided fields are updated.
+  optional string name = 2;
+  optional string description = 3;
+  optional string command = 4;
+  optional string target_directory = 5;
+  optional string input_template = 6;
+  optional string session_type = 7;
+  optional string model = 8;
+  optional string agent_type = 9;
+  optional string cron_expression = 10;
+  optional bool cron_enabled = 11;
+  // Retention: keep only the N most recent sessions (0 = keep all).
+  optional int32 keep_sessions = 12;
+  // Retention: auto-archive completed sessions after this many hours (0 = disabled).
+  optional int32 archive_after_hours = 13;
+}
+
+message UpdateWorkflowResponse {
+  WorkflowProto workflow = 1;
+}
+
+message DeleteWorkflowRequest {
+  string id = 1;
+}
+
+message DeleteWorkflowResponse {}
+
+message ListWorkflowsRequest {}
+
+message ListWorkflowsResponse {
+  repeated WorkflowProto workflows = 1;
+}
+
+message RunWorkflowRequest {
+  string id = 1;
+  // arg is injected into input_template if present (replaces {{input}}).
+  string arg = 2;
+}
+
+message ListSlashCommandsRequest {
+  // Directory to scan for project-level .claude/commands/. May be empty.
+  string target_directory = 1;
+}
+
+// SlashCommandInfo describes a single slash command available for autocomplete.
+message SlashCommandInfo {
+  // Command name without the leading slash, e.g. "code:fix-loop".
+  // Subdirectory separators are replaced with ":".
+  string name = 1;
+  // Human-readable title from YAML frontmatter, or the name if absent.
+  string title = 2;
+  // Short description from YAML frontmatter.
+  string description = 3;
+  // "builtin" | "user" | "project"
+  string source = 4;
+}
+
+message ListSlashCommandsResponse {
+  repeated SlashCommandInfo commands = 1;
+}
+
+message RunWorkflowResponse {
+  string session_id = 1;
+}
+
+// DetectionEventProto is the wire representation of a single status-detection event.
+message DetectionEventProto {
+  string session_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string matched_pattern = 3;   // pattern Name or "<none>" if no match
+  string matched_category = 4;  // "active", "idle", "error", etc.
+  int32 result_status = 5;      // maps to DetectedStatus int value
+  string tail_snippet = 6;      // last 512 bytes of cleaned terminal output
+}
+
+message GetDetectionEventsRequest {
+  string session_id = 1;
+  // max events to return; capped at 100 server-side; 0 means default (20)
+  int32 limit = 2;
+}
+
+message GetDetectionEventsResponse {
+  repeated DetectionEventProto events = 1;
+}
+
+message ArchiveSessionRequest {
+  string session_id = 1;
+}
+
+message ArchiveSessionResponse {}
+
+message UnarchiveSessionRequest {
+  string session_id = 1;
+}
+
+message UnarchiveSessionResponse {}
+
+message ArchiveWorkflowSessionsRequest {
+  string workflow_id = 1;
+}
+
+message ArchiveWorkflowSessionsResponse {
+  // Number of sessions that were archived (active/creating/paused are skipped).
+  int32 archived_count = 1;
+}
+
+message DeleteWorkflowFailedSessionsRequest {
+  string workflow_id = 1;
+}
+
+message DeleteWorkflowFailedSessionsResponse {
+  // Number of sessions that were archived (soft-deleted).
+  int32 deleted_count = 1;
+}
+
+message GetProviderLimitsRequest {
+  string session_id = 1; // session title/id
+}
+
+message ProviderLimitsProto {
+  string provider = 1;
+  string model = 2;
+  int32 requests_limit = 3;
+  int32 requests_remaining = 4;
+  google.protobuf.Timestamp requests_reset = 5;
+  int32 tokens_limit = 6;
+  int32 tokens_remaining = 7;
+  google.protobuf.Timestamp tokens_reset = 8;
+  int32 context_tokens_used = 9;
+  int32 context_tokens_max = 10;
+  int32 session_input_tokens = 11;
+  int32 session_output_tokens = 12;
+  double estimated_cost_usd = 13;
+  bool available = 14;
+  string last_error_code = 15;
+  google.protobuf.Timestamp fetched_at = 16;
+}
+
+message GetProviderLimitsResponse {
+  ProviderLimitsProto limits = 1;
+}
+

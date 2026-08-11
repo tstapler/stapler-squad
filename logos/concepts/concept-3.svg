@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 512">
+
+  <g id="background">
+    <rect x="0" y="0" width="1024" height="512" fill="#0A0A0F"/>
+  </g>
+
+  <g id="icon">
+    <rect x="88" y="316" width="164" height="14" fill="#8B1A3B" rx="3"/>
+
+    <rect x="88"  y="222" width="28" height="96" fill="#8B1A3B" rx="3"/>
+    <rect x="134" y="222" width="28" height="96" fill="#8B1A3B" rx="3"/>
+    <rect x="180" y="222" width="28" height="96" fill="#8B1A3B" rx="3"/>
+    <rect x="226" y="222" width="28" height="96" fill="#8B1A3B" rx="3"/>
+
+    <circle cx="102" cy="214" r="6" fill="#C9A84C"/>
+    <circle cx="148" cy="214" r="6" fill="#5B3678"/>
+    <circle cx="194" cy="214" r="6" fill="#C9A84C"/>
+    <circle cx="240" cy="214" r="6" fill="#C9A84C"/>
+    <circle cx="240" cy="214" r="3" fill="#0A0A0F"/>
+  </g>
+
+  <g id="divider">
+    <line x1="330" y1="90" x2="330" y2="422" stroke="#1E1820" stroke-width="1"/>
+  </g>
+
+  <g id="wordmark">
+    <text
+      x="692"
+      y="234"
+      font-family="Georgia, 'Times New Roman', serif"
+      font-size="68"
+      font-weight="700"
+      fill="#EDE0D0"
+      letter-spacing="8"
+      text-anchor="middle">SENESCHAL</text>
+    <text
+      x="692"
+      y="290"
+      font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+      font-size="15"
+      font-weight="400"
+      fill="#C9A84C"
+      letter-spacing="5"
+      text-anchor="middle">YOUR AGENTIC ESTATE, MANAGED</text>
+  </g>
+
+</svg>

@@ -1,0 +1,13 @@
+{
+  "id": "GetInsightsSummary",
+  "type": "backend",
+  "service": "InsightsService",
+  "method": "GetInsightsSummary",
+  "protoFile": "proto/session/v1/insights.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlagged"
+  ],
+  "lastModified": "2026-07-27T00:00:00Z"
+}

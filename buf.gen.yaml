@@ -1,0 +1,26 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/tstapler/stapler-squad/gen/proto/go
+plugins:
+  # Go protobuf generation
+  - remote: buf.build/protocolbuffers/go
+    out: gen/proto/go
+    opt:
+      - paths=source_relative
+
+  # Go ConnectRPC generation
+  - remote: buf.build/connectrpc/go
+    out: gen/proto/go
+    opt:
+      - paths=source_relative
+
+  # TypeScript protobuf message types generation (for web-app)
+  - local: web-app/node_modules/.bin/protoc-gen-es
+    out: web-app/src/gen
+    opt:
+      - target=ts
+      - ts_nocheck=false
+      - keep_empty_files=true

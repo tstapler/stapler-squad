@@ -1,0 +1,24 @@
+{
+  "id": "pane-tiling-engine",
+  "type": "frontend",
+  "component": "PaneTilingContainer",
+  "path": "web-app/src/components/pane/PaneTilingContainer.tsx",
+  "tested": true,
+  "testIds": [
+    "paneReducer_should_replaceLeafWithSplit_When_splitVertical",
+    "paneReducer_should_replaceLeafWithSplit_When_splitHorizontal",
+    "paneReducer_should_setDefaultRatio_When_splitCreated",
+    "paneReducer_should_collapseParentWithSibling_When_closingLeaf",
+    "paneReducer_should_focusSibling_When_closingFocusedPane",
+    "paneReducer_should_resetToInitialState_When_closingLastRootLeaf",
+    "paneReducer_should_updateRatio_When_resizePaneDispatched",
+    "paneReducer_should_updateFocusedPaneId_When_focusPaneDispatched",
+    "paneReducer_should_setSessionId_When_assignSessionDispatched",
+    "paneReducer_should_returnInitialSingleEmptyLeaf_When_resetLayout",
+    "paneReducer_should_setZoomedPaneId_When_zoomPaneDispatched",
+    "paneReducer_should_toggleZoomOff_When_sameZoomedPaneIdDispatched",
+    "paneReducer_should_neverProduceStateWithMissingFocusedPaneId_When_$type",
+    "paneReducer_should_keepRatioWithinBounds_When_resizeApplied"
+  ],
+  "lastModified": "2026-05-07T00:00:00Z"
+}

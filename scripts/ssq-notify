@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+#
+# ssq-notify - Send notifications from tmux sessions to Stapler Squad
+#
+# This script allows Claude Code instances running in tmux sessions to send
+# notification chimes with metadata to the Stapler Squad server, which broadcasts
+# them to all connected clients (web UI and TUI).
+#
+# Usage:
+#   ssq-notify --session-id "my-session" --title "Task Complete" [options]
+#
+# Required:
+#   --session-id, -s    Session ID (must match active Stapler Squad session)
+#   --title, -t         Notification title (required)
+#
+# Optional:
+#   --message, -m       Detailed message body
+#   --type              Notification type (see below)
+#   --priority, -p      Priority: urgent, high, medium, low (default: medium)
+#   --metadata, -d      Key=value pairs (can be specified multiple times)
+#   --port              Server port (default: 8543)
+#   --quiet, -q         Suppress output on success
+#   --help, -h          Show this help message
+#
+# Notification Types:
+#   info              - General information
+#   approval_needed   - Requires user approval
+#   error             - Error occurred
+#   warning           - Warning message
+#   task_complete     - Task finished successfully
+#   task_failed       - Task finished with errors
+#   progress          - Progress update
+#   question          - Question for user
+#   reminder          - Reminder notification
+#   system            - System notification
+#   custom            - Custom notification
+#
+# Examples:
+#   # Simple notification
+#   ssq-notify -s "my-session" -t "Build Complete" -p low
+#
+#   # Error notification with message
+#   ssq-notify -s "my-session" -t "Build Failed" -m "Error in main.go:42" --type error -p high
+#
+#   # Task completion with metadata
+#   ssq-notify -s "my-session" -t "Tests Passed" --type task_complete \
+#     -d "tests=142" -d "duration=45s"
+#
+#   # Approval needed (urgent)
+#   ssq-notify -s "my-session" -t "Permission Required" --type approval_needed \
+#     -m "Allow write access to /etc/hosts?" -p urgent
+#
+# Environment Variables:
+#   CS_SESSION_ID     - Default session ID (can be set in .bashrc/.zshrc)
+#   CS_SERVER_PORT    - Default server port
+#
+
+set -euo pipefail
+
+# Default values
+PORT="${CS_SERVER_PORT:-8543}"
+SESSION_ID="${CS_SESSION_ID:-}"
+TITLE=""
+MESSAGE=""
+TYPE="info"
+PRIORITY="medium"
+QUIET=false
+declare -a METADATA=()
+
+# Map priority names to protobuf enum values
+priority_to_enum() {
+    case "$1" in
+        low)    echo 1 ;;
+        medium) echo 2 ;;
+        high)   echo 3 ;;
+        urgent) echo 4 ;;
+        *)      echo 2 ;; # default to medium
+    esac
+}
+
+# Map type names to protobuf enum values
+type_to_enum() {
+    case "$1" in
+        info)            echo 1 ;;
+        approval_needed) echo 2 ;;
+        error)           echo 3 ;;
+        warning)         echo 4 ;;
+        task_complete)   echo 5 ;;
+        task_failed)     echo 6 ;;
+        progress)        echo 7 ;;
+        question)        echo 8 ;;
+        reminder)        echo 9 ;;
+        system)          echo 10 ;;
+        custom)          echo 11 ;;
+        *)               echo 1 ;; # default to info
+    esac
+}
+
+usage() {
+    head -60 "$0" | tail -n +2 | sed 's/^#//' | sed 's/^ //'
+    exit 0
+}
+
+error() {
+    echo "Error: $1" >&2
+    exit 1
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --session-id|-s)
+            SESSION_ID="$2"
+            shift 2
+            ;;
+        --title|-t)
+            TITLE="$2"
+            shift 2
+            ;;
+        --message|-m)
+            MESSAGE="$2"
+            shift 2
+            ;;
+        --type)
+            TYPE="$2"
+            shift 2
+            ;;
+        --priority|-p)
+            PRIORITY="$2"
+            shift 2
+            ;;
+        --metadata|-d)
+            METADATA+=("$2")
+            shift 2
+            ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        --quiet|-q)
+            QUIET=true
+            shift
+            ;;
+        --help|-h)
+            usage
+            ;;
+        *)
+            error "Unknown option: $1"
+            ;;
+    esac
+done
+
+# Validate required arguments
+if [[ -z "$SESSION_ID" ]]; then
+    error "Session ID is required. Use --session-id or set CS_SESSION_ID environment variable."
+fi
+
+if [[ -z "$TITLE" ]]; then
+    error "Title is required. Use --title."
+fi
+
+# Build metadata JSON object using jq for safe encoding
+metadata_json="{}"
+if [[ ${#METADATA[@]} -gt 0 ]]; then
+    for item in "${METADATA[@]}"; do
+        key="${item%%=*}"
+        value="${item#*=}"
+        metadata_json=$(jq --null-input --argjson base "$metadata_json" --arg k "$key" --arg v "$value" '$base + {($k): $v}')
+    done
+fi
+
+# Convert priority and type to enum values
+priority_enum=$(priority_to_enum "$PRIORITY")
+type_enum=$(type_to_enum "$TYPE")
+
+# Build request JSON safely using jq (handles newlines, tabs, control chars, etc.)
+request_json=$(jq --null-input \
+    --arg sessionId "$SESSION_ID" \
+    --argjson notificationType "$type_enum" \
+    --argjson priority "$priority_enum" \
+    --arg title "$TITLE" \
+    --arg message "$MESSAGE" \
+    --argjson metadata "$metadata_json" \
+    '{sessionId: $sessionId, notificationType: $notificationType, priority: $priority, title: $title, message: $message, metadata: $metadata}'
+)
+
+# Send request to server using ConnectRPC JSON format
+response=$(curl -s -w "\n%{http_code}" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "$request_json" \
+    "http://localhost:$PORT/api/session.v1.SessionService/SendNotification" \
+    2>&1) || {
+    error "Failed to connect to server at localhost:$PORT. Is Stapler Squad running?"
+}
+
+# Split response into body and status code
+http_code=$(echo "$response" | tail -n 1)
+# Use sed to remove last line (cross-platform, macOS head doesn't support -n -1)
+body=$(echo "$response" | sed '$d')
+
+# Check response
+if [[ "$http_code" == "200" ]]; then
+    if [[ "$QUIET" == "false" ]]; then
+        notification_id=$(echo "$body" | jq -r '.notificationId // "unknown"')
+        echo "Notification sent successfully (ID: $notification_id)"
+    fi
+    exit 0
+else
+    error_msg=$(echo "$body" | jq -r '.message // .error // "Unknown error"' 2>/dev/null || echo "$body")
+    error "Server returned $http_code: $error_msg"
+fi

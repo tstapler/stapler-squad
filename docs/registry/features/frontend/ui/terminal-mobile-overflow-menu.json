@@ -1,0 +1,16 @@
+{
+  "id": "terminal-mobile-overflow-menu",
+  "type": "frontend",
+  "component": "TerminalOutput",
+  "path": "web-app/src/components/sessions/TerminalOutput.tsx",
+  "tested": true,
+  "testIds": [
+    "mobile toolbar overflow > More button is visible on mobile viewport",
+    "mobile toolbar overflow > primary buttons are visible without opening overflow",
+    "mobile toolbar overflow > clicking More reveals overflow row with secondary buttons",
+    "mobile toolbar overflow > clicking Less hides the overflow row",
+    "mobile toolbar overflow > secondary buttons are hidden in toolbar on mobile",
+    "mobile toolbar overflow > overflow row is hidden on desktop viewport"
+  ],
+  "lastModified": "2026-05-02T00:00:00Z"
+}

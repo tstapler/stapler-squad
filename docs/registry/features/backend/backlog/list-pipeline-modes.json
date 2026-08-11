@@ -1,0 +1,12 @@
+{
+  "id": "backlog:list-pipeline-modes",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "ListPipelineModes",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_pipeline_mode.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-07-16T07:59:16Z"
+}

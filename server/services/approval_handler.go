@@ -1,0 +1,951 @@
+package services
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/tmux"
+
+	"github.com/google/uuid"
+)
+
+// hookDecisionResponse is the JSON response Claude Code expects from an HTTP hook.
+type hookDecisionResponse struct {
+	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type hookSpecificOutput struct {
+	HookEventName string       `json:"hookEventName"`
+	Decision      hookDecision `json:"decision"`
+}
+
+type hookDecision struct {
+	Behavior string `json:"behavior"`
+	Message  string `json:"message,omitempty"`
+}
+
+// ReviewQueueChecker is an interface for triggering immediate review queue checks.
+// This avoids importing the session package's concrete ReviewQueuePoller type directly.
+type ReviewQueueChecker interface {
+	FindInstance(sessionID string) *session.Instance
+	CheckSession(inst *session.Instance)
+}
+
+// approvalNotificationStamper is a narrow interface for stamping approval outcomes
+// on notification records after the approval is resolved (or times out).
+type approvalNotificationStamper interface {
+	SetMetadata(id, key, value string) error
+	MarkRead(ids []string) (int, error)
+}
+
+// autoApprovalLogger is a narrow interface for writing silent auto-approval records
+// directly to notification history without triggering toasts or push notifications.
+type autoApprovalLogger interface {
+	AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error
+}
+
+// headlessPoolApprover is the narrow interface ApprovalHandler needs from the headless pool.
+type headlessPoolApprover interface {
+	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, float64, error)
+}
+
+// ApprovalHandler handles Claude Code HTTP hooks for PermissionRequest events.
+// It blocks the HTTP connection open while waiting for the user's decision,
+// then returns the decision in the hookSpecificOutput JSON format.
+type ApprovalHandler struct {
+	store               *ApprovalStore
+	storage             *session.Storage
+	eventBus            *events.EventBus
+	queueChecker        ReviewQueueChecker          // optional: triggers immediate review queue check on new approval
+	classifier          classifier.Classifier       // optional: auto-classify before escalating to manual review
+	analyticsStore      *AnalyticsStore             // optional: record classification decisions
+	domainChecker       *DomainAgeChecker           // optional: escalate requests to newly-registered domains
+	notificationStamper approvalNotificationStamper // optional: stamps approval outcomes on notification records
+	autoApprovalLog     autoApprovalLogger          // optional: writes silent records for auto-approved/denied ops
+	timeout             time.Duration               // default 4m; overridable in tests
+	headlessPool        headlessPoolApprover        // optional: LLM approval for autonomous sessions
+	autonomousChecker   func(string) bool           // optional: returns true if sessionID is an autonomous session
+	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
+	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
+}
+
+// NewApprovalHandler creates a new ApprovalHandler.
+func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
+	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: session.DefaultPRStatusPollerConfig().PollInterval}
+}
+
+// SetPollInterval overrides the interval used to bound CI-status staleness (Task 1.1.2b).
+// Callers should pass the live PRStatusPoller's configured interval so the guard can't
+// silently desync from the poller if it's ever tuned.
+func (h *ApprovalHandler) SetPollInterval(d time.Duration) {
+	h.pollInterval = d
+}
+
+// SetLiveInstanceFinder wires the live in-memory instance lookup used to populate
+// ClassificationContext.CIStatus. GitHubCheckConclusion/LastPRStatusCheck are not
+// persisted in the ent schema (see Storage.UpdateInstancePRStatus) — they only live on
+// the in-memory Instance the PRStatusPoller keeps fresh — so a *session.Storage lookup
+// cannot see them; this must be the live registry (typically *SessionService).
+func (h *ApprovalHandler) SetLiveInstanceFinder(f LiveInstanceFinder) {
+	h.liveFinder = f
+}
+
+// approvalTimeout returns the configured timeout, falling back to 4 minutes.
+func (h *ApprovalHandler) approvalTimeout() time.Duration {
+	if h.timeout > 0 {
+		return h.timeout
+	}
+	return 4 * time.Minute
+}
+
+// stampResolved stamps an approval decision on the notification record,
+// marks it read, and broadcasts a resolution event to connected clients.
+// Called for the timeout and cancel arms where no HTTP response decision is sent.
+func (h *ApprovalHandler) stampResolved(approvalID, sessionID, reason string) {
+	if h.notificationStamper != nil {
+		if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", reason); err != nil {
+			log.Warn("[ApprovalHandler] could not stamp "+reason+" on notification", "approval_id", approvalID, "err", err)
+		}
+		if _, err := h.notificationStamper.MarkRead([]string{approvalID}); err != nil {
+			log.Warn("[ApprovalHandler] could not mark "+reason+" approval read", "approval_id", approvalID, "err", err)
+		}
+	}
+	if h.eventBus != nil && sessionID != "" && sessionID != "unknown" {
+		h.eventBus.Publish(events.NewApprovalResponseEvent(sessionID, false, approvalID))
+	}
+}
+
+// SetQueueChecker injects a ReviewQueueChecker for triggering immediate review queue updates
+// when a new approval is created. This provides <100ms feedback instead of waiting for the
+// next 2-second poll cycle.
+func (h *ApprovalHandler) SetQueueChecker(checker ReviewQueueChecker) {
+	h.queueChecker = checker
+}
+
+// SetClassifier injects a Classifier for auto-approving/denying tool use requests
+// before they reach the manual review queue.
+func (h *ApprovalHandler) SetClassifier(c classifier.Classifier) {
+	h.classifier = c
+}
+
+// SetAnalyticsStore injects an AnalyticsStore for recording classification decisions.
+func (h *ApprovalHandler) SetAnalyticsStore(a *AnalyticsStore) {
+	h.analyticsStore = a
+}
+
+// SetDomainChecker injects a DomainAgeChecker for escalating requests to newly-registered domains.
+func (h *ApprovalHandler) SetDomainChecker(d *DomainAgeChecker) {
+	h.domainChecker = d
+}
+
+// SetNotificationStamper injects a stamper for persisting approval outcomes on notification records.
+// When set, resolved and timed-out approvals are stamped with approval_decision in their metadata
+// so the notification panel can show a persistent badge after page refresh.
+func (h *ApprovalHandler) SetNotificationStamper(s approvalNotificationStamper) {
+	h.notificationStamper = s
+}
+
+// SetAutoApprovalLogger injects a logger for writing silent auto-approval records to notification
+// history. When set, AutoAllow and AutoDeny decisions are recorded without triggering toasts or
+// push notifications, giving users a reviewable log of what the classifier handled automatically.
+func (h *ApprovalHandler) SetAutoApprovalLogger(l autoApprovalLogger) {
+	h.autoApprovalLog = l
+}
+
+// SetHeadlessPool injects a headless LLM pool for autonomous session approval.
+// When set and autonomousChecker returns true for a session, risky tool calls are sent to the
+// LLM for approval instead of the human review queue.
+func (h *ApprovalHandler) SetHeadlessPool(pool headlessPoolApprover) {
+	h.headlessPool = pool
+}
+
+// SetAutonomousChecker injects a function that returns true when the given session ID is an
+// autonomous session. Injected from server.go to avoid a construction-time circular dependency.
+func (h *ApprovalHandler) SetAutonomousChecker(fn func(string) bool) {
+	h.autonomousChecker = fn
+}
+
+// buildApprovalQuery constructs the LLM prompt for an autonomous approval decision.
+// Tool arguments are JSON-encoded to prevent values containing "APPROVE:" or "DENY:"
+// from influencing the LLM's decision (prompt injection via tool input).
+func buildApprovalQuery(toolName string, toolInput map[string]interface{}, sessionTail string) string {
+	argsJSON, err := json.Marshal(toolInput)
+	argsStr := string(argsJSON)
+	if err != nil {
+		argsStr = "(encoding error)"
+	}
+	return fmt.Sprintf(
+		"Requested tool: %s\nArguments (JSON): %s\nRecent session output:\n---\n%s\n---\nReply APPROVE: <reason> or DENY: <reason>",
+		toolName, argsStr, sessionTail,
+	)
+}
+
+// HandlePermissionRequest handles POST /api/hooks/permission-request.
+// This endpoint is configured as an HTTP hook in Claude Code's settings.
+// It blocks until the user approves/denies or the context is canceled.
+func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http.Request) {
+	log.Info("[ApprovalHandler] received request", "remote_addr", r.RemoteAddr, "method", r.Method, "path", r.URL.Path)
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse the hook payload from request body
+	var payload classifier.PermissionRequestPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		log.Warn("[ApprovalHandler] failed to parse hook payload", "err", err)
+		// Don't block Claude on parse errors - let the terminal handle it
+		h.writeDecision(w, "allow", "")
+		return
+	}
+
+	// Map to a stapler-squad session using the X-CS-Session-ID header first,
+	// then fall back to cwd prefix matching against session paths.
+	// Always resolve to the stable ID (UUID) so the client can match the notification.
+	sessionID := h.resolveSessionID(r.Header.Get("X-CS-Session-ID"), payload.Cwd)
+	if sessionID == "" {
+		sessionID = "unknown"
+	}
+
+	// Secret scan: auto-deny any command that appears to contain a plaintext secret.
+	// Runs on the full command text (before any truncation) so it catches long secrets.
+	if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
+		if hit := ScanForSecrets(cmd); hit.Found {
+			msg := FormatSecretDenyMessage(hit.PatternName)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied — plaintext secret detected", "tool", payload.ToolName, "pattern", hit.PatternName)
+			if h.analyticsStore != nil {
+				// Before recording to analytics, replace the command so the secret is not persisted.
+				// Shallow-copy the payload and replace ToolInput to avoid mutating the original
+				// (the original payload pointer may be used after this branch for the response).
+				sanitizedInput := make(map[string]interface{}, len(payload.ToolInput))
+				for k, v := range payload.ToolInput {
+					sanitizedInput[k] = v
+				}
+				sanitizedInput["command"] = redactedSecret
+				sanitizedPayload := payload
+				sanitizedPayload.ToolInput = sanitizedInput
+				h.analyticsStore.RecordFromResult(sanitizedPayload, classifier.ClassificationResult{
+					Decision:  classifier.AutoDeny,
+					RiskLevel: classifier.RiskCritical,
+					RuleID:    classifier.RuleIDSecretScan,
+					RuleName:  "Plaintext Secret Detection",
+					Reason:    msg,
+				}, sessionID, "", 0)
+			}
+			h.writeDecision(w, "deny", msg)
+			return
+		}
+	}
+
+	// escalation captures the classification result (or its domain-age synthetic equivalent)
+	// that led to this request being queued for manual review. Zero-valued (no-match) unless
+	// set below.
+	var escalation classifier.ClassificationResult
+
+	// classified is true only when escalation was genuinely assigned below (domain-age or a
+	// real classifier result). RiskLevel must never be read from escalation unless classified
+	// is true — escalation's zero value (classifier.RiskLow) is indistinguishable from a real
+	// Low risk, and reading it unconditionally would silently mislabel an unclassified/degraded
+	// request (e.g. h.classifier == nil) as safe. See pre-mortem.md Failure #1.
+	var classified bool
+
+	// Domain age check: if a Bash command is contacting a newly-registered domain,
+	// escalate immediately regardless of other rules.
+	if h.domainChecker != nil {
+		if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
+			domains := ExtractDomainsFromCommand(cmd)
+			for _, domain := range domains {
+				isNew, err := h.domainChecker.IsNewlyRegistered(r.Context(), domain)
+				if err != nil {
+					// Silenced on purpose: a single domain's check failing doesn't abort the
+					// whole request. But it means the reviewer sees whatever the classifier
+					// decides afterward (no-match/explicit-rule) with no indication a domain
+					// check was attempted and came back inconclusive for this domain.
+					log.Warn("[ApprovalHandler] domain age check error", "domain", domain, "err", err)
+					continue
+				}
+				if isNew {
+					threshDays := int(h.domainChecker.NewDomainThreshold().Hours() / 24)
+					reason := fmt.Sprintf("Domain %q was registered within the last %d days — possible phishing or supply-chain risk.", domain, threshDays)
+					log.ForSession(sessionID).Info("[ApprovalHandler] escalating — newly-registered domain", "tool", payload.ToolName, "domain", domain, "escalation_category", "domain-age")
+					domainEscalation := classifier.ClassificationResult{
+						Decision:  classifier.Escalate,
+						RiskLevel: classifier.RiskHigh,
+						RuleID:    classifier.RuleIDNewDomainCheck,
+						RuleName:  "New Domain Check",
+						Reason:    reason,
+					}
+					if h.analyticsStore != nil {
+						h.analyticsStore.RecordFromResult(payload, domainEscalation, sessionID, "", 0)
+					}
+					// Fall through to manual review queue (do NOT return here).
+					escalation = domainEscalation
+					classified = true
+					goto createApproval
+				}
+			}
+		}
+	}
+
+	// AskUserQuestion: fire an informational notification so the user knows to check the
+	// terminal, then defer to the native terminal dialog (empty body). No approval_id
+	// is included in the notification metadata so the UI renders a plain ❓ toast with
+	// no Approve/Deny buttons.
+	if strings.EqualFold(payload.ToolName, "AskUserQuestion") {
+		log.ForSession(sessionID).Info("[ApprovalHandler] AskUserQuestion — notifying and deferring to native dialog")
+		h.broadcastQuestionNotification(sessionID, payload)
+		h.writeDeferDecision(w)
+		return
+	}
+
+	// Classify the request: auto-allow/deny if a rule matches; escalate to manual review otherwise.
+	if h.classifier != nil {
+		start := time.Now()
+		classCtx := h.classifier.BuildContext(payload.Cwd)
+		if h.liveFinder != nil {
+			if inst := h.liveFinder.FindLiveInstance(sessionID); inst != nil {
+				// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
+				// fields on its own goroutine under inst.mu (session/instance.go's mu
+				// doc comment mandates Snapshot() for reads outside the actor).
+				ghInfo := inst.Snapshot().GitHub
+				if ghInfo.GitHubPRNumber > 0 {
+					classCtx.CIStatus = ghInfo.GitHubCheckConclusion
+					// Staleness guard (Task 1.1.2b): a cached conclusion older than 2x the
+					// poller's configured interval may no longer reflect the branch's real CI
+					// state. Treat it as unknown rather than risk gating an irreversible
+					// auto-approve (RequireCIPassing) on stale data.
+					if time.Since(ghInfo.LastPRStatusCheck) > 2*h.pollInterval {
+						classCtx.CIStatus = ""
+					}
+				}
+			}
+		}
+		result := h.classifier.Classify(payload, classCtx)
+		durationMs := time.Since(start).Milliseconds()
+
+		if h.analyticsStore != nil {
+			// Normalize RuleID the same way the default: branch below does before recording,
+			// so the analytics breakdown and the review-queue card agree on category for an
+			// unrecognized decision — result.RuleID is "" here (no rule lookup occurred), which
+			// would otherwise bucket as EscalationNoMatch instead of EscalationUnexpected.
+			recordResult := result
+			if result.Decision != classifier.AutoAllow && result.Decision != classifier.AutoDeny && result.Decision != classifier.Escalate {
+				recordResult.RuleID = classifier.RuleIDUnexpectedDecision
+			}
+			h.analyticsStore.RecordFromResult(payload, recordResult, sessionID, "", durationMs)
+		}
+
+		switch result.Decision {
+		case classifier.AutoAllow:
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID)
+			if h.autoApprovalLog != nil {
+				filePath, _ := payload.ToolInput["file_path"].(string)
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "allow")
+			}
+			h.writeDecision(w, "allow", "")
+			return
+		case classifier.AutoDeny:
+			msg := result.Reason
+			if result.Alternative != "" {
+				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
+			}
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg)
+			if h.autoApprovalLog != nil {
+				filePath, _ := payload.ToolInput["file_path"].(string)
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "deny")
+			}
+			h.writeDecision(w, "deny", msg)
+			return
+		case classifier.Escalate:
+			escalation = result
+			classified = true
+			// Fall through to manual review queue (createApproval label below).
+		default:
+			// Unrecognized classifier.ClassificationDecision (e.g. a future 4th value). Fail safe
+			// toward manual review rather than silently falling through with escalation unset —
+			// this switch's missing-case behavior is exactly the bug this feature fixes; guard
+			// against it recurring for any future decision value.
+			log.Warn("[ApprovalHandler] unrecognized classifier decision, escalating for manual review", "decision", result.Decision)
+			// Pre-mortem P3: route through the synthetic RuleIDUnexpectedDecision sentinel so
+			// CategorizeEscalationRuleID buckets this as EscalationUnexpected, not EscalationNoMatch
+			// (result.RuleID is almost certainly "" here, since no rule lookup occurred) — an internal
+			// classifier bug must not silently render normal "no rule matched" copy or offer the
+			// Create Rule CTA as if this were a real coverage gap. Override RuleID before the
+			// assignment (not after) so escalation is never observably set without it.
+			result.RuleID = classifier.RuleIDUnexpectedDecision
+			escalation = result
+			classified = true
+		}
+	}
+
+createApproval:
+
+	// Autonomous LLM approval: if the session is autonomous and a headless pool is configured,
+	// ask the LLM to approve or deny instead of queuing for human review.
+	if h.headlessPool != nil && h.autonomousChecker != nil && h.autonomousChecker(sessionID) {
+		var sessionTail string
+		if h.queueChecker != nil && sessionID != "unknown" {
+			if inst := h.queueChecker.FindInstance(sessionID); inst != nil {
+				sessionTail, _ = inst.Preview()
+			}
+		}
+		query := buildApprovalQuery(payload.ToolName, payload.ToolInput, sessionTail)
+		const approvalSystemPrompt = `You are a security reviewer for an autonomous coding session.
+Evaluate the requested tool call and decide if it is safe to approve.
+Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
+		resp, _, llmErr := h.headlessPool.CallBlocking(
+			r.Context(),
+			headless.FeatureKeyAutonomousApproval,
+			approvalSystemPrompt,
+			query,
+			headless.CallOptions{WorkDir: payload.Cwd},
+		)
+		if llmErr == nil {
+			resp = strings.TrimSpace(resp)
+			if strings.HasPrefix(resp, "APPROVE:") {
+				reason := strings.TrimSpace(strings.TrimPrefix(resp, "APPROVE:"))
+				log.ForSession(sessionID).Info("[ApprovalHandler] autonomous LLM approved", "tool", payload.ToolName, "reason", reason)
+				h.writeDecision(w, "allow", "")
+				return
+			} else if strings.HasPrefix(resp, "DENY:") {
+				reason := strings.TrimSpace(strings.TrimPrefix(resp, "DENY:"))
+				log.ForSession(sessionID).Info("[ApprovalHandler] autonomous LLM denied", "tool", payload.ToolName, "reason", reason)
+				h.writeDecision(w, "deny", reason)
+				return
+			}
+			log.ForSession(sessionID).Warn("[ApprovalHandler] autonomous LLM gave unexpected response, falling through to human queue", "tool", payload.ToolName, "resp", resp)
+		} else {
+			log.ForSession(sessionID).Warn("[ApprovalHandler] autonomous LLM call failed, falling through to human queue", "tool", payload.ToolName, "err", llmErr)
+		}
+	}
+
+	// Create a pending approval record
+	approvalID := uuid.New().String()
+	riskLevel := ""
+	if classified {
+		riskLevel = riskLevelString(escalation.RiskLevel)
+	}
+	approval := &PendingApproval{
+		ID:                 approvalID,
+		SessionID:          sessionID,
+		ClaudeSessionID:    payload.SessionID,
+		ToolName:           payload.ToolName,
+		ToolInput:          payload.ToolInput,
+		Cwd:                payload.Cwd,
+		PermissionMode:     payload.PermissionMode,
+		CreatedAt:          time.Now(),
+		EscalationReason:   truncateEscalationReason(classifier.EscalationReasonText(escalation)),
+		EscalationCategory: string(classifier.CategorizeEscalationRuleID(escalation.RuleID)),
+		RiskLevel:          riskLevel,
+		// Use the configured timeout (default 4 minutes), strictly less than the 5-minute hook timeout.
+		ExpiresAt: time.Now().Add(h.approvalTimeout()),
+	}
+
+	if err := h.store.Create(approval); err != nil {
+		log.Error("[ApprovalHandler] failed to store approval", "err", err)
+		h.writeDecision(w, "allow", "")
+		return
+	}
+
+	// Notify all web UI clients about the pending approval
+	h.broadcastApprovalNotification(sessionID, approval)
+
+	// Trigger immediate review queue check for this session (Story 3, Task 3.1).
+	// This provides <100ms feedback in the review queue instead of waiting for the
+	// next 2-second poll cycle.
+	if h.queueChecker != nil && sessionID != "unknown" {
+		if inst := h.queueChecker.FindInstance(sessionID); inst != nil {
+			h.queueChecker.CheckSession(inst)
+			log.ForSession(sessionID).Info("[ApprovalHandler] triggered immediate queue check")
+		}
+	}
+
+	log.ForSession(sessionID).Info("[ApprovalHandler] waiting for decision", "approval_id", approvalID, "tool", payload.ToolName)
+
+	// Block until user decides, server times out, or connection closes
+	var decision ApprovalDecision
+	select {
+	case decision = <-approval.decisionCh:
+		// User responded via ResolveApproval RPC
+		log.ForSession(sessionID).Info("[ApprovalHandler] approval resolved", "approval_id", approvalID, "behavior", decision.Behavior)
+	case <-time.After(h.approvalTimeout()):
+		// Server-side timeout (before the hook's 5-minute timeout).
+		// Return an empty HTTP response so the hook script gets no hookSpecificOutput
+		// and Claude Code falls back to its native terminal permission dialog.
+		// This lets the user still approve/deny in the terminal rather than being
+		// silently allowed or denied.
+		h.store.Remove(approvalID)
+		h.stampResolved(approvalID, sessionID, "timeout")
+		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out — returning empty response (native dialog fallback)", "approval_id", approvalID)
+		w.WriteHeader(http.StatusOK)
+		return
+	case <-r.Context().Done():
+		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
+		h.store.Remove(approvalID)
+		decision = ApprovalDecision{Behavior: "allow", Message: ""}
+		h.stampResolved(approvalID, sessionID, "canceled")
+		log.ForSession(sessionID).Info("[ApprovalHandler] approval context canceled", "approval_id", approvalID)
+		return // Don't write to disconnected client
+	}
+
+	h.writeDecision(w, decision.Behavior, decision.Message)
+}
+
+// resolveSessionName returns the human-readable title for sessionID using the
+// in-memory queueChecker (no DB side-effects). Falls back to sessionID itself
+// when the instance cannot be found (e.g. external sessions, race at startup).
+func (h *ApprovalHandler) resolveSessionName(sessionID string) string {
+	if h.queueChecker != nil {
+		if inst := h.queueChecker.FindInstance(sessionID); inst != nil {
+			return inst.Title
+		}
+	}
+	return sessionID
+}
+
+// broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
+// The approval ID is passed in the notification metadata so the UI can resolve it.
+func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approval *PendingApproval) {
+	metadata := map[string]string{
+		"approval_id": approval.ID,
+		"tool_name":   approval.ToolName,
+		"cwd":         approval.Cwd,
+	}
+
+	// Extract tool-specific display fields
+	if cmd, ok := approval.ToolInput["command"].(string); ok && cmd != "" {
+		metadata["tool_input_command"] = cmd
+	}
+	if filePath, ok := approval.ToolInput["file_path"].(string); ok && filePath != "" {
+		metadata["tool_input_file"] = filePath
+	}
+	if desc, ok := approval.ToolInput["description"].(string); ok && desc != "" {
+		metadata["tool_input_description"] = desc
+	}
+
+	title := fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
+	message := buildApprovalMessage(approval)
+
+	event := events.NewNotificationEvent(
+		sessionID,
+		h.resolveSessionName(sessionID),
+		approval.ID, // Use approval ID as notification ID for correlation
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT),
+		title,
+		message,
+		metadata,
+	)
+	h.eventBus.Publish(event)
+}
+
+// maxNotificationMessageLen is the maximum number of runes to include in a
+// notification toast message before truncating with "...".
+const maxNotificationMessageLen = 120
+
+// broadcastQuestionNotification fires an INPUT_REQUIRED notification when Claude uses
+// AskUserQuestion. It omits approval_id from metadata so no Approve/Deny buttons are shown —
+// only a ❓ toast directing the user to respond in the terminal.
+func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload) {
+	message := "Check the terminal to respond."
+	if prompt, ok := payload.ToolInput["prompt"].(string); ok && prompt != "" {
+		message = truncateString(prompt, maxNotificationMessageLen)
+	}
+
+	event := events.NewNotificationEvent(
+		sessionID,
+		h.resolveSessionName(sessionID),
+		uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		"Claude has a question",
+		message,
+		nil,
+	)
+	h.eventBus.Publish(event)
+}
+
+// truncateString returns s truncated to at most maxRunes Unicode code points,
+// appending "..." when truncation occurs. Safe for any UTF-8 content.
+func truncateString(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "..."
+}
+
+// maxEscalationReasonLen bounds PendingApproval.EscalationReason. An explicit
+// rule's Reason is free text a rule author can set to any length, and
+// persistToDiskLocked re-marshals and writes ALL pending approvals to disk on
+// every single Create/Resolve while holding the write lock — an unbounded
+// string here would scale that cost with rule-author verbosity, not just
+// entry count.
+const maxEscalationReasonLen = 500
+
+// truncateEscalationReason caps s at maxEscalationReasonLen runes.
+func truncateEscalationReason(s string) string {
+	return truncateString(s, maxEscalationReasonLen)
+}
+
+// sanitizeNotificationText strips newlines and non-printable characters from
+// user- or model-controlled strings before embedding them in OS notification
+// titles, preventing newline injection into the OS notification tray.
+func sanitizeNotificationText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r < 32 {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// buildApprovalMessage builds the human-readable message for an approval notification.
+func buildApprovalMessage(approval *PendingApproval) string {
+	if cmd, ok := approval.ToolInput["command"].(string); ok && cmd != "" {
+		return truncateString(cmd, maxNotificationMessageLen)
+	}
+	if filePath, ok := approval.ToolInput["file_path"].(string); ok && filePath != "" {
+		return filePath
+	}
+	return fmt.Sprintf("Claude needs permission to use %s", approval.ToolName)
+}
+
+// resolveSessionID returns the stable session ID (UUID) for a given raw header
+// value and cwd. It tries the header first (matching by title or UUID via
+// stableIDForData/matchesIDData), then falls back to cwd prefix matching.
+// Uses ListInstanceData to avoid constructing Instance objects and spawning
+// tmux subprocesses for every stopped session.
+func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
+	if h.storage == nil {
+		return headerVal
+	}
+	instances, err := h.storage.ListInstanceData()
+	if err != nil {
+		return headerVal
+	}
+	if headerVal != "" {
+		for _, d := range instances {
+			if matchesIDData(d, headerVal) {
+				return stableIDForData(d)
+			}
+		}
+	}
+	// Fall back to cwd prefix matching
+	bestID := ""
+	bestLen := 0
+	for _, d := range instances {
+		if p := d.Path; p != "" && strings.HasPrefix(cwd, p) && len(p) > bestLen {
+			bestID = stableIDForData(d)
+			bestLen = len(p)
+		}
+		if wd := d.WorkingDir; wd != "" && strings.HasPrefix(cwd, wd) && len(wd) > bestLen {
+			bestID = stableIDForData(d)
+			bestLen = len(wd)
+		}
+	}
+	return bestID
+}
+
+// stableIDForData mirrors Instance.GetStableID for raw InstanceData.
+func stableIDForData(d session.InstanceData) string {
+	if d.UUID != "" {
+		return d.UUID
+	}
+	return d.Title
+}
+
+// matchesIDData mirrors Instance.MatchesID for raw InstanceData without constructing
+// an Instance or spawning any subprocesses. Matches by UUID, title, or computed
+// tmux session name (prefix + sanitized title). The tmux-name branch requires a
+// non-empty TmuxPrefix to avoid a title-only match that would bypass UUID lookup.
+//
+// TODO: move stableIDForData and matchesIDData to session.InstanceData methods so
+// the matching semantics are colocated with the type they operate on.
+func matchesIDData(d session.InstanceData, id string) bool {
+	if d.UUID != "" && d.UUID == id {
+		return true
+	}
+	if d.Title == id {
+		return true
+	}
+	// Tmux-name match requires a prefix; without it d.TmuxPrefix+title == title
+	// which duplicates the title check above and allows UUID-less resolution.
+	if d.TmuxPrefix == "" {
+		return false
+	}
+	// Derive via the canonical sanitizer rather than re-implementing it here —
+	// a hand-rolled copy silently drifts from tmux.NewSessionName's rules (#162).
+	return tmux.NewSessionName(d.Title, d.TmuxPrefix).String() == id
+}
+
+// writeDeferDecision returns an empty HTTP 200 with no body.
+// Claude Code interprets the absence of hookSpecificOutput as "no decision made by the hook"
+// and falls back to its native terminal permission dialog.
+func (h *ApprovalHandler) writeDeferDecision(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusOK)
+}
+
+// writeDecision writes the hookSpecificOutput JSON response to the HTTP response.
+func (h *ApprovalHandler) writeDecision(w http.ResponseWriter, behavior, message string) {
+	resp := hookDecisionResponse{
+		HookSpecificOutput: hookSpecificOutput{
+			HookEventName: "PermissionRequest",
+			Decision:      hookDecision{Behavior: behavior, Message: message},
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Warn("[ApprovalHandler] failed to write decision response", "err", err)
+	}
+}
+
+// StartExpirationCleanup starts a background goroutine that periodically removes expired approvals.
+// The goroutine stops when ctx is canceled.
+func StartExpirationCleanup(ctx context.Context, store *ApprovalStore) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if expired := store.CleanupExpired(); len(expired) > 0 {
+					log.Info("[ApprovalStore] cleaned up expired approvals", "count", len(expired), "ids", expired)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// hookEntry is the individual hook definition within a matcher group.
+type hookEntry struct {
+	Type    string            `json:"type"`
+	Command string            `json:"command,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Timeout int               `json:"timeout,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// hookMatcherGroup is a group of hooks optionally filtered by a matcher.
+type hookMatcherGroup struct {
+	Matcher string      `json:"matcher,omitempty"`
+	Hooks   []hookEntry `json:"hooks"`
+}
+
+const (
+	hookTimeout = 300 // seconds — must be ≤ Claude Code's 5-minute hook timeout
+)
+
+// hookApprovalURL returns the current PermissionRequest hook callback URL. It delegates to
+// hook_injector.go's hookEndpoints(hookBaseURLFn) — the single source of truth for hook URLs,
+// shared with InjectHooksConfig — rather than maintaining a second, parallel lazy-base-URL
+// mechanism. Resolved fresh on every call (never cached), so all usage sites in
+// InjectHookConfig below reflect whatever base URL is current at their point of use rather
+// than a value baked in at server- or package-construction time.
+func hookApprovalURL() string {
+	return hookEndpoints(hookBaseURLFn)[HookPermissionApproval]
+}
+
+// InjectHookConfig writes (or merges) the stapler-squad PermissionRequest HTTP hook
+// into <rootDir>/.claude/settings.local.json.
+//
+// If the file already contains a hook pointing to hookApprovalURL(), it is left unchanged.
+// If the file exists but lacks our hook, the hook is prepended to PermissionRequest.
+// If the file does not exist, it is created with just our hook config.
+func InjectHookConfig(rootDir, sessionTitle string) error {
+	claudeDir := filepath.Join(rootDir, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.local.json")
+
+	// Desired hook entry for this session.
+	// settings.local.json only supports "command" type hooks; use curl to POST to the approval URL.
+	curlCmd := fmt.Sprintf(
+		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
+		hookTimeout, hookApprovalURL(), sessionTitle,
+	)
+	entry := hookEntry{
+		Type:    "command",
+		Command: curlCmd,
+		Timeout: hookTimeout,
+	}
+	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
+
+	// Read existing settings (if any).
+	raw := map[string]json.RawMessage{}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", settingsPath, err)
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			// Malformed JSON — attempt targeted repair before falling back to a fresh config.
+			log.Warn("[InjectHookConfig] invalid JSON, attempting repair", "path", settingsPath, "err", err)
+			repaired, repairErr := repairSettingsJSON(data)
+			if repairErr == nil {
+				log.Info("[InjectHookConfig] repaired settings file", "path", settingsPath)
+				_ = json.Unmarshal(repaired, &raw) // best-effort; raw may still be partial
+			} else {
+				log.Warn("[InjectHookConfig] could not repair settings, resetting to minimal config", "path", settingsPath, "err", repairErr)
+				raw = map[string]json.RawMessage{}
+			}
+		}
+	}
+
+	// Check whether our command-type hook is already present.
+	if hooksRaw, ok := raw["hooks"]; ok {
+		var hooks map[string]json.RawMessage
+		if err := json.Unmarshal(hooksRaw, &hooks); err == nil {
+			if prRaw, ok := hooks["PermissionRequest"]; ok {
+				var groups []hookMatcherGroup
+				if err := json.Unmarshal(prRaw, &groups); err == nil {
+					for _, g := range groups {
+						for _, h := range g.Hooks {
+							if h.Type == "command" && hookCommandReferencesURL(h.Command, hookApprovalURL()) {
+								log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
+								return nil
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Merge: prepend our group to PermissionRequest hooks.
+	// Also remove any old http-type entries pointing to our URL (migration from old format).
+	var prGroups []hookMatcherGroup
+	if hooksRaw, ok := raw["hooks"]; ok {
+		var hooks map[string]json.RawMessage
+		if err := json.Unmarshal(hooksRaw, &hooks); err == nil {
+			if prRaw, ok := hooks["PermissionRequest"]; ok {
+				var existingGroups []hookMatcherGroup
+				if err := json.Unmarshal(prRaw, &existingGroups); err == nil {
+					for _, g := range existingGroups {
+						// Strip out any old http-type hooks pointing to our URL.
+						filtered := g.Hooks[:0]
+						for _, h := range g.Hooks {
+							if h.URL != hookApprovalURL() {
+								filtered = append(filtered, h)
+							}
+						}
+						if len(filtered) > 0 {
+							g.Hooks = filtered
+							prGroups = append(prGroups, g)
+						}
+					}
+				}
+			}
+		}
+	}
+	prGroups = append([]hookMatcherGroup{group}, prGroups...)
+
+	// Rebuild hooks object.
+	hooksMap := map[string]json.RawMessage{}
+	if hooksRaw, ok := raw["hooks"]; ok {
+		_ = json.Unmarshal(hooksRaw, &hooksMap)
+	}
+	prJSON, err := json.Marshal(prGroups)
+	if err != nil {
+		return fmt.Errorf("marshal PermissionRequest hooks: %w", err)
+	}
+	hooksMap["PermissionRequest"] = json.RawMessage(prJSON)
+
+	hooksJSON, err := json.Marshal(hooksMap)
+	if err != nil {
+		return fmt.Errorf("marshal hooks map: %w", err)
+	}
+	raw["hooks"] = json.RawMessage(hooksJSON)
+
+	// Write back with indentation.
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		return fmt.Errorf("create .claude dir: %w", err)
+	}
+	// Write atomically via temp file to avoid partial writes corrupting the file.
+	tmpPath := settingsPath + ".tmp"
+	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
+		return fmt.Errorf("write temp %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, settingsPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename %s: %w", tmpPath, err)
+	}
+	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
+	return nil
+}
+
+// repairSettingsJSON attempts to fix common JSON syntax errors in Claude settings files.
+//
+// The most common corruption seen in settings.local.json is a missing comma between
+// adjacent values (e.g. two string entries in the permissions.allow array written by
+// separate code paths without coordinating on the trailing comma).
+//
+// Strategy: use json.SyntaxError.Offset to locate the exact byte where the parser
+// choked, then insert a comma just after the last non-whitespace byte before that
+// position.  Repeats up to maxRepairs times to handle multiple missing commas.
+// Returns the repaired bytes, or an error if the JSON could not be made valid.
+func repairSettingsJSON(data []byte) ([]byte, error) {
+	const maxRepairs = 20
+	current := make([]byte, len(data))
+	copy(current, data)
+
+	for i := 0; i < maxRepairs; i++ {
+		var syntaxErr *json.SyntaxError
+		if err := json.Unmarshal(current, new(interface{})); err == nil {
+			return current, nil
+		} else if !errors.As(err, &syntaxErr) {
+			return nil, fmt.Errorf("non-syntax error, cannot repair: %w", err)
+		} else {
+			offset := int(syntaxErr.Offset)
+			if offset <= 0 || offset > len(current) {
+				return nil, fmt.Errorf("offset %d out of range (len=%d): %w", offset, len(current), err)
+			}
+			errMsg := err.Error()
+
+			// Missing comma between array elements or object key:value pairs.
+			// syntaxErr.Offset points to the byte AFTER the one that was just read
+			// (i.e. the erroneous character is at index Offset-1).
+			// Walk backwards past whitespace to find the end of the previous token,
+			// then insert a comma there.
+			if strings.Contains(errMsg, "after array element") ||
+				strings.Contains(errMsg, "after object key:value pair") {
+				insertAt := offset - 1 // index of the unexpected character
+				for insertAt > 0 && isJSONWhitespace(current[insertAt-1]) {
+					insertAt--
+				}
+				fixed := make([]byte, 0, len(current)+1)
+				fixed = append(fixed, current[:insertAt]...)
+				fixed = append(fixed, ',')
+				fixed = append(fixed, current[insertAt:]...)
+				current = fixed
+				continue
+			}
+
+			return nil, fmt.Errorf("unsupported JSON syntax error at offset %d: %w", offset, err)
+		}
+	}
+	return nil, fmt.Errorf("still invalid after %d repair attempts", maxRepairs)
+}
+
+// isJSONWhitespace reports whether b is a JSON whitespace character.
+func isJSONWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}

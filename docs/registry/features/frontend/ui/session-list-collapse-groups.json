@@ -1,0 +1,24 @@
+{
+  "id": "session-list-collapse-groups",
+  "type": "frontend",
+  "component": "SessionList",
+  "path": "web-app/src/components/sessions/SessionList.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "session-list-collapse-groups > clicking a category toggle collapses and re-expands its sessions (AC 0, 1, 5)",
+    "session-list-collapse-groups > toggle is keyboard-operable with Enter and Space (AC 2)",
+    "session-list-collapse-groups > collapsed state persists across page reload (AC 3)",
+    "session-list-collapse-groups > no collapse toggle is rendered when grouping strategy is None (AC 6)",
+    "SessionList — collapsible categories (row mode) > renders a collapse toggle per group, expanded by default",
+    "SessionList — collapsible categories (row mode) > clicking a group's toggle hides its sessions and sets aria-expanded=false (AC 0, 3)",
+    "SessionList — collapsible categories (row mode) > clicking a collapsed group's toggle again restores its sessions (AC 1)",
+    "SessionList — collapsible categories (row mode) > is keyboard-operable via Enter and Space (AC 2)",
+    "SessionList — collapsible categories (row mode) > persists collapsed state to localStorage and restores it on remount (AC 4)",
+    "SessionList — collapsible categories (row mode) > does not render a toggle when grouping strategy is None (AC 6)",
+    "SessionList — collapsible categories (row mode) > keeps independent collapse state across two SessionList instances via storageKeyPrefix (AC 8)",
+    "SessionList — collapsible categories (card mode) > renders a collapse toggle per group in card view mode",
+    "SessionList — collapsible categories (card mode) > collapsing a group hides its cards while other groups render under the correct header (AC 4)"
+  ],
+  "lastModified": "2026-07-19T00:00:00Z"
+}

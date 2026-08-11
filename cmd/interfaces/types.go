@@ -1,0 +1,55 @@
+package interfaces
+
+import "github.com/tstapler/stapler-squad/session"
+
+// CommandContext provides context and state to command handlers
+type CommandContext struct {
+	Command  interface{} // The actual command (opaque to avoid circular import)
+	Args     map[string]interface{}
+	AppState interface{}
+	UIState  interface{}
+	Key      string
+}
+
+// CommandHandler is the function signature for command implementations
+type CommandHandler func(ctx *CommandContext) error
+
+// Instance represents a session instance with permission checks
+// This interface allows command filtering without importing the full session package
+type Instance interface {
+	GetPermissions() session.InstancePermissions
+}
+
+// ContextID identifies different application contexts/modes
+type ContextID string
+
+// CommandID uniquely identifies a command
+type CommandID string
+
+// Category groups related commands for help display
+type Category string
+
+// Standard application contexts
+const (
+	ContextGlobal    ContextID = "global"
+	ContextList      ContextID = "list"
+	ContextPTYList   ContextID = "pty-list"
+	ContextGitStatus ContextID = "git-status"
+	ContextHelp      ContextID = "help"
+	ContextPrompt    ContextID = "prompt"
+	ContextSearch    ContextID = "search"
+	ContextConfirm   ContextID = "confirm"
+)
+
+// Standard command categories
+const (
+	CategorySession      Category = "Session Management"
+	CategoryPTY          Category = "PTY Management"
+	CategoryGit          Category = "Git Integration"
+	CategoryNavigation   Category = "Navigation"
+	CategoryOrganization Category = "Organization"
+	CategoryView         Category = "View"
+	CategorySystem       Category = "System"
+	CategoryLegacy       Category = "Legacy"
+	CategorySpecial      Category = "Special" // Hidden from main help
+)

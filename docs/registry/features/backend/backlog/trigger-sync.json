@@ -1,0 +1,19 @@
+{
+  "id": "backlog:trigger-sync",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "TriggerSync",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_sync.go",
+  "tested": true,
+  "testIds": [
+    "TestTriggerSync_ReturnsUnimplementedWithoutPluginRegistry",
+    "TestTriggerSync_ReturnsInvalidArgumentWhenSourceIDEmpty",
+    "TestTriggerSync_ReturnsNotFoundForMissingSource",
+    "TestTriggerSync_SucceedsAndCreatesItems",
+    "TestTriggerSync_DecryptsTokenThroughServiceLayer",
+    "TestTriggerSync_PropagatesFetchError"
+  ],
+  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+}

@@ -1,0 +1,165 @@
+package notifications
+
+import (
+	"context"
+	"fmt"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
+	"sync"
+	"time"
+)
+
+const (
+	// DefaultCoalesceInterval is the default interval for flushing the coalescing buffer.
+	DefaultCoalesceInterval = 500 * time.Millisecond
+
+	// maxBufferSize triggers an immediate flush if the buffer exceeds this size,
+	// preventing unbounded memory growth.
+	maxBufferSize = 1000
+)
+
+// Appender is the interface used by the subscriber to append records.
+// This enables testing without a real NotificationHistoryStore.
+type Appender interface {
+	Append(record *NotificationRecord) error
+}
+
+// StartSubscriber subscribes to the EventBus, filters for EventNotification events,
+// converts them to NotificationRecords, coalesces rapid-fire events for the same
+// (sessionID, notificationType) key within a 500ms window, and flushes them to the store.
+// It stops when the context is canceled, flushing any remaining buffered records.
+func StartSubscriber(ctx context.Context, bus *events.EventBus, store *NotificationHistoryStore) {
+	StartSubscriberWithInterval(ctx, bus, store, DefaultCoalesceInterval)
+}
+
+// StartSubscriberWithInterval is like StartSubscriber but allows configuring the
+// coalescing interval. This is primarily useful for tests that need shorter intervals.
+func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, store Appender, interval time.Duration) {
+	if bus == nil || store == nil {
+		log.Warn("NotificationSubscriber EventBus or store is nil, not starting subscriber")
+		return
+	}
+
+	ch, _ := bus.Subscribe(ctx)
+
+	go func() {
+		log.Info("NotificationSubscriber started", "coalesce_interval", interval)
+		defer log.Info("NotificationSubscriber stopped")
+
+		var mu sync.Mutex
+		buffer := make(map[string]*NotificationRecord)
+
+		// flush sends all buffered records to the store and clears the buffer.
+		// Must be called with mu held or when no concurrent access is possible.
+		flush := func() {
+			if len(buffer) == 0 {
+				return
+			}
+			for key, record := range buffer {
+				if err := store.Append(record); err != nil {
+					log.Error("NotificationSubscriber failed to append notification", "err", err)
+				}
+				delete(buffer, key)
+			}
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		defer func() {
+			mu.Lock()
+			flush()
+			mu.Unlock()
+		}()
+
+		for {
+			select {
+			case event, ok := <-ch:
+				if !ok {
+					return
+				}
+				if event == nil || event.Type != events.EventNotification {
+					continue
+				}
+
+				record := eventToRecord(event)
+				if record == nil {
+					continue
+				}
+
+				key := coalesceKey(record.SessionID, record.NotificationType)
+
+				mu.Lock()
+				buffer[key] = record // Latest wins
+				// If buffer exceeds max size, flush immediately to prevent memory growth
+				if len(buffer) >= maxBufferSize {
+					flush()
+				}
+				mu.Unlock()
+
+			case <-ticker.C:
+				mu.Lock()
+				flush()
+				mu.Unlock()
+
+			case <-ctx.Done():
+				// Drain any events already in the channel so the deferred flush captures them.
+				mu.Lock()
+				for {
+					select {
+					case event, ok := <-ch:
+						if !ok {
+							mu.Unlock()
+							return
+						}
+						if event != nil && event.Type == events.EventNotification {
+							if record := eventToRecord(event); record != nil {
+								buffer[coalesceKey(record.SessionID, record.NotificationType)] = record
+							}
+						}
+					default:
+						mu.Unlock()
+						return
+					}
+				}
+			}
+		}
+	}()
+}
+
+// coalesceKey builds the dedup key for the coalescing buffer.
+func coalesceKey(sessionID string, notifType int32) string {
+	return fmt.Sprintf("%s:%d", sessionID, notifType)
+}
+
+// eventToRecord converts an events.Event of type EventNotification into a NotificationRecord.
+func eventToRecord(event *events.Event) *NotificationRecord {
+	if event.NotificationID == "" {
+		return nil
+	}
+
+	sessionName := event.Context // Context stores session name for notification events
+	// Fall back to the raw SessionID only for genuine session notifications. Backlog-item
+	// notifications (identified by metadata["item_id"]) now thread the item's ID through
+	// as SessionID for coalescing purposes (see EventBusNotifier.Notify) but have no
+	// human-friendly session name — falling back here would surface the raw item UUID as
+	// SessionName, which wins the frontend's title fallback chain
+	// (sessionName || title || sessionId, see NotificationPanel.tsx / NotificationsPage.tsx)
+	// and would clobber the real, descriptive notification title.
+	if sessionName == "" && event.NotificationMetadata["item_id"] == "" {
+		sessionName = event.SessionID
+	}
+
+	return &NotificationRecord{
+		ID:               event.NotificationID,
+		SessionID:        event.SessionID,
+		SessionName:      sessionName,
+		NotificationType: event.NotificationType,
+		Priority:         event.NotificationPriority,
+		Title:            event.NotificationTitle,
+		Message:          event.NotificationMessage,
+		Metadata:         event.NotificationMetadata,
+		CreatedAt:        event.Timestamp,
+		IsRead:           false,
+		SessionScoped:    event.NotificationMetadata[events.MetadataKeySessionScoped] == "true",
+	}
+}

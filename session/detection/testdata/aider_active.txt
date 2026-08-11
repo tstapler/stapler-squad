@@ -1,0 +1,8 @@
+Aider v0.82.0
+Model: claude-3-5-sonnet-20241022 with diff edit format, weak model claude-3-5-haiku-20241022
+Git repo: .git with 42 files
+Repo-map: using 1024 tokens
+────────────────────────────────────────────────────────────────────────────────
+> Refactor the authentication module to use JWT tokens
+
+⠙ Waiting for claude-3-5-sonnet-20241022...

@@ -1,0 +1,17 @@
+{
+  "id": "pane-resize-handle",
+  "type": "frontend",
+  "component": "ResizeHandle",
+  "path": "web-app/src/components/pane/ResizeHandle.tsx",
+  "tested": true,
+  "testIds": [
+    "ResizeHandle_should_callSetPointerCapture_When_pointerDown",
+    "ResizeHandle_should_callReleasePointerCapture_When_pointerUp",
+    "ResizeHandle_should_callOnResizeWithClampedRatio_When_pointerMoveAfterDown",
+    "ResizeHandle_should_notCallOnResize_When_pointerMoveWithoutDown",
+    "ResizeHandle_should_callSetPointerCapture_When_touchPointerDown",
+    "ResizeHandle_should_handleTouchPointerMove_When_pointerTypeIsTouch",
+    "ResizeHandle_should_callReleasePointerCapture_When_pointerCancel"
+  ],
+  "lastModified": "2026-05-07T00:00:00Z"
+}

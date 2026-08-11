@@ -1,0 +1,11 @@
+{
+  "id": "unfinished:list",
+  "type": "backend",
+  "service": "UnfinishedWorkService",
+  "method": "ListUnfinishedWork",
+  "protoFile": "proto/session/v1/unfinished.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-17T16:40:58.370370777-07:00"
+}

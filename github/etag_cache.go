@@ -1,0 +1,126 @@
+package github
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"sync"
+)
+
+// ETagCache stores ETags and cached PRInfo responses per (owner, repo, prNumber).
+// Using conditional requests (If-None-Match) allows GitHub to return 304 Not Modified
+// responses that cost zero rate-limit quota when the PR has not changed.
+// sync.Map gives lock-free reads in the steady state — entries are written once on
+// first PR discovery and then read on every subsequent poll tick.
+type ETagCache struct {
+	store sync.Map // key: string, value: etagEntry
+}
+
+type etagEntry struct {
+	etag   string
+	prInfo *PRInfo
+}
+
+// NewETagCache creates a new empty ETagCache.
+func NewETagCache() *ETagCache {
+	return &ETagCache{}
+}
+
+func (c *ETagCache) cacheKey(owner, repo string, prNumber int) string {
+	return fmt.Sprintf("%s/%s/%d", owner, repo, prNumber)
+}
+
+func (c *ETagCache) get(key string) (etagEntry, bool) {
+	v, ok := c.store.Load(key)
+	if !ok {
+		return etagEntry{}, false
+	}
+	return v.(etagEntry), true
+}
+
+func (c *ETagCache) set(key string, e etagEntry) {
+	c.store.Store(key, e)
+}
+
+// GetPRInfoConditional fetches PR info using ETag conditional requests.
+// Uses native net/http instead of a gh subprocess to avoid forkExec lock contention.
+// Returns (info, changed, error).
+//   - changed=false means 304 Not Modified; info contains the cached value.
+//   - changed=true means 200 OK; info contains freshly fetched data.
+//   - Both info and changed may be zero values when an error is returned.
+func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *ETagCache) (*PRInfo, bool, error) {
+	key := cache.cacheKey(owner, repo, prNumber)
+
+	entry, hasCached := cache.get(key)
+
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
+		url.PathEscape(owner), url.PathEscape(repo), prNumber)
+	req, err := newGHRequest(ctx, apiPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("build conditional PR request: %w", err)
+	}
+	if hasCached && entry.etag != "" {
+		req.Header.Set("If-None-Match", entry.etag)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("conditional PR request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotModified {
+		if hasCached {
+			return entry.prInfo, false, nil
+		}
+		return nil, false, nil
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, false, fmt.Errorf("GitHub API: unauthorized (401)")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		// Retry-After present → secondary rate limit; no Retry-After → auth/permission error.
+		if resp.Header.Get("Retry-After") != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, false, fmt.Errorf("GitHub API: secondary rate limit (403)")
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, false, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
+		}
+		return nil, false, fmt.Errorf("GitHub API: forbidden (403)")
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, false, fmt.Errorf("GitHub API: rate limited (429)")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		// Drain body so the connection can be reused.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		// Fall back to a full fetch.
+		info, fetchErr := GetPRInfoCtx(ctx, owner, repo, prNumber)
+		if fetchErr != nil {
+			return nil, false, fetchErr
+		}
+		cache.set(key, etagEntry{prInfo: info})
+		return info, true, nil
+	}
+
+	// Drain body (we only need the ETag header for the conditional check).
+	_, _ = io.Copy(io.Discard, resp.Body)
+	newEtag := resp.Header.Get("ETag")
+
+	// PR changed — fetch full review/CI data (requires gh CLI for reviews+statusCheckRollup).
+	newInfo, err := GetPRInfoCtx(ctx, owner, repo, prNumber)
+	if err != nil {
+		return nil, false, err
+	}
+
+	cache.set(key, etagEntry{etag: newEtag, prInfo: newInfo})
+
+	return newInfo, true, nil
+}

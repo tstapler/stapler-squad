@@ -1,0 +1,14 @@
+{
+  "id": "approval:list-pending",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListPendingApprovals",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestListPendingApprovals_should_IncludeRiskLevelInProto_When_ApprovalHasClassifiedRisk",
+    "TestListPendingApprovals_should_ReturnEmptyRiskLevel_When_ApprovalPredatesFeature"
+  ],
+  "lastModified": "2026-08-10T00:00:00Z"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "session:run-one-shot",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "RunOneShot",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-07-17T00:20:00-07:00"
+}

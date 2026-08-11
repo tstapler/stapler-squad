@@ -1,0 +1,24 @@
+{
+  "id": "approval:resolve",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ResolveApproval",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled",
+    "TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled",
+    "TestResolveApproval_UnaffectedWhenNoPR",
+    "TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound",
+    "TestResolveApproval_NilLiveFinder_FailsOpen",
+    "TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly",
+    "TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired",
+    "ApprovalBlock_should_ShowInlineExplanation_When_ApproveClickedWithFailingCIAndFlagOn",
+    "ApprovalBlock_should_OfferViewCIRunLink_When_Blocked",
+    "ApprovalBlock_should_AllowApproveAnyway_When_ReviewerOverridesBlock",
+    "ApprovalBlock_should_RemainKeyboardOperable_When_ApproveDenyButtonsRendered",
+    "ApprovalBlock_should_PairWarningIconWithText_When_BlockMessageRenders"
+  ],
+  "lastModified": "2026-08-05T00:00:00Z"
+}
