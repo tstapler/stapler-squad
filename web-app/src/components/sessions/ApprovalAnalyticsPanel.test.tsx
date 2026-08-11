@@ -42,6 +42,7 @@ const baseSummary = {
   topPythonImports: [],
   commandSubcommandStats: [],
   escalationReasonCounts: {},
+  riskLevelCounts: {},
 };
 
 // Mutable per-test override — reset to `baseSummary` in `beforeEach`. Tests that need a
@@ -367,12 +368,59 @@ describe("ApprovalAnalyticsPanel", () => {
           "secret-scan": 0,
           "unclassifiable": 0,
         },
+        // riskLevelCounts is also empty via baseSummary — both sections render the shared
+        // empty-state copy, so there are two matching nodes (see the getAllByText usage below).
       };
 
       render(<ApprovalAnalyticsPanel />);
 
-      expect(screen.getByText("No escalations in this window.")).toBeInTheDocument();
+      expect(screen.getAllByText("No escalations in this window.")).toHaveLength(2);
       expect(screen.queryByText("Escalation Reasons")).not.toBeInTheDocument();
+      expect(screen.queryByText("Risk Level Breakdown")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Risk Level Breakdown", () => {
+    it("ApprovalAnalyticsPanel_should_RenderRiskLevelBreakdownTable_When_SummaryHasRiskLevelCounts", () => {
+      mockSummary = {
+        ...baseSummary,
+        riskLevelCounts: {
+          critical: 5,
+          high: 10,
+          medium: 15,
+          low: 0,
+        },
+      };
+
+      render(<ApprovalAnalyticsPanel />);
+
+      expect(screen.getByText("Risk Level Breakdown")).toBeInTheDocument();
+      expect(screen.getByText("Critical")).toBeInTheDocument();
+      expect(screen.getByText("High")).toBeInTheDocument();
+      expect(screen.getByText("Medium")).toBeInTheDocument();
+      expect(screen.getByText("5")).toBeInTheDocument();
+      expect(screen.getByText("10")).toBeInTheDocument();
+      expect(screen.getByText("15")).toBeInTheDocument();
+
+      // Zero-count level is omitted.
+      expect(screen.queryByText("Low")).not.toBeInTheDocument();
+    });
+
+    it("ApprovalAnalyticsPanel_should_RenderSharedEmptyState_When_AllRiskLevelCountsAreZero", () => {
+      mockSummary = {
+        ...baseSummary,
+        riskLevelCounts: {
+          critical: 0,
+          high: 0,
+          medium: 0,
+          low: 0,
+        },
+      };
+
+      render(<ApprovalAnalyticsPanel />);
+
+      expect(screen.getAllByText("No escalations in this window.")).toHaveLength(2);
+      expect(screen.queryByText("Risk Level Breakdown")).not.toBeInTheDocument();
     });
   });
 });

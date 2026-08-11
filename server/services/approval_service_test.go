@@ -403,6 +403,15 @@ func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 		"unclassifiable": 1,
 		"explicit-rule":  1,
 	}, resp.Msg.Summary.EscalationReasonCounts)
+
+	// AC5 (plan.md Task 3.1.2/3.1.3): risk_level_counts must survive the same
+	// ComputeSummary -> summaryToProto chain, scoped identically to EscalationReasonCounts
+	// (the auto_allow s7 entry, RiskLevel "low", must not appear).
+	assert.Equal(t, map[string]int32{
+		"medium":   4,
+		"high":     1,
+		"critical": 1,
+	}, resp.Msg.Summary.RiskLevelCounts)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

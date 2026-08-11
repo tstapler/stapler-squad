@@ -104,6 +104,16 @@ const ESCALATION_CATEGORY_LABELS: Record<EscalationCategory, string> = {
   "unexpected": "Internal classification error",
 };
 
+// Maps `risk_level` values (classifier.RiskLevel string form) to the human-readable labels
+// shown in the "Risk Level Breakdown" table. Same fallback contract as
+// ESCALATION_CATEGORY_LABELS above — unmapped keys render the raw string, never "undefined".
+const RISK_LEVEL_LABELS: Record<string, string> = {
+  critical: "Critical",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
+
 /**
  * ApprovalAnalyticsPanel displays time-series and aggregate data for
  * auto-approval classification decisions.
@@ -147,6 +157,17 @@ export function ApprovalAnalyticsPanel() {
       .sort((a, b) => b[1] - a[1]);
   }, [summary?.escalationReasonCounts]);
   const escalationReasonMaxCount = escalationReasonRows[0]?.[1] ?? 1;
+
+  // Non-zero risk-level counts, sorted descending — drives the "Risk Level Breakdown" table.
+  // Scoped to escalations only, matching escalationReasonCounts (see analytics_store.go's
+  // ComputeSummary) — the two tables share a denominator.
+  const riskLevelRows = useMemo(() => {
+    const counts = summary?.riskLevelCounts ?? {};
+    return Object.entries(counts)
+      .filter(([, count]) => count > 0)
+      .sort((a, b) => b[1] - a[1]);
+  }, [summary?.riskLevelCounts]);
+  const riskLevelMaxCount = riskLevelRows[0]?.[1] ?? 1;
 
   return (
     <div className={panel}>
@@ -347,6 +368,39 @@ export function ApprovalAnalyticsPanel() {
                       <td className={`${td} ${tdRight}`}>{count}</td>
                       <td className={`${td} ${tdBar}`}>
                         <Bar value={count} max={escalationReasonMaxCount} className={barRule} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className={empty}>No escalations in this window.</div>
+        )
+      )}
+
+      {/* ── Risk Level Breakdown ── */}
+      {summary && (
+        riskLevelRows.length > 0 ? (
+          <div className={tableSection}>
+            <h3 className={sectionTitle}>Risk Level Breakdown</h3>
+            <div className={tableWrapper}>
+              <table className={table}>
+                <thead>
+                  <tr>
+                    <th className={th}>Risk Level</th>
+                    <th className={`${th} ${thRight}`}>Count</th>
+                    <th className={th}>Frequency</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {riskLevelRows.map(([level, count]) => (
+                    <tr key={level} className={row}>
+                      <td className={td}>{RISK_LEVEL_LABELS[level] ?? level}</td>
+                      <td className={`${td} ${tdRight}`}>{count}</td>
+                      <td className={`${td} ${tdBar}`}>
+                        <Bar value={count} max={riskLevelMaxCount} className={barRule} />
                       </td>
                     </tr>
                   ))}
