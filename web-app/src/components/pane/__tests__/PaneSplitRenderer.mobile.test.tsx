@@ -17,7 +17,9 @@ jest.mock("@/components/sessions/SessionDetail", () => ({
 }));
 
 jest.mock("@/components/pane/PaneHeader", () => ({
-  PaneHeader: () => <div data-testid="pane-header" />,
+  PaneHeader: (props: { splitButtonVisible?: boolean }) => (
+    <div data-testid="pane-header" data-split-visible={String(props.splitButtonVisible)} />
+  ),
 }));
 
 jest.mock("@/components/pane/ResizeHandle", () => ({
@@ -125,11 +127,22 @@ describe("PaneSplitRenderer — mobile layout", () => {
       expect(sessionDetails[0]).toHaveTextContent("Session Two");
     });
 
-    it("shows the reset layout button when there are multiple panes", () => {
+    it("hides the reset layout button on mobile even with multiple panes", () => {
       render(
         <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
       );
-      expect(screen.getByTestId("reset-layout-btn")).toBeInTheDocument();
+      // Desktop window-management chrome — MobilePaneTabStrip + per-pane close
+      // buttons cover this on mobile without eating scarce header space.
+      expect(screen.queryByTestId("reset-layout-btn")).not.toBeInTheDocument();
+    });
+
+    it("hides pane header split buttons on mobile", () => {
+      render(
+        <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
+      );
+      for (const header of screen.getAllByTestId("pane-header")) {
+        expect(header).toHaveAttribute("data-split-visible", "false");
+      }
     });
   });
 
@@ -150,6 +163,14 @@ describe("PaneSplitRenderer — mobile layout", () => {
       // Tab strip shows for any multi-pane layout on mobile (including horizontal splits)
       // so the "+" add-pane button is always accessible on mobile
       expect(screen.getByRole("tablist")).toBeInTheDocument();
+    });
+
+    it("does not render a resize handle for horizontal splits on mobile", () => {
+      render(
+        <PaneSplitRenderer state={horizontalSplitState} dispatch={jest.fn()} sessions={sessions} />
+      );
+      // Dragging a 6px divider is impractical on touch; mobile horizontal splits use a fixed ratio.
+      expect(screen.queryByTestId("resize-handle")).not.toBeInTheDocument();
     });
   });
 });
@@ -179,5 +200,21 @@ describe("PaneSplitRenderer — desktop layout", () => {
       <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
     );
     expect(screen.getByTestId("resize-handle")).toBeInTheDocument();
+  });
+
+  it("shows the reset layout button when there are multiple panes", () => {
+    render(
+      <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
+    );
+    expect(screen.getByTestId("reset-layout-btn")).toBeInTheDocument();
+  });
+
+  it("shows pane header split buttons on desktop", () => {
+    render(
+      <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
+    );
+    for (const header of screen.getAllByTestId("pane-header")) {
+      expect(header).toHaveAttribute("data-split-visible", "true");
+    }
   });
 });

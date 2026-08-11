@@ -1,5 +1,11 @@
 import { style, keyframes } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars, breakpoints, zIndex } from "@/styles/theme.css";
+
+// Mirrors ViewportProvider's isMobile||isFoldable cutoff (< breakpoints.inner,
+// 900px), which PaneSplitRenderer uses to decide mobile pane chrome. Keep in
+// sync — a mismatch reintroduces the 768-900px gap where the tab row and pane
+// chrome disagreed on whether the viewport is "mobile".
+const mobileMediaQuery = `screen and (max-width: calc(${breakpoints.inner} - 1px))`;
 
 const tabFadeIn = keyframes({
   from: { opacity: 0, transform: "translateY(4px)" },
@@ -37,7 +43,7 @@ export const header = style({
     },
   },
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       padding: "0.4rem 0.75rem",
       flexWrap: "nowrap",
       gap: "0.25rem",
@@ -60,7 +66,7 @@ export const title = style({
     },
   },
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       fontSize: "0.9rem",
       flex: "1 1 auto",
       minWidth: 0,
@@ -87,7 +93,7 @@ export const headerActions = style({
   alignItems: "center",
   gap: "0.25rem",
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       flexShrink: 0,
     },
   },
@@ -220,6 +226,11 @@ export const closeButton = style({
   },
 });
 
+export const tabsWrapper = style({
+  position: "relative",
+  flexShrink: 0,
+});
+
 export const tabs = style({
   display: "flex",
   borderBottom: `1px solid ${vars.color.borderColor}`,
@@ -228,7 +239,7 @@ export const tabs = style({
   gap: "0.125rem",
   flexShrink: 0,
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       overflowX: "auto",
       padding: "0 0.25rem",
       gap: "0",
@@ -236,6 +247,24 @@ export const tabs = style({
       selectors: {
         "&::-webkit-scrollbar": { display: "none" },
       },
+    },
+  },
+});
+
+// ponytail: static fade, not scroll-position-aware — good enough to signal
+// "more tabs" on mobile without a ResizeObserver/scroll-listener.
+export const tabsFade = style({
+  display: "none",
+  "@media": {
+    [mobileMediaQuery]: {
+      display: "block",
+      position: "absolute",
+      top: 0,
+      bottom: "1px", // sit above the tabs' borderBottom
+      right: 0,
+      width: "20px",
+      pointerEvents: "none",
+      background: `linear-gradient(to right, transparent, ${vars.color.background})`,
     },
   },
 });
@@ -261,7 +290,7 @@ export const tab = style({
     },
   },
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       padding: "0.5rem 0.6rem",
       fontSize: "0.75rem",
       whiteSpace: "nowrap",
@@ -281,7 +310,7 @@ export const tabIcon = style({
   fontSize: "1rem",
   lineHeight: 1,
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       fontSize: "0.875rem",
     },
   },
@@ -299,7 +328,7 @@ export const content = style({
   display: "flex",
   flexDirection: "column",
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       padding: "0.75rem",
     },
   },
@@ -332,7 +361,7 @@ export const infoGrid = style({
   gap: "1rem",
   userSelect: "text",
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       gridTemplateColumns: "1fr",
       gap: "0.75rem",
     },
@@ -348,7 +377,7 @@ export const infoItem = style({
   borderRadius: vars.radii.md,
   border: `1px solid ${vars.color.borderColor}`,
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       padding: "0.625rem",
     },
   },
@@ -587,7 +616,7 @@ export const actionButtonSave = style({
 
 export const fullscreenMobileHeader = style({
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       padding: "0.25rem 0.5rem",
       flexWrap: "nowrap",
       rowGap: 0,
@@ -597,7 +626,7 @@ export const fullscreenMobileHeader = style({
 
 export const fullscreenMobileTitle = style({
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       flex: "1 1 auto",
       fontSize: "0.875rem",
       whiteSpace: "nowrap",
@@ -610,7 +639,7 @@ export const fullscreenMobileTitle = style({
 
 export const fullscreenMobileHeaderActions = style({
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       flexShrink: 0,
     },
   },
@@ -618,7 +647,7 @@ export const fullscreenMobileHeaderActions = style({
 
 export const fullscreenMobileTabs = style({
   "@media": {
-    "screen and (max-width: 768px)": {
+    [mobileMediaQuery]: {
       padding: "0 0.25rem",
       borderBottom: `1px solid ${vars.color.borderColor}`,
     },
@@ -628,6 +657,23 @@ export const fullscreenMobileTabs = style({
 export const tabDisabled = style({
   opacity: 0.4,
   cursor: "not-allowed",
+});
+
+export const disabledTabHint = style({
+  position: "absolute",
+  top: "100%",
+  right: "0.5rem",
+  zIndex: zIndex.raised,
+  marginTop: "0.25rem",
+  padding: "0.375rem 0.625rem",
+  borderRadius: vars.radii.sm,
+  background: vars.color.cardBackground,
+  border: `1px solid ${vars.color.borderColor}`,
+  color: vars.color.textPrimary,
+  fontSize: vars.fontSize.xs,
+  maxWidth: "min(280px, 90vw)",
+  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)",
+  cursor: "pointer",
 });
 
 export const workflowSection = style({

@@ -142,6 +142,19 @@ export function SessionDetailView({
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
 
+  // Reason text for a disabled tab, surfaced on tap since touch devices have no
+  // hover to reveal the `title` attribute. Cleared after a few seconds or on next tap.
+  const [disabledTabHint, setDisabledTabHint] = useState<string | null>(null);
+  const disabledTabHintTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDisabledTabHint = (reason: string) => {
+    if (disabledTabHintTimeoutRef.current) clearTimeout(disabledTabHintTimeoutRef.current);
+    setDisabledTabHint(reason);
+    disabledTabHintTimeoutRef.current = setTimeout(() => setDisabledTabHint(null), 3000);
+  };
+  useEffect(() => () => {
+    if (disabledTabHintTimeoutRef.current) clearTimeout(disabledTabHintTimeoutRef.current);
+  }, []);
+
   // Sync active tab when the pane's controlled tab changes (e.g. PaneHeader tab click)
   useEffect(() => {
     setActiveTabId(initialTab);
@@ -568,6 +581,7 @@ export function SessionDetailView({
         </ActionBar>
       </div>}
 
+      <div className={styles.tabsWrapper}>
       <div
         className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
         role="tablist"
@@ -577,17 +591,26 @@ export function SessionDetailView({
             e.preventDefault();
             const nextIndex = (currentIndex + 1) % tabs.length;
             handleTabChange(tabs[nextIndex].id);
-            (e.currentTarget.querySelectorAll('[role="tab"]')[nextIndex] as HTMLElement)?.focus();
+            const el = e.currentTarget.querySelectorAll('[role="tab"]')[nextIndex] as HTMLElement | undefined;
+            el?.focus();
+            el?.scrollIntoView({ block: "nearest", inline: "nearest" });
           } else if (e.key === "ArrowLeft") {
             e.preventDefault();
             const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length;
             handleTabChange(tabs[prevIndex].id);
-            (e.currentTarget.querySelectorAll('[role="tab"]')[prevIndex] as HTMLElement)?.focus();
+            const el = e.currentTarget.querySelectorAll('[role="tab"]')[prevIndex] as HTMLElement | undefined;
+            el?.focus();
+            el?.scrollIntoView({ block: "nearest", inline: "nearest" });
           }
         }}
       >
         {tabs.map((tab) => {
           const Icon = tab.icon;
+          const disabledReason = tab.disabled && tab.id === "browser"
+            ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
+            : tab.disabled && tab.id === "summary"
+              ? "Summary is generated after the session ends."
+              : undefined;
           return (
             <button
               key={tab.id}
@@ -595,15 +618,17 @@ export function SessionDetailView({
               role="tab"
               aria-selected={activeTab === tab.id}
               aria-disabled={tab.disabled}
+              aria-label={disabledReason ? `${tab.label}: ${disabledReason}` : undefined}
               className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""} ${tab.disabled ? tabDisabled : ""}`}
-              onClick={() => { if (!tab.disabled) handleTabChange(tab.id); }}
-              title={
-                tab.disabled && tab.id === "browser"
-                  ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
-                  : tab.disabled && tab.id === "summary"
-                    ? "Summary is generated after the session ends."
-                    : undefined
-              }
+              onClick={() => {
+                if (tab.disabled) {
+                  // title (hover) is unreachable on touch — surface the reason on tap instead.
+                  if (disabledReason) showDisabledTabHint(disabledReason);
+                  return;
+                }
+                handleTabChange(tab.id);
+              }}
+              title={disabledReason}
             >
               <span className={styles.tabIcon}><Icon size={16} /></span>
               <span className={styles.tabLabel}>{tab.label}</span>
@@ -647,6 +672,19 @@ export function SessionDetailView({
         >
           +
         </button>
+      </div>
+      <div className={styles.tabsFade} data-testid="tab-scroll-fade" aria-hidden="true" />
+      {disabledTabHint && (
+        <div
+          className={styles.disabledTabHint}
+          data-testid="disabled-tab-hint"
+          role="status"
+          aria-live="polite"
+          onClick={() => setDisabledTabHint(null)}
+        >
+          {disabledTabHint}
+        </div>
+      )}
       </div>
 
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
