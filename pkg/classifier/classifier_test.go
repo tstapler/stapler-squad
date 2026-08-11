@@ -3380,3 +3380,26 @@ func TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch(t *testing.T)
 		})
 	}
 }
+
+// TestRiskLevel_ValuesAreStableForPersistence guards RiskLevel's iota block against
+// reordering/insertion — the values are persisted as an int column
+// (ApprovalRule.risk_level, session/ent/schema/approvalrule.go) and depended on by the
+// string conversions in server/services (riskLevelString/parseRiskLevel). See the WARNING
+// comment on the RiskLevel type declaration (review-queue-severity, sdd:6-verify Layer 2
+// architecture finding). A future edit that reorders this block would pass every other test
+// in this package but silently corrupt already-persisted rule risk levels; this test exists
+// so that specific failure mode fails loudly here instead.
+func TestRiskLevel_ValuesAreStableForPersistence(t *testing.T) {
+	if RiskLow != 0 {
+		t.Errorf("RiskLow = %d, want 0", RiskLow)
+	}
+	if RiskMedium != 1 {
+		t.Errorf("RiskMedium = %d, want 1", RiskMedium)
+	}
+	if RiskHigh != 2 {
+		t.Errorf("RiskHigh = %d, want 2", RiskHigh)
+	}
+	if RiskCritical != 3 {
+		t.Errorf("RiskCritical = %d, want 3", RiskCritical)
+	}
+}

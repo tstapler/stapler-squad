@@ -219,6 +219,27 @@ describe("StuckItemsSection", () => {
       const titles = screen.getAllByText(/older item|newer item/).map((el) => el.textContent);
       expect(titles).toEqual(["older item", "newer item"]);
     });
+
+    // Regression guard for backlog/plan-approval-flicker: GROUP_ORDER is a
+    // manually-maintained array, not compile-checked exhaustive over
+    // StuckReason like stuckReason.ts's label/icon/class maps are — a reason
+    // present in the item list but absent from GROUP_ORDER is silently never
+    // rendered even though it still counts toward the header total, which is
+    // exactly the "count says N, list shows fewer" mismatch this feature
+    // exists to avoid. plan_not_approved, spawn_failed, pr_pending_no_pr,
+    // rework_blocked_stale, pr_needs_fix, and respawn_blocked_active were all
+    // found missing here (discovered via this fix's e2e test never finding a
+    // seeded plan_not_approved card despite "1 stuck" showing in the header).
+    it.each(
+      Object.values(StuckReason)
+        .filter((v): v is StuckReason => typeof v === "number" && v !== StuckReason.UNSPECIFIED)
+    )("renders a group heading for every non-UNSPECIFIED StuckReason value (%i)", (reason) => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({ items: [makeItem({ reason, itemId: `item-${reason}` })] })
+      );
+      render(<StuckItemsSection />);
+      expect(screen.getByTestId(`stuck-group-${reason}`)).toBeInTheDocument();
+    });
   });
 
   describe("StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap", () => {

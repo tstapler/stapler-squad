@@ -106,7 +106,14 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	}
 	require.True(t, started, "session never started within 60s")
 
-	streamCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// 120s, not 60s: every tmux subprocess this test's stimulus goroutine and
+	// the instance's own internal consumers spawn queues behind the same
+	// 8-slot exec gate (session/tmux/exec_gate.go's AcquireExecSlot) shared
+	// by every other tmux-backed test in this package. Under full-suite load
+	// (dozens of concurrent real-tmux tests) that queueing can push PTY
+	// output well past a 60s budget even though nothing is actually stuck —
+	// see the exec-gate flake this widened window is meant to absorb.
+	streamCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	stream := client.StreamTerminal(streamCtx)
 	require.NoError(t, stream.Send(&sessionv1.TerminalData{SessionId: sessionID}))

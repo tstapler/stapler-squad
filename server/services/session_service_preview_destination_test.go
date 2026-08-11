@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -70,10 +69,7 @@ func TestPreviewDestinationPath_GitHubURL_ReturnsExactPath(t *testing.T) {
 // with no static config.json entry, must resolve exactly like CreateSession does — via the
 // shared enterpriseHosts() helper reading s.userPRCache, not a second copy of the union.
 func TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_ReturnsExactPath(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
-	}))
+	ts := httptest.NewServer(http.HandlerFunc(fakeGitHubEnterpriseHandler))
 	defer ts.Close()
 	const enterpriseHost = "github.netflix.net"
 	gh.EnterpriseBaseURLOverride[enterpriseHost] = ts.URL + "/"

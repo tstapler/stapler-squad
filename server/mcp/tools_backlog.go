@@ -1150,7 +1150,12 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", parseErr), ""), nil
 	}
 
-	issue, fetchErr := githubpkg.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+	repo, repoErr := githubpkg.NewRepoRef(ref.Owner, ref.Repo)
+	if repoErr != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", repoErr), ""), nil
+	}
+
+	issue, fetchErr := githubpkg.GetIssue(ctx, githubpkg.AccountRef{Host: ref.Host}, repo, ref.IssueNumber)
 	if fetchErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
 	}
@@ -1202,15 +1207,20 @@ func (h *backlogHandlers) verifyRef(ctx context.Context, ref *githubpkg.ParsedGi
 // contract, genuinely different in shape from verifyPR's (bool, error) — see
 // ADR-002.
 func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error {
+	account := githubpkg.AccountRef{Host: ref.Host}
+	repo, err := githubpkg.NewRepoRef(ref.Owner, ref.Repo)
+	if err != nil {
+		return err
+	}
 	switch ref.Type {
 	case githubpkg.RefTypePR:
-		_, err := githubpkg.GetPR(ctx, ref.Owner, ref.Repo, ref.PRNumber)
+		_, err := githubpkg.GetPR(ctx, account, repo, ref.PRNumber)
 		return err
 	case githubpkg.RefTypeIssue:
-		_, err := githubpkg.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+		_, err := githubpkg.GetIssue(ctx, account, repo, ref.IssueNumber)
 		return err
 	case githubpkg.RefTypeCommit:
-		_, err := githubpkg.GetCommit(ctx, ref.Owner, ref.Repo, ref.CommitSHA)
+		_, err := githubpkg.GetCommit(ctx, account, repo, ref.CommitSHA)
 		return err
 	default:
 		return fmt.Errorf("unsupported ref type %s", ref.Type)

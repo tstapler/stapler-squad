@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"connectrpc.com/connect"
@@ -59,7 +60,32 @@ func (s *BacklogService) AttachSessionToItem(
 				session.BacklogStatusIdea, session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status))
 	}
 
-	// 3. Snapshot current AC.
+	// 3. Reject attaching a session whose working directory is the item's own
+	// shared repo checkout rather than a dedicated worktree/directory. Unlike
+	// SpawnSessionFromItem (which always tries a worktree first and only falls
+	// back to a fresh, per-session directory — never the shared checkout
+	// itself), attaching an arbitrary pre-existing session had no such
+	// guarantee. Confirmed live 2026-07-21 on item 635a373d (PR #206): its
+	// attached session's effective root dir was literally item.RepoPath (the
+	// shared main checkout, used by countless other things), so a re-review
+	// computed its diff against whatever unrelated commits had landed there
+	// between review rounds — a wrong verdict, not a stuck one.
+	if instances, loadErr := s.storage.LoadInstances(); loadErr == nil {
+		for _, inst := range instances {
+			if inst.UUID != req.Msg.SessionUuid {
+				continue
+			}
+			if inst.Path != "" && item.RepoPath != "" &&
+				filepath.Clean(inst.GetEffectiveRootDir()) == filepath.Clean(item.RepoPath) {
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("session %q's working directory is the item's shared repo checkout (%q) — attach requires a dedicated worktree or directory so review diffs, reopen, and ship stay scoped to this item's own work",
+						req.Msg.SessionUuid, item.RepoPath))
+			}
+			break
+		}
+	}
+
+	// 4. Snapshot current AC.
 	acSnapshot := item.AcceptanceCriteria
 
 	// 4. Load prior sessions BEFORE creating this attach's own ItemSession, so the
@@ -232,7 +258,11 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid GitHub issue URL %q", req.Msg.IssueUrl))
 	}
 
-	issue, err := gh.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+	repo, err := gh.NewRepoRef(ref.Owner, ref.Repo)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	issue, err := gh.GetIssue(ctx, gh.AccountRef{Host: ref.Host, Username: req.Msg.AccountUsername}, repo, ref.IssueNumber)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fetch GitHub issue: %w", err))
 	}

@@ -15,6 +15,7 @@ function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
     prNumber: 148,
     prUrl: "https://github.com/tstapler/stapler-squad/pull/148",
     context: "PR #148 green & mergeable, unmerged for 3 days",
+    planArtifactsPath: "",
     ...overrides,
   } as StuckBacklogItem;
 }
@@ -228,8 +229,8 @@ describe("StuckItemDetail", () => {
     });
   });
 
-  describe("StuckItemDetail_should_offerApprovePlanControl_When_ReasonIsPlanNotApproved", () => {
-    it("renders explanatory copy for plan_not_approved", () => {
+  describe("StuckItemDetail_should_offerApprovePlanControl_When_ReasonIsPlanNotApprovedAndPlanExists", () => {
+    it("renders explanatory copy for plan_not_approved when a plan exists", () => {
       render(
         <StuckItemDetail
           item={makeItem({
@@ -237,6 +238,7 @@ describe("StuckItemDetail", () => {
             prNumber: 0,
             prUrl: "",
             context: "queued item blocked by DequeueNextQueuedItems' planning gate",
+            planArtifactsPath: "project_plans/foo/plan.md",
           })}
         />
       );
@@ -249,15 +251,23 @@ describe("StuckItemDetail", () => {
     });
 
     it("does not render the approve button when no handler is provided", () => {
-      render(<StuckItemDetail item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED })} />);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, planArtifactsPath: "plan.md" })}
+        />
+      );
       expect(screen.queryByTestId("stuck-item-approve-plan-form")).not.toBeInTheDocument();
     });
 
     it("calls onApprovePlan with the item id when 'Approve Plan' is clicked", async () => {
-      const onApprovePlan = jest.fn().mockResolvedValue(true);
+      const onApprovePlan = jest.fn().mockResolvedValue(undefined);
       render(
         <StuckItemDetail
-          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, itemId: "item-plan-1" })}
+          item={makeItem({
+            reason: StuckReason.PLAN_NOT_APPROVED,
+            itemId: "item-plan-1",
+            planArtifactsPath: "plan.md",
+          })}
           onApprovePlan={onApprovePlan}
         />
       );
@@ -266,17 +276,46 @@ describe("StuckItemDetail", () => {
       await waitFor(() => expect(onApprovePlan).toHaveBeenCalledWith("item-plan-1"));
     });
 
-    it("shows an error message when the approve call fails", async () => {
-      const onApprovePlan = jest.fn().mockResolvedValue(false);
+    it("shows the real backend error message when the approve call rejects", async () => {
+      const onApprovePlan = jest
+        .fn()
+        .mockRejectedValue(new Error("no plan artifacts found — run TriggerTriage first"));
       render(
         <StuckItemDetail
-          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED })}
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, planArtifactsPath: "plan.md" })}
           onApprovePlan={onApprovePlan}
         />
       );
       fireEvent.click(screen.getByTestId("stuck-item-approve-plan"));
 
-      await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-approve-plan-error").textContent).toBe(
+          "no plan artifacts found — run TriggerTriage first"
+        )
+      );
+    });
+  });
+
+  describe("StuckItemDetail_should_hideApproveAffordance_When_ReasonIsPlanNotApprovedButNoPlanExists", () => {
+    it("does not render the Approve Plan button or form when planArtifactsPath is empty", () => {
+      const onApprovePlan = jest.fn().mockResolvedValue(undefined);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, planArtifactsPath: "" })}
+          onApprovePlan={onApprovePlan}
+        />
+      );
+      expect(screen.queryByTestId("stuck-item-approve-plan-form")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("stuck-item-plan-not-approved-copy")).not.toBeInTheDocument();
+    });
+
+    it("renders a non-actionable explanatory message instead", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, planArtifactsPath: "" })}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-no-action-copy")).toBeInTheDocument();
     });
   });
 });
