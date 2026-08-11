@@ -54,6 +54,8 @@ jobs:
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload generated files
         uses: actions/upload-artifact@v4
