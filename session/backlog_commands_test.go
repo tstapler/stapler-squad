@@ -576,8 +576,23 @@ func TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir(t *testing.T) {
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(repoPath, gitDir)
 	}
-	if gitDir != commonDir {
-		t.Errorf("expected --git-dir (%s) and --git-common-dir (%s) to resolve identically for a plain repo", gitDir, commonDir)
+
+	// Resolve symlinks on both sides: t.TempDir() on macOS returns a path under
+	// /var/folders/..., which is itself a symlink to /private/var/.... git's
+	// --path-format=absolute resolves through that symlink, but joining the
+	// (unresolved) repoPath onto the relative --git-dir output does not, so the
+	// two would otherwise mismatch on symlink resolution alone rather than on
+	// any real --git-common-dir behavior difference.
+	resolvedGitDir, err := filepath.EvalSymlinks(gitDir)
+	if err != nil {
+		t.Fatalf("failed to resolve symlinks for git-dir %s: %v", gitDir, err)
+	}
+	resolvedCommonDir, err := filepath.EvalSymlinks(commonDir)
+	if err != nil {
+		t.Fatalf("failed to resolve symlinks for git-common-dir %s: %v", commonDir, err)
+	}
+	if resolvedGitDir != resolvedCommonDir {
+		t.Errorf("expected --git-dir (%s) and --git-common-dir (%s) to resolve identically for a plain repo", resolvedGitDir, resolvedCommonDir)
 	}
 }
 

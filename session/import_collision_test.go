@@ -74,6 +74,10 @@ func (f *fakeInstanceStore) UpdateInstanceLastUserResponse(string, time.Time) er
 	panic("fakeInstanceStore: UpdateInstanceLastUserResponse not implemented")
 }
 
+func (f *fakeInstanceStore) UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error {
+	panic("fakeInstanceStore: UpdateInstanceMetadata not implemented")
+}
+
 func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExactPathCollides(t *testing.T) {
 	store := &fakeInstanceStore{
 		instances: []InstanceData{

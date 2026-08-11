@@ -236,6 +236,10 @@ func (f *fakeImportCollisionStore) UpdateInstanceLastUserResponse(string, time.T
 	return nil
 }
 
+func (f *fakeImportCollisionStore) UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error {
+	return nil
+}
+
 // fakeAliveChecker lets ConfirmKillExternalSession tests control whether the
 // original PID is still considered the same process, mirroring
 // session/import_kill_test.go's fake of the same name (different package, no
