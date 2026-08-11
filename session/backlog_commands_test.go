@@ -566,13 +566,16 @@ func TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles(t *testing.
 
 // TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir pins the mechanism by which
 // the --git-common-dir fix is a no-op for plain (non-worktree) repos: both flags must
-// resolve to the same directory there. Both calls use --path-format=absolute so git itself
-// resolves any symlinks in the path (e.g. macOS's /var -> /private/var) — comparing a
-// manually-joined relative --git-dir against an absolute --git-common-dir would otherwise
-// flake on those platforms.
+// resolve to the same directory there.
 func TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir(t *testing.T) {
 	repoPath := setupTestGitRepo(t)
 
+	// Both sides must go through git's own --path-format=absolute resolution.
+	// t.TempDir() on macOS returns a path through the /var -> /private/var
+	// symlink; git's absolute-path formatting resolves it but a manual
+	// filepath.Join of the unresolved repoPath onto a relative --git-dir does
+	// not, producing a false mismatch unrelated to --git-dir vs
+	// --git-common-dir semantics.
 	gitDir := runGitRevParse(t, repoPath, "--path-format=absolute", "--git-dir")
 	commonDir := runGitRevParse(t, repoPath, "--path-format=absolute", "--git-common-dir")
 
