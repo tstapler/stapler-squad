@@ -31,6 +31,16 @@ no false "branch already exists" failure.
 ## UX Acceptance Tests
 N/A — pure infrastructure, no user-facing surface.
 
+## Addendum (research/features.md §5, post-initial-review)
+`setupNewWorktree()`'s ref check is the only gate before `cleanupExistingBranch()`
+unconditionally calls `repo.Storer.RemoveReference(branchRef)` — so a misclassified error
+here can silently delete a real branch ref, not just produce a confusing worktree-add
+failure. `TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed` (REQ-2, above)
+should assert the branch ref **still exists** after the forced-error call (query
+`repo.Reference(branchRef, false)` post-`Setup()` and expect success), in addition to
+asserting the error and the absence of a created worktree — this is what proves the
+data-loss guard, not just the error-surfacing behavior.
+
 ## Test Stack
 - **Unit**: Go stdlib `testing` + `testify` (`assert`/`require`) — matches existing `session/git` test files. `TestBranchRefExists_*` tests call the private `branchRefExists` helper directly (test file is package `git`, same as `worktree_creation_test.go`) against a real temp-dir repo opened via `git.PlainOpen`, with no mocking of go-git — isolates the classification logic from the two calling code paths.
 - **Integration**: real temp-dir git repos via `setupTestRepo(t)` (no mocking of go-git or the `git` CLI), exercising `Setup()` and `setupNewWorktree()` as a whole — including the goroutine race in `Setup()` and the actual `runGitCommand` shellouts (`worktree add`, `worktree remove`). This is the "integration" tier for this package per the existing convention in `worktree_creation_test.go`.
