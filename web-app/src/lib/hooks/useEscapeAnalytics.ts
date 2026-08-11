@@ -26,7 +26,8 @@ interface UseEscapeAnalyticsSummaryReturn {
 }
 
 export function useEscapeAnalyticsSummary(
-  sessionId: string
+  sessionId: string,
+  enabled: boolean = true
 ): UseEscapeAnalyticsSummaryReturn {
   const [histogram, setHistogram] = useState<EscapeSequenceCount[]>([]);
   const [totalSequences, setTotalSequences] = useState<bigint>(0n);
@@ -42,7 +43,7 @@ export function useEscapeAnalyticsSummary(
   }, []);
 
   const fetchSummary = useCallback(async () => {
-    if (!clientRef.current || !sessionId) return;
+    if (!clientRef.current || !sessionId || !enabled) return;
     setLoading(true);
     setError(null);
     try {
@@ -59,11 +60,37 @@ export function useEscapeAnalyticsSummary(
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, enabled]);
 
   useEffect(() => {
-    fetchSummary();
-  }, [fetchSummary]);
+    if (!clientRef.current || !sessionId || !enabled) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    const fetchData = async () => {
+      try {
+        const req = create(GetEscapeAnalyticsSummaryRequestSchema, { sessionId });
+        const resp = await clientRef.current!.getEscapeAnalyticsSummary(req);
+        if (cancelled) return;
+        setHistogram(resp.histogram ?? []);
+        setTotalSequences(resp.totalSequences ?? 0n);
+        setTotalMangled(resp.totalMangled ?? 0n);
+        setMangleRate(resp.mangleRate ?? 0);
+      } catch (err) {
+        if (cancelled) return;
+        const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics summary");
+        setError(e);
+        console.error("Failed to fetch escape analytics summary:", e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchData();
+    return () => { cancelled = true; };
+  }, [sessionId, enabled]);
 
   return { histogram, totalSequences, totalMangled, mangleRate, loading, error, refresh: fetchSummary };
 }
