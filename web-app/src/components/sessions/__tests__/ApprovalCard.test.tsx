@@ -33,6 +33,7 @@ function makeApproval(overrides: Partial<PlainApproval> = {}): PlainApproval {
     createdAt: undefined,
     expiresAt: undefined,
     secondsRemaining: 60,
+    riskLevel: "",
     ...overrides,
   };
 }
