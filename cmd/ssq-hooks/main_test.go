@@ -363,6 +363,20 @@ func TestParseGeminiPayload_VariantC_ArgsCwdPullUp(t *testing.T) {
 	assert.Equal(t, "/args/dir", payload.Cwd)
 }
 
+// parseGeminiPayload_should_preferTopLevelCwd_When_bothCwdAndArgsCwdPresent
+func TestParseGeminiPayload_VariantC_TopLevelCwdPrecedenceOverArgsCwd(t *testing.T) {
+	input := `{"toolCall":{"name":"run_command","args":{"command":"ls","Cwd":"/args/dir"}},"cwd":"/direct"}`
+	payload := callParseGeminiPayloadWithStdin(t, input)
+	assert.Equal(t, "/direct", payload.Cwd)
+}
+
+// parseGeminiPayload_should_preferArgsCwd_When_bothArgsCwdAndWorkspacePathsPresent
+func TestParseGeminiPayload_VariantC_ArgsCwdPrecedenceOverWorkspacePaths(t *testing.T) {
+	input := `{"toolCall":{"name":"run_command","args":{"command":"ls","Cwd":"/args/dir"}},"workspacePaths":["/ws/dir"]}`
+	payload := callParseGeminiPayloadWithStdin(t, input)
+	assert.Equal(t, "/args/dir", payload.Cwd)
+}
+
 // parseGeminiPayload_should_returnUnknown_When_schemaUnrecognized
 func TestParseGeminiPayload_UnknownSchema(t *testing.T) {
 	input := `{"command":"ls"}` // no 'name' or 'tool_name'
