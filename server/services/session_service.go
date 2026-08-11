@@ -1573,6 +1573,8 @@ func (s *SessionService) CreateSession(
 		instanceOpts.ClonedRepoPath = clonedRepoPath
 		if gitHubRef.PRNumber > 0 {
 			instanceOpts.GitHubPRNumber = gitHubRef.PRNumber
+			instanceOpts.GitHubPRURL = fmt.Sprintf("https://%s/%s/%s/pull/%d",
+				githubpkg.NormalizeHost(gitHubRef.Host), gitHubRef.Owner, gitHubRef.Repo, gitHubRef.PRNumber)
 		}
 	}
 
