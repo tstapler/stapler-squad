@@ -237,8 +237,17 @@ func writeAntigravityHookDecision(result classifier.ClassificationResult) {
 // classifier's "no rule matched" catch-all as auto-allow would silently weaken the policy for
 // the plurality of commands that don't match an explicit rule. See
 // docs/adr/ADR-027-opencode-escalate-fail-closed.md for the full decision record.
+//
+// AutoAllow is the only explicit non-deny case, deliberately: cmd/ssq-hooks is excluded from
+// golangci-lint's exhaustive check (.golangci.yml), so nothing else guards against
+// classifier.ClassificationDecision growing a 4th value in the future. Routing every decision
+// except AutoAllow through the same fail-closed default means a future/unrecognized value
+// blocks (matching this function's own documented intent) instead of silently falling through
+// to allow, the way a `case Escalate: ...deny(); default: allow` shape would.
 func writeOpenCodeHookDecision(result classifier.ClassificationResult) {
 	switch result.Decision {
+	case classifier.AutoAllow:
+		// exit 0, no output — the plugin does not throw.
 	case classifier.AutoDeny:
 		reason := result.Reason
 		if result.Alternative != "" {
@@ -250,13 +259,12 @@ func writeOpenCodeHookDecision(result classifier.ClassificationResult) {
 		}
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks: blocked%s — %s\n", ruleInfo, reason)
 		os.Exit(1)
-	case classifier.Escalate:
+	default:
+		// Escalate, and any future/unrecognized ClassificationDecision: fail closed.
 		fmt.Fprintln(os.Stderr, "SSQ-Hooks: requires manual review (no rule matched); OpenCode's "+
 			"tool.execute.before hook has no ask/dialog fallback, so this is blocked rather than "+
 			"silently allowed — approve manually via the review queue or add a classifier rule")
 		os.Exit(1)
-	default:
-		// AutoAllow: exit 0, no output — the plugin does not throw.
 	}
 }
 
@@ -1201,7 +1209,10 @@ export const StaplerSquad = async (ctx) => {
         cwd: ctx.directory,
       });
       try {
-        execFileSync(%q, ["check", "--opencode"], { input: payload, encoding: "utf8" });
+        // timeout: a hang in ssq-hooks (contended lock, slow disk) must fail closed within a
+        // bounded window, not stall the OpenCode session indefinitely — a timed-out child is
+        // killed and throws, which the catch below already turns into a blocked tool call.
+        execFileSync(%s, ["check", "--opencode"], { input: payload, encoding: "utf8", timeout: 8000 });
       } catch (err) {
         throw new Error((err.stderr || "").trim() || "blocked by stapler-squad policy");
       }
@@ -1210,8 +1221,17 @@ export const StaplerSquad = async (ctx) => {
 };
 `
 
+// openCodePluginContent renders openCodePluginTemplate with ssqHooksPath embedded as a JS
+// string literal. Uses encoding/json (not fmt's %q, which is Go/strconv escaping — close to
+// but not identical to JS string-literal escaping, e.g. Go's \a has no JS equivalent) so the
+// embedding is safe by construction rather than by coincidence of the two escape tables mostly
+// agreeing.
 func openCodePluginContent(ssqHooksPath string) string {
-	return fmt.Sprintf(openCodePluginTemplate, ssqHooksPath)
+	quotedPath, err := json.Marshal(ssqHooksPath)
+	if err != nil {
+		quotedPath = []byte(`""`)
+	}
+	return fmt.Sprintf(openCodePluginTemplate, quotedPath)
 }
 
 // patchOpenCodeHooks writes the ssq-hooks OpenCode plugin to pluginPath. Safe to run multiple

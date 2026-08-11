@@ -473,27 +473,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func runOpenCodeDecisionSubprocess(t *testing.T, env ...string) subprocessResult {
-	t.Helper()
-	c := exec.Command(os.Args[0], "-test.run=^TestMain$") //nolint:forbidigo,norawexec
-	c.Env = append(os.Environ(), env...)
-	var stdout, stderr strings.Builder
-	c.Stdout = &stdout
-	c.Stderr = &stderr
-	err := c.Run()
-	code := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			code = exitErr.ExitCode()
-		}
-	}
-	return subprocessResult{
-		ExitCode: code,
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-	}
-}
-
 // subprocessResult holds the outcome of a subprocess invocation.
 type subprocessResult struct {
 	ExitCode int
@@ -501,31 +480,12 @@ type subprocessResult struct {
 	Stderr   string
 }
 
-func runGeminiDecisionSubprocess(t *testing.T, env ...string) subprocessResult {
+// runDecisionSubprocess re-invokes the test binary (gated into TestMain by env, per
+// TestMain's *_DECISION checks) to exercise a writeXHookDecision function that calls os.Exit.
+// Shared by the gemini/agy/opencode decision tests — each passes its own *_DECISION env var.
+func runDecisionSubprocess(t *testing.T, env ...string) subprocessResult {
 	t.Helper()
-	// Re-invoke the test binary, gated by GEMINI_DECISION env var.
 	c := exec.Command(os.Args[0], "-test.run=^TestMain$") //nolint:forbidigo,norawexec // subprocess re-invoke of the test binary; context/WaitDelay not applicable to test binary re-execution
-	c.Env = append(os.Environ(), env...)
-	var stdout, stderr strings.Builder
-	c.Stdout = &stdout
-	c.Stderr = &stderr
-	err := c.Run()
-	code := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			code = exitErr.ExitCode()
-		}
-	}
-	return subprocessResult{
-		ExitCode: code,
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-	}
-}
-
-func runAgyDecisionSubprocess(t *testing.T, env ...string) subprocessResult {
-	t.Helper()
-	c := exec.Command(os.Args[0], "-test.run=^TestMain$") //nolint:forbidigo,norawexec
 	c.Env = append(os.Environ(), env...)
 	var stdout, stderr strings.Builder
 	c.Stdout = &stdout
@@ -575,7 +535,7 @@ func TestWriteGeminiHookDecision_Escalate(t *testing.T) {
 // writeGeminiHookDecision_should_exitOneWithStderr_When_autoDeny
 // Uses subprocess pattern because writeGeminiHookDecision calls os.Exit(1) on AutoDeny.
 func TestWriteGeminiHookDecision_AutoDeny(t *testing.T) {
-	res := runGeminiDecisionSubprocess(t,
+	res := runDecisionSubprocess(t,
 		"GEMINI_DECISION=deny",
 		"GEMINI_DENY_REASON=dangerous command",
 	)
@@ -586,7 +546,7 @@ func TestWriteGeminiHookDecision_AutoDeny(t *testing.T) {
 
 // writeGeminiHookDecision_should_includeDenyReasonAndRuleID_When_autoDenyWithRuleID
 func TestWriteGeminiHookDecision_AutoDenyWithRuleID(t *testing.T) {
-	res := runGeminiDecisionSubprocess(t,
+	res := runDecisionSubprocess(t,
 		"GEMINI_DECISION=deny",
 		"GEMINI_DENY_RULE=RULE-007",
 		"GEMINI_DENY_REASON=rm -rf blocked",
@@ -597,7 +557,7 @@ func TestWriteGeminiHookDecision_AutoDenyWithRuleID(t *testing.T) {
 }
 
 func TestWriteAntigravityHookDecision_AutoAllow(t *testing.T) {
-	res := runAgyDecisionSubprocess(t, "AGY_DECISION=allow")
+	res := runDecisionSubprocess(t, "AGY_DECISION=allow")
 	assert.Equal(t, 0, res.ExitCode)
 	var out map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(res.Stdout), &out))
@@ -606,7 +566,7 @@ func TestWriteAntigravityHookDecision_AutoAllow(t *testing.T) {
 }
 
 func TestWriteAntigravityHookDecision_AutoDeny(t *testing.T) {
-	res := runAgyDecisionSubprocess(t, "AGY_DECISION=deny", "AGY_DENY_REASON=unsafe", "AGY_DENY_ALT=try again")
+	res := runDecisionSubprocess(t, "AGY_DECISION=deny", "AGY_DENY_REASON=unsafe", "AGY_DENY_ALT=try again")
 	assert.Equal(t, 0, res.ExitCode)
 	var out map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(res.Stdout), &out))
@@ -616,7 +576,7 @@ func TestWriteAntigravityHookDecision_AutoDeny(t *testing.T) {
 }
 
 func TestWriteAntigravityHookDecision_Escalate(t *testing.T) {
-	res := runAgyDecisionSubprocess(t, "AGY_DECISION=escalate")
+	res := runDecisionSubprocess(t, "AGY_DECISION=escalate")
 	assert.Equal(t, 0, res.ExitCode)
 	var out map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(res.Stdout), &out))
@@ -639,6 +599,15 @@ func TestPatchOpenCodeHooks_NewFile(t *testing.T) {
 	assert.Contains(t, content, `check`)
 	assert.Contains(t, content, `--opencode`)
 	assert.Contains(t, content, "/path/to/ssq-hooks")
+
+	// Substring assertions above don't catch a template edit that breaks JS syntax (bad
+	// escape, missing comma/brace) — verify the generated file actually parses as JS when a
+	// Node runtime is available. Skips silently if `node` isn't on PATH rather than failing,
+	// since this isn't a hard build dependency of the Go toolchain.
+	if nodePath, err := exec.LookPath("node"); err == nil {
+		out, err := exec.Command(nodePath, "--check", pluginPath).CombinedOutput() //nolint:forbidigo,norawexec // test-only JS syntax check
+		assert.NoErrorf(t, err, "generated plugin is not valid JS: %s", out)
+	}
 }
 
 // patchOpenCodeHooks_should_produceByteIdenticalOutput_When_runTwice
@@ -660,6 +629,10 @@ func TestPatchOpenCodeHooks_Idempotent(t *testing.T) {
 func TestInstallOpenCode_FreshInstall(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// No `opencode` binary resolvable — keeps installOpenCode's best-effort version probe a
+	// no-op instead of shelling out to whatever's actually on the host machine's PATH (slow,
+	// and makes the test's behavior depend on host state).
+	t.Setenv("PATH", t.TempDir())
 	installOpenCode()
 	destBin := filepath.Join(home, ".local", "bin", "ssq-hooks")
 	assert.FileExists(t, destBin)
@@ -675,6 +648,7 @@ func TestInstallOpenCode_FreshInstall(t *testing.T) {
 func TestInstallOpenCode_RemovesStaleWrapper(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
 	binDir := filepath.Join(home, ".local", "bin")
 	require.NoError(t, os.MkdirAll(binDir, 0755))
 	staleWrapper := filepath.Join(binDir, "open-code")
@@ -750,6 +724,18 @@ func TestParseOpenCodePayload_EmptyInput(t *testing.T) {
 	assert.Equal(t, "Unknown", payload.ToolName)
 }
 
+// parseOpenCodePayload_should_leaveToolInputNil_When_keyAbsent
+//
+// A zero-arg tool call has output.args === undefined in the plugin, and JSON.stringify drops
+// undefined-valued keys entirely — so the real wire payload for that case has no "tool_input"
+// key at all, not `{}`. normalizeOpenCodeToolInput's nil-map guard exists for exactly this.
+func TestParseOpenCodePayload_ToolInputKeyAbsent(t *testing.T) {
+	input := `{"tool_name":"bash","cwd":"/tmp"}`
+	payload := callParseOpenCodePayloadWithStdin(t, input)
+	assert.Equal(t, "bash", payload.ToolName)
+	assert.Nil(t, payload.ToolInput)
+}
+
 // parseOpenCodePayload_should_populateFilePathKey_When_toolInputUsesCamelCaseFilePath
 //
 // Regression test for a bug caught only by a live end-to-end test (not a synthetic unit test):
@@ -809,7 +795,7 @@ func TestWriteOpenCodeHookDecision_AutoAllow(t *testing.T) {
 // writeOpenCodeHookDecision_should_exitOneWithReasonOnStderr_When_autoDeny
 // Uses subprocess pattern because writeOpenCodeHookDecision calls os.Exit(1) on AutoDeny.
 func TestWriteOpenCodeHookDecision_AutoDeny(t *testing.T) {
-	res := runOpenCodeDecisionSubprocess(t,
+	res := runDecisionSubprocess(t,
 		"OPENCODE_DECISION=deny",
 		"OPENCODE_DENY_REASON=dangerous command",
 		"OPENCODE_DENY_RULE=RULE-042",
@@ -820,11 +806,23 @@ func TestWriteOpenCodeHookDecision_AutoDeny(t *testing.T) {
 	assert.Contains(t, res.Stderr, "dangerous command")
 }
 
+// writeOpenCodeHookDecision_should_omitRuleInfo_When_ruleIDEmpty
+func TestWriteOpenCodeHookDecision_AutoDenyWithoutRuleID(t *testing.T) {
+	res := runDecisionSubprocess(t,
+		"OPENCODE_DECISION=deny",
+		"OPENCODE_DENY_REASON=dangerous command",
+	)
+	assert.Equal(t, 1, res.ExitCode)
+	assert.Contains(t, res.Stderr, "blocked")
+	assert.NotContains(t, res.Stderr, "[rule:")
+	assert.Contains(t, res.Stderr, "dangerous command")
+}
+
 // writeOpenCodeHookDecision_should_exitOneWithDistinctReason_When_escalate
 // Per ADR-027, Escalate maps to deny (fail-closed) with a reason distinct from AutoDeny's,
 // naming the lack of an ask/dialog fallback rather than a specific rule match.
 func TestWriteOpenCodeHookDecision_Escalate(t *testing.T) {
-	res := runOpenCodeDecisionSubprocess(t, "OPENCODE_DECISION=escalate")
+	res := runDecisionSubprocess(t, "OPENCODE_DECISION=escalate")
 	assert.Equal(t, 1, res.ExitCode)
 	assert.Contains(t, res.Stderr, "requires manual review")
 	assert.Contains(t, res.Stderr, "no ask/dialog fallback")
