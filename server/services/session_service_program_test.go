@@ -49,6 +49,19 @@ func addHibernatedThenForceActive(t *testing.T, fix *forkTestFixture, title, pat
 	return nil
 }
 
+// findInstanceByTitle returns the instance with the given title from loaded, failing the
+// test if it isn't present.
+func findInstanceByTitle(t *testing.T, loaded []*session.Instance, title string) *session.Instance {
+	t.Helper()
+	for _, inst := range loaded {
+		if inst.Title == title {
+			return inst
+		}
+	}
+	t.Fatalf("findInstanceByTitle: could not find %q", title)
+	return nil
+}
+
 // --------------------------------------------------------------------------
 // UpdateSession – program branch (RPC-handler level)
 // --------------------------------------------------------------------------
@@ -77,15 +90,41 @@ func TestUpdateSession_ProgramUpdate_ActiveSession_Restarts(t *testing.T) {
 
 	loaded, loadErr := fix.storage.LoadInstances()
 	require.NoError(t, loadErr)
-	var found *session.Instance
-	for _, i := range loaded {
-		if i.Title == "active-program-session" {
-			found = i
-			break
-		}
-	}
-	require.NotNil(t, found)
+	found := findInstanceByTitle(t, loaded, "active-program-session")
 	assert.Equal(t, "aider", found.Program, "program change must persist")
+}
+
+// TestUpdateSession_ProgramUpdate_ActiveSession_RestartFailure_ReturnsInternal verifies
+// that when Instance.SwitchProgram's restart attempt fails, UpdateSession translates that
+// into connect.CodeInternal (session_service.go's switchErr branch) rather than a 200 with
+// a stale response — the one branch this refactor touches that TestUpdateSession_
+// ProgramUpdate_ActiveSession_Restarts (the success path) doesn't exercise. A working
+// directory that doesn't exist makes the real tmux `new-session -c <dir>` deterministically
+// fail without needing a fake processManager.
+func TestUpdateSession_ProgramUpdate_ActiveSession_RestartFailure_ReturnsInternal(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := addHibernatedThenForceActive(t, fix, "active-restart-failure-session", "/nonexistent/path/does-not-exist-ssq-test")
+	t.Cleanup(func() { _ = inst.KillSession() })
+
+	newProgram := "aider"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:      "active-restart-failure-session",
+		Program: &newProgram,
+	}))
+	require.Error(t, err, "restart against a nonexistent working directory must fail")
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInternal, connectErr.Code())
+
+	// Per SwitchProgram's contract, persist runs before the restart attempt, so the
+	// program change is durable even though the restart itself failed.
+	loaded, loadErr := fix.storage.LoadInstances()
+	require.NoError(t, loadErr)
+	found := findInstanceByTitle(t, loaded, "active-restart-failure-session")
+	assert.Equal(t, "aider", found.Program, "program change must persist despite the restart failure")
 }
 
 // TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart verifies that changing the
@@ -124,14 +163,7 @@ func TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart(t *testing.T) {
 
 	reloaded, err := fix.storage.LoadInstances()
 	require.NoError(t, err)
-	var found *session.Instance
-	for _, i := range reloaded {
-		if i.Title == "stopped-program-session" {
-			found = i
-			break
-		}
-	}
-	require.NotNil(t, found)
+	found := findInstanceByTitle(t, reloaded, "stopped-program-session")
 	assert.Equal(t, "aider", found.Program, "program change must be persisted")
 }
 
@@ -262,14 +294,7 @@ func TestUpdateSessionProgram_RealInstance_SwitchesAndPersists(t *testing.T) {
 
 	loaded, err := fix.storage.LoadInstances()
 	require.NoError(t, err)
-	var found *session.Instance
-	for _, inst := range loaded {
-		if inst.Title == "auto-fallback-session" {
-			found = inst
-			break
-		}
-	}
-	require.NotNil(t, found)
+	found := findInstanceByTitle(t, loaded, "auto-fallback-session")
 	assert.Equal(t, "aider", found.Program, "program change must be persisted")
 }
 
