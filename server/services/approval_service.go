@@ -181,6 +181,7 @@ func (as *ApprovalService) ListPendingApprovals(
 			CreatedAt:        timestamppb.New(a.CreatedAt),
 			ExpiresAt:        timestamppb.New(a.ExpiresAt),
 			SecondsRemaining: remaining,
+			RiskLevel:        a.RiskLevel,
 		})
 	}
 

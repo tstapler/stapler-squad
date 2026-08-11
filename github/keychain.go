@@ -69,10 +69,18 @@ func accountKey(ref AccountRef) string {
 	return keychainAccountPrefix + NormalizeHost(ref.Host) + ":" + ref.Username
 }
 
-// GetKeychainToken returns any stored GitHub token (first account, or the
-// legacy single-account slot). Kept for backward-compatibility with the
-// single-token auth flow.
+// GetKeychainToken returns a token for the default single-token auth flow
+// (getGHToken/newGHRequest), which always targets api.github.com. It must
+// therefore prefer a github.com account's token over any other configured
+// host: returning an enterprise account's token here sends valid credentials
+// to the wrong API and GitHub correctly rejects them as 401 Bad credentials,
+// regardless of account order in ListKeychainAccounts. Falls back to the
+// first account of any host, then the legacy single-account slot, only when
+// no github.com account is configured.
 func GetKeychainToken() string {
+	if tok := GetKeychainTokenForHost(defaultHost); tok != "" {
+		return tok
+	}
 	for _, ref := range ListKeychainAccounts() {
 		if tok := GetKeychainTokenForAccount(ref.Host, ref.Username); tok != "" {
 			return tok

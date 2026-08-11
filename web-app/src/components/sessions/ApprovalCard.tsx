@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { PlainApproval } from "@/lib/api/approvalsApi";
+import { SeverityBadge } from "./SeverityBadge";
 import {
   card,
   cardExpired,
@@ -109,6 +110,7 @@ export function ApprovalCard({ approval, onApprove, onDeny, sessionTitle }: Appr
         <div className={toolName}>
           <span className={toolIcon} aria-hidden="true">&#x1F527;</span>
           {approval.toolName}
+          <SeverityBadge riskLevel={approval.riskLevel} compact />
         </div>
         <span
           className={`${countdown} ${getCountdownClass()}`}

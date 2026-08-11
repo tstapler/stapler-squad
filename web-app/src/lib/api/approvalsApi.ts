@@ -20,6 +20,7 @@ export interface PlainApproval {
   createdAt: Record<string, unknown> | undefined;
   expiresAt: Record<string, unknown> | undefined;
   secondsRemaining: number;
+  riskLevel: string;
 }
 
 function getClient() {

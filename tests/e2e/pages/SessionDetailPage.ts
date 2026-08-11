@@ -101,4 +101,32 @@ export class SessionDetailPage {
   getSummaryLiveRegion(): Locator {
     return this.page.getByRole("status");
   }
+
+  // ---------------------------------------------------------------------
+  // Notes panel — Info tab, NotePanel.tsx. See session-notes.spec.ts.
+  // ---------------------------------------------------------------------
+
+  getInfoTab(): Locator {
+    return this.page.getByRole("tab", { name: "Info" });
+  }
+
+  getNotePanel(): Locator {
+    return this.page.getByTestId("session-note-panel");
+  }
+
+  getNoteAddButton(): Locator {
+    return this.page.getByRole("button", { name: "Add note" });
+  }
+
+  getNoteTextarea(): Locator {
+    return this.page.getByTestId("session-note-textarea");
+  }
+
+  getNoteSaveButton(): Locator {
+    return this.page.getByTestId("session-note-save-button");
+  }
+
+  getNoteRenderedBody(): Locator {
+    return this.page.getByTestId("session-note-rendered");
+  }
 }

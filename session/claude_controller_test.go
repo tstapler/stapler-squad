@@ -641,6 +641,34 @@ func newControllerWithMock(content string) (*ClaudeController, *mockInstance) {
 	return cc, inst
 }
 
+// TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryDisplayed is the
+// most direct regression test for the "no-op nudge into actively-working sessions" bug: it
+// exercises the exact mechanism the bug lived in, not a proxy for it.
+//
+// cc.IsIdle()/GetIdleState() reads pane content through detection.IdleDetector.DetectStateFromContent,
+// which runs the SAME StatusDetector this PR's pattern fix changes, then maps the result via
+// mapStatusToIdleState (session/detection/idle.go) — critically, StatusUnknown maps to
+// IdleStateWaiting (session/detection/idle.go's comment: "Unknown status - don't maintain
+// Unknown, default to Waiting"), i.e. treated as IDLE. Before the pattern widening, the reported
+// batched-summary pane text classified as StatusUnknown, so cc.IsIdle() incorrectly returned true
+// for a session that was actively working — this is the real site AutonomousDriver.run()'s
+// waitForIdle reads to decide whether a turn is warranted (both its settleWindow=0 startup path
+// and its settleWindow>0 post-turn path call cc.IsIdle() once to seed their decision). After the
+// fix, the same text classifies as StatusExecuting, which maps to IdleStateActive.
+func TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryDisplayed(t *testing.T) {
+	batchedSummary := "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…"
+	cc, _ := newControllerWithMock(batchedSummary)
+
+	if got := cc.IsIdle(); got {
+		t.Error("IsIdle() = true for a batched multi-tool-call summary pane — the session is " +
+			"actively working; this would let waitForIdle seed idleSince immediately and " +
+			"eventually fire a spurious no-op nudge")
+	}
+	if state, _ := cc.GetIdleState(); state != detection.IdleStateActive {
+		t.Errorf("GetIdleState() = %v, want IdleStateActive for a batched multi-tool-call summary pane", state)
+	}
+}
+
 // TestClaudeController_Start_TagsEscapeAnalyticsWithStableID is a regression test for
 // BUG-025 at its actual assembly point. TestResponseStream_SetStableSessionID (in
 // response_stream_test.go) proves ResponseStream.SetStableSessionID wiring works, but it

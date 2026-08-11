@@ -278,6 +278,31 @@ fda_is_granted() {
     return 1
 }
 
+# Polls (up to 10s) until none of the given TCP ports have a LISTENer, so the
+# incoming process doesn't race the outgoing one's socket teardown. Ports that
+# are empty/unset (e.g. profiling disabled) are skipped. Proceeds with a
+# warning on timeout rather than blocking forever — a genuinely stuck old
+# process needs a human, not a longer sleep.
+wait_for_port_release() {
+    max_ticks=20  # 20 * 0.5s = 10s
+    tick=0
+    while [ "$tick" -lt "$max_ticks" ]; do
+        busy=0
+        for port in "$@"; do
+            [ -n "$port" ] || continue
+            if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+                busy=1
+                break
+            fi
+        done
+        [ "$busy" = "0" ] && return 0
+        sleep 0.5
+        tick=$((tick + 1))
+    done
+    log_warning "Old process still holding a port after $((max_ticks / 2))s — starting anyway."
+    return 1
+}
+
 # ── macOS / LaunchAgent ───────────────────────────────────────────────────────
 install_macos() {
     bin_path="$1"
@@ -398,17 +423,29 @@ EOF
     fi
 
     # Stop the existing service before loading the updated plist.
-    # Use 'launchctl bootout' (blocking — waits for the process to exit) so the
-    # old process is fully gone before the new one starts.  This prevents the two
-    # processes from racing over tmux sessions.  Fall back to 'launchctl unload'
-    # on older macOS that lacks bootout support.
+    # 'launchctl bootout' unregisters the job from launchd but, in practice,
+    # returns before the old process has actually released its listening
+    # sockets — the process is still tearing down (flushing tmux/session
+    # state) when bootout's call returns.  A fixed short sleep here is a race:
+    # if the new process starts and tries to bind :8543/:8444 before the old
+    # one has let go, it fails with "bind: address already in use", crashes,
+    # and gets stuck in launchd's KeepAlive restart loop until the old socket
+    # is finally freed — which is what caused the health check to time out on
+    # prior runs (confirmed via ~/.stapler-squad/logs/service.log showing
+    # repeated "bind remote server on 0.0.0.0:8444: ... address already in
+    # use" crash-loop entries). Poll for the ports to actually clear instead
+    # of guessing a sleep duration.  Fall back to 'launchctl unload' on older
+    # macOS that lacks bootout support.
     log_info "Stopping existing service (if running)..."
     if ! launchctl bootout "gui/$(id -u)/com.stapler-squad" 2>/dev/null; then
         launchctl unload "$plist_file" 2>/dev/null || true
     fi
 
-    # Brief grace period for the process to finish writing its final state.
-    sleep 0.5
+    if [ "$ENABLE_PROFILE" = "1" ]; then
+        wait_for_port_release 8543 8444 "$PROFILE_PORT"
+    else
+        wait_for_port_release 8543 8444
+    fi
 
     log_info "Starting updated service..."
     if ! launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null; then

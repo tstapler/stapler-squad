@@ -20123,6 +20123,7 @@ type SessionMutation struct {
 	last_prompt_signature  *string
 	hidden                 *bool
 	pause_reason           *string
+	exit_reason            *string
 	workflow_id            *string
 	archived_at            *time.Time
 	github_pr_url          *string
@@ -20131,6 +20132,7 @@ type SessionMutation struct {
 	github_owner           *string
 	github_repo            *string
 	session_artifacts      *string
+	note                   *string
 	clearedFields          map[string]struct{}
 	worktree               *int
 	clearedworktree        bool
@@ -21837,6 +21839,55 @@ func (m *SessionMutation) ResetPauseReason() {
 	delete(m.clearedFields, session.FieldPauseReason)
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (m *SessionMutation) SetExitReason(s string) {
+	m.exit_reason = &s
+}
+
+// ExitReason returns the value of the "exit_reason" field in the mutation.
+func (m *SessionMutation) ExitReason() (r string, exists bool) {
+	v := m.exit_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExitReason returns the old "exit_reason" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldExitReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExitReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExitReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExitReason: %w", err)
+	}
+	return oldValue.ExitReason, nil
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (m *SessionMutation) ClearExitReason() {
+	m.exit_reason = nil
+	m.clearedFields[session.FieldExitReason] = struct{}{}
+}
+
+// ExitReasonCleared returns if the "exit_reason" field was cleared in this mutation.
+func (m *SessionMutation) ExitReasonCleared() bool {
+	_, ok := m.clearedFields[session.FieldExitReason]
+	return ok
+}
+
+// ResetExitReason resets all changes to the "exit_reason" field.
+func (m *SessionMutation) ResetExitReason() {
+	m.exit_reason = nil
+	delete(m.clearedFields, session.FieldExitReason)
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (m *SessionMutation) SetWorkflowID(s string) {
 	m.workflow_id = &s
@@ -22201,6 +22252,55 @@ func (m *SessionMutation) ResetSessionArtifacts() {
 	delete(m.clearedFields, session.FieldSessionArtifacts)
 }
 
+// SetNote sets the "note" field.
+func (m *SessionMutation) SetNote(s string) {
+	m.note = &s
+}
+
+// Note returns the value of the "note" field in the mutation.
+func (m *SessionMutation) Note() (r string, exists bool) {
+	v := m.note
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNote returns the old "note" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldNote(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNote is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNote requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNote: %w", err)
+	}
+	return oldValue.Note, nil
+}
+
+// ClearNote clears the value of the "note" field.
+func (m *SessionMutation) ClearNote() {
+	m.note = nil
+	m.clearedFields[session.FieldNote] = struct{}{}
+}
+
+// NoteCleared returns if the "note" field was cleared in this mutation.
+func (m *SessionMutation) NoteCleared() bool {
+	_, ok := m.clearedFields[session.FieldNote]
+	return ok
+}
+
+// ResetNote resets all changes to the "note" field.
+func (m *SessionMutation) ResetNote() {
+	m.note = nil
+	delete(m.clearedFields, session.FieldNote)
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by id.
 func (m *SessionMutation) SetWorktreeID(id int) {
 	m.worktree = &id
@@ -22553,7 +22653,7 @@ func (m *SessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SessionMutation) Fields() []string {
-	fields := make([]string, 0, 41)
+	fields := make([]string, 0, 43)
 	if m.title != nil {
 		fields = append(fields, session.FieldTitle)
 	}
@@ -22656,6 +22756,9 @@ func (m *SessionMutation) Fields() []string {
 	if m.pause_reason != nil {
 		fields = append(fields, session.FieldPauseReason)
 	}
+	if m.exit_reason != nil {
+		fields = append(fields, session.FieldExitReason)
+	}
 	if m.workflow_id != nil {
 		fields = append(fields, session.FieldWorkflowID)
 	}
@@ -22676,6 +22779,9 @@ func (m *SessionMutation) Fields() []string {
 	}
 	if m.session_artifacts != nil {
 		fields = append(fields, session.FieldSessionArtifacts)
+	}
+	if m.note != nil {
+		fields = append(fields, session.FieldNote)
 	}
 	return fields
 }
@@ -22753,6 +22859,8 @@ func (m *SessionMutation) Field(name string) (ent.Value, bool) {
 		return m.Hidden()
 	case session.FieldPauseReason:
 		return m.PauseReason()
+	case session.FieldExitReason:
+		return m.ExitReason()
 	case session.FieldWorkflowID:
 		return m.WorkflowID()
 	case session.FieldArchivedAt:
@@ -22767,6 +22875,8 @@ func (m *SessionMutation) Field(name string) (ent.Value, bool) {
 		return m.GithubRepo()
 	case session.FieldSessionArtifacts:
 		return m.SessionArtifacts()
+	case session.FieldNote:
+		return m.Note()
 	}
 	return nil, false
 }
@@ -22844,6 +22954,8 @@ func (m *SessionMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldHidden(ctx)
 	case session.FieldPauseReason:
 		return m.OldPauseReason(ctx)
+	case session.FieldExitReason:
+		return m.OldExitReason(ctx)
 	case session.FieldWorkflowID:
 		return m.OldWorkflowID(ctx)
 	case session.FieldArchivedAt:
@@ -22858,6 +22970,8 @@ func (m *SessionMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldGithubRepo(ctx)
 	case session.FieldSessionArtifacts:
 		return m.OldSessionArtifacts(ctx)
+	case session.FieldNote:
+		return m.OldNote(ctx)
 	}
 	return nil, fmt.Errorf("unknown Session field %s", name)
 }
@@ -23105,6 +23219,13 @@ func (m *SessionMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetPauseReason(v)
 		return nil
+	case session.FieldExitReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExitReason(v)
+		return nil
 	case session.FieldWorkflowID:
 		v, ok := value.(string)
 		if !ok {
@@ -23153,6 +23274,13 @@ func (m *SessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSessionArtifacts(v)
+		return nil
+	case session.FieldNote:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNote(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Session field %s", name)
@@ -23304,6 +23432,9 @@ func (m *SessionMutation) ClearedFields() []string {
 	if m.FieldCleared(session.FieldPauseReason) {
 		fields = append(fields, session.FieldPauseReason)
 	}
+	if m.FieldCleared(session.FieldExitReason) {
+		fields = append(fields, session.FieldExitReason)
+	}
 	if m.FieldCleared(session.FieldWorkflowID) {
 		fields = append(fields, session.FieldWorkflowID)
 	}
@@ -23324,6 +23455,9 @@ func (m *SessionMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(session.FieldSessionArtifacts) {
 		fields = append(fields, session.FieldSessionArtifacts)
+	}
+	if m.FieldCleared(session.FieldNote) {
+		fields = append(fields, session.FieldNote)
 	}
 	return fields
 }
@@ -23408,6 +23542,9 @@ func (m *SessionMutation) ClearField(name string) error {
 	case session.FieldPauseReason:
 		m.ClearPauseReason()
 		return nil
+	case session.FieldExitReason:
+		m.ClearExitReason()
+		return nil
 	case session.FieldWorkflowID:
 		m.ClearWorkflowID()
 		return nil
@@ -23428,6 +23565,9 @@ func (m *SessionMutation) ClearField(name string) error {
 		return nil
 	case session.FieldSessionArtifacts:
 		m.ClearSessionArtifacts()
+		return nil
+	case session.FieldNote:
+		m.ClearNote()
 		return nil
 	}
 	return fmt.Errorf("unknown Session nullable field %s", name)
@@ -23539,6 +23679,9 @@ func (m *SessionMutation) ResetField(name string) error {
 	case session.FieldPauseReason:
 		m.ResetPauseReason()
 		return nil
+	case session.FieldExitReason:
+		m.ResetExitReason()
+		return nil
 	case session.FieldWorkflowID:
 		m.ResetWorkflowID()
 		return nil
@@ -23559,6 +23702,9 @@ func (m *SessionMutation) ResetField(name string) error {
 		return nil
 	case session.FieldSessionArtifacts:
 		m.ResetSessionArtifacts()
+		return nil
+	case session.FieldNote:
+		m.ResetNote()
 		return nil
 	}
 	return fmt.Errorf("unknown Session field %s", name)

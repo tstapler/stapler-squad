@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/config"
 )
 
 func setupTestIndexStore(t *testing.T) (*IndexStore, string) {
@@ -65,6 +67,46 @@ func TestNewIndexStore(t *testing.T) {
 	// Verify directory was created
 	if _, err := os.Stat(indexDir); os.IsNotExist(err) {
 		t.Error("Index directory was not created")
+	}
+}
+
+// TestNewIndexStore_TestMode_UsesIsolatedDir_NotRealHomeDir guards the CI
+// timeout fix: NewIndexStore() (called by every NewSessionService in the
+// server/services test suite) used to always persist to the real
+// ~/.claude/search_index regardless of test mode. On an active dev machine
+// that file accumulates to tens of thousands of documents over the
+// developer's real usage; decoding it under -race on every NewSessionService
+// call in a full package test run was slow enough to blow CI's 150s budget
+// (unrelated to whatever the individual test was actually exercising). Under
+// config.IsTestMode() (true for any go test binary), it must use
+// config.GetConfigDir()'s isolated test directory instead.
+func TestNewIndexStore_TestMode_UsesIsolatedDir_NotRealHomeDir(t *testing.T) {
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+	store, err := NewIndexStore()
+	if err != nil {
+		t.Fatalf("NewIndexStore() error = %v", err)
+	}
+
+	want := filepath.Join(testDir, "search_index")
+	if got := store.GetIndexDir(); got != want {
+		t.Errorf("NewIndexStore().GetIndexDir() = %q, want %q (isolated STAPLER_SQUAD_TEST_DIR path)", got, want)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir() error = %v", err)
+	}
+	realDir := filepath.Join(home, ".claude", "search_index")
+	if store.GetIndexDir() == realDir {
+		t.Error("NewIndexStore() used the real ~/.claude/search_index while config.IsTestMode() is true")
+	}
+}
+
+func TestNewIndexStore_TestMode_True(t *testing.T) {
+	if !config.IsTestMode() {
+		t.Fatal("config.IsTestMode() = false inside a go test binary; NewIndexStore's test-mode isolation would silently not apply")
 	}
 }
 

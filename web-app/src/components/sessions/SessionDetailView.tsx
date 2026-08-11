@@ -25,6 +25,7 @@ import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
+import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
@@ -38,6 +39,7 @@ import {
   pausedOverlayTitle,
   pausedOverlayReason,
   pausedOverlayButton,
+  crashedOverlayIcon,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -422,6 +424,10 @@ export function SessionDetailView({
     }
   };
 
+  const handleResumeFromCrash = async () => {
+    await actions.resumeFromCrash();
+  };
+
   const handleDeleteClick = () => {
     if (session.status === SessionStatus.RUNNING || session.status === SessionStatus.NEEDS_APPROVAL) {
       setShowDeleteConfirm(true);
@@ -731,6 +737,35 @@ export function SessionDetailView({
                     </button>
                   </div>
                 )}
+                {/* Crashed overlay: the tmux pane exited abnormally (remain-on-exit
+                    dead pane) and was detected by SessionHealthChecker. Distinct
+                    from the paused overlay above — same layout, error palette. */}
+                {session.status === SessionStatus.CRASHED && (
+                  <div
+                    className={pausedOverlay}
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Session has crashed"
+                  >
+                    <span className={crashedOverlayIcon} aria-hidden="true">⚠️</span>
+                    <p className={pausedOverlayTitle}>This session has crashed</p>
+                    {session.exitReason && (
+                      <p className={pausedOverlayReason}>
+                        {session.exitReason}
+                      </p>
+                    )}
+                    <button
+                      className={pausedOverlayButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleResumeFromCrash();
+                      }}
+                      aria-label="Resume this session"
+                    >
+                      ▶ Resume Session
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -818,16 +853,20 @@ export function SessionDetailView({
             />
           </div>
         )}
-        {activeTab === "files" && (
-          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-files">
-            <FilesTab
-              sessionId={session.id}
-              baseUrl={getApiBaseUrl()}
-              initialSelectedPath={filesSelectedPath}
-              onSelectedPathChange={setFilesSelectedPath}
-            />
-          </div>
-        )}
+        <div
+          className={styles.tabContent}
+          role="tabpanel"
+          aria-labelledby="tab-files"
+          aria-hidden={activeTab !== "files"}
+          data-active={activeTab === "files"}
+        >
+          <FilesTab
+            sessionId={session.id}
+            baseUrl={getApiBaseUrl()}
+            initialSelectedPath={filesSelectedPath}
+            onSelectedPathChange={setFilesSelectedPath}
+          />
+        </div>
         {activeTab === "logs" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
             <SessionLogsTab sessionId={session.id} />
@@ -1247,6 +1286,16 @@ export function SessionDetailView({
             {session.goal?.goalText && (
               <GoalPanel goal={session.goal} />
             )}
+            <NotePanel
+              note={session.note ?? ""}
+              onSave={async (v) => {
+                // actions.update resolves to null (never rejects) on RPC failure — NotePanel's
+                // save-error UI (aria-live assertive message, textarea preserved) only fires on
+                // a rejected promise, so a null result must be converted into a throw here.
+                const result = await actions.update({ note: v });
+                if (!result) throw new Error("Failed to save note");
+              }}
+            />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
           </div>

@@ -13,6 +13,7 @@ export function useSessionActions(sessionId: string) {
   const {
     pauseSession,
     resumeSession,
+    resumeCrashedSession,
     deleteSession,
     renameSession,
     restartSession,
@@ -24,6 +25,7 @@ export function useSessionActions(sessionId: string) {
     pause: () => pauseSession(sessionId),
     resume: (updates?: { title?: string; tags?: string[] }) =>
       resumeSession(sessionId, updates),
+    resumeFromCrash: () => resumeCrashedSession(sessionId),
     delete: (force?: boolean) => deleteSession(sessionId, force),
     rename: (title: string) => renameSession(sessionId, title),
     restart: () => restartSession(sessionId),
