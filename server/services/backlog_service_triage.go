@@ -436,6 +436,21 @@ func retitleTriageWorktreeToFinalBranch(itemID, repoPath, title string, wt *git.
 	}
 }
 
+// cleanupProvisionalTriageWorktree removes a triage worktree that was created
+// for this run but never reached the commit+rename step (LLM call failed,
+// result parsing failed) — otherwise it's an orphaned triage-<itemID>
+// worktree/branch that nothing ever reuses or removes. Once
+// retitleTriageWorktreeToFinalBranch has run, the worktree is promoted for
+// reuse and must not be cleaned up here.
+func cleanupProvisionalTriageWorktree(itemID string, wt *git.GitWorktree) {
+	if wt == nil {
+		return
+	}
+	if cleanupErr := wt.Cleanup(); cleanupErr != nil {
+		log.WarningLog.Printf("[TriggerTriage] failed to clean up provisional triage worktree for item=%s: %v", itemID, cleanupErr)
+	}
+}
+
 func (s *BacklogService) SpawnSessionFromItem(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SpawnSessionFromItemRequest],
@@ -2449,6 +2464,7 @@ func (s *BacklogService) TriggerTriage(
 			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s: %v",
 				itemID, callElapsed.Round(time.Second), errType, callErr)
 			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
+			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
 
@@ -2457,6 +2473,7 @@ func (s *BacklogService) TriggerTriage(
 			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d: %v",
 				itemID, callElapsed.Round(time.Second), len(raw), parseErr)
 			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
 		result.Iteration = iteration
@@ -2497,11 +2514,14 @@ func (s *BacklogService) TriggerTriage(
 		// flat under artifactAbsPath like the default pipeline's prompt does —
 		// readPlanFile (session/backlog_review.go) only ever looks for
 		// <PlanArtifactsPath>/plan.md, so this must point at the implementation/
-		// subdirectory in the triage worktree, or review/context-building
-		// silently finds no plan content for every SDD-mode item (true even
-		// before this change, since artifactAbsPath never held SDD's output).
+		// subdirectory in triageWorkDir, or review/context-building silently
+		// finds no plan content for every SDD-mode item (true even before this
+		// change, since artifactAbsPath never held SDD's output). Keyed off
+		// triageWorkDir, not triageWorktree != nil: the fallback path (worktree
+		// setup failed) still runs SDD triage directly in itemRepoPath — via
+		// triageWorkDir == itemRepoPath — and still needs pap to find it there.
 		pap := artifactAbsPath
-		if triageWorktree != nil && item.PipelineMode == session.DefaultSDDPipelineModeSlug {
+		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
 			pap = filepath.Join(triageWorkDir, "project_plans", result.Title, "implementation")
 		}
 		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
