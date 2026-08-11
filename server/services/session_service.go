@@ -1898,6 +1898,24 @@ func (s *SessionService) UpdateSession(
 	// the capacity-monitor auto-fallback path (UpdateSessionProgram below) via
 	// Instance.SwitchProgram so the two entry points can't drift or double-restart.
 	if req.Msg.Program != nil {
+		// Flush any pending title/category/note rename now, keyed on currentTitle,
+		// before SwitchProgram's callback below can trigger its own SaveInstances
+		// call. That call persists via instance.ToInstanceData(), whose Title is
+		// already the in-memory-renamed value — looking the DB row up by that new
+		// title (before the narrow rename below has run) misses the still-old-titled
+		// row and duplicates it via saveInstancesToRepo's Create fallback, exactly
+		// the orphaned/duplicate-row bug this file's UpdateSessionMetadata exists to
+		// avoid. Flushing here first keeps every later persist call in this handler
+		// looking up the same, already-correct row.
+		if metaTitle != nil || metaCategory != nil || metaNote != nil {
+			if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, nil); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+			}
+			if metaTitle != nil {
+				currentTitle = *metaTitle
+			}
+			metaTitle, metaCategory, metaNote = nil, nil, nil
+		}
 		changed, _, switchErr := instance.SwitchProgram(ctx, *req.Msg.Program, func() error {
 			return s.storage.SaveInstances([]*session.Instance{instance})
 		})

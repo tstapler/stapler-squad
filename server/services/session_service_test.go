@@ -886,6 +886,55 @@ func TestUpdateSession_TitleRename_DoesNotOrphanOldRow(t *testing.T) {
 		"rename must not leave an orphaned row under the old title (found: %v)", matches)
 }
 
+// TestUpdateSession_TitleAndProgramCombo_DoesNotDuplicateRow is the regression test for a
+// bug found in code review: when a single UpdateSession request changes both Title and
+// Program, the Program branch's SwitchProgram callback used to persist via SaveInstances
+// BEFORE the deferred narrow title rename ran. SaveInstances looks the DB row up by the
+// already-in-memory-renamed title, misses the still-old-titled row, and duplicates it via
+// saveInstancesToRepo's Create fallback — leaving two rows under the new title. Asserts
+// exactly one row exists under either title after a combined Title+Program edit.
+func TestUpdateSession_TitleAndProgramCombo_DoesNotDuplicateRow(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "combo-old-title")
+
+	newTitle := "combo-new-title"
+	newProgram := "aider"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:      "combo-old-title",
+		Title:   &newTitle,
+		Program: &newProgram,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, newTitle, resp.Msg.Session.Title)
+	assert.Equal(t, newProgram, resp.Msg.Session.Program)
+
+	data, err := fix.storage.ListInstanceData()
+	require.NoError(t, err)
+
+	var matches []string
+	for _, d := range data {
+		if d.Title == "combo-old-title" || d.Title == newTitle {
+			matches = append(matches, d.Title)
+		}
+	}
+	assert.Equal(t, []string{newTitle}, matches,
+		"combined title+program edit must not leave a duplicate row (found: %v)", matches)
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == newTitle {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, newProgram, found.Program, "program change must be persisted alongside the rename")
+}
+
 // TestUpdateSession_ConcurrentDifferentFieldEdits_BothPersist verifies that two concurrent
 // UpdateSession calls touching different fields (note, category) of the same session both
 // land — neither narrow metadata write should lose the other's update.
@@ -1141,6 +1190,75 @@ func TestResumeCrashedSession_NotFound(t *testing.T) {
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+}
+
+// TestResumeHibernatedSession_DoesNotTouchOtherSessions is the regression test for the
+// layer-1 write-amplification fix applied to ResumeHibernatedSession (and identically to
+// HibernateSession/ResumeCrashedSession, which share the exact same
+// `instances[instanceIndex] = instance; SaveInstances(instances)` -> `SaveInstances([]*session.Instance{instance})`
+// shape): resuming one Hibernated session used to persist via the entire live instance
+// list, rewriting every other started session's row too. Asserts a sibling session's
+// UpdatedAt is untouched.
+func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	hibernated := &session.Instance{
+		Title:     "hibernated-session",
+		UUID:      "dddddddd-0000-0000-0000-000000000004",
+		Path:      "/tmp/test",
+		Status:    session.Hibernated,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(hibernated))
+
+	other := &session.Instance{
+		Title:     "hibernate-sibling-session",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(other))
+
+	// ResumeFromHibernation dispatches the actual relaunch to a background goroutine
+	// that calls the real Start(false) — a real tmux session gets created as a side
+	// effect. Best-effort clean it up so repeated test runs don't leave orphaned tmux
+	// sessions, mirroring TestResumeCrashedSession_TransitionsCrashedToActive.
+	t.Cleanup(func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = hibernated.KillSession()
+	})
+
+	before, err := storage.LoadInstances()
+	require.NoError(t, err)
+	var beforeOtherUpdatedAt time.Time
+	for _, inst := range before {
+		if inst.Title == "hibernate-sibling-session" {
+			beforeOtherUpdatedAt = inst.UpdatedAt
+		}
+	}
+	require.False(t, beforeOtherUpdatedAt.IsZero(), "sibling session must be found before the call")
+
+	resp, err := svc.ResumeHibernatedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeHibernatedSessionRequest{Id: "dddddddd-0000-0000-0000-000000000004"}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, resp.Msg.Session.Status)
+
+	after, err := storage.LoadInstances()
+	require.NoError(t, err)
+	for _, inst := range after {
+		if inst.Title == "hibernate-sibling-session" {
+			assert.True(t, inst.UpdatedAt.Equal(beforeOtherUpdatedAt),
+				"sibling session must not be rewritten by resuming a different session (before=%v after=%v)",
+				beforeOtherUpdatedAt, inst.UpdatedAt)
+		}
+	}
 }
 
 // TestResumeCrashedSession_TransitionsCrashedToActive verifies that resuming a
