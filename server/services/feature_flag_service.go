@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // sddDefaultPipelineFlagName is shared between knownFeatureFlags below and
@@ -21,6 +22,23 @@ const sddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
 // ApprovalService.ResolveApproval's CI-red guard (approval_service.go) so the flag
 // name can't drift between where it's declared and where it's read.
 const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
+
+// workspacePeersNudgeFlagName is shared between knownFeatureFlags below and
+// workspacePeersBlockFor below so the flag name can't drift between where it's declared and
+// where it's read.
+const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+
+// workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
+// called by both SessionService.workspacePeersBlockFor (session_service.go) and
+// BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
+// drift on the gate itself, the same way session.WorkspacePeersBlockForPath already keeps
+// them from drifting on how the nudge is rendered.
+func workspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
+	if !config.LoadConfig().GetFeatureFlag(workspacePeersNudgeFlagName) {
+		return ""
+	}
+	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
+}
 
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
@@ -51,6 +69,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        blockApprovalOnCIFailureFlagName,
 		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
+	},
+	{
+		name:        workspacePeersNudgeFlagName,
+		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
 	},
 }
 

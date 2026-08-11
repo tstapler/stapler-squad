@@ -1293,13 +1293,14 @@ func (s *SessionService) GetSession(
 }
 
 // workspacePeersBlockFor returns a one-time "other active sessions in this workspace"
-// nudge for a new session being created at repoPath, or "" on any detection/lookup
-// failure, when there's no concrete storage backing this service, or when there are no
-// peers (AC5). Best-effort: this is a convenience nudge, not required session context.
-// Delegates to session.WorkspacePeersBlockForPath, shared with BacklogService's
-// initialPromptFor so the two callers can't drift on how the nudge is built.
+// nudge for a new session being created at repoPath, or "" when the workspacePeersNudgeFlagName
+// feature flag is off (default), on any detection/lookup failure, when there's no concrete
+// storage backing this service, or when there are no peers. Best-effort: this is a
+// convenience nudge, not required session context. Delegates to
+// session.WorkspacePeersBlockForPath, shared with BacklogService's initialPromptFor so the
+// two callers can't drift on how the nudge is built.
 func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return session.WorkspacePeersBlockForPath(ctx, s.concStorage, repoPath)
+	return workspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
 // CreateSession initializes a new AI agent session with tmux and git worktree.
@@ -1529,8 +1530,9 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
-	// One-time workspace-peers nudge for genuinely new sessions (not resumes) — AC5.
-	// Best-effort: any detection/lookup failure just omits the nudge.
+	// One-time workspace-peers nudge for genuinely new sessions (not resumes), when the
+	// workspacePeersNudgeFlagName feature flag is enabled. Best-effort: any detection/lookup
+	// failure just omits the nudge.
 	initialPrompt := req.Msg.InitialPrompt
 	if req.Msg.ResumeId == "" {
 		initialPrompt += s.workspacePeersBlockFor(ctx, resolvedPath)
