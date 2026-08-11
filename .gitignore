@@ -61,6 +61,7 @@ tests/e2e/playwright-report-dev-mode/
 tests/e2e/test-results/
 tests/e2e/node_modules/
 tests/e2e/test-results-dev-mode/
+tests/e2e/fixtures/*-theme.json
 
 # Scratch benchmark output files (not the committed baselines in benchmarks/go/)
 bench-current.txt
