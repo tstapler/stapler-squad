@@ -11,7 +11,7 @@ import (
 )
 
 // TestNewSessionService_TestMode_NeverTouchesRealSearchIndex guards the
-// server/services/server/mcp CI timeout fix: NewSessionService used to always
+// server/services and server/mcp CI timeout fix: NewSessionService used to always
 // call search.NewIndexStore() and gob-decode whatever index was on disk,
 // which under a `go test` binary meant every test in the package shared and
 // grew one persisted index for the life of the binary -- slow enough under
@@ -34,7 +34,15 @@ import (
 func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", "")
+	// t.Setenv can only set a value, not unset one, so clear any inherited
+	// STAPLER_SQUAD_TEST_DIR explicitly and restore it afterward -- config.GetConfigDir()
+	// currently uses os.Getenv (config/config.go:125), for which "" and unset are
+	// equivalent, but os.Unsetenv keeps this test correct even if that ever changes to
+	// os.LookupEnv.
+	if orig, ok := os.LookupEnv("STAPLER_SQUAD_TEST_DIR"); ok {
+		os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+		t.Cleanup(func() { os.Setenv("STAPLER_SQUAD_TEST_DIR", orig) })
+	}
 
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
