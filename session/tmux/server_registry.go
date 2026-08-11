@@ -63,6 +63,11 @@ type TmuxServerRegistry struct {
 	// waitBackoffWithFastRecheck's ponytail: comment for why that matters.
 	syncMu sync.Mutex
 
+	// hookMu guards fastRecheckWaitStartHook, a test-only observability hook.
+	// See SetFastRecheckWaitStartHook.
+	hookMu                   sync.Mutex
+	fastRecheckWaitStartHook func(backoff time.Duration)
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -145,6 +150,39 @@ func (r *TmuxServerRegistry) ListSessions() map[string]bool {
 		out[k] = v
 	}
 	return out
+}
+
+// SetFastRecheckWaitStartHook installs a callback invoked synchronously, on
+// reconnectLoop's own goroutine, at the moment waitBackoffWithFastRecheck
+// begins a wait whose backoff has reached fastRecheckMinBackoff -- i.e. a
+// wait that is actually about to run its fast-recheck attempts. It exists
+// solely so tests can deterministically synchronize with the start of a
+// fast-recheck window instead of estimating cycle timing from
+// reconnectLoop's nominal backoff curve (100ms, doubling): that estimate
+// approach let a test's kill-session land after the current cycle's
+// fast-recheck attempts had already both run and found nothing (because the
+// kill hadn't happened yet), deferring detection to the next, much longer
+// backoff cycle and blowing the test's short detection-latency budget --
+// see TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff in
+// server_registry_integration_test.go for the full history.
+//
+// The hook must not block: it runs inline on reconnectLoop's goroutine and
+// delays the fast-recheck attempts themselves for as long as it runs. Pass
+// nil to remove the hook (the default, and safe for production use since
+// this field is otherwise never populated).
+func (r *TmuxServerRegistry) SetFastRecheckWaitStartHook(hook func(backoff time.Duration)) {
+	r.hookMu.Lock()
+	r.fastRecheckWaitStartHook = hook
+	r.hookMu.Unlock()
+}
+
+func (r *TmuxServerRegistry) fireFastRecheckWaitStartHook(backoff time.Duration) {
+	r.hookMu.Lock()
+	hook := r.fastRecheckWaitStartHook
+	r.hookMu.Unlock()
+	if hook != nil {
+		hook(backoff)
+	}
 }
 
 // IsHealthy implements SessionExistenceChecker and SessionLister.
@@ -484,6 +522,13 @@ func (r *TmuxServerRegistry) waitBackoffWithFastRecheck(backoff time.Duration) {
 		}
 		return
 	}
+
+	// Fire the test-observability hook (see SetFastRecheckWaitStartHook) right
+	// as this wait qualifies for fast-recheck, before the deadline timer and
+	// attempts loop below start -- this is the earliest point at which a test
+	// can act (e.g. kill a session) and be guaranteed the resulting change is
+	// still visible to this wait's own fast-recheck attempts.
+	r.fireFastRecheckWaitStartHook(backoff)
 
 	// ponytail: fastRecheckAttempts * (fastRecheckSyncTimeout + fastRecheckInterval)
 	// = 700ms is a hard ceiling on fast-recheck's OWN polling delay during a
