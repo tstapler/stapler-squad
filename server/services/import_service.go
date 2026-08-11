@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -44,6 +45,36 @@ type ImportService struct {
 	registry     *session.Registry
 	linker       *session.HistoryLinker
 	suspended    *session.SuspendedProcessStore
+	tmuxQuerier  session.TmuxSocketQuerier
+
+	// instanceLocks serializes ConfirmKillExternalSession and
+	// CancelPendingKill calls for the same instance ID -- without it, a
+	// concurrent confirm+cancel race for one instance could both read the
+	// same SuspendedProcessRecord and then race to remove/resume based on a
+	// stale view of it. Zero-value ready; no separate constructor needed.
+	instanceLocks instanceLocks
+}
+
+// instanceLocks hands out a *sync.Mutex per instance ID, lazily created, so
+// callers can serialize per-instance-ID critical sections without needing a
+// single lock across all instances.
+type instanceLocks struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func (l *instanceLocks) forInstance(instanceID string) *sync.Mutex {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.locks == nil {
+		l.locks = make(map[string]*sync.Mutex)
+	}
+	m, ok := l.locks[instanceID]
+	if !ok {
+		m = &sync.Mutex{}
+		l.locks[instanceID] = m
+	}
+	return m
 }
 
 // NewImportService creates an ImportService. inspector may be nil in
@@ -72,6 +103,7 @@ func NewImportServiceWithRealInspector(
 		registry:     registry,
 		linker:       linker,
 		suspended:    suspended,
+		tmuxQuerier:  session.NewRealTmuxSocketQuerier(),
 	}
 }
 
@@ -155,6 +187,8 @@ func (s *ImportService) CommitImportExternalSession(
 		Registry:             s.registry,
 		Linker:               s.linker,
 		Suspended:            s.suspended,
+		AliveChecker:         s.aliveChecker,
+		TmuxQuerier:          s.tmuxQuerier,
 		Candidate:            candidateFromProto(candidateRef),
 		ExpectedCorrelation:  correlationResultFromProto(req.Msg.GetExpectedCorrelation()),
 		DisambiguationChoice: req.Msg.GetDisambiguationChoice(),
@@ -201,6 +235,10 @@ func (s *ImportService) ConfirmKillExternalSession(
 	if instanceID == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("instance_id is required"))
 	}
+
+	lock := s.instanceLocks.forInstance(instanceID)
+	lock.Lock()
+	defer lock.Unlock()
 
 	pidIdentity := req.Msg.GetPidIdentity()
 	if pidIdentity == nil || pidIdentity.GetPid() <= 0 {
@@ -258,11 +296,24 @@ func (s *ImportService) CancelPendingKill(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("instance_id is required"))
 	}
 
-	originalPID := req.Msg.GetPidIdentity().GetPid()
-	if originalPID <= 0 && s.suspended != nil {
+	lock := s.instanceLocks.forInstance(instanceID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Prefer the persisted SuspendedProcessRecord's PID over the
+	// client-supplied pid_identity.pid: the client's copy can be stale (e.g.
+	// a page reload replaying an older PIDIdentity) while the record is the
+	// one CommitImportExternalSession actually suspended and is what
+	// CancelPendingKill must resume. Only fall back to the client-supplied
+	// value when no record exists.
+	var originalPID int32
+	if s.suspended != nil {
 		if record, ok, err := s.suspended.Get(instanceID); err == nil && ok {
 			originalPID = record.PID
 		}
+	}
+	if originalPID <= 0 {
+		originalPID = req.Msg.GetPidIdentity().GetPid()
 	}
 
 	resumed, err := session.CancelPendingKill(session.CancelPendingKillParams{
