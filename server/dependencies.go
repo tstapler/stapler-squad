@@ -1311,6 +1311,19 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var workflowScheduler *workflows.Scheduler
 	if workflowRepo != nil {
 		workflowScheduler = workflows.NewScheduler(workflowRepo, sessionService, eventBus)
+		// Model-family overrides (e.g. bumping "sonnet"'s "latest" to a new release)
+		// live in an optional JSON file so they take effect without a redeploy —
+		// same shape as the pricing_overrides.json wiring above.
+		if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
+			overridePath := filepath.Join(configDir, "model_family_overrides.json")
+			if families, loadErr := workflows.LoadModelFamilyOverride(overridePath); loadErr == nil {
+				workflowScheduler.SetModelFamilies(families)
+			} else if !os.IsNotExist(loadErr) {
+				log.Warn("failed to load model family override, using defaults", "path", overridePath, "err", loadErr)
+			}
+		} else {
+			log.Warn("failed to resolve config dir, skipping model family override, using defaults", "err", cfgErr)
+		}
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
