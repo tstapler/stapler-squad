@@ -9,7 +9,7 @@
 
 import React from "react";
 import { render, waitFor } from "@testing-library/react";
-import { FileContentViewer } from "../FileContentViewer";
+import { FileContentViewer, isDoubleGPress, DOUBLE_G_WINDOW_MS } from "../FileContentViewer";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -27,6 +27,12 @@ interface CapturedGutterConfig {
 let capturedGutterConfig: CapturedGutterConfig | null = null;
 const mockEditorViewCtor = jest.fn();
 
+interface CapturedKeyBinding {
+  key: string;
+  run: (view: unknown) => boolean;
+}
+let capturedKeymapBindings: CapturedKeyBinding[] | null = null;
+
 jest.mock("@codemirror/view", () => {
   class GutterMarker {}
   class EditorView {
@@ -35,13 +41,19 @@ jest.mock("@codemirror/view", () => {
     constructor(opts: unknown) {
       mockEditorViewCtor(opts);
     }
+    dispatch() {}
     destroy() {}
   }
   function gutter(config: CapturedGutterConfig) {
     capturedGutterConfig = config;
     return { __gutter: true };
   }
-  const keymap = { of: jest.fn((bindings: unknown) => ({ __keymap: bindings })) };
+  const keymap = {
+    of: jest.fn((bindings: CapturedKeyBinding[]) => {
+      capturedKeymapBindings = bindings;
+      return { __keymap: bindings };
+    }),
+  };
   return { EditorView, gutter, GutterMarker, keymap };
 });
 
@@ -49,6 +61,18 @@ jest.mock("@codemirror/state", () => ({
   EditorState: {
     readOnly: { of: (v: unknown) => ({ readOnly: v }) },
     create: (opts: unknown) => opts,
+  },
+  // Minimal stand-in for CodeMirror's Compartment: of()/reconfigure() just
+  // need to be callable and return something dispatch() (also mocked) can
+  // accept; the real reconfiguration behavior is CodeMirror's own, not this
+  // component's, so it isn't re-tested here.
+  Compartment: class Compartment {
+    of(ext: unknown) {
+      return { __compartmentOf: ext };
+    }
+    reconfigure(ext: unknown) {
+      return { __compartmentReconfigure: ext };
+    }
   },
 }));
 
@@ -120,6 +144,7 @@ const MODIFY_DIFF = `diff --git a/src/foo.txt b/src/foo.txt
 beforeEach(() => {
   jest.clearAllMocks();
   capturedGutterConfig = null;
+  capturedKeymapBindings = null;
 });
 
 // ---------------------------------------------------------------------------
@@ -192,5 +217,72 @@ describe("FileContentViewer — CodeMirror rendering", () => {
     // The gutter is always constructed but reports no marks for an uncovered file.
     expect(capturedGutterConfig).not.toBeNull();
     expect(capturedGutterConfig!.lineMarker(fakeViewForLine(1), { from: 0 })).toBeNull();
+  });
+});
+
+describe("FileContentViewer — vim keybindings", () => {
+  it("isDoubleGPress_should_ReturnTrue_When_SecondPressIsWithinTheWindow", () => {
+    expect(isDoubleGPress(1000, 1000 + DOUBLE_G_WINDOW_MS - 1)).toBe(true);
+    expect(isDoubleGPress(1000, 1000 + 1)).toBe(true);
+  });
+
+  it("isDoubleGPress_should_ReturnFalse_When_SecondPressIsAtOrAfterTheWindow", () => {
+    expect(isDoubleGPress(1000, 1000 + DOUBLE_G_WINDOW_MS)).toBe(false);
+    expect(isDoubleGPress(1000, 1000 + DOUBLE_G_WINDOW_MS + 500)).toBe(false);
+  });
+
+  it("registers the expected hjkl/gg/G/ctrl-d/ctrl-u/shift-select/yank/search vim keymap bindings", async () => {
+    mockUseGetFileContent.mockReturnValue({
+      data: { isBinary: false, content: SMALL_CONTENT, isTruncated: false, size: BigInt(0) },
+      loading: false,
+      error: null,
+    });
+
+    render(<FileContentViewer sessionId="s1" filePath="src/foo.txt" baseUrl="http://x" />);
+
+    await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
+    expect(capturedKeymapBindings).not.toBeNull();
+
+    const keys = capturedKeymapBindings!.map((b) => b.key);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        "h", "l", "j", "k", "0", "$", "g", "G",
+        "Ctrl-d", "Ctrl-u",
+        "Shift-h", "Shift-l", "Shift-j", "Shift-k", "Shift-0", "Shift-$",
+        "Shift-Ctrl-d", "Shift-Ctrl-u",
+        "y", "/", "n", "Shift-n",
+      ])
+    );
+  });
+
+  it("gg_should_JumpToDocStartOnlyOnTheSecondPress_When_PressedTwiceQuickly", async () => {
+    mockUseGetFileContent.mockReturnValue({
+      data: { isBinary: false, content: SMALL_CONTENT, isTruncated: false, size: BigInt(0) },
+      loading: false,
+      error: null,
+    });
+
+    render(<FileContentViewer sessionId="s1" filePath="src/foo.txt" baseUrl="http://x" />);
+    await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
+
+    const gBinding = capturedKeymapBindings!.find((b) => b.key === "g");
+    expect(gBinding).toBeDefined();
+
+    const { cursorDocStart } = jest.requireMock("@codemirror/commands") as { cursorDocStart: jest.Mock };
+    cursorDocStart.mockReturnValue(true);
+
+    const fakeView = {};
+
+    // First "g" press: no prior press recorded, so this should be a no-op
+    // (returns true without invoking cursorDocStart).
+    const firstResult = gBinding!.run(fakeView);
+    expect(firstResult).toBe(true);
+    expect(cursorDocStart).not.toHaveBeenCalled();
+
+    // Second "g" press immediately after: should be treated as "gg" and
+    // jump to the document start.
+    const secondResult = gBinding!.run(fakeView);
+    expect(secondResult).toBe(true);
+    expect(cursorDocStart).toHaveBeenCalledWith(fakeView);
   });
 });

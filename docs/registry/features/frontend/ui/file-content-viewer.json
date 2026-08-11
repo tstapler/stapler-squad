@@ -9,7 +9,11 @@
   "testIds": [
     "FileContentViewer — CodeMirror rendering > renders CodeMirror with no gutter marks when there is no diff",
     "FileContentViewer — CodeMirror rendering > uses CodeMirror with a gutter marker when the file has a diff",
-    "FileContentViewer — CodeMirror rendering > renders CodeMirror with no gutter marks when diffContent doesn't cover this file"
+    "FileContentViewer — CodeMirror rendering > renders CodeMirror with no gutter marks when diffContent doesn't cover this file",
+    "FileContentViewer — vim keybindings > isDoubleGPress_should_ReturnTrue_When_SecondPressIsWithinTheWindow",
+    "FileContentViewer — vim keybindings > isDoubleGPress_should_ReturnFalse_When_SecondPressIsAtOrAfterTheWindow",
+    "FileContentViewer — vim keybindings > registers the expected hjkl/gg/G/ctrl-d/ctrl-u/shift-select/yank/search vim keymap bindings",
+    "FileContentViewer — vim keybindings > gg_should_JumpToDocStartOnlyOnTheSecondPress_When_PressedTwiceQuickly"
   ],
-  "lastModified": "2026-08-10T16:49:05-07:00"
+  "lastModified": "2026-08-10T17:30:00-07:00"
 }
