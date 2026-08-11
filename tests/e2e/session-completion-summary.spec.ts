@@ -24,6 +24,13 @@ test.describe("session-completion-summary", () => {
       const sessionsPage = new SessionsPage(page);
       const detail = new SessionDetailPage(page);
 
+      // Pre-seed the first-visit onboarding dialog as dismissed so it doesn't
+      // intercept clicks later in the flow (same pattern as session-notes.spec.ts,
+      // ci-status-badge.spec.ts).
+      await page.addInitScript(() => {
+        localStorage.setItem("stapler-squad:onboarded", "true");
+      });
+
       await sessionsPage.goto();
       await expect(sessionsPage.searchInput).toBeVisible({ timeout: 15000 });
 
@@ -33,18 +40,32 @@ test.describe("session-completion-summary", () => {
       // a plain shell exits deterministically on `exit`, whereas a real
       // Claude Code process would not exit on its own. ---
       await sessionsPage.newSessionButton.click();
-      await page.getByRole("radio", { name: /one.off/i }).click();
+      await page.getByRole("radio", { name: /temporary \(no git\)/i }).click();
 
       const sessionTitle = `e2e-summary-${Date.now()}`;
       await page.getByLabel("Session Name").fill(sessionTitle);
 
       await page.getByText("Advanced Options").click();
-      await page.getByLabel("Program").selectOption("bash");
+      await page.getByLabel("Program", { exact: true }).selectOption("bash");
+
+      // --- Regression check for the modal-clipping bug: with Advanced Options
+      // expanded, the footer can exceed the viewport unless .modal scrolls
+      // (Omnibar.css.ts). Assert the submit button is actually within the
+      // viewport bounds after scrolling, not just DOM-attached/"visible". ---
+      const submitButton = page.getByTestId("omnibar-footer-submit");
+      await submitButton.scrollIntoViewIfNeeded();
+      const viewport = page.viewportSize();
+      await expect(async () => {
+        const box = await submitButton.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+        expect(box!.y).toBeGreaterThanOrEqual(0);
+      }).toPass({ timeout: 5000 });
 
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",
       );
-      await page.getByRole("button", { name: /create|start/i }).click();
+      await submitButton.click();
       await createRequest;
 
       // OmnibarContext's handleCreateSession navigates to /?session=<id> on
