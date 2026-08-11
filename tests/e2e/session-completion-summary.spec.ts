@@ -24,6 +24,13 @@ test.describe("session-completion-summary", () => {
       const sessionsPage = new SessionsPage(page);
       const detail = new SessionDetailPage(page);
 
+      // Pre-seed the first-visit onboarding dialog as dismissed so it doesn't
+      // intercept clicks later in the flow (same pattern as
+      // ci-status-badge.spec.ts and session-notes.spec.ts).
+      await page.addInitScript(() => {
+        localStorage.setItem("stapler-squad:onboarded", "true");
+      });
+
       await sessionsPage.goto();
       await expect(sessionsPage.searchInput).toBeVisible({ timeout: 15000 });
 
@@ -33,18 +40,18 @@ test.describe("session-completion-summary", () => {
       // a plain shell exits deterministically on `exit`, whereas a real
       // Claude Code process would not exit on its own. ---
       await sessionsPage.newSessionButton.click();
-      await page.getByRole("radio", { name: /one.off/i }).click();
+      await page.getByRole("radio", { name: /temporary \(no git\)/i }).click();
 
       const sessionTitle = `e2e-summary-${Date.now()}`;
       await page.getByLabel("Session Name").fill(sessionTitle);
 
       await page.getByText("Advanced Options").click();
-      await page.getByLabel("Program").selectOption("bash");
+      await page.getByLabel("Program", { exact: true }).selectOption("bash");
 
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",
       );
-      await page.getByRole("button", { name: /create|start/i }).click();
+      await sessionsPage.createSessionSubmitButton.click();
       await createRequest;
 
       // OmnibarContext's handleCreateSession navigates to /?session=<id> on

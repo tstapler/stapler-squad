@@ -845,6 +845,7 @@ export function OmnibarCreationPanel({
         </button>
         <button
           type="button"
+          data-testid="omnibar-create-session-button"
           className={`${buttonClass} ${buttonPrimary}`}
           onClick={onSubmit}
           disabled={!canSubmit || isSubmitting}
