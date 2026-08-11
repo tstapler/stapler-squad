@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -263,13 +264,19 @@ var (
 				cfg.PasskeyRPID = rpIDFlag
 			}
 
-			// Detect LAN IP for hostname resolution and display
-			lanIP, _ := getOutboundIP()
-			lanIPStr := "127.0.0.1"
-			if lanIP != nil {
-				lanIPStr = lanIP.String()
+			// Detect every LAN IP (not just the OS-preferred outbound one, which
+			// can be a VPN tunnel) for hostname resolution and display.
+			lanIPs := detectLANIPs()
+			hostnameSeen := make(map[string]bool)
+			var hostnames []string
+			for _, ip := range lanIPs {
+				for _, name := range resolveLANHostnames(ip) {
+					if !hostnameSeen[name] {
+						hostnameSeen[name] = true
+						hostnames = append(hostnames, name)
+					}
+				}
 			}
-			hostnames := resolveLANHostnames(lanIPStr)
 
 			app := warren.New()
 			var (
@@ -639,13 +646,19 @@ var (
 			}
 			fmt.Fprintf(os.Stderr, "New setup token written to %s (valid 1h)\n", setupTokenPath)
 
-			lanIP, err := getOutboundIP()
-			if err != nil {
-				lanIP = net.ParseIP("127.0.0.1")
-			}
-			lanIPStr := lanIP.String()
+			lanIPs := detectLANIPs()
+			lanIPStr := lanIPs[0]
 
-			hostnames := resolveLANHostnames(lanIPStr)
+			var hostnames []string
+			hostnameSeen := make(map[string]bool)
+			for _, ip := range lanIPs {
+				for _, name := range resolveLANHostnames(ip) {
+					if !hostnameSeen[name] {
+						hostnameSeen[name] = true
+						hostnames = append(hostnames, name)
+					}
+				}
+			}
 
 			displayHost := rpID
 			if displayHost == "" {
@@ -669,7 +682,9 @@ var (
 			for _, hn := range hostnames {
 				addHost(hn)
 			}
-			addHost(lanIPStr)
+			for _, ip := range lanIPs {
+				addHost(ip)
+			}
 
 			for _, host := range hosts {
 				caURL := fmt.Sprintf("https://%s:%d/auth/ca.pem", host, port)
@@ -967,37 +982,108 @@ func getOutboundIP() (net.IP, error) {
 	return conn.LocalAddr().(*net.UDPAddr).IP, nil
 }
 
+// listNonLoopbackIPs enumerates every non-loopback, non-link-local IPv4
+// address bound to an up local interface. getOutboundIP only reports the
+// single interface the OS routing table picks for outbound internet traffic
+// -- typically a VPN tunnel when one is active -- so it can miss the real LAN
+// entirely (and any hostnames that only resolve on that LAN, e.g. a router's
+// local DNS record). This enumerates all of them instead.
+func listNonLoopbackIPs() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var ips []string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			ip4 := ip.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+				continue
+			}
+			s := ip4.String()
+			if !seen[s] {
+				seen[s] = true
+				ips = append(ips, s)
+			}
+		}
+	}
+	return ips
+}
+
+// detectLANIPs returns every LAN IP that TLS certs and WebAuthn origins
+// should cover: the OS-preferred outbound address first (preserving prior
+// single-IP behavior and its use as the default display/rpID address), then
+// any other interface addresses listNonLoopbackIPs finds that
+// getOutboundIP's routing-table heuristic missed.
+func detectLANIPs() []string {
+	seen := make(map[string]bool)
+	var ips []string
+	if lanIP, err := getOutboundIP(); err == nil && lanIP != nil {
+		s := lanIP.String()
+		seen[s] = true
+		ips = append(ips, s)
+	}
+	for _, ip := range listNonLoopbackIPs() {
+		if !seen[ip] {
+			seen[ip] = true
+			ips = append(ips, ip)
+		}
+	}
+	if len(ips) == 0 {
+		ips = []string{"127.0.0.1"}
+	}
+	return ips
+}
+
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
 func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int) error {
-	// Detect LAN IP for QR code URLs and TLS cert SANs.
-	lanIP, err := getOutboundIP()
-	if err != nil {
-		log.Warn("Could not detect LAN IP; using localhost", "err", err)
-		lanIP = net.ParseIP("127.0.0.1")
-	}
-	lanIPStr := lanIP.String()
+	// Detect every LAN IP (not just the OS-preferred outbound one, which can
+	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
+	lanIPs := detectLANIPs()
+	lanIPStr := lanIPs[0]
 
-	// Use hostnames already resolved and stored on the server.
+	// Use hostnames already resolved and stored on the server -- this is
+	// already a flattened, deduplicated union across every detected LAN IP
+	// (see the early detectLANIPs()-based resolution that feeds SetHostnames).
 	hostnames := srv.GetHostnames()
 
 	remoteAddr := fmt.Sprintf("0.0.0.0:%d", remotePort)
 
-	// Build SAN list for the TLS cert (include localhost, IP, and all hostnames).
-	// WebAuthn rpID must be a hostname, so including the LAN IP in the SANs
-	// is fine for HTTPS but rpID itself must be a hostname for most browsers.
-	sans := make([]string, 0, 3+len(hostnames))
-	sans = append(sans, "localhost", "127.0.0.1", lanIPStr)
-	sans = append(sans, hostnames...)
+	// Build one SAN set per network the server answers on, so each leaf cert
+	// only ever advertises its own network's identity. WebAuthn rpID must be
+	// a hostname, so including the LAN IP in the SANs is fine for HTTPS, but
+	// rpID itself must be a hostname for most browsers.
+	networks := map[string][]string{
+		"127.0.0.1": {"localhost", "127.0.0.1"},
+	}
+	for _, ip := range lanIPs {
+		networks[ip] = append([]string{ip}, resolveLANHostnames(ip)...)
+	}
 
-	tlsPaths, err := server.EnsureTLSCerts(sans)
+	caFile, netCerts, err := server.EnsureNetworkTLSCerts(networks)
 	if err != nil {
 		return fmt.Errorf("ensure TLS certs: %w", err)
 	}
 
-	tlsCfg, err := server.LoadTLSConfig(tlsPaths.CertFile, tlsPaths.KeyFile)
-	if err != nil {
-		return fmt.Errorf("load TLS config: %w", err)
+	tlsCfg := &tls.Config{
+		GetCertificate: server.GetCertificateByLocalAddr(netCerts),
+		MinVersion:     tls.VersionTLS12,
 	}
 
 	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
@@ -1061,7 +1147,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	go setupMgr.WatchFile(ctx, setupTokenPath)
 
 	// Register auth routes on the shared mux (accessible via both servers).
-	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, tlsPaths.CAFile, displayHost, remotePort)
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
@@ -1102,7 +1188,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 
 	log.Info("auth: remote access enabled", "port", remotePort, "rpID", rpID, "host", displayHost, "lan_ip", lanIPStr)
-	log.Info("auth: TLS CA cert", "path", tlsPaths.CAFile)
+	log.Info("auth: TLS CA cert", "path", caFile)
 	return nil
 }
 
