@@ -4,10 +4,17 @@ import { PaneSplitRenderer } from "../PaneSplitRenderer";
 import type { PaneState } from "@/lib/pane/paneTypes";
 import type { Session } from "@/gen/session/v1/types_pb";
 
-// Mock viewport — mobile by default; override per test via mockIsMobile
+// Mock viewport — mobile by default; override per test via mockIsMobile/mockIsFoldable.
+// PaneSplitRenderer treats isMobile||isFoldable as "narrow" (< 900px, matching
+// ViewportProvider's breakpoints.inner) — both disjuncts need coverage.
 let mockIsMobile = true;
+let mockIsFoldable = false;
 jest.mock("@/components/providers/ViewportProvider", () => ({
-  useViewport: () => ({ isMobile: mockIsMobile, isFoldable: false, isInnerScreen: !mockIsMobile }),
+  useViewport: () => ({
+    isMobile: mockIsMobile,
+    isFoldable: mockIsFoldable,
+    isInnerScreen: !mockIsMobile && !mockIsFoldable,
+  }),
 }));
 
 jest.mock("@/components/sessions/SessionDetail", () => ({
@@ -80,6 +87,7 @@ const sessions = [
 describe("PaneSplitRenderer — mobile layout", () => {
   beforeEach(() => {
     mockIsMobile = true;
+    mockIsFoldable = false;
   });
 
   describe("single pane (no splits)", () => {
@@ -175,9 +183,50 @@ describe("PaneSplitRenderer — mobile layout", () => {
   });
 });
 
+// isNarrow = isMobile || isFoldable — the foldable/tablet disjunct (600-899px,
+// !isMobile) needs the same narrow-layout coverage as the isMobile branch above,
+// since it's the width band this PR's breakpoint-reconciliation fix targets.
+describe("PaneSplitRenderer — foldable width (isFoldable, not isMobile)", () => {
+  beforeEach(() => {
+    mockIsMobile = false;
+    mockIsFoldable = true;
+  });
+
+  it("shows mobile tab strip at foldable width with multiple panes", () => {
+    render(
+      <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
+    );
+    expect(screen.getByRole("tablist", { name: "Pane switcher" })).toBeInTheDocument();
+  });
+
+  it("hides the reset layout button at foldable width even with multiple panes", () => {
+    render(
+      <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
+    );
+    expect(screen.queryByTestId("reset-layout-btn")).not.toBeInTheDocument();
+  });
+
+  it("hides pane header split buttons at foldable width", () => {
+    render(
+      <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
+    );
+    for (const header of screen.getAllByTestId("pane-header")) {
+      expect(header).toHaveAttribute("data-split-visible", "false");
+    }
+  });
+
+  it("does not render a resize handle for horizontal splits at foldable width", () => {
+    render(
+      <PaneSplitRenderer state={horizontalSplitState} dispatch={jest.fn()} sessions={sessions} />
+    );
+    expect(screen.queryByTestId("resize-handle")).not.toBeInTheDocument();
+  });
+});
+
 describe("PaneSplitRenderer — desktop layout", () => {
   beforeEach(() => {
     mockIsMobile = false;
+    mockIsFoldable = false;
   });
 
   it("shows both panes side by side for vertical split on desktop", () => {
