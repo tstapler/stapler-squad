@@ -1,5 +1,6 @@
 "use client";
 // +feature: review-queue-pr-creation
+// +feature: review-queue-severity-sort-filter
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
@@ -15,6 +16,8 @@ import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
 import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
+import { riskLevelRank } from "@/lib/sessions/riskLevel";
+import { SeverityBadge, getRiskLevelInfo } from "./SeverityBadge";
 import {
   panel,
   header,
@@ -118,10 +121,10 @@ interface ReviewQueuePanelProps {
 const DEFAULT_PR_PROMPT =
   "Create a pull request for the changes in this session. Title: use Conventional Commits format (fix:, feat:, etc.). Body: structure as ## Summary (1-3 sentences on why this change was made, tied to the backlog item's problem statement in .backlog-context.md if present), ## What Changed (a short bullet list, not a line-by-line diff restatement), and ## Test plan (a checklist of concrete verification steps such as specific commands or manual checks — not an unqualified claim that tests pass). Keep it concise, no scratch notes.";
 
-type SortField = "default" | "priority" | "age" | "diffSize" | "name";
+type SortField = "default" | "severity" | "priority" | "age" | "diffSize" | "name";
 
 // URL query param keys, persisted/restored via useFilterState for shareable/bookmarkable filter state.
-const FILTER_URL_KEYS = ["priority", "reason", "program", "category", "tag", "pr", "diverged", "q", "sort", "dir", "group"] as const;
+const FILTER_URL_KEYS = ["priority", "reason", "severity", "program", "category", "tag", "pr", "diverged", "q", "sort", "dir", "group"] as const;
 
 // Grouping strategies that map onto fields ReviewItem actually carries (no project/workflow/session-type data).
 const REVIEW_GROUPING_STRATEGIES = [
@@ -133,7 +136,34 @@ const REVIEW_GROUPING_STRATEGIES = [
   GroupingStrategy.Status,
 ];
 
-const SORT_FIELDS: SortField[] = ["priority", "age", "diffSize", "name"];
+const SORT_FIELDS: SortField[] = ["severity", "priority", "age", "diffSize", "name"];
+
+// The baseline default sort (AC3: severity-first). Referenced everywhere "severity is the
+// no-filter-applied sort" matters (initial state fallback, URL suppression, clear-all reset,
+// active-filter-count exemption) so a future change to the default only needs one edit.
+const DEFAULT_SORT_FIELD: SortField = "severity";
+
+// Sentinel Set/URL member for "risk_level metadata key absent" — kept distinct from the
+// literal empty string since parseStrSet/joinSet drop empty strings on the comma-joined
+// URL round trip. Never confused with a real RiskLevel value.
+const UNRECORDED_SEVERITY = "unrecorded";
+
+// The 4 known RiskLevel values plus UNRECORDED_SEVERITY, in default-sort-order — drives the
+// severity filter chip set. Unrecorded gets its own chip (design/ux.md Surface 3) rather than
+// being omitted, since an unrecorded-severity item must still be reachable via the filter UI.
+const SEVERITY_FILTER_VALUES = ["critical", "high", "medium", "low", UNRECORDED_SEVERITY] as const;
+
+// The known, filterable RiskLevel values (SEVERITY_FILTER_VALUES minus the sentinel) —
+// derived once so severityFilterKey and SEVERITY_FILTER_VALUES can't drift apart.
+const KNOWN_RISK_LEVELS = new Set<string>(SEVERITY_FILTER_VALUES.filter((v) => v !== UNRECORDED_SEVERITY));
+
+// Buckets any value outside the known RiskLevel set (absent, "", or an unrecognized future
+// value) into UNRECORDED_SEVERITY, so every item is always reachable through one of the
+// SEVERITY_FILTER_VALUES chips — a future/unrecognized risk_level can't become its own
+// unfilterable key (PR #411 review finding).
+function severityFilterKey(riskLevel: string | undefined): string {
+  return riskLevel && KNOWN_RISK_LEVELS.has(riskLevel) ? riskLevel : UNRECORDED_SEVERITY;
+}
 
 // Category -> emoji prefix for the escalation reason line (WCAG 1.4.1 — not color-only).
 // No "secret-scan" entry: that category never reaches a ReviewItem (requirements.md
@@ -191,6 +221,16 @@ function parseNumSet(v: string | undefined): Set<number> {
 
 function parseStrSet(v: string | undefined): Set<string> {
   return new Set(v ? v.split(",").filter(Boolean) : []);
+}
+
+// Resolves the initial sortField from the URL. "default" (natural queue order) is a valid,
+// explicitly-selectable SortField that SORT_FIELDS deliberately excludes (it's the pre-AC3
+// baseline this feature replaced) — checked first so an old bookmarked `?sort=default` URL
+// still round-trips. Any other missing/unrecognized value falls back to DEFAULT_SORT_FIELD.
+function resolveInitialSortField(urlSort: string | undefined): SortField {
+  if (urlSort === "default") return "default";
+  if (urlSort && (SORT_FIELDS as string[]).includes(urlSort)) return urlSort as SortField;
+  return DEFAULT_SORT_FIELD;
 }
 
 // Minimal Session shape for groupSessions() — only the fields grouping strategies read.
@@ -258,6 +298,7 @@ export function ReviewQueuePanel({
   // Combinable multi-select filters — each dimension is a Set; empty Set = "no filter applied".
   const [priorityFilter, setPriorityFilter] = useState<Set<Priority>>(() => parseNumSet(urlFilters.priority) as Set<Priority>);
   const [reasonFilter, setReasonFilter] = useState<Set<AttentionReason>>(() => parseNumSet(urlFilters.reason) as Set<AttentionReason>);
+  const [severityFilter, setSeverityFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.severity));
   const [programFilter, setProgramFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.program));
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.category));
   const [tagFilter, setTagFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.tag));
@@ -266,9 +307,10 @@ export function ReviewQueuePanel({
   );
   const [divergedOnly, setDivergedOnly] = useState(() => urlFilters.diverged === "1");
   const [searchText, setSearchText] = useState(() => urlFilters.q ?? "");
-  const [sortField, setSortField] = useState<SortField>(() =>
-    urlFilters.sort && (SORT_FIELDS as string[]).includes(urlFilters.sort) ? (urlFilters.sort as SortField) : "default"
-  );
+  // Default sort is "severity" (highest risk first, AC3) — "default" (natural
+  // server/queue order) remains a selectable option but is no longer the fallback when no
+  // sort param is present in the URL.
+  const [sortField, setSortField] = useState<SortField>(() => resolveInitialSortField(urlFilters.sort));
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">(() => (urlFilters.dir === "desc" ? "desc" : "asc"));
   const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
     urlFilters.group && REVIEW_GROUPING_STRATEGIES.includes(urlFilters.group as GroupingStrategy)
@@ -371,6 +413,9 @@ export function ReviewQueuePanel({
     if (reasonFilter.size > 0) {
       filtered = filtered.filter((item) => reasonFilter.has(item.reason));
     }
+    if (severityFilter.size > 0) {
+      filtered = filtered.filter((item) => severityFilter.has(severityFilterKey(item.metadata?.["risk_level"])));
+    }
     if (programFilter.size > 0) {
       filtered = filtered.filter((item) => programFilter.has(item.program));
     }
@@ -400,6 +445,14 @@ export function ReviewQueuePanel({
       const dir = sortDirection === "asc" ? 1 : -1;
       filtered = [...filtered].sort((a, b) => {
         switch (sortField) {
+          // ponytail: no snapshot-order-freeze needed here (unlike this file's general
+          // reviewingIdsSnapshot pattern) — risk_level is captured once at approval
+          // creation and never re-derived (server/services/approval_store.go), so an
+          // already-visible item's severity rank cannot change mid-review. Membership in
+          // `items` is still frozen to the snapshot as usual; only a genuinely new item
+          // (excluded until the snapshot is manually refreshed) could shift severity order.
+          case "severity":
+            return (riskLevelRank(b.metadata?.["risk_level"] ?? "") - riskLevelRank(a.metadata?.["risk_level"] ?? "")) * dir;
           case "priority":
             return (a.priority - b.priority) * dir;
           case "age":
@@ -422,6 +475,7 @@ export function ReviewQueuePanel({
     allItems,
     priorityFilter,
     reasonFilter,
+    severityFilter,
     programFilter,
     categoryFilter,
     tagFilter,
@@ -434,6 +488,17 @@ export function ReviewQueuePanel({
 
   // Distinct values available for the Program/Category/Tag multi-select filters,
   // with counts computed from the full (unfiltered) queue.
+  // Per-severity-value counts (including the UNRECORDED_SEVERITY bucket) for the filter
+  // chip counts — computed client-side from the unfiltered queue, mirroring availablePrograms.
+  const bySeverity = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of allItems) {
+      const key = severityFilterKey(item.metadata?.["risk_level"]);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [allItems]);
+
   const availablePrograms = useMemo(() => countByField(allItems, (i) => i.program), [allItems]);
   const availableCategories = useMemo(() => countByField(allItems, (i) => i.category), [allItems]);
   const availableTags = useMemo(() => countByField(allItems, (i) => i.tags), [allItems]);
@@ -599,6 +664,12 @@ export function ReviewQueuePanel({
     setUrlFilter("reason", joinSet(next));
   };
 
+  const handleFilterBySeverity = (severity: string) => {
+    const next = toggleInSet(severityFilter, severity);
+    setSeverityFilter(next);
+    setUrlFilter("severity", joinSet(next));
+  };
+
   const handleFilterByProgram = (program: string) => {
     const next = toggleInSet(programFilter, program);
     setProgramFilter(next);
@@ -652,7 +723,9 @@ export function ReviewQueuePanel({
 
   const handleSortFieldChange = (value: SortField) => {
     setSortField(value);
-    setUrlFilter("sort", value === "default" ? undefined : value);
+    // DEFAULT_SORT_FIELD is omitted from the URL like "default" used to be, so a plain/
+    // no-param URL still resolves to severity sort via resolveInitialSortField's fallback.
+    setUrlFilter("sort", value === DEFAULT_SORT_FIELD ? undefined : value);
   };
 
   const handleSortDirectionChange = (value: "asc" | "desc") => {
@@ -672,13 +745,14 @@ export function ReviewQueuePanel({
     }
     setPriorityFilter(new Set());
     setReasonFilter(new Set());
+    setSeverityFilter(new Set());
     setProgramFilter(new Set());
     setCategoryFilter(new Set());
     setTagFilter(new Set());
     setPrFilter("all");
     setDivergedOnly(false);
     setSearchText("");
-    setSortField("default");
+    setSortField(DEFAULT_SORT_FIELD);
     setSortDirection("asc");
     setGroupingStrategy(GroupingStrategy.None);
     clearUrlFilters();
@@ -707,13 +781,16 @@ export function ReviewQueuePanel({
   const activeFilterCount =
     priorityFilter.size +
     reasonFilter.size +
+    severityFilter.size +
     programFilter.size +
     categoryFilter.size +
     tagFilter.size +
     (prFilter !== "all" ? 1 : 0) +
     (divergedOnly ? 1 : 0) +
     (searchText.trim() ? 1 : 0) +
-    (sortField !== "default" ? 1 : 0) +
+    // Only count as an active filter when the user has deviated from DEFAULT_SORT_FIELD
+    // (mirrors "default"'s old exemption before this feature).
+    (sortField !== DEFAULT_SORT_FIELD ? 1 : 0) +
     (groupingStrategy !== GroupingStrategy.None ? 1 : 0);
 
   const activeFilterLabel = activeFilterCount > 0 ? `Filter (${activeFilterCount})` : "Filter";
@@ -770,6 +847,7 @@ export function ReviewQueuePanel({
           )}
           {queueItem.metadata?.["pending_approval_id"] && (
             <>
+              <SeverityBadge riskLevel={queueItem.metadata["risk_level"] ?? ""} compact />
               <p
                 className={`${escalationReasonText}`}
                 id={`escalation-reason-${queueItem.sessionId}`}
@@ -1120,6 +1198,27 @@ export function ReviewQueuePanel({
             </div>
           </div>
 
+          <div className={filterGroup}>
+            <label className={filterLabel}>Severity (any):</label>
+            <div className={filterButtons}>
+              {SEVERITY_FILTER_VALUES.map((severity) => {
+                const severityCount = bySeverity.get(severity) ?? 0;
+                const label = severity === UNRECORDED_SEVERITY ? "Not recorded" : getRiskLevelInfo(severity).label;
+                return (
+                  <button
+                    key={severity}
+                    className={`${filterButton} ${severityFilter.has(severity) ? filterButtonActive : ""}`}
+                    onClick={() => handleFilterBySeverity(severity)}
+                    disabled={severityCount === 0}
+                    aria-pressed={severityFilter.has(severity)}
+                  >
+                    {label} ({severityCount})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {availablePrograms.length > 0 && (
             <div className={filterGroup}>
               <label className={filterLabel}>Program (any):</label>
@@ -1206,6 +1305,7 @@ export function ReviewQueuePanel({
                 value={sortField}
                 onChange={(e) => handleSortFieldChange(e.target.value as SortField)}
               >
+                <option value="severity">Severity</option>
                 <option value="default">Queue order</option>
                 <option value="priority">Priority</option>
                 <option value="age">Last activity</option>

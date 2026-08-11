@@ -36,6 +36,13 @@ type PendingApproval struct {
 	EscalationReason   string
 	EscalationCategory string
 
+	// RiskLevel is the classifier-assigned risk level ("low"/"medium"/"high"/"critical"),
+	// captured once at creation via riskLevelString(escalation.RiskLevel) — never re-derived
+	// after creation (matches EscalationReason/EscalationCategory). "" means "not recorded"
+	// (approvals created before this field existed, or when the classifier was unreachable) —
+	// never treated as a fallback to "low".
+	RiskLevel string
+
 	// Orphaned is true for approvals loaded from disk after a server restart.
 	// These have no live HTTP connection, so they cannot be resolved via the decision channel.
 	Orphaned bool
@@ -58,6 +65,7 @@ type PersistedApproval struct {
 	ExpiresAt          time.Time              `json:"expires_at"`
 	EscalationReason   string                 `json:"escalation_reason,omitempty"`
 	EscalationCategory string                 `json:"escalation_category,omitempty"`
+	RiskLevel          string                 `json:"risk_level,omitempty"`
 	Orphaned           bool                   `json:"orphaned"`
 }
 
@@ -158,6 +166,7 @@ func (s *ApprovalStore) GetApprovalMetadataBySession(sessionID string) []session
 				Orphaned:           a.Orphaned,
 				EscalationReason:   a.EscalationReason,
 				EscalationCategory: a.EscalationCategory,
+				RiskLevel:          a.RiskLevel,
 			})
 		}
 	}
@@ -318,6 +327,7 @@ func (s *ApprovalStore) persistToDiskLocked() {
 			ExpiresAt:          a.ExpiresAt,
 			EscalationReason:   a.EscalationReason,
 			EscalationCategory: a.EscalationCategory,
+			RiskLevel:          a.RiskLevel,
 			Orphaned:           a.Orphaned,
 		})
 	}
@@ -394,6 +404,7 @@ func (s *ApprovalStore) loadFromDisk() error {
 			ExpiresAt:          p.ExpiresAt,
 			EscalationReason:   p.EscalationReason,
 			EscalationCategory: p.EscalationCategory,
+			RiskLevel:          p.RiskLevel,
 			Orphaned:           true, // Always mark as orphaned on load
 			decisionCh:         nil,  // No live HTTP connection
 		}

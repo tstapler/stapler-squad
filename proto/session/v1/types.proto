@@ -1070,6 +1070,10 @@ message PendingApprovalProto {
 
   // Seconds remaining before expiry (convenience field for countdown timers).
   int32 seconds_remaining = 9;
+
+  // Classifier-assigned risk level ("low"/"medium"/"high"/"critical"), captured once at
+  // creation time. Empty for approvals that predate this field.
+  string risk_level = 10;
 }
 
 // ============================================================================
@@ -1149,6 +1153,10 @@ message AnalyticsSummaryProto {
   // Escalation-reason breakdown: counts per category ("no-match", "explicit-rule",
   // "domain-age", "secret-scan", "unclassifiable") — see classifier.EscalationCategory.
   map<string, int32> escalation_reason_counts = 17;
+  // Risk-level breakdown: counts per classifier.RiskLevel string ("low"/"medium"/"high"/
+  // "critical"), scoped to escalated decisions only (matching escalation_reason_counts'
+  // scope) so both tables share the same denominator.
+  map<string, int32> risk_level_counts = 18;
 }
 
 message ToolStatProto {
