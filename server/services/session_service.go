@@ -176,6 +176,12 @@ type SessionService struct {
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
 
+	// quotaGate feeds account-wide rate-limit detections into the quota
+	// headroom gate that pauses/resumes backlog automation. Late-wired via
+	// SetQuotaGate since QuotaGate needs backlogCtrl, which doesn't exist yet
+	// inside NewSessionService.
+	quotaGate *QuotaGate
+
 	// analyticsClient is the ent client for the analytics database (escape events, etc.).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
 	analyticsClient *ent.Client
@@ -1133,6 +1139,12 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {
 	s.featureFlagSvc.SetFeatureController(name, c)
+}
+
+// SetStatusDetailProvider wires an optional status-detail provider for the
+// named feature flag. Delegates to FeatureFlagService.
+func (s *SessionService) SetStatusDetailProvider(name string, fn func() string) {
+	s.featureFlagSvc.SetStatusDetailProvider(name, fn)
 }
 
 // ListSessions returns all sessions with optional filtering.
@@ -4184,6 +4196,13 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 	// Session state sync (rate_limit_state/rate_limit_reset_time) must fire
 	// regardless of Hidden — only the Notifications-page entry above is gated.
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
+
+	// Feed the account-wide quota gate's hard/reactive override signal. Not
+	// gated on inst.Hidden (unlike the notification above) — a rate limit hit
+	// by a hidden/headless session still consumes real account quota.
+	if s.quotaGate != nil {
+		s.quotaGate.recordRateLimitEvent(time.Now())
+	}
 }
 
 // onRateLimitRecovery publishes the rate-limit-recovery notification for inst.
@@ -4692,6 +4711,12 @@ func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
 	if s.capacityMonitor != nil {
 		s.capacityMonitor.tokenStore = store
 	}
+}
+
+// SetQuotaGate wires the account-wide quota gate so onRateLimitDetected can
+// feed it the hard/reactive override signal.
+func (s *SessionService) SetQuotaGate(g *QuotaGate) {
+	s.quotaGate = g
 }
 
 // GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.

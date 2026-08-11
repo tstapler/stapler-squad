@@ -63,6 +63,11 @@ type FeatureFlagService struct {
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
 
+	// statusDetailProviders maps feature flag names to a function returning an
+	// optional human-readable status line (e.g. why the flag is currently off).
+	// Wired via SetStatusDetailProvider. Absent name -> "".
+	statusDetailProviders map[string]func() string
+
 	// updateMu serializes UpdateFeatureFlag's read-toggle-rollback sequence so two
 	// concurrent toggles of the same flag can't race: without this, a slow caller's
 	// rollback (after its own controller failure) could stomp a faster caller's
@@ -87,6 +92,16 @@ func (f *FeatureFlagService) SetFeatureController(name string, c FeatureControll
 	f.featureControllers[name] = c
 }
 
+// SetStatusDetailProvider wires an optional status-detail provider for the
+// named feature flag. GetFeatureFlags calls fn on every request and populates
+// FeatureFlag.StatusDetail with its result (empty string when fn returns "").
+func (f *FeatureFlagService) SetStatusDetailProvider(name string, fn func() string) {
+	if f.statusDetailProviders == nil {
+		f.statusDetailProviders = make(map[string]func() string)
+	}
+	f.statusDetailProviders[name] = fn
+}
+
 // +api: feature-flags:list
 // GetFeatureFlags returns all known feature flags and their current state.
 func (f *FeatureFlagService) GetFeatureFlags(
@@ -105,10 +120,15 @@ func (f *FeatureFlagService) GetFeatureFlags(
 		if ctrl, ok := f.featureControllers[kf.name]; ok {
 			enabled = ctrl.IsEnabled()
 		}
+		var statusDetail string
+		if provider, ok := f.statusDetailProviders[kf.name]; ok {
+			statusDetail = provider()
+		}
 		flags = append(flags, &sessionv1.FeatureFlag{
-			Name:        kf.name,
-			Enabled:     enabled,
-			Description: kf.description,
+			Name:         kf.name,
+			Enabled:      enabled,
+			Description:  kf.description,
+			StatusDetail: statusDetail,
 		})
 	}
 
@@ -191,11 +211,17 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 
 	log.Info("feature flag updated", "feature", name, "enabled", enabled)
 
+	var statusDetail string
+	if provider, ok := f.statusDetailProviders[name]; ok {
+		statusDetail = provider()
+	}
+
 	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
 		Flag: &sessionv1.FeatureFlag{
-			Name:        name,
-			Enabled:     enabled,
-			Description: description,
+			Name:         name,
+			Enabled:      enabled,
+			Description:  description,
+			StatusDetail: statusDetail,
 		},
 	}), nil
 }
