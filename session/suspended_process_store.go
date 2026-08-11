@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -49,6 +50,15 @@ type SuspendedProcessStore struct {
 	configDir   string
 	lockFile    *flock.Flock
 	lockTimeout time.Duration
+
+	// mu provides real intra-process mutual exclusion. flock.Flock guards
+	// against other OS processes but a single *flock.Flock value gives no
+	// such guarantee against concurrent goroutines within this process --
+	// two goroutines can both pass TryLockContext/TryRLockContext (flock is
+	// reentrant/no-op within one process on most platforms) and interleave
+	// their read-modify-write of the underlying file. mu is taken in
+	// addition to, not instead of, the flock calls below.
+	mu sync.Mutex
 }
 
 // NewSuspendedProcessStore creates a store rooted at the same config
@@ -71,15 +81,27 @@ func (s *SuspendedProcessStore) path() string {
 	return filepath.Join(s.configDir, suspendedProcessFileName)
 }
 
-// Add persists a new SuspendedProcessRecord, appending to any existing
-// records under an exclusive lock.
+// Add persists a SuspendedProcessRecord under an exclusive lock, using
+// upsert semantics: any existing record for the same InstanceID is replaced
+// rather than duplicated. CommitImportExternalSession's compensating-delete
+// path can retry Add for the same InstanceID (e.g. after a transient write
+// failure), and without this dedup a retry would leave two records for one
+// instance, which would make ReconcileSuspendedProcesses/Remove behavior
+// ambiguous.
 func (s *SuspendedProcessStore) Add(record SuspendedProcessRecord) error {
 	return s.withWriteLock(func() error {
 		file, err := s.readWithoutLocking()
 		if err != nil {
 			return err
 		}
-		file.Records = append(file.Records, record)
+		kept := make([]SuspendedProcessRecord, 0, len(file.Records)+1)
+		for _, r := range file.Records {
+			if r.InstanceID != record.InstanceID {
+				kept = append(kept, r)
+			}
+		}
+		kept = append(kept, record)
+		file.Records = kept
 		return s.writeWithoutLocking(file)
 	})
 }
@@ -133,6 +155,9 @@ func (s *SuspendedProcessStore) List() ([]SuspendedProcessRecord, error) {
 }
 
 func (s *SuspendedProcessStore) withReadLock(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.lockTimeout)
 	defer cancel()
 	locked, err := s.lockFile.TryRLockContext(ctx, 100*time.Millisecond)
@@ -147,6 +172,9 @@ func (s *SuspendedProcessStore) withReadLock(fn func() error) error {
 }
 
 func (s *SuspendedProcessStore) withWriteLock(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.lockTimeout)
 	defer cancel()
 	locked, err := s.lockFile.TryLockContext(ctx, 100*time.Millisecond)
