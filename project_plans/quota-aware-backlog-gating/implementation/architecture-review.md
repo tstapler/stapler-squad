@@ -1,6 +1,6 @@
 # Architecture Review: quota-aware-backlog-gating
 **Date**: 2026-08-10
-**Verdict**: BLOCKED
+**Verdict**: BLOCKED → RESOLVED (see verdict update note below Blockers section, `sdd:4-validate` pass, 2026-08-10)
 
 ## Constitution Check
 
@@ -10,9 +10,16 @@ three-lens review.
 
 ---
 
+**Verdict update (re-checked during `sdd:4-validate`, 2026-08-10)**: RESOLVED — both Blockers below
+are addressed by the current plan.md text (the Domain Glossary's `foregroundSessionActive` entry
+now mandates `Snapshot()`, and Task 2.1.1c defines the locking `recordRateLimitEvent` wrapper).
+Concerns and Nitpicks remain open as non-blocking follow-ups.
+
 ## Blockers
 
-- [ ] **Task 2.3.1a (`foregroundSessionActive`)** — reads `inst.Status` / `inst.Category` directly
+- [x] **RESOLVED — plan.md's Domain Glossary entry for `foregroundSessionActive` now explicitly
+  reads `snap := inst.Snapshot()` and states "never a direct field read", matching this finding's
+  remediation exactly.** Original finding: **Task 2.3.1a (`foregroundSessionActive`)** — reads `inst.Status` / `inst.Category` directly
   off `*session.Instance` instead of via `inst.Snapshot()`. `session/instance.go:387-389`
   documents the concurrency contract explicitly: *"mu protects Instance's mutable data fields
   (Status, started, Tags, Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts,
@@ -31,7 +38,10 @@ three-lens review.
   Add a one-line comment noting *why* (cross-goroutine read) so a future edit doesn't
   "simplify" it back to a direct field read.
 
-- [ ] **Task 1.3.1a / Task 1.3.2b (`recordRateLimitEvent` locking gap)** — Task 1.3.1a defines
+- [x] **RESOLVED — plan.md's Task 2.1.1c now defines the exact locking wrapper this finding
+  requested (`func (g *QuotaGate) recordRateLimitEvent(at time.Time) { g.mu.Lock(); defer
+  g.mu.Unlock(); g.rateLimits.recordRateLimitEvent(at) }`), and Task 1.3.2b's call site + comments
+  explicitly point at this wrapper, not `RateLimitAggregate`'s unlocked method.** Original finding: **Task 1.3.1a / Task 1.3.2b (`recordRateLimitEvent` locking gap)** — Task 1.3.1a defines
   `RateLimitAggregate.recordRateLimitEvent`/`hasRecentRateLimitEvent` with explicitly **no
   locking**, justified only by a code comment ("always accessed under `QuotaGate.mu`"). But Task
   1.3.2b's literal call site is `s.quotaGate.recordRateLimitEvent(time.Now())`, invoked from

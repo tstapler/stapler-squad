@@ -56,6 +56,8 @@
 - **Feature flag**: none new. The entire mechanism only activates inside the `if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true" ...)` branches this file already gates its other auto-reconnect logic behind (`useTerminalStream.ts:331`, `:434`) — `NEXT_PUBLIC_RECONNECT_V2` defaults off (`web-app/.env.local.example:1`), so this feature ships dark by default, same as the rest of the V2 reconnect subsystem it extends.
 - **Rollback procedure**: revert the 3 source-file commits (`backoff.ts`, `useTerminalStream.ts`, `TerminalOutput.tsx`); no data/schema/config migration involved. Because the feature is inert with the flag off, an emergency rollback without a code revert is also available: setting/confirming `NEXT_PUBLIC_RECONNECT_V2` unset in the deployed build disables it along with the rest of V2.
 - **Staged rollout**: piggybacks on however `NEXT_PUBLIC_RECONNECT_V2` itself is staged/enabled — no independent rollout plan needed for this change specifically.
+- **Activation ownership (pre-mortem Failure #4, P2)**: this repo currently has one active user/maintainer (`tstapler`, also the original issue reporter). Shipping this PR with `NEXT_PUBLIC_RECONNECT_V2` still off is acceptable only if `tstapler` personally flips it on in their own dev/deployed instance within the same work session as merging, to dogfood it — otherwise file a one-line follow-up backlog item ("enable NEXT_PUBLIC_RECONNECT_V2 and confirm foreground-fast-reconnect feels snappier") so the flag-flip doesn't silently fall off the radar the way pre-mortem Failure #4 describes.
+- **`FOREGROUND_CONNECT_TIMEOUT_MS=1200` is an unvalidated starting guess, not a measured value** (pre-mortem Failure #2, P1): herdr-web's real constant isn't inspectable (different, unvendored repo — `research/build-vs-buy.md` §4), so `1200` was re-derived from AC2's own "~1200-1500ms" range, not from measured connect-to-first-message latency. On higher-RTT links (VPN, corporate proxy, remote dev) a healthy connection could regularly exceed 1200ms, causing foreground attempts 1-2 to be aborted and retried needlessly — more churn for the terminals a user is actively watching than the pre-feature 3500ms baseline, and invisible in production since the Observability Plan adds no metrics (only an unmonitored `console.warn`). **Before enabling `NEXT_PUBLIC_RECONNECT_V2` broadly**: validate `1200`ms against real p95/p99 connect-to-first-message latency (e.g. temporarily counting `trigger=connect-timeout foreground=true` log lines, or a manual test over a VPN/high-RTT link), and note in the PR description that `1200`ms is a starting value subject to tuning. File a follow-up backlog item to add a lightweight success/failure counter for connect-timeout-triggered aborts if dogfooding surfaces flappiness.
 
 ## Unresolved Questions
 None. (The one open design fork identified in research — whether `foregroundConnectAttemptRef` should also reset on a successful connect — is resolved as a documented Pattern Decision above, not left blocking.)
@@ -170,6 +172,12 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
       expect(connectTimeoutMs(false, 0)).toBe(CONNECT_TIMEOUT_MS);
       expect(connectTimeoutMs(false, 5)).toBe(CONNECT_TIMEOUT_MS);
     });
+    it("connectTimeoutMs_should_beStandaloneFunction_When_comparedToJitteredDelay", () => {
+      // AC1: locks in that connectTimeoutMs is genuinely new, not a repurposing
+      // of jitteredDelay/BackoffState — different signature, different purpose.
+      expect(connectTimeoutMs).not.toBe(jitteredDelay);
+      expect(connectTimeoutMs.length).toBe(2); // (foreground, attemptsSinceForeground)
+    });
   });
   ```
 - Run `cd web-app && npx jest --no-coverage --testPathPatterns="backoff.test"` to verify.
@@ -210,6 +218,8 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
 **Acceptance Criteria**:
 - AC3: false→true transition resets the attempt counter.
   - *Given* `foregroundRef.current` is `false` and `foregroundConnectAttemptRef.current` is `2` (fast window previously exhausted), *When* the `foreground` prop transitions `false → true` and the new standalone `useEffect([foreground])` runs, *Then* `terminalBackoffRef.current.reset()` fires and `foregroundConnectAttemptRef.current` is set to `0`, so the next `connect()` call computes `connectTimeoutMs(true, 0)` = `1200`ms again.
+- AC3 (pre-mortem Failure #1, P1): stale pending backoff wait does not survive the transition.
+  - *Given* a `reconnectTimerRef` timer is pending (scheduled while `foreground` was `false`, e.g. a 20s backoff delay), *When* `foreground` transitions `false → true`, *Then* that timer is cleared and `connect()` is invoked immediately (subject to the `shouldReconnectRef`/not-already-connecting/not-already-connected guards) rather than being left to fire on its original, stale schedule.
 **Files**: `web-app/src/lib/hooks/useTerminalStream.ts`
 
 ##### Task 2.2.1a: Add `foregroundRef` and `foregroundConnectAttemptRef` (~2 min)
@@ -220,7 +230,15 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
   ```
 - Files: `web-app/src/lib/hooks/useTerminalStream.ts`
 
-##### Task 2.2.1b: Add the foreground-transition effect (~5 min)
+##### Task 2.2.1b: Add the foreground-transition effect (~8 min)
+- **Revised per pre-mortem Failure #1 (P1)**: resetting the counters alone is not enough. If this
+  terminal is currently sitting out a long, already-scheduled `reconnectTimerRef` backoff delay
+  (computed while it was backgrounded — up to `BackoffState`'s 30s cap), that pending wait
+  survives the transition untouched, so the user selects a stalled terminal and it still sits
+  idle for up to 30s before the fast 1200ms connect-timeout ever gets a chance to run — the exact
+  scenario this feature exists to fix. The transition effect must also clear that pending timer
+  and trigger an immediate reconnect, not just reset the counters for whatever the *next* attempt
+  would have been.
 - As a new, standalone `useEffect` (do **not** merge into the mount effect at line 416-430 or the visibilitychange effect at 432-458 — this file's convention is one narrowly-scoped effect per concern), placed after the existing ref-sync effect (~line 126-128):
   ```ts
   // Detect the foreground false→true transition (AC3): reset both the
@@ -228,16 +246,29 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
   // attempt counter so a just-selected terminal gets the full fast
   // window immediately, not whatever was left over from before it was
   // foreground (or from background attempts that happened while it wasn't selected).
+  //
+  // Also clear any pending reconnectTimerRef and reconnect immediately (pre-mortem
+  // Failure #1, P1): without this, a terminal that was mid-backoff-delay while
+  // backgrounded would still sit out that stale, potentially-30s wait after being
+  // selected, before the fast connect-timeout ever got a chance to apply.
   useEffect(() => {
     const wasForeground = foregroundRef.current;
     foregroundRef.current = foreground;
+    if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") return; // same gate as the rest of this file's auto-reconnect logic (consistency, triad Engineering-lens round 2)
     if (!wasForeground && foreground) {
       terminalBackoffRef.current.reset();
       foregroundConnectAttemptRef.current = 0;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+        if (shouldReconnectRef.current && !isConnectingRef.current && !isConnectedRef.current) {
+          connectRef.current?.();
+        }
+      }
     }
   }, [foreground]);
   ```
-- Note: this effect intentionally does **not** call `connectRef.current()` — it only adjusts state for whatever the *next* attempt will be (matching the "snapshot-at-schedule-time" Pattern Decision above). It does not accelerate an already-scheduled backoff sleep. This is a deliberate scope boundary: AC3 only asks for the counter reset, not an immediate reconnect.
+- This mirrors the existing visibilitychange effect's own precedent (`useTerminalStream.ts:433-458`, which already clears backoff state and calls `connect()` immediately on `visibilitychange`/`online`) — the foreground transition is the in-app equivalent of that same "the user is looking at this now, don't make them wait out a stale delay" signal, just scoped to session selection instead of browser-tab visibility. Guard on `shouldReconnectRef`/`isConnectingRef`/`isConnectedRef` the same way that effect does, to avoid double-connecting an attempt already in flight or a terminal that's already connected (e.g. `reconnectTimerRef` was null because there was nothing pending).
 - Files: `web-app/src/lib/hooks/useTerminalStream.ts`
 
 ### Epic 2.3: Connect-timeout race integrated into `connect()`
@@ -252,13 +283,20 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
   - *Given* `foregroundRef.current === true` and `foregroundConnectAttemptRef.current === 0`, *When* `connect()` computes its timeout via `connectTimeoutMs(foregroundRef.current, foregroundConnectAttemptRef.current)`, *Then* the scheduled timer fires after `1200`ms if no message has arrived by then.
 - AC5: scoped to the `NEXT_PUBLIC_RECONNECT_V2` path.
   - *Given* `process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true"`, *When* `connect()` runs, *Then* the connect-timeout `setTimeout` is not scheduled at all (guarded the same way the existing retry-scheduling and visibilitychange logic already are), since there is no automatic-reconnect loop in that mode for a timeout-triggered abort to feed into.
+- Race guard (pre-mortem Failure #3, P2): a first message that lands in the same tick the timer fires must win, not the abort.
+  - *Given* the timer callback fires, *When* it runs, *Then* it first re-checks the same `firstMessage` flag the success path checks — if `firstMessage` is already `false` (a message already landed, even if this callback was scheduled microtasks before `clearTimeout` ran), the callback is a no-op and does **not** call `attemptController.abort()`.
 **Files**: `web-app/src/lib/hooks/useTerminalStream.ts`
 
-##### Task 2.3.1a: Add `connectTimeoutRef` (~2 min)
+##### Task 2.3.1a: Add `connectTimeoutRef` and lift `firstMessage` to a ref (~4 min)
 - Near the other timer refs (around line 110-111, alongside `reconnectTimerRef`), add:
   ```ts
   const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   ```
+- **Correction (triad Engineering-lens round 2, blocker)**: the existing `let firstMessage = true;` (line 219) is declared *inside* the nested async IIFE that processes stream messages — a different function scope than `connect()`'s own top level, where the connect-timeout `setTimeout` callback (Task 2.3.1b) is scheduled. A callback in that outer scope cannot read a `let` declared inside the inner IIFE; as originally drafted this plan's race-guard callback would not compile. Fix: add a ref instead, alongside `connectTimeoutRef`:
+  ```ts
+  const firstMessageRef = useRef(true);
+  ```
+  Then in the nested IIFE, replace `let firstMessage = true;` with resetting the ref at the same point (`firstMessageRef.current = true;`), and replace every subsequent read/write of the local `firstMessage` variable (the `if (firstMessage) { ... firstMessage = false; }` block at lines 221-227) with `firstMessageRef.current` — same logic, ref-backed so it's readable from `connect()`'s outer scope by the timeout callback in Task 2.3.1b.
 - Files: `web-app/src/lib/hooks/useTerminalStream.ts`
 
 ##### Task 2.3.1b: Compute timeout, increment attempt counter, schedule the timer (~5 min)
@@ -267,10 +305,24 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
   const attemptController = abortControllerRef.current;
   const timeoutMs = connectTimeoutMs(foregroundRef.current, foregroundConnectAttemptRef.current);
   foregroundConnectAttemptRef.current += 1;
+  const attemptNumber = foregroundConnectAttemptRef.current; // logged value, captured before the increment below (fixes an off-by-one in the log line)
   if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") {
     connectTimeoutRef.current = setTimeout(() => {
       connectTimeoutRef.current = null;
-      console.warn(`[reconnect] stream=terminal trigger=connect-timeout foreground=${foregroundRef.current} attempt=${foregroundConnectAttemptRef.current} timeoutMs=${timeoutMs}`);
+      // Race guard (pre-mortem Failure #3, P2) — best-effort, not a perfect fix:
+      // re-check firstMessageRef immediately before aborting, so a message that
+      // already landed and was processed (firstMessageRef.current already false)
+      // is not retroactively aborted. This closes the case where the success
+      // path's callback ran first in the event-loop's task ordering. It does NOT
+      // — and cannot, in a single-threaded event loop with two independently
+      // scheduled callbacks — guarantee which of the two wins when both become
+      // eligible to run at effectively the same instant; whichever the JS engine
+      // dequeues first decides the outcome, same as any timeout-based
+      // cancellation (e.g. `AbortSignal.timeout()`, `fetch` timeout patterns).
+      // Accepted as adequate: an occasional abort-of-an-attempt-that-was-about-
+      // to-succeed just falls into the existing, already-tested retry path.
+      if (!firstMessageRef.current) return;
+      console.warn(`[reconnect] stream=terminal trigger=connect-timeout foreground=${foregroundRef.current} attempt=${attemptNumber} timeoutMs=${timeoutMs}`);
       attemptController.abort();
     }, timeoutMs);
   }
@@ -278,6 +330,11 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
 - Import `connectTimeoutMs` from `@/lib/utils/backoff` in this file's existing `backoff` import (line 10): `import { BackoffState, connectTimeoutMs, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";`.
 - **Note**: `foregroundConnectAttemptRef.current += 1` runs unconditionally (even when the flag is off) — this is intentionally cheap and inert when V2 is off, matching `research/architecture.md` §5's recommendation, since no reconnect is ever scheduled to consume it in that mode.
 - Files: `web-app/src/lib/hooks/useTerminalStream.ts`
+
+##### Task 2.3.1e: Test — a message processed before the timer fires is not retroactively aborted (~4 min)
+- **Added per triad Engineering-lens review (pre-mortem Failure #3, P2)**. Add a regression test in `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`: push the first message and let it be processed (`firstMessageRef.current` becomes `false`) *before* advancing fake timers to the connect-timeout duration, then assert `capturedSignal?.aborted` stays `false` and `isConnected` becomes `true`.
+- **Scope note (triad UX-lens round 2)**: this test proves the guard's actual mechanism — a processed message prevents a *later-firing* timer from aborting — not "whichever of the two events happens closer to real-world-simultaneously always wins." That stronger claim isn't testable or guaranteeable in a single-threaded event loop (see the code comment in Task 2.3.1b); don't write a test that asserts it, and don't claim pre-mortem Failure #3 is "fully closed" — it's mitigated to the same standard as any other timeout-based abort pattern in this codebase or elsewhere.
+- Files: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
 
 ##### Task 2.3.1c: Clear the timer on first-message success (~3 min)
 - Inside the `if (firstMessage) { ... }` block (lines 221-227), add the clear **before** `firstMessage = false`:
@@ -339,6 +396,10 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
   ```
 - Files: `web-app/src/lib/hooks/useTerminalStream.ts`
 
+##### Task 2.4.1c: Test — `disconnect()` before first message clears the pending connect-timeout (~4 min)
+- **Added per triad Engineering-lens round 2 review** — `validation.md`'s AC7 row commits to `useTerminalStream_should_notLeakConnectTimeout_When_disconnectCalledBeforeFirstMessage` with no corresponding task. Add to `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`: start a connect attempt (no message pushed), call `disconnect()` before advancing any timers, then advance fake timers past `FOREGROUND_CONNECT_TIMEOUT_MS`/`CONNECT_TIMEOUT_MS` and assert `attemptController.abort()`/the `console.warn` connect-timeout log never fires — proving Task 2.4.1a's clear actually prevents the leaked timer from acting on a torn-down attempt.
+- Files: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
+
 ---
 
 ## Phase 3: UI Wiring
@@ -357,6 +418,23 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
 - In `web-app/src/components/sessions/TerminalOutput.tsx`, in the existing `useTerminalStream({...})` call (line 456-470), add `foreground: isVisible,` alongside the existing `isExternal: isExternal,` line.
 - No other change to this file — `isVisible`'s existing fit+focus effect (lines 949-956) is untouched, kept as a separate concern from `foreground`'s reconnect-timing semantics per `research/architecture.md` §2's note (same input value, deliberately separate names for two different purposes).
 - Files: `web-app/src/components/sessions/TerminalOutput.tsx`
+
+### Epic 3.2: Wiring regression tests
+**Goal**: Close a gap flagged by triad Engineering-lens review — `validation.md` commits to `TerminalOutput_should_passForegroundTrue/False_When_isVisiblePropTrue/False`.
+**Correction (triad Engineering-lens round 2, blocker)**: `web-app/src/components/sessions/__tests__/TerminalOutput.reconnect.test.tsx` is **not** a new file — it already exists on `main` (363 lines, `describe("TerminalOutput reconnect banner", ...)`, Stories 3.2.1/3.2.2 from a prior feature) with its own established `useTerminalStream` mock (`jest.mock("@/lib/hooks/useTerminalStream", ...)`, `makeStreamMock()` helper, line 39/139). This task **extends** that existing describe block/mock helper — it must not create/overwrite the file, which would destroy the existing 10-test suite.
+
+#### Story 3.2.1: `foreground` wiring is unit-tested at the component boundary
+**As a** reviewer, **I want** a test proving `TerminalOutput` passes `foreground: isVisible` into `useTerminalStream`, **so that** AC4 has direct test coverage rather than only being implied by the one-line diff.
+**Acceptance Criteria**:
+- AC4 (test coverage): matches validation.md's `Requirement → Test Mapping` row for AC4.
+**Files**: `web-app/src/components/sessions/__tests__/TerminalOutput.reconnect.test.tsx` (existing file, extend only)
+
+##### Task 3.2.1a: Extend `TerminalOutput.reconnect.test.tsx` with 2 new tests (~8 min)
+- In the existing file, reuse the existing `makeStreamMock()`/`(useTerminalStream as jest.Mock).mockReturnValue(...)` mocking convention already used throughout (see line 139, 170, 198). Add, either inside the existing `describe("TerminalOutput reconnect banner", ...)` block or a new sibling `describe("TerminalOutput foreground wiring", ...)`:
+  - `TerminalOutput_should_passForegroundTrue_When_isVisiblePropTrue` — render with `isVisible={true}`, assert `(useTerminalStream as jest.Mock)` was called with an options object containing `foreground: true`.
+  - `TerminalOutput_should_passForegroundFalse_When_isVisiblePropFalse` — render with `isVisible={false}`, assert `foreground: false`.
+- Run `cd web-app && npx jest --no-coverage --testPathPatterns="TerminalOutput.reconnect"` to verify both the 2 new tests and the existing 10 pass unmodified.
+- Files: `web-app/src/components/sessions/__tests__/TerminalOutput.reconnect.test.tsx`
 
 ---
 
@@ -493,7 +571,25 @@ Phase 4: Test Coverage — depends on Phases 1-3 being implemented
 - This is largely covered by Task 4.2.1a's assertion (`terminalState` reaches `'DISCONNECTED'`, not stuck at `'CONNECTING'`); add one explicit assertion that a subsequent attempt is scheduled and eventually reached `'CONNECTING'` again after the backoff delay elapses (`jest.advanceTimersByTime` past `terminalBackoffRef`'s computed delay), proving the double-connect guard (`isConnectingRef`) was correctly reset by the `finally` block rather than left stuck `true` forever.
 - Files: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
 
-- Run `cd web-app && npx jest --no-coverage --testPathPatterns="useTerminalStream.test"` after 4.2.1a-e to verify all new tests pass.
+##### Task 4.2.1f: Test — pending stale backoff wait does not survive foreground transition (~5 min)
+- **Added per pre-mortem Failure #1 (P1)**. Add a test: with `foreground: false`, drive a failed attempt so `reconnectTimerRef` schedules a long backoff delay (e.g. force `terminalBackoffRef` to a multi-second delay by simulating a couple of prior failures, or directly assert against a known delay from `BackoffState`'s formula); then `rerender({...RECONNECT_OPTIONS, foreground: true})`. Assert: (a) the original `reconnectTimerRef` timer is cleared (advancing fake timers to its original fire time does *not* trigger a second/duplicate `connect()` call beyond the immediate one), and (b) `connect()`/`streamTerminal` is invoked immediately (within the same `act()`, before any `jest.advanceTimersByTime`), proving the stale wait was pre-empted rather than left to elapse on its original schedule.
+- Files: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
+
+##### Task 4.2.1g: Test — AC0, no behavior change for callers that omit `foreground` (~5 min)
+- **Added per triad Engineering-lens round 2/3 review** — `validation.md` commits two AC0 tests with no corresponding plan tasks. Add both:
+  - `useTerminalStream_should_connectAsBeforeChange_When_foregroundOmitted`: render with the existing `RECONNECT_OPTIONS` (no `foreground` key), push the first message synchronously as every pre-existing test already does, assert `isConnected` becomes `true` — same shape as this file's pre-existing connect-success tests, just asserting the omitted-`foreground` default path specifically.
+  - `useTerminalStream_should_handleStreamErrorIdentically_When_foregroundOmittedAndConnectionFails`: same omitted-`foreground` setup, but the mocked stream throws immediately; assert the existing `catch`/`finally` error-handling path runs unchanged (state reaches `DISCONNECTED`/retry-scheduled as it does today), proving the new connect-timeout machinery doesn't alter error-path behavior when inert-by-default.
+- Files: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
+
+##### Task 4.2.1i: Test — AC3, counters untouched on non-false→true transitions (~4 min)
+- **Added per triad Engineering-lens round 3 review** — `validation.md` commits `useTerminalStream_should_notResetCounters_When_foregroundDoesNotTransitionFalseToTrue` with no corresponding plan task. Add: rerender with `foreground` staying `true→true` and separately `true→false`, and in neither case assert `terminalBackoffRef.current.reset()` was called or `foregroundConnectAttemptRef.current` was zeroed — only the literal `false→true` edge triggers the reset (Task 2.2.1b).
+- Files: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
+
+##### Task 4.2.1h: Test — AC5, connect-timeout only scheduled when `NEXT_PUBLIC_RECONNECT_V2` is on (~4 min)
+- **Added per triad Engineering-lens round 2 review** — `validation.md` commits `connect_should_scheduleConnectTimeout_When_reconnectV2FlagEnabled` and `connect_should_notScheduleConnectTimeout_When_reconnectV2FlagDisabled` with no corresponding plan tasks. Add both: with the flag on, assert a connect-timeout timer is pending after `connect()` (e.g. via `jest.getTimerCount()` delta, or by advancing to just past the timeout and observing the abort); with the flag off (or unset), assert no such timer is ever scheduled (advancing timers well past `CONNECT_TIMEOUT_MS` never triggers an abort).
+- Files: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
+
+- Run `cd web-app && npx jest --no-coverage --testPathPatterns="useTerminalStream.test"` after 4.2.1a-h to verify all new tests pass.
 
 ### Epic 4.3: Regression verification
 **Goal**: Confirm AC7 — no regression to existing `useTerminalStream`/`useTerminalStream.resync.integration` suites.
