@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -206,6 +208,16 @@ func TestSwitchProgram_ClaudeToGemini_CleanlyClearsConversationState(t *testing.
 	assert.True(t, changed)
 	assert.Equal(t, "gemini", resolved)
 	assert.Empty(t, inst.GetClaudeConversationUUID(), "switching to gemini must clear the stale claude UUID, not silently keep it")
+}
+
+// TestPortHistoryFailureIsExpected directly covers the Warn-vs-Error log-level selection used
+// by SwitchProgram, independent of whether isClaudeAntigravityCrossSwitch/CanHandle parity
+// currently makes the ErrNoHistoryAdapter branch reachable in production — this keeps the
+// selection logic itself verified as defense-in-depth against future drift.
+func TestPortHistoryFailureIsExpected(t *testing.T) {
+	assert.True(t, portHistoryFailureIsExpected(ErrNoHistoryAdapter))
+	assert.True(t, portHistoryFailureIsExpected(fmt.Errorf("wrapped: %w", ErrNoHistoryAdapter)))
+	assert.False(t, portHistoryFailureIsExpected(errors.New("disk full")))
 }
 
 // TestSwitchProgram_ConcurrentCalls_Serialize is a race-detector regression guard (run

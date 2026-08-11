@@ -14,27 +14,28 @@ import (
 )
 
 // TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel verifies that a program pair
-// with no matching HistoryAdapter on either side (e.g. opencode/bash, neither of which has a
-// canonical history format) returns the explicit ErrNoHistoryAdapter sentinel rather than a
-// bare, unexplained nil.
+// with no matching HistoryAdapter on either side returns the explicit ErrNoHistoryAdapter
+// sentinel rather than a bare, unexplained nil — covering both a pair where neither side has a
+// canonical history format (opencode/bash) and gemini specifically (the real Gemini CLI, whose
+// history format is not the Antigravity storage AgyAdapter reads/writes, so it must resolve as
+// unmatched rather than being silently misrouted through AgyAdapter).
 func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) {
-	inst := &Instance{Title: "test-session"}
-
-	err := PortSessionHistory(context.Background(), "opencode", "bash", inst)
-	if !errors.Is(err, ErrNoHistoryAdapter) {
-		t.Fatalf("PortSessionHistory(opencode, bash) = %v, want ErrNoHistoryAdapter", err)
+	tests := []struct {
+		name      string
+		old, new_ string
+	}{
+		{"opencode_to_bash", "opencode", "bash"},
+		{"claude_to_gemini", "claude", "gemini"},
 	}
-}
 
-// TestPortSessionHistory_GeminiPair_ReturnsSentinel verifies that gemini — the real Gemini
-// CLI, whose history format is not the Antigravity storage AgyAdapter reads/writes — is
-// resolved as unmatched, not silently misrouted through AgyAdapter.
-func TestPortSessionHistory_GeminiPair_ReturnsSentinel(t *testing.T) {
-	inst := &Instance{Title: "test-session"}
-
-	err := PortSessionHistory(context.Background(), "claude", "gemini", inst)
-	if !errors.Is(err, ErrNoHistoryAdapter) {
-		t.Fatalf("PortSessionHistory(claude, gemini) = %v, want ErrNoHistoryAdapter", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := &Instance{Title: "test-session"}
+			err := PortSessionHistory(context.Background(), tt.old, tt.new_, inst)
+			if !errors.Is(err, ErrNoHistoryAdapter) {
+				t.Fatalf("PortSessionHistory(%q, %q) = %v, want ErrNoHistoryAdapter", tt.old, tt.new_, err)
+			}
+		})
 	}
 }
 

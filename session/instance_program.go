@@ -10,9 +10,13 @@ import (
 )
 
 // isClaudeAntigravityFamily reports whether program belongs to the Claude/Antigravity
-// family recognized by the history-porting and conversation-UUID heuristics below.
+// family recognized by the history-porting and conversation-UUID heuristics below. Derived
+// from resolveHistoryAdapter (rather than re-declaring its own claude/agy/antigravity string
+// match) so this can't independently drift from which programs actually have a HistoryAdapter
+// — the exact drift that caused "gemini" to be treated as portable by AgyAdapter.CanHandle
+// but not by this family check.
 func isClaudeAntigravityFamily(program string) bool {
-	return strings.Contains(program, "claude") || strings.Contains(program, "agy") || strings.Contains(program, "antigravity")
+	return resolveHistoryAdapter(program) != nil
 }
 
 // isClaudeAntigravityCrossSwitch reports whether oldProgram and newProgram sit on opposite
@@ -21,6 +25,17 @@ func isClaudeAntigravityFamily(program string) bool {
 func isClaudeAntigravityCrossSwitch(oldProgram, newProgram string) bool {
 	return (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
 		((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude"))
+}
+
+// portHistoryFailureIsExpected reports whether portErr is the low-severity ErrNoHistoryAdapter
+// sentinel (isClaudeAntigravityCrossSwitch and each adapter's CanHandle having drifted out of
+// sync) rather than a genuine import/export failure, so SwitchProgram can pick Warn vs Error.
+// Currently unreachable via SwitchProgram itself — isClaudeAntigravityFamily now derives from
+// resolveHistoryAdapter, so the two stay in sync by construction — but kept as defense-in-depth
+// against isClaudeAntigravityCrossSwitch (which can't reduce the same way, since it also
+// encodes directionality) drifting independently in the future.
+func portHistoryFailureIsExpected(portErr error) bool {
+	return errors.Is(portErr, ErrNoHistoryAdapter)
 }
 
 // SwitchProgram atomically switches this instance's Program to rawProgram (resolving an
@@ -59,7 +74,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 	switch {
 	case isClaudeAntigravityCrossSwitch(oldProgram, resolvedProgram):
 		if portErr := PortSessionHistory(ctx, oldProgram, resolvedProgram, i); portErr != nil {
-			if errors.Is(portErr, ErrNoHistoryAdapter) {
+			if portHistoryFailureIsExpected(portErr) {
 				// Low-severity: the family-gate above and each adapter's CanHandle
 				// have drifted out of sync. Best-effort porting still no-ops safely.
 				log.Warn("[SwitchProgram] no history adapter resolved for program pair; skipping history port", "session", i.Title, "old", oldProgram, "new", resolvedProgram)

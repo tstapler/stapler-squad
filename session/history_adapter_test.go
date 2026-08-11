@@ -21,15 +21,17 @@ func TestResolveHistoryAdapter(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := resolveHistoryAdapter(tt.program)
-		if tt.wantName == "" {
-			if got != nil {
-				t.Errorf("resolveHistoryAdapter(%q) = %q, want nil", tt.program, got.Name())
+		t.Run(tt.program, func(t *testing.T) {
+			got := resolveHistoryAdapter(tt.program)
+			if tt.wantName == "" {
+				if got != nil {
+					t.Errorf("resolveHistoryAdapter(%q) = %q, want nil", tt.program, got.Name())
+				}
+				return
 			}
-			continue
-		}
-		if got == nil || got.Name() != tt.wantName {
-			t.Errorf("resolveHistoryAdapter(%q) = %v, want adapter named %q", tt.program, got, tt.wantName)
-		}
+			if got == nil || got.Name() != tt.wantName {
+				t.Errorf("resolveHistoryAdapter(%q) = %v, want adapter named %q", tt.program, got, tt.wantName)
+			}
+		})
 	}
 }

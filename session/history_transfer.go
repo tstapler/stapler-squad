@@ -14,8 +14,9 @@ import (
 
 // ErrNoHistoryAdapter indicates PortSessionHistory was asked to port history for a program
 // pair where no registered HistoryAdapter claims one (or both) sides — e.g. opencode, aider,
-// or bash, none of which have a canonical history format to port. Callers should treat this
-// as an expected, low-severity no-op (log and continue), not a hard failure.
+// bash, or gemini (the real Gemini CLI, distinct from Antigravity's own storage format — see
+// AgyAdapter.CanHandle), none of which have a canonical history format to port. Callers should
+// treat this as an expected, low-severity no-op (log and continue), not a hard failure.
 var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
 
 // ConversationID represents a validated Claude/Antigravity conversation UUID.
