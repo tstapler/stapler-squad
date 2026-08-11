@@ -508,7 +508,19 @@ test-race: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with race detector en
 	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short ./...
 
 test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
-	go test -race -tags integration ./...
+	# ./session and ./session/tmux are the only integration-tagged packages that
+	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
+	# Running the full suite's default per-package parallelism let those two
+	# packages' tmux-heavy tests fork/poll real tmux servers concurrently and
+	# compete for scheduler time, which was the root cause of
+	# TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff intermittently
+	# missing its reconnect-backoff cycle count under `make ci` while always
+	# passing in isolation (see registryPollTimeout's comment in
+	# session/tmux/server_registry_integration_test.go). -p 1 serializes just
+	# these two packages against each other; everything else still runs in
+	# parallel via the second invocation.
+	go test -race -tags integration -p 1 ./session ./session/tmux
+	go test -race -tags integration $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
 	go test -v -tags=harness -run TestTriageHarness ./server/services/
