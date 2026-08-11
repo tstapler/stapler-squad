@@ -93,12 +93,13 @@ func TestDetector_should_LogCanaryOnce_When_OutputHasUnmatchedQuotaKeyword(t *te
 		t.Error("canaryLogged = false, want true after unmatched quota keyword")
 	}
 
-	// Guard: only logs once per session, not once per scan.
-	detector.canaryLogged = false // reset to prove the real guard is the field, not a fluke
-	detector.canaryLogged = true
+	// A second scan with another unmatched keyword must not panic/reset state
+	// — canaryLogged's own early-return guard (maybeLogUndetectedWording's
+	// first line) is what suppresses the second log call; this only pins
+	// that the field stays true and ProcessOutput remains safe to call again.
 	detector.ProcessOutput([]byte("checking quota again"))
 	if !detector.canaryLogged {
-		t.Error("canaryLogged flipped back to false unexpectedly")
+		t.Error("canaryLogged = false after a second scan, want true (must stay latched)")
 	}
 }
 

@@ -78,11 +78,11 @@ var quotaKeywords = []string{"usage limit", "rate limit", "quota"}
 
 // maybeLogUndetectedWording logs a warning, once per session, if output contains a
 // generic quota/limit keyword that none of the configured rate-limit regex patterns
-// matched. This is the QuotaGate feature's only active-by-default protection
-// (server/services/quota_gate.go's hard/reactive signal) depends entirely on this
-// package's regex set — a wording variant Anthropic ships later that the regex set
-// misses would otherwise silently defeat that protection with no signal anything is
-// wrong. Must be called with d.mu held.
+// matched. Downstream consumers (e.g. server/services/quota_gate.go's hard/reactive
+// override signal) depend entirely on this package's regex set to observe rate-limit
+// events — a wording variant Anthropic ships later that the regex set misses would
+// otherwise silently defeat that dependent behavior with no signal anything is wrong.
+// Must be called with d.mu held.
 func (d *Detector) maybeLogUndetectedWording(output string) {
 	if d.canaryLogged {
 		return
@@ -91,11 +91,15 @@ func (d *Detector) maybeLogUndetectedWording(output string) {
 	for _, kw := range quotaKeywords {
 		if strings.Contains(lower, kw) {
 			d.canaryLogged = true
-			truncated := output
+			// Truncate on a rune boundary — a byte-index slice risks splitting
+			// a multi-byte UTF-8 rune (box-drawing chars, emoji, etc. are
+			// realistic in terminal output), which would produce invalid
+			// UTF-8 in the log line and can break structured log parsers.
+			truncated := []rune(output)
 			if len(truncated) > 200 {
 				truncated = truncated[:200]
 			}
-			log.Warn("QuotaGate: possible undetected rate-limit wording", "session", d.sessionID, "line", truncated)
+			log.Warn("ratelimit: possible undetected quota/limit wording", "session", d.sessionID, "line", string(truncated))
 			return
 		}
 	}

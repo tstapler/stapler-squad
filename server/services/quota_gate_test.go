@@ -29,10 +29,9 @@ func fakeResultsWithUsage(usedTokens int64) []*tokens.ParseResult {
 // which only tracks bool flags, not counts — several QuotaGate regression
 // tests need to assert exact call counts across multiple Reconcile ticks.
 type countingFeatureController struct {
-	enabled          bool
-	enableCalls      int
-	disableCalls     int
-	sessionStopCalls int // regression guard: must never be incremented by QuotaGate
+	enabled      bool
+	enableCalls  int
+	disableCalls int
 }
 
 func (c *countingFeatureController) Enable(_ context.Context) error {
@@ -48,10 +47,6 @@ func (c *countingFeatureController) Disable() error {
 }
 
 func (c *countingFeatureController) IsEnabled() bool { return c.enabled }
-
-// stopAnySession is a spy unrelated to QuotaGate's actual dependencies,
-// recording the absence of any session-instance-scoped call explicitly.
-func (c *countingFeatureController) stopAnySession() { c.sessionStopCalls++ }
 
 func newTestQuotaGate(cfg config.QuotaConfig, store *fakeTokenStore, poller *mockInstancePoller, ctrl *countingFeatureController, bus *events.EventBus) *QuotaGate {
 	return NewQuotaGate(func() config.QuotaConfig { return cfg }, store, poller, ctrl, bus)
@@ -438,6 +433,18 @@ func TestQuotaGate_should_PublishNotificationOnRealEventBus_When_TransitionOccur
 // Non-goal safeguard: pause never touches session-instance-scoped state.
 // ---------------------------------------------------------------------------
 
+// TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota
+// verifies the pause path calls FeatureController.Disable() exactly once.
+// The broader Non-Goal ("never kill an in-flight session, only stop new
+// dispatch") is a structural guarantee, not a runtime one: FeatureController
+// (session_service.go) has exactly three methods — Enable, Disable,
+// IsEnabled — none of them session-instance-scoped, and QuotaGate's only
+// other dependencies (InstancePoller.GetInstances, tokens.TokenStoreReader)
+// are read-only. A spy asserting "no session-stop method was called" would
+// be vacuously true regardless of correctness, since QuotaGate has no
+// reference to any such method in the first place — the type system already
+// forecloses it, so this test only needs to pin the one real, checkable
+// behavior: Disable() fires exactly once per pause.
 func TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota(t *testing.T) {
 	poller := &mockInstancePoller{instances: []*session.Instance{
 		{Category: "", Status: session.Active},
@@ -455,7 +462,50 @@ func TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota(
 	if ctrl.disableCalls != 1 {
 		t.Fatalf("disableCalls = %d, want exactly 1", ctrl.disableCalls)
 	}
-	if ctrl.sessionStopCalls != 0 {
-		t.Errorf("sessionStopCalls = %d, want 0 — QuotaGate must never touch a live session instance directly", ctrl.sessionStopCalls)
+}
+
+// TestReconcile_should_ResetHysteresisCounters_When_HardOverrideFires is the
+// architecture-review BLOCKER regression guard: plan.md Task 2.1.2a requires
+// the hard-override disable branch to reset both consecutiveBelow/Above
+// counters, since the hard override bypasses them entirely. Without the
+// reset, a soft-threshold near-miss (consecutiveBelow left nonzero by an
+// interrupted run) can survive a hard-override pause and cause a premature
+// re-pause on the very first tick after a later manual re-enable, instead of
+// requiring a fresh ConsecutiveTicksToPause run.
+func TestReconcile_should_ResetHysteresisCounters_When_HardOverrideFires(t *testing.T) {
+	poller := &mockInstancePoller{}
+	ctrl := &countingFeatureController{enabled: true}
+	bus := events.NewEventBus(10)
+	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
+	cfg.Enabled = true
+	cfg.ConsecutiveTicksToPause = 2
+	cfg.PauseBelowHeadroomPct = 20.0
+	cfg.AssumedWindowTokenBudget = 1000
+
+	// Drive one below-threshold tick first, leaving a stale consecutiveBelow==1
+	// (not yet enough to trigger the soft-threshold pause on its own).
+	store := &fakeTokenStore{results: fakeResultsWithUsage(900)} // 10% remaining
+	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
+	qg.Reconcile(context.Background())
+	qg.mu.Lock()
+	stale := qg.state.consecutiveBelow
+	qg.mu.Unlock()
+	if stale != 1 {
+		t.Fatalf("test precondition failed: consecutiveBelow = %d after one below-threshold tick, want 1", stale)
+	}
+
+	// Now the hard signal fires, disabling immediately and — per the fix —
+	// resetting both counters rather than leaving the stale 1 in place.
+	qg.recordRateLimitEvent(time.Now())
+	qg.Reconcile(context.Background())
+
+	qg.mu.Lock()
+	below, above := qg.state.consecutiveBelow, qg.state.consecutiveAbove
+	qg.mu.Unlock()
+	if below != 0 || above != 0 {
+		t.Errorf("consecutiveBelow=%d consecutiveAbove=%d after hard-override disable, want both 0", below, above)
+	}
+	if ctrl.disableCalls != 1 {
+		t.Fatalf("disableCalls = %d, want 1", ctrl.disableCalls)
 	}
 }

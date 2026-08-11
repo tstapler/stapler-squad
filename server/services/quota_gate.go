@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -24,6 +25,10 @@ const (
 
 	quotaGateNotifyCooldown        = 5 * time.Minute
 	quotaGateUncalibratedLogPeriod = time.Hour
+
+	// Pause-reason values, compared against in StatusDetail and notifyPaused.
+	reasonHardOverride  = "hard_override"
+	reasonSoftThreshold = "soft_threshold"
 )
 
 // RateLimitAggregate tracks the hard/reactive override signal: whether any
@@ -76,6 +81,15 @@ type gateState struct {
 // separate, lighter-weight seam (ShouldThrottleForeground) rather than
 // Disable/Enable.
 type QuotaGate struct {
+	// mu guards rateLimits/state/foregroundThrottleUntil below. Reconcile holds
+	// it for its entire body, including the calls it makes into
+	// backlogCtrl.Enable/Disable and eventBus.Publish — safe today because
+	// both are non-blocking and never call back into QuotaGate (Enable/Disable
+	// only toggle a channel/goroutine under BacklogController's own separate
+	// lock; Publish fans out over a buffered channel with a non-blocking
+	// select). If either dependency ever becomes blocking or re-entrant, this
+	// invariant breaks (sync.Mutex is not reentrant) and must be revisited —
+	// do not add a call into QuotaGate from inside either of those paths.
 	mu          sync.Mutex
 	cfgFn       func() config.QuotaConfig
 	tokenStore  tokens.TokenStoreReader
@@ -143,7 +157,7 @@ func (g *QuotaGate) StatusDetail() string {
 	defer g.mu.Unlock()
 
 	if g.state.pausedByQuota {
-		if g.state.lastPauseReason == "hard_override" {
+		if g.state.lastPauseReason == reasonHardOverride {
 			return fmt.Sprintf("Paused: a session hit the usage limit within the last %d minutes.", cfg.RateLimitWindowMinutes)
 		}
 		return fmt.Sprintf("Paused: session-quota headroom below threshold (%.0f%% remaining; threshold %.0f%%).",
@@ -225,7 +239,16 @@ func (g *QuotaGate) Reconcile(ctx context.Context) {
 	hard := g.rateLimits.hasRecentRateLimitEvent(now, time.Duration(cfg.RateLimitWindowMinutes)*time.Minute)
 
 	if hard && current {
-		g.disable(ctx, cfg, "hard_override", HeadroomEstimate{})
+		// Bypasses the consecutive-tick counters entirely — the hard override
+		// supersedes whatever the soft signal was tracking, so both counters
+		// must be reset too. Without this, a soft-threshold near-miss
+		// (consecutiveBelow left at a nonzero value by an interrupted run) can
+		// survive a hard-override pause and cause a premature re-pause on the
+		// very first tick after a subsequent manual re-enable, instead of
+		// requiring a fresh ConsecutiveTicksToPause run.
+		g.state.consecutiveBelow = 0
+		g.state.consecutiveAbove = 0
+		g.disable(cfg, reasonHardOverride, HeadroomEstimate{})
 		return
 	}
 
@@ -253,7 +276,7 @@ func (g *QuotaGate) Reconcile(ctx context.Context) {
 		g.state.consecutiveAbove = 0
 		if g.state.consecutiveBelow >= cfg.ConsecutiveTicksToPause {
 			g.state.consecutiveBelow = 0
-			g.disable(ctx, cfg, "soft_threshold", estimate)
+			g.disable(cfg, reasonSoftThreshold, estimate)
 		}
 	case !hard && !current && g.state.pausedByQuota && estimate.PctRemaining >= cfg.PauseBelowHeadroomPct+cfg.ResumeMarginPct:
 		g.state.consecutiveAbove++
@@ -281,7 +304,9 @@ func (g *QuotaGate) Reconcile(ctx context.Context) {
 // must never fire while hard == true, both invariants already encoded in
 // that same switch case's condition.
 
-func (g *QuotaGate) disable(ctx context.Context, cfg config.QuotaConfig, reason string, estimate HeadroomEstimate) {
+// disable takes no context: FeatureController.Disable() has no ctx parameter
+// (unlike Enable), so there is nothing to thread through here.
+func (g *QuotaGate) disable(cfg config.QuotaConfig, reason string, estimate HeadroomEstimate) {
 	if err := g.backlogCtrl.Disable(); err != nil {
 		log.Error("QuotaGate: failed to disable backlog", "err", err)
 		return
@@ -313,21 +338,38 @@ func (g *QuotaGate) enable(ctx context.Context, cfg config.QuotaConfig, estimate
 // call them directly on a freshly-constructed, single-goroutine QuotaGate,
 // where the mutex is not contended.
 
+// withinManualOverrideGrace reports whether now is still within
+// cfg.ManualOverrideGraceMinutes of the last detected manual toggle — used to
+// bypass the notify cooldown so a re-pause/re-resume right after a manual
+// override is never silently suppressed.
+func (g *QuotaGate) withinManualOverrideGrace(cfg config.QuotaConfig, now time.Time) bool {
+	return !g.state.manualOverrideAt.IsZero() &&
+		now.Sub(g.state.manualOverrideAt) < time.Duration(cfg.ManualOverrideGraceMinutes)*time.Minute
+}
+
+// shouldNotify reports whether a notification should fire now, and updates
+// *lastAt when it does. withinGrace bypasses the cooldown entirely.
+func (g *QuotaGate) shouldNotify(lastAt *time.Time, withinGrace bool, now time.Time) bool {
+	if !withinGrace && !lastAt.IsZero() && now.Sub(*lastAt) < quotaGateNotifyCooldown {
+		return false
+	}
+	*lastAt = now
+	return true
+}
+
 func (g *QuotaGate) notifyPaused(cfg config.QuotaConfig, reason string, estimate HeadroomEstimate) {
 	now := time.Now()
-	withinGrace := !g.state.manualOverrideAt.IsZero() &&
-		now.Sub(g.state.manualOverrideAt) < time.Duration(cfg.ManualOverrideGraceMinutes)*time.Minute
-	if !withinGrace && !g.state.lastPauseNotifyAt.IsZero() && now.Sub(g.state.lastPauseNotifyAt) < quotaGateNotifyCooldown {
+	withinGrace := g.withinManualOverrideGrace(cfg, now)
+	if !g.shouldNotify(&g.state.lastPauseNotifyAt, withinGrace, now) {
 		return
 	}
-	g.state.lastPauseNotifyAt = now
 
 	var msg string
 	switch {
 	case withinGrace:
 		msg = fmt.Sprintf("Backlog was manually re-enabled at %s but quota is still critical — pausing again.",
 			g.state.manualOverrideAt.Format("3:04 PM"))
-	case reason == "hard_override":
+	case reason == reasonHardOverride:
 		msg = fmt.Sprintf("Backlog paused: a session hit the usage limit within the last %d minutes. Resumes automatically once no recent rate-limit events are observed.",
 			cfg.RateLimitWindowMinutes)
 	default:
@@ -337,8 +379,8 @@ func (g *QuotaGate) notifyPaused(cfg config.QuotaConfig, reason string, estimate
 
 	g.eventBus.Publish(events.NewNotificationEvent(
 		quotaGateNotifierKey, "", uuid.New().String(),
-		int32(8), // NOTIFICATION_TYPE_WARNING
-		int32(3), // NOTIFICATION_PRIORITY_HIGH
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
 		"Backlog Automation Paused", msg,
 		map[string]string{"type": quotaGatePausedType, "reason": reason},
 	))
@@ -346,20 +388,18 @@ func (g *QuotaGate) notifyPaused(cfg config.QuotaConfig, reason string, estimate
 
 func (g *QuotaGate) notifyResumed(cfg config.QuotaConfig, estimate HeadroomEstimate) {
 	now := time.Now()
-	withinGrace := !g.state.manualOverrideAt.IsZero() &&
-		now.Sub(g.state.manualOverrideAt) < time.Duration(cfg.ManualOverrideGraceMinutes)*time.Minute
-	if !withinGrace && !g.state.lastResumeNotifyAt.IsZero() && now.Sub(g.state.lastResumeNotifyAt) < quotaGateNotifyCooldown {
+	withinGrace := g.withinManualOverrideGrace(cfg, now)
+	if !g.shouldNotify(&g.state.lastResumeNotifyAt, withinGrace, now) {
 		return
 	}
-	g.state.lastResumeNotifyAt = now
 
 	msg := fmt.Sprintf("Backlog automation resumed: session-quota headroom recovered to ~%.0f%% (threshold %.0f%%). Backlog dispatch resumes automatically.",
 		estimate.PctRemaining, cfg.PauseBelowHeadroomPct)
 
 	g.eventBus.Publish(events.NewNotificationEvent(
 		quotaGateNotifierKey, "", uuid.New().String(),
-		int32(12), // NOTIFICATION_TYPE_STATUS_CHANGE
-		int32(2),  // NOTIFICATION_PRIORITY_MEDIUM
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		"Backlog Automation Resumed", msg,
 		map[string]string{"type": quotaGateResumedType},
 	))
