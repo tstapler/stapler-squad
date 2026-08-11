@@ -319,16 +319,11 @@ type Instance struct {
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
-	// conversationClearedAt records when ClearConversationState() last ran.
-	// Read by tryExtractConversationUUID's DetectByPath fallback so a cold-restore
-	// recovery attempt does not resurrect a JSONL that predates an explicit
-	// "start fresh" request. In-memory only (not persisted): does not survive a
-	// stapler-squad process restart — see ADR-001, Consequences.
-	//
-	// Guarded by claudeSessionMu (same lock as claudeSession/HistoryFilePath),
-	// NOT by i.mu — see tryExtractConversationUUID for why it takes
-	// claudeSessionMu itself around the read/compare instead of relying on a
-	// caller-held lock.
+	// conversationClearedAt records when ClearConversationState() last ran, so
+	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
+	// predating an explicit "start fresh" request. In-memory only — does not
+	// survive a process restart (see ADR-001, Consequences). Guarded by
+	// claudeSessionMu, not i.mu.
 	conversationClearedAt time.Time
 
 	// claudeSessionMu protects claudeSession, conversationClearedAt, and
@@ -868,6 +863,25 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	})
 }
 
+// recoverConversationBeforeLaunch tries to recover a persisted conversation UUID
+// from disk BEFORE initTmuxSession() reads it to decide whether to embed --resume.
+// Shared by startLocked() and legacy start() so the two call sites can't drift
+// (pre-mortem failure mode #4). Falls through to tryExtractConversationUUID's
+// DetectByPath fallback, guarded by conversationClearedAt.
+//
+// Only changes the actual launch command for a genuinely fresh Instance:
+// initTmuxSession() early-returns via HasSession() whenever a TmuxSession object
+// already exists in-process (e.g. after KillSession()), so this recovery is a
+// no-op for in-process restart-churn — confirmed by
+// TestKillSessionThenStart_DoesNotRebuildLaunchCommand; see plan.md Risk Control
+// item 8.
+func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
+	if firstTimeSetup || i.pm().IsAlive() || i.HasClaudeSession() {
+		return
+	}
+	i.tryExtractConversationUUID()
+}
+
 // startLocked is the actor-safe body of Start(). Called only from within
 // sendSyncErr/send closures. The param is named actorState (not s) to make
 // actor-only ownership visually distinct and prevent future edits from treating
@@ -892,28 +906,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
-	if !firstTimeSetup && !i.pm().IsAlive() && !i.HasClaudeSession() {
-		// Recover a persisted conversation UUID from disk BEFORE initTmuxSession()
-		// reads i.claudeSession.ConversationUUID to decide whether to embed --resume.
-		// i.pm().IsAlive() false here means tryExtractConversationUUID's internal
-		// PID fast-path is a no-op (no live process to inspect), so it falls
-		// straight to the DetectByPath fallback — guarded by conversationClearedAt
-		// against resurrecting an explicitly-cleared conversation (see
-		// ClearConversationState).
-		//
-		// This only changes the launch command for a genuinely fresh Instance
-		// (initTmuxSession()'s underlying TmuxSession pointer is nil, i.e. a real
-		// stapler-squad process restart/boot): initTmuxSession() below early-returns
-		// via HasSession() whenever a TmuxSession object already exists in-process
-		// (e.g. after KillSession()), in which case buildLaunchCommand() is not
-		// called and this recovery only updates in-memory/persisted state for later
-		// callers, not this relaunch's command — confirmed by
-		// TestSpike_KillSessionThenStart_DoesNotRebuildLaunchCommand; see
-		// project_plans/cold-restart-uuid-recovery/implementation/plan.md Risk
-		// Control item 8.
-		i.tryExtractConversationUUID()
-	}
-
+	i.recoverConversationBeforeLaunch(firstTimeSetup)
 	i.initTmuxSession()
 
 	i.pm().ResetExitOnce()
@@ -1096,12 +1089,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
-	if !firstTimeSetup && !i.pm().IsAlive() && !i.HasClaudeSession() {
-		// See the identical guard in startLocked() for the full rationale and the
-		// scope caveat (only affects the launch command for a genuinely fresh
-		// Instance, not a reused in-process TmuxSession — Risk Control item 8).
-		i.tryExtractConversationUUID()
-	}
+	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
 	i.initTmuxSession()
 

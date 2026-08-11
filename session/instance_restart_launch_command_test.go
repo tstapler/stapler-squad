@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSpike_KillSessionThenStart_DoesNotRebuildLaunchCommand is the Epic 1.0
+// TestKillSessionThenStart_DoesNotRebuildLaunchCommand is the Epic 1.0
 // verification spike from project_plans/cold-restart-uuid-recovery/implementation/plan.md
 // (Task 1.0.1a). It traces whether Instance.KillSession() + Instance.Start(false) —
 // the exact sequence session/health.go's dead-pane recovery loop uses — rebuilds the
@@ -31,7 +31,7 @@ import (
 // TmuxSession. That gap is tracked as a named follow-up in plan.md's Risk Control
 // (item 5 references pre-mortem #4; the HasSession()-reuse gap itself is a distinct,
 // separately-scoped follow-up — see ADR-001) rather than fixed in this plan.
-func TestSpike_KillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
+func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

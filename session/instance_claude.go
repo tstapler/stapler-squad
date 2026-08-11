@@ -305,12 +305,12 @@ func (i *Instance) ClearConversationState() {
 // cold restore — it is not a degraded case despite the fast path being tried
 // first.
 //
-// Does not require or assume any caller-held lock: it manages its own locking
-// internally for conversationClearedAt (see the DetectByPath fallback below)
-// and, like before, directly mutates i.claudeSession/i.HistoryFilePath without
-// a lock — a pre-existing, out-of-scope exposure on the real lock-free call
-// sites (SwitchWorkspace, and the two cold-restore call sites in instance.go)
-// that this comment does not claim to have fixed.
+// Does not require or assume any caller-held lock: it takes claudeSessionMu
+// itself around every read/write of claudeSession, HistoryFilePath, and
+// conversationClearedAt. The initial early-return check below is the one
+// exception — it is an unlocked read, a pre-existing, out-of-scope exposure
+// on the real lock-free call sites (SwitchWorkspace, and the two cold-restore
+// call sites in instance.go) that this fix does not claim to have closed.
 func (i *Instance) tryExtractConversationUUID() {
 	// Skip if we already have a conversation UUID.
 	if i.claudeSession != nil && i.claudeSession.ConversationUUID != "" {
@@ -369,12 +369,13 @@ func (i *Instance) tryExtractConversationUUID() {
 		return
 	}
 
-	// Set the fields directly (caller holds stateMutex).
+	i.claudeSessionMu.Lock()
 	if i.claudeSession == nil {
 		i.claudeSession = &ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = info.ConversationUUID
 	i.HistoryFilePath = info.HistoryFilePath
+	i.claudeSessionMu.Unlock()
 	log.ForSession(i.Title).Info("uuid assigned via tryextractconversationuuid", "uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 }
 
