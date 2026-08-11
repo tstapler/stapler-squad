@@ -24,16 +24,29 @@ export function ImportSessionsContainer() {
   const { commitImport } = useImportSessionService();
   const [previewCandidate, setPreviewCandidate] =
     useState<ExternalSessionCandidateRef | null>(null);
+  // importQueue holds candidates still waiting to be previewed after
+  // previewCandidate, so a bulk "Import selected" (N candidates) works
+  // through all of them one at a time instead of only the first.
+  const [importQueue, setImportQueue] = useState<ExternalSessionCandidateRef[]>([]);
   const [pendingKill, setPendingKill] = useState<PendingKill | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
 
-  const handleImport = useCallback((candidates: ExternalSessionCandidateRef[]) => {
-    const [first] = candidates;
-    if (first) {
-      setCommitError(null);
-      setPreviewCandidate(first);
-    }
+  // advanceQueue pulls the next candidate (if any) off importQueue and makes
+  // it the active preview, or clears previewCandidate once the queue is
+  // empty. Call this whenever the current candidate's flow (preview
+  // cancelled, commit succeeded with no kill needed, or kill dialog closed)
+  // has finished, so the next selected candidate is picked up automatically.
+  const advanceQueue = useCallback((queue: ExternalSessionCandidateRef[]) => {
+    const [next, ...rest] = queue;
+    setImportQueue(rest);
+    setPreviewCandidate(next ?? null);
   }, []);
+
+  const handleImport = useCallback((candidates: ExternalSessionCandidateRef[]) => {
+    if (candidates.length === 0) return;
+    setCommitError(null);
+    advanceQueue(candidates);
+  }, [advanceQueue]);
 
   const handleConfirmPreview = useCallback(
     async ({
@@ -54,16 +67,20 @@ export function ImportSessionsContainer() {
         setCommitError(result?.error || "Failed to import session.");
         return;
       }
-      setPreviewCandidate(null);
       if (result.pidIdentity) {
+        setPreviewCandidate(null);
         setPendingKill({
           instanceId: result.instanceId,
           pidIdentity: result.pidIdentity,
           program: preview.program,
         });
+        return;
       }
+      // No kill decision needed for this candidate -- move on to the next
+      // queued candidate (if any) right away.
+      advanceQueue(importQueue);
     },
-    [previewCandidate, commitImport]
+    [previewCandidate, commitImport, importQueue, advanceQueue]
   );
 
   const handleKillStatusChange = useCallback((_status: ImportRowStatus) => {
@@ -85,7 +102,7 @@ export function ImportSessionsContainer() {
         <ImportPreviewDialog
           candidate={previewCandidate}
           onConfirm={handleConfirmPreview}
-          onCancel={() => setPreviewCandidate(null)}
+          onCancel={() => advanceQueue(importQueue)}
         />
       )}
 
@@ -95,7 +112,10 @@ export function ImportSessionsContainer() {
           pidIdentity={pendingKill.pidIdentity}
           program={pendingKill.program}
           onStatusChange={handleKillStatusChange}
-          onClose={() => setPendingKill(null)}
+          onClose={() => {
+            setPendingKill(null);
+            advanceQueue(importQueue);
+          }}
         />
       )}
     </div>
