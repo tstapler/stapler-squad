@@ -79,14 +79,27 @@ type ApprovalMetadataProvider interface {
 	GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata
 }
 
-// riskLevelRank orders RiskLevel strings by severity, highest first. Unrecorded ("") ranks
-// alongside "high" — fail-safe, since an unclassified request must never be treated as safe.
-var riskLevelRank = map[string]int{
+// riskLevelRankTable orders RiskLevel strings by severity, highest first. Unrecorded ("")
+// ranks alongside "high" — fail-safe, since an unclassified request must never be treated as
+// safe. Never read this map directly — use riskLevelRank(), which falls back to the
+// unrecorded rank for any key (including a future/unrecognized RiskLevel string) absent from
+// this table, so an unknown value never silently ranks *below* "low" (the Go zero value for
+// a missing map key). Mirrors web-app/src/lib/sessions/riskLevel.ts's riskLevelRank().
+var riskLevelRankTable = map[string]int{
 	"critical": 4,
 	"high":     3,
 	"":         3,
 	"medium":   2,
 	"low":      1,
+}
+
+// riskLevelRank returns level's fail-safe rank, falling back to the unrecorded ("") rank for
+// any value not in riskLevelRankTable — see that table's doc comment for why.
+func riskLevelRank(level string) int {
+	if rank, ok := riskLevelRankTable[level]; ok {
+		return rank
+	}
+	return riskLevelRankTable[""]
 }
 
 // highestRiskApproval returns the most dangerous of a session's concurrent pending approvals
@@ -98,7 +111,7 @@ var riskLevelRank = map[string]int{
 func highestRiskApproval(approvals []ApprovalMetadata) ApprovalMetadata {
 	best := approvals[0]
 	for _, a := range approvals[1:] {
-		if riskLevelRank[a.RiskLevel] > riskLevelRank[best.RiskLevel] {
+		if riskLevelRank(a.RiskLevel) > riskLevelRank(best.RiskLevel) {
 			best = a
 		}
 	}

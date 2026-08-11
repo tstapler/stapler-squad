@@ -1175,12 +1175,23 @@ func TestRiskLevelRank_MatchesTypeScriptMirror(t *testing.T) {
 		"low":      1,
 	}
 	for level, wantRank := range want {
-		if got := riskLevelRank[level]; got != wantRank {
-			t.Errorf("riskLevelRank[%q] = %d, want %d", level, got, wantRank)
+		if got := riskLevelRank(level); got != wantRank {
+			t.Errorf("riskLevelRank(%q) = %d, want %d", level, got, wantRank)
 		}
 	}
-	if len(riskLevelRank) != len(want) {
-		t.Errorf("riskLevelRank has %d entries, want %d — update this test's `want` map and riskLevel.ts's RISK_LEVEL_RANK together", len(riskLevelRank), len(want))
+	if len(riskLevelRankTable) != len(want) {
+		t.Errorf("riskLevelRankTable has %d entries, want %d — update this test's `want` map and riskLevel.ts's RISK_LEVEL_RANK together", len(riskLevelRankTable), len(want))
+	}
+}
+
+// TestRiskLevelRank_should_FallBackToUnrecordedRank_When_ValueIsUnrecognized covers a PR
+// review finding (github.com/tstapler/stapler-squad/pull/411): a plain map lookup returns
+// Go's zero value (0) for a key absent from riskLevelRankTable, which would rank a future/
+// unrecognized RiskLevel string *below* "low" (rank 1) — the opposite of the fail-safe intent
+// applied everywhere else. riskLevelRank() must fall back to the unrecorded rank instead.
+func TestRiskLevelRank_should_FallBackToUnrecordedRank_When_ValueIsUnrecognized(t *testing.T) {
+	if got, want := riskLevelRank("some-future-risk-level"), riskLevelRank(""); got != want {
+		t.Errorf("riskLevelRank(unrecognized) = %d, want %d (the unrecorded/fail-safe rank)", got, want)
 	}
 }
 

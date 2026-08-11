@@ -865,6 +865,22 @@ describe("ReviewQueuePanel — severity", () => {
 
     expect(screen.getByTestId("severity-badge-unrecorded")).toHaveAttribute("aria-label", "Severity not recorded");
   });
+
+  it("ReviewQueuePanel_should_BucketUnrecognizedRiskLevel_When_FilteringByNotRecorded", () => {
+    // PR #411 review finding: an unrecognized future risk_level value must still be
+    // reachable via the "Not recorded" chip, not become its own unfilterable key.
+    const unrecognized = makeApprovalItem({ sessionId: "s-future", sessionName: "Future Item", riskLevel: "extreme" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([unrecognized]));
+
+    renderPanel();
+    openFilters();
+
+    const notRecordedChip = screen.getByRole("button", { name: /Not recorded \(1\)/ });
+    fireEvent.click(notRecordedChip);
+
+    expect(notRecordedChip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-future")).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

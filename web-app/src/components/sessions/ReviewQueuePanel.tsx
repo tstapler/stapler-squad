@@ -153,8 +153,16 @@ const UNRECORDED_SEVERITY = "unrecorded";
 // being omitted, since an unrecorded-severity item must still be reachable via the filter UI.
 const SEVERITY_FILTER_VALUES = ["critical", "high", "medium", "low", UNRECORDED_SEVERITY] as const;
 
+// The known, filterable RiskLevel values (SEVERITY_FILTER_VALUES minus the sentinel) —
+// derived once so severityFilterKey and SEVERITY_FILTER_VALUES can't drift apart.
+const KNOWN_RISK_LEVELS = new Set<string>(SEVERITY_FILTER_VALUES.filter((v) => v !== UNRECORDED_SEVERITY));
+
+// Buckets any value outside the known RiskLevel set (absent, "", or an unrecognized future
+// value) into UNRECORDED_SEVERITY, so every item is always reachable through one of the
+// SEVERITY_FILTER_VALUES chips — a future/unrecognized risk_level can't become its own
+// unfilterable key (PR #411 review finding).
 function severityFilterKey(riskLevel: string | undefined): string {
-  return riskLevel || UNRECORDED_SEVERITY;
+  return riskLevel && KNOWN_RISK_LEVELS.has(riskLevel) ? riskLevel : UNRECORDED_SEVERITY;
 }
 
 // Category -> emoji prefix for the escalation reason line (WCAG 1.4.1 — not color-only).

@@ -11,6 +11,10 @@ interface SeverityInfo {
   abbr: string;
   icon: string;
   variant: SeverityVariant;
+  // testIdSuffix is always one of the 5 known strings below, even for an unrecognized
+  // riskLevel input — bounds the data-testid/DOM contract to a fixed set instead of
+  // embedding a raw, unbounded backend string (PR #411 review finding).
+  testIdSuffix: "critical" | "high" | "medium" | "low" | "unrecorded";
 }
 
 // getRiskLevelInfo maps a classifier.RiskLevel string ("low"/"medium"/"high"/"critical") to
@@ -19,15 +23,15 @@ interface SeverityInfo {
 export function getRiskLevelInfo(riskLevel: string): SeverityInfo {
   switch (riskLevel) {
     case "critical":
-      return { label: RISK_LEVEL_LABELS.critical, abbr: "CRIT", icon: "⛔", variant: "critical" };
+      return { label: RISK_LEVEL_LABELS.critical, abbr: "CRIT", icon: "⛔", variant: "critical", testIdSuffix: "critical" };
     case "high":
-      return { label: RISK_LEVEL_LABELS.high, abbr: "HIGH", icon: "🔴", variant: "high" };
+      return { label: RISK_LEVEL_LABELS.high, abbr: "HIGH", icon: "🔴", variant: "high", testIdSuffix: "high" };
     case "medium":
-      return { label: RISK_LEVEL_LABELS.medium, abbr: "MED", icon: "🟠", variant: "medium" };
+      return { label: RISK_LEVEL_LABELS.medium, abbr: "MED", icon: "🟠", variant: "medium", testIdSuffix: "medium" };
     case "low":
-      return { label: RISK_LEVEL_LABELS.low, abbr: "LOW", icon: "🟢", variant: "low" };
+      return { label: RISK_LEVEL_LABELS.low, abbr: "LOW", icon: "🟢", variant: "low", testIdSuffix: "low" };
     default:
-      return { label: "Severity not recorded", abbr: "N/A", icon: "⚪", variant: "unknown" };
+      return { label: "Severity not recorded", abbr: "N/A", icon: "⚪", variant: "unknown", testIdSuffix: "unrecorded" };
   }
 }
 
@@ -51,7 +55,7 @@ export function SeverityBadge({ riskLevel, compact = false }: SeverityBadgeProps
       role="img"
       aria-label={ariaLabel}
       title={ariaLabel}
-      data-testid={`severity-badge-${riskLevel || "unrecorded"}`}
+      data-testid={`severity-badge-${info.testIdSuffix}`}
     >
       <span className={styles.icon} aria-hidden="true">{info.icon}</span>
       {compact ? info.abbr : info.label}
