@@ -1036,6 +1036,8 @@ func TestFormatDirtyPathsRejectionMessage_EmptyPaths_UsesGenericWording(t *testi
 	msg := formatDirtyPathsRejectionMessage(nil)
 	assert.Contains(t, msg, "uncommitted changes")
 	assert.NotContains(t, msg, "git add -A")
+}
+
 // --- request_review: Phase 2 CAS generalization (Epic 4.1) ---
 
 // TestRequestReview_TransitionsPRPendingItemToReview verifies FR1's happy
