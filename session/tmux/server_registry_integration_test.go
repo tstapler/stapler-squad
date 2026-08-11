@@ -297,19 +297,11 @@ func TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff(t *testing.T)
 	t.Cleanup(func() { registry.SetFastRecheckWaitStartHook(nil) })
 	keepaliveName := tmux.TmuxPrefix + "keepalive"
 
-	// sentinelName is a session distinct from both the keepalive session
-	// (killed below to elevate backoff) and the target session (killed
-	// later to assert detection). Without it, once both keepalive and the
-	// target session are gone the isolated server has zero sessions left,
-	// and tmux's default exit-empty behavior tears the whole server process
-	// down -- confirmed directly: every list-sessions call issued afterward
-	// (including syncSessionsFastRecheck's) then fails outright ("exit
-	// status 1", connection refused) instead of returning an empty list, so
-	// syncSessionsLocked can't diff/fire at all. That raced against exactly
-	// which of the two fast-recheck attempts happened to run before the
-	// server died, producing a ~50/50 flake unrelated to the fix under test.
-	// This sentinel (never killed) keeps the server itself alive for the
-	// whole test regardless of which other sessions are killed.
+	// sentinelName is never killed, so the isolated server always has at
+	// least one session left -- without it, killing both the keepalive and
+	// target sessions leaves zero sessions, and tmux's exit-empty behavior
+	// tears the whole server down, failing every subsequent list-sessions
+	// call instead of returning an empty list.
 	sentinelName := "testpaneexit-elevated-backoff-sentinel"
 	newSessionWithRetry(t, socket, "-d", "-s", sentinelName, "sleep 300")
 
