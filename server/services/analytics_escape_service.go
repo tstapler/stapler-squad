@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -35,27 +36,34 @@ func (s *SessionService) QueryEscapeAnalytics(
 		pageSize = 1000
 	}
 
-	// Build query
-	query := s.analyticsClient.EscapeEvent.Query().
-		Where(escapeevent.SessionID(req.Msg.SessionId)).
-		Order(ent.Asc(escapeevent.FieldSessionSeq)).
-		Limit(pageSize + 1) // fetch one extra to determine if there's a next page
-
+	// Filters shared between the page query and the total-count query below —
+	// the count must reflect all matching rows, not just the cursor'd page.
+	filters := []predicate.EscapeEvent{escapeevent.SessionID(req.Msg.SessionId)}
 	if req.Msg.Stage != "" {
-		query = query.Where(escapeevent.Stage(req.Msg.Stage))
+		filters = append(filters, escapeevent.Stage(req.Msg.Stage))
 	}
 	if req.Msg.SequenceType != "" {
-		query = query.Where(escapeevent.SequenceType(req.Msg.SequenceType))
+		filters = append(filters, escapeevent.SequenceType(req.Msg.SequenceType))
 	}
 	if req.Msg.MangledOnly {
-		query = query.Where(escapeevent.Mangled(true))
+		filters = append(filters, escapeevent.Mangled(true))
 	}
 	if req.Msg.StartTime != nil {
-		query = query.Where(escapeevent.WallTimeGTE(req.Msg.StartTime.AsTime()))
+		filters = append(filters, escapeevent.WallTimeGTE(req.Msg.StartTime.AsTime()))
 	}
 	if req.Msg.EndTime != nil {
-		query = query.Where(escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
+		filters = append(filters, escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
 	}
+
+	totalCount, err := s.analyticsClient.EscapeEvent.Query().Where(filters...).Count(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	query := s.analyticsClient.EscapeEvent.Query().
+		Where(filters...).
+		Order(ent.Asc(escapeevent.FieldSessionSeq)).
+		Limit(pageSize + 1) // fetch one extra to determine if there's a next page
 
 	// Cursor-based pagination via session_seq
 	if req.Msg.PageToken != "" {
@@ -107,7 +115,7 @@ func (s *SessionService) QueryEscapeAnalytics(
 	return connect.NewResponse(&sessionv1.QueryEscapeAnalyticsResponse{
 		Events:        protoEvents,
 		NextPageToken: nextPageToken,
-		TotalCount:    int32(len(protoEvents)),
+		TotalCount:    int32(totalCount),
 	}), nil
 }
 
