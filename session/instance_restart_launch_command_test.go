@@ -41,7 +41,7 @@ func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
-		Program:          "claude",
+		Program:          stubClaudeBinary(t),
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_spike_%d_", time.Now().UnixNano()),

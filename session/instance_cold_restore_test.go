@@ -37,6 +37,22 @@ func coldRestoreSocket(t *testing.T) string {
 	return name
 }
 
+// stubClaudeBinary writes an executable "claude" stub (a plain `sleep 300`
+// script) to a temp dir and returns its path. Using this as Instance.Program
+// (instead of the literal string "claude") keeps isClaude()'s basename match
+// — so buildLaunchCommand embeds --resume — while guaranteeing the tmux pane
+// can actually exec something that stays alive: the real claude CLI is not
+// installed on CI runners, only on a developer machine that happens to have
+// it in PATH, and a pane whose command exits almost instantly makes
+// TmuxAlive() a race against remain-on-exit instead of a reliable check.
+func stubClaudeBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nsleep 300\n"), 0o755))
+	return path
+}
+
 // TestColdRestore_WithUUID verifies that when the tmux session is dead and a
 // Claude conversation UUID is present, Start(false) performs a cold restore by
 // launching a new tmux session. Note: --resume flag injection is verified at the
@@ -179,7 +195,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
-		Program:          "claude",
+		Program:          stubClaudeBinary(t),
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
