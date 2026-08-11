@@ -332,6 +332,28 @@ Task 1.3.2a (file "SpawnShell silent error" follow-up)          — independent,
   This is **new** coverage — no existing test exercises `onCreateSession` rejecting in the Alias branch; the only existing throw test in `Omnibar.alias.test.tsx` (lines 437-471) covers the *detection* effect throwing, not `onCreateSession` itself.
 - Files: `web-app/src/components/sessions/__tests__/Omnibar.submitReset.test.tsx`
 
+##### Task 1.2.3c: Alias happy-path-no-error test (AC3, added by `validation.md`) (~3 min)
+- Same `describe` block:
+  ```ts
+  it("does not show an error message when the Alias submission succeeds normally", async () => {
+    const onCreateSession = jest.fn().mockResolvedValue(undefined);
+    const onClose = jest.fn();
+    const { input } = renderOmnibar({ onCreateSession, onClose });
+
+    await typeAndDetect(input, "@ssq my-feature");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    });
+
+    // onClose fired exactly once — no retry/re-entry into the error branch.
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // The only place error text renders is OmnibarCreationPanel.tsx:839's
+    // {error && <div className={errorClass}>{error}</div>}; assert it's absent.
+    expect(screen.queryByText(/failed to create session/i)).not.toBeInTheDocument();
+  });
+  ```
+- Files: `web-app/src/components/sessions/__tests__/Omnibar.submitReset.test.tsx`
+
 #### Story 1.2.4: Defense-in-depth reset test (AC6)
 **As a** developer, **I want** a test proving the `!isOpen` effect's new `setIsSubmitting(false)` actually prevents a stuck state across a close/reopen cycle, **so that** requirement 6 has direct coverage, not just code inspection.
 **Acceptance Criteria**: see Story 1.1.3's GWT (Requirement 6).
