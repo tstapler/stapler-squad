@@ -46,6 +46,15 @@ func LoadModelFamilyOverride(configPath string) (map[string]string, error) {
 		return nil, err
 	}
 	for family, modelID := range overrides {
+		// Override values bypass CreateWorkflow/UpdateWorkflow's save-time
+		// ValidateModel call (they never go through the RPC layer), but they
+		// reach the same fire-time sink (FireNow concatenates the resolved
+		// value into a `claude --model <value>` program string) — so they
+		// must be validated here too, or a malformed override file value
+		// becomes a shell-metacharacter injection vector.
+		if err := ValidateModel(modelID); err != nil {
+			return nil, fmt.Errorf("model family override %q has invalid model id %q: %w", family, modelID, err)
+		}
 		families[family] = modelID
 	}
 	return families, nil
