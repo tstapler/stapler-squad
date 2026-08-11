@@ -825,13 +825,23 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		}
 		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
 		log.ForSession(i.Title).Info("session exited unexpectedly", "reason", reason)
-		i.send(func(s *instanceState) {
+		// Blocks (sendSyncErr, not send) so the Active->Stopped transition has
+		// landed -- and its snapshot republished -- before EventExited fires below.
+		// This callback runs on the tmux control-mode reader goroutine, never on
+		// the actor's own goroutine, so blocking here cannot deadlock against the
+		// actor. Without this, sessionExitedPublisher (server/services/session_service.go)
+		// could publish the SessionUpdated event while the transition is still
+		// in-flight, racing GetStatus()/Snapshot() reads on the delivery path.
+		if err := i.sendSyncErr(func(s *instanceState) error {
 			if s.inst.Status == Active {
 				if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}
 			}
-		})
+			return nil
+		}); err != nil {
+			log.Warn("exit callback: status transition did not land", "session", i.Title, "err", err)
+		}
 		// Capture the diff snapshot before firing EventExited so listeners (e.g.
 		// sessionSummaryListener) can read a fresh i.GetDiffStats() synchronously
 		// from the callback — see ADR-002 / plan.md's "Diff-stat capture timing"

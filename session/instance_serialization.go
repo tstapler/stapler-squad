@@ -401,8 +401,22 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			}
 		}
 		// If the underlying tmux session is still alive (e.g. server crashed mid-write
-		// or exit callback fired falsely), recover it rather than leave it stuck as Stopped.
-		if instance.processManager.IsAlive() {
+		// or exit callback fired falsely), recover it rather than leave it stuck as
+		// Stopped. IsAlive() alone can't see remain-on-exit: it keeps the tmux
+		// session/pane around as a dead placeholder after the wrapped program exits
+		// (same distinction PaneProcessDead() draws for the health checker, see
+		// instance_tmux.go), so without the pane-exit check below, every session the
+		// health checker had just legitimately marked Stopped would be revived right
+		// back to Active on the very next LoadInstances() -- SessionHealthChecker's
+		// tick calls LoadInstances() every poll, so this raced the exact fix in
+		// session/health.go that makes freshly-created sessions reach Stopped promptly.
+		paneExited := false
+		if tb, ok := instance.processManager.(*TmuxBackend); ok {
+			if tm := tb.TmuxManager(); tm != nil {
+				_, _, paneExited = tm.PaneExitStatus()
+			}
+		}
+		if instance.processManager.IsAlive() && !paneExited {
 			log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
 			instance.loadStatus(Active)
 			if deferStart {

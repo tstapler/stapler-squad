@@ -2328,7 +2328,11 @@ func (s *SessionService) WatchSessions(
 				}
 			}
 			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-				if adapters.StatusToProto(inst.Status) != *req.Msg.StatusFilter {
+				// inst.GetStatus() reads the lock-free published snapshot rather than
+				// inst.Status directly -- see reconcileSessions' identical fix
+				// (9fcded805) for why a raw field read here races with the actor's
+				// transitionToLocked write under -race.
+				if adapters.StatusToProto(session.Status(inst.GetStatus())) != *req.Msg.StatusFilter {
 					continue
 				}
 			}
@@ -2361,7 +2365,7 @@ func (s *SessionService) WatchSessions(
 			}
 
 			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-				if event.Session != nil && adapters.StatusToProto(event.Session.Status) != *req.Msg.StatusFilter {
+				if event.Session != nil && adapters.StatusToProto(session.Status(event.Session.GetStatus())) != *req.Msg.StatusFilter {
 					continue
 				}
 			}
