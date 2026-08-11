@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -141,6 +142,74 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold start")
 }
 
+// TestColdRestore_WithoutUUID_RecoversFromJSONL verifies AC1/AC4 of
+// project_plans/cold-restart-uuid-recovery: when the tmux session is dead, the
+// in-memory conversation UUID is empty, but a same-path conversation JSONL exists
+// on disk, Start(false) recovers that UUID via the DetectByPath fallback BEFORE
+// building the launch command, so the revived session launches with --resume
+// instead of silently starting fresh. This is the exact regression
+// TestColdRestore_WithoutUUID left uncovered (see requirements.md's "Existing
+// related work").
+func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
+	checkTmuxAvailable(t)
+
+	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
+	fakeHome := t.TempDir()
+
+	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+		Title:            title,
+		Path:             t.TempDir(),
+		Program:          "claude",
+		SessionType:      SessionTypeDirectory,
+		AutoYes:          false,
+		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
+		TmuxServerSocket: coldRestoreSocket(t),
+	})
+	require.NoError(t, err)
+	defer func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Logf("cleanup warning: %v", cleanupErr)
+		}
+	}()
+
+	// Inject a fake home dir and pre-write a conversation JSONL for this
+	// instance's project path, as if a previous run had captured one. Uses a
+	// no-open-files mock inspector (not nil) because Start's post-launch
+	// tryExtractConversationUUID call re-runs once tmux is alive, hitting the
+	// PID fast path — a nil inspector would panic there. Same convention as
+	// history_linker_test.go's "no open files → always falls through to
+	// DetectByPath" mocks.
+	inst.historyDetector = NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome)
+	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
+	jsonlDir := filepath.Join(fakeHome, ".claude", "projects", ClaudeProjectDirName(inst.Path))
+	require.NoError(t, os.MkdirAll(jsonlDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(jsonlDir, fixtureUUID+".jsonl"), []byte("{}"), 0o644))
+
+	// No claudeSession set — instance.claudeSession remains nil, tmux dead.
+	assert.False(t, inst.TmuxAlive(), "tmux session must be dead before cold restore")
+
+	startCleanup, err := inst.StartWithCleanup(false)
+	require.NoError(t, err, "cold restore with recoverable JSONL should not error")
+	defer func() {
+		if startCleanup != nil {
+			if cleanupErr := startCleanup(); cleanupErr != nil {
+				t.Logf("startCleanup warning: %v", cleanupErr)
+			}
+		}
+	}()
+
+	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
+	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
+	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
+
+	assert.Contains(t, inst.LaunchCommand, "--resume", "launch command must embed --resume when a same-path JSONL was recoverable")
+	assert.Contains(t, inst.LaunchCommand, fixtureUUID)
+	assert.Equal(t, fixtureUUID, inst.GetConversationUUID())
+}
+
 // TestHotRestore_ExistingSession verifies that when the tmux session is already
 // alive, Start(false) attaches to it (hot restore) rather than creating a new one.
 func TestHotRestore_ExistingSession(t *testing.T) {
@@ -254,4 +323,72 @@ func TestIsStaleResumeExit(t *testing.T) {
 			assert.Equal(t, tt.want, isStaleResumeExit(tt.content))
 		})
 	}
+}
+
+// TestTryExtractConversationUUID_SkipsStaleJSONLAfterClear verifies AC3 of
+// project_plans/cold-restart-uuid-recovery: a DetectByPath candidate JSONL that
+// predates an explicit ClearConversationState() call must not be resurrected —
+// the guard leaves claudeSession nil / ConversationUUID empty rather than
+// resuming a conversation the user explicitly discarded. No live tmux needed:
+// tryExtractConversationUUID's PID fast path is skipped (bare Instance, pm() has
+// no session), so it goes straight to the DetectByPath fallback.
+func TestTryExtractConversationUUID_SkipsStaleJSONLAfterClear(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeHome := t.TempDir()
+	clearedAt := time.Now()
+
+	inst := &Instance{
+		Title:                 "test-skips-stale-after-clear",
+		Path:                  tmpDir,
+		SessionType:           SessionTypeDirectory,
+		conversationClearedAt: clearedAt,
+		historyDetector:       NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
+	}
+
+	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
+	jsonlDir := filepath.Join(fakeHome, ".claude", "projects", ClaudeProjectDirName(tmpDir))
+	require.NoError(t, os.MkdirAll(jsonlDir, 0o755))
+	jsonlPath := filepath.Join(jsonlDir, fixtureUUID+".jsonl")
+	require.NoError(t, os.WriteFile(jsonlPath, []byte("{}"), 0o644))
+	// Predates the clear.
+	staleTime := clearedAt.Add(-1 * time.Hour)
+	require.NoError(t, os.Chtimes(jsonlPath, staleTime, staleTime))
+
+	inst.tryExtractConversationUUID()
+
+	if inst.claudeSession != nil {
+		assert.Empty(t, inst.claudeSession.ConversationUUID, "a JSONL predating the explicit clear must not be resurrected")
+	}
+}
+
+// TestTryExtractConversationUUID_RecoversJSONLNewerThanClear verifies the guard
+// added for AC3 is one-sided: a JSONL written AFTER an explicit
+// ClearConversationState() call (e.g. a new conversation, later interrupted
+// again) is still recovered normally.
+func TestTryExtractConversationUUID_RecoversJSONLNewerThanClear(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeHome := t.TempDir()
+	clearedAt := time.Now()
+
+	inst := &Instance{
+		Title:                 "test-recovers-newer-than-clear",
+		Path:                  tmpDir,
+		SessionType:           SessionTypeDirectory,
+		conversationClearedAt: clearedAt,
+		historyDetector:       NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
+	}
+
+	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
+	jsonlDir := filepath.Join(fakeHome, ".claude", "projects", ClaudeProjectDirName(tmpDir))
+	require.NoError(t, os.MkdirAll(jsonlDir, 0o755))
+	jsonlPath := filepath.Join(jsonlDir, fixtureUUID+".jsonl")
+	require.NoError(t, os.WriteFile(jsonlPath, []byte("{}"), 0o644))
+	// Postdates the clear.
+	freshTime := clearedAt.Add(1 * time.Hour)
+	require.NoError(t, os.Chtimes(jsonlPath, freshTime, freshTime))
+
+	inst.tryExtractConversationUUID()
+
+	require.NotNil(t, inst.claudeSession)
+	assert.Equal(t, fixtureUUID, inst.claudeSession.ConversationUUID, "a JSONL postdating the explicit clear must still be recovered")
 }

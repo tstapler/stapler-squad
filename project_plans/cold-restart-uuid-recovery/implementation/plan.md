@@ -2,7 +2,7 @@
 
 **Feature**: Move `HistoryFileDetector.DetectByPath()` recovery ahead of `initTmuxSession()` in both cold-restore code paths, guarded so it cannot resurrect a conversation the user explicitly cleared.
 **Date**: 2026-08-10
-**Status**: Ready for implementation of Epic 1.0 (verification spike) first; Epics 1.1/1.2 ready to implement once Epic 1.0 confirms or corrects their premise (see Epic 1.0 header, added after engineering triad review round 2).
+**Status**: Epic 1.0 spike complete and confirmed (2026-08-11, see Unresolved Questions and Risk Control item 8) — fix scoped to the true process-boot cold-start case only. Epics 1.1/1.2 implementing.
 **ADRs**: ADR-001 (guard against resurrecting an explicitly-cleared conversation)
 
 ---
@@ -63,11 +63,37 @@ N/A — no schema or persisted-data changes. `conversationClearedAt` is an unexp
   5. *(added post-pre-mortem, 2026-08-10)* Factor the duplicated guard block (Tasks 1.1.1a/1.1.1b) into one private helper (e.g. `i.recoverConversationBeforeLaunch()`) instead of literal duplication — pre-mortem failure mode #4 (P3): a future one-sided edit to only one call site would silently reintroduce this exact bug class. Low cost; do during implementation of Story 1.1.1, not deferred indefinitely.
   6. *(added post-pre-mortem, 2026-08-10)* Post-ship confirmation step (pre-mortem #5, P2): ~1 week after deploy, grep production logs for the new `tryextractconversationuuid: found conversation via path fallback` / `...skipping recovery` / `...no jsonl file found` lines and record counts, so "shipped" isn't conflated with "confirmed the recovery path actually fires in production." Not a new metric/alert — a one-time manual check.
   7. *(added post-pre-mortem, 2026-08-10)* mtime-granularity race (pre-mortem #3, P2): a JSONL written by `KillSession()`'s triggering event and read by `DetectByPath` within the same mtime-granularity window could be partially written. No debounce added in this plan; worth a small "candidate mtime must be >1-2s old, or file is well-formed JSON" check if this proves to matter in practice — not blocking, no evidence yet.
+  8. *(added after Epic 1.0 spike resolution, 2026-08-11)* `initTmuxSession()`'s `HasSession()` early-return skips `buildLaunchCommand()` for any in-process `Start(false)` call once a `TmuxSession` object has ever been constructed for that `Instance` — confirmed by `TestSpike_KillSessionThenStart_DoesNotRebuildLaunchCommand`. This plan's reorder does not change the launch command for that path (only for a genuinely fresh `Instance`, i.e. an actual `stapler-squad` process restart). Closing this — likely by having `KillSession()` (or `initTmuxSession()` itself) detect a dead-but-still-registered session and call `buildLaunchCommand()`/`SetSession()` again, the same fix class as `Restart()` already does — would be needed to close requirements.md's captured in-process restart-churn timeline. Deliberately out of scope for this plan: it is a distinct, one-layer-up bug (`initTmuxSession()`'s reuse check, not the recovery-ordering bug this plan fixes) and deserves its own research/plan/validate cycle, not a late addition to an already-reviewed plan.
 - **Validation gate addition** *(added after engineering triad review round 2, 2026-08-10)*: Task 1.2.3a's targeted test run should include `-race` (`go test -race ./session -run "..."`) at least once, given this plan adds new `claudeSessionMu` lock discipline around a field read from a call site (`SwitchWorkspace`) that is deliberately lock-free by design elsewhere.
 
 ## Unresolved Questions
 
-- *(added after engineering triad review round 2, 2026-08-10)* Does `Instance.KillSession()` + `Instance.Start(false)` — the exact sequence `session/health.go`'s dead-pane recovery uses, and ADR-001's named "concrete trigger path" — actually re-derive the launch command from the current `i.claudeSession.ConversationUUID`, or does `initTmuxSession()`'s `HasSession()` early-return skip `buildLaunchCommand()` whenever a `TmuxSession` object already exists in-process (as traced in Epic 1.0's header)? Resolved by Epic 1.0/Task 1.0.1a before Story 1.1.1/1.1.2 are implemented against it.
+- ~~*(added after engineering triad review round 2, 2026-08-10)* Does `Instance.KillSession()` + `Instance.Start(false)` — the exact sequence `session/health.go`'s dead-pane recovery uses, and ADR-001's named "concrete trigger path" — actually re-derive the launch command from the current `i.claudeSession.ConversationUUID`, or does `initTmuxSession()`'s `HasSession()` early-return skip `buildLaunchCommand()` whenever a `TmuxSession` object already exists in-process (as traced in Epic 1.0's header)? Resolved by Epic 1.0/Task 1.0.1a before Story 1.1.1/1.1.2 are implemented against it.~~
+  **RESOLVED 2026-08-11** by `TestSpike_KillSessionThenStart_DoesNotRebuildLaunchCommand`
+  (`session/instance_restart_launch_command_test.go`): confirmed by a real-tmux integration
+  test — `KillSession()` + `Start(false)` does **not** rebuild the launch command
+  (`inst.LaunchCommand` stayed `"claude"`, no `--resume`, even after setting a fresh UUID),
+  while `Restart(false)` does (embeds `--resume '<uuid>'`). `initTmuxSession()`'s
+  `if i.pm().HasSession() { ...; return }` early-return fires because
+  `TmuxProcessManager.Close()` (called by `KillSession()`) never nils the `atomic.Pointer`
+  backing `HasSession()`.
+  **Broader consequence than originally scoped**: this early-return is not specific to
+  `health.go`'s call sequence — it fires for *any* `Start(false)` call while the `Instance`'s
+  in-process `TmuxSession` object still exists, which in practice covers every in-process
+  restart path (`session_driver.go`'s `handleDriverFailure` when `st == Stopped`, hibernation
+  revival, health.go's dead-pane recovery). `initTmuxSession()` only calls `buildLaunchCommand()`
+  when `tm.session` is `nil` — i.e. a genuinely fresh `Instance`, meaning the `stapler-squad`
+  *process itself* restarted (deploy, `make install-service`, crash, machine reboot), not just
+  tmux. Per this repo's own `.claude/rules/tmux-keep-server-on-restart.md`, that process-restart
+  case is a real, recurring event (a service restart without `--tmux-keep-server` kills every
+  tmux session, forcing exactly this cold-boot path on next server start), so Epic 1.1's reorder
+  is not a narrow edge case — but it does **not** close the in-process restart-churn scenario
+  requirements.md's captured timeline documents (repeated inactivity-timeout restarts /
+  auto-hibernation while the `stapler-squad` process keeps running). Per this section's own
+  pre-planned fallback: Epic 1.1/1.2 proceed as scoped (they still fix the true cold-boot case,
+  including AC1/AC4 as literally written, which construct a fresh `Instance`); the
+  `HasSession()`-reuse gap is tracked as a new named follow-up (Risk Control item 8) rather than
+  added to this plan's scope.
 
 ## Dependency Visualization
 
