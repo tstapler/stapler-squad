@@ -48,10 +48,24 @@ test.describe("session-completion-summary", () => {
       await page.getByText("Advanced Options").click();
       await page.getByLabel("Program", { exact: true }).selectOption("bash");
 
+      // --- Regression check for the modal-clipping bug: with Advanced Options
+      // expanded, the footer can exceed the viewport unless .modal scrolls
+      // (Omnibar.css.ts). Assert the submit button is actually within the
+      // viewport bounds after scrolling, not just DOM-attached/"visible". ---
+      const submitButton = page.getByTestId("omnibar-footer-submit");
+      await submitButton.scrollIntoViewIfNeeded();
+      const viewport = page.viewportSize();
+      await expect(async () => {
+        const box = await submitButton.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+        expect(box!.y).toBeGreaterThanOrEqual(0);
+      }).toPass({ timeout: 5000 });
+
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",
       );
-      await page.getByTestId("omnibar-footer-submit").click();
+      await submitButton.click();
       await createRequest;
 
       // OmnibarContext's handleCreateSession navigates to /?session=<id> on

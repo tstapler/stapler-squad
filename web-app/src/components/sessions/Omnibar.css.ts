@@ -46,7 +46,13 @@ export const modal = style({
   maxWidth: 600,
   // Story 6.1: Theme-aware glow border on omnibar
   boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px ${vars.color.glowSecondary}`,
-  maxHeight: "85vh",
+  // Matches the maxHeight+overflow convention used by WorkspaceSwitchModal/TagEditor.
+  // Unlike those, the whole modal scrolls together (header+footer included) rather than
+  // pinning header/footer around an inner scroll region — .modal's children here include
+  // several conditionally-rendered, statically-positioned dropdowns (AliasPalette,
+  // AtCommandDropdown, discovery results), so splitting out a dedicated scroll region
+  // would need re-verifying each of those states; left as a follow-up.
+  maxHeight: "80vh",
   overflowY: "auto",
   overflowX: "hidden",
   position: "relative",
