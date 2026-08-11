@@ -16,6 +16,16 @@ import {
   gutterMarkerAdd, gutterMarkerDelete, gutterMarkerModify,
 } from "./FileContentViewer.css";
 
+// Vim-style "gg" (jump to doc start) requires two "g" presses within a short
+// window; a lone "g" should otherwise be a no-op (not insert text, since the
+// editor is read-only anyway). Extracted as a pure function so the timing
+// logic is unit-testable without mounting CodeMirror.
+export const DOUBLE_G_WINDOW_MS = 400;
+
+export function isDoubleGPress(lastGPressAt: number, now: number, windowMs: number = DOUBLE_G_WINDOW_MS): boolean {
+  return now - lastGPressAt < windowMs;
+}
+
 const GUTTER_MARKER_CLASS: Record<GutterMarkType, string> = {
   add: gutterMarkerAdd,
   delete: gutterMarkerDelete,
@@ -184,18 +194,46 @@ interface CodeMirrorViewerProps {
 function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMirrorViewerProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<import("@codemirror/view").EditorView | null>(null);
+  // Compartment for the line-wrapping extension, plus the cached extension
+  // value itself, so toggling "wrap" can dispatch a lightweight reconfigure
+  // instead of tearing down and rebuilding the whole EditorView (which would
+  // discard cursor position, scroll offset, and undo history). Both are set
+  // once the async mount below finishes and cleared on unmount/remount.
+  const wrapCompartmentRef = useRef<import("@codemirror/state").Compartment | null>(null);
+  const lineWrappingExtRef = useRef<import("@codemirror/state").Extension | null>(null);
+  // Always-current wrapLines value, read at EditorView-construction time so a
+  // toggle that happens while the dynamic imports below are still in flight
+  // isn't silently lost (the mount effect intentionally does NOT depend on
+  // wrapLines anymore — see the dedicated reconfigure effect below).
+  const wrapLinesRef = useRef(wrapLines);
+  useEffect(() => {
+    wrapLinesRef.current = wrapLines;
+  }, [wrapLines]);
 
   useEffect(() => {
+    // Guards against a stale async mount overwriting a newer one: if the
+    // file/language changes again before this effect's dynamic imports
+    // resolve, React runs this cleanup (setting cancelled=true) before the
+    // next effect run starts its own mount. Every await point below checks
+    // `cancelled` so a superseded run never calls `new EditorView(...)` nor
+    // touches viewRef.current, and the cleanup only destroys/nulls the view
+    // it actually owns.
+    let cancelled = false;
     let view: import("@codemirror/view").EditorView | null = null;
 
     (async () => {
       if (!editorRef.current) return;
 
       const { EditorView, gutter, GutterMarker, keymap } = await import("@codemirror/view");
-      const { EditorState } = await import("@codemirror/state");
+      if (cancelled) return;
+      const { EditorState, Compartment } = await import("@codemirror/state");
+      if (cancelled) return;
       const { basicSetup } = await import("codemirror");
+      if (cancelled) return;
       const { HighlightStyle, syntaxHighlighting } = await import("@codemirror/language");
+      if (cancelled) return;
       const { tags } = await import("@lezer/highlight");
+      if (cancelled) return;
       const {
         cursorCharLeft, cursorCharRight, cursorLineDown, cursorLineUp,
         selectCharLeft, selectCharRight, selectLineDown, selectLineUp,
@@ -204,7 +242,9 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
         cursorDocStart, cursorDocEnd, cursorPageDown, cursorPageUp,
         selectPageDown, selectPageUp,
       } = await import("@codemirror/commands");
+      if (cancelled) return;
       const { openSearchPanel, findNext, findPrevious } = await import("@codemirror/search");
+      if (cancelled) return;
 
       // Load language extension.
       let langExtension = null;
@@ -213,6 +253,7 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
       } catch {
         // Fall back to plain text if language not supported.
       }
+      if (cancelled) return;
 
       class ChangeGutterMarker extends GutterMarker {
         constructor(private markType: GutterMarkType) {
@@ -303,7 +344,7 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
           key: "g",
           run: (v) => {
             const now = Date.now();
-            const isDoubleG = now - lastGPress < 400;
+            const isDoubleG = isDoubleGPress(lastGPress, now);
             lastGPress = isDoubleG ? 0 : now;
             return isDoubleG ? cursorDocStart(v) : true;
           },
@@ -332,6 +373,14 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
         { key: "Shift-n", run: findPrevious },
       ]);
 
+      // Wrap-lines is wired through a Compartment so a later toggle (see the
+      // dedicated effect below) can reconfigure just this slice of state via
+      // dispatch() instead of tearing down and recreating the whole
+      // EditorView, which would otherwise discard cursor position, scroll
+      // offset, and undo history on every wrap toggle.
+      const wrapCompartment = new Compartment();
+      const lineWrappingExt = EditorView.lineWrapping;
+
       // readOnly prevents edits; omitting editable.of(false) keeps contenteditable=true
       // so the browser allows text selection and copy.
       const extensions = [
@@ -340,7 +389,13 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
         cmTheme,
         syntaxHighlighting(cmHighlightStyle),
         vimKeymap,
-        ...(wrapLines ? [EditorView.lineWrapping] : []),
+        wrapCompartment.of(wrapLinesRef.current ? [lineWrappingExt] : []),
+        // gutterMarks is intentionally NOT compartmentalized: the gutter's
+        // structural inclusion (present/absent) and its lineMarker closure
+        // both close over `gutterMarks` from this render, and gutter marks
+        // only change when the diff content or selected file changes
+        // (infrequent, unlike the interactively-toggled wrapLines), so a
+        // full rebuild on that dependency is an acceptable, simpler tradeoff.
         ...(gutterMarks && gutterMarks.size > 0 ? [changeGutter] : []),
       ];
       if (langExtension) extensions.push(langExtension);
@@ -350,15 +405,39 @@ function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMir
         extensions,
       });
 
+      if (cancelled || !editorRef.current) return;
+
       view = new EditorView({ state, parent: editorRef.current });
       viewRef.current = view;
+      wrapCompartmentRef.current = wrapCompartment;
+      lineWrappingExtRef.current = lineWrappingExt;
     })();
 
     return () => {
+      cancelled = true;
       view?.destroy();
-      viewRef.current = null;
+      if (viewRef.current === view) {
+        viewRef.current = null;
+      }
+      wrapCompartmentRef.current = null;
+      lineWrappingExtRef.current = null;
     };
-  }, [content, language, wrapLines, gutterMarks]);
+  }, [content, language, gutterMarks]);
+
+  // Lightweight wrap-lines toggle: reconfigures the existing view's
+  // Compartment instead of rebuilding the EditorView, so cursor position,
+  // scroll offset, and undo history survive the toggle. No-ops until the
+  // async mount effect above has finished (wrapCompartmentRef populated);
+  // wrapLinesRef (kept current above) covers the value at initial mount.
+  useEffect(() => {
+    const view = viewRef.current;
+    const compartment = wrapCompartmentRef.current;
+    const lineWrappingExt = lineWrappingExtRef.current;
+    if (!view || !compartment) return;
+    view.dispatch({
+      effects: compartment.reconfigure(wrapLines ? [lineWrappingExt!] : []),
+    });
+  }, [wrapLines]);
 
   return <div ref={editorRef} className={codeMirrorEditor} />;
 }
