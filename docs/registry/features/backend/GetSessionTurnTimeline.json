@@ -1,0 +1,16 @@
+{
+  "id": "GetSessionTurnTimeline",
+  "type": "backend",
+  "service": "InsightsService",
+  "method": "GetSessionTurnTimeline",
+  "protoFile": "proto/session/v1/insights.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/insights_service.go",
+  "tested": true,
+  "testIds": [
+    "TestGetSessionTurnTimeline_should_returnTurns_When_ConversationIdMatches",
+    "TestGetSessionTurnTimeline_should_returnEmptyTurns_When_ConversationIdUnknown",
+    "TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore"
+  ],
+  "lastModified": "2026-08-02T07:44:18.987946495-07:00"
+}

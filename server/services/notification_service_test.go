@@ -24,6 +24,7 @@ func newNotificationTestServer(t *testing.T) (*SessionService, *events.EventBus,
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	mux := http.NewServeMux()
 	path, handler := sessionv1connect.NewSessionServiceHandler(svc)

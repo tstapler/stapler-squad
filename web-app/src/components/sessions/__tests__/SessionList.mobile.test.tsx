@@ -6,7 +6,10 @@ import type { Session } from "@/gen/session/v1/types_pb";
 // Heavy dependency mocks for SessionList
 
 jest.mock("@connectrpc/connect", () => ({
-  createClient: jest.fn(() => ({})),
+  createClient: jest.fn(() => ({
+    getInsightsSummary: jest.fn(async () => ({ sessions: [] })),
+    watchInsights: async function* () {},
+  })),
 }));
 
 jest.mock("@connectrpc/connect-web", () => ({

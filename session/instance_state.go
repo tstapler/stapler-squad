@@ -100,6 +100,8 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 		hibernateProcessLocked(s, ctx)
 	case transitionKey{Hibernated, Active}:
 		resumeFromHibernationLocked(s, ctx)
+	case transitionKey{Crashed, Active}:
+		resumeFromCrashLocked(s, ctx)
 	}
 	return nil
 }

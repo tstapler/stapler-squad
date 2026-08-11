@@ -231,3 +231,108 @@ func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedS
 	assert.Equal(t, fileStats, fetched.ShippedFileStats)
 	assert.False(t, fetched.ShippedSnapshotCaptureFailed)
 }
+
+// TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip mirrors
+// ShippedSnapshotAt's round-trip test above: create an item, assert
+// PrFeedbackAddressedAt is nil, update it with a timestamp, re-fetch, assert
+// it round-trips exactly — also incidentally exercises the ent auto-migration
+// path for the new nullable pr_feedback_addressed_at column (fresh schema
+// creation includes it).
+func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item for pr-feedback-watermark round-trip",
+	})
+	require.NoError(t, err)
+
+	fetchedPre, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetchedPre.PrFeedbackAddressedAt)
+
+	watermark := time.Now().UTC().Truncate(time.Second)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrFeedbackAddressedAt: &watermark,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterUpdate, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterUpdate.PrFeedbackAddressedAt)
+	assert.True(t, watermark.Equal(*fetchedAfterUpdate.PrFeedbackAddressedAt))
+
+	// Clearing must be explicit via ClearPrFeedbackAddressedAt, not achievable
+	// by passing a nil pointer (which means "leave untouched").
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		ClearPrFeedbackAddressedAt: true,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterClear, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetchedAfterClear.PrFeedbackAddressedAt)
+}
+
+// TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow is the NULL-safety
+// test for the new labels field (Epic 0.1, Story 0.1.1): a row created
+// without setting Labels must read back as nil/empty, not panic, confirming
+// ent's field.Strings(...).Optional() JSON-column scan handles a NULL/empty
+// column safely.
+func TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := repo.client.BacklogItem.Create().
+		SetTitle("item created before labels field existed").
+		Save(ctx)
+	require.NoError(t, err)
+
+	fetched, err := repo.GetBacklogItem(ctx, created.ID.String())
+	require.NoError(t, err)
+	assert.Empty(t, fetched.Labels)
+}
+
+// TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip mirrors
+// TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip (Epic 0.6,
+// Story 0.6.1): create an item, assert GitHubSyncedIssueUpdatedAt is nil,
+// update it with a timestamp, re-fetch, assert it round-trips exactly, then
+// confirm ClearGitHubSyncedIssueUpdatedAt explicitly clears it back to nil.
+func TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item for github-synced-issue-updated-at watermark round-trip",
+	})
+	require.NoError(t, err)
+
+	fetchedPre, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetchedPre.GitHubSyncedIssueUpdatedAt)
+
+	watermark := time.Now().UTC().Truncate(time.Second)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		GitHubSyncedIssueUpdatedAt: &watermark,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterUpdate, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterUpdate.GitHubSyncedIssueUpdatedAt)
+	assert.True(t, watermark.Equal(*fetchedAfterUpdate.GitHubSyncedIssueUpdatedAt))
+
+	// Clearing must be explicit via ClearGitHubSyncedIssueUpdatedAt, not
+	// achievable by passing a nil pointer (which means "leave untouched").
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		ClearGitHubSyncedIssueUpdatedAt: true,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterClear, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetchedAfterClear.GitHubSyncedIssueUpdatedAt)
+}

@@ -21,6 +21,12 @@ export function fmtPct(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`;
 }
 
+/** Cache-hit rate: cacheRead / (input + cacheRead), 0-guarded. */
+export function computeCacheHitRate(input: number, cacheRead: number): number {
+  const denom = input + cacheRead;
+  return denom === 0 ? 0 : cacheRead / denom;
+}
+
 /** Format a protobuf Timestamp as a short human-readable date. */
 export function fmtDate(ts: { seconds: bigint } | undefined): string {
   if (!ts) return "—";

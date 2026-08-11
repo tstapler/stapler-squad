@@ -63,6 +63,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Prompt:               snap.Prompt,
 		InitialPrompt:        snap.InitialPrompt,
 		Category:             snap.Category,
+		Note:                 snap.Note,
 		IsExpanded:           snap.IsExpanded,
 		Tags:                 snap.Tags, // Include tags in serialization
 		SessionType:          snap.SessionType,
@@ -117,6 +118,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		MCPServerURL: snap.MCPServerURL,
 		// Pause reason — persisted so it survives restarts
 		PauseReason: snap.PauseReason,
+		// Exit reason — persisted so a Crashed banner survives restarts
+		ExitReason: snap.ExitReason,
 		// Workflow linkage and archive state
 		WorkflowID: snap.WorkflowID,
 		ArchivedAt: snap.ArchivedAt,
@@ -227,6 +230,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		Prompt:           data.Prompt,
 		InitialPrompt:    data.InitialPrompt,
 		Category:         data.Category,
+		Note:             data.Note,
 		IsExpanded:       data.IsExpanded,
 		Tags:             tags, // Use migrated tags (includes category if needed)
 		SessionType:      data.SessionType,
@@ -288,6 +292,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		MCPServerURL: data.MCPServerURL,
 		// Pause reason
 		PauseReason: data.PauseReason,
+		// Exit reason
+		ExitReason: data.ExitReason,
 		// Workflow linkage and archive state
 		WorkflowID: data.WorkflowID,
 		ArchivedAt: data.ArchivedAt,
@@ -413,6 +419,31 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	} else if instance.Status == Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)
 		// but do NOT call Start — hibernated sessions resume only on explicit request.
+		tmuxPrefix := instance.TmuxPrefix
+		if tmuxPrefix == "" {
+			tmuxPrefix = "staplersquad_"
+		}
+		if tb, ok := instance.processManager.(*TmuxBackend); ok {
+			if instance.TmuxServerSocket != "" {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(
+					instance.Title, instance.Program, tmuxPrefix,
+					instance.TmuxServerSocket, tmux.WithRegistry(nil)))
+			} else {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(
+					instance.Title, instance.Program, tmuxPrefix))
+			}
+		}
+		instance.started.Store(true)
+	} else if instance.Status == Crashed {
+		// Wire the tmux session object (for IsAlive checks) but do NOT call Start --
+		// like Hibernated, a Crashed session resumes only on explicit request
+		// (Instance.ResumeFromCrash / the ResumeCrashedSession RPC). Without this
+		// branch, Crashed falls into the generic (Active) else-branch below with
+		// started=false, and server/dependencies.go's Step 6 startup loop
+		// unconditionally calls Start(false) on every !Started() instance --
+		// silently auto-resuming every Crashed session on the very next server
+		// restart, exactly what the new Crashed status is designed to prevent
+		// (see session/health.go's "must not be silently respawned" comment).
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {
 			tmuxPrefix = "staplersquad_"

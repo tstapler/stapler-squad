@@ -467,6 +467,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     initialCols: lastResizeRef.current?.cols,
     initialRows: lastResizeRef.current?.rows,
     isExternal: isExternal,
+    foreground: isVisible,
   });
 
   const { notifyResyncOutputReceived } = useVisibilityResync({

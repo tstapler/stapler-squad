@@ -60,6 +60,7 @@ jobs:
         uses: bufbuild/buf-setup-action@v1
         with:
           version: '1.41.0'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate protobuf code
         run: buf generate

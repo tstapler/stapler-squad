@@ -291,6 +291,7 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	sb.WriteString("  - outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE\n")
 	sb.WriteString("  - evidence: direct quote or reference from the diff\n\n")
 	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_review_verdict): %s\n", item.ID)
+	sb.WriteString("\nEnd your session immediately after calling submit_review_verdict. Do not wait, poll, or do further work — an idle-but-alive reviewer session leaves the item stuck in review.\n")
 
 	return sb.String()
 }

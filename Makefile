@@ -57,13 +57,25 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard checklocks
+.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks
 
 # Default target
 help: ## Show this help message
 	@echo "Stapler Squad Development Makefile"
 	@echo "================================="
 	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: ports
+ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
+	@base=$$(python3 -c "import zlib; print(61000 + zlib.crc32(b'stapler-squad') % 4525)" 2>/dev/null || echo 62871); \
+	echo "Manual dev port block (base $$base = 61000 + CRC32(\"stapler-squad\") % 4525):"; \
+	echo "  $$base = manual instance #1 - PORT"; \
+	echo "  $$((base+1)) = manual instance #1 - --remote-port"; \
+	echo "  $$((base+2)) = manual instance #2 - PORT"; \
+	echo "  $$((base+3)) = manual instance #2 - --remote-port"; \
+	echo "  $$((base+4))-$$((base+9)) = spare"; \
+	echo ""; \
+	echo "Fixed (documented, do not reassign): :8543 main service, :8444 remote-access default"
 
 # Registry targets
 # Per-feature files live under docs/registry/features/ — one file per RPC/component.
@@ -83,6 +95,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/backlog.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/insights.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/github_user.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@# Generation is additive; prune files whose RPC no longer exists so the
 	@# committed set stays in sync with the proto (avoids registry-validation drift).
 	@bash tools/scanner/prune-stale-backend.sh $(BACKEND_FEATURES_DIR)
@@ -155,7 +168,7 @@ web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FIL
 		cd web-app && pnpm install --frozen-lockfile; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@cd web-app && NEXT_BUILD_MODE=development pnpm run build
+	@cd web-app && NEXT_BUILD_MODE=development ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -745,7 +758,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
@@ -767,6 +780,20 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	    exit 1; \
 	fi
 	@echo "✅ actor-field-guard: no direct Instance field writes"
+
+ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdWaitOnce are touched outside the ptmxMu helpers
+	@echo "ptmx-field-guard: scanning session/tmux/*.go for direct PTY-triple field access..."
+	@if grep -nE '\b[A-Za-z_][A-Za-z0-9_]*\.(ptmx|attachCmd|attachCmdWaitOnce)\b' session/tmux/*.go \
+	    | grep -v '^session/tmux/shell_handle.go:' \
+	    `# shell_handle.go declares its own unrelated ShellTmuxHandle.ptmx/attachCmd fields` \
+	    `# (receiver "h", guarded by spawnMu, not ptmxMu) -- excluded by file, not by line marker,` \
+	    `# because none of that file's lines ever legitimately touch the PTY triple this guards` \
+	    | grep -vE ':[0-9]+:[[:space:]]*//' \
+	    | grep -v 'allow-direct-ptmx-access' ; then \
+	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/setPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
+	    exit 1; \
+	fi
+	@echo "✅ ptmx-field-guard: no direct PTY-triple field access outside the guarded helpers"
 
 # Debugging and profiling
 profile-cpu: ensure-tools ## Run benchmarks with CPU profiling

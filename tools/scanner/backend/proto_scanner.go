@@ -96,11 +96,12 @@ var methodToID = map[string]string{
 	"GetTerminalSnapshot": "session:get-terminal-snapshot",
 	"ListBranches":        "session:list-branches",
 	// Profile and defaults RPCs
-	"UpsertProfile":        "profile:upsert",
-	"DeleteProfile":        "profile:delete",
-	"GetSessionDefaults":   "defaults:get",
-	"UpdateGlobalDefaults": "defaults:update-global",
-	"ResolveDefaults":      "defaults:resolve",
+	"UpsertProfile":          "profile:upsert",
+	"DeleteProfile":          "profile:delete",
+	"GetSessionDefaults":     "defaults:get",
+	"UpdateGlobalDefaults":   "defaults:update-global",
+	"ResolveDefaults":        "defaults:resolve",
+	"PreviewDestinationPath": "session:preview-destination-path",
 	// Alias RPCs
 	"UpsertAlias": "alias:upsert",
 	"DeleteAlias": "alias:delete",
@@ -153,6 +154,7 @@ var methodToID = map[string]string{
 	"UpdateItemSource":            "backlog:update-source",
 	"DeleteItemSource":            "backlog:delete-source",
 	"GetSyncHistory":              "backlog:get-sync-history",
+	"PreviewBackwardSyncImpact":   "backlog:preview-backward-sync-impact",
 	"GetBacklogItemDiff":          "backlog:get-item-diff",
 	"GetBacklogItemCost":          "backlog:get-item-cost",
 	"GetBacklogItemShipStatus":    "backlog:get-item-ship-status",
@@ -188,6 +190,7 @@ var methodToID = map[string]string{
 	"UnarchiveSession":        "session:unarchive",
 	"HibernateSession":        "session:hibernate",
 	"ResumeHibernatedSession": "session:resume-hibernated",
+	"ResumeCrashedSession":    "session:resume-crashed",
 	"WriteToSession":          "session:write",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
@@ -223,6 +226,8 @@ var methodToID = map[string]string{
 	"WatchUserPRs":              "github-user:watch-prs",
 	"GetGitHubAuthState":        "github-user:get-auth-state",
 	"AddGitHubAccountWithToken": "github-user:add-account-with-token",
+	"ListGitHubCLIHosts":        "github-user:list-cli-hosts",
+	"AddGitHubAccountFromCLI":   "github-user:add-account-from-cli",
 	// Provider limits RPCs
 	"GetProviderLimits": "session:get-provider-limits",
 	// Config file rules RPCs (stub implementations in RulesService)

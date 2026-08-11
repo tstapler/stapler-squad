@@ -222,6 +222,9 @@ const (
 	// SessionServiceResolveDefaultsProcedure is the fully-qualified name of the SessionService's
 	// ResolveDefaults RPC.
 	SessionServiceResolveDefaultsProcedure = "/session.v1.SessionService/ResolveDefaults"
+	// SessionServicePreviewDestinationPathProcedure is the fully-qualified name of the SessionService's
+	// PreviewDestinationPath RPC.
+	SessionServicePreviewDestinationPathProcedure = "/session.v1.SessionService/PreviewDestinationPath"
 	// SessionServiceUpdateGlobalDefaultsProcedure is the fully-qualified name of the SessionService's
 	// UpdateGlobalDefaults RPC.
 	SessionServiceUpdateGlobalDefaultsProcedure = "/session.v1.SessionService/UpdateGlobalDefaults"
@@ -303,6 +306,9 @@ const (
 	// SessionServiceResumeHibernatedSessionProcedure is the fully-qualified name of the
 	// SessionService's ResumeHibernatedSession RPC.
 	SessionServiceResumeHibernatedSessionProcedure = "/session.v1.SessionService/ResumeHibernatedSession"
+	// SessionServiceResumeCrashedSessionProcedure is the fully-qualified name of the SessionService's
+	// ResumeCrashedSession RPC.
+	SessionServiceResumeCrashedSessionProcedure = "/session.v1.SessionService/ResumeCrashedSession"
 	// SessionServiceSpawnShellProcedure is the fully-qualified name of the SessionService's SpawnShell
 	// RPC.
 	SessionServiceSpawnShellProcedure = "/session.v1.SessionService/SpawnShell"
@@ -547,6 +553,10 @@ type SessionServiceClient interface {
 	// ResolveDefaults merges all default layers for a given working directory and optional profile.
 	// Returns the resolved values plus source metadata for per-field badges in the UI.
 	ResolveDefaults(context.Context, *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error)
+	// PreviewDestinationPath computes where a session's checkout/worktree would land,
+	// without performing any git or filesystem mutation. Used by the Omnibar to show a
+	// live destination hint before the user submits session creation.
+	PreviewDestinationPath(context.Context, *connect.Request[v1.PreviewDestinationPathRequest]) (*connect.Response[v1.PreviewDestinationPathResponse], error)
 	// UpdateGlobalDefaults replaces the global default fields.
 	UpdateGlobalDefaults(context.Context, *connect.Request[v1.UpdateGlobalDefaultsRequest]) (*connect.Response[v1.UpdateGlobalDefaultsResponse], error)
 	// UpsertProfile creates or updates a named profile.
@@ -608,6 +618,11 @@ type SessionServiceClient interface {
 	// ResumeHibernatedSession re-launches the AI process for a Hibernated session,
 	// transitioning it back to Active status.
 	ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error)
+	// ResumeCrashedSession re-launches the AI process for a Crashed session
+	// (dead tmux pane detected by SessionHealthChecker), transitioning it back
+	// to Active status. Threads --resume automatically when a conversation UUID
+	// is known.
+	ResumeCrashedSession(context.Context, *connect.Request[v1.ResumeCrashedSessionRequest]) (*connect.Response[v1.ResumeCrashedSessionResponse], error)
 	// SpawnShell creates and starts a new custom shell attached to a session.
 	// The shell runs as an independent sibling tmux session.
 	SpawnShell(context.Context, *connect.Request[v1.SpawnShellRequest]) (*connect.Response[v1.SpawnShellResponse], error)
@@ -1062,6 +1077,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("ResolveDefaults")),
 			connect.WithClientOptions(opts...),
 		),
+		previewDestinationPath: connect.NewClient[v1.PreviewDestinationPathRequest, v1.PreviewDestinationPathResponse](
+			httpClient,
+			baseURL+SessionServicePreviewDestinationPathProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("PreviewDestinationPath")),
+			connect.WithClientOptions(opts...),
+		),
 		updateGlobalDefaults: connect.NewClient[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse](
 			httpClient,
 			baseURL+SessionServiceUpdateGlobalDefaultsProcedure,
@@ -1222,6 +1243,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+SessionServiceResumeHibernatedSessionProcedure,
 			connect.WithSchema(sessionServiceMethods.ByName("ResumeHibernatedSession")),
+			connect.WithClientOptions(opts...),
+		),
+		resumeCrashedSession: connect.NewClient[v1.ResumeCrashedSessionRequest, v1.ResumeCrashedSessionResponse](
+			httpClient,
+			baseURL+SessionServiceResumeCrashedSessionProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ResumeCrashedSession")),
 			connect.WithClientOptions(opts...),
 		),
 		spawnShell: connect.NewClient[v1.SpawnShellRequest, v1.SpawnShellResponse](
@@ -1425,6 +1452,7 @@ type sessionServiceClient struct {
 	listPathCompletions          *connect.Client[v1.ListPathCompletionsRequest, v1.ListPathCompletionsResponse]
 	getSessionDefaults           *connect.Client[v1.GetSessionDefaultsRequest, v1.GetSessionDefaultsResponse]
 	resolveDefaults              *connect.Client[v1.ResolveDefaultsRequest, v1.ResolveDefaultsResponse]
+	previewDestinationPath       *connect.Client[v1.PreviewDestinationPathRequest, v1.PreviewDestinationPathResponse]
 	updateGlobalDefaults         *connect.Client[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse]
 	upsertProfile                *connect.Client[v1.UpsertProfileRequest, v1.UpsertProfileResponse]
 	deleteProfile                *connect.Client[v1.DeleteProfileRequest, v1.DeleteProfileResponse]
@@ -1452,6 +1480,7 @@ type sessionServiceClient struct {
 	getEscapeAnalyticsSummary    *connect.Client[v1.GetEscapeAnalyticsSummaryRequest, v1.GetEscapeAnalyticsSummaryResponse]
 	hibernateSession             *connect.Client[v1.HibernateSessionRequest, v1.HibernateSessionResponse]
 	resumeHibernatedSession      *connect.Client[v1.ResumeHibernatedSessionRequest, v1.ResumeHibernatedSessionResponse]
+	resumeCrashedSession         *connect.Client[v1.ResumeCrashedSessionRequest, v1.ResumeCrashedSessionResponse]
 	spawnShell                   *connect.Client[v1.SpawnShellRequest, v1.SpawnShellResponse]
 	stopShell                    *connect.Client[v1.StopShellRequest, v1.StopShellResponse]
 	restartShell                 *connect.Client[v1.RestartShellRequest, v1.RestartShellResponse]
@@ -1796,6 +1825,11 @@ func (c *sessionServiceClient) ResolveDefaults(ctx context.Context, req *connect
 	return c.resolveDefaults.CallUnary(ctx, req)
 }
 
+// PreviewDestinationPath calls session.v1.SessionService.PreviewDestinationPath.
+func (c *sessionServiceClient) PreviewDestinationPath(ctx context.Context, req *connect.Request[v1.PreviewDestinationPathRequest]) (*connect.Response[v1.PreviewDestinationPathResponse], error) {
+	return c.previewDestinationPath.CallUnary(ctx, req)
+}
+
 // UpdateGlobalDefaults calls session.v1.SessionService.UpdateGlobalDefaults.
 func (c *sessionServiceClient) UpdateGlobalDefaults(ctx context.Context, req *connect.Request[v1.UpdateGlobalDefaultsRequest]) (*connect.Response[v1.UpdateGlobalDefaultsResponse], error) {
 	return c.updateGlobalDefaults.CallUnary(ctx, req)
@@ -1929,6 +1963,11 @@ func (c *sessionServiceClient) HibernateSession(ctx context.Context, req *connec
 // ResumeHibernatedSession calls session.v1.SessionService.ResumeHibernatedSession.
 func (c *sessionServiceClient) ResumeHibernatedSession(ctx context.Context, req *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error) {
 	return c.resumeHibernatedSession.CallUnary(ctx, req)
+}
+
+// ResumeCrashedSession calls session.v1.SessionService.ResumeCrashedSession.
+func (c *sessionServiceClient) ResumeCrashedSession(ctx context.Context, req *connect.Request[v1.ResumeCrashedSessionRequest]) (*connect.Response[v1.ResumeCrashedSessionResponse], error) {
+	return c.resumeCrashedSession.CallUnary(ctx, req)
 }
 
 // SpawnShell calls session.v1.SessionService.SpawnShell.
@@ -2217,6 +2256,10 @@ type SessionServiceHandler interface {
 	// ResolveDefaults merges all default layers for a given working directory and optional profile.
 	// Returns the resolved values plus source metadata for per-field badges in the UI.
 	ResolveDefaults(context.Context, *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error)
+	// PreviewDestinationPath computes where a session's checkout/worktree would land,
+	// without performing any git or filesystem mutation. Used by the Omnibar to show a
+	// live destination hint before the user submits session creation.
+	PreviewDestinationPath(context.Context, *connect.Request[v1.PreviewDestinationPathRequest]) (*connect.Response[v1.PreviewDestinationPathResponse], error)
 	// UpdateGlobalDefaults replaces the global default fields.
 	UpdateGlobalDefaults(context.Context, *connect.Request[v1.UpdateGlobalDefaultsRequest]) (*connect.Response[v1.UpdateGlobalDefaultsResponse], error)
 	// UpsertProfile creates or updates a named profile.
@@ -2278,6 +2321,11 @@ type SessionServiceHandler interface {
 	// ResumeHibernatedSession re-launches the AI process for a Hibernated session,
 	// transitioning it back to Active status.
 	ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error)
+	// ResumeCrashedSession re-launches the AI process for a Crashed session
+	// (dead tmux pane detected by SessionHealthChecker), transitioning it back
+	// to Active status. Threads --resume automatically when a conversation UUID
+	// is known.
+	ResumeCrashedSession(context.Context, *connect.Request[v1.ResumeCrashedSessionRequest]) (*connect.Response[v1.ResumeCrashedSessionResponse], error)
 	// SpawnShell creates and starts a new custom shell attached to a session.
 	// The shell runs as an independent sibling tmux session.
 	SpawnShell(context.Context, *connect.Request[v1.SpawnShellRequest]) (*connect.Response[v1.SpawnShellResponse], error)
@@ -2728,6 +2776,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("ResolveDefaults")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServicePreviewDestinationPathHandler := connect.NewUnaryHandler(
+		SessionServicePreviewDestinationPathProcedure,
+		svc.PreviewDestinationPath,
+		connect.WithSchema(sessionServiceMethods.ByName("PreviewDestinationPath")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceUpdateGlobalDefaultsHandler := connect.NewUnaryHandler(
 		SessionServiceUpdateGlobalDefaultsProcedure,
 		svc.UpdateGlobalDefaults,
@@ -2888,6 +2942,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		SessionServiceResumeHibernatedSessionProcedure,
 		svc.ResumeHibernatedSession,
 		connect.WithSchema(sessionServiceMethods.ByName("ResumeHibernatedSession")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceResumeCrashedSessionHandler := connect.NewUnaryHandler(
+		SessionServiceResumeCrashedSessionProcedure,
+		svc.ResumeCrashedSession,
+		connect.WithSchema(sessionServiceMethods.ByName("ResumeCrashedSession")),
 		connect.WithHandlerOptions(opts...),
 	)
 	sessionServiceSpawnShellHandler := connect.NewUnaryHandler(
@@ -3152,6 +3212,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceGetSessionDefaultsHandler.ServeHTTP(w, r)
 		case SessionServiceResolveDefaultsProcedure:
 			sessionServiceResolveDefaultsHandler.ServeHTTP(w, r)
+		case SessionServicePreviewDestinationPathProcedure:
+			sessionServicePreviewDestinationPathHandler.ServeHTTP(w, r)
 		case SessionServiceUpdateGlobalDefaultsProcedure:
 			sessionServiceUpdateGlobalDefaultsHandler.ServeHTTP(w, r)
 		case SessionServiceUpsertProfileProcedure:
@@ -3206,6 +3268,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceHibernateSessionHandler.ServeHTTP(w, r)
 		case SessionServiceResumeHibernatedSessionProcedure:
 			sessionServiceResumeHibernatedSessionHandler.ServeHTTP(w, r)
+		case SessionServiceResumeCrashedSessionProcedure:
+			sessionServiceResumeCrashedSessionHandler.ServeHTTP(w, r)
 		case SessionServiceSpawnShellProcedure:
 			sessionServiceSpawnShellHandler.ServeHTTP(w, r)
 		case SessionServiceStopShellProcedure:
@@ -3515,6 +3579,10 @@ func (UnimplementedSessionServiceHandler) ResolveDefaults(context.Context, *conn
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ResolveDefaults is not implemented"))
 }
 
+func (UnimplementedSessionServiceHandler) PreviewDestinationPath(context.Context, *connect.Request[v1.PreviewDestinationPathRequest]) (*connect.Response[v1.PreviewDestinationPathResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.PreviewDestinationPath is not implemented"))
+}
+
 func (UnimplementedSessionServiceHandler) UpdateGlobalDefaults(context.Context, *connect.Request[v1.UpdateGlobalDefaultsRequest]) (*connect.Response[v1.UpdateGlobalDefaultsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.UpdateGlobalDefaults is not implemented"))
 }
@@ -3621,6 +3689,10 @@ func (UnimplementedSessionServiceHandler) HibernateSession(context.Context, *con
 
 func (UnimplementedSessionServiceHandler) ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ResumeHibernatedSession is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ResumeCrashedSession(context.Context, *connect.Request[v1.ResumeCrashedSessionRequest]) (*connect.Response[v1.ResumeCrashedSessionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ResumeCrashedSession is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) SpawnShell(context.Context, *connect.Request[v1.SpawnShellRequest]) (*connect.Response[v1.SpawnShellResponse], error) {

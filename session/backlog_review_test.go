@@ -163,6 +163,20 @@ func TestBuildReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testin
 	assert.NotContains(t, prompt, "## No-Diff Verification")
 }
 
+// TestBuildReviewPrompt_InstructsEndingSessionAfterSubmitReviewVerdict is the
+// regression guard for BUG-047 (reviewer submits a verdict and then never
+// exits, leaving the item wedged in "review" forever — see
+// AutoReopenAfterFailedReview's and reconcileUnprocessedReviewVerdicts' doc
+// comments for the backend side of this fix). Symmetric to the work-role
+// prompt's explicit "Do NOT end your session" instruction — the review-role
+// prompt must tell the reviewer the opposite: end the session once the
+// verdict is in.
+func TestBuildReviewPrompt_InstructsEndingSessionAfterSubmitReviewVerdict(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	prompt := BuildReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, uuid.New().String(), "")
+	assert.Contains(t, prompt, "End your session immediately after calling submit_review_verdict")
+}
+
 // TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection verifies
 // that non-empty verification notes are rendered in a distinctly-labeled section
 // separate from the diff, so the reviewer can tell it apart from code-derived evidence.

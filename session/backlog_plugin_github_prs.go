@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/tstapler/stapler-squad/github"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -71,6 +72,12 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 		}
 	}
 
+	// Prefer the shared keychain (one credential per host, managed in Settings)
+	// over a per-source config token; fall back to cfg.Token for sources
+	// configured before the migration to shared, host-keyed credentials.
+	if token := github.GetKeychainTokenForHost(cfg.Host); token != "" {
+		cfg.Token = token
+	}
 	if cfg.Token == "" {
 		return nil, cursor, nil
 	}

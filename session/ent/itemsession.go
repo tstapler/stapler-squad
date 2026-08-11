@@ -28,6 +28,8 @@ type ItemSession struct {
 	StartedAt *time.Time `json:"started_at,omitempty"`
 	// EndedAt holds the value of the "ended_at" field.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// Set only alongside ended_at for a headless (triage/review) call: classifyHeadlessCallError's bucket ("shutdown", "timeout", "process_error", "claude_not_found", "other") or "" for a successful end / not yet classified. Lets orphan-recovery sweeps distinguish a call killed by our own graceful shutdown (retry immediately, no penalty) from a call that actually failed on its own merits (apply the normal backoff).
+	EndReason string `json:"end_reason,omitempty"`
 	// JSON []AcCriterion at spawn time
 	AcSnapshot string `json:"ac_snapshot,omitempty"`
 	// The PipelineMode slug resolved and in effect when this session first started — snapshotted so later edits to the item's live pipeline_mode don't retroactively change what this session is shown to have run. Mirrors ac_snapshot's discipline.
@@ -38,13 +40,15 @@ type ItemSession struct {
 	TriageResult string `json:"triage_result,omitempty"`
 	// Freeform verification evidence reported via request_review (commands run, manual checks performed) — not visible in the diff
 	VerificationNotes string `json:"verification_notes,omitempty"`
-	// LastCommitSha holds the value of the "last_commit_sha" field.
+	// The worktree's pre-work HEAD SHA, captured once when this session spawns. This is the BASE of the review gate's base..HEAD diff — by construction always an ancestor of main. It is NOT evidence of anything having shipped: any "is this session's work on main?" check must read last_commit_sha (live-refreshed), never this. Splitting the two is the fix for BUG-047's collateral damage, where the spawn-time base SHA was written into last_commit_sha and made IsCommitOnMain trivially true, causing closeIfSupersededByMain to close a real, unmerged PR as "superseded".
+	BaseCommitSha string `json:"base_commit_sha,omitempty"`
+	// The work session's CURRENT tip commit, re-read from the session's worktree HEAD on every reconciliation tick by refreshWorkSessionGitActivity (session/backlog_lifecycle.go) for as long as the session is active. Safe to treat as "the latest commit this session authored". For the pre-work baseline, use base_commit_sha.
 	LastCommitSha string `json:"last_commit_sha,omitempty"`
 	// LastCommitAt holds the value of the "last_commit_at" field.
 	LastCommitAt *time.Time `json:"last_commit_at,omitempty"`
 	// LastCommitMessage holds the value of the "last_commit_message" field.
 	LastCommitMessage string `json:"last_commit_message,omitempty"`
-	// CommitCountSinceSpawn holds the value of the "commit_count_since_spawn" field.
+	// Number of commits reachable from last_commit_sha but not from base_commit_sha, recomputed alongside last_commit_sha on each refresh tick.
 	CommitCountSinceSpawn int `json:"commit_count_since_spawn,omitempty"`
 	// LastFileTouchAt holds the value of the "last_file_touch_at" field.
 	LastFileTouchAt *time.Time `json:"last_file_touch_at,omitempty"`
@@ -103,7 +107,7 @@ func (*ItemSession) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case itemsession.FieldCommitCountSinceSpawn:
 			values[i] = new(sql.NullInt64)
-		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldAcSnapshot, itemsession.FieldPipelineModeSnapshot, itemsession.FieldPipelineModeSnapshotHash, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage:
+		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldEndReason, itemsession.FieldAcSnapshot, itemsession.FieldPipelineModeSnapshot, itemsession.FieldPipelineModeSnapshotHash, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage:
 			values[i] = new(sql.NullString)
 		case itemsession.FieldStartedAt, itemsession.FieldEndedAt, itemsession.FieldLastCommitAt, itemsession.FieldLastFileTouchAt, itemsession.FieldLastProgressAt, itemsession.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -158,6 +162,12 @@ func (_m *ItemSession) assignValues(columns []string, values []any) error {
 				_m.EndedAt = new(time.Time)
 				*_m.EndedAt = value.Time
 			}
+		case itemsession.FieldEndReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field end_reason", values[i])
+			} else if value.Valid {
+				_m.EndReason = value.String
+			}
 		case itemsession.FieldAcSnapshot:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field ac_snapshot", values[i])
@@ -187,6 +197,12 @@ func (_m *ItemSession) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field verification_notes", values[i])
 			} else if value.Valid {
 				_m.VerificationNotes = value.String
+			}
+		case itemsession.FieldBaseCommitSha:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field base_commit_sha", values[i])
+			} else if value.Valid {
+				_m.BaseCommitSha = value.String
 			}
 		case itemsession.FieldLastCommitSha:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -308,6 +324,9 @@ func (_m *ItemSession) String() string {
 		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")
+	builder.WriteString("end_reason=")
+	builder.WriteString(_m.EndReason)
+	builder.WriteString(", ")
 	builder.WriteString("ac_snapshot=")
 	builder.WriteString(_m.AcSnapshot)
 	builder.WriteString(", ")
@@ -322,6 +341,9 @@ func (_m *ItemSession) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("verification_notes=")
 	builder.WriteString(_m.VerificationNotes)
+	builder.WriteString(", ")
+	builder.WriteString("base_commit_sha=")
+	builder.WriteString(_m.BaseCommitSha)
 	builder.WriteString(", ")
 	builder.WriteString("last_commit_sha=")
 	builder.WriteString(_m.LastCommitSha)

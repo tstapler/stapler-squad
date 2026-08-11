@@ -107,6 +107,17 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 
 	repo.client = client
 
+	// Normalize any pre-existing BacklogItem.updated_at rows from Local to
+	// UTC (idempotent) — see backlog_item_updated_at_utc_migration.go for
+	// why this is required, not just cosmetic: mixed Local/UTC-formatted
+	// TEXT rows sort incorrectly and spuriously fail CAS preconditions
+	// built from a protobuf Timestamp (always UTC) until each row is
+	// touched once.
+	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
+	}
+
 	return repo, nil
 }
 
@@ -168,6 +179,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.Category != "" {
 		sessionCreate.SetCategory(data.Category)
 	}
+	if data.Note != "" {
+		sessionCreate.SetNote(data.Note)
+	}
 	if data.SessionType != "" {
 		sessionCreate.SetSessionType(string(data.SessionType))
 	}
@@ -215,6 +229,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	}
 	if data.GitHubRepo != "" {
 		sessionCreate.SetGithubRepo(data.GitHubRepo)
+	}
+	if data.ArchivedAt != nil {
+		sessionCreate.SetArchivedAt(*data.ArchivedAt)
 	}
 
 	// Link project if specified (look up by name)
@@ -377,6 +394,10 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if data.Category != "" {
 		sessionUpdate.SetCategory(data.Category)
 	}
+	// Note is set unconditionally, unlike sibling optional string fields: an empty note is a
+	// meaningful, intentionally-reachable state ("cleared"), not an "unset" sentinel, so the
+	// guarded-update convention would silently prevent a user from ever clearing it.
+	sessionUpdate.SetNote(data.Note)
 	if data.SessionType != "" {
 		sessionUpdate.SetSessionType(string(data.SessionType))
 	}
@@ -425,6 +446,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		sessionUpdate.SetPauseReason(data.PauseReason)
 	} else {
 		sessionUpdate.ClearPauseReason()
+	}
+	if data.ExitReason != "" {
+		sessionUpdate.SetExitReason(data.ExitReason)
+	} else {
+		sessionUpdate.ClearExitReason()
 	}
 	sessionUpdate.SetOneShot(data.OneShot)
 	sessionUpdate.SetHidden(data.Hidden)
@@ -990,6 +1016,45 @@ func (r *EntRepository) UpdateLastViewed(ctx context.Context, title string, t ti
 	return nil
 }
 
+// UpdateSessionMetadata efficiently updates only title/category/note/working_dir fields
+// for a session, issuing a single UPDATE WHERE title=? without a prior SELECT and without
+// the worktree/diffstats/tags/claude_session writes the full Update method performs —
+// mirrors UpdateLastViewed's shape. currentTitle must be the row's title from BEFORE any
+// rename already applied to the caller's in-memory Instance in this same request: Update
+// looks the row up by data.Title (the post-rename value), which misses the still-old-titled
+// DB row and falls into Update's Create fallback, orphaning it under the new title. Using
+// currentTitle as the WHERE key avoids that. Category/WorkingDir are only set when non-nil
+// AND non-empty, matching Update's existing guarded (`data.Category != ""`) semantics;
+// Note is set whenever non-nil (including ""), since an empty note is a meaningful cleared
+// state, not "unset" — same asymmetry as Update's unconditional SetNote(data.Note).
+func (r *EntRepository) UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error {
+	update := r.client.Session.Update().
+		Where(session.Title(currentTitle)).
+		SetUpdatedAt(time.Now())
+
+	if newTitle != nil && *newTitle != "" {
+		update.SetTitle(*newTitle)
+	}
+	if category != nil && *category != "" {
+		update.SetCategory(*category)
+	}
+	if note != nil {
+		update.SetNote(*note)
+	}
+	if workingDir != nil && *workingDir != "" {
+		update.SetWorkingDir(*workingDir)
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update session metadata: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", currentTitle)
+	}
+	return nil
+}
+
 // Close performs cleanup and releases resources
 func (r *EntRepository) Close() error {
 	if r.client != nil {
@@ -1037,6 +1102,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		Program:             sess.Program,
 		ExistingWorktree:    sess.ExistingWorktree,
 		Category:            sess.Category,
+		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
 		LastOutputSignature: sess.LastOutputSignature,
@@ -1072,6 +1138,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	}
 	data.LastPromptSignature = sess.LastPromptSignature
 	data.PauseReason = sess.PauseReason
+	data.ExitReason = sess.ExitReason
 	data.WorkflowID = sess.WorkflowID
 	data.ArchivedAt = sess.ArchivedAt
 	data.GitHubPRURL = sess.GithubPrURL
@@ -1239,6 +1306,7 @@ func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error
 			RequiredFlagPrefixes:  rule.RequiredFlagPrefixes,
 			PythonModes:           rule.PythonModes,
 			SafePythonImportsOnly: rule.SafePythonImportsOnly,
+			RequireCIPassing:      rule.RequireCiPassing,
 		}
 	}
 	return result, nil
@@ -1296,6 +1364,7 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetRequiredFlagPrefixes(requiredFlagPrefixes).
 		SetPythonModes(pythonModes).
 		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
+		SetRequireCiPassing(data.RequireCIPassing).
 		OnConflictColumns(approvalrule.FieldRuleID).
 		UpdateNewValues().
 		Exec(ctx)

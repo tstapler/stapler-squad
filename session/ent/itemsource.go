@@ -26,6 +26,12 @@ type ItemSource struct {
 	Config string `json:"config,omitempty"`
 	// Enabled holds the value of the "enabled" field.
 	Enabled bool `json:"enabled,omitempty"`
+	// ForwardSyncEnabled holds the value of the "forward_sync_enabled" field.
+	ForwardSyncEnabled bool `json:"forward_sync_enabled,omitempty"`
+	// BackwardSyncEnabled holds the value of the "backward_sync_enabled" field.
+	BackwardSyncEnabled bool `json:"backward_sync_enabled,omitempty"`
+	// ForwardSyncCloseLabel holds the value of the "forward_sync_close_label" field.
+	ForwardSyncCloseLabel string `json:"forward_sync_close_label,omitempty"`
 	// SyncCursor holds the value of the "sync_cursor" field.
 	SyncCursor string `json:"sync_cursor,omitempty"`
 	// LastSyncedAt holds the value of the "last_synced_at" field.
@@ -74,9 +80,9 @@ func (*ItemSource) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case itemsource.FieldEnabled:
+		case itemsource.FieldEnabled, itemsource.FieldForwardSyncEnabled, itemsource.FieldBackwardSyncEnabled:
 			values[i] = new(sql.NullBool)
-		case itemsource.FieldPluginID, itemsource.FieldDisplayName, itemsource.FieldConfig, itemsource.FieldSyncCursor:
+		case itemsource.FieldPluginID, itemsource.FieldDisplayName, itemsource.FieldConfig, itemsource.FieldForwardSyncCloseLabel, itemsource.FieldSyncCursor:
 			values[i] = new(sql.NullString)
 		case itemsource.FieldLastSyncedAt, itemsource.FieldCreatedAt, itemsource.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -126,6 +132,24 @@ func (_m *ItemSource) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field enabled", values[i])
 			} else if value.Valid {
 				_m.Enabled = value.Bool
+			}
+		case itemsource.FieldForwardSyncEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field forward_sync_enabled", values[i])
+			} else if value.Valid {
+				_m.ForwardSyncEnabled = value.Bool
+			}
+		case itemsource.FieldBackwardSyncEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field backward_sync_enabled", values[i])
+			} else if value.Valid {
+				_m.BackwardSyncEnabled = value.Bool
+			}
+		case itemsource.FieldForwardSyncCloseLabel:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field forward_sync_close_label", values[i])
+			} else if value.Valid {
+				_m.ForwardSyncCloseLabel = value.String
 			}
 		case itemsource.FieldSyncCursor:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -209,6 +233,15 @@ func (_m *ItemSource) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Enabled))
+	builder.WriteString(", ")
+	builder.WriteString("forward_sync_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ForwardSyncEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("backward_sync_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BackwardSyncEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("forward_sync_close_label=")
+	builder.WriteString(_m.ForwardSyncCloseLabel)
 	builder.WriteString(", ")
 	builder.WriteString("sync_cursor=")
 	builder.WriteString(_m.SyncCursor)

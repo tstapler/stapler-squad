@@ -6,7 +6,7 @@ import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
 import { SubStatusChip } from "./SubStatusChip";
-import { GitHubBadge } from "./GitHubBadge";
+import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import {
   row,
   rowPaused,
@@ -28,12 +28,14 @@ import {
   memoryBadgeWarning,
   memoryBadgeHigh,
   diffBadge,
+  noteIndicator,
   branchCell,
   rowMemoryPressure,
   checkboxCell,
   checkboxButton,
 } from "./SessionRow.css";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS, buildRowGridTemplate } from "./session-columns";
+import { truncateGoal } from "@/lib/utils/string";
 
 interface SessionRowProps {
   session: Session;
@@ -86,6 +88,8 @@ function getStatusDotValue(status: SessionStatus): string {
       return "needs-approval";
     case SessionStatus.HIBERNATED:
       return "hibernated";
+    case SessionStatus.CRASHED:
+      return "crashed";
     default:
       return "idle";
   }
@@ -99,6 +103,7 @@ const STATUS_DOT_LABELS: Record<string, string> = {
   "loading": "Loading",
   "needs-approval": "Needs Approval",
   "hibernated": "Hibernated",
+  "crashed": "Crashed",
 };
 
 function getStatusDotLabel(dotValue: string): string {
@@ -169,6 +174,9 @@ function SessionRowInner({
   // Show branch separately if the branch column is visible; otherwise fold into displayName.
   const showBranchCol = visibleColumns.includes("branch");
   const displayName = showBranchCol ? session.title : (session.branch || session.title);
+
+  const trimmedNote = session.note?.trim();
+  const noteTooltip = trimmedNote ? truncateGoal(trimmedNote, 120) : undefined;
 
   const memMB = Number(session.memoryRssMb ?? 0n);
   const memorySeverityClass =
@@ -271,6 +279,18 @@ function SessionRowInner({
             checkConclusion={session.githubCheckConclusion}
             compact={true}
           />
+          {noteTooltip && (
+            <Tooltip label={noteTooltip}>
+              <span
+                className={noteIndicator}
+                role="img"
+                aria-label="Has a note"
+                data-testid="badge-has-note"
+              >
+                📝
+              </span>
+            </Tooltip>
+          )}
         </span>
       </span>
 

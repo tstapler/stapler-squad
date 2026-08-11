@@ -6,7 +6,7 @@ import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
-import { GitHubBadge } from "./GitHubBadge";
+import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
@@ -53,6 +53,7 @@ import {
   statusLoading,
   statusNeedsApproval,
   statusUnknown,
+  statusCrashed,
   category,
   tagsContainer,
   tags,
@@ -87,6 +88,7 @@ import {
   taskFraction,
   autonomousBadge,
   workflowBadge,
+  noteBadge,
   creationSpinner,
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
@@ -174,6 +176,8 @@ function SessionCardInner({
   const isCreating = session.status === SessionStatus.CREATING;
   const isPaused = session.status === SessionStatus.PAUSED;
   const pendingProgramChange = hasPendingProgramChange(session);
+  const trimmedNote = session.note?.trim();
+  const noteTooltip = trimmedNote ? truncateGoal(trimmedNote, 120) : undefined;
   const { html: snapshotHtml, isEmpty: snapshotIsEmpty, loading: snapshotLoadingState, error: snapshotErrorMsg } =
     useTerminalSnapshot(session.id, isSnapshotEnabled);
 
@@ -195,6 +199,8 @@ function SessionCardInner({
         return statusPaused;
       case SessionStatus.HIBERNATED:
         return statusPaused;  // no distinct style yet; reuses paused (session is idle/stopped)
+      case SessionStatus.CRASHED:
+        return statusCrashed;
       default:
         return statusUnknown;
     }
@@ -218,6 +224,8 @@ function SessionCardInner({
         return "Stopped";
       case SessionStatus.HIBERNATED:
         return "Hibernated";
+      case SessionStatus.CRASHED:
+        return "Crashed";
       default:
         return "Unknown";
     }
@@ -634,6 +642,18 @@ function SessionCardInner({
               >
                 <span aria-hidden="true">⏳</span> Pending program change
               </span>
+            )}
+            {noteTooltip && (
+              <Tooltip label={noteTooltip}>
+                <span
+                  className={noteBadge}
+                  role="img"
+                  aria-label="Has a note"
+                  data-testid="badge-has-note"
+                >
+                  <span aria-hidden="true">📝</span> Note
+                </span>
+              </Tooltip>
             )}
           </div>
         </div>

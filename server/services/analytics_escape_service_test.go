@@ -32,6 +32,7 @@ func createTestServiceWithAnalytics(t *testing.T) (*SessionService, *ent.Client)
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 	client := createTestAnalyticsClient(t)
 	svc.SetAnalyticsClient(client)
 	return svc, client
@@ -117,6 +118,7 @@ func TestQueryEscapeAnalytics_RequiresSessionID(t *testing.T) {
 func TestQueryEscapeAnalytics_NoClientReturnsUnavailable(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(100))
+	t.Cleanup(func() { svc.Shutdown() })
 	// analyticsClient intentionally not set
 
 	req := connect.NewRequest(&sessionv1.QueryEscapeAnalyticsRequest{SessionId: "x"})

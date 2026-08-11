@@ -38,11 +38,24 @@ runs:
       shell: bash
       run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
+    # Warms webpack's persistent cache (which holds next/font's downloaded
+    # font files) across runs, so most builds skip the fonts.gstatic.com
+    # network fetch entirely instead of relying on the retry below.
+    - name: Cache Next.js build cache
+      uses: actions/cache@v4
+      with:
+        path: web-app/.next/cache
+        key: nextjs-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+        restore-keys: |
+          nextjs-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+          nextjs-${{ runner.os }}-
 
     - name: Build web UI
       shell: bash
       working-directory: web-app
-      run: pnpm run build
+      # next/font fetches fonts from fonts.gstatic.com at build time; retry
+      # with backoff since that's an external network call, not our code.
+      run: ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
 
     - name: Copy web UI to dist
       shell: bash

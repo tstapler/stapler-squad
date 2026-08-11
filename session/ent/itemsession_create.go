@@ -66,6 +66,20 @@ func (_c *ItemSessionCreate) SetNillableEndedAt(v *time.Time) *ItemSessionCreate
 	return _c
 }
 
+// SetEndReason sets the "end_reason" field.
+func (_c *ItemSessionCreate) SetEndReason(v string) *ItemSessionCreate {
+	_c.mutation.SetEndReason(v)
+	return _c
+}
+
+// SetNillableEndReason sets the "end_reason" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableEndReason(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetEndReason(*v)
+	}
+	return _c
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (_c *ItemSessionCreate) SetAcSnapshot(v string) *ItemSessionCreate {
 	_c.mutation.SetAcSnapshot(v)
@@ -132,6 +146,20 @@ func (_c *ItemSessionCreate) SetVerificationNotes(v string) *ItemSessionCreate {
 func (_c *ItemSessionCreate) SetNillableVerificationNotes(v *string) *ItemSessionCreate {
 	if v != nil {
 		_c.SetVerificationNotes(*v)
+	}
+	return _c
+}
+
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (_c *ItemSessionCreate) SetBaseCommitSha(v string) *ItemSessionCreate {
+	_c.mutation.SetBaseCommitSha(v)
+	return _c
+}
+
+// SetNillableBaseCommitSha sets the "base_commit_sha" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableBaseCommitSha(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetBaseCommitSha(*v)
 	}
 	return _c
 }
@@ -327,6 +355,10 @@ func (_c *ItemSessionCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *ItemSessionCreate) defaults() {
+	if _, ok := _c.mutation.EndReason(); !ok {
+		v := itemsession.DefaultEndReason
+		_c.mutation.SetEndReason(v)
+	}
 	if _, ok := _c.mutation.PipelineModeSnapshot(); !ok {
 		v := itemsession.DefaultPipelineModeSnapshot
 		_c.mutation.SetPipelineModeSnapshot(v)
@@ -334,6 +366,10 @@ func (_c *ItemSessionCreate) defaults() {
 	if _, ok := _c.mutation.PipelineModeSnapshotHash(); !ok {
 		v := itemsession.DefaultPipelineModeSnapshotHash
 		_c.mutation.SetPipelineModeSnapshotHash(v)
+	}
+	if _, ok := _c.mutation.BaseCommitSha(); !ok {
+		v := itemsession.DefaultBaseCommitSha
+		_c.mutation.SetBaseCommitSha(v)
 	}
 	if _, ok := _c.mutation.CommitCountSinceSpawn(); !ok {
 		v := itemsession.DefaultCommitCountSinceSpawn
@@ -428,6 +464,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 		_spec.SetField(itemsession.FieldEndedAt, field.TypeTime, value)
 		_node.EndedAt = &value
 	}
+	if value, ok := _c.mutation.EndReason(); ok {
+		_spec.SetField(itemsession.FieldEndReason, field.TypeString, value)
+		_node.EndReason = value
+	}
 	if value, ok := _c.mutation.AcSnapshot(); ok {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)
 		_node.AcSnapshot = value
@@ -447,6 +487,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.VerificationNotes(); ok {
 		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
 		_node.VerificationNotes = value
+	}
+	if value, ok := _c.mutation.BaseCommitSha(); ok {
+		_spec.SetField(itemsession.FieldBaseCommitSha, field.TypeString, value)
+		_node.BaseCommitSha = value
 	}
 	if value, ok := _c.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
@@ -625,6 +669,24 @@ func (u *ItemSessionUpsert) ClearEndedAt() *ItemSessionUpsert {
 	return u
 }
 
+// SetEndReason sets the "end_reason" field.
+func (u *ItemSessionUpsert) SetEndReason(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldEndReason, v)
+	return u
+}
+
+// UpdateEndReason sets the "end_reason" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateEndReason() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldEndReason)
+	return u
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (u *ItemSessionUpsert) ClearEndReason() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldEndReason)
+	return u
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (u *ItemSessionUpsert) SetAcSnapshot(v string) *ItemSessionUpsert {
 	u.Set(itemsession.FieldAcSnapshot, v)
@@ -700,6 +762,24 @@ func (u *ItemSessionUpsert) UpdateVerificationNotes() *ItemSessionUpsert {
 // ClearVerificationNotes clears the value of the "verification_notes" field.
 func (u *ItemSessionUpsert) ClearVerificationNotes() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldVerificationNotes)
+	return u
+}
+
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (u *ItemSessionUpsert) SetBaseCommitSha(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldBaseCommitSha, v)
+	return u
+}
+
+// UpdateBaseCommitSha sets the "base_commit_sha" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateBaseCommitSha() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldBaseCommitSha)
+	return u
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (u *ItemSessionUpsert) ClearBaseCommitSha() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldBaseCommitSha)
 	return u
 }
 
@@ -956,6 +1036,27 @@ func (u *ItemSessionUpsertOne) ClearEndedAt() *ItemSessionUpsertOne {
 	})
 }
 
+// SetEndReason sets the "end_reason" field.
+func (u *ItemSessionUpsertOne) SetEndReason(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetEndReason(v)
+	})
+}
+
+// UpdateEndReason sets the "end_reason" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateEndReason() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateEndReason()
+	})
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (u *ItemSessionUpsertOne) ClearEndReason() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearEndReason()
+	})
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (u *ItemSessionUpsertOne) SetAcSnapshot(v string) *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
@@ -1044,6 +1145,27 @@ func (u *ItemSessionUpsertOne) UpdateVerificationNotes() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearVerificationNotes() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearVerificationNotes()
+	})
+}
+
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (u *ItemSessionUpsertOne) SetBaseCommitSha(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetBaseCommitSha(v)
+	})
+}
+
+// UpdateBaseCommitSha sets the "base_commit_sha" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateBaseCommitSha() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateBaseCommitSha()
+	})
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (u *ItemSessionUpsertOne) ClearBaseCommitSha() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearBaseCommitSha()
 	})
 }
 
@@ -1489,6 +1611,27 @@ func (u *ItemSessionUpsertBulk) ClearEndedAt() *ItemSessionUpsertBulk {
 	})
 }
 
+// SetEndReason sets the "end_reason" field.
+func (u *ItemSessionUpsertBulk) SetEndReason(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetEndReason(v)
+	})
+}
+
+// UpdateEndReason sets the "end_reason" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateEndReason() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateEndReason()
+	})
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (u *ItemSessionUpsertBulk) ClearEndReason() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearEndReason()
+	})
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (u *ItemSessionUpsertBulk) SetAcSnapshot(v string) *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
@@ -1577,6 +1720,27 @@ func (u *ItemSessionUpsertBulk) UpdateVerificationNotes() *ItemSessionUpsertBulk
 func (u *ItemSessionUpsertBulk) ClearVerificationNotes() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearVerificationNotes()
+	})
+}
+
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (u *ItemSessionUpsertBulk) SetBaseCommitSha(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetBaseCommitSha(v)
+	})
+}
+
+// UpdateBaseCommitSha sets the "base_commit_sha" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateBaseCommitSha() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateBaseCommitSha()
+	})
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (u *ItemSessionUpsertBulk) ClearBaseCommitSha() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearBaseCommitSha()
 	})
 }
 

@@ -24,6 +24,7 @@ import {
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
+  "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },
 };
 
 export default function FeaturesPage() {
@@ -46,7 +47,7 @@ export default function FeaturesPage() {
       ) : !error && flagList.length === 0 ? (
         <p className={emptyMessage}>No feature flags configured.</p>
       ) : (
-        flagList.map(({ name, enabled, description }) => {
+        flagList.map(({ name, enabled, description, statusDetail }) => {
           const meta = FEATURE_META[name];
           const label = meta?.label ?? name;
           return (
@@ -60,6 +61,9 @@ export default function FeaturesPage() {
                 </div>
                 {description && (
                   <div className={flagDescription}>{description}</div>
+                )}
+                {statusDetail && (
+                  <div className={flagDescription}>{statusDetail}</div>
                 )}
               </div>
               <button

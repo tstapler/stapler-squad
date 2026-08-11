@@ -53,6 +53,7 @@ func newRulesServiceWithAI(t *testing.T, aiClient AIClient) *RulesService {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
 	return NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient)
 }
@@ -158,6 +159,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 
 	// Insert 3 escalated entries with no rule match.
 	// RiskLevel must be non-empty to pass the DB schema validator.
@@ -207,6 +209,7 @@ func TestGenerateSuggestedRule_NeverCallsUpsert(t *testing.T) {
 	spy := &spyRulesStore{RulesStore: baseStore}
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
 
 	svc := &RulesService{
@@ -627,6 +630,7 @@ func newSimpleRulesService(t *testing.T) *RulesService {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
 	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
 }

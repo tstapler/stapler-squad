@@ -11,8 +11,13 @@ interface StuckItemDetailProps {
   item: StuckBacklogItem;
   /** Sets a per-item rework-cap override and immediately reopens the item — omitted disables the rework_cap override control. */
   onReworkCapOverride?: (itemId: string, override: number) => Promise<boolean>;
-  /** Approves the item's plan (ApprovePlan RPC) — omitted disables the approve control entirely. */
-  onApprovePlan?: (itemId: string) => Promise<boolean>;
+  /**
+   * Approves the item's plan (ApprovePlan RPC) — omitted disables the
+   * approve control entirely. Rejects (throws) on failure so this component
+   * can surface the actual backend message (e.g. "no plan artifacts found")
+   * instead of a generic error.
+   */
+  onApprovePlan?: (itemId: string) => Promise<void>;
 }
 
 /** Read-only "Repo auto-merge: on/off/unknown" line (Story 4.1.4). `allowAutoMerge` is
@@ -32,12 +37,19 @@ export function StuckItemDetail({ item, onReworkCapOverride, onApprovePlan }: St
   const isPrReady = item.reason === StuckReason.PR_READY_UNMERGED;
   const isReworkCap = item.reason === StuckReason.REWORK_CAP;
   const isAutonomousStuck = item.reason === StuckReason.AUTONOMOUS_STUCK;
-  const isPlanNotApproved = item.reason === StuckReason.PLAN_NOT_APPROVED;
+  const isPlanNotApprovedReason = item.reason === StuckReason.PLAN_NOT_APPROVED;
+  // hasPlan gates the actionable "Approve Plan" affordance on a real plan
+  // existing — `reason` alone lags actual PlanArtifactsPath state until the
+  // next ReconcileStuck tick (see research/pitfalls.md #1), so without this
+  // check the button could be shown with nothing behind it.
+  const hasPlan = item.planArtifactsPath !== "";
+  const isPlanNotApproved = isPlanNotApprovedReason && hasPlan;
   const why = item.context?.trim() ? item.context : "No additional context recorded";
 
   const [moreRounds, setMoreRounds] = useState("3");
   const [overrideState, setOverrideState] = useState<"idle" | "pending" | "error">("idle");
   const [approveState, setApproveState] = useState<"idle" | "pending" | "error">("idle");
+  const [approveError, setApproveError] = useState<string | null>(null);
 
   async function submitOverride(override: number) {
     if (!onReworkCapOverride) return;
@@ -49,8 +61,14 @@ export function StuckItemDetail({ item, onReworkCapOverride, onApprovePlan }: St
   async function submitApprovePlan() {
     if (!onApprovePlan) return;
     setApproveState("pending");
-    const ok = await onApprovePlan(item.itemId);
-    setApproveState(ok ? "idle" : "error");
+    setApproveError(null);
+    try {
+      await onApprovePlan(item.itemId);
+      setApproveState("idle");
+    } catch (err) {
+      setApproveState("error");
+      setApproveError(err instanceof Error ? err.message : "Failed to approve — try again.");
+    }
   }
 
   return (
@@ -129,6 +147,14 @@ export function StuckItemDetail({ item, onReworkCapOverride, onApprovePlan }: St
         </p>
       )}
 
+      {isPlanNotApprovedReason && !hasPlan && (
+        <p className={styles.actionCopy} data-testid="stuck-item-no-action-copy">
+          This item is flagged as waiting on plan approval, but no plan has been
+          generated yet — run triage first. This will clear on the next check once a
+          plan exists.
+        </p>
+      )}
+
       {isPlanNotApproved && (
         <>
           <p className={styles.actionCopy} data-testid="stuck-item-plan-not-approved-copy">
@@ -147,8 +173,8 @@ export function StuckItemDetail({ item, onReworkCapOverride, onApprovePlan }: St
                 {approveState === "pending" ? "Approving…" : "Approve Plan"}
               </button>
               {approveState === "error" && (
-                <span className={styles.overrideStatus} role="alert">
-                  Failed to approve — try again.
+                <span className={styles.overrideStatus} role="alert" data-testid="stuck-item-approve-plan-error">
+                  {approveError}
                 </span>
               )}
             </div>

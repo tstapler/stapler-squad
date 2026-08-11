@@ -342,6 +342,75 @@ func TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresen
 	}
 }
 
+// Test_hookCommandReferencesURL_should_NotMatchWhenURLIsAStrictPrefixOfAnother is the
+// deterministic regression test for the root cause behind
+// TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresent's flakiness:
+// HookPostToolLogging's endpoint (".../api/hooks/post-tool-use") is a strict string prefix of
+// HookGitDriftCheck's (".../api/hooks/post-tool-use-drift-check"). A bare
+// strings.Contains(command, url) treated the shorter URL as present inside the longer URL's
+// command, which (via Go's randomized map iteration order in InjectHooksConfig's `for hookName
+// := range wanted` loop) intermittently caused one of the two PostToolUse hooks to never be
+// injected at all. hookCommandReferencesURL must reject that false-positive match while still
+// matching a command that genuinely references the URL.
+func Test_hookCommandReferencesURL_should_NotMatchWhenURLIsAStrictPrefixOfAnother(t *testing.T) {
+	shortURL := "http://localhost:8543/api/hooks/post-tool-use"
+	longURL := "http://localhost:8543/api/hooks/post-tool-use-drift-check"
+	commandForLongURL := "curl -s --max-time 300 -X POST '" + longURL + "' -H 'Content-Type: application/json' -d @-"
+
+	if hookCommandReferencesURL(commandForLongURL, shortURL) {
+		t.Fatalf("expected command for the longer URL %q to NOT match the shorter, prefix URL %q", longURL, shortURL)
+	}
+	if !hookCommandReferencesURL(commandForLongURL, longURL) {
+		t.Fatalf("expected command for %q to match itself", longURL)
+	}
+}
+
+// TestInjectHooksConfig_should_InjectBothHooks_When_OneEndpointIsAPrefixOfAnother is the
+// end-to-end regression test for the same bug, run over many iterations because the original
+// failure depended on Go's randomized map iteration order (over InjectHooksConfig's `wanted`
+// set) rather than any goroutine or true data race -- a single run had roughly even odds of
+// passing by luck. Pre-fix, this loop reliably failed within the first few iterations (see
+// hookCommandReferencesURL's doc comment); post-fix it must pass every time regardless of
+// iteration order.
+func TestInjectHooksConfig_should_InjectBothHooks_When_OneEndpointIsAPrefixOfAnother(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		tmpDir := t.TempDir()
+		if err := InjectHooksConfig(tmpDir, "sess", []HookName{HookPostToolLogging, HookGitDriftCheck}); err != nil {
+			t.Fatalf("iteration %d: InjectHooksConfig: %v", i, err)
+		}
+
+		settings := readSettings(t, tmpDir)
+		var hooksMap map[string]json.RawMessage
+		if err := json.Unmarshal(settings["hooks"], &hooksMap); err != nil {
+			t.Fatalf("iteration %d: parse hooks: %v", i, err)
+		}
+		postToolRaw, ok := hooksMap["PostToolUse"]
+		if !ok {
+			t.Fatalf("iteration %d: PostToolUse key missing entirely from hooks", i)
+		}
+		var groups []hookMatcherGroup
+		if err := json.Unmarshal(postToolRaw, &groups); err != nil {
+			t.Fatalf("iteration %d: parse PostToolUse groups: %v", i, err)
+		}
+		foundLogging, foundDrift := false, false
+		for _, g := range groups {
+			for _, h := range g.Hooks {
+				if strings.Contains(h.Command, "/api/hooks/post-tool-use-drift-check") {
+					foundDrift = true
+				} else if strings.Contains(h.Command, "/api/hooks/post-tool-use") {
+					foundLogging = true
+				}
+			}
+		}
+		if !foundLogging {
+			t.Fatalf("iteration %d: post_tool_logging hook missing -- it was dropped because its URL is a prefix of git_drift_check's", i)
+		}
+		if !foundDrift {
+			t.Fatalf("iteration %d: git_drift_check hook missing", i)
+		}
+	}
+}
+
 // TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON
 // guards against the fixed-tmp-filename hazard writeSettingsAtomic previously had:
 // tmpPath was settingsPath+".tmp" (not unique per call), so two concurrent writers

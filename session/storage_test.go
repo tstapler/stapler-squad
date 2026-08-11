@@ -675,7 +675,7 @@ func TestSetBacklogItemPRAndTransition_should_TransitionAndPersistPR_When_ItemIn
 	})
 	require.NoError(t, err)
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item.ID, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.")
+	err = storage.SetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
 	require.NoError(t, err)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -699,11 +699,11 @@ func TestSetBacklogItemPRAndTransition_should_NoOp_When_AlreadyPRPendingSamePR(t
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/55"
 	prNum := 55
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
 	require.NoError(t, err)
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item.ID, prURL, prNum, "Implemented the feature.")
-	require.NoError(t, err, "repeating the same PR on an already-pr_pending item must be a no-op success, not an error")
+	err = storage.SetBacklogItemPRAndTransition(ctx, updated, prURL, prNum, "Implemented the feature.", nil)
+	require.NoError(t, err, "repeating the same PR on an already-pr_pending item must be a no-op success, not an error — the idempotency short-circuit must run before the reassignment-guard check, so a nil guard here is fine")
 }
 
 // TestSetBacklogItemPRAndTransition_should_ReturnError_When_StorageWriteFails
@@ -732,6 +732,62 @@ func TestSetBacklogItemPRAndTransition_should_ReturnError_When_StorageWriteFails
 
 	require.NoError(t, repo.Close())
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item.ID, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.")
+	err = storage.SetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
 	require.Error(t, err, "a storage write failure must be returned to the caller, not silently swallowed")
+}
+
+// TestSetBacklogItemPRAndTransition_should_RejectPrecondition_When_ObservedStatusInvalid
+// verifies the invalid-starting-status guard directly at the storage layer:
+// only "review" or "pr_pending" are ever accepted, regardless of caller.
+func TestSetBacklogItemPRAndTransition_should_RejectPrecondition_When_ObservedStatusInvalid(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Not ready for a PR yet",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	err = storage.SetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Too early.", nil)
+	require.ErrorIs(t, err, ErrPreconditionFailed)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusIdea), fetched.Status, "an invalid starting status must never be transitioned")
+	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_ConcurrentWriteWon
+// verifies the CAS pinning property directly at the storage layer, isolated
+// from the MCP handler/mock scaffolding TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails
+// exercises: a caller's observed snapshot must fail the write once it's
+// stale, even for an unrelated field change that only bumped updated_at.
+func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_ConcurrentWriteWon(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Ship it",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// Simulate a concurrent winner landing between this caller's read
+	// (item, captured above) and its write below — any field write bumps
+	// updated_at (ent's UpdateDefault), which is enough to invalidate a
+	// pinned-snapshot CAS.
+	title := "Retitled by a concurrent winner"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &title}, nil)
+	require.NoError(t, err)
+
+	err = storage.SetBacklogItemPRAndTransition(ctx, item /* stale */, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
+	require.ErrorIs(t, err, ErrPreconditionFailed)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a stale observed snapshot must never win the CAS")
+	assert.Equal(t, 0, fetched.PrNumber)
 }
