@@ -290,6 +290,21 @@ func generateServerCert(caKey *ecdsa.PrivateKey, caCert *x509.Certificate, hostn
 		return nil, nil, genErr
 	}
 
+	// RFC 6125 / browser hostname validation matches a literal IP address
+	// against the certificate's iPAddress SAN entries only, never its dNSName
+	// entries -- a dotted-decimal string stuffed into DNSNames (as this used
+	// to do for every entry) is silently ignored when the client connects by
+	// IP, causing a hostname-mismatch error.
+	var dnsNames []string
+	var ipAddrs []net.IP
+	for _, h := range hostnames {
+		if ip := net.ParseIP(h); ip != nil {
+			ipAddrs = append(ipAddrs, ip)
+		} else {
+			dnsNames = append(dnsNames, h)
+		}
+	}
+
 	tmpl := &x509.Certificate{
 		SerialNumber: newSerial(),
 		Subject: pkix.Name{
@@ -299,7 +314,8 @@ func generateServerCert(caKey *ecdsa.PrivateKey, caCert *x509.Certificate, hostn
 		NotBefore:   time.Now().Add(-time.Hour),
 		NotAfter:    time.Now().Add(2 * 365 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
-		DNSNames:    hostnames,
+		DNSNames:    dnsNames,
+		IPAddresses: ipAddrs,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
