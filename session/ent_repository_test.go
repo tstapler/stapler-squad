@@ -464,6 +464,107 @@ func TestUpdateReviewQueueState_SingleStatement(t *testing.T) {
 	assert.False(t, updated.LastPromptDetected.IsZero())
 }
 
+// TestUpdateSessionMetadata_SingleStatement enforces that UpdateSessionMetadata issues a
+// single direct UPDATE and does NOT perform a SELECT first, and that it does not create a
+// worktree/diffstats/tags/claude_session row as a side effect (unlike the full Update path).
+func TestUpdateSessionMetadata_SingleStatement(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sess := createTestSession("metadata-test")
+	require.NoError(t, repo.Create(ctx, sess))
+
+	var selectCount int32
+	repo.client.Intercept(ssent.InterceptFunc(func(next ssent.Querier) ssent.Querier {
+		return ssent.QuerierFunc(func(ctx context.Context, q ssent.Query) (ssent.Value, error) {
+			atomic.AddInt32(&selectCount, 1)
+			return next.Query(ctx, q)
+		})
+	}))
+
+	newTitle := "metadata-test-renamed"
+	category := "urgent"
+	note := "left this waiting on CI"
+	workingDir := "/tmp/new-workdir"
+	err := repo.UpdateSessionMetadata(ctx, sess.Title, &newTitle, &category, &note, &workingDir)
+	require.NoError(t, err)
+
+	got := atomic.LoadInt32(&selectCount)
+	require.Equal(t, int32(0), got,
+		"UpdateSessionMetadata must issue a single UPDATE, not SELECT+UPDATE (got %d SELECT queries)", got)
+
+	updated, err := repo.Get(ctx, newTitle)
+	require.NoError(t, err)
+	assert.Equal(t, newTitle, updated.Title)
+	assert.Equal(t, category, updated.Category)
+	assert.Equal(t, note, updated.Note)
+	assert.Equal(t, workingDir, updated.WorkingDir)
+	assert.Empty(t, updated.Worktree.RepoPath, "narrow metadata update must not create a worktree row")
+	assert.Zero(t, updated.DiffStats.Added+updated.DiffStats.Removed, "narrow metadata update must not touch diff stats")
+	assert.Empty(t, updated.Tags, "narrow metadata update must not touch tags")
+	assert.Empty(t, updated.ClaudeSession.ConversationUUID, "narrow metadata update must not create a claude_session row")
+}
+
+// TestUpdateSessionMetadata_ClearsNoteToEmpty verifies that passing a non-nil empty-string
+// note clears the stored note rather than being skipped as "unset" — matching Update's
+// unconditional SetNote(data.Note) semantics for the same reason (an empty note is a
+// meaningful cleared state).
+func TestUpdateSessionMetadata_ClearsNoteToEmpty(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sess := createTestSession("note-clear-test")
+	sess.Note = "stale reminder"
+	require.NoError(t, repo.Create(ctx, sess))
+
+	empty := ""
+	err := repo.UpdateSessionMetadata(ctx, sess.Title, nil, nil, &empty, nil)
+	require.NoError(t, err)
+
+	updated, err := repo.Get(ctx, sess.Title)
+	require.NoError(t, err)
+	assert.Equal(t, "", updated.Note, "note must be cleared to empty, not left stale")
+}
+
+// TestUpdateSessionMetadata_NilFieldsLeaveExistingValuesUntouched verifies that a nil
+// pointer for category/workingDir leaves the existing DB value untouched — the guarded
+// "not provided" semantics the four sibling narrow-update methods all share.
+func TestUpdateSessionMetadata_NilFieldsLeaveExistingValuesUntouched(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sess := createTestSession("guarded-fields-test")
+	sess.Category = "original-category"
+	sess.WorkingDir = "/original/workdir"
+	require.NoError(t, repo.Create(ctx, sess))
+
+	note := "only the note changed"
+	err := repo.UpdateSessionMetadata(ctx, sess.Title, nil, nil, &note, nil)
+	require.NoError(t, err)
+
+	updated, err := repo.Get(ctx, sess.Title)
+	require.NoError(t, err)
+	assert.Equal(t, note, updated.Note)
+	assert.Equal(t, "original-category", updated.Category, "category must be untouched when not part of the request")
+	assert.Equal(t, "/original/workdir", updated.WorkingDir, "working_dir must be untouched when not part of the request")
+}
+
+// TestUpdateSessionMetadata_SessionNotFound verifies the same not-found error shape as its
+// sibling narrow-update methods when the row doesn't exist.
+func TestUpdateSessionMetadata_SessionNotFound(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	note := "irrelevant"
+	err := repo.UpdateSessionMetadata(ctx, "does-not-exist", nil, nil, &note, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session not found")
+}
+
 func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
 	// Create temporary database file with unique name using timestamp to avoid conflicts
 	tmpDir := t.TempDir()

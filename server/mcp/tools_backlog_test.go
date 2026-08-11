@@ -1001,6 +1001,43 @@ func TestRequestReview_RejectsWhenSessionNotLinked(t *testing.T) {
 	require.Equal(t, ErrPermissionDenied, errObj["code"])
 }
 
+// TestFormatDirtyPathsRejectionMessage_ListsEachPath verifies the message names the
+// specific dirty paths instead of a blanket "git add -A" instruction.
+func TestFormatDirtyPathsRejectionMessage_ListsEachPath(t *testing.T) {
+	msg := formatDirtyPathsRejectionMessage([]string{"server/handler.go", "scratch.txt"})
+	assert.Contains(t, msg, "server/handler.go")
+	assert.Contains(t, msg, "scratch.txt")
+	assert.NotContains(t, msg, "git add -A")
+}
+
+// TestFormatDirtyPathsRejectionMessage_CapsAtMaxPaths verifies a large path list is
+// capped with an "...and N more" suffix rather than listed in full.
+func TestFormatDirtyPathsRejectionMessage_CapsAtMaxPaths(t *testing.T) {
+	paths := make([]string, 15)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("file-%d.txt", i)
+	}
+
+	msg := formatDirtyPathsRejectionMessage(paths)
+
+	for i := 0; i < maxRejectionMessagePaths; i++ {
+		assert.Contains(t, msg, paths[i])
+	}
+	for i := maxRejectionMessagePaths; i < len(paths); i++ {
+		assert.NotContains(t, msg, paths[i])
+	}
+	assert.Contains(t, msg, "...and 5 more")
+}
+
+// TestFormatDirtyPathsRejectionMessage_EmptyPaths_UsesGenericWording verifies the
+// fallback wording when no specific paths are available (e.g. GetWorktreeDirtyPaths
+// itself errored).
+func TestFormatDirtyPathsRejectionMessage_EmptyPaths_UsesGenericWording(t *testing.T) {
+	msg := formatDirtyPathsRejectionMessage(nil)
+	assert.Contains(t, msg, "uncommitted changes")
+	assert.NotContains(t, msg, "git add -A")
+}
+
 // --- request_review: Phase 2 CAS generalization (Epic 4.1) ---
 
 // TestRequestReview_TransitionsPRPendingItemToReview verifies FR1's happy
@@ -2021,6 +2058,7 @@ func TestDecideOverridePolicy(t *testing.T) {
 		v              PRVerification
 		overrideReason string
 		callerLogin    string
+		forceOverride  bool
 		wantAccept     bool
 		wantCode       connect.Code
 	}{
@@ -2093,11 +2131,37 @@ func TestDecideOverridePolicy(t *testing.T) {
 			callerLogin:    "tstapler",
 			wantAccept:     true,
 		},
+		{
+			name:           "forceOverride: matched branch still rejects without override_reason (reassignment AC1)",
+			v:              NewPRVerification(true, true, "backlog/x", githubpkg.PRStateOpen, "tstapler"),
+			overrideReason: "",
+			callerLogin:    "tstapler",
+			forceOverride:  true,
+			wantAccept:     false,
+			wantCode:       connect.CodeInvalidArgument,
+		},
+		{
+			name:           "forceOverride: matched branch still rejects on author mismatch (reassignment AC9)",
+			v:              NewPRVerification(true, true, "backlog/x", githubpkg.PRStateOpen, "someone-else"),
+			overrideReason: "correcting a bad PR",
+			callerLogin:    "tstapler",
+			forceOverride:  true,
+			wantAccept:     false,
+			wantCode:       connect.CodePermissionDenied,
+		},
+		{
+			name:           "forceOverride: matched branch, reason given, author matches, open state accepts",
+			v:              NewPRVerification(true, true, "backlog/x", githubpkg.PRStateOpen, "tstapler"),
+			overrideReason: "correcting a bad PR",
+			callerLogin:    "tstapler",
+			forceOverride:  true,
+			wantAccept:     true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			accept, code, _ := decideOverridePolicy(tt.v, tt.overrideReason, tt.callerLogin)
+			accept, code, _ := decideOverridePolicy(tt.v, tt.overrideReason, tt.callerLogin, tt.forceOverride)
 			assert.Equal(t, tt.wantAccept, accept)
 			if !tt.wantAccept {
 				assert.Equal(t, tt.wantCode, code)
@@ -2395,6 +2459,462 @@ func TestReportPRCreated_should_RejectCall_When_PRNumberDoesNotExist(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
 	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// --- report_pr_created: reassignment from pr_pending ---
+
+// setupReportPRCreatedReassignmentFixture creates a pr_pending-status item
+// with a linked work session and an already-tracked PR (trackedPRNumber),
+// mirroring setupReportPRCreatedFixture but for the reassignment path (item
+// already pr_pending rather than review). Optionally seeds
+// PrFeedbackAddressedAt so AC7 (clearing it on reassignment) can be asserted.
+func setupReportPRCreatedReassignmentFixture(t *testing.T, storage *session.Storage, trackedPRNumber int, seedFeedbackAddressedAt bool) (*session.BacklogItemData, string) {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Ship it",
+		Status: string(session.BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	prURL := fmt.Sprintf("https://github.com/tstapler/stapler-squad/pull/%d", trackedPRNumber)
+	update := session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &trackedPRNumber}
+	if seedFeedbackAddressedAt {
+		seeded := time.Now().Add(-time.Hour)
+		update.PrFeedbackAddressedAt = &seeded
+	}
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, update, nil)
+	require.NoError(t, err)
+
+	return updated, sessionUUID
+}
+
+// TestReportPRCreated_should_ReassignPR_When_AlreadyPRPendingWithOverrideReason
+// (AC0): a work session may correct an already-tracked PR to a different one
+// when the item is pr_pending, given a valid override_reason and a new PR
+// that verifies on GitHub as open and self-authored.
+func TestReportPRCreated_should_ReassignPR_When_AlreadyPRPendingWithOverrideReason(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Corrected the tracked PR after closing the polluted one.",
+		"override_reason": "tracked branch was polluted by another session; opened a clean PR instead and closed the original",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "pr_pending")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, 200, fetched.PrNumber)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/200", fetched.PrURL)
+}
+
+// TestReportPRCreated_should_RejectReassignment_When_AlreadyPRPendingMissingOverrideReason
+// (AC1): reassignment from pr_pending without override_reason is rejected
+// before any GitHub call, even though nothing about the new PR itself has
+// been checked yet — a matching branch does not excuse the missing reason.
+func TestReportPRCreated_should_RejectReassignment_When_AlreadyPRPendingMissingOverrideReason(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	verifyCalled := false
+	loginCalled := false
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			verifyCalled = true
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) {
+			loginCalled = true
+			return "tstapler", nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number": float64(200),
+		"summary":   "Trying to correct the PR without a reason.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "override_reason")
+	assert.False(t, verifyCalled, "must reject before any GitHub verification when reassigning without override_reason")
+	assert.False(t, loginCalled, "resolveCallerGitHubLogin must not be called when override_reason is missing")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 100, fetched.PrNumber, "tracked PR must remain unchanged")
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+}
+
+// TestReportPRCreated_should_RejectReassignment_When_CurrentPRAlreadyMerged
+// (AC2): once the currently tracked PR is merged, reassignment is
+// hard-rejected with no override escape hatch — a merged PR's association
+// with the item must never be silently swapped, even with override_reason
+// set. The new PR's own verification must never even run.
+func TestReportPRCreated_should_RejectReassignment_When_CurrentPRAlreadyMerged(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateMerged, "tstapler"), nil
+			}
+			t.Fatalf("verifyPRMatchesBranch called for new PR #%d — must hard-reject before verifying the new PR once the currently tracked PR is already merged", prNumber)
+			return PRVerification{}, nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Trying to reassign a merged PR.",
+		"override_reason": "trying anyway",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "already merged")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 100, fetched.PrNumber, "tracked PR must remain unchanged")
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+}
+
+// TestReportPRCreated_should_RejectSecondReassignment_When_ConcurrentCASRace
+// (AC3): two concurrent reassignment calls racing on the same pr_pending
+// item, each correcting to a different new PR number, must result in exactly
+// one winner via the same atomic CAS write TestReportPRCreated_
+// LoserPRNeverPersists_WhenCASPreconditionFails exercises for the review ->
+// pr_pending path — the loser gets a clear error and its PR number never
+// lands, even transiently.
+func TestReportPRCreated_should_RejectSecondReassignment_When_ConcurrentCASRace(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	// readBarrier forces both goroutines' pre-write GetBacklogItem reads
+	// (routed through the getBacklogItemFor seam) to complete before either
+	// is allowed to proceed into SetBacklogItemPRAndTransition's write — see
+	// TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails's doc
+	// comment for why this matters.
+	var readBarrier sync.WaitGroup
+	readBarrier.Add(2)
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		it, getErr := storage.GetBacklogItem(fnCtx, itemID)
+		readBarrier.Done()
+		readBarrier.Wait()
+		return it, getErr
+	}
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		getBacklogItemFn:     getBacklogItemFn,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	type prRaceResult struct {
+		prNumber int
+		result   *mcpgo.CallToolResult
+		err      error
+	}
+
+	var wg sync.WaitGroup
+	var startBarrier sync.WaitGroup
+	startBarrier.Add(1)
+	results := make(chan prRaceResult, 2)
+
+	race := func(prNumber int) {
+		defer wg.Done()
+		startBarrier.Wait()
+		req := makeToolReq(map[string]interface{}{
+			"item_id":         item.ID,
+			"pr_url":          fmt.Sprintf("https://github.com/tstapler/stapler-squad/pull/%d", prNumber),
+			"pr_number":       float64(prNumber),
+			"summary":         fmt.Sprintf("Racing reassignment call for PR #%d.", prNumber),
+			"override_reason": "racing correction",
+		})
+		result, callErr := handler.reportPRCreated(ctxWithUUID, req)
+		results <- prRaceResult{prNumber: prNumber, result: result, err: callErr}
+	}
+
+	wg.Add(2)
+	go race(300)
+	go race(400)
+	startBarrier.Done()
+	wg.Wait()
+	close(results)
+
+	var successes, failures int
+	var winnerPRNumber int
+	for rr := range results {
+		require.NoError(t, rr.err)
+		require.Len(t, rr.result.Content, 1)
+		tc, ok := rr.result.Content[0].(mcpgo.TextContent)
+		require.True(t, ok)
+
+		// The success path returns plain (non-JSON) text; errResult always
+		// emits a JSON-encoded MCPResult.
+		var parsed map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(tc.Text), &parsed); jsonErr != nil {
+			successes++
+			winnerPRNumber = rr.prNumber
+			continue
+		}
+		failures++
+	}
+
+	require.Equal(t, 1, successes, "exactly one racer should win the CAS reassignment")
+	require.Equal(t, 1, failures, "the loser must see an error, not silently succeed")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, winnerPRNumber, fetched.PrNumber,
+		"the persisted PrNumber must match whichever racer's reassignment actually won the CAS — the loser's PR number must never land, even transiently")
+}
+
+// TestReportPRCreated_should_RecordDistinctAuditNote_When_Reassigned (AC6):
+// the audit trail must distinguish a reassignment from a first-time PR
+// recording — SetBacklogItemPRAndTransition's progress note Status is
+// "pr_corrected" on reassignment, never the first-time "pr_created".
+func TestReportPRCreated_should_RecordDistinctAuditNote_When_Reassigned(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Corrected the tracked PR.",
+		"override_reason": "tracked branch was polluted; opened a clean PR instead",
+	})
+
+	_, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	notes, err := storage.ListProgressNotesForItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, notes)
+	found := false
+	for _, n := range notes {
+		assert.NotEqual(t, "pr_created", n.Status, "a reassignment must not be recorded with the same note status as a first-time recording")
+		if n.Status == "pr_corrected" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a progress note with status=pr_corrected distinguishing this reassignment from a first-time PR recording")
+}
+
+// TestReportPRCreated_should_ClearPrFeedbackAddressedAt_When_Reassigned
+// (AC7): reassigning to a new PR must not leave the old PR's
+// feedback-dedup watermark in place.
+func TestReportPRCreated_should_ClearPrFeedbackAddressedAt_When_Reassigned(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, true)
+	require.NotNil(t, item.PrFeedbackAddressedAt, "fixture must seed pr_feedback_addressed_at")
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Corrected the tracked PR.",
+		"override_reason": "tracked branch was polluted; opened a clean PR instead",
+	})
+
+	_, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetched.PrFeedbackAddressedAt, "pr_feedback_addressed_at must be cleared when the tracked PR is reassigned")
+}
+
+// TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand
+// (AC8): a CAS failure from an out-of-band status change between this call's
+// read and its write must surface as a friendly, actionable message — not
+// the raw internal precondition-failed error. Uses the getBacklogItemFn seam
+// to inject a write (bumping updated_at) between the handler's read and its
+// own primary write, simulating another action landing in that gap.
+func TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		it, getErr := storage.GetBacklogItem(fnCtx, itemID)
+		if getErr != nil {
+			return it, getErr
+		}
+		title := "Retitled out from under this call"
+		if _, updErr := storage.UpdateBacklogItem(fnCtx, itemID, session.BacklogItemUpdate{Title: &title}, nil); updErr != nil {
+			return it, updErr
+		}
+		return it, nil
+	}
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		getBacklogItemFn:     getBacklogItemFn,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+		"pr_number": float64(42),
+		"summary":   "Implemented the feature.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInternalError, errObj["code"].(string))
+	msg := errObj["message"].(string)
+	assert.Contains(t, msg, "item state changed since your last read")
+	assert.NotContains(t, msg, "precondition failed", "must surface the friendly wrapped message, not the raw internal error text")
+}
+
+// TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch (AC9):
+// the reassignment path requires the new PR's author to match the caller's
+// verified GitHub identity, even when the new PR's branch matches this
+// item's tracked branch — the same gate the review-path override already
+// enforces (TestReportPRCreated_should_RejectCall_When_UnrelatedPRAuthorMismatch).
+func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "someone-else"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Attempting to reassign to someone else's PR.",
+		"override_reason": "trying anyway",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "someone-else")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 100, fetched.PrNumber, "tracked PR must remain unchanged on author mismatch")
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
 }
 
 // fakeTriageHeadlessPool is a minimal headless.PoolClient stub used only to

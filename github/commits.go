@@ -32,15 +32,18 @@ type ghCommitJSON struct {
 
 // GetCommit fetches a single commit by SHA via the GitHub REST API (native
 // net/http, same auth/error-classification mechanism as GetIssue/GetPR).
+// account.Host "" means github.com; account.Username, when non-empty, selects
+// among multiple connected accounts for that host (see getGHTokenForAccount).
 // Returns ErrNotAuthenticated when no token is configured.
-func GetCommit(ctx context.Context, owner, repo, sha string) (*CommitResult, error) {
-	if getGHToken(ctx) == "" {
+func GetCommit(ctx context.Context, account AccountRef, repo RepoRef, sha string) (*CommitResult, error) {
+	token := getGHTokenForAccount(ctx, account)
+	if token == "" {
 		return nil, ErrNotAuthenticated
 	}
 
-	apiPath := fmt.Sprintf("repos/%s/%s/commits/%s", url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	apiPath := fmt.Sprintf("repos/%s/%s/commits/%s", url.PathEscape(repo.Owner()), url.PathEscape(repo.Repo()), url.PathEscape(sha))
 
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHostWithToken(ctx, account.Host, apiPath, token)
 	if err != nil {
 		return nil, fmt.Errorf("build commit request: %w", err)
 	}

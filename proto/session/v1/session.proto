@@ -251,6 +251,11 @@ service SessionService {
   // Returns the resolved values plus source metadata for per-field badges in the UI.
   rpc ResolveDefaults(ResolveDefaultsRequest) returns (ResolveDefaultsResponse) {}
 
+  // PreviewDestinationPath computes where a session's checkout/worktree would land,
+  // without performing any git or filesystem mutation. Used by the Omnibar to show a
+  // live destination hint before the user submits session creation.
+  rpc PreviewDestinationPath(PreviewDestinationPathRequest) returns (PreviewDestinationPathResponse) {}
+
   // UpdateGlobalDefaults replaces the global default fields.
   rpc UpdateGlobalDefaults(UpdateGlobalDefaultsRequest) returns (UpdateGlobalDefaultsResponse) {}
 
@@ -335,6 +340,12 @@ service SessionService {
   // ResumeHibernatedSession re-launches the AI process for a Hibernated session,
   // transitioning it back to Active status.
   rpc ResumeHibernatedSession(ResumeHibernatedSessionRequest) returns (ResumeHibernatedSessionResponse) {}
+
+  // ResumeCrashedSession re-launches the AI process for a Crashed session
+  // (dead tmux pane detected by SessionHealthChecker), transitioning it back
+  // to Active status. Threads --resume automatically when a conversation UUID
+  // is known.
+  rpc ResumeCrashedSession(ResumeCrashedSessionRequest) returns (ResumeCrashedSessionResponse) {}
 
   // ============================================================================
   // Custom Shell RPCs
@@ -614,6 +625,9 @@ message UpdateSessionRequest {
   // Steering message to inject into an autonomous session mid-run.
   // Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
   optional string steer_message = 11;
+
+  // Update the session's free-form note. Capped at 10,000 bytes.
+  optional string note = 12;
 }
 
 message UpdateSessionResponse {
@@ -1769,6 +1783,21 @@ message GetSessionDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
 }
 
+// PreviewDestinationPath
+
+message PreviewDestinationPathRequest {
+  string input = 1;         // raw omnibar text (URL/shorthand or local path)
+  string mode = 2;          // "github_url" | "new_worktree" - client already knows which
+  string repo_path = 3;     // new_worktree only: resolved local repo path
+  string session_name = 4;  // new_worktree only: source string for the sanitized dir name
+}
+
+message PreviewDestinationPathResponse {
+  string path = 1;              // exact for github_url; a directory prefix for new_worktree
+  bool is_exact = 2;            // true only for github_url
+  string unresolved_reason = 3; // set (non-error) when input isn't resolvable yet
+}
+
 // ResolveDefaults
 
 message ResolveDefaultsRequest {
@@ -2172,6 +2201,9 @@ message FeatureFlag {
   bool enabled = 2;
   // Human-readable description of what the feature does.
   string description = 3;
+  // Optional human-readable status line (e.g. why a controller-backed flag is
+  // currently off). Empty when not applicable.
+  string status_detail = 4;
 }
 
 message GetFeatureFlagsRequest {}
@@ -2384,6 +2416,15 @@ message ResumeHibernatedSessionRequest {
 }
 
 message ResumeHibernatedSessionResponse {
+  Session session = 1;
+}
+
+// ResumeCrashedSession messages
+message ResumeCrashedSessionRequest {
+  string id = 1;
+}
+
+message ResumeCrashedSessionResponse {
   Session session = 1;
 }
 

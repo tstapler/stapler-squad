@@ -5,6 +5,7 @@ package tmux_test
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -27,32 +28,49 @@ func newIsolatedSocket(t *testing.T) string {
 	// or any other reason the same test body executes twice), racing one
 	// run's teardown against the next run's setup on the same socket path --
 	// observed as an intermittent "server exited unexpectedly" failure.
-	socket := fmt.Sprintf("integration_%d_%s_%d", os.Getpid(), t.Name(), rand.Int63())
-	// Replace characters that are invalid in tmux socket names.
-	safeSocket := ""
-	for _, c := range socket {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
-			safeSocket += string(c)
-		} else {
-			safeSocket += "_"
-		}
-	}
+	//
+	// t.Name() is hashed (fnv32a, 8 hex chars) rather than embedded verbatim:
+	// AF_UNIX's sun_path is capped at ~107 usable bytes, and
+	// "/tmp/tmux-<uid>/integration_<pid>_<name>_<rand>" overflows that limit
+	// for long test names (e.g.
+	// TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff, 63
+	// chars) -- confirmed via a deterministic "File name too long" failure
+	// from `tmux new-session`, not a flake. extractTestSocketPID
+	// (testutil/tmuxreap) only requires a "_"-delimited numeric PID segment
+	// within pidMax after the "integration_" prefix, which this format still
+	// provides.
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(t.Name()))
+	socket := fmt.Sprintf("integration_%d_%08x_%d", os.Getpid(), h.Sum32(), rand.Int31())
 	t.Cleanup(func() {
-		exec.Command(tmux.Binary(), "-L", safeSocket, "kill-server").Run() //nolint:errcheck
+		exec.Command(tmux.Binary(), "-L", socket, "kill-server").Run() //nolint:errcheck
 	})
-	return safeSocket
+	return socket
 }
 
-// newSessionWithRetry runs `tmux -L socket new-session <args...>`, retrying up
-// to 3 times with short backoff. Under heavy concurrent tmux usage (many
-// packages each running real tmux servers during `go test ./...`), a fresh
-// server can transiently report "server exited unexpectedly" on its first
-// session-creation attempt even though the socket is otherwise healthy --
-// the same class of transient failure EnsureServerRunning recovers from in
-// session/tmux/tmux.go. Fails the test if every attempt fails.
+// newSessionWithRetry runs `tmux -L socket -f /dev/null new-session <args...>`,
+// retrying up to 3 times with short backoff. -f /dev/null is load-bearing when
+// this call is the one that starts the isolated server (always true for the
+// keepalive session, the first command issued against a fresh socket): tmux
+// reads ~/.tmux.conf (and /etc/tmux.conf) on server startup regardless of -L,
+// so without -f every "isolated" test server was silently inheriting this
+// developer's real interactive config -- including `run
+// '~/.tmux/plugins/tpm/tpm'`, which forks several `tmux <subcommand>` and
+// helper-script child processes against the brand-new server as part of
+// config load. That contended with this test suite's own near-immediate
+// list-sessions/attach-session calls on the same fresh server and was
+// root-caused (via temporary stderr capture on syncSessionsLocked, see git
+// history) as the actual source of the "server exited unexpectedly" /
+// "no server running" crashes this comment used to attribute to generic
+// "heavy concurrent tmux usage" -- confirmed by the fact that count=40 loops
+// stopped reproducing the crash once config loading was suppressed here.
+// The retry loop is kept as defense-in-depth for genuine host-load
+// transients (matching EnsureServerRunning's recovery pattern in
+// session/tmux/tmux.go), not because -f alone was expected to leave any
+// residual flakiness to retry away.
 func newSessionWithRetry(t *testing.T, socket string, args ...string) {
 	t.Helper()
-	fullArgs := append([]string{"-L", socket, "new-session"}, args...)
+	fullArgs := append([]string{"-L", socket, "-f", "/dev/null", "new-session"}, args...)
 	const maxAttempts = 3
 	var lastErr error
 	var lastOut []byte
@@ -93,6 +111,28 @@ func startIsolatedRegistry(t *testing.T) (*tmux.TmuxServerRegistry, string) {
 		t.Fatalf("registry.Start: %v", err)
 	}
 
+	// Wait for the control-mode client to actually attach before returning.
+	// Root-caused via tmux's own -v server log (see git history): a session
+	// created by the caller immediately after startIsolatedRegistry returns
+	// can land in the gap between the registry's control-mode attach-session
+	// (fully processed server-side only once IsHealthy() goes true) and its
+	// post-connect syncSessions() snapshot. A session created in that gap
+	// predates the control client's subscription, so tmux never emits
+	// %session-created/%sessions-changed for it to this client, and no
+	// further resync is guaranteed if the connection then stays healthy
+	// indefinitely (no debounce trigger, no reconnect) -- the session is
+	// permanently invisible to the registry, not just delayed. Confirmed
+	// directly: reproduced as "session not visible in registry before
+	// subscribing" timing out at the full registryPollTimeout with zero
+	// reconnect/backoff log lines in between, i.e. the control-mode
+	// connection never dropped and simply never re-synced. Waiting for
+	// IsHealthy() here (set only after the post-connect sync succeeds, which
+	// requires a live round trip to a server that has therefore also already
+	// processed the earlier-submitted attach-session) closes the gap: any
+	// session a test creates after this point is guaranteed to be created
+	// after the control client has subscribed.
+	pollUntil(t, registryPollTimeout, "registry did not become healthy initially", registry.IsHealthy)
+
 	return registry, socket
 }
 
@@ -102,9 +142,15 @@ func startIsolatedRegistry(t *testing.T) (*tmux.TmuxServerRegistry, string) {
 // a connection that happens to reconnect once or twice right before an
 // assertion can burn most of a 1s budget on the reconnect delay alone, before
 // syncSessions even runs -- observed under heavy concurrent tmux load (many
-// packages each running real tmux servers during `go test ./...`). 3s
-// comfortably covers a few backoff cycles plus sync time.
-const registryPollTimeout = 3 * time.Second
+// packages each running real tmux servers during `go test ./...`). 8s (not
+// 3s) matches backoffElevationPollTimeout's own reasoning below: confirmed
+// directly (full-package -race runs, 3/4 failing before this bump) that a
+// freshly created isolated server can burn through several backoff cycles
+// (100->200->400->800->1600ms, over 3s of backoff alone) transiently
+// unstable right after creation before settling, and -race's 2-10x slowdown
+// plus shared-runner tmux-fork contention can push that well past 3s -- 8s
+// gives real headroom instead of trading this flake for a tighter one.
+const registryPollTimeout = 8 * time.Second
 
 // pollUntil polls fn until it returns true or the timeout expires.
 // It calls t.Fatal with msg if the timeout is exceeded.
@@ -113,6 +159,43 @@ func pollUntil(t *testing.T, timeout time.Duration, msg string, fn func() bool) 
 	if err := wait.WaitForCondition(fn, wait.WaitConfig{Timeout: timeout, PollInterval: 5 * time.Millisecond, Description: msg}); err != nil {
 		t.Fatal(msg)
 	}
+}
+
+// waitForReconnectCycles blocks until it has observed minCycles complete
+// IsHealthy() pulses (false -> true -> false). Each pulse corresponds to one
+// full reconnectLoop iteration: a connect attempt, a brief healthy window
+// while syncSessions runs (see reconnectLoop's runtime.Gosched() comment,
+// which exists specifically so this window is observable), then readLines
+// returning and the loop entering its next backoff wait. prevHealthy starts
+// at the registry's current IsHealthy() value so an already-true state at
+// call time (the tail of a still-live connection dropping) is never
+// miscounted as a completed pulse -- only a rise observed *during* this
+// call, followed by a fall, counts. This is a condition-driven replacement
+// for a fixed sleep (see docs/adr/003-no-static-sleeps-in-tests.md): it
+// verifies its own precondition instead of assuming it from elapsed time.
+// t.Fatal with the observed count if minCycles is not reached in time.
+func waitForReconnectCycles(t *testing.T, registry *tmux.TmuxServerRegistry, minCycles int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	pulses := 0
+	sawRise := false
+	prevHealthy := registry.IsHealthy()
+	for time.Now().Before(deadline) {
+		h := registry.IsHealthy()
+		switch {
+		case !prevHealthy && h:
+			sawRise = true
+		case prevHealthy && !h && sawRise:
+			pulses++
+			sawRise = false
+			if pulses >= minCycles {
+				return
+			}
+		}
+		prevHealthy = h
+		runtime.Gosched()
+	}
+	t.Fatalf("only observed %d/%d reconnect cycles within %s -- backoff did not grow as expected", pulses, minCycles, timeout)
 }
 
 // Test 1: Registry starts and becomes healthy within 2 seconds.
@@ -183,6 +266,99 @@ func TestTmuxServerRegistry_PaneExitChannel(t *testing.T) {
 		// alone, before syncSessions even runs -- observed under heavy concurrent
 		// tmux load. 3s comfortably covers a few backoff cycles plus sync time.
 		t.Fatal("SubscribePaneExit channel not closed within 3s after kill-session")
+	}
+}
+
+// Regression test: pane-exit is still detected quickly even while
+// reconnectLoop's backoff has grown large. Exercises the fastRecheckAttempts
+// x (fastRecheckSyncTimeout + fastRecheckInterval) = 700ms ceiling
+// structurally, not by re-running the flaky test until it happens to pass.
+//
+// Backoff-elevation mechanism: killing the isolated socket's keepalive
+// session (never auto-recreated off the default socket, see
+// startControlMode) forces every subsequent attach-session attempt to fail
+// near-instantly, so reconnectLoop's backoff doubles every cycle without
+// ever resetting (100->200->400->800->1600->3200ms...). waitForReconnectCycles
+// counts the resulting IsHealthy() true->false pulses to know, structurally
+// rather than by wall-clock guess, when backoff has reached the target
+// value. This replaces an earlier design that used a fixed
+// time.Sleep(2 * time.Second), which violated ADR-003 (No Static Sleeps in
+// Tests, docs/adr/003-no-static-sleeps-in-tests.md) and didn't verify its
+// own precondition.
+//
+// Known gap: this test elevates backoff via a clean control-mode outage, so
+// no %sessions-changed event / debounce callback ever fires during its
+// fast-recheck phase, and syncSessionsFastRecheck's TryLock never contends
+// with the blocking syncSessions() path. The syncMu-contention scenario
+// (fast-recheck skipping a check because another caller holds syncMu) is
+// therefore NOT exercised here. Verifying that scenario needs either
+// unexported access to syncMu or a way to reliably slow list-sessions from
+// outside the package, both unavailable to this external tmux_test package
+// (server_registry_test.go, the only place with that access, is a third
+// file outside this fix's file-confinement -- see requirements.md AC6) --
+// accepted as a documented gap rather than expanded scope.
+func TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff(t *testing.T) {
+	registry, socket := startIsolatedRegistry(t)
+	keepaliveName := tmux.TmuxPrefix + "keepalive"
+
+	// sentinelName is a session distinct from both the keepalive session
+	// (killed below to elevate backoff) and the target session (killed
+	// later to assert detection). Without it, once both keepalive and the
+	// target session are gone the isolated server has zero sessions left,
+	// and tmux's default exit-empty behavior tears the whole server process
+	// down -- confirmed directly: every list-sessions call issued afterward
+	// (including syncSessionsFastRecheck's) then fails outright ("exit
+	// status 1", connection refused) instead of returning an empty list, so
+	// syncSessionsLocked can't diff/fire at all. That raced against exactly
+	// which of the two fast-recheck attempts happened to run before the
+	// server died, producing a ~50/50 flake unrelated to the fix under test.
+	// This sentinel (never killed) keeps the server itself alive for the
+	// whole test regardless of which other sessions are killed.
+	sentinelName := "testpaneexit-elevated-backoff-sentinel"
+	newSessionWithRetry(t, socket, "-d", "-s", sentinelName, "sleep 300")
+
+	sessionName := "testpaneexit-elevated-backoff"
+	newSessionWithRetry(t, socket, "-d", "-s", sessionName)
+	pollUntil(t, registryPollTimeout, "session not visible before elevating backoff", func() bool {
+		return registry.SessionExists(sessionName)
+	})
+
+	// Elevate reconnectLoop's backoff: kill the keepalive session once, then
+	// wait for enough reconnect cycles to have completed that the *next*
+	// wait reconnectLoop is about to enter uses backoff=3200ms
+	// (100->200->400->800->1600->3200, one doubling per completed pulse).
+	// waitForReconnectCycles returns as soon as a pulse's healthy->unhealthy
+	// transition is observed, which happens *before* that cycle's wait -- so
+	// counting to pulse 5 (backoff doubled 4 times) would leave reconnectLoop
+	// about to enter only its 1600ms wait, exactly at (not past)
+	// fastRecheckMinBackoff's threshold. Counting to pulse 6 (5 doublings)
+	// lands on the 3200ms wait, comfortably past the 1.5s detection-assertion
+	// window below, so unfixed code (which has no fast-recheck and is bound
+	// by backoff alone) would very likely still be waiting when that
+	// window's deadline fires -- not just "slower in principle."
+	if out, err := exec.Command(tmux.Binary(), "-L", socket, "kill-session", "-t", keepaliveName).CombinedOutput(); err != nil {
+		t.Fatalf("kill-session keepalive: %v (%s)", err, out)
+	}
+	// minElevatedBackoffCycles=6 needs real headroom over its ~3.1s nominal
+	// curve under -race + shared-runner contention (pre-mortem.md failure #4)
+	// -- reuses registryPollTimeout rather than a second identically-reasoned
+	// 8s constant.
+	const minElevatedBackoffCycles = 6
+	waitForReconnectCycles(t, registry, minElevatedBackoffCycles, registryPollTimeout)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	exitCh := registry.SubscribePaneExit(ctx, sessionName)
+
+	if out, err := exec.Command(tmux.Binary(), "-L", socket, "kill-session", "-t", sessionName).CombinedOutput(); err != nil {
+		t.Fatalf("kill-session %s: %v (%s)", sessionName, err, out)
+	}
+
+	select {
+	case <-exitCh:
+		// detected despite elevated backoff -- the fix is working
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("SubscribePaneExit channel not closed within 1.5s despite elevated backoff -- fast-recheck did not decouple detection from backoff")
 	}
 }
 

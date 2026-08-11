@@ -462,13 +462,19 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// Belt-and-suspenders layer 1: reject if the worktree has uncommitted changes.
 	// The reviewer reads the committed diff; uncommitted work would be invisible and
 	// the review verdict would be inaccurate. Agent must commit before requesting review.
+	// GetWorktreeDirtyPaths alone answers both "is it dirty" and "which paths" — no
+	// need for a separate IsWorktreeDirty call first. A pathsErr here (rare — the
+	// worktree was already resolved above) fails open rather than blocking the RPC,
+	// matching this belt-and-suspenders check's pre-existing fail-open behavior; it's
+	// still logged so a silent failure to reject a genuinely dirty worktree is visible.
 	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
-		if dirty, dirtyErr := session.IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
-			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s", callerUUID, itemID)
-			return errResult(ErrInvalidArgument,
-				"request_review rejected: the worktree has uncommitted changes. "+
-					"Run `git add -A && git commit -m 'description of changes'` to commit your work, then call request_review again.",
-				""), nil
+		paths, pathsErr := session.GetWorktreeDirtyPaths(wt.WorktreePath)
+		if pathsErr != nil {
+			log.WarningLog.Printf("[mcp:request_review] GetWorktreeDirtyPaths failed for session=%s worktree=%s: %v", callerUUID, wt.WorktreePath, pathsErr)
+		}
+		if pathsErr == nil && len(paths) > 0 {
+			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s paths=%v", callerUUID, itemID, paths)
+			return errResult(ErrInvalidArgument, formatDirtyPathsRejectionMessage(paths), ""), nil
 		}
 	}
 
@@ -560,6 +566,31 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Review requested for item %s. The item has been moved to review status.", itemID,
 	)), nil
+}
+
+// maxRejectionMessagePaths caps how many dirty paths formatDirtyPathsRejectionMessage
+// lists explicitly, so a large diff doesn't produce an unbounded message.
+const maxRejectionMessagePaths = 10
+
+// formatDirtyPathsRejectionMessage builds request_review's uncommitted-changes
+// rejection text from the specific dirty paths, instead of a blanket "git add -A"
+// instruction, so the agent knows exactly what to commit.
+func formatDirtyPathsRejectionMessage(paths []string) string {
+	if len(paths) == 0 {
+		return "request_review rejected: the worktree has uncommitted changes. " +
+			"Run `git status` in the worktree, commit your work, then call request_review again."
+	}
+	shown := paths
+	var suffix string
+	if len(paths) > maxRejectionMessagePaths {
+		shown = paths[:maxRejectionMessagePaths]
+		suffix = fmt.Sprintf(" ...and %d more", len(paths)-maxRejectionMessagePaths)
+	}
+	return fmt.Sprintf(
+		"request_review rejected: the worktree has uncommitted changes: %s%s. "+
+			"Commit these specific paths (e.g. `git add <path> && git commit -m 'description of changes'`), then call request_review again.",
+		strings.Join(shown, ", "), suffix,
+	)
 }
 
 // itemSessionsFor lists ItemSessions for itemID via the overridable
@@ -819,11 +850,17 @@ func (h *backlogHandlers) callerGitHubLogin(ctx context.Context) (string, error)
 // checked before the state gate so a PR failing both surfaces the more
 // fundamental "this isn't your PR" reason rather than a "not open/merged,
 // try again later" reason that invites a misleading retry.
-func decideOverridePolicy(v PRVerification, overrideReason, callerLogin string) (accept bool, code connect.Code, msg string) {
+//
+// forceOverride skips the Matched fast path — reportPRCreated sets it true
+// on the reassignment path (item already pr_pending, correcting the tracked
+// PR to a different number), where a matching branch alone is not enough:
+// AC1/AC9 require override_reason and self-authorship on every reassignment,
+// not just ones whose head branch happens to differ from the tracked branch.
+func decideOverridePolicy(v PRVerification, overrideReason, callerLogin string, forceOverride bool) (accept bool, code connect.Code, msg string) {
 	if !v.Exists {
 		return false, connect.CodeNotFound, "PR does not exist"
 	}
-	if v.Matched {
+	if v.Matched && !forceOverride {
 		return true, connect.Code(0), ""
 	}
 	if overrideReason == "" {
@@ -926,6 +963,44 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		)), nil
 	}
 
+	// Reassignment: the item already has a *different* PR tracked
+	// (status already pr_pending — the idempotent same-number case returned
+	// above). This requires strictly more than the first-time recording
+	// path: override_reason is mandatory unconditionally (AC1, checked here
+	// before any network call — even a matching branch doesn't excuse it),
+	// and the currently tracked PR is hard-checked for already being merged
+	// (AC2) before anything else, since a merged PR's association must never
+	// be silently swapped.
+	isReassignment := item.Status == string(session.BacklogStatusPRPending)
+	if isReassignment && overrideReason == "" {
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"item %s already has PR #%d tracked (status pr_pending) — reassigning it to PR #%d requires override_reason explaining why, even if the new PR's branch matches this item's tracked branch. "+
+				"Retry with override_reason set, e.g. override_reason=\"tracked branch was polluted by another session; opened a clean PR instead and closed the original\".",
+			itemID, item.PrNumber, prNumber), ""), nil
+	}
+	if isReassignment && item.PrNumber > 0 {
+		// Fail CLOSED on a parse failure here, same as a verification
+		// failure below — this is the one check the tool description
+		// promises has no override, so an unparseable stored PrURL must
+		// never silently skip it and let the reassignment through.
+		curRef, curParseErr := session.ParseGitHubURL(item.PrURL)
+		if curParseErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf(
+				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
+				item.PrURL, curParseErr), ""), nil
+		}
+		curVerification, curErr := h.verifyPR(ctx, curRef.Owner, curRef.Repo, item.PrNumber, "")
+		if curErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("could not verify the currently tracked PR #%d against GitHub — retry: %v", item.PrNumber, curErr), ""), nil
+		}
+		if curVerification.State == githubpkg.PRStateMerged {
+			return errResult(ErrInvalidArgument, fmt.Sprintf(
+				"item %s's currently tracked PR #%d is already merged — refusing to reassign it to PR #%d, even with override_reason. "+
+					"A merged PR's association with this item cannot be changed; open a new backlog item if further work is needed.",
+				itemID, item.PrNumber, prNumber), ""), nil
+		}
+	}
+
 	// Parse the reported URL to extract owner/repo, and cross-check it
 	// against the reported pr_number — a typo'd URL/number pair fails fast
 	// here, before any network call.
@@ -956,9 +1031,12 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	// trusted), never when the PR doesn't exist (existence can never be
 	// overridden regardless of authorship), and never when override_reason
 	// is empty (a call already doomed to reject for a missing reason
-	// shouldn't pay for a GitHub API call it doesn't need).
+	// shouldn't pay for a GitHub API call it doesn't need). On the
+	// reassignment path (AC9), the identity check is mandatory even when the
+	// branch matches — isReassignment is already only ever true here with a
+	// non-empty overrideReason (the early reject above guarantees it).
 	var callerLogin string
-	if verification.Exists && !verification.Matched && overrideReason != "" {
+	if verification.Exists && overrideReason != "" && (isReassignment || !verification.Matched) {
 		login, loginErr := h.callerGitHubLogin(ctx)
 		if loginErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("could not resolve your GitHub identity to verify the override — retry: %v", loginErr), ""), nil
@@ -966,7 +1044,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		callerLogin = login
 	}
 
-	accept, code, _ := decideOverridePolicy(verification, overrideReason, callerLogin)
+	accept, code, _ := decideOverridePolicy(verification, overrideReason, callerLogin, isReassignment)
 	if !accept {
 		var msg string
 		switch code {
@@ -993,18 +1071,55 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInvalidArgument, msg, ""), nil
 	}
 
-	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, itemID, prURL, prNumber, summary); setErr != nil {
+	// Build the reassignment guard from what was already verified above:
+	// override_reason is non-empty (rejected earlier otherwise), the
+	// currently tracked PR is confirmed not merged (rejected earlier
+	// otherwise — or there was no PR to check), and decideOverridePolicy
+	// just accepted with forceOverride=true, which requires
+	// verification.Author == callerLogin. nil when this isn't a
+	// reassignment — SetBacklogItemPRAndTransition ignores it in that case.
+	var guard *session.PRReassignmentGuard
+	if isReassignment {
+		guard = &session.PRReassignmentGuard{
+			OverrideReason:      overrideReason,
+			CurrentPRMerged:     false,
+			NewPRAuthorVerified: true,
+		}
+	}
+
+	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, item, prURL, prNumber, summary, guard); setErr != nil {
+		if errors.Is(setErr, session.ErrPreconditionFailed) {
+			// AC8: the item's status changed out from under this call between
+			// our read above and the atomic write (another action resolved it,
+			// or a racing report_pr_created call won first) — a friendly,
+			// actionable message, not a raw internal error (mirrors
+			// report_duplicate's identical CAS-failure message).
+			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it, or a concurrent report_pr_created call won first) — call get_backlog_item to see its current status", ""), nil
+		}
+		if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
+			// Should be unreachable — this handler always constructs a valid
+			// guard whenever isReassignment is true — but surfaces distinctly
+			// rather than as a generic internal error if storage's own
+			// contract check ever disagrees with the handler's.
+			return errResult(ErrInternalError, fmt.Sprintf("reassignment rejected by storage layer: %v", setErr), ""), nil
+		}
 		return errResult(ErrInternalError, fmt.Sprintf("record PR: %v", setErr), ""), nil
 	}
 
 	log.InfoLog.Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
 
-	if !verification.Matched {
+	if isReassignment || !verification.Matched {
 		// The override path was actually taken (not the fast path) — audit
-		// it, since this path has no technical human gate.
-		log.Warn("report_pr_created: recording PR via override (head branch differs from tracked branch)",
+		// it, since this path has no technical human gate. Gated on
+		// isReassignment too (not just !verification.Matched): a
+		// same-branch reassignment still went through the mandatory
+		// override_reason + author-identity check (forceOverride), so it
+		// must be audited even though verification.Matched is true.
+		log.Warn("report_pr_created: recording PR via override",
 			"session", callerUUID,
 			"item", itemID,
+			"reassignment", isReassignment,
+			"previous_pr_number", item.PrNumber,
 			"pr_number", prNumber,
 			"actual_head_branch", verification.ActualHeadBranch,
 			"tracked_branch", branch,
@@ -1150,7 +1265,12 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", parseErr), ""), nil
 	}
 
-	issue, fetchErr := githubpkg.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+	repo, repoErr := githubpkg.NewRepoRef(ref.Owner, ref.Repo)
+	if repoErr != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", repoErr), ""), nil
+	}
+
+	issue, fetchErr := githubpkg.GetIssue(ctx, githubpkg.AccountRef{Host: ref.Host}, repo, ref.IssueNumber)
 	if fetchErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
 	}
@@ -1202,15 +1322,20 @@ func (h *backlogHandlers) verifyRef(ctx context.Context, ref *githubpkg.ParsedGi
 // contract, genuinely different in shape from verifyPR's (bool, error) — see
 // ADR-002.
 func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error {
+	account := githubpkg.AccountRef{Host: ref.Host}
+	repo, err := githubpkg.NewRepoRef(ref.Owner, ref.Repo)
+	if err != nil {
+		return err
+	}
 	switch ref.Type {
 	case githubpkg.RefTypePR:
-		_, err := githubpkg.GetPR(ctx, ref.Owner, ref.Repo, ref.PRNumber)
+		_, err := githubpkg.GetPR(ctx, account, repo, ref.PRNumber)
 		return err
 	case githubpkg.RefTypeIssue:
-		_, err := githubpkg.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+		_, err := githubpkg.GetIssue(ctx, account, repo, ref.IssueNumber)
 		return err
 	case githubpkg.RefTypeCommit:
-		_, err := githubpkg.GetCommit(ctx, ref.Owner, ref.Repo, ref.CommitSHA)
+		_, err := githubpkg.GetCommit(ctx, account, repo, ref.CommitSHA)
 		return err
 	default:
 		return fmt.Errorf("unsupported ref type %s", ref.Type)
@@ -1717,7 +1842,8 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			mcpgo.WithDescription("Report a pull request YOU created (e.g. via /backlog/ship or a manual `gh pr create`) back onto this backlog item. Role: work only. Call this as the final step any time you create a PR yourself instead of letting the system create one for you — otherwise the item never shows the PR and stays invisible to the reviewer and the operator. "+
 				"The reported PR is verified against GitHub (it must exist and its head branch must match this session's own branch) before being trusted — a mismatched or invalid PR is rejected, not silently recorded. "+
 				"If the PR's head branch doesn't match this item's tracked branch (e.g. the tracked branch was polluted by another session sharing this worktree, so you opened the PR from a clean branch instead), pass override_reason to record it anyway — gated by an explicit reason AND by the PR having been authored by this same GitHub identity; it cannot be used to attach a PR someone/something else opened. "+
-				"On success, the item transitions from review to pr_pending. Calling this again with the same PR after it already succeeded is safe (no-op)."),
+				"On success, the item transitions from review to pr_pending. Calling this again with the same PR after it already succeeded is safe (no-op). "+
+				"If the item already has a DIFFERENT PR tracked (already pr_pending), this call reassigns it — e.g. you opened a bad PR from a polluted branch, closed it, and opened a clean replacement. Reassignment always requires override_reason (even if the new PR's branch matches the tracked branch) and the new PR must be authored by your own GitHub identity. Reassignment is refused outright, with no override, once the currently tracked PR is already merged — open a new backlog item instead."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),

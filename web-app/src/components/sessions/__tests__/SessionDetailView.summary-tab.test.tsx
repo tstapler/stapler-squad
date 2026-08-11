@@ -16,7 +16,7 @@
  * unrelated to this change).
  */
 import React from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionDetailView } from "../SessionDetailView";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
@@ -189,5 +189,39 @@ describe("SessionDetailView — Summary tab (Epic 3.2, Story 3.2.1)", () => {
     expect(sessionSummaryPanelSpy).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "sess-summary-1" })
     );
+  });
+
+  // Touch devices have no `:hover`, so the `title` tooltip asserted above is
+  // unreachable there — tapping a disabled tab must surface the same reason
+  // via a visible, dismissible hint instead.
+  it("shows a dismissible hint with the disabled reason on tap (touch fallback for title)", async () => {
+    const user = userEvent.setup();
+    renderView(SessionStatus.ACTIVE);
+
+    const summaryTab = screen.getByRole("tab", { name: /summary/i });
+    await user.click(summaryTab);
+
+    const hint = screen.getByTestId("disabled-tab-hint");
+    expect(hint).toHaveTextContent("Summary is generated after the session ends.");
+    // Tapping a disabled tab must not activate it.
+    expect(summaryTab).toHaveAttribute("aria-selected", "false");
+
+    await user.click(hint);
+    expect(screen.queryByTestId("disabled-tab-hint")).not.toBeInTheDocument();
+  });
+
+  it("auto-dismisses the disabled-tab hint after the timeout", () => {
+    jest.useFakeTimers();
+    renderView(SessionStatus.ACTIVE);
+
+    fireEvent.click(screen.getByRole("tab", { name: /summary/i }));
+    expect(screen.getByTestId("disabled-tab-hint")).toBeInTheDocument();
+
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+    expect(screen.queryByTestId("disabled-tab-hint")).not.toBeInTheDocument();
+
+    jest.useRealTimers();
   });
 });

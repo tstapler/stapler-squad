@@ -25,6 +25,7 @@ import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
+import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
@@ -38,6 +39,7 @@ import {
   pausedOverlayTitle,
   pausedOverlayReason,
   pausedOverlayButton,
+  crashedOverlayIcon,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -139,6 +141,19 @@ export function SessionDetailView({
 }: SessionDetailViewProps) {
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
+
+  // Reason text for a disabled tab, surfaced on tap since touch devices have no
+  // hover to reveal the `title` attribute. Cleared after a few seconds or on next tap.
+  const [disabledTabHint, setDisabledTabHint] = useState<string | null>(null);
+  const disabledTabHintTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDisabledTabHint = (reason: string) => {
+    if (disabledTabHintTimeoutRef.current) clearTimeout(disabledTabHintTimeoutRef.current);
+    setDisabledTabHint(reason);
+    disabledTabHintTimeoutRef.current = setTimeout(() => setDisabledTabHint(null), 3000);
+  };
+  useEffect(() => () => {
+    if (disabledTabHintTimeoutRef.current) clearTimeout(disabledTabHintTimeoutRef.current);
+  }, []);
 
   // Sync active tab when the pane's controlled tab changes (e.g. PaneHeader tab click)
   useEffect(() => {
@@ -422,6 +437,10 @@ export function SessionDetailView({
     }
   };
 
+  const handleResumeFromCrash = async () => {
+    await actions.resumeFromCrash();
+  };
+
   const handleDeleteClick = () => {
     if (session.status === SessionStatus.RUNNING || session.status === SessionStatus.NEEDS_APPROVAL) {
       setShowDeleteConfirm(true);
@@ -562,6 +581,7 @@ export function SessionDetailView({
         </ActionBar>
       </div>}
 
+      <div className={styles.tabsWrapper}>
       <div
         className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
         role="tablist"
@@ -571,17 +591,26 @@ export function SessionDetailView({
             e.preventDefault();
             const nextIndex = (currentIndex + 1) % tabs.length;
             handleTabChange(tabs[nextIndex].id);
-            (e.currentTarget.querySelectorAll('[role="tab"]')[nextIndex] as HTMLElement)?.focus();
+            const el = e.currentTarget.querySelectorAll('[role="tab"]')[nextIndex] as HTMLElement | undefined;
+            el?.focus();
+            el?.scrollIntoView({ block: "nearest", inline: "nearest" });
           } else if (e.key === "ArrowLeft") {
             e.preventDefault();
             const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length;
             handleTabChange(tabs[prevIndex].id);
-            (e.currentTarget.querySelectorAll('[role="tab"]')[prevIndex] as HTMLElement)?.focus();
+            const el = e.currentTarget.querySelectorAll('[role="tab"]')[prevIndex] as HTMLElement | undefined;
+            el?.focus();
+            el?.scrollIntoView({ block: "nearest", inline: "nearest" });
           }
         }}
       >
         {tabs.map((tab) => {
           const Icon = tab.icon;
+          const disabledReason = tab.disabled && tab.id === "browser"
+            ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
+            : tab.disabled && tab.id === "summary"
+              ? "Summary is generated after the session ends."
+              : undefined;
           return (
             <button
               key={tab.id}
@@ -589,15 +618,17 @@ export function SessionDetailView({
               role="tab"
               aria-selected={activeTab === tab.id}
               aria-disabled={tab.disabled}
+              aria-label={disabledReason ? `${tab.label}: ${disabledReason}` : undefined}
               className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""} ${tab.disabled ? tabDisabled : ""}`}
-              onClick={() => { if (!tab.disabled) handleTabChange(tab.id); }}
-              title={
-                tab.disabled && tab.id === "browser"
-                  ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
-                  : tab.disabled && tab.id === "summary"
-                    ? "Summary is generated after the session ends."
-                    : undefined
-              }
+              onClick={() => {
+                if (tab.disabled) {
+                  // title (hover) is unreachable on touch — surface the reason on tap instead.
+                  if (disabledReason) showDisabledTabHint(disabledReason);
+                  return;
+                }
+                handleTabChange(tab.id);
+              }}
+              title={disabledReason}
             >
               <span className={styles.tabIcon}><Icon size={16} /></span>
               <span className={styles.tabLabel}>{tab.label}</span>
@@ -641,6 +672,19 @@ export function SessionDetailView({
         >
           +
         </button>
+      </div>
+      <div className={styles.tabsFade} data-testid="tab-scroll-fade" aria-hidden="true" />
+      {disabledTabHint && (
+        <div
+          className={styles.disabledTabHint}
+          data-testid="disabled-tab-hint"
+          role="status"
+          aria-live="polite"
+          onClick={() => setDisabledTabHint(null)}
+        >
+          {disabledTabHint}
+        </div>
+      )}
       </div>
 
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
@@ -724,6 +768,35 @@ export function SessionDetailView({
                       onClick={(e) => {
                         e.stopPropagation();
                         handlePauseResume();
+                      }}
+                      aria-label="Resume this session"
+                    >
+                      ▶ Resume Session
+                    </button>
+                  </div>
+                )}
+                {/* Crashed overlay: the tmux pane exited abnormally (remain-on-exit
+                    dead pane) and was detected by SessionHealthChecker. Distinct
+                    from the paused overlay above — same layout, error palette. */}
+                {session.status === SessionStatus.CRASHED && (
+                  <div
+                    className={pausedOverlay}
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Session has crashed"
+                  >
+                    <span className={crashedOverlayIcon} aria-hidden="true">⚠️</span>
+                    <p className={pausedOverlayTitle}>This session has crashed</p>
+                    {session.exitReason && (
+                      <p className={pausedOverlayReason}>
+                        {session.exitReason}
+                      </p>
+                    )}
+                    <button
+                      className={pausedOverlayButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleResumeFromCrash();
                       }}
                       aria-label="Resume this session"
                     >
@@ -818,16 +891,20 @@ export function SessionDetailView({
             />
           </div>
         )}
-        {activeTab === "files" && (
-          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-files">
-            <FilesTab
-              sessionId={session.id}
-              baseUrl={getApiBaseUrl()}
-              initialSelectedPath={filesSelectedPath}
-              onSelectedPathChange={setFilesSelectedPath}
-            />
-          </div>
-        )}
+        <div
+          className={styles.tabContent}
+          role="tabpanel"
+          aria-labelledby="tab-files"
+          aria-hidden={activeTab !== "files"}
+          data-active={activeTab === "files"}
+        >
+          <FilesTab
+            sessionId={session.id}
+            baseUrl={getApiBaseUrl()}
+            initialSelectedPath={filesSelectedPath}
+            onSelectedPathChange={setFilesSelectedPath}
+          />
+        </div>
         {activeTab === "logs" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
             <SessionLogsTab sessionId={session.id} />
@@ -1247,6 +1324,16 @@ export function SessionDetailView({
             {session.goal?.goalText && (
               <GoalPanel goal={session.goal} />
             )}
+            <NotePanel
+              note={session.note ?? ""}
+              onSave={async (v) => {
+                // actions.update resolves to null (never rejects) on RPC failure — NotePanel's
+                // save-error UI (aria-live assertive message, textarea preserved) only fires on
+                // a rejected promise, so a null result must be converted into a throw here.
+                const result = await actions.update({ note: v });
+                if (!result) throw new Error("Failed to save note");
+              }}
+            />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
           </div>

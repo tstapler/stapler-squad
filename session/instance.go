@@ -37,6 +37,12 @@ const (
 	// Restoring is the transient startup state when a hibernated session is being restored.
 	// Never persisted to the database — transitions to Active or Creating on completion.
 	Restoring Status = 5
+	// Crashed is a terminal state distinct from Stopped: the wrapped program exited
+	// abnormally (non-zero exit code or signal) and tmux's remain-on-exit left a dead
+	// pane placeholder, detected by SessionHealthChecker's polling (see session/health.go).
+	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
+	// it surfaces to the user/automation for an explicit resume (see ExitReason).
+	Crashed Status = 6
 
 	// Deprecated: use Active.
 	Running = Active
@@ -61,6 +67,8 @@ func (s Status) String() string {
 		return "Hibernated"
 	case Restoring:
 		return "Restoring"
+	case Crashed:
+		return "Crashed"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -95,6 +103,12 @@ type LifecycleListener interface {
 }
 
 // ==== Instance -- Core Fields and Construction ====
+
+// MaxNoteLength is the maximum length, in bytes, of Instance.Note. Cross-referenced with the
+// ent schema's field.Text("note").MaxLen(10000) (session/ent/schema/session.go) — the schema
+// package cannot import this package (would create an import cycle), so the two 10000s must be
+// kept in sync by comment, not by shared constant.
+const MaxNoteLength = 10000
 
 // Instance is a running instance of claude code.
 type Instance struct {
@@ -142,6 +156,8 @@ type Instance struct {
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
 	Category string
+	// Note is a user-authored free-form markdown note attached to this session.
+	Note string
 	// IsExpanded indicates whether this session's category is expanded in the UI
 	IsExpanded bool
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
@@ -282,6 +298,11 @@ type Instance struct {
 	// PauseReason records why this session was paused. Use PauseReason* constants.
 	// Empty when session has never been paused.
 	PauseReason string `json:"pause_reason,omitempty"`
+
+	// ExitReason records why this session's pane exited when Status == Crashed
+	// (e.g. "signal SIGKILL (exit code 137)"). Empty otherwise. Set by
+	// SessionHealthChecker when it detects a dead pane (session/health.go).
+	ExitReason string `json:"exit_reason,omitempty"`
 
 	// WorkflowID is the UUID of the Workflow that spawned this session.
 	// Empty for manually-created sessions.
@@ -476,6 +497,8 @@ type InstanceOptions struct {
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
 	Category string
+	// Note is a user-authored free-form markdown note attached to this session.
+	Note string
 	// Tags are multi-valued labels for flexible organization
 	Tags []string
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
@@ -606,6 +629,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		InitialPrompt:    opts.InitialPrompt,
 		ExistingWorktree: opts.ExistingWorktree,
 		Category:         opts.Category,
+		Note:             opts.Note,
 		Tags:             opts.Tags, // Set tags from options
 		SessionType:      sessionType,
 		TmuxPrefix:       opts.TmuxPrefix,

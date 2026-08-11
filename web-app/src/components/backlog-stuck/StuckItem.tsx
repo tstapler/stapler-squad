@@ -38,8 +38,13 @@ interface StuckItemProps {
    * needing to know the specific failure shape.
    */
   onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
-  /** Approves the item's plan (ApprovePlan RPC) — omitted disables the approve control entirely. */
-  onApprovePlan?: (itemId: string) => Promise<boolean>;
+  /**
+   * Approves the item's plan (ApprovePlan RPC) — omitted disables the
+   * approve control entirely. Rejects (throws) on failure, mirroring
+   * onTriggerRemediationNow above, so the specific backend error message
+   * reaches the caller instead of being swallowed.
+   */
+  onApprovePlan?: (itemId: string) => Promise<void>;
 }
 
 /** Extracts "owner/repo" from a GitHub PR URL, for the glance-level identity line. */

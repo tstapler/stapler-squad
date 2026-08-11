@@ -255,6 +255,13 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// set below.
 	var escalation classifier.ClassificationResult
 
+	// classified is true only when escalation was genuinely assigned below (domain-age or a
+	// real classifier result). RiskLevel must never be read from escalation unless classified
+	// is true — escalation's zero value (classifier.RiskLow) is indistinguishable from a real
+	// Low risk, and reading it unconditionally would silently mislabel an unclassified/degraded
+	// request (e.g. h.classifier == nil) as safe. See pre-mortem.md Failure #1.
+	var classified bool
+
 	// Domain age check: if a Bash command is contacting a newly-registered domain,
 	// escalate immediately regardless of other rules.
 	if h.domainChecker != nil {
@@ -286,6 +293,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 					}
 					// Fall through to manual review queue (do NOT return here).
 					escalation = domainEscalation
+					classified = true
 					goto createApproval
 				}
 			}
@@ -363,6 +371,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			return
 		case classifier.Escalate:
 			escalation = result
+			classified = true
 			// Fall through to manual review queue (createApproval label below).
 		default:
 			// Unrecognized classifier.ClassificationDecision (e.g. a future 4th value). Fail safe
@@ -378,6 +387,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			// assignment (not after) so escalation is never observably set without it.
 			result.RuleID = classifier.RuleIDUnexpectedDecision
 			escalation = result
+			classified = true
 		}
 	}
 
@@ -424,6 +434,10 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 
 	// Create a pending approval record
 	approvalID := uuid.New().String()
+	riskLevel := ""
+	if classified {
+		riskLevel = riskLevelString(escalation.RiskLevel)
+	}
 	approval := &PendingApproval{
 		ID:                 approvalID,
 		SessionID:          sessionID,
@@ -435,6 +449,7 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 		CreatedAt:          time.Now(),
 		EscalationReason:   truncateEscalationReason(classifier.EscalationReasonText(escalation)),
 		EscalationCategory: string(classifier.CategorizeEscalationRuleID(escalation.RuleID)),
+		RiskLevel:          riskLevel,
 		// Use the configured timeout (default 4 minutes), strictly less than the 5-minute hook timeout.
 		ExpiresAt: time.Now().Add(h.approvalTimeout()),
 	}

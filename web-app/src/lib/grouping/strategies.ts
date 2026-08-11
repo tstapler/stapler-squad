@@ -216,6 +216,7 @@ function getStatusDisplayName(status: number): string {
     case SessionStatus.CREATING:       return "Creating"; // 6
     case SessionStatus.STOPPED:        return "Stopped";  // 7
     case SessionStatus.HIBERNATED:     return "Hibernated"; // 8
+    case SessionStatus.CRASHED:        return "Crashed";  // 10
     default:                           return "Unknown";
   }
 }

@@ -649,6 +649,26 @@ func (_u *SessionUpdate) ClearPauseReason() *SessionUpdate {
 	return _u
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (_u *SessionUpdate) SetExitReason(v string) *SessionUpdate {
+	_u.mutation.SetExitReason(v)
+	return _u
+}
+
+// SetNillableExitReason sets the "exit_reason" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableExitReason(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetExitReason(*v)
+	}
+	return _u
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (_u *SessionUpdate) ClearExitReason() *SessionUpdate {
+	_u.mutation.ClearExitReason()
+	return _u
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (_u *SessionUpdate) SetWorkflowID(v string) *SessionUpdate {
 	_u.mutation.SetWorkflowID(v)
@@ -793,6 +813,26 @@ func (_u *SessionUpdate) SetNillableSessionArtifacts(v *string) *SessionUpdate {
 // ClearSessionArtifacts clears the value of the "session_artifacts" field.
 func (_u *SessionUpdate) ClearSessionArtifacts() *SessionUpdate {
 	_u.mutation.ClearSessionArtifacts()
+	return _u
+}
+
+// SetNote sets the "note" field.
+func (_u *SessionUpdate) SetNote(v string) *SessionUpdate {
+	_u.mutation.SetNote(v)
+	return _u
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableNote(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetNote(*v)
+	}
+	return _u
+}
+
+// ClearNote clears the value of the "note" field.
+func (_u *SessionUpdate) ClearNote() *SessionUpdate {
+	_u.mutation.ClearNote()
 	return _u
 }
 
@@ -1062,6 +1102,11 @@ func (_u *SessionUpdate) check() error {
 			return &ValidationError{Name: "program", err: fmt.Errorf(`ent: validator failed for field "Session.program": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Note(); ok {
+		if err := session.NoteValidator(v); err != nil {
+			return &ValidationError{Name: "note", err: fmt.Errorf(`ent: validator failed for field "Session.note": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -1254,6 +1299,12 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.PauseReasonCleared() {
 		_spec.ClearField(session.FieldPauseReason, field.TypeString)
 	}
+	if value, ok := _u.mutation.ExitReason(); ok {
+		_spec.SetField(session.FieldExitReason, field.TypeString, value)
+	}
+	if _u.mutation.ExitReasonCleared() {
+		_spec.ClearField(session.FieldExitReason, field.TypeString)
+	}
 	if value, ok := _u.mutation.WorkflowID(); ok {
 		_spec.SetField(session.FieldWorkflowID, field.TypeString, value)
 	}
@@ -1298,6 +1349,12 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.SessionArtifactsCleared() {
 		_spec.ClearField(session.FieldSessionArtifacts, field.TypeString)
+	}
+	if value, ok := _u.mutation.Note(); ok {
+		_spec.SetField(session.FieldNote, field.TypeString, value)
+	}
+	if _u.mutation.NoteCleared() {
+		_spec.ClearField(session.FieldNote, field.TypeString)
 	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -2183,6 +2240,26 @@ func (_u *SessionUpdateOne) ClearPauseReason() *SessionUpdateOne {
 	return _u
 }
 
+// SetExitReason sets the "exit_reason" field.
+func (_u *SessionUpdateOne) SetExitReason(v string) *SessionUpdateOne {
+	_u.mutation.SetExitReason(v)
+	return _u
+}
+
+// SetNillableExitReason sets the "exit_reason" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableExitReason(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetExitReason(*v)
+	}
+	return _u
+}
+
+// ClearExitReason clears the value of the "exit_reason" field.
+func (_u *SessionUpdateOne) ClearExitReason() *SessionUpdateOne {
+	_u.mutation.ClearExitReason()
+	return _u
+}
+
 // SetWorkflowID sets the "workflow_id" field.
 func (_u *SessionUpdateOne) SetWorkflowID(v string) *SessionUpdateOne {
 	_u.mutation.SetWorkflowID(v)
@@ -2327,6 +2404,26 @@ func (_u *SessionUpdateOne) SetNillableSessionArtifacts(v *string) *SessionUpdat
 // ClearSessionArtifacts clears the value of the "session_artifacts" field.
 func (_u *SessionUpdateOne) ClearSessionArtifacts() *SessionUpdateOne {
 	_u.mutation.ClearSessionArtifacts()
+	return _u
+}
+
+// SetNote sets the "note" field.
+func (_u *SessionUpdateOne) SetNote(v string) *SessionUpdateOne {
+	_u.mutation.SetNote(v)
+	return _u
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableNote(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetNote(*v)
+	}
+	return _u
+}
+
+// ClearNote clears the value of the "note" field.
+func (_u *SessionUpdateOne) ClearNote() *SessionUpdateOne {
+	_u.mutation.ClearNote()
 	return _u
 }
 
@@ -2609,6 +2706,11 @@ func (_u *SessionUpdateOne) check() error {
 			return &ValidationError{Name: "program", err: fmt.Errorf(`ent: validator failed for field "Session.program": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Note(); ok {
+		if err := session.NoteValidator(v); err != nil {
+			return &ValidationError{Name: "note", err: fmt.Errorf(`ent: validator failed for field "Session.note": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -2818,6 +2920,12 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	if _u.mutation.PauseReasonCleared() {
 		_spec.ClearField(session.FieldPauseReason, field.TypeString)
 	}
+	if value, ok := _u.mutation.ExitReason(); ok {
+		_spec.SetField(session.FieldExitReason, field.TypeString, value)
+	}
+	if _u.mutation.ExitReasonCleared() {
+		_spec.ClearField(session.FieldExitReason, field.TypeString)
+	}
 	if value, ok := _u.mutation.WorkflowID(); ok {
 		_spec.SetField(session.FieldWorkflowID, field.TypeString, value)
 	}
@@ -2862,6 +2970,12 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if _u.mutation.SessionArtifactsCleared() {
 		_spec.ClearField(session.FieldSessionArtifacts, field.TypeString)
+	}
+	if value, ok := _u.mutation.Note(); ok {
+		_spec.SetField(session.FieldNote, field.TypeString, value)
+	}
+	if _u.mutation.NoteCleared() {
+		_spec.ClearField(session.FieldNote, field.TypeString)
 	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{

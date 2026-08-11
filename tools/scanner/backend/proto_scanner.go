@@ -96,11 +96,12 @@ var methodToID = map[string]string{
 	"GetTerminalSnapshot": "session:get-terminal-snapshot",
 	"ListBranches":        "session:list-branches",
 	// Profile and defaults RPCs
-	"UpsertProfile":        "profile:upsert",
-	"DeleteProfile":        "profile:delete",
-	"GetSessionDefaults":   "defaults:get",
-	"UpdateGlobalDefaults": "defaults:update-global",
-	"ResolveDefaults":      "defaults:resolve",
+	"UpsertProfile":          "profile:upsert",
+	"DeleteProfile":          "profile:delete",
+	"GetSessionDefaults":     "defaults:get",
+	"UpdateGlobalDefaults":   "defaults:update-global",
+	"ResolveDefaults":        "defaults:resolve",
+	"PreviewDestinationPath": "session:preview-destination-path",
 	// Alias RPCs
 	"UpsertAlias": "alias:upsert",
 	"DeleteAlias": "alias:delete",
@@ -189,6 +190,7 @@ var methodToID = map[string]string{
 	"UnarchiveSession":        "session:unarchive",
 	"HibernateSession":        "session:hibernate",
 	"ResumeHibernatedSession": "session:resume-hibernated",
+	"ResumeCrashedSession":    "session:resume-crashed",
 	"WriteToSession":          "session:write",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
