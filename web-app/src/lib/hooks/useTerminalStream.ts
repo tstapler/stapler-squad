@@ -121,6 +121,11 @@ export function useTerminalStream({
   const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foregroundRef = useRef(foreground);
   const foregroundConnectAttemptRef = useRef(0);
+  // Shared across the hook's whole lifetime (not per-connect() call) because the
+  // connectTimeoutRef callback below is declared outside the async message-processing
+  // IIFE and needs to read it. Correctness relies on connect()'s own re-entrancy guard
+  // (isConnectedRef/isConnectingRef) preventing two attempts from touching this ref at
+  // once — do not relax those guards without re-checking this invariant.
   const firstMessageRef = useRef(true);
   const connectRef = useRef<(overrideCols?: number, overrideRows?: number) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
@@ -134,6 +139,16 @@ export function useTerminalStream({
       interceptors: [createAuthInterceptor()],
     })
   ));
+
+  // Clears the pending per-attempt connect-timeout timer, if any. Shared across every
+  // exit path (first-message success, stream error/end, disconnect(), unmount, and a
+  // synchronous throw before the async message loop starts) so none of them can miss it.
+  const clearConnectTimeout = useCallback(() => {
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
+    }
+  }, []);
 
   // Sync ref with state
   useEffect(() => {
@@ -160,7 +175,7 @@ export function useTerminalStream({
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
-        if (shouldReconnectRef.current && !isConnectingRef.current && !isConnectedRef.current) {
+        if (shouldReconnectRef.current && !isConnectingRef.current && !isConnectedRef.current && !isDisconnectingRef.current) {
           connectRef.current?.();
         }
       }
@@ -224,7 +239,10 @@ export function useTerminalStream({
       abortControllerRef.current = new AbortController();
       const attemptController = abortControllerRef.current;
       firstMessageRef.current = true;
-      const timeoutMs = connectTimeoutMs(foregroundRef.current, foregroundConnectAttemptRef.current);
+      const foregroundAtSchedule = foregroundRef.current;
+      const timeoutMs = connectTimeoutMs(foregroundAtSchedule, foregroundConnectAttemptRef.current);
+      // Counted unconditionally (even with the flag off) since it's cheap and inert
+      // when nothing schedules a connect-timeout to consume it.
       foregroundConnectAttemptRef.current += 1;
       const attemptNumber = foregroundConnectAttemptRef.current;
       if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") {
@@ -234,7 +252,7 @@ export function useTerminalStream({
           // immediately before aborting, so a message that already landed and
           // was processed is not retroactively aborted.
           if (!firstMessageRef.current) return;
-          console.warn(`[reconnect] stream=terminal trigger=connect-timeout foreground=${foregroundRef.current} attempt=${attemptNumber} timeoutMs=${timeoutMs}`);
+          console.warn(`[reconnect] stream=terminal trigger=connect-timeout foreground=${foregroundAtSchedule} attempt=${attemptNumber} timeoutMs=${timeoutMs}`);
           attemptController.abort();
         }, timeoutMs);
       }
@@ -274,10 +292,7 @@ export function useTerminalStream({
         try {
           for await (const msg of stream) {
             if (firstMessageRef.current) {
-              if (connectTimeoutRef.current) {
-                clearTimeout(connectTimeoutRef.current);
-                connectTimeoutRef.current = null;
-              }
+              clearConnectTimeout();
               isConnectingRef.current = false;
               setIsConnected(true);
               setScrollbackLoaded(true);
@@ -387,10 +402,7 @@ export function useTerminalStream({
           // connection does not corrupt the next connect() call.
           textDecoderRef.current = new TextDecoder();
           scrollbackDecoderRef.current = new TextDecoder();
-          if (connectTimeoutRef.current) {
-            clearTimeout(connectTimeoutRef.current);
-            connectTimeoutRef.current = null;
-          }
+          clearConnectTimeout();
           if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
               && shouldReconnectRef.current
               && !isDisconnectingRef.current) {
@@ -416,12 +428,16 @@ export function useTerminalStream({
         }
       })();
     } catch (err) {
+      // Covers a synchronous throw before the async message loop starts (e.g. proto
+      // schema validation, MessageQueue construction) — the connect-timeout scheduled
+      // above must not outlive this now-dead attempt.
       isConnectingRef.current = false;
+      clearConnectTimeout();
       handleError(err);
       setIsConnected(false);
     }
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      flowControl, metrics, handleError, initialCols, initialRows]);
+      flowControl, metrics, handleError, initialCols, initialRows, clearConnectTimeout]);
 
   // Keep connectRef in sync so visibility/online listeners always call the current closure
   connectRef.current = connect;
@@ -437,10 +453,7 @@ export function useTerminalStream({
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    if (connectTimeoutRef.current) {
-      clearTimeout(connectTimeoutRef.current);
-      connectTimeoutRef.current = null;
-    }
+    clearConnectTimeout();
     const isResyncingRef = getIsResyncingRef();
     if (isDisconnectingRef.current || isResyncingRef.current) {
       if (isResyncingRef.current) {
@@ -477,7 +490,7 @@ export function useTerminalStream({
     isDisconnectingRef.current = false;
     textDecoderRef.current = new TextDecoder();
     scrollbackDecoderRef.current = new TextDecoder();
-  }, [getIsResyncingRef]);
+  }, [getIsResyncingRef, clearConnectTimeout]);
 
   // ---- Auto-connect / cleanup ----
   useEffect(() => {
@@ -490,10 +503,7 @@ export function useTerminalStream({
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
-      if (connectTimeoutRef.current) {
-        clearTimeout(connectTimeoutRef.current);
-        connectTimeoutRef.current = null;
-      }
+      clearConnectTimeout();
       metrics.flushOutputBuffer();
       disconnect();
     };

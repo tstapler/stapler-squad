@@ -68,17 +68,15 @@ export function getWsCloseCode(err: unknown): number | null {
 }
 
 // ---------------------------------------------------------------------------
-// Connect-timeout policy (foreground vs. background)
+// Connect-timeout policy: per-attempt duration cap (foreground vs. background),
+// distinct from BackoffState's delay-between-attempts above.
 // ---------------------------------------------------------------------------
 
 /**
  * Fast connect-timeout for the first FOREGROUND_FAST_ATTEMPTS attempts since a
- * terminal became foreground. Re-derived from AC2's "~1200-1500ms" range —
- * herdr-web's real TERMINAL_FOREGROUND_CONNECT_TIMEOUT_MS isn't inspectable
- * (different, unvendored repo), so this is an unvalidated starting guess, not
- * a measured value. Validate against real p95/p99 connect-to-first-message
- * latency (esp. VPN/high-RTT links) before enabling NEXT_PUBLIC_RECONNECT_V2
- * broadly.
+ * terminal became foreground. Unvalidated starting guess (herdr-web's real value
+ * isn't inspectable) — validate against real p95/p99 connect-to-first-message
+ * latency on VPN/high-RTT links before enabling NEXT_PUBLIC_RECONNECT_V2 broadly.
  */
 export const FOREGROUND_CONNECT_TIMEOUT_MS = 1200;
 
