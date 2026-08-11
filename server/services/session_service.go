@@ -252,10 +252,48 @@ type ScrollbackSequencer interface {
 // Conclusion: the two-param constructor (storage, eventBus) is the correct boundary.
 // All other deps are external to this package or have construction-order constraints.
 
-// NewSessionService creates a new SessionService with the given storage and event bus.
+// NewSessionService creates a new SessionService with the given storage and event bus,
+// using a disk-backed search engine (or an in-memory one under config.IsTestMode(), to
+// keep the ~78 existing test call sites working without change — see
+// NewSessionServiceWithSearchEngine's doc comment for why IsTestMode() is only the
+// default, not the seam itself).
 // NOTE: Instances are NOT loaded here to prevent double-loading and initialization timing issues.
 // Instances will be loaded in server.go after dependencies (statusManager, reviewQueue) are wired.
 func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus) *SessionService {
+	return NewSessionServiceWithSearchEngine(storage, eventBus, newDefaultSearchEngine())
+}
+
+// newDefaultSearchEngine builds the search engine NewSessionService uses when the caller
+// doesn't inject one: disk-backed with incremental persistence in production, in-memory
+// under config.IsTestMode(). Under go test, skipping disk avoids a shared per-process test
+// directory that every NewSessionService call in a test binary would otherwise persist
+// into — the index grows across the whole package run and gob-decoding it gets slow enough
+// under -race to blow CI's timeout budget, independent of what each test is exercising.
+func newDefaultSearchEngine() *search.SearchEngine {
+	if config.IsTestMode() {
+		return search.NewSearchEngine()
+	}
+	indexStore, err := search.NewIndexStore()
+	if err != nil {
+		log.Warn("failed to create index store, using in-memory search", "err", err)
+		return search.NewSearchEngine()
+	}
+	searchEngine := search.NewSearchEngineWithPersistence(indexStore)
+	if loadErr := searchEngine.LoadIndex(); loadErr != nil {
+		log.Warn("failed to load persisted search index", "err", loadErr)
+	} else if meta := searchEngine.GetSyncMetadata(); meta != nil {
+		log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
+	}
+	return searchEngine
+}
+
+// NewSessionServiceWithSearchEngine is the dependency-injection seam for the search engine:
+// pass an explicit *search.SearchEngine (e.g. search.NewSearchEngine() for in-memory)
+// instead of relying on NewSessionService's config.IsTestMode() default. Full migration of
+// the ~78 existing NewSessionService(storage, eventBus) call sites to explicit injection is
+// a separate, larger mechanical refactor — out of scope here; this seam exists so new or
+// updated tests can opt in without waiting on that migration.
+func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *events.EventBus, searchEngine *search.SearchEngine) *SessionService {
 	reviewQueue := session.NewReviewQueue()
 
 	// concStorage is the concrete backing store used by sub-services that haven't migrated to
@@ -264,29 +302,6 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	var concStorage *session.Storage
 	if cs, ok := storage.(*session.Storage); ok {
 		concStorage = cs
-	}
-
-	// Initialize search engine with disk persistence for incremental index updates.
-	// Under go test (config.IsTestMode), skip disk entirely and use a fresh
-	// in-memory engine: search.NewIndexStore() otherwise persists to a
-	// per-process test directory that every NewSessionService call in a test
-	// binary shares, so the index grows across the whole package run and
-	// gob-decoding it gets slow enough under -race to blow CI's timeout
-	// budget — independent of whatever each test is actually exercising.
-	var searchEngine *search.SearchEngine
-	if config.IsTestMode() {
-		searchEngine = search.NewSearchEngine()
-	} else if indexStore, err := search.NewIndexStore(); err != nil {
-		log.Warn("failed to create index store, using in-memory search", "err", err)
-		searchEngine = search.NewSearchEngine()
-	} else {
-		searchEngine = search.NewSearchEngineWithPersistence(indexStore)
-		if loadErr := searchEngine.LoadIndex(); loadErr != nil {
-			log.Warn("failed to load persisted search index", "err", loadErr)
-		} else if searchEngine.GetSyncMetadata() != nil {
-			meta := searchEngine.GetSyncMetadata()
-			log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
-		}
 	}
 
 	// Build approval store with disk persistence path

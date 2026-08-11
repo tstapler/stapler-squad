@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session/search"
 )
 
 // TestNewSessionService_TestMode_NeverTouchesRealSearchIndex guards the
@@ -43,5 +46,24 @@ func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
 	searchIndexDir := filepath.Join(pidTestDir, "search_index")
 	if _, err := os.Stat(searchIndexDir); !os.IsNotExist(err) {
 		t.Errorf("NewSessionService created %q in test mode; want no disk persistence for the search index at all (err=%v)", searchIndexDir, err)
+	}
+}
+
+// TestNewSessionServiceWithSearchEngine_UsesInjectedEngine confirms the DI seam actually
+// wires the caller's engine through, rather than silently falling back to
+// newDefaultSearchEngine()'s config.IsTestMode() branching.
+func TestNewSessionServiceWithSearchEngine_UsesInjectedEngine(t *testing.T) {
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(16)
+	t.Cleanup(bus.Close)
+	injected := search.NewSearchEngine()
+
+	svc := NewSessionServiceWithSearchEngine(storage, bus, injected)
+	t.Cleanup(func() { svc.Shutdown() })
+	if svc == nil {
+		t.Fatal("NewSessionServiceWithSearchEngine returned nil")
+	}
+	if svc.searchSvc.searchEngine != injected {
+		t.Error("NewSessionServiceWithSearchEngine did not wire through the injected search engine")
 	}
 }
