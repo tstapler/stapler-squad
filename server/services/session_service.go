@@ -1573,6 +1573,7 @@ func (s *SessionService) CreateSession(
 		instanceOpts.ClonedRepoPath = clonedRepoPath
 		if gitHubRef.PRNumber > 0 {
 			instanceOpts.GitHubPRNumber = gitHubRef.PRNumber
+			instanceOpts.GitHubPRURL = gitHubRef.PRURL()
 		}
 	}
 
