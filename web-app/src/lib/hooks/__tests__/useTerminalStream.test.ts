@@ -1049,6 +1049,51 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     expect(timeoutWarnings.length).toBe(0);
   });
 
+  it('connect_should_notCallOnError_When_connectTimeoutAborts', async () => {
+    // Code review finding: a connect-timeout abort is our own deliberate fast-retry
+    // optimization, not a real failure — it must not be surfaced via onError, since
+    // callers (e.g. TerminalOutput.tsx) count onError calls toward a user-visible
+    // "connection failed" attempt counter/banner. A real, non-timeout stream error
+    // still must reach onError (asserted below via the separate hard-fail-code path).
+    const onError = jest.fn();
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      return makePushStream(opts?.signal).iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true, onError })
+    );
+
+    await act(async () => { result.current.connect(); });
+    await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(result.current.terminalState).toBe('DISCONNECTED'));
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('connect_should_callOnError_When_streamErrorsForARealNonTimeoutReason', async () => {
+    // Symmetry check for the fix above: onError suppression is scoped specifically
+    // to connect-timeout-triggered aborts, not stream errors in general.
+    const onError = jest.fn();
+    mockStreamTerminal.mockImplementation(() => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            throw new Error('genuine stream failure');
+          },
+        };
+      },
+    }));
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true, onError })
+    );
+
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(onError.mock.calls[0][0].message).toBe('genuine stream failure');
+  });
+
   it('connect_should_beNoOp_When_calledAgainWhileAlreadyConnecting', async () => {
     // Regression guard for the invariant firstMessageRef/connectTimeoutRef rely on
     // (documented at their declaration): connect()'s own isConnectedRef/isConnectingRef

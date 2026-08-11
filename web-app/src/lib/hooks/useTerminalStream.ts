@@ -127,6 +127,12 @@ export function useTerminalStream({
   // (isConnectedRef/isConnectingRef) preventing two attempts from touching this ref at
   // once — do not relax those guards without re-checking this invariant.
   const firstMessageRef = useRef(true);
+  // Set immediately before attemptController.abort() fires from a connect-timeout,
+  // so the resulting stream error can be routed past onError (see the catch block
+  // below) instead of surfacing as a visible connection failure — a connect-timeout
+  // is a deliberate, internal fast-retry optimization, not a real failure the caller
+  // should count toward its own attempt/error UI.
+  const connectTimeoutAbortedRef = useRef(false);
   const connectRef = useRef<(overrideCols?: number, overrideRows?: number) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
   const scrollbackDecoderRef = useRef(new TextDecoder());
@@ -245,6 +251,7 @@ export function useTerminalStream({
       abortControllerRef.current = new AbortController();
       const attemptController = abortControllerRef.current;
       firstMessageRef.current = true;
+      connectTimeoutAbortedRef.current = false;
       const foregroundAtSchedule = foregroundRef.current;
       const timeoutMs = connectTimeoutMs(foregroundAtSchedule, foregroundConnectAttemptRef.current);
       // Counted unconditionally (even with the flag off) since it's cheap and inert
@@ -259,6 +266,7 @@ export function useTerminalStream({
           // was processed is not retroactively aborted.
           if (!firstMessageRef.current) return;
           console.warn(`[reconnect] stream=terminal trigger=connect-timeout foreground=${foregroundAtSchedule} attempt=${attemptNumber} timeoutMs=${timeoutMs}`);
+          connectTimeoutAbortedRef.current = true;
           attemptController.abort();
         }, timeoutMs);
       }
@@ -398,7 +406,15 @@ export function useTerminalStream({
             setIsHardFailed(true);
             console.warn(`[reconnect] stream=terminal non-retriable ws-close-code=${wsCode}, giving up`);
           }
-          handleError(err);
+          // A connect-timeout abort is our own deliberate fast-retry optimization, not
+          // a real failure — don't surface it via onError/setError, or callers that
+          // count onError calls toward a user-visible "connection failed" UI (e.g.
+          // TerminalOutput.tsx's connectionAttempts banner) would show churn/false
+          // "Terminal unavailable" states for what's meant to be an invisible retry.
+          // The internal backoff/reconnect scheduling below is unaffected either way.
+          if (!connectTimeoutAbortedRef.current) {
+            handleError(err);
+          }
         } finally {
           isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
           isConnectingRef.current = false;
