@@ -91,7 +91,7 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	tmpDir := t.TempDir()
 	fakeClaudePath := filepath.Join(tmpDir, "claude")
 	outFile := filepath.Join(tmpDir, "captured-prompt.txt")
-	script := "#!/bin/sh\nshift 4\nprintf '%s' \"$1\" > \"$OUT_FILE\"\n"
+	script := "#!/bin/sh\nshift 4\nprintf '%s' \"$1\" > \"$OUT_FILE.tmp\" && mv \"$OUT_FILE.tmp\" \"$OUT_FILE\"\n"
 	if err := os.WriteFile(fakeClaudePath, []byte(script), 0o755); err != nil {
 		t.Fatalf("failed to write fake claude script: %v", err)
 	}
@@ -107,16 +107,19 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 		t.Fatalf("tmux rejected the fixed command (this is the bug re-appearing): %s (%v)\ncommand was: %s", out, err, fixedCmd)
 	}
 
-	// Wait for the fake claude script to run and capture the prompt.
+	// Wait for the fake claude script to run and capture the prompt. A
+	// successful read alone isn't proof of a complete write -- os.ReadFile
+	// can observe a torn/short read if it races the script's write, so also
+	// require the read to match the expected length before accepting it.
 	deadline := time.Now().Add(5 * time.Second)
 	var captured []byte
 	for {
-		if data, readErr := os.ReadFile(outFile); readErr == nil {
+		if data, readErr := os.ReadFile(outFile); readErr == nil && len(data) == len(prompt) {
 			captured = data
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("fake claude script never wrote %s within the deadline", outFile)
+			t.Fatalf("fake claude script never wrote the full %d-byte prompt to %s within the deadline", len(prompt), outFile)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
