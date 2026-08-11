@@ -2,7 +2,7 @@
 
 **Feature**: Move `HistoryFileDetector.DetectByPath()` recovery ahead of `initTmuxSession()` in both cold-restore code paths, guarded so it cannot resurrect a conversation the user explicitly cleared.
 **Date**: 2026-08-10
-**Status**: Ready for implementation
+**Status**: Ready for implementation of Epic 1.0 (verification spike) first; Epics 1.1/1.2 ready to implement once Epic 1.0 confirms or corrects their premise (see Epic 1.0 header, added after engineering triad review round 2).
 **ADRs**: ADR-001 (guard against resurrecting an explicitly-cleared conversation)
 
 ---
@@ -60,10 +60,14 @@ N/A — no schema or persisted-data changes. `conversationClearedAt` is an unexp
   2. Apply the same `conversationClearedAt` guard to `session/history_linker.go`'s `correlateSession()` for full consistency — pre-existing exposure, no reported incident.
   3. `session/session_driver.go`'s hardcoded 10-minute inactivity-restart window that opens the UUID-loss race in the first place — explicitly out of scope per requirements.md.
   4. Persisting `conversationClearedAt` across a `stapler-squad` process restart (would require `session/ent` schema work) — the in-memory guard added here only protects the same-process regression (ADR-001).
+  5. *(added post-pre-mortem, 2026-08-10)* Factor the duplicated guard block (Tasks 1.1.1a/1.1.1b) into one private helper (e.g. `i.recoverConversationBeforeLaunch()`) instead of literal duplication — pre-mortem failure mode #4 (P3): a future one-sided edit to only one call site would silently reintroduce this exact bug class. Low cost; do during implementation of Story 1.1.1, not deferred indefinitely.
+  6. *(added post-pre-mortem, 2026-08-10)* Post-ship confirmation step (pre-mortem #5, P2): ~1 week after deploy, grep production logs for the new `tryextractconversationuuid: found conversation via path fallback` / `...skipping recovery` / `...no jsonl file found` lines and record counts, so "shipped" isn't conflated with "confirmed the recovery path actually fires in production." Not a new metric/alert — a one-time manual check.
+  7. *(added post-pre-mortem, 2026-08-10)* mtime-granularity race (pre-mortem #3, P2): a JSONL written by `KillSession()`'s triggering event and read by `DetectByPath` within the same mtime-granularity window could be partially written. No debounce added in this plan; worth a small "candidate mtime must be >1-2s old, or file is well-formed JSON" check if this proves to matter in practice — not blocking, no evidence yet.
+- **Validation gate addition** *(added after engineering triad review round 2, 2026-08-10)*: Task 1.2.3a's targeted test run should include `-race` (`go test -race ./session -run "..."`) at least once, given this plan adds new `claudeSessionMu` lock discipline around a field read from a call site (`SwitchWorkspace`) that is deliberately lock-free by design elsewhere.
 
 ## Unresolved Questions
 
-None.
+- *(added after engineering triad review round 2, 2026-08-10)* Does `Instance.KillSession()` + `Instance.Start(false)` — the exact sequence `session/health.go`'s dead-pane recovery uses, and ADR-001's named "concrete trigger path" — actually re-derive the launch command from the current `i.claudeSession.ConversationUUID`, or does `initTmuxSession()`'s `HasSession()` early-return skip `buildLaunchCommand()` whenever a `TmuxSession` object already exists in-process (as traced in Epic 1.0's header)? Resolved by Epic 1.0/Task 1.0.1a before Story 1.1.1/1.1.2 are implemented against it.
 
 ## Dependency Visualization
 
@@ -95,6 +99,68 @@ Epic 1.2: Regression tests
 ---
 
 ## Phase 1: Cold-Restart UUID Recovery
+
+### Epic 1.0: Verify the load-bearing premise before implementing (spike)
+
+> **Added after engineering triad review round 2, 2026-08-10 — BLOCKER, must run first.**
+> A fresh engineering-lens review traced the actual call path and raised a concrete,
+> code-cited concern that undermines this plan's central claim: `TmuxProcessManager.Close()`
+> (called by `Instance.KillSession()`) never nils `tm.session` (an `atomic.Pointer`), and
+> `initTmuxSession()` (`session/instance_tmux.go:249-253`) early-returns via `HasSession()`
+> — true as soon as any `TmuxSession` object has ever existed for this Instance in-process —
+> *without* calling `buildLaunchCommand()` again. `TmuxSession.program` is set only at
+> construction (`newTmuxSessionWithSocket`) and is never reassigned elsewhere in the package.
+> If this reading is correct, `Instance.KillSession()` + `Instance.Start(false)` — the exact
+> sequence `session/health.go:219-228`'s dead-pane recovery uses, and the sequence ADR-001
+> names as its "concrete trigger path" — relaunches tmux using whatever `t.program` was baked
+> in at the *last* `SetSession()` call, NOT a value recomputed from the current
+> `i.claudeSession.ConversationUUID`. That would mean neither the pre-existing code nor this
+> plan's reorder/guard actually changes behavior for that in-process reuse case — only for a
+> genuinely fresh `Instance` (true process-boot cold start, which is what `TestColdRestore_*`
+> already exercises via `NewInstanceWithCleanup`). By contrast, `Instance.Restart()`
+> (`session/instance.go:1487+`) *does* explicitly rebuild the launch command every call. Which
+> of the two paths produced requirements.md's captured log timeline is not established —
+> `session_driver.go`'s `handleDriverFailure` calls `Start(false)` directly only when status is
+> `Stopped`, otherwise it calls `Restart(false)`.
+>
+> This must be resolved before Story 1.1.1's tasks are trusted to deliver AC1 for the
+> in-process restart-churn scenario (as opposed to the true-cold-boot scenario, which the
+> existing plan and AC4 test already cover correctly regardless of this open question).
+
+#### Story 1.0.1: Confirm whether `KillSession()` + `Start(false)` rebuilds the launch command
+**As a** plan author, **I want** proof (not inference) of which code path produced the
+observed bug, **so that** Story 1.1.1/1.1.2 target the actual failure mode instead of a
+plausible-sounding but unverified one.
+
+**Acceptance Criteria**:
+- A test or direct trace confirms, for an `Instance` whose `TmuxSession` object already
+  exists (constructed once, then `KillSession()` called, then `Start(false)`), whether the
+  resulting tmux `new-session`/pane command embeds `--resume <current-uuid>` or reuses the
+  stale command from the original construction.
+
+##### Task 1.0.1a: Write a focused trace test contrasting `KillSession()+Start(false)` vs `Restart()` (~15 min)
+- In a new or existing `session` package test, construct an `Instance` (real tmux, per
+  `instance_cold_restore_test.go`'s helpers), call `Start(true)` once (`firstTimeSetup`) to
+  force `TmuxSession` construction, set `i.claudeSession.ConversationUUID` to a known value,
+  call `i.KillSession()`, then `i.Start(false)`. Inspect the actual launched command (via the
+  `TmuxSession`'s stored `program`/`LaunchCommand` field, whichever this codebase exposes for
+  assertion — see how `TestColdRestore_WithUUID` asserts this today) to confirm whether it
+  contains `--resume <the-set-uuid>`.
+- Run the equivalent through `i.Restart(false)` for contrast, per the round-2 review's finding
+  that `Restart()` explicitly captures and rebuilds via `buildLaunchCommand()`.
+- **If the trace confirms `KillSession()+Start(false)` does NOT rebuild the command**: this
+  plan's Epic 1.1 reorder is still correct and beneficial for true-cold-boot revival (ship it
+  as scoped), but does not by itself close the in-process restart-churn scenario in
+  requirements.md's captured timeline. Add a follow-up story (not blocking this plan, but
+  tracked in Risk Control) to fix `initTmuxSession()`'s `HasSession()` reuse check so a dead
+  pane with a stale `program` also gets `buildLaunchCommand()` re-run — likely the same class
+  of fix as this plan, one layer up.
+- **If the trace confirms it DOES rebuild the command** (i.e. this review's tracing missed
+  something, e.g. another code path resets `tm.session`): update ADR-001 to cite the
+  confirming test in place of the current inference, and proceed with Epic 1.1/1.2 as written.
+- Files: `session/instance_cold_restore_test.go` (or a new `session/instance_restart_launch_command_test.go`)
+
+---
 
 ### Epic 1.1: Hoist pre-launch recovery ahead of the launch-command decision
 **Goal**: `--resume <uuid>` is decided using a disk-recovered UUID when the in-memory one is empty, at both mirrored cold-restore call sites, without resurrecting an explicitly-cleared conversation.
@@ -136,6 +202,7 @@ Epic 1.2: Regression tests
 
 ##### Task 1.1.1c: Fix the stale doc comment on `tryExtractConversationUUID` (~2 min)
 - In `session/instance_claude.go`, replace the doc comment line "The tmux session must be alive for this to work, because it inspects the foreground process's open file descriptors via proc_pidinfo." with a corrected version noting the `DetectByPath` fallback also runs (and is now the expected path) when the tmux session is dead, per architecture.md §2's finding that this comment predates the fallback and could mislead a future reader into thinking the pre-launch call site added in Task 1.1.1a/b is unsafe.
+- Also correct the adjacent "IMPORTANT: This method assumes stateMutex is already held by the caller" claim (currently lines 302-304): it is inaccurate today (`SwitchWorkspace` already calls it lock-free by design, `session/instance_workspace.go:76-81`) and would become more misleading once Task 1.1.2d adds an explicit `claudeSessionMu.RLock()` inside the function itself. Replace with a note that the function does not require or assume any caller-held lock; it manages its own locking internally for `conversationClearedAt` (Task 1.1.2d) and, like today, directly mutates `i.claudeSession`/`i.HistoryFilePath` without a lock — a pre-existing, out-of-scope exposure this plan does not change beyond the new field. Flagged in engineering triad review, 2026-08-10.
 - Files: `session/instance_claude.go`
 
 ---
@@ -161,6 +228,11 @@ See ADR-001 for the full rationale — this closes a concrete regression this pl
   // recovery attempt does not resurrect a JSONL that predates an explicit
   // "start fresh" request. In-memory only (not persisted): does not survive a
   // stapler-squad process restart — see ADR-001, Consequences.
+  //
+  // Guarded by claudeSessionMu (same lock as claudeSession/HistoryFilePath),
+  // NOT by i.mu — see Task 1.1.2d for why tryExtractConversationUUID must take
+  // claudeSessionMu itself around the read/compare instead of relying on a
+  // caller-held lock.
   conversationClearedAt time.Time
   ```
 - `time` is already imported in `instance.go` (used by `CreatedAt`/`UpdatedAt`).
@@ -169,6 +241,8 @@ See ADR-001 for the full rationale — this closes a concrete regression this pl
 ##### Task 1.1.2b: Set `conversationClearedAt` in `ClearConversationState()` (~2 min)
 - In `session/instance_claude.go`, inside `ClearConversationState()` (currently lines 278-296), inside the existing `claudeSessionMu.Lock()` critical section, add `i.conversationClearedAt = time.Now()` alongside the existing `i.claudeSession.ConversationUUID = ""` / `i.HistoryFilePath = ""` writes.
 - Files: `session/instance_claude.go`
+
+> **Concurrency note (added after engineering triad review, 2026-08-10):** `tryExtractConversationUUID` is called from at least one site that deliberately does *not* hold the actor lock — `SwitchWorkspace` (`session/instance_workspace.go:76-81`) calls it outside `sendSyncErr`'s actor command specifically to avoid holding the mailbox slot during syscalls, accepting "false negatives are safe" for the pre-existing unguarded `i.claudeSession` field access. `conversationClearedAt` is a *new* field this story adds under the same exposure: `ClearConversationState()` (writer) and `tryExtractConversationUUID()` (reader, added in Task 1.1.2d) can run on different goroutines with no lock ordering between them today. Unlike the pre-existing `i.claudeSession` race (out of scope — not introduced by this plan), this is a new field this plan is adding, so it must not ship unguarded. Task 1.1.2d below takes `claudeSessionMu.RLock()` around the read; no change needed here in 1.1.2a/1.1.2b beyond keeping the write inside the existing `claudeSessionMu.Lock()` section as already specified.
 
 ##### Task 1.1.2c: Add `ModTime` to `HistoryFileInfo` and populate it in `DetectByPath` (~3 min)
 - In `session/history_detector.go`:
@@ -180,13 +254,19 @@ See ADR-001 for the full rationale — this closes a concrete regression this pl
 ##### Task 1.1.2d: Add the clearedAt-vs-ModTime guard inside `tryExtractConversationUUID` (~4 min)
 - In `session/instance_claude.go`, `tryExtractConversationUUID()` (currently lines 308-363), in the `DetectByPath` fallback block (currently lines 336-349), after `info, err = detector.DetectByPath(effectivePath)` and its existing error-log check, insert:
   ```go
-  if info != nil && !i.conversationClearedAt.IsZero() && !info.ModTime.After(i.conversationClearedAt) {
-      log.Debug("tryextractconversationuuid: found jsonl predates last explicit clear, skipping recovery",
-          "session", i.Title, "path", info.HistoryFilePath, "clearedAt", i.conversationClearedAt)
-      info = nil
+  if info != nil {
+      i.claudeSessionMu.RLock()
+      clearedAt := i.conversationClearedAt
+      i.claudeSessionMu.RUnlock()
+      if !clearedAt.IsZero() && !info.ModTime.After(clearedAt) {
+          log.Debug("tryextractconversationuuid: found jsonl predates last explicit clear, skipping recovery",
+              "session", i.Title, "path", info.HistoryFilePath, "clearedAt", clearedAt)
+          info = nil
+      }
   }
   ```
   placed before the existing `if info != nil { log.Info("tryextractconversationuuid: found conversation via path fallback", ...) }` line, so a discarded candidate falls through to the existing `if info == nil { log.Debug("...no jsonl file found...") }` branch below unchanged.
+  **Take `claudeSessionMu.RLock()` around the read of `conversationClearedAt` explicitly** (do not rely on a caller-held lock) — `tryExtractConversationUUID`'s own doc comment claims "stateMutex is already held by the caller," but the real call site `SwitchWorkspace` (`session/instance_workspace.go:76-81`) calls it *outside* the actor lock by design, and the two cold-restore call sites (`session/instance.go:910`, `:1116`, both being moved earlier by Task 1.1.1a/b) don't hold `claudeSessionMu` either. Without this explicit lock, `ClearConversationState()` writing `conversationClearedAt` on one goroutine races with this read on another (flagged in engineering triad review, 2026-08-10) — a new race this plan would otherwise introduce, distinct from the pre-existing (out-of-scope, unguarded) `i.claudeSession` field race on the same call paths.
 - Files: `session/instance_claude.go`
 
 ---

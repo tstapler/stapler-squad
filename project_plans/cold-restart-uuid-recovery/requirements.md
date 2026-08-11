@@ -101,6 +101,19 @@ which is what makes it recoverable via `DetectByPath` in principle.
    overwritten by a newer JSONL from a different session in the same directory.
 6. `make quick-check` (build + test + lint) stays green.
 
+## Addendum (post-planning, 2026-08-10)
+
+A round-2 engineering triad review traced the code and raised a credible, code-cited concern
+that `Instance.KillSession()` + `Instance.Start(false)` — the exact sequence
+`session/health.go`'s dead-pane recovery uses — may never call `buildLaunchCommand()` again
+(`initTmuxSession()`'s `HasSession()` early-return), meaning this fix may only help the
+true process-boot cold-start case and not the in-process restart-churn case this item's
+captured log timeline documents. `implementation/plan.md`'s new Epic 1.0 adds a verification
+spike (Task 1.0.1a) to resolve this before Story 1.1.1/1.1.2 proceed. AC1/AC4 as written
+below are unaffected for the true-cold-boot case either way; if Epic 1.0 confirms the
+in-process path doesn't rebuild the command, a follow-up AC/story targeting
+`initTmuxSession()`'s reuse check will be needed to fully close the reported bug.
+
 ## Out of Scope
 
 - The related `driverInactivityTimeout` hardcoded-10-minute restart-churn issue
