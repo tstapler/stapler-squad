@@ -1,0 +1,19 @@
+{
+  "id": "review-queue-severity-sort-filter",
+  "type": "frontend",
+  "name": "Review queue severity badge, default severity sort, and severity filter",
+  "component": "ReviewQueuePanel",
+  "path": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
+  "filePath": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "ReviewQueuePanel — severity > ReviewQueuePanel_should_SortItemsBySeverityDescending_When_DefaultSortFieldIsSeverity",
+    "ReviewQueuePanel — severity > should render unrecorded-severity item between Critical and Medium in default sort (fail-safe)",
+    "ReviewQueuePanel — severity > ReviewQueuePanel_should_ShowOnlyCriticalItems_When_CriticalSeverityChipClicked",
+    "ReviewQueuePanel — severity > ReviewQueuePanel_should_ShowSharedEmptyState_When_SeverityFilterMatchesZeroItems",
+    "ReviewQueuePanel — severity > renders a compact SeverityBadge next to the escalation reason for an approval-pending item",
+    "ReviewQueuePanel — severity > renders the not-recorded badge state when risk_level metadata key is absent"
+  ],
+  "lastModified": "2026-08-10T00:00:00Z"
+}

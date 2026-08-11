@@ -1,4 +1,5 @@
 "use client";
+// +feature: approval-rules-risk-column
 
 import { useEffect, useMemo, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";

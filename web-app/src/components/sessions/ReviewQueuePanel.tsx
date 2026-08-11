@@ -1,5 +1,6 @@
 "use client";
 // +feature: review-queue-pr-creation
+// +feature: review-queue-severity-sort-filter
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";

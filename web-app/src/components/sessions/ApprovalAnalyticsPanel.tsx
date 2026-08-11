@@ -1,4 +1,5 @@
 "use client";
+// +feature: approval-analytics-risk-breakdown
 
 import React, { useState, useCallback, useMemo } from "react";
 import { buildPrefillHref } from "@/lib/ruleBuilderPrefill";

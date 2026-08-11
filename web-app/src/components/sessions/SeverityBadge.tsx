@@ -1,4 +1,5 @@
 "use client";
+// +feature: severity-badge
 
 import * as styles from "./SeverityBadge.css";
 
