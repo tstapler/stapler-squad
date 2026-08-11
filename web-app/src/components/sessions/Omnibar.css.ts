@@ -46,7 +46,9 @@ export const modal = style({
   maxWidth: 600,
   // Story 6.1: Theme-aware glow border on omnibar
   boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px ${vars.color.glowSecondary}`,
-  overflow: "hidden",
+  maxHeight: "85vh",
+  overflowY: "auto",
+  overflowX: "hidden",
   position: "relative",
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
