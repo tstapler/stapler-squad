@@ -118,6 +118,15 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
 	}
 
+	// Populate github_pr_url for pre-existing sessions that have a known PR
+	// number/owner/repo but were created before CreateSession started
+	// building the URL itself (idempotent) — see
+	// github_pr_url_backfill.go.
+	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
+	}
+
 	return repo, nil
 }
 

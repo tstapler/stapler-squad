@@ -236,24 +236,26 @@ func writeFile(path, content string) error {
 }
 
 // addWorktreeExcludes writes backlog-generated file patterns to
-// $GIT_DIR/info/exclude so they are invisible to git without touching
-// .gitignore (which would pollute the target repo).
+// $GIT_COMMON_DIR/info/exclude so they are invisible to git without touching
+// .gitignore (which would pollute the target repo). Resolving via
+// --git-common-dir (not --git-dir) matters for linked worktrees (`git worktree
+// add`): --git-dir there returns the worktree-private admin directory
+// (<common>/.git/worktrees/<name>), and git status never reads an info/exclude
+// written there — only the one under the shared common dir is honored. See
+// session/git/util.go's findMainRepoPathForWorktree for the same resolution.
 func addWorktreeExcludes(worktreePath string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()
 	if err != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] git rev-parse --git-dir in %s: %v", worktreePath, err)
+		log.WarningLog.Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
 		return
 	}
-	gitDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(worktreePath, gitDir)
-	}
+	gitCommonDir := strings.TrimSpace(string(out))
 
-	excludeFile := filepath.Join(gitDir, "info", "exclude")
+	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
 	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o755); mkErr != nil {
 		log.WarningLog.Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
 		return

@@ -462,13 +462,19 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// Belt-and-suspenders layer 1: reject if the worktree has uncommitted changes.
 	// The reviewer reads the committed diff; uncommitted work would be invisible and
 	// the review verdict would be inaccurate. Agent must commit before requesting review.
+	// GetWorktreeDirtyPaths alone answers both "is it dirty" and "which paths" — no
+	// need for a separate IsWorktreeDirty call first. A pathsErr here (rare — the
+	// worktree was already resolved above) fails open rather than blocking the RPC,
+	// matching this belt-and-suspenders check's pre-existing fail-open behavior; it's
+	// still logged so a silent failure to reject a genuinely dirty worktree is visible.
 	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
-		if dirty, dirtyErr := session.IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
-			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s", callerUUID, itemID)
-			return errResult(ErrInvalidArgument,
-				"request_review rejected: the worktree has uncommitted changes. "+
-					"Run `git add -A && git commit -m 'description of changes'` to commit your work, then call request_review again.",
-				""), nil
+		paths, pathsErr := session.GetWorktreeDirtyPaths(wt.WorktreePath)
+		if pathsErr != nil {
+			log.WarningLog.Printf("[mcp:request_review] GetWorktreeDirtyPaths failed for session=%s worktree=%s: %v", callerUUID, wt.WorktreePath, pathsErr)
+		}
+		if pathsErr == nil && len(paths) > 0 {
+			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s paths=%v", callerUUID, itemID, paths)
+			return errResult(ErrInvalidArgument, formatDirtyPathsRejectionMessage(paths), ""), nil
 		}
 	}
 
@@ -560,6 +566,31 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Review requested for item %s. The item has been moved to review status.", itemID,
 	)), nil
+}
+
+// maxRejectionMessagePaths caps how many dirty paths formatDirtyPathsRejectionMessage
+// lists explicitly, so a large diff doesn't produce an unbounded message.
+const maxRejectionMessagePaths = 10
+
+// formatDirtyPathsRejectionMessage builds request_review's uncommitted-changes
+// rejection text from the specific dirty paths, instead of a blanket "git add -A"
+// instruction, so the agent knows exactly what to commit.
+func formatDirtyPathsRejectionMessage(paths []string) string {
+	if len(paths) == 0 {
+		return "request_review rejected: the worktree has uncommitted changes. " +
+			"Run `git status` in the worktree, commit your work, then call request_review again."
+	}
+	shown := paths
+	var suffix string
+	if len(paths) > maxRejectionMessagePaths {
+		shown = paths[:maxRejectionMessagePaths]
+		suffix = fmt.Sprintf(" ...and %d more", len(paths)-maxRejectionMessagePaths)
+	}
+	return fmt.Sprintf(
+		"request_review rejected: the worktree has uncommitted changes: %s%s. "+
+			"Commit these specific paths (e.g. `git add <path> && git commit -m 'description of changes'`), then call request_review again.",
+		strings.Join(shown, ", "), suffix,
+	)
 }
 
 // itemSessionsFor lists ItemSessions for itemID via the overridable
