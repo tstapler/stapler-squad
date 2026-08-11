@@ -4,6 +4,10 @@ import {
   BackoffState,
   isRetriableCloseCode,
   getWsCloseCode,
+  connectTimeoutMs,
+  FOREGROUND_CONNECT_TIMEOUT_MS,
+  CONNECT_TIMEOUT_MS,
+  FOREGROUND_FAST_ATTEMPTS,
 } from "@/lib/utils/backoff";
 
 describe("jitteredDelay", () => {
@@ -116,5 +120,27 @@ describe("getWsCloseCode", () => {
   it("should return null when ConnectError has no ws-close-code header", () => {
     const err = new ConnectError("some error", Code.Unavailable);
     expect(getWsCloseCode(err)).toBeNull();
+  });
+});
+
+describe("connectTimeoutMs", () => {
+  it("connectTimeoutMs_should_returnForegroundTimeout_When_foregroundTrueAndAttemptZero", () => {
+    expect(connectTimeoutMs(true, 0)).toBe(FOREGROUND_CONNECT_TIMEOUT_MS);
+  });
+  it("connectTimeoutMs_should_returnForegroundTimeout_When_foregroundTrueAndAttemptOne", () => {
+    expect(connectTimeoutMs(true, 1)).toBe(FOREGROUND_CONNECT_TIMEOUT_MS);
+  });
+  it("connectTimeoutMs_should_returnNormalTimeout_When_foregroundTrueAndAttemptEqualsFastAttempts", () => {
+    expect(connectTimeoutMs(true, FOREGROUND_FAST_ATTEMPTS)).toBe(CONNECT_TIMEOUT_MS);
+  });
+  it("connectTimeoutMs_should_returnNormalTimeout_When_foregroundFalseRegardlessOfAttempt", () => {
+    expect(connectTimeoutMs(false, 0)).toBe(CONNECT_TIMEOUT_MS);
+    expect(connectTimeoutMs(false, 5)).toBe(CONNECT_TIMEOUT_MS);
+  });
+  it("connectTimeoutMs_should_beStandaloneFunction_When_comparedToJitteredDelay", () => {
+    // AC1: locks in that connectTimeoutMs is genuinely new, not a repurposing
+    // of jitteredDelay/BackoffState — different signature, different purpose.
+    expect(connectTimeoutMs).not.toBe(jitteredDelay);
+    expect(connectTimeoutMs.length).toBe(2); // (foreground, attemptsSinceForeground)
   });
 });
