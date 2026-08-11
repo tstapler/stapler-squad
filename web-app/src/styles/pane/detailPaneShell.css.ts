@@ -16,7 +16,13 @@ export const detailPaneBase = style({
   "@media": {
     "(max-width: 768px)": {
       position: "fixed",
-      inset: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      // Reserve space for BottomNav (fixed, zIndex.bottomNav) instead of `inset: 0` —
+      // otherwise this pane's bottom content renders underneath the nav bar, unreachable
+      // by scroll since the nav sits above it in the stacking order.
+      bottom: "var(--bottom-nav-height, 72px)",
       width: "100% !important" as "inherit",
       zIndex: zIndex.dropdown,
       background: vars.color.modalBackground,

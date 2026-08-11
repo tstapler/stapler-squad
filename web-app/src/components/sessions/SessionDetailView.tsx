@@ -853,16 +853,20 @@ export function SessionDetailView({
             />
           </div>
         )}
-        {activeTab === "files" && (
-          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-files">
-            <FilesTab
-              sessionId={session.id}
-              baseUrl={getApiBaseUrl()}
-              initialSelectedPath={filesSelectedPath}
-              onSelectedPathChange={setFilesSelectedPath}
-            />
-          </div>
-        )}
+        <div
+          className={styles.tabContent}
+          role="tabpanel"
+          aria-labelledby="tab-files"
+          aria-hidden={activeTab !== "files"}
+          data-active={activeTab === "files"}
+        >
+          <FilesTab
+            sessionId={session.id}
+            baseUrl={getApiBaseUrl()}
+            initialSelectedPath={filesSelectedPath}
+            onSelectedPathChange={setFilesSelectedPath}
+          />
+        </div>
         {activeTab === "logs" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
             <SessionLogsTab sessionId={session.id} />
