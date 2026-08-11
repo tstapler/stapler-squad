@@ -333,6 +333,10 @@ service SessionService {
   // GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
   rpc GetEscapeAnalyticsSummary(GetEscapeAnalyticsSummaryRequest) returns (GetEscapeAnalyticsSummaryResponse) {}
 
+  // GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
+  // across all sessions, plus a per-session breakdown to spot outliers.
+  rpc GetEscapeAnalyticsGlobalSummary(GetEscapeAnalyticsGlobalSummaryRequest) returns (GetEscapeAnalyticsGlobalSummaryResponse) {}
+
   // HibernateSession checkpoints the session state, kills the AI process, and
   // transitions the session to Hibernated status.
   rpc HibernateSession(HibernateSessionRequest) returns (HibernateSessionResponse) {}
@@ -2270,6 +2274,26 @@ message GetEscapeAnalyticsSummaryRequest {
 
 message GetEscapeAnalyticsSummaryResponse {
   repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+}
+
+message GetEscapeAnalyticsGlobalSummaryRequest {
+  optional google.protobuf.Timestamp start_time = 1;
+  optional google.protobuf.Timestamp end_time = 2;
+}
+
+message GetEscapeAnalyticsGlobalSummaryResponse {
+  repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+  repeated SessionEscapeSummary per_session = 5;
+}
+
+message SessionEscapeSummary {
+  string session_id = 1;
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;

@@ -212,9 +212,10 @@ var methodToID = map[string]string{
 	"GenerateSuggestedRule": "approval:generate-suggested-rule",
 	"ValidateRules":         "approval:validate-rules",
 	// Analytics RPCs
-	"GetEscapeAnalyticsSummary": "analytics:get-escape-summary",
-	"GetProgramAnalytics":       "analytics:get-program",
-	"QueryEscapeAnalytics":      "analytics:query-escape",
+	"GetEscapeAnalyticsSummary":       "analytics:get-escape-summary",
+	"GetEscapeAnalyticsGlobalSummary": "analytics:get-escape-global-summary",
+	"GetProgramAnalytics":             "analytics:get-program",
+	"QueryEscapeAnalytics":            "analytics:query-escape",
 	// Feature flags RPCs
 	"GetFeatureFlags":   "feature-flag:get",
 	"UpdateFeatureFlag": "feature-flag:update",

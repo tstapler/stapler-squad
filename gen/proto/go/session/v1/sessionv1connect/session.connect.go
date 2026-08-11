@@ -300,6 +300,9 @@ const (
 	// SessionServiceGetEscapeAnalyticsSummaryProcedure is the fully-qualified name of the
 	// SessionService's GetEscapeAnalyticsSummary RPC.
 	SessionServiceGetEscapeAnalyticsSummaryProcedure = "/session.v1.SessionService/GetEscapeAnalyticsSummary"
+	// SessionServiceGetEscapeAnalyticsGlobalSummaryProcedure is the fully-qualified name of the
+	// SessionService's GetEscapeAnalyticsGlobalSummary RPC.
+	SessionServiceGetEscapeAnalyticsGlobalSummaryProcedure = "/session.v1.SessionService/GetEscapeAnalyticsGlobalSummary"
 	// SessionServiceHibernateSessionProcedure is the fully-qualified name of the SessionService's
 	// HibernateSession RPC.
 	SessionServiceHibernateSessionProcedure = "/session.v1.SessionService/HibernateSession"
@@ -612,6 +615,9 @@ type SessionServiceClient interface {
 	QueryEscapeAnalytics(context.Context, *connect.Request[v1.QueryEscapeAnalyticsRequest]) (*connect.Response[v1.QueryEscapeAnalyticsResponse], error)
 	// GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
 	GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error)
+	// GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
+	// across all sessions, plus a per-session breakdown to spot outliers.
+	GetEscapeAnalyticsGlobalSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsGlobalSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsGlobalSummaryResponse], error)
 	// HibernateSession checkpoints the session state, kills the AI process, and
 	// transitions the session to Hibernated status.
 	HibernateSession(context.Context, *connect.Request[v1.HibernateSessionRequest]) (*connect.Response[v1.HibernateSessionResponse], error)
@@ -1233,6 +1239,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("GetEscapeAnalyticsSummary")),
 			connect.WithClientOptions(opts...),
 		),
+		getEscapeAnalyticsGlobalSummary: connect.NewClient[v1.GetEscapeAnalyticsGlobalSummaryRequest, v1.GetEscapeAnalyticsGlobalSummaryResponse](
+			httpClient,
+			baseURL+SessionServiceGetEscapeAnalyticsGlobalSummaryProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetEscapeAnalyticsGlobalSummary")),
+			connect.WithClientOptions(opts...),
+		),
 		hibernateSession: connect.NewClient[v1.HibernateSessionRequest, v1.HibernateSessionResponse](
 			httpClient,
 			baseURL+SessionServiceHibernateSessionProcedure,
@@ -1388,121 +1400,122 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 
 // sessionServiceClient implements SessionServiceClient.
 type sessionServiceClient struct {
-	listSessions                 *connect.Client[v1.ListSessionsRequest, v1.ListSessionsResponse]
-	getSession                   *connect.Client[v1.GetSessionRequest, v1.GetSessionResponse]
-	createSession                *connect.Client[v1.CreateSessionRequest, v1.CreateSessionResponse]
-	updateSession                *connect.Client[v1.UpdateSessionRequest, v1.UpdateSessionResponse]
-	deleteSession                *connect.Client[v1.DeleteSessionRequest, v1.DeleteSessionResponse]
-	watchSessions                *connect.Client[v1.WatchSessionsRequest, v1.SessionEvent]
-	streamTerminal               *connect.Client[v1.TerminalData, v1.TerminalData]
-	getSessionDiff               *connect.Client[v1.GetSessionDiffRequest, v1.GetSessionDiffResponse]
-	getVCSStatus                 *connect.Client[v1.GetVCSStatusRequest, v1.GetVCSStatusResponse]
-	getReviewQueue               *connect.Client[v1.GetReviewQueueRequest, v1.GetReviewQueueResponse]
-	acknowledgeSession           *connect.Client[v1.AcknowledgeSessionRequest, v1.AcknowledgeSessionResponse]
-	getLogs                      *connect.Client[v1.GetLogsRequest, v1.GetLogsResponse]
-	watchReviewQueue             *connect.Client[v1.WatchReviewQueueRequest, v1.ReviewQueueEvent]
-	logUserInteraction           *connect.Client[v1.LogUserInteractionRequest, v1.LogUserInteractionResponse]
-	getClaudeConfig              *connect.Client[v1.GetClaudeConfigRequest, v1.GetClaudeConfigResponse]
-	listClaudeConfigs            *connect.Client[v1.ListClaudeConfigsRequest, v1.ListClaudeConfigsResponse]
-	updateClaudeConfig           *connect.Client[v1.UpdateClaudeConfigRequest, v1.UpdateClaudeConfigResponse]
-	listClaudeHistory            *connect.Client[v1.ListClaudeHistoryRequest, v1.ListClaudeHistoryResponse]
-	getClaudeHistoryDetail       *connect.Client[v1.GetClaudeHistoryDetailRequest, v1.GetClaudeHistoryDetailResponse]
-	getClaudeHistoryMessages     *connect.Client[v1.GetClaudeHistoryMessagesRequest, v1.GetClaudeHistoryMessagesResponse]
-	searchClaudeHistory          *connect.Client[v1.SearchClaudeHistoryRequest, v1.SearchClaudeHistoryResponse]
-	getPRInfo                    *connect.Client[v1.GetPRInfoRequest, v1.GetPRInfoResponse]
-	getPRComments                *connect.Client[v1.GetPRCommentsRequest, v1.GetPRCommentsResponse]
-	postPRComment                *connect.Client[v1.PostPRCommentRequest, v1.PostPRCommentResponse]
-	mergePR                      *connect.Client[v1.MergePRRequest, v1.MergePRResponse]
-	closePR                      *connect.Client[v1.ClosePRRequest, v1.ClosePRResponse]
-	sendNotification             *connect.Client[v1.SendNotificationRequest, v1.SendNotificationResponse]
-	focusWindow                  *connect.Client[v1.FocusWindowRequest, v1.FocusWindowResponse]
-	renameSession                *connect.Client[v1.RenameSessionRequest, v1.RenameSessionResponse]
-	restartSession               *connect.Client[v1.RestartSessionRequest, v1.RestartSessionResponse]
-	getWorkspaceInfo             *connect.Client[v1.GetWorkspaceInfoRequest, v1.GetWorkspaceInfoResponse]
-	listWorkspaceTargets         *connect.Client[v1.ListWorkspaceTargetsRequest, v1.ListWorkspaceTargetsResponse]
-	switchWorkspace              *connect.Client[v1.SwitchWorkspaceRequest, v1.SwitchWorkspaceResponse]
-	resolveApproval              *connect.Client[v1.ResolveApprovalRequest, v1.ResolveApprovalResponse]
-	listPendingApprovals         *connect.Client[v1.ListPendingApprovalsRequest, v1.ListPendingApprovalsResponse]
-	createDebugSnapshot          *connect.Client[v1.CreateDebugSnapshotRequest, v1.CreateDebugSnapshotResponse]
-	getNotificationHistory       *connect.Client[v1.GetNotificationHistoryRequest, v1.GetNotificationHistoryResponse]
-	markNotificationRead         *connect.Client[v1.MarkNotificationReadRequest, v1.MarkNotificationReadResponse]
-	clearNotificationHistory     *connect.Client[v1.ClearNotificationHistoryRequest, v1.ClearNotificationHistoryResponse]
-	listApprovalRules            *connect.Client[v1.ListApprovalRulesRequest, v1.ListApprovalRulesResponse]
-	upsertApprovalRule           *connect.Client[v1.UpsertApprovalRuleRequest, v1.UpsertApprovalRuleResponse]
-	deleteApprovalRule           *connect.Client[v1.DeleteApprovalRuleRequest, v1.DeleteApprovalRuleResponse]
-	getApprovalAnalytics         *connect.Client[v1.GetApprovalAnalyticsRequest, v1.GetApprovalAnalyticsResponse]
-	getProgramAnalytics          *connect.Client[v1.GetProgramAnalyticsRequest, v1.GetProgramAnalyticsResponse]
-	generateSuggestedRule        *connect.Client[v1.GenerateSuggestedRuleRequest, v1.GenerateSuggestedRuleResponse]
-	validateRules                *connect.Client[v1.ValidateRulesRequest, v1.ValidateRulesResponse]
-	exportRules                  *connect.Client[v1.ExportRulesRequest, v1.ExportRulesResponse]
-	bulkUpsertRules              *connect.Client[v1.BulkUpsertRulesRequest, v1.BulkUpsertRulesResponse]
-	getConfigFileRules           *connect.Client[v1.GetConfigFileRulesRequest, v1.GetConfigFileRulesResponse]
-	saveRulesToConfigFile        *connect.Client[v1.SaveRulesToConfigFileRequest, v1.SaveRulesToConfigFileResponse]
-	listDatabases                *connect.Client[v1.ListDatabasesRequest, v1.ListDatabasesResponse]
-	getCurrentDatabase           *connect.Client[v1.GetCurrentDatabaseRequest, v1.GetCurrentDatabaseResponse]
-	switchDatabase               *connect.Client[v1.SwitchDatabaseRequest, v1.SwitchDatabaseResponse]
-	mergeDatabase                *connect.Client[v1.MergeDatabaseRequest, v1.MergeDatabaseResponse]
-	createCheckpoint             *connect.Client[v1.CreateCheckpointRequest, v1.CreateCheckpointResponse]
-	listCheckpoints              *connect.Client[v1.ListCheckpointsRequest, v1.ListCheckpointsResponse]
-	forkSession                  *connect.Client[v1.ForkSessionRequest, v1.ForkSessionResponse]
-	clearConversationState       *connect.Client[v1.ClearConversationStateRequest, v1.ClearConversationStateResponse]
-	listFiles                    *connect.Client[v1.ListFilesRequest, v1.ListFilesResponse]
-	getFileContent               *connect.Client[v1.GetFileContentRequest, v1.GetFileContentResponse]
-	searchFiles                  *connect.Client[v1.SearchFilesRequest, v1.SearchFilesResponse]
-	listPathCompletions          *connect.Client[v1.ListPathCompletionsRequest, v1.ListPathCompletionsResponse]
-	getSessionDefaults           *connect.Client[v1.GetSessionDefaultsRequest, v1.GetSessionDefaultsResponse]
-	resolveDefaults              *connect.Client[v1.ResolveDefaultsRequest, v1.ResolveDefaultsResponse]
-	previewDestinationPath       *connect.Client[v1.PreviewDestinationPathRequest, v1.PreviewDestinationPathResponse]
-	updateGlobalDefaults         *connect.Client[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse]
-	upsertProfile                *connect.Client[v1.UpsertProfileRequest, v1.UpsertProfileResponse]
-	deleteProfile                *connect.Client[v1.DeleteProfileRequest, v1.DeleteProfileResponse]
-	upsertDirectoryRule          *connect.Client[v1.UpsertDirectoryRuleRequest, v1.UpsertDirectoryRuleResponse]
-	deleteDirectoryRule          *connect.Client[v1.DeleteDirectoryRuleRequest, v1.DeleteDirectoryRuleResponse]
-	listWorktrees                *connect.Client[v1.ListWorktreesRequest, v1.ListWorktreesResponse]
-	listPromptHistory            *connect.Client[v1.ListPromptHistoryRequest, v1.ListPromptHistoryResponse]
-	deletePromptHistory          *connect.Client[v1.DeletePromptHistoryRequest, v1.DeletePromptHistoryResponse]
-	batchCreateSessions          *connect.Client[v1.BatchCreateSessionsRequest, v1.BatchCreateSessionsResponse]
-	runOneShot                   *connect.Client[v1.RunOneShotRequest, v1.RunOneShotResponse]
-	createProject                *connect.Client[v1.CreateProjectRequest, v1.CreateProjectResponse]
-	listProjects                 *connect.Client[v1.ListProjectsRequest, v1.ListProjectsResponse]
-	updateProject                *connect.Client[v1.UpdateProjectRequest, v1.UpdateProjectResponse]
-	deleteProject                *connect.Client[v1.DeleteProjectRequest, v1.DeleteProjectResponse]
-	assignSessionsToProject      *connect.Client[v1.AssignSessionsToProjectRequest, v1.AssignSessionsToProjectResponse]
-	listBranches                 *connect.Client[v1.ListBranchesRequest, v1.ListBranchesResponse]
-	getTerminalSnapshot          *connect.Client[v1.GetTerminalSnapshotRequest, v1.GetTerminalSnapshotResponse]
-	writeToSession               *connect.Client[v1.WriteToSessionRequest, v1.WriteToSessionResponse]
-	logClientEvents              *connect.Client[v1.LogClientEventsRequest, v1.LogClientEventsResponse]
-	listErrors                   *connect.Client[v1.ListErrorsRequest, v1.ListErrorsResponse]
-	acknowledgeError             *connect.Client[v1.AcknowledgeErrorRequest, v1.AcknowledgeErrorResponse]
-	getFeatureFlags              *connect.Client[v1.GetFeatureFlagsRequest, v1.GetFeatureFlagsResponse]
-	updateFeatureFlag            *connect.Client[v1.UpdateFeatureFlagRequest, v1.UpdateFeatureFlagResponse]
-	queryEscapeAnalytics         *connect.Client[v1.QueryEscapeAnalyticsRequest, v1.QueryEscapeAnalyticsResponse]
-	getEscapeAnalyticsSummary    *connect.Client[v1.GetEscapeAnalyticsSummaryRequest, v1.GetEscapeAnalyticsSummaryResponse]
-	hibernateSession             *connect.Client[v1.HibernateSessionRequest, v1.HibernateSessionResponse]
-	resumeHibernatedSession      *connect.Client[v1.ResumeHibernatedSessionRequest, v1.ResumeHibernatedSessionResponse]
-	resumeCrashedSession         *connect.Client[v1.ResumeCrashedSessionRequest, v1.ResumeCrashedSessionResponse]
-	spawnShell                   *connect.Client[v1.SpawnShellRequest, v1.SpawnShellResponse]
-	stopShell                    *connect.Client[v1.StopShellRequest, v1.StopShellResponse]
-	restartShell                 *connect.Client[v1.RestartShellRequest, v1.RestartShellResponse]
-	listShells                   *connect.Client[v1.ListShellsRequest, v1.ListShellsResponse]
-	deleteShell                  *connect.Client[v1.DeleteShellRequest, v1.DeleteShellResponse]
-	createWorkflow               *connect.Client[v1.CreateWorkflowRequest, v1.CreateWorkflowResponse]
-	updateWorkflow               *connect.Client[v1.UpdateWorkflowRequest, v1.UpdateWorkflowResponse]
-	deleteWorkflow               *connect.Client[v1.DeleteWorkflowRequest, v1.DeleteWorkflowResponse]
-	listWorkflows                *connect.Client[v1.ListWorkflowsRequest, v1.ListWorkflowsResponse]
-	runWorkflow                  *connect.Client[v1.RunWorkflowRequest, v1.RunWorkflowResponse]
-	getDetectionEvents           *connect.Client[v1.GetDetectionEventsRequest, v1.GetDetectionEventsResponse]
-	listSlashCommands            *connect.Client[v1.ListSlashCommandsRequest, v1.ListSlashCommandsResponse]
-	listAliases                  *connect.Client[v1.ListAliasesRequest, v1.ListAliasesResponse]
-	upsertAlias                  *connect.Client[v1.UpsertAliasRequest, v1.UpsertAliasResponse]
-	deleteAlias                  *connect.Client[v1.DeleteAliasRequest, v1.DeleteAliasResponse]
-	archiveSession               *connect.Client[v1.ArchiveSessionRequest, v1.ArchiveSessionResponse]
-	unarchiveSession             *connect.Client[v1.UnarchiveSessionRequest, v1.UnarchiveSessionResponse]
-	archiveWorkflowSessions      *connect.Client[v1.ArchiveWorkflowSessionsRequest, v1.ArchiveWorkflowSessionsResponse]
-	deleteWorkflowFailedSessions *connect.Client[v1.DeleteWorkflowFailedSessionsRequest, v1.DeleteWorkflowFailedSessionsResponse]
-	getProviderLimits            *connect.Client[v1.GetProviderLimitsRequest, v1.GetProviderLimitsResponse]
-	getHookStatus                *connect.Client[v1.GetHookStatusRequest, v1.GetHookStatusResponse]
-	installHooks                 *connect.Client[v1.InstallHooksRequest, v1.InstallHooksResponse]
+	listSessions                    *connect.Client[v1.ListSessionsRequest, v1.ListSessionsResponse]
+	getSession                      *connect.Client[v1.GetSessionRequest, v1.GetSessionResponse]
+	createSession                   *connect.Client[v1.CreateSessionRequest, v1.CreateSessionResponse]
+	updateSession                   *connect.Client[v1.UpdateSessionRequest, v1.UpdateSessionResponse]
+	deleteSession                   *connect.Client[v1.DeleteSessionRequest, v1.DeleteSessionResponse]
+	watchSessions                   *connect.Client[v1.WatchSessionsRequest, v1.SessionEvent]
+	streamTerminal                  *connect.Client[v1.TerminalData, v1.TerminalData]
+	getSessionDiff                  *connect.Client[v1.GetSessionDiffRequest, v1.GetSessionDiffResponse]
+	getVCSStatus                    *connect.Client[v1.GetVCSStatusRequest, v1.GetVCSStatusResponse]
+	getReviewQueue                  *connect.Client[v1.GetReviewQueueRequest, v1.GetReviewQueueResponse]
+	acknowledgeSession              *connect.Client[v1.AcknowledgeSessionRequest, v1.AcknowledgeSessionResponse]
+	getLogs                         *connect.Client[v1.GetLogsRequest, v1.GetLogsResponse]
+	watchReviewQueue                *connect.Client[v1.WatchReviewQueueRequest, v1.ReviewQueueEvent]
+	logUserInteraction              *connect.Client[v1.LogUserInteractionRequest, v1.LogUserInteractionResponse]
+	getClaudeConfig                 *connect.Client[v1.GetClaudeConfigRequest, v1.GetClaudeConfigResponse]
+	listClaudeConfigs               *connect.Client[v1.ListClaudeConfigsRequest, v1.ListClaudeConfigsResponse]
+	updateClaudeConfig              *connect.Client[v1.UpdateClaudeConfigRequest, v1.UpdateClaudeConfigResponse]
+	listClaudeHistory               *connect.Client[v1.ListClaudeHistoryRequest, v1.ListClaudeHistoryResponse]
+	getClaudeHistoryDetail          *connect.Client[v1.GetClaudeHistoryDetailRequest, v1.GetClaudeHistoryDetailResponse]
+	getClaudeHistoryMessages        *connect.Client[v1.GetClaudeHistoryMessagesRequest, v1.GetClaudeHistoryMessagesResponse]
+	searchClaudeHistory             *connect.Client[v1.SearchClaudeHistoryRequest, v1.SearchClaudeHistoryResponse]
+	getPRInfo                       *connect.Client[v1.GetPRInfoRequest, v1.GetPRInfoResponse]
+	getPRComments                   *connect.Client[v1.GetPRCommentsRequest, v1.GetPRCommentsResponse]
+	postPRComment                   *connect.Client[v1.PostPRCommentRequest, v1.PostPRCommentResponse]
+	mergePR                         *connect.Client[v1.MergePRRequest, v1.MergePRResponse]
+	closePR                         *connect.Client[v1.ClosePRRequest, v1.ClosePRResponse]
+	sendNotification                *connect.Client[v1.SendNotificationRequest, v1.SendNotificationResponse]
+	focusWindow                     *connect.Client[v1.FocusWindowRequest, v1.FocusWindowResponse]
+	renameSession                   *connect.Client[v1.RenameSessionRequest, v1.RenameSessionResponse]
+	restartSession                  *connect.Client[v1.RestartSessionRequest, v1.RestartSessionResponse]
+	getWorkspaceInfo                *connect.Client[v1.GetWorkspaceInfoRequest, v1.GetWorkspaceInfoResponse]
+	listWorkspaceTargets            *connect.Client[v1.ListWorkspaceTargetsRequest, v1.ListWorkspaceTargetsResponse]
+	switchWorkspace                 *connect.Client[v1.SwitchWorkspaceRequest, v1.SwitchWorkspaceResponse]
+	resolveApproval                 *connect.Client[v1.ResolveApprovalRequest, v1.ResolveApprovalResponse]
+	listPendingApprovals            *connect.Client[v1.ListPendingApprovalsRequest, v1.ListPendingApprovalsResponse]
+	createDebugSnapshot             *connect.Client[v1.CreateDebugSnapshotRequest, v1.CreateDebugSnapshotResponse]
+	getNotificationHistory          *connect.Client[v1.GetNotificationHistoryRequest, v1.GetNotificationHistoryResponse]
+	markNotificationRead            *connect.Client[v1.MarkNotificationReadRequest, v1.MarkNotificationReadResponse]
+	clearNotificationHistory        *connect.Client[v1.ClearNotificationHistoryRequest, v1.ClearNotificationHistoryResponse]
+	listApprovalRules               *connect.Client[v1.ListApprovalRulesRequest, v1.ListApprovalRulesResponse]
+	upsertApprovalRule              *connect.Client[v1.UpsertApprovalRuleRequest, v1.UpsertApprovalRuleResponse]
+	deleteApprovalRule              *connect.Client[v1.DeleteApprovalRuleRequest, v1.DeleteApprovalRuleResponse]
+	getApprovalAnalytics            *connect.Client[v1.GetApprovalAnalyticsRequest, v1.GetApprovalAnalyticsResponse]
+	getProgramAnalytics             *connect.Client[v1.GetProgramAnalyticsRequest, v1.GetProgramAnalyticsResponse]
+	generateSuggestedRule           *connect.Client[v1.GenerateSuggestedRuleRequest, v1.GenerateSuggestedRuleResponse]
+	validateRules                   *connect.Client[v1.ValidateRulesRequest, v1.ValidateRulesResponse]
+	exportRules                     *connect.Client[v1.ExportRulesRequest, v1.ExportRulesResponse]
+	bulkUpsertRules                 *connect.Client[v1.BulkUpsertRulesRequest, v1.BulkUpsertRulesResponse]
+	getConfigFileRules              *connect.Client[v1.GetConfigFileRulesRequest, v1.GetConfigFileRulesResponse]
+	saveRulesToConfigFile           *connect.Client[v1.SaveRulesToConfigFileRequest, v1.SaveRulesToConfigFileResponse]
+	listDatabases                   *connect.Client[v1.ListDatabasesRequest, v1.ListDatabasesResponse]
+	getCurrentDatabase              *connect.Client[v1.GetCurrentDatabaseRequest, v1.GetCurrentDatabaseResponse]
+	switchDatabase                  *connect.Client[v1.SwitchDatabaseRequest, v1.SwitchDatabaseResponse]
+	mergeDatabase                   *connect.Client[v1.MergeDatabaseRequest, v1.MergeDatabaseResponse]
+	createCheckpoint                *connect.Client[v1.CreateCheckpointRequest, v1.CreateCheckpointResponse]
+	listCheckpoints                 *connect.Client[v1.ListCheckpointsRequest, v1.ListCheckpointsResponse]
+	forkSession                     *connect.Client[v1.ForkSessionRequest, v1.ForkSessionResponse]
+	clearConversationState          *connect.Client[v1.ClearConversationStateRequest, v1.ClearConversationStateResponse]
+	listFiles                       *connect.Client[v1.ListFilesRequest, v1.ListFilesResponse]
+	getFileContent                  *connect.Client[v1.GetFileContentRequest, v1.GetFileContentResponse]
+	searchFiles                     *connect.Client[v1.SearchFilesRequest, v1.SearchFilesResponse]
+	listPathCompletions             *connect.Client[v1.ListPathCompletionsRequest, v1.ListPathCompletionsResponse]
+	getSessionDefaults              *connect.Client[v1.GetSessionDefaultsRequest, v1.GetSessionDefaultsResponse]
+	resolveDefaults                 *connect.Client[v1.ResolveDefaultsRequest, v1.ResolveDefaultsResponse]
+	previewDestinationPath          *connect.Client[v1.PreviewDestinationPathRequest, v1.PreviewDestinationPathResponse]
+	updateGlobalDefaults            *connect.Client[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse]
+	upsertProfile                   *connect.Client[v1.UpsertProfileRequest, v1.UpsertProfileResponse]
+	deleteProfile                   *connect.Client[v1.DeleteProfileRequest, v1.DeleteProfileResponse]
+	upsertDirectoryRule             *connect.Client[v1.UpsertDirectoryRuleRequest, v1.UpsertDirectoryRuleResponse]
+	deleteDirectoryRule             *connect.Client[v1.DeleteDirectoryRuleRequest, v1.DeleteDirectoryRuleResponse]
+	listWorktrees                   *connect.Client[v1.ListWorktreesRequest, v1.ListWorktreesResponse]
+	listPromptHistory               *connect.Client[v1.ListPromptHistoryRequest, v1.ListPromptHistoryResponse]
+	deletePromptHistory             *connect.Client[v1.DeletePromptHistoryRequest, v1.DeletePromptHistoryResponse]
+	batchCreateSessions             *connect.Client[v1.BatchCreateSessionsRequest, v1.BatchCreateSessionsResponse]
+	runOneShot                      *connect.Client[v1.RunOneShotRequest, v1.RunOneShotResponse]
+	createProject                   *connect.Client[v1.CreateProjectRequest, v1.CreateProjectResponse]
+	listProjects                    *connect.Client[v1.ListProjectsRequest, v1.ListProjectsResponse]
+	updateProject                   *connect.Client[v1.UpdateProjectRequest, v1.UpdateProjectResponse]
+	deleteProject                   *connect.Client[v1.DeleteProjectRequest, v1.DeleteProjectResponse]
+	assignSessionsToProject         *connect.Client[v1.AssignSessionsToProjectRequest, v1.AssignSessionsToProjectResponse]
+	listBranches                    *connect.Client[v1.ListBranchesRequest, v1.ListBranchesResponse]
+	getTerminalSnapshot             *connect.Client[v1.GetTerminalSnapshotRequest, v1.GetTerminalSnapshotResponse]
+	writeToSession                  *connect.Client[v1.WriteToSessionRequest, v1.WriteToSessionResponse]
+	logClientEvents                 *connect.Client[v1.LogClientEventsRequest, v1.LogClientEventsResponse]
+	listErrors                      *connect.Client[v1.ListErrorsRequest, v1.ListErrorsResponse]
+	acknowledgeError                *connect.Client[v1.AcknowledgeErrorRequest, v1.AcknowledgeErrorResponse]
+	getFeatureFlags                 *connect.Client[v1.GetFeatureFlagsRequest, v1.GetFeatureFlagsResponse]
+	updateFeatureFlag               *connect.Client[v1.UpdateFeatureFlagRequest, v1.UpdateFeatureFlagResponse]
+	queryEscapeAnalytics            *connect.Client[v1.QueryEscapeAnalyticsRequest, v1.QueryEscapeAnalyticsResponse]
+	getEscapeAnalyticsSummary       *connect.Client[v1.GetEscapeAnalyticsSummaryRequest, v1.GetEscapeAnalyticsSummaryResponse]
+	getEscapeAnalyticsGlobalSummary *connect.Client[v1.GetEscapeAnalyticsGlobalSummaryRequest, v1.GetEscapeAnalyticsGlobalSummaryResponse]
+	hibernateSession                *connect.Client[v1.HibernateSessionRequest, v1.HibernateSessionResponse]
+	resumeHibernatedSession         *connect.Client[v1.ResumeHibernatedSessionRequest, v1.ResumeHibernatedSessionResponse]
+	resumeCrashedSession            *connect.Client[v1.ResumeCrashedSessionRequest, v1.ResumeCrashedSessionResponse]
+	spawnShell                      *connect.Client[v1.SpawnShellRequest, v1.SpawnShellResponse]
+	stopShell                       *connect.Client[v1.StopShellRequest, v1.StopShellResponse]
+	restartShell                    *connect.Client[v1.RestartShellRequest, v1.RestartShellResponse]
+	listShells                      *connect.Client[v1.ListShellsRequest, v1.ListShellsResponse]
+	deleteShell                     *connect.Client[v1.DeleteShellRequest, v1.DeleteShellResponse]
+	createWorkflow                  *connect.Client[v1.CreateWorkflowRequest, v1.CreateWorkflowResponse]
+	updateWorkflow                  *connect.Client[v1.UpdateWorkflowRequest, v1.UpdateWorkflowResponse]
+	deleteWorkflow                  *connect.Client[v1.DeleteWorkflowRequest, v1.DeleteWorkflowResponse]
+	listWorkflows                   *connect.Client[v1.ListWorkflowsRequest, v1.ListWorkflowsResponse]
+	runWorkflow                     *connect.Client[v1.RunWorkflowRequest, v1.RunWorkflowResponse]
+	getDetectionEvents              *connect.Client[v1.GetDetectionEventsRequest, v1.GetDetectionEventsResponse]
+	listSlashCommands               *connect.Client[v1.ListSlashCommandsRequest, v1.ListSlashCommandsResponse]
+	listAliases                     *connect.Client[v1.ListAliasesRequest, v1.ListAliasesResponse]
+	upsertAlias                     *connect.Client[v1.UpsertAliasRequest, v1.UpsertAliasResponse]
+	deleteAlias                     *connect.Client[v1.DeleteAliasRequest, v1.DeleteAliasResponse]
+	archiveSession                  *connect.Client[v1.ArchiveSessionRequest, v1.ArchiveSessionResponse]
+	unarchiveSession                *connect.Client[v1.UnarchiveSessionRequest, v1.UnarchiveSessionResponse]
+	archiveWorkflowSessions         *connect.Client[v1.ArchiveWorkflowSessionsRequest, v1.ArchiveWorkflowSessionsResponse]
+	deleteWorkflowFailedSessions    *connect.Client[v1.DeleteWorkflowFailedSessionsRequest, v1.DeleteWorkflowFailedSessionsResponse]
+	getProviderLimits               *connect.Client[v1.GetProviderLimitsRequest, v1.GetProviderLimitsResponse]
+	getHookStatus                   *connect.Client[v1.GetHookStatusRequest, v1.GetHookStatusResponse]
+	installHooks                    *connect.Client[v1.InstallHooksRequest, v1.InstallHooksResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1955,6 +1968,11 @@ func (c *sessionServiceClient) GetEscapeAnalyticsSummary(ctx context.Context, re
 	return c.getEscapeAnalyticsSummary.CallUnary(ctx, req)
 }
 
+// GetEscapeAnalyticsGlobalSummary calls session.v1.SessionService.GetEscapeAnalyticsGlobalSummary.
+func (c *sessionServiceClient) GetEscapeAnalyticsGlobalSummary(ctx context.Context, req *connect.Request[v1.GetEscapeAnalyticsGlobalSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsGlobalSummaryResponse], error) {
+	return c.getEscapeAnalyticsGlobalSummary.CallUnary(ctx, req)
+}
+
 // HibernateSession calls session.v1.SessionService.HibernateSession.
 func (c *sessionServiceClient) HibernateSession(ctx context.Context, req *connect.Request[v1.HibernateSessionRequest]) (*connect.Response[v1.HibernateSessionResponse], error) {
 	return c.hibernateSession.CallUnary(ctx, req)
@@ -2315,6 +2333,9 @@ type SessionServiceHandler interface {
 	QueryEscapeAnalytics(context.Context, *connect.Request[v1.QueryEscapeAnalyticsRequest]) (*connect.Response[v1.QueryEscapeAnalyticsResponse], error)
 	// GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
 	GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error)
+	// GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
+	// across all sessions, plus a per-session breakdown to spot outliers.
+	GetEscapeAnalyticsGlobalSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsGlobalSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsGlobalSummaryResponse], error)
 	// HibernateSession checkpoints the session state, kills the AI process, and
 	// transitions the session to Hibernated status.
 	HibernateSession(context.Context, *connect.Request[v1.HibernateSessionRequest]) (*connect.Response[v1.HibernateSessionResponse], error)
@@ -2932,6 +2953,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("GetEscapeAnalyticsSummary")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceGetEscapeAnalyticsGlobalSummaryHandler := connect.NewUnaryHandler(
+		SessionServiceGetEscapeAnalyticsGlobalSummaryProcedure,
+		svc.GetEscapeAnalyticsGlobalSummary,
+		connect.WithSchema(sessionServiceMethods.ByName("GetEscapeAnalyticsGlobalSummary")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceHibernateSessionHandler := connect.NewUnaryHandler(
 		SessionServiceHibernateSessionProcedure,
 		svc.HibernateSession,
@@ -3264,6 +3291,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceQueryEscapeAnalyticsHandler.ServeHTTP(w, r)
 		case SessionServiceGetEscapeAnalyticsSummaryProcedure:
 			sessionServiceGetEscapeAnalyticsSummaryHandler.ServeHTTP(w, r)
+		case SessionServiceGetEscapeAnalyticsGlobalSummaryProcedure:
+			sessionServiceGetEscapeAnalyticsGlobalSummaryHandler.ServeHTTP(w, r)
 		case SessionServiceHibernateSessionProcedure:
 			sessionServiceHibernateSessionHandler.ServeHTTP(w, r)
 		case SessionServiceResumeHibernatedSessionProcedure:
@@ -3681,6 +3710,10 @@ func (UnimplementedSessionServiceHandler) QueryEscapeAnalytics(context.Context, 
 
 func (UnimplementedSessionServiceHandler) GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetEscapeAnalyticsSummary is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetEscapeAnalyticsGlobalSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsGlobalSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsGlobalSummaryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetEscapeAnalyticsGlobalSummary is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) HibernateSession(context.Context, *connect.Request[v1.HibernateSessionRequest]) (*connect.Response[v1.HibernateSessionResponse], error) {
