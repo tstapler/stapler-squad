@@ -154,19 +154,11 @@ func pollUntil(t *testing.T, timeout time.Duration, msg string, fn func() bool) 
 }
 
 // waitForFastRecheckWaitStart blocks until reconnectLoop reports (via
-// TmuxServerRegistry.SetFastRecheckWaitStartHook) that it has begun a
-// backoff wait whose value is >= minBackoff.
-//
-// This polls the hook's report of reconnectLoop's real state, not an
-// estimated wall-clock offset derived from the nominal backoff formula
-// (100ms, doubling each cycle): a real cycle also spends time
-// starting/failing the control-mode subprocess and running syncSessions, so
-// an estimate can land after that cycle's own fast-recheck window
-// (fastRecheckAttempts x (fastRecheckSyncTimeout+fastRecheckInterval), 700ms
-// today) has already run and found nothing -- deferring detection to the
-// next, much longer cycle. Waiting on the hook instead guarantees the
-// caller's subsequent kill-session lands before that window's fast-recheck
-// attempts run.
+// SetFastRecheckWaitStartHook) that it has begun a backoff wait >= minBackoff.
+// It waits on that real signal rather than an estimated wall-clock offset
+// derived from the nominal backoff formula, since an estimate can land after
+// that cycle's own fast-recheck window already ran and found nothing,
+// deferring detection to the next, much longer cycle.
 func waitForFastRecheckWaitStart(t *testing.T, registry *tmux.TmuxServerRegistry, minBackoff time.Duration, timeout time.Duration) {
 	t.Helper()
 
@@ -264,34 +256,17 @@ func TestTmuxServerRegistry_PaneExitChannel(t *testing.T) {
 }
 
 // Regression test: pane-exit is still detected quickly even while
-// reconnectLoop's backoff has grown large. Exercises the fastRecheckAttempts
-// x (fastRecheckSyncTimeout + fastRecheckInterval) = 700ms ceiling
-// structurally, not by re-running the flaky test until it happens to pass.
+// reconnectLoop's backoff has grown large. Killing the isolated socket's
+// keepalive session makes every attach-session attempt fail near-instantly,
+// so backoff doubles every cycle without resetting. The test polls
+// reconnectLoop's own hook-reported state (waitForFastRecheckWaitStart)
+// rather than IsHealthy(), which stays false throughout and so can't confirm
+// the target backoff was reached.
 //
-// Backoff-elevation mechanism: killing the isolated socket's keepalive
-// session (never auto-recreated off the default socket, see
-// startControlMode) forces every subsequent attach-session attempt to fail
-// near-instantly, so reconnectLoop's backoff doubles every cycle without
-// ever resetting (100->200->400->800->1600->3200ms...).
-//
-// This test polls elapsed wall-clock time against reconnectLoop's own
-// hook-reported state (waitForFastRecheckWaitStart), not IsHealthy():
-// IsHealthy() stays false for this whole test once the keepalive session is
-// killed, since every reconnect attempt fails near-instantly, so it can
-// never be used to confirm reconnectLoop has reached the target backoff --
-// only the hook and elapsed time can.
-//
-// Known gap: this test elevates backoff via a clean control-mode outage, so
-// no %sessions-changed event / debounce callback ever fires during its
-// fast-recheck phase, and syncSessionsFastRecheck's TryLock never contends
-// with the blocking syncSessions() path. The syncMu-contention scenario
-// (fast-recheck skipping a check because another caller holds syncMu) is
-// therefore NOT exercised here. Verifying that scenario needs either
-// unexported access to syncMu or a way to reliably slow list-sessions from
-// outside the package, both unavailable to this external tmux_test package
-// (server_registry_test.go, the only place with that access, is a third
-// file outside this fix's file-confinement -- see requirements.md AC6) --
-// accepted as a documented gap rather than expanded scope.
+// Known gap: backoff is elevated via a clean control-mode outage, so the
+// syncMu-contention path (fast-recheck skipped because syncSessions holds
+// the lock) isn't exercised here -- verifying it needs access this external
+// test package doesn't have (see requirements.md AC6).
 func TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff(t *testing.T) {
 	registry, socket := startIsolatedRegistry(t)
 	t.Cleanup(func() { registry.SetFastRecheckWaitStartHook(nil) })
