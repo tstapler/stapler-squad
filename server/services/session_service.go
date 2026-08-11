@@ -2027,20 +2027,7 @@ func (s *SessionService) UpdateSession(
 
 	// Publish events based on what was updated
 	if len(updatedFields) > 0 {
-		// Publish general update event, including detection state when available.
-		if s.statusManager != nil {
-			statusInfo := s.statusManager.GetStatus(instance)
-			if statusInfo.IsControllerActive {
-				s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
-					instance, updatedFields,
-					statusInfo.ClaudeStatus, statusInfo.StatusContext,
-				))
-			} else {
-				s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
-			}
-		} else {
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
-		}
+		s.publishSessionUpdatedEvent(instance, updatedFields)
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
@@ -4678,10 +4665,31 @@ func (s *SessionService) GetProviderLimits(
 	}), nil
 }
 
+// publishSessionUpdatedEvent publishes a SessionUpdated event for instance covering
+// updatedFields, using the statusManager-aware NewSessionUpdatedEventWithDetection variant
+// when a controller is actively running (so clients see live ClaudeStatus/StatusContext),
+// and falling back to the plain NewSessionUpdatedEvent otherwise. Shared by UpdateSession's
+// end-of-handler publish and UpdateSessionProgram (the capacity-monitor auto-fallback path)
+// so the two program-switch entry points publish identically instead of drifting.
+func (s *SessionService) publishSessionUpdatedEvent(instance *session.Instance, updatedFields []string) {
+	if s.statusManager != nil {
+		statusInfo := s.statusManager.GetStatus(instance)
+		if statusInfo.IsControllerActive {
+			s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
+				instance, updatedFields,
+				statusInfo.ClaudeStatus, statusInfo.StatusContext,
+			))
+			return
+		}
+	}
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
+}
+
 // UpdateSessionProgram handles switching programs for a session, doing the history
 // porting, DB save, and PTY restart. Shares its implementation with the UpdateSession RPC
-// handler via Instance.SwitchProgram (see session/instance_program.go) so the two
-// program-switch entry points — this auto-fallback path and the manual RPC — can't drift.
+// handler via Instance.SwitchProgram (see session/instance_program.go) and
+// publishSessionUpdatedEvent above so the two program-switch entry points — this
+// auto-fallback path and the manual RPC — can't drift.
 func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID string, newProgram string) error {
 	inst := s.findInstance(sessionID)
 	if inst == nil {
@@ -4698,7 +4706,7 @@ func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID str
 		return fmt.Errorf("failed to restart session: %w", err)
 	}
 
-	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))
+	s.publishSessionUpdatedEvent(inst, []string{"program"})
 
 	return nil
 }
