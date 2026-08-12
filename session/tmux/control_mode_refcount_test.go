@@ -330,5 +330,4 @@ drain:
 	}
 
 	sess.UnsubscribeFromControlModeUpdates(healthyID)
-	<-drained
 }

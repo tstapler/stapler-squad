@@ -37,10 +37,10 @@ func (e *AgentExporter) Export(events []*history.Event) error {
 	// We assume inhibition rules are applied upstream, but we strictly enforce
 	// that we only output events to the agent (or let caller handle it).
 	// For now, we encode to JSON and write to stdout/writer.
-	
+
 	encoder := json.NewEncoder(e.writer)
 	encoder.SetIndent("", "  ")
-	
+
 	if err := encoder.Encode(events); err != nil {
 		return fmt.Errorf("failed to encode events for agent: %w", err)
 	}

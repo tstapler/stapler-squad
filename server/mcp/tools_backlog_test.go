@@ -1937,6 +1937,28 @@ func TestCreateBacklogItem_should_ReturnError_When_PriorityOutOfRange(t *testing
 	require.False(t, m["success"].(bool), "create_backlog_item must reject an out-of-range priority")
 }
 
+// TestCreateBacklogItem_should_Succeed_When_NoSessionUUID is the regression
+// test for the bug where a manually-registered MCP client (e.g. `claude mcp
+// add` from a plain terminal with no STAPLER_SESSION_UUID set) got a hard
+// PERMISSION_DENIED from create_backlog_item even though the tool's write
+// path (storage.CreateBacklogItem) takes no session parameter and creates no
+// session/item link — the session UUID was only ever used for the audit-trail
+// log line, so there was no real invariant to protect by rejecting the call.
+func TestCreateBacklogItem_should_Succeed_When_NoSessionUUID(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := context.Background() // No session UUID injected — simulates a manual MCP client.
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title": "Filed from a manual MCP client",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Filed from a manual MCP client")
+}
+
 // TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds verifies
 // the happy path against a stubbed GitHub API — title/body land on the new
 // item and Notes records the source issue URL, mirroring
@@ -1979,6 +2001,39 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 	assert.Equal(t, "bug: something is broken", fetched.Title)
 	assert.Equal(t, "Steps to reproduce...", fetched.Description)
 	assert.Contains(t, fetched.Notes, "https://github.com/tstapler/stapler-squad/issues/316")
+}
+
+// TestImportGitHubIssue_should_Succeed_When_NoSessionUUID mirrors
+// TestCreateBacklogItem_should_Succeed_When_NoSessionUUID's regression
+// coverage for import_github_issue: it has the same "session UUID used only
+// for the audit log" shape, so a manual MCP client must not be rejected.
+func TestImportGitHubIssue_should_Succeed_When_NoSessionUUID(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"number": 318, "title": "filed via manual mcp client", "body": "...",
+			"html_url": "https://github.com/tstapler/stapler-squad/issues/318",
+			"user": {"login": "tstapler"}, "state": "open"
+		}`))
+	}))
+	defer srv.Close()
+	prevBaseURL := githubpkg.GhBaseURL
+	githubpkg.GhBaseURL = srv.URL + "/"
+	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := context.Background() // No session UUID injected — simulates a manual MCP client.
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/issues/318",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "filed via manual mcp client")
 }
 
 // TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet

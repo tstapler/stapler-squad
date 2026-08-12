@@ -59,7 +59,7 @@ func (s *SQLiteStore) InsertEvent(ctx context.Context, e *history.Event) error {
 	VALUES (?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO NOTHING;
 	`
-	
+
 	return s.executeWithRetry(ctx, func() error {
 		_, err := s.db.ExecContext(ctx, query, e.ID, e.Command, e.Timestamp, e.Directory, e.ExitCode, e.ProgramSource, e.IsRedacted)
 		return err
