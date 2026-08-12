@@ -128,49 +128,56 @@ test.describe("backlog-session-steer", () => {
     });
   });
 
-  test("steers a live work session and hides the control for headless triage sessions", async ({
-    page,
-    request,
-  }) => {
-    const itemTitle = `session-steer-live-${Date.now()}`;
-    let itemId: string | undefined;
-    let realSessionId: string | undefined;
-    const headlessSessionId = `headless-triage-e2e-fake-${Date.now()}`;
+  // Parametrized over both Real-Session roles (sessionKind.ts:52-55 treats
+  // "work" and "review" identically for isSteerable()) — AC6 requires
+  // steering to work for "triage, review, or work" sessions, and this is the
+  // e2e proof that a review-role row genuinely reaches the live Instance via
+  // the real UpdateSession RPC, not just the work-role case.
+  for (const role of ["work", "review"] as const) {
+    test(`steers a live ${role} session and hides the control for headless triage sessions`, async ({
+      page,
+      request,
+    }) => {
+      const itemTitle = `session-steer-live-${role}-${Date.now()}`;
+      let itemId: string | undefined;
+      let realSessionId: string | undefined;
+      const headlessSessionId = `headless-triage-e2e-fake-${role}-${Date.now()}`;
 
-    try {
-      itemId = await createInProgressItem(request, itemTitle);
-      const realSession = await client.createSession({
-        title: `session-steer-live-target-${Date.now()}`,
-        path: "/tmp",
-        program: "bash",
-      });
-      realSessionId = realSession.id;
+      try {
+        itemId = await createInProgressItem(request, itemTitle);
+        const realSession = await client.createSession({
+          title: `session-steer-live-target-${role}-${Date.now()}`,
+          path: "/tmp",
+          program: "bash",
+        });
+        realSessionId = realSession.id;
 
-      await injectItemSessions(page, itemId, [
-        { id: "e2e-work-session-entity", sessionUuid: realSessionId, sessionRole: "work" },
-        { id: "e2e-headless-session-entity", sessionUuid: headlessSessionId, sessionRole: "triage" },
-      ]);
+        await injectItemSessions(page, itemId, [
+          { id: "e2e-session-entity", sessionUuid: realSessionId, sessionRole: role },
+          { id: "e2e-headless-session-entity", sessionUuid: headlessSessionId, sessionRole: "triage" },
+        ]);
 
-      await openDetail(page, itemTitle);
+        await openDetail(page, itemTitle);
 
-      const toggle = page.getByTestId(`session-steer-toggle-${realSessionId}`);
-      await expect(toggle).toBeVisible();
-      await expect(toggle).toBeEnabled();
+        const toggle = page.getByTestId(`session-steer-toggle-${realSessionId}`);
+        await expect(toggle).toBeVisible();
+        await expect(toggle).toBeEnabled();
 
-      await toggle.click();
-      await page.getByTestId(`session-steer-input-${realSessionId}`).fill("please run the tests");
-      await page.getByTestId(`session-steer-submit-${realSessionId}`).click();
+        await toggle.click();
+        await page.getByTestId(`session-steer-input-${realSessionId}`).fill("please run the tests");
+        await page.getByTestId(`session-steer-submit-${realSessionId}`).click();
 
-      await expect(page.getByRole("alert").filter({ hasText: "Steering message sent." })).toBeVisible();
+        await expect(page.getByRole("alert").filter({ hasText: "Steering message sent." })).toBeVisible();
 
-      // Absent, not just hidden — a headless-triage row never renders a
-      // steer toggle at all (ADR-002).
-      await expect(page.getByTestId(`session-steer-toggle-${headlessSessionId}`)).toHaveCount(0);
-    } finally {
-      if (realSessionId) await client.deleteSession(realSessionId, true).catch(() => {});
-      if (itemId) await archiveItem(request, itemId);
-    }
-  });
+        // Absent, not just hidden — a headless-triage row never renders a
+        // steer toggle at all (ADR-002).
+        await expect(page.getByTestId(`session-steer-toggle-${headlessSessionId}`)).toHaveCount(0);
+      } finally {
+        if (realSessionId) await client.deleteSession(realSessionId, true).catch(() => {});
+        if (itemId) await archiveItem(request, itemId);
+      }
+    });
+  }
 
   test("submits on Enter and cancels with focus return on Escape", async ({ page, request }) => {
     const itemTitle = `session-steer-keyboard-${Date.now()}`;

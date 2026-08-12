@@ -9,13 +9,15 @@
   "testIds": [
     "SessionsSection_should_NotRenderSteerControl_When_SessionIsHeadlessTriage",
     "SessionsSection_should_RenderEnabledSteerControl_When_SessionIsLiveWork",
+    "SessionsSection_should_RenderEnabledSteerControl_When_SessionIsLiveReview",
     "SessionsSection_should_RenderDisabledSteerControlWithTitle_When_WorkSessionHasEnded",
     "SessionsSection_should_CallOnSteerSessionWithTrimmedMessage_When_SendClicked",
     "SessionsSection_should_SubmitOnEnterKey_When_ComposerOpen",
     "SessionsSection_should_CancelAndReturnFocusToToggle_When_EscapePressed",
     "SessionsSection_should_DisableSendWithoutClosingComposer_When_SessionEndsWhileComposerOpen",
     "SessionsSection_should_KeepComposerOpenAndShowError_When_OnSteerSessionRejects",
-    "tests/e2e/backlog-session-steer.spec.ts"
+    "tests/e2e/backlog-session-steer.spec.ts (steers a live work session and hides the control for headless triage sessions)",
+    "tests/e2e/backlog-session-steer.spec.ts (steers a live review session and hides the control for headless triage sessions)"
   ],
-  "lastModified": "2026-08-12T00:00:00Z"
+  "lastModified": "2026-08-12T12:00:00Z"
 }

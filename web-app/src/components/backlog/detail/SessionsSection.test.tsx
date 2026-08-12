@@ -326,6 +326,19 @@ describe("SessionsSection steer control (Story 2.2.2, ADR-002)", () => {
     expect(toggle).not.toBeDisabled();
   });
 
+  it("SessionsSection_should_RenderEnabledSteerControl_When_SessionIsLiveReview", () => {
+    // Mirrors the LiveWork case above — classifySessionKind maps role
+    // "review" to kind "review", and isSteerable() treats "work"/"review"
+    // identically (sessionKind.ts:52-55), so a live review session must get
+    // the same enabled Steer control as a live work session.
+    const session = makeSession({ sessionId: "review-live-1", role: "review" });
+    renderSteerSection([session]);
+
+    const toggle = screen.getByTestId("session-steer-toggle-review-live-1");
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).not.toBeDisabled();
+  });
+
   it("SessionsSection_should_RenderDisabledSteerControlWithTitle_When_WorkSessionHasEnded", () => {
     const session = makeSession({
       sessionId: "work-ended-1",
