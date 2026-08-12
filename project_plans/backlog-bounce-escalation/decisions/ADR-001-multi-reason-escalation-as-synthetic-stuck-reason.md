@@ -48,3 +48,14 @@ with only label/icon/class additions — no new component family.
   decision per new reason: add a case, or rely on the reason's own detector/event-site to
   resolve it. See plan.md Story 1.2.3 and 1.3.2 for the two different answers this ADR's two
   signals need.
+- **Known divergence from `research/ux.md` §2** (surfaced during triad review, round 3):
+  `research/ux.md` recommended swapping in a distinct visual treatment on the *same* card as
+  the underlying reason ("not a new component"), but this ADR's synthetic-`StuckReason`
+  approach gives each escalation its own `BacklogStuckState` row, which — per Task 2.1.1b's
+  `GROUP_ORDER` entry — renders as its own card under its own group heading, i.e. an escalated
+  item shows up twice (once under its real reason, once under "Multiple reasons
+  stuck"/"Bounce cap exhausted"). Accepted trade-off, not fixed: the alternative (badging the
+  *existing* reason's card instead of creating a new row) would mean the escalation signal
+  isn't independently `MarkStuck`/`ResolveStuck`/snooze/notify-tracked the way every other
+  reason is — reintroducing exactly the parallel-tracking problem Option 3 was chosen to avoid
+  (see Options Considered above). The duplicate card is judged the cheaper cost of the two.

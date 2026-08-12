@@ -23,7 +23,7 @@ both surfaced via the existing `backlog_stuck_states` infrastructure, no new sto
 | `reconcileMultiReasonEscalation` | New detector method on `*BacklogLifecycleListener`, registered via `runStuckDetector("multi_reason_escalation", ...)` in `ReconcileStuck`. Groups `FindOpenStuckStates`' result by `ItemID`, counts non-escalation reasons per item, `MarkStuck`/`ResolveStuck`s `StuckReasonMultipleReasons` accordingly, and notifies (once, dwell-gated) on first crossing. | `session/backlog_lifecycle.go`. |
 | `justParked` | Existing bool returned by `RemediationDue` — true exactly when this call's attempt count reached `MaxRemediationAttempts`. | `session/backlog_remediation.go:168`. Reused unchanged as the trigger for Signal 2. |
 | `autoReopenWithBackoffGate` | Existing method, `session/backlog_lifecycle_review.go:194`. Signature extended to accept `itemStatus BacklogStatus` (previously missing — needed so the new `MarkStuck` call for `bounce_cap_exhausted` has the item's real current status, since `handleReviewSessionExited`'s item is in `review` status at both call sites, not `in_progress`). | Existing bouncing-reason `justParked` notify call site — Signal 2's exact insertion point. |
-| `otherReasonsCount` / `otherReasonLabels` | Existing `StuckItem.tsx` props, computed client-side in `StuckItemsSection.tsx` by grouping the flat `ListStuckBacklogItems` result by `itemId`. | Unchanged — the two new reasons flow through this existing computation automatically once they exist as rows. |
+| `otherReasonsCount` / `otherReasonLabels` | Existing `StuckItem.tsx` props, computed client-side in `StuckItemsSection.tsx` by grouping the flat `ListStuckBacklogItems` result by `itemId`. | **Modified** (revised during validation — see pre-mortem.md Failure #3, P2): the grouping computation itself is reused unchanged, but its input is now filtered to exclude `StuckReason.MULTIPLE_REASONS`/`StuckReason.BOUNCE_CAP_EXHAUSTED` rows before counting — otherwise an escalated item's own escalation row(s) would inflate its "+N other reasons" badge self-referentially. See Task 2.1.1c. |
 | `chipEscalated` | New vanilla-extract class in `stuckReason.css.ts` for the two new reasons' chip — visually distinct (not reusing any existing reason's color), per `research/ux.md`'s "never repurpose existing chip colors for severity" constraint. | New in this project. |
 
 ---
@@ -81,17 +81,52 @@ both surfaced via the existing `backlog_stuck_states` infrastructure, no new sto
 
 ## Unresolved Questions
 
-- [ ] Whether `bouncing` + `abandoned_review` co-occurs commonly enough (structurally, per
-  `research/pitfalls.md` §2 "An item that will ALWAYS have 2 reasons 'by design'") that the
-  fixed `multiReasonThreshold = 2` fires too often once live for more than a few days — blocks
-  nothing in this plan (Story 3.3.1's post-ship verification step should explicitly check this
-  against a week of live data), but should gate whether a future refinement (excluding
-  structurally-implied reason pairs from the count) is needed — owner: Tyler, re-check after
-  ~1 week of live escalation-row history.
+- [x] ~~Whether `bouncing` + `abandoned_review` co-occurs commonly enough...~~ — **Resolved
+  during validation (pre-mortem.md Failure #1, P1)**: confirmed structurally coupled via
+  `markAbandonedReview`'s existing gate on `bouncing` (`session/backlog_lifecycle_review.go:553`,
+  `TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue`). Task 1.2.2a now excludes
+  `abandoned_review` from the count when it co-occurs with a gate-blocked `bouncing` row,
+  rather than waiting a week of live data to find out the naive `>= 2` count over-fires.
+  Story 3.3.1's live-verification pass still checks actual escalation-row volume post-ship as
+  a backstop.
 - [ ] Whether de-escalation needs its own dwell/hysteresis gate (see Pattern Decisions table)
   — deferred as a documented, not-yet-needed refinement; only becomes a real question if
   Story 3.3.1's verification or subsequent live use shows visible flapping in the UI — owner:
-  Tyler, same re-check point as above.
+  Tyler, same re-check point as above. This is the same underlying condition as pre-mortem.md
+  Failure #2 (P2 — no de-escalation hysteresis + notify-once-per-row semantics can cause
+  repeated near-duplicate ERROR/URGENT notifications if the count oscillates near the
+  threshold); the cheaper fix pre-mortem.md suggests if this does need addressing is a
+  notify-cooldown keyed off `NotifiedAt`, mirroring how `multiReasonEscalationNotifyReady`
+  already keys off `FirstDetectedAt` — no new column required. Deferred pre-ship on the same
+  reasoning: no observed flapping yet to calibrate a cooldown window against.
+- [x] ~~`otherReasonsCount`/`otherReasonLabels` self-referential inflation~~ — **Resolved
+  during triad review** (pre-mortem.md Failure #3, P2): Task 2.1.1c now excludes the two new
+  escalation reasons from that frontend count, with Task 2.1.3c's regression test.
+- [ ] Signal 2's `MarkStuck` call (Task 1.3.1b) is event-triggered and best-effort with no
+  reconcile-tick backstop, unlike Signal 1 which re-evaluates fresh every tick (pre-mortem.md
+  Failure #4, P2). **Deliberately deferred, not fixed in this pass**: adding a backstop
+  detector would mean a third new detector in `ReconcileStuck` for a P2 (likely-but-recoverable,
+  per pre-mortem's own severity call) race that requires a concurrent status write landing in
+  the same instant as this one `MarkStuck` call — narrower blast radius than Failure #1 (P1,
+  which fires on nearly every bouncing item) or Failure #3 (P2, which fires on every escalated
+  item, now fixed above). If Story 3.3.1's live verification shows a `bounce_cap_exhausted` row
+  ever actually missing for a capped-while-bouncing item, promote this to a backstop detector
+  then — owner: Tyler, same re-check point as the threshold/hysteresis items above.
+- [ ] Differentiated ERROR/URGENT notification treatment (Story 1.3.1) is wired only for the
+  `bouncing` backoff gate, not the structurally identical `justParked` pattern in the
+  push-failed (`backlog_lifecycle_pr.go`) or stale-work (`backlog_lifecycle_stale.go`) gates
+  (pre-mortem.md Failure #5, P3). **Deliberately out of scope for this pass** — requirements.md
+  frames this project around the `bouncing` reason specifically (the three motivating example
+  items are all bouncing-capped); extending to the other two gates is a small, mechanical
+  fast-follow, not a blocker to shipping Signal 2 for `bouncing` — owner: Tyler, file as a
+  fast-follow alongside the Story 3.2.1 flaky-test-review follow-up item if it proves confusing
+  in practice.
+- [ ] `otherReasonsCount`'s hover-only `title` tooltip has no keyboard/screen-reader path
+  (pre-existing gap in `StuckItemsSection.tsx`, not introduced by this project — surfaced
+  during triad review round 3 because this project's two new reasons flow through the same
+  badge). **Out of scope for this pass**: fixing it is a pre-existing-debt accessibility fix
+  unrelated to escalation signals specifically, better scoped as its own small fast-follow
+  than bundled into this project's diff — owner: Tyler.
 
 ## Dependency Visualization
 
@@ -111,7 +146,9 @@ Phase 1: Backend Escalation Signals
 
 Phase 2: Frontend Surfacing (depends on Phase 1's proto regen, Story 1.1.2)
   Epic 2.1
-    Story 2.1.1 (labels/icons/GROUP_ORDER) ──> Story 2.1.2 (chipEscalated) ──> Story 2.1.3 (tests)
+    Story 2.1.1 (labels/icons/GROUP_ORDER/otherReasonsCount exclusion) ──> Story 2.1.2 (chipEscalated)
+                                                                        ──> Story 2.1.3 (tests)
+                                                                        ──> Story 2.1.4 (de-escalation banner, independent of 2.1.2/2.1.3)
 
 Phase 3: Registry, Decision Record, Verification (depends on Phases 1-2 complete)
   Epic 3.1  Story 3.1.1 (registry update)
@@ -262,13 +299,31 @@ cached count) and is visible without a manual DB query.
   context.Context, er *EntRepository)`. Call `er.FindOpenStuckStates(ctx)`, group by `ItemID`
   into `map[string][]OpenStuckStateData`, filtering out any row whose `Reason` is
   `StuckReasonMultipleReasons` or `StuckReasonBounceCapExhausted` (the count must exclude the
-  escalation reasons themselves — see plan.md Pattern Decisions / ADR-001 consequences). For
-  each item where `isMultiReasonEscalated(len(nonEscalationRows))`, call
+  escalation reasons themselves — see plan.md Pattern Decisions / ADR-001 consequences).
+  **Also exclude `StuckReasonAbandonedReview` from the count when the same item also has an
+  open, gate-blocked `StuckReasonBouncing` row** — `abandoned_review` and `bouncing` are
+  structurally coupled, not independent signals (`markAbandonedReview`,
+  `session/backlog_lifecycle_review.go:553`, already gates its own respawn on the same
+  `bouncing` remediation gate; proven by
+  `TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue`,
+  `session/backlog_lifecycle_test.go:1158`). Without this exclusion, `bouncing`+
+  `abandoned_review` would co-occur on nearly every bouncing item, degrading "2 simultaneous
+  reasons" from a distinguishing signal to "most bouncing items" — see pre-mortem.md Failure #1
+  (P1). For each item where `isMultiReasonEscalated(len(nonEscalationRows))`, call
   `er.MarkStuck(ctx, itemID, domain.StuckReasonMultipleReasons, BacklogStatus(item.ItemStatus),
   contextString)` where `contextString` summarizes the open reasons (e.g. `"bouncing,
-  abandoned_review"`, joined from the row set) for the `Context` column shown in the UI detail
+  push_failed"`, joined from the row set) for the `Context` column shown in the UI detail
   view.
 - Files: `session/backlog_lifecycle.go`
+
+##### Task 1.2.2e: Regression test — coupled `bouncing`+`abandoned_review` does not self-escalate (~3 min)
+- Add `TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBouncingAndAbandonedReviewOpen`
+  — seed an item with open `bouncing` (gate-blocked) and `abandoned_review` rows only (no third
+  independent reason) and assert `reconcileMultiReasonEscalation` does **not** `MarkStuck` a
+  `multiple_reasons` row for it, per Task 1.2.2a's exclusion. A companion case seeds the same
+  pair plus one genuinely independent reason (e.g. `push_failed`) and asserts escalation *does*
+  fire, confirming the exclusion narrows rather than disables the count.
+- Files: `session/backlog_lifecycle_stuck_test.go`
 
 ##### Task 1.2.2b: Notify branch (dwell-gated, notify-once) (~5 min)
 - After `MarkStuck`, re-fetch (or reuse, if `MarkStuck` is extended to return the row —
@@ -506,10 +561,11 @@ not a blank/fallback chip.
 
 ##### Task 2.1.1a: Add label/icon/class entries (~4 min)
 - Add `[StuckReason.MULTIPLE_REASONS]: "Multiple reasons stuck"` and
-  `[StuckReason.BOUNCE_CAP_EXHAUSTED]: "Bounce cap exhausted"` to `STUCK_REASON_LABELS`; a
-  distinguishing icon (e.g. `"🔺"` for both, or two distinct escalation-flavored glyphs) to
-  `STUCK_REASON_ICONS`; `styles.chipEscalated` (new, Story 2.1.2) to `STUCK_REASON_CLASS` for
-  both.
+  `[StuckReason.BOUNCE_CAP_EXHAUSTED]: "Bounce cap exhausted"` to `STUCK_REASON_LABELS`;
+  **two distinct icons** — not a shared glyph — to `STUCK_REASON_ICONS` (e.g. `"🔺"` for
+  `MULTIPLE_REASONS`, `"⛔"` for `BOUNCE_CAP_EXHAUSTED`), so the two escalation reasons stay
+  distinguishable at a glance in the same group even though labels always accompany the icon;
+  `styles.chipEscalated` (new, Story 2.1.2) to `STUCK_REASON_CLASS` for both.
 - Files: `web-app/src/components/backlog-stuck/stuckReason.ts`
 
 ##### Task 2.1.1b: Add both to `GROUP_ORDER` (~2 min)
@@ -517,6 +573,16 @@ not a blank/fallback chip.
   `GROUP_ORDER` array, positioned after `StuckReason.BOUNCING` (adjacent to the reason they
   most directly escalate from — consistent with the array's existing "actionability, not
   severity" ordering rationale, not placed first as if ranking danger).
+- Files: `web-app/src/components/backlog-stuck/StuckItemsSection.tsx`
+
+##### Task 2.1.1c: Exclude escalation reasons from `otherReasonsCount`/`otherReasonLabels` (~4 min)
+- In `StuckItemsSection.tsx`'s per-item grouping (the code that computes `otherReasonsCount`/
+  `otherReasonLabels` from the flat `ListStuckBacklogItems` result), filter out rows whose
+  `reason` is `StuckReason.MULTIPLE_REASONS` or `StuckReason.BOUNCE_CAP_EXHAUSTED` before
+  counting/labeling "other reasons" for a given item — mirroring the backend's own
+  self-exclusion in Task 1.2.2a. Without this, an item with 2 real reasons plus its own
+  `multiple_reasons` escalation row would show "+2 other reasons" instead of "+1", the
+  self-referential badge bug identified in pre-mortem.md Failure #3 (P2).
 - Files: `web-app/src/components/backlog-stuck/StuckItemsSection.tsx`
 
 ---
@@ -558,6 +624,13 @@ file's own doc comment) cannot silently recur for these two reasons.
     `StuckItemsSection` renders, *Then* a card for that item is present in the DOM (matching
     the existing `StuckItemsSection_should_showOtherReasonsBadge_When_SameItemInMultipleGroups`
     test's assertion style).
+- An item with 2 real (non-escalation) reasons plus its own `multiple_reasons` escalation row
+  shows `otherReasonsCount` reflecting only the 2 real reasons, not 3 — guarding Task 2.1.1c's
+  exclusion fix (pre-mortem.md Failure #3).
+  - *Given* a seeded item with open `bouncing`, `push_failed`, and `multiple_reasons` rows,
+    *When* `StuckItemsSection` renders that item's card, *Then* its "other reasons" badge reads
+    "+1" (one *other* reason beyond whichever is primary), not "+2" — i.e. `multiple_reasons`
+    itself is excluded from the count.
 **Files**: `web-app/src/components/backlog-stuck/stuckReason.test.ts`, `web-app/src/components/backlog-stuck/StuckItemsSection.test.tsx`
 
 ##### Task 2.1.3a: `stuckReason.ts` exhaustiveness tests (~3 min)
@@ -569,6 +642,57 @@ file's own doc comment) cannot silently recur for these two reasons.
 ##### Task 2.1.3b: `StuckItemsSection` render test for the new `GROUP_ORDER` entries (~4 min)
 - Add `StuckItemsSection_should_renderMultipleReasonsGroup_When_ItemEscalated`, mirroring the
   existing group-rendering test setup.
+- Files: `web-app/src/components/backlog-stuck/StuckItemsSection.test.tsx`
+
+##### Task 2.1.3c: `otherReasonsCount` exclusion regression test (~3 min)
+- Add `StuckItemsSection_should_ExcludeEscalationReasonFromOtherReasonsCount_When_ItemHasMultipleReasonsRow`,
+  seeding the 3-row case described in Story 2.1.3's acceptance criteria above and asserting the
+  rendered badge count excludes the escalation row. Guards Task 2.1.1c / pre-mortem.md
+  Failure #3 from regressing silently.
+- Files: `web-app/src/components/backlog-stuck/StuckItemsSection.test.tsx`
+
+---
+
+#### Story 2.1.4: De-escalation confirmation banner (reuse existing `justResolved` ghost pattern)
+**As a** user watching the Stuck Items panel, **I want** an item whose open-reason count drops
+below the escalation threshold to show a brief "no longer critical" confirmation instead of
+its `multiple_reasons` card silently vanishing, **so that** de-escalation reads as a resolved
+transition, not an unexplained disappearance — per `research/ux.md` §4's explicit
+recommendation to reuse the existing ghost/confirmation mechanism rather than introduce a new
+one.
+**Acceptance Criteria**:
+- When an escalated item's `multiple_reasons` row resolves (count dropped below threshold, per
+  Task 1.2.2c) while its card is expanded/visible, `StuckItemsSection.tsx` applies the same
+  `justResolved`/`resolvedMessage` ghost-card mechanism already used for full-item resolution
+  (`StuckItemsSection.tsx:91-121`, `StuckItem.tsx:385-390`), with copy reflecting "no longer
+  critical — down to N open reason(s)" rather than the full-resolution copy, then removes the
+  card after the same timer.
+  - *Given* an item with an open `multiple_reasons` row currently rendered, *When* that row
+    resolves on the next poll (item still has 1 open non-escalation reason, e.g. `bouncing`),
+    *Then* the card renders the ghost/confirmation banner with de-escalation-specific copy
+    before being removed, instead of vanishing from the list on the very next render.
+**Files**: `web-app/src/components/backlog-stuck/StuckItemsSection.tsx`, `web-app/src/components/backlog-stuck/StuckItem.tsx`
+
+##### Task 2.1.4a: Extend the ghost/`justResolved` mechanism to per-reason de-escalation (~5 min)
+- `StuckItemsSection.tsx`'s existing full-item `justResolved` detection (comparing the
+  previous poll's item set to the current one) already tracks per-item disappearance; extend
+  the same comparison to also detect "item still present, but its `multiple_reasons` row is no
+  longer in the current poll's reason set" and pass a de-escalation-flavored `resolvedMessage`
+  ("No longer critical — down to N open reason(s)") into `StuckItem` for that case, reusing the
+  same `cardResolved` class and removal timer. **Also replace the trailing
+  "...It will be removed from this list shortly." copy** with de-escalation-specific wording
+  (e.g. "...This card will be removed shortly; the item itself is still open elsewhere in the
+  list.") so it doesn't read as full-item resolution when only the escalation card is being
+  removed. Known, accepted limitation carried over unchanged from the existing mechanism: this
+  only fires while the card is expanded/visible, same as full-item `justResolved` today — a
+  collapsed escalated card still de-escalates silently on the next poll; not fixed in this pass
+  since it would mean changing the existing full-resolution behavior too, out of this project's
+  scope.
+- Files: `web-app/src/components/backlog-stuck/StuckItemsSection.tsx`
+
+##### Task 2.1.4b: Test (~4 min)
+- Add `StuckItemsSection_should_ShowDeescalationBanner_When_MultipleReasonsRowResolvesButItemRemainsOpen`,
+  mirroring the existing full-item `justResolved` render test's setup/assertions.
 - Files: `web-app/src/components/backlog-stuck/StuckItemsSection.test.tsx`
 
 ---
