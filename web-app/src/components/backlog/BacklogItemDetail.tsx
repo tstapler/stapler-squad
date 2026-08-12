@@ -1244,6 +1244,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 // more-current live-store state with a redundant read.
                 onSkip={() => {}}
                 onRefine={handleRefineTriage}
+                onAnswerQuestion={handleRefineTriage}
               />
             </div>
           )}

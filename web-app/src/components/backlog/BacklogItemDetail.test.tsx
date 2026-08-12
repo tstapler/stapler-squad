@@ -14,7 +14,7 @@
  */
 
 import React from "react";
-import { render, screen, act, fireEvent, within } from "@testing-library/react";
+import { render, screen, act, fireEvent, within, waitFor } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
@@ -26,7 +26,25 @@ import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from 
 // focused on BacklogItemDetail's own render behavior.
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
-jest.mock("./TriageReviewPanel", () => ({ TriageReviewPanel: () => null }));
+// Stubbed to a minimal interactive shim (rather than plain `() => null`) so
+// Task 1.1.2c's wiring test can exercise the real onAnswerQuestion prop
+// BacklogItemDetail passes down, without standing up the full real
+// TriageReviewPanel/TriageDiffSection tree (already covered by
+// TriageReviewPanel.test.tsx and TriageDiffSection.test.tsx). No existing
+// test in this file renders an item matching the triageStatus==="completed"
+// && status==="idea" gate, so this is a no-op for every other test here.
+jest.mock("./TriageReviewPanel", () => ({
+  TriageReviewPanel: (props: { onAnswerQuestion?: (feedback: string) => Promise<void> }) =>
+    props.onAnswerQuestion ? (
+      <button
+        type="button"
+        data-testid="mock-triage-answer-question"
+        onClick={() => props.onAnswerQuestion!("Q: Should retries be per-workflow or global?\nA: Per-workflow, default to global")}
+      >
+        Mock answer question
+      </button>
+    ) : null,
+}));
 jest.mock("./TriageLoadingIndicator", () => ({ TriageLoadingIndicator: () => null }));
 
 // ReviewChangesModal makes a real ConnectRPC call on mount — stub it to a marker
@@ -96,6 +114,10 @@ const updateBacklogItem = jest.fn().mockResolvedValue(null);
 // can control resolution timing — needed for the actionLoading polling-
 // suspend regression test (Story 3.1.3, Task 3.1.3c).
 const overrideVerdict = jest.fn();
+// Hoisted (Task 1.1.2c, backlog-operator-feedback-loop) so the triage
+// question-answer wiring test can assert on the exact call made when the
+// mocked TriageReviewPanel's onAnswerQuestion prop is invoked.
+const triggerTriage = jest.fn().mockResolvedValue(undefined);
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   // mapBacklogItem is a real (unmocked) named export — BacklogItemDetail's
@@ -105,7 +127,7 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: () => ({
     getBacklogItem,
     transitionStatus: jest.fn().mockResolvedValue(true),
-    triggerTriage: jest.fn(),
+    triggerTriage,
     cancelTriage: jest.fn(),
     spawnSessionFromItem: jest.fn(),
     approvePlan: jest.fn(),
@@ -174,6 +196,7 @@ beforeEach(() => {
   updateBacklogItem.mockClear().mockResolvedValue(null);
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
   overrideVerdict.mockReset();
+  triggerTriage.mockClear().mockResolvedValue(undefined);
   // Story 3.1.4's per-section expand state (useSectionExpandState) and
   // "Show N more" state (useShowMore) both persist to localStorage keyed
   // by itemId — clear between tests so one test's expand/collapse
@@ -1233,5 +1256,49 @@ describe("BacklogItemDetail — Epic 4.2 (backlog-github-two-way-sync): Source s
     });
 
     expect(screen.getByTestId("collapsible-header-source")).toBeInTheDocument();
+  });
+});
+
+// project_plans/backlog-operator-feedback-loop Epic 1.1 (Task 1.1.2c):
+// answering a triage question inline must reach the exact same
+// triggerTriage(id, feedback) call the existing "Not quite — give feedback"
+// button already uses — no new RPC, no new triage-trigger code path.
+// TriageReviewPanel is stubbed above to a minimal shim that invokes
+// onAnswerQuestion with a fixed composed "Q:.../A:..." string; the composer
+// function itself is unit-tested in isolation in
+// composeQuestionAnswerFeedback.test.ts, and the toggle/textarea/submit UI
+// is covered in TriageDiffSection.test.tsx — this test only proves the
+// wiring from BacklogItemDetail down to the real triggerTriage RPC call.
+describe("BacklogItemDetail — Epic 1.1: triage question answer wiring", () => {
+  it("calls triggerTriage with the composed Q:/A: feedback when a question is answered", async () => {
+    const session = makeSession({ role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([session]),
+      status: "idea",
+      triageStatus: "completed",
+      triageResult: {
+        summary: "Looks mostly ready — one open question.",
+        suggestions: [
+          { text: "Should retries be per-workflow or global?", rationale: "question" },
+        ],
+        clarifyingQuestions: [],
+      },
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("mock-triage-answer-question"));
+
+    await waitFor(() => {
+      expect(triggerTriage).toHaveBeenCalledWith(
+        "item-1",
+        "Q: Should retries be per-workflow or global?\nA: Per-workflow, default to global"
+      );
+    });
   });
 });
