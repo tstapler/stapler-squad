@@ -32,6 +32,18 @@ leaving the view, retyping context by hand, or having no affordance at all:
 Gaps 1 and 2 are UI-wiring problems connecting existing backend primitives. Gap 3 needs new
 backend surface (RPC + status transition) in addition to UI.
 
+## Target user & usage context
+
+The target user is a single operator running their own `stapler-squad` instance and reviewing
+their own backlog items — not a multi-operator team review tool. Every flow in this ticket
+(answering a triage question, requesting plan changes, steering a session) assumes one person
+acting on one item at a time. This assumption is what licenses deferring the two-tab-race
+optimistic-concurrency token (`expected_modified_at_unix_ms`) for Gap 3 — see
+`implementation/plan.md`'s Unresolved Question 5, which accepts the concurrent-approve-vs-reject
+race as out of scope specifically because it requires a multi-tab/multi-operator usage pattern
+this ticket doesn't target. If multi-operator review becomes a real usage pattern later, that
+assumption — and the deferred token — should be revisited.
+
 ## Baseline (what users do today without this)
 
 - **Gap 1**: Operator reads the question in the Triage Questions section, then manually
@@ -51,6 +63,12 @@ per `.claude/rules/e2e-test-conventions.md`, and the new/changed RPCs and compon
 registered per `.claude/rules/feature-registry.md`. Qualitatively: an operator can answer a
 triage question, request plan changes, or steer a backlog-linked session, all from the item
 detail view they're already reading, without retyping context by hand.
+
+Beyond test/AC completion, the outcome this is meant to produce is fewer operator round-trips:
+the number of times an operator has to leave the item detail view — or manually retype context
+they already typed once, into an unrelated box — to answer a question, request a plan change, or
+redirect a running session should drop to zero for these three flows. That drop to zero, not
+just "the e2e tests pass," is the qualitative success signal.
 
 ## Appetite / scope note
 
@@ -93,6 +111,21 @@ scope.
   behavior — Gap 1 consumes this path as-is.
 - Notification/alerting when an agent asks a question (badges, notifications) — reasonable
   follow-up, not required for this ticket.
+
+## Kano classification (why these three gaps ship as one ticket)
+
+| Gap | Kano category | Why |
+|---|---|---|
+| Gap 3 — plan review (Request Changes) | Must-be | An approve-only gate with no structured reject path is a felt defect once a reviewer disagrees with a plan — its absence is noticed as broken, not merely unpolished. |
+| Gap 1 — triage Q&A | Performance | Removes a manual retype step; satisfaction scales roughly linearly with the round-trip effort saved, the classic Performance-attribute shape. |
+| Gap 2 — steer in place | Attractive | A workaround already exists (navigate to the general session list and steer from there); in-place steering is a delight on top of a working baseline, not something its absence would be flagged as broken. |
+
+These three land as one ticket despite differing Kano categories because they share one goal —
+giving the operator a way to "talk back to the agent" from the item detail view — and none
+blocks the others structurally; only the implementation effort differs (Gap 3 needs new backend
+surface, Gaps 1/2 are UI wiring on existing primitives). Splitting by Kano category would
+separate work that is already independently schedulable (see Dependency Visualization in
+`implementation/plan.md`) without reducing risk.
 
 ## Known key files (from item research — verify against current HEAD during Phase 2/3)
 

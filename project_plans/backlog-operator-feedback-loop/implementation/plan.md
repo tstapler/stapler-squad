@@ -165,6 +165,8 @@ additive change didn't alter default behavior.
 | Stale question-answer form outlives the `TriageResult` it was answering (`pitfalls.md` Gap-1 #1) | Per-question local form state is keyed to the current render only; a new `iteration` on `triageResult` naturally remounts `TriageDiffSection`'s question list, discarding stale open forms | Epic 1, Story 1.1 |
 | `PlanVerdictBox`/`ActionsSection` independently re-derive plan-review status and drift (`pitfalls.md` #6) | Single `derivePlanReviewStatus` pure function, unit-tested, imported by both | Epic 4, Story 4.1 (P11) |
 | Feature registry / e2e coverage debt (`.claude/rules/feature-registry.md`) | Dedicated registry-file tasks per new RPC/component; `make registry-generate` run and `coverage-gaps.json` diff checked as the final task | Epic 5 |
+| The ephemeral "✓ Answered" marker is pure component-local `useState`, lost on refresh/navigation during a retriage that can run up to 30 minutes, so an answered question can silently reappear as unanswered (`pre-mortem.md` #1, P2) | **Accepted for v1** — the Domain Glossary's "Answered-question marker" entry already documents this state as client-side, session-local, and not persisted, by design (requirements.md Open Question 2's "default to stateless" resolution); re-answering is idempotent (a second `Q:/A:` feedback string for the same question just composes into another `triggerTriage` call) so the failure mode is operator confusion, not data loss | Domain Glossary (Epic 1, Story 1.1.1) |
+| Task 3.2.1a's `plan_rejection_reason = 33` / `plan_rejected_at = 34` are hardcoded from a `main` read taken at plan-writing time (2026-08-12), which can drift under this repo's many concurrent SDD worktrees (`pre-mortem.md` #4, P2) | Re-derive "current highest field number + 1" from `main` via a one-line grep/sort immediately before editing `backlog.proto` at actual implementation time — do not trust this plan doc's recorded 33/34 verbatim; `buf lint`/`buf generate` CI is the actual source-of-truth gate, this plan's numbers are a best-effort placeholder (restates Task 3.2.1a's existing caveat here so it isn't buried in prose) | Epic 3, Story 3.2.1 (Task 3.2.1a) |
 
 ---
 
@@ -202,6 +204,21 @@ pass:
    branch logs-only-on-failure and still returns success; non-autonomous branch returns a real
    `FailedPrecondition`). Left asymmetric deliberately for this pass; unifying them would change
    the existing autonomous UI's behavior, which is out of scope here.
+7. **(New, from `implementation/pre-mortem.md` failure #3, P1 — explicit product decision,
+   made here rather than left implicit in §0.)** §0 defers `GetPlanArtifactContent` (in-browser
+   plan-content rendering) because no AC literally requires it, but that trim has a real
+   consequence this plan is now stating outright: Gap 3 ships a fully-functional
+   Approve/Request-Changes review UI (status card, required-reason form, both buttons) with
+   nothing in the flow that confirms, or even prompts, that the operator has opened
+   `item.planArtifactsPath` before acting. **Decision: accepted as a v1 trade-off.** The item
+   detail view already shows the plan's file path in a `<code>` element next to the review
+   actions — reading it is one click/copy away in an editor or terminal, the same distance it
+   was before this project, and this pass does not regress that. What this pass explicitly does
+   NOT do: force a "must open before approve" gate, or add a content-viewed acknowledgment
+   step — both would be new UX surface with no AC anchor, the same YAGNI call §0 already made
+   for `GetPlanArtifactContent` itself. If operators are later observed approving/rejecting
+   faster than they could plausibly have read the plan, the fix is building
+   `GetPlanArtifactContent` (already fully designed, just deferred) — not a new design.
 
 ---
 
@@ -235,9 +252,43 @@ Epics 1 and 2 have no dependency on each other or on Epic 3/4 and can proceed fu
 Epic 4 cannot start until Epic 3's RPC exists. Epic 5 is last (needs every new
 RPC/component to register against and every new UI path to exercise in e2e).
 
+**File-contention note**: despite having no *logical* dependency on each other, Epics 1, 2, and
+4 all touch `web-app/src/components/backlog/BacklogItemDetail.tsx` in addition to their own
+component files (Task 1.1.2b wires `onAnswerQuestion`, Task 2.2.2e wires `onSteerSession`/
+`steeringSessionId`, Task 4.3.1a/4.3.1b add the `PlanVerdictBox` callbacks and render call).
+Land them as separate, small, sequential PRs rather than literally-parallel long-lived branches
+to avoid repeated merge conflicts in that one shared file — the underlying implementation work
+can still be developed in parallel (e.g. three worktrees), it's the merge order into `main` that
+should be sequential.
+
 ---
 
 ## Phase 1: Gap 1 — Triage Question Answering
+
+### Task 1.1.0: Pre-implementation check — how common are multi-question triage rounds? (~10 min, no code)
+
+**Why this task exists**: `pre-mortem.md` failure #5 (P2) flags that Pattern Decision P2 (Task
+list below, per-question submit) was chosen specifically to avoid "lose your other answers on
+one failed submit," but was never checked against the `triageInFlight` guard's up-to-30-minute
+exclusivity window for the case where a single triage round asks more than one question — the
+scenario a "clarifying questions" feature exists to handle. If that case is common, per-question
+submit degrades to "one question answerable per ~30-minute cycle," which doesn't meaningfully
+beat the manual baseline this project is replacing.
+
+- Before starting Story 1.1.1, check whether multi-question triage rounds are actually common:
+  grep recent `submit_triage_result` calls' question counts in logs (or the equivalent stored
+  `TriageResult.suggestions` history), or ask in the team channel / whoever authored the triage
+  prompt.
+- If multi-question rounds are common, **flag that Pattern Decision P2 should be revisited**
+  before implementing Story 1.1.1 — the alternative is composing all currently-open answered
+  questions from one render into a single multi-Q/A feedback string on one `triggerTriage` call
+  (still the existing field/RPC, no scope violation), or at minimum making the second+ "Answer"
+  toggle show "queued — will apply once the current re-triage finishes" instead of a hard
+  failure.
+- If multi-question rounds are rare/nonexistent, proceed with P2 as planned and record that
+  finding in the PR description as the justification.
+- Files: none (research-only task; its finding gates whether Story 1.1.1 proceeds as planned or
+  P2 gets revised first).
 
 ### Epic 1.1: Per-question answer → composed feedback → existing retriage path
 
@@ -310,19 +361,28 @@ feedback box.
   data-testid={`triage-question-answer-input-${i}`}>` bound to `answerDrafts[i]`, focused via
   `useEffect` on open. If `answeredIndices.has(i)`, render a read-only "✓ Answered: {draft}"
   line instead of the toggle (matches Google-Docs-resolved-comment treatment per `ux.md`).
+  Pressing Escape while the textarea is focused cancels the open form the same way clicking
+  Cancel does (see Task 1.1.1e), matching Gap 2's Steer composer (Task 2.2.2c) — consistent
+  Escape-to-cancel behavior across all three inline-disclosure forms in this project.
 - Files: `web-app/src/components/backlog/TriageDiffSection.tsx`
 
 ##### Task 1.1.1e: Submit/Cancel handlers (~4 min)
 - Submit button (`data-testid={`triage-question-answer-submit-${i}`}`, `aria-disabled`+
-  `disabled` while `answerDrafts[i]?.trim()` is empty, enforced in the click handler too):
-  calls `composeQuestionAnswerFeedback(q.text, answerDrafts[i])`, then
+  `disabled` while `answerDrafts[i]?.trim()` is empty or `submittingIndex === i`, enforced in
+  the click handler too): calls `composeQuestionAnswerFeedback(q.text, answerDrafts[i])`, then
   `await onAnswerQuestion(composed)`; on success sets `answeredIndices` to include `i`, closes
   the form (`setOpenIndex(null)`), and clears the draft. On failure, surfaces the existing
   in-flight-triage error (`pitfalls.md` Gap-1 #2) inline via the same `TriageErrorBanner`
   pattern `TriageReviewPanel`'s refine form already uses — do not silently drop the answer.
-  Cancel button: `setOpenIndex(null)`, returns focus to the toggle button via a `ref` captured
-  before opening (per `ux.md`'s "don't inherit the Cancel-focus-return gap" note — this
-  component is new, get it right from the start).
+  While the `triggerTriage` call is in flight, set `submittingIndex` to `i` and wire the Submit
+  button's `aria-busy={submittingIndex === i}` with a "Submitting…" label, mirroring Task
+  2.2.2c's `aria-busy`/"Sending…" pattern on the Steer composer's Send button — this is a
+  multi-minute LLM-backed retriage call, so a button that looks idle rather than busy is a real
+  risk of a duplicate submit. Cancel button: `setOpenIndex(null)`, returns focus to the toggle
+  button via a `ref` captured before opening (per `ux.md`'s "don't inherit the
+  Cancel-focus-return gap" note — this component is new, get it right from the start). The
+  textarea's `onKeyDown` also handles `Escape` the same way Cancel does (`if (e.key ===
+  "Escape") handleCancel(i);`), matching Task 2.2.2c's Steer composer.
 - Files: `web-app/src/components/backlog/TriageDiffSection.tsx`
 
 ##### Task 1.1.1f: Styles (~3 min)
@@ -557,6 +617,8 @@ the item detail view, **so that** I don't lose the context I built up reading th
     className={styles.sessionSteerBtn}
     disabled={!isSteerable(s) || steeringSessionId === s.sessionId}
     aria-disabled={!isSteerable(s)}
+    aria-expanded={openSteerFor === s.sessionId}
+    aria-controls={`session-steer-composer-${s.sessionId}`}
     title={!isSteerable(s) && s.endedAt ? "Session has ended — steering is unavailable" : undefined}
     aria-label={`Steer session ${s.sessionId}`}
     data-testid={`session-steer-toggle-${s.sessionId}`}
@@ -568,7 +630,11 @@ the item detail view, **so that** I don't lose the context I built up reading th
   Compute `isSteerable(s)` once per row (imported from `sessionKind.ts`) rather than inline
   three times. Add local `const [openSteerFor, setOpenSteerFor] = useState<string | null>(null);`
   at the top of the component. **Do not** render this button at all for the `isSynthetic`
-  branch — no conditional-disabled version there, per ADR-002.
+  branch — no conditional-disabled version there, per ADR-002. `aria-expanded`/`aria-controls`
+  here mirror Gap 1's toggle button in Task 1.1.1d (the composer rendered in Task 2.2.2c gets
+  `id={`session-steer-composer-${s.sessionId}`}` to match) — all three inline-disclosure
+  toggles in this project (Gap 1 answer, Gap 2 steer, Gap 3 reject) use the same
+  `aria-expanded`/`aria-controls` pairing for consistency.
 - Files: `web-app/src/components/backlog/detail/SessionsSection.tsx`
 
 ##### Task 2.2.2c: Inline composer (single-line input + Send/Cancel) (~5 min)
@@ -577,7 +643,7 @@ the item detail view, **so that** I don't lose the context I built up reading th
   submit-on-Enter):
   ```tsx
   {openSteerFor === s.sessionId && (
-    <div className={styles.steerComposer} role="form" aria-label={`Steer session ${s.sessionId}`}>
+    <div id={`session-steer-composer-${s.sessionId}`} className={styles.steerComposer} role="form" aria-label={`Steer session ${s.sessionId}`}>
       <input
         ref={steerInputRef}
         type="text"
@@ -590,7 +656,7 @@ the item detail view, **so that** I don't lose the context I built up reading th
       <button
         type="button"
         onClick={() => void handleSteerSubmit(s)}
-        disabled={steeringSessionId === s.sessionId || !steerDraft.trim()}
+        disabled={steeringSessionId === s.sessionId || !steerDraft.trim() || !isSteerable(s)}
         aria-busy={steeringSessionId === s.sessionId}
         data-testid={`session-steer-submit-${s.sessionId}`}
       >
@@ -602,9 +668,17 @@ the item detail view, **so that** I don't lose the context I built up reading th
     </div>
   )}
   ```
-  `handleSteerSubmit` calls `onSteerSession(s, steerDraft.trim())`, then on success clears
-  `steerDraft` and closes (`setOpenSteerFor(null)`), returning focus to the toggle button
-  (captured `ref`, per Gap 1's same focus-return discipline). On failure, keep the composer
+  The Send button's `disabled` condition re-derives `isSteerable(s)` from the current `s` on
+  every render (the same value the row's own gating already computes in Task 2.2.2b) rather
+  than closing over the value that was true when the composer was first opened — a session that
+  ends while the composer is open must disable Send without requiring the operator to close and
+  reopen it (pre-mortem failure #2, P2). `handleSteerSubmit` calls `onSteerSession(s,
+  steerDraft.trim())`, then on success clears `steerDraft` and closes (`setOpenSteerFor(null)`),
+  returning focus to the toggle button (captured `ref`, per Gap 1's same focus-return
+  discipline). `handleSteerSubmit` also re-checks `isSteerable(s)` immediately before calling
+  `onSteerSession`, returning an inline error without making a network call if the session
+  became unsteerable while the composer was open (belt-and-suspenders with the disabled Send
+  button, for the case a stale click event slips through). On failure, keep the composer
   open and surface the RPC's error message inline (this is the branch that now returns a real
   `FailedPrecondition` per Task 2.1.1a, not a silent log-only failure).
 - Files: `web-app/src/components/backlog/detail/SessionsSection.tsx`
@@ -650,7 +724,10 @@ the item detail view, **so that** I don't lose the context I built up reading th
 - `SessionsSection.test.tsx`: Steer button absent for a `headless-`-prefixed row; present and
   enabled for a live work-session row; disabled+`title` set for an ended work-session row;
   clicking Steer → typing → Send calls `onSteerSession` with the exact session + trimmed
-  message; Enter key submits, Escape cancels and returns focus.
+  message; Enter key submits, Escape cancels and returns focus; session ends while the composer
+  is open (rerender with `endedAt` set on the same `s` prop mid-test, composer still mounted) →
+  Send becomes disabled without requiring the composer to be closed/reopened (pre-mortem
+  failure #2, P2).
 - Files: `web-app/src/components/backlog/detail/SessionsSection.test.tsx` (new or extended)
 
 ##### Task 2.2.2g: Registry touch (~2 min)
@@ -1145,9 +1222,17 @@ reviewed"):
 - `<button data-testid="backlog-action-reject-plan">` toggling a `<textarea
   data-testid="plan-reject-reason">`, focus-on-open via `useEffect`, Cancel returns focus to
   the toggle, Submit (`data-testid="backlog-action-reject-plan-submit"`) `aria-disabled`+
-  `disabled` while `reason.trim()` is empty, guard enforced in the click handler too (not just
-  the attribute). Reuse `GateVerdictBox.tsx`'s exact existing toggle/focus/aria-expanded
-  pattern rather than reinventing it.
+  `disabled` while `reason.trim()` is empty or `actionPending` is true, guard enforced in the
+  click handler too (not just the attribute). Reuse `GateVerdictBox.tsx`'s exact existing
+  toggle/focus/aria-expanded pattern rather than reinventing it. Wire the `actionPending` prop
+  to the Submit button's `aria-busy={actionPending}` with a "Requesting…" label while true,
+  mirroring Task 2.2.2c's `aria-busy`/"Sending…" pattern on the Steer composer's Send button —
+  Request Changes triggers a plan-regeneration-adjacent, multi-minute LLM-backed operation
+  downstream, so the button must not look idle while a submit is in flight. The textarea's
+  `onKeyDown` also handles `Escape` the same way Cancel does (`if (e.key === "Escape")
+  handleCancel();`), matching Task 2.2.2c's Steer composer and Task 1.1.1d/e's answer form —
+  consistent Escape-to-cancel behavior across all three inline-disclosure forms in this
+  project.
 - Files: `web-app/src/components/backlog/PlanVerdictBox.tsx`
 
 ##### Task 4.2.1d: "Regenerate Plan with This Feedback" CTA **[PORT — ADR-002 pattern]** (~3 min)
