@@ -48,6 +48,7 @@ jest.mock("@/lib/store", () => ({
   useAppSelector: () => mockLiveRawItem,
 }));
 jest.mock("@connectrpc/connect", () => ({
+  ...jest.requireActual("@connectrpc/connect"),
   createClient: () => ({
     watchBacklogItems: () => (async function* () {})(),
   }),
