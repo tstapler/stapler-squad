@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -360,7 +361,7 @@ func TestImportService_CancelPendingKill_PrefersPersistedRecordPID_When_RecordEx
 // file needs its own copy).
 func spawnSleeperForTest(t *testing.T) *exec.Cmd {
 	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "sleep", "30")
+	cmd := safeexec.CommandContext(context.Background(), "sleep", "30")
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()

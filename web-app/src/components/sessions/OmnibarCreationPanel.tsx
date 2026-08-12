@@ -23,6 +23,9 @@ import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
 import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
+import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
+import { OmnibarPresetList } from "./OmnibarPresetList";
+import * as presetListStyles from "./OmnibarPresetList.css";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
@@ -71,6 +74,11 @@ type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
 const PRIMARY_TYPES = SESSION_TYPES.slice(0, 2).concat([SESSION_TYPES[3]]); // new_worktree, directory, one_off
 const ADVANCED_TYPES = [SESSION_TYPES[2], SESSION_TYPES[4]]; // existing_worktree, new_project
 const ADVANCED_VALUES = new Set<string>(ADVANCED_TYPES.map((t) => t.value));
+
+// Stable identity for callers that omit launcherPresets — a fresh `[]` literal as a default
+// parameter value would get a new identity every render, retriggering the auto-open effect's
+// dependency array unnecessarily.
+const EMPTY_PRESETS: LauncherPresetEntry[] = [];
 
 // Radio options for the "Open as" sub-selector inside New Project mode.
 const NEW_PROJECT_OPEN_AS = [
@@ -145,6 +153,14 @@ export interface OmnibarCreationPanelProps {
   destinationPreviewIsExact?: boolean;
   /** True while the destination path preview request is in flight. */
   isDestinationPreviewLoading?: boolean;
+  /** Called when the user selects a launcher preset from the Presets section. */
+  onPresetSelect?: (preset: LauncherPresetEntry) => void;
+  /** Launcher presets — fetched once by OmnibarContext (shared with PresetDetector), passed
+   * down rather than fetched again here so a refetch (e.g. on Omnibar open) reaches both
+   * consumers from the same state. */
+  launcherPresets?: LauncherPresetEntry[];
+  launcherPresetsLoading?: boolean;
+  launcherPresetsLoadError?: string | null;
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -179,6 +195,10 @@ export function OmnibarCreationPanel({
   destinationPreviewPath = null,
   destinationPreviewIsExact = false,
   isDestinationPreviewLoading = false,
+  onPresetSelect,
+  launcherPresets: presets = EMPTY_PRESETS,
+  launcherPresetsLoading: presetsLoading = false,
+  launcherPresetsLoadError: presetsLoadError = null,
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes, autoApprove,
@@ -268,6 +288,20 @@ export function OmnibarCreationPanel({
   }, [sessionType]);
 
   const availablePrograms = useAvailablePrograms();
+  // Default-expanded once at least one preset is loaded — an empty/error state is cheap to
+  // show collapsed, but a populated list is the feature's main value and shouldn't require an
+  // extra click to discover on first use (design/ux.md §5.1.1). Auto-opens only once: a ref
+  // (not an ongoing effect keyed on presets.length) so a later background refetch can't
+  // re-force the section open after the user has manually collapsed it.
+  const [presetsOpen, setPresetsOpen] = useState(() => presets.length > 0);
+  const hasAutoOpenedPresets = useRef(presets.length > 0);
+  useEffect(() => {
+    if (!hasAutoOpenedPresets.current && presets.length > 0) {
+      hasAutoOpenedPresets.current = true;
+      setPresetsOpen(true);
+    }
+  }, [presets.length]);
+  const isProgramRecognized = !program || availablePrograms.some((p) => p.value === program);
 
   // ─── File attachment state ────────────────────────────────────────────────
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
@@ -792,6 +826,25 @@ export function OmnibarCreationPanel({
           )}
         </div>
 
+        {/* Presets — hand-edited, shareable launch shortcuts from launcher-presets.json.
+            Placed above Advanced Options so it's visible without an extra click. */}
+        <div className={collapsible}>
+          <div className={collapsibleHeader} onClick={() => setPresetsOpen((v) => !v)}>
+            <span className={collapsibleTitle}>Presets</span>
+            <span className={`${collapsibleIcon} ${presetsOpen ? expanded : ""}`}>▼</span>
+          </div>
+          <div className={[styles.advancedSection, presetsOpen ? styles.advancedSectionOpen : ""].filter(Boolean).join(" ")}>
+            <div className={collapsibleContent}>
+              <OmnibarPresetList
+                presets={presets}
+                loading={presetsLoading}
+                loadError={presetsLoadError}
+                onSelect={(preset) => onPresetSelect?.(preset)}
+              />
+            </div>
+          </div>
+        </div>
+
         {/* Advanced Options */}
         <div className={collapsible}>
           <div className={collapsibleHeader} onClick={onToggleAdvanced}>
@@ -815,6 +868,11 @@ export function OmnibarCreationPanel({
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
                 </select>
+                {!isProgramRecognized && (
+                  <span className={presetListStyles.programWarning} data-testid="preset-program-warning">
+                    &quot;{program}&quot; not found in PATH — check it&apos;s installed
+                  </span>
+                )}
               </div>
 
               {/* Category */}

@@ -219,6 +219,9 @@ const (
 	// SessionServiceGetSessionDefaultsProcedure is the fully-qualified name of the SessionService's
 	// GetSessionDefaults RPC.
 	SessionServiceGetSessionDefaultsProcedure = "/session.v1.SessionService/GetSessionDefaults"
+	// SessionServiceGetLauncherPresetsProcedure is the fully-qualified name of the SessionService's
+	// GetLauncherPresets RPC.
+	SessionServiceGetLauncherPresetsProcedure = "/session.v1.SessionService/GetLauncherPresets"
 	// SessionServiceResolveDefaultsProcedure is the fully-qualified name of the SessionService's
 	// ResolveDefaults RPC.
 	SessionServiceResolveDefaultsProcedure = "/session.v1.SessionService/ResolveDefaults"
@@ -553,6 +556,9 @@ type SessionServiceClient interface {
 	ListPathCompletions(context.Context, *connect.Request[v1.ListPathCompletionsRequest]) (*connect.Response[v1.ListPathCompletionsResponse], error)
 	// GetSessionDefaults returns the full session defaults configuration (global, profiles, directory rules).
 	GetSessionDefaults(context.Context, *connect.Request[v1.GetSessionDefaultsRequest]) (*connect.Response[v1.GetSessionDefaultsResponse], error)
+	// GetLauncherPresets returns the hand-authored launcher presets from
+	// ~/.stapler-squad/launcher-presets.json, freshly read and validated on every call.
+	GetLauncherPresets(context.Context, *connect.Request[v1.GetLauncherPresetsRequest]) (*connect.Response[v1.GetLauncherPresetsResponse], error)
 	// ResolveDefaults merges all default layers for a given working directory and optional profile.
 	// Returns the resolved values plus source metadata for per-field badges in the UI.
 	ResolveDefaults(context.Context, *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error)
@@ -1077,6 +1083,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("GetSessionDefaults")),
 			connect.WithClientOptions(opts...),
 		),
+		getLauncherPresets: connect.NewClient[v1.GetLauncherPresetsRequest, v1.GetLauncherPresetsResponse](
+			httpClient,
+			baseURL+SessionServiceGetLauncherPresetsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetLauncherPresets")),
+			connect.WithClientOptions(opts...),
+		),
 		resolveDefaults: connect.NewClient[v1.ResolveDefaultsRequest, v1.ResolveDefaultsResponse](
 			httpClient,
 			baseURL+SessionServiceResolveDefaultsProcedure,
@@ -1463,6 +1475,7 @@ type sessionServiceClient struct {
 	searchFiles                     *connect.Client[v1.SearchFilesRequest, v1.SearchFilesResponse]
 	listPathCompletions             *connect.Client[v1.ListPathCompletionsRequest, v1.ListPathCompletionsResponse]
 	getSessionDefaults              *connect.Client[v1.GetSessionDefaultsRequest, v1.GetSessionDefaultsResponse]
+	getLauncherPresets              *connect.Client[v1.GetLauncherPresetsRequest, v1.GetLauncherPresetsResponse]
 	resolveDefaults                 *connect.Client[v1.ResolveDefaultsRequest, v1.ResolveDefaultsResponse]
 	previewDestinationPath          *connect.Client[v1.PreviewDestinationPathRequest, v1.PreviewDestinationPathResponse]
 	updateGlobalDefaults            *connect.Client[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse]
@@ -1831,6 +1844,11 @@ func (c *sessionServiceClient) ListPathCompletions(ctx context.Context, req *con
 // GetSessionDefaults calls session.v1.SessionService.GetSessionDefaults.
 func (c *sessionServiceClient) GetSessionDefaults(ctx context.Context, req *connect.Request[v1.GetSessionDefaultsRequest]) (*connect.Response[v1.GetSessionDefaultsResponse], error) {
 	return c.getSessionDefaults.CallUnary(ctx, req)
+}
+
+// GetLauncherPresets calls session.v1.SessionService.GetLauncherPresets.
+func (c *sessionServiceClient) GetLauncherPresets(ctx context.Context, req *connect.Request[v1.GetLauncherPresetsRequest]) (*connect.Response[v1.GetLauncherPresetsResponse], error) {
+	return c.getLauncherPresets.CallUnary(ctx, req)
 }
 
 // ResolveDefaults calls session.v1.SessionService.ResolveDefaults.
@@ -2271,6 +2289,9 @@ type SessionServiceHandler interface {
 	ListPathCompletions(context.Context, *connect.Request[v1.ListPathCompletionsRequest]) (*connect.Response[v1.ListPathCompletionsResponse], error)
 	// GetSessionDefaults returns the full session defaults configuration (global, profiles, directory rules).
 	GetSessionDefaults(context.Context, *connect.Request[v1.GetSessionDefaultsRequest]) (*connect.Response[v1.GetSessionDefaultsResponse], error)
+	// GetLauncherPresets returns the hand-authored launcher presets from
+	// ~/.stapler-squad/launcher-presets.json, freshly read and validated on every call.
+	GetLauncherPresets(context.Context, *connect.Request[v1.GetLauncherPresetsRequest]) (*connect.Response[v1.GetLauncherPresetsResponse], error)
 	// ResolveDefaults merges all default layers for a given working directory and optional profile.
 	// Returns the resolved values plus source metadata for per-field badges in the UI.
 	ResolveDefaults(context.Context, *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error)
@@ -2791,6 +2812,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("GetSessionDefaults")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceGetLauncherPresetsHandler := connect.NewUnaryHandler(
+		SessionServiceGetLauncherPresetsProcedure,
+		svc.GetLauncherPresets,
+		connect.WithSchema(sessionServiceMethods.ByName("GetLauncherPresets")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceResolveDefaultsHandler := connect.NewUnaryHandler(
 		SessionServiceResolveDefaultsProcedure,
 		svc.ResolveDefaults,
@@ -3237,6 +3264,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceListPathCompletionsHandler.ServeHTTP(w, r)
 		case SessionServiceGetSessionDefaultsProcedure:
 			sessionServiceGetSessionDefaultsHandler.ServeHTTP(w, r)
+		case SessionServiceGetLauncherPresetsProcedure:
+			sessionServiceGetLauncherPresetsHandler.ServeHTTP(w, r)
 		case SessionServiceResolveDefaultsProcedure:
 			sessionServiceResolveDefaultsHandler.ServeHTTP(w, r)
 		case SessionServicePreviewDestinationPathProcedure:
@@ -3602,6 +3631,10 @@ func (UnimplementedSessionServiceHandler) ListPathCompletions(context.Context, *
 
 func (UnimplementedSessionServiceHandler) GetSessionDefaults(context.Context, *connect.Request[v1.GetSessionDefaultsRequest]) (*connect.Response[v1.GetSessionDefaultsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetSessionDefaults is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetLauncherPresets(context.Context, *connect.Request[v1.GetLauncherPresetsRequest]) (*connect.Response[v1.GetLauncherPresetsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetLauncherPresets is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) ResolveDefaults(context.Context, *connect.Request[v1.ResolveDefaultsRequest]) (*connect.Response[v1.ResolveDefaultsResponse], error) {
