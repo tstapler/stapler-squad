@@ -611,6 +611,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     // SessionSearch) with no keystroke left to trigger a re-run.
   }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName, aliases, workflows]);
 
+  // Clear a stale submission error whenever the input value itself changes —
+  // keyed on `input` alone (not the detection-debounce effect's deps, which
+  // also include aliases/workflows) so an unrelated async refetch can't wipe
+  // a just-shown error. Covers every setInput() call site (typing, recent
+  // shell command chips, alias/at-command completion, clone session), not
+  // just the <input>'s own onChange.
+  useEffect(() => {
+    setError(null);
+  }, [input]);
+
   // Focus input when opened
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -1280,7 +1290,6 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
               setInput(e.target.value);
               setDropdownDismissed(false);
               setDropdownIndex(-1);
-              setError(null);
             }}
             autoComplete="off"
             autoCorrect="off"

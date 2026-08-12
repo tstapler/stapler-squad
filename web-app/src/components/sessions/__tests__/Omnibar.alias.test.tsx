@@ -469,4 +469,31 @@ describe("Omnibar detection effect error handling", () => {
     const disabledAfterThrow = createButtonsAfterThrow.map((btn) => btn.hasAttribute("disabled"));
     expect(disabledAfterThrow).toEqual(disabledBeforeThrow);
   });
+
+  // Regression pin for the SpawnShell discovery-mode error fix: that fix moved
+  // the error clear into the main input's onChange handler (shared by both
+  // discovery and creation mode), which also clears a stale *creation-mode*
+  // submission error the instant the user edits the source input — previously
+  // it persisted until the next submit or close. This is intentional (stale
+  // errors shouldn't linger indefinitely in either mode), so pin it here.
+  it("clears a creation-mode submission error once the user edits the source input", async () => {
+    // canSubmit requires the path to resolve (pathDoesNotExist would otherwise
+    // block submission before onCreateSession is ever called).
+    mockUsePathCompletions.mockReturnValue({ ...defaultCompletions, baseDirExists: true, pathExists: true });
+
+    const onCreateSession = jest.fn().mockRejectedValue(new Error("path already in use"));
+    const { input } = renderOmnibar({ onCreateSession });
+
+    await typeAndDetect(input, "/home/user/projects");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    });
+
+    expect(screen.getByText("path already in use")).toBeInTheDocument();
+
+    // Editing the source input clears the stale error, same as the SpawnShell path.
+    await typeAndDetect(input, "/home/user/other-project");
+
+    expect(screen.queryByText("path already in use")).not.toBeInTheDocument();
+  });
 });

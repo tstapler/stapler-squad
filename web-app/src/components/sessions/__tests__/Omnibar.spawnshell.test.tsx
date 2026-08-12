@@ -204,6 +204,66 @@ describe("Omnibar SpawnShell error surfacing", () => {
     expect(screen.queryByText("boom")).not.toBeInTheDocument();
   });
 
+  it("clears the error on input edit even when the edit keeps SpawnShell detection active", async () => {
+    // Regression pin: typing a *different* query normally leaves SpawnShell
+    // detection (dispatchMode "detect") and unmounts the whole chip+error
+    // block, which would make the error disappear regardless of whether
+    // setError(null) actually ran. Stay on a `>shell` input throughout so the
+    // block stays mounted and only the error's own clearing is exercised.
+    const onCreateSession = jest.fn().mockRejectedValue(new Error("boom"));
+    const { input } = renderOmnibar({ onCreateSession });
+
+    await typeAndDetect(input, ">shell -- ls");
+    await submit(input);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    await typeAndDetect(input, ">shell -- pwd");
+
+    expect(screen.getByTestId("spawn-shell-chip")).toBeInTheDocument();
+    expect(screen.queryByTestId("spawn-shell-error")).not.toBeInTheDocument();
+  });
+
+  it("does not render the error for a non-SpawnShell detection type", async () => {
+    // Pins the error block's InputType.SpawnShell gate against a future
+    // refactor that might hoist it out of that conditional.
+    const onCreateSession = jest.fn().mockRejectedValue(new Error("boom"));
+    const { input } = renderOmnibar({ onCreateSession });
+
+    await typeAndDetect(input, ">shell -- ls");
+    await submit(input);
+    expect(screen.getByTestId("spawn-shell-error")).toBeInTheDocument();
+
+    // Switch to a plain local-path input — different detection type, enters
+    // creation mode. The stale SpawnShell error must not leak into it.
+    await typeAndDetect(input, "/home/user/projects");
+
+    expect(screen.queryByTestId("spawn-shell-error")).not.toBeInTheDocument();
+  });
+
+  it("clears the error when clicking a recent-command chip, which sets input directly (bypassing onChange)", async () => {
+    // Regression pin: recent-command chips call setInput() directly
+    // (Omnibar.tsx's recentCommands button onClick), not the <input>'s
+    // onChange handler — an onChange-only clear misses this path entirely.
+    window.localStorage.setItem("ssq.recentShellCommands", JSON.stringify(["ls -la"]));
+
+    const onCreateSession = jest.fn().mockRejectedValue(new Error("boom"));
+    const { input } = renderOmnibar({ onCreateSession });
+
+    // Bare ">shell" (no dir/command) shows the recent-commands list.
+    await typeAndDetect(input, ">shell");
+    await submit(input);
+    expect(screen.getByTestId("spawn-shell-error")).toBeInTheDocument();
+
+    const recentCommandButton = screen.getByTestId("spawn-shell-recent-command");
+    await act(async () => {
+      fireEvent.click(recentCommandButton);
+    });
+
+    expect(screen.queryByTestId("spawn-shell-error")).not.toBeInTheDocument();
+
+    window.localStorage.removeItem("ssq.recentShellCommands");
+  });
+
   it("does not render an error and closes on a successful >shell submission", async () => {
     const onCreateSession = jest.fn().mockResolvedValue(undefined);
     const { input, onClose } = renderOmnibar({ onCreateSession });
