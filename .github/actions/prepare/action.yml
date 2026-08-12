@@ -31,11 +31,33 @@ runs:
       shell: bash
       run: cd web-app && pnpm install --frozen-lockfile
 
-    - name: Set up buf
-      uses: bufbuild/buf-setup-action@v1
+    # Cache the buf binary so most runs skip the network entirely — a cache
+    # hit here means "Set up buf" below never touches GitHub Releases.
+    - name: Cache buf binary
+      uses: actions/cache@v4
       with:
-        version: '1.41.0'
-        github_token: ${{ inputs.github_token }}
+        path: ${{ runner.temp }}/buf-bin
+        key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
+    # On a cache miss, install buf directly instead of via bufbuild/buf-setup-action:
+    # that action only retries for ~30s total, which isn't enough during a
+    # buf.build/GH Releases blip (observed repeatedly: "socket hang up" from
+    # the release asset CDN, 4 consecutive job failures across ~20 minutes).
+    # buf also publishes the raw binary (no .tar.gz) per-platform, so install
+    # it directly with the same retry-with-backoff.sh convention already used
+    # below for the next/font fetch flake.
+    - name: Set up buf
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/buf-bin"
+        if [ ! -x "$RUNNER_TEMP/buf-bin/buf" ]; then
+          scripts/retry-with-backoff.sh -n 5 -s 10 -- \
+            curl -sSL -o "$RUNNER_TEMP/buf-bin/buf" \
+            "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-$(uname -s)-$(uname -m)"
+          chmod +x "$RUNNER_TEMP/buf-bin/buf"
+        fi
+        echo "$RUNNER_TEMP/buf-bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/buf-bin/buf" --version
 
     - name: Generate protobuf code
       shell: bash
