@@ -288,19 +288,22 @@ export function OmnibarCreationPanel({
   }, [sessionType]);
 
   const availablePrograms = useAvailablePrograms();
-  // Default-expanded once at least one preset is loaded — an empty/error state is cheap to
-  // show collapsed, but a populated list is the feature's main value and shouldn't require an
-  // extra click to discover on first use (design/ux.md §5.1.1). Auto-opens only once: a ref
-  // (not an ongoing effect keyed on presets.length) so a later background refetch can't
+  // Default-expanded once there's something to show — either a loaded preset or a config
+  // error. An error must never sit hidden behind a collapsed section: AC requires a malformed
+  // config to "fail loudly", and a load_error with zero presets (the RPC's own contract) would
+  // otherwise default to collapsed under the empty-state branch below, silently hiding it. A
+  // truly empty, error-free state is the only case that stays collapsed (design/ux.md §5.1.1).
+  // Auto-opens only once: a ref (not an ongoing effect) so a later background refetch can't
   // re-force the section open after the user has manually collapsed it.
-  const [presetsOpen, setPresetsOpen] = useState(() => presets.length > 0);
-  const hasAutoOpenedPresets = useRef(presets.length > 0);
+  const shouldAutoOpenPresets = presets.length > 0 || Boolean(presetsLoadError);
+  const [presetsOpen, setPresetsOpen] = useState(() => shouldAutoOpenPresets);
+  const hasAutoOpenedPresets = useRef(shouldAutoOpenPresets);
   useEffect(() => {
-    if (!hasAutoOpenedPresets.current && presets.length > 0) {
+    if (!hasAutoOpenedPresets.current && shouldAutoOpenPresets) {
       hasAutoOpenedPresets.current = true;
       setPresetsOpen(true);
     }
-  }, [presets.length]);
+  }, [shouldAutoOpenPresets]);
   const isProgramRecognized = !program || availablePrograms.some((p) => p.value === program);
 
   // ─── File attachment state ────────────────────────────────────────────────
@@ -829,7 +832,12 @@ export function OmnibarCreationPanel({
         {/* Presets — hand-edited, shareable launch shortcuts from launcher-presets.json.
             Placed above Advanced Options so it's visible without an extra click. */}
         <div className={collapsible}>
-          <div className={collapsibleHeader} onClick={() => setPresetsOpen((v) => !v)}>
+          <div
+            className={collapsibleHeader}
+            onClick={() => setPresetsOpen((v) => !v)}
+            aria-expanded={presetsOpen}
+            data-testid="preset-section-header"
+          >
             <span className={collapsibleTitle}>Presets</span>
             <span className={`${collapsibleIcon} ${presetsOpen ? expanded : ""}`}>▼</span>
           </div>

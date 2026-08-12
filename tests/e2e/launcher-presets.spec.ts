@@ -106,4 +106,34 @@ test.describe("launcher-presets", () => {
     // No dead end: input stays editable, the user can correct it.
     await expect(input).toBeEditable();
   });
+
+  test("launcher-presets_should_ShowConfigErrorExpandedByDefault_When_FileIsMalformed", async ({ page }) => {
+    // A duplicate id -> GetLauncherPresets returns zero presets alongside a load_error. Real
+    // browser CSS (unlike jsdom) actually enforces the Presets section's collapsed/expanded
+    // state, so this is the authoritative check for the "fails loudly" requirement: the error
+    // must be visible immediately, not hidden behind a collapsed section the user never opens.
+    fs.writeFileSync(
+      path.join(TEST_DIR!, "launcher-presets.json"),
+      JSON.stringify({
+        version: 1,
+        presets: [
+          { id: "dup", label: "First", argv: ["true"] },
+          { id: "dup", label: "Second", argv: ["true"] },
+        ],
+      })
+    );
+
+    await page.addInitScript(() => {
+      localStorage.setItem("stapler-squad:onboarded", "true");
+    });
+    await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 10000 });
+    await page.waitForSelector('[data-testid="session-card"], [data-testid="session-row"]', { timeout: 15000 });
+
+    await page.keyboard.press("Control+Shift+K");
+    await page.waitForSelector('[aria-label="Session source input"]', { timeout: 5000 });
+
+    const alert = page.getByTestId("preset-config-error");
+    await expect(alert).toBeVisible({ timeout: 5000 });
+    await expect(alert).toContainText('duplicate preset id "dup"');
+  });
 });
