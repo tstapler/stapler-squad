@@ -338,6 +338,20 @@ func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID s
 
 // --- wait_for_backlog_event ---
 
+// Event-type filter values for wait_for_backlog_event — the single source of
+// truth referenced by backlogEventKindFilterValue's switch,
+// currentStateWaitResult's filter comparisons, the handler's default
+// eventTypeFilter assignment, and the mcpgo.Enum(...) tool registration.
+const (
+	eventTypeAny             = "any"
+	eventTypeVerdictRecorded = "verdict_recorded"
+	eventTypeStatusChanged   = "status_changed"
+	eventTypeItemArchived    = "item_archived"
+	eventTypeItemRemoved     = "item_removed"
+	eventTypeItemUpdated     = "item_updated"
+	eventTypeSessionAttached = "session_attached"
+)
+
 // WaitForBacklogEventResult is the response for wait_for_backlog_event.
 type WaitForBacklogEventResult struct {
 	MCPResult
@@ -360,17 +374,17 @@ type WaitForBacklogEventResult struct {
 func backlogEventKindFilterValue(kind events.BacklogChangeKind) string {
 	switch kind {
 	case events.BacklogChangeVerdictRecorded:
-		return "verdict_recorded"
+		return eventTypeVerdictRecorded
 	case events.BacklogChangeStatusTransition:
-		return "status_changed"
+		return eventTypeStatusChanged
 	case events.BacklogChangeItemArchived:
-		return "item_archived"
+		return eventTypeItemArchived
 	case events.BacklogChangeItemRemoved:
-		return "item_removed"
+		return eventTypeItemRemoved
 	case events.BacklogChangeSessionAttached:
-		return "session_attached"
+		return eventTypeSessionAttached
 	case events.BacklogChangeItemUpdated, events.BacklogChangeTriageProgressUpdated:
-		return "item_updated"
+		return eventTypeItemUpdated
 	default:
 		return string(kind)
 	}
@@ -423,12 +437,12 @@ func currentStateWaitResult(item *session.BacklogItemData, verdict *session.Revi
 	status := session.BacklogStatus(item.Status)
 	terminal := status == session.BacklogStatusDone || status == session.BacklogStatusArchived
 
-	if (eventTypeFilter == "any" || eventTypeFilter == "verdict_recorded") && verdict != nil {
+	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) && verdict != nil {
 		return &WaitForBacklogEventResult{
 			MCPResult:        MCPResult{Success: true},
 			EventReceived:    true,
 			FromCurrentState: true,
-			EventKind:        "verdict_recorded",
+			EventKind:        eventTypeVerdictRecorded,
 			ItemID:           item.ID,
 			Status:           item.Status,
 			VerdictOutcome:   verdict.OverallOutcome,
@@ -436,12 +450,12 @@ func currentStateWaitResult(item *session.BacklogItemData, verdict *session.Revi
 			IsTerminal:       terminal,
 		}
 	}
-	if (eventTypeFilter == "any" || eventTypeFilter == "item_archived") && status == session.BacklogStatusArchived {
+	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeItemArchived) && status == session.BacklogStatusArchived {
 		return &WaitForBacklogEventResult{
 			MCPResult:        MCPResult{Success: true},
 			EventReceived:    true,
 			FromCurrentState: true,
-			EventKind:        "item_archived",
+			EventKind:        eventTypeItemArchived,
 			ItemID:           item.ID,
 			Status:           item.Status,
 			IsTerminal:       true,
@@ -477,7 +491,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInvalidArgument, err.Error(), "Provide a valid UUID (e.g. from list_backlog_items or get_backlog_item)."), nil
 	}
 
-	eventTypeFilter := "any"
+	eventTypeFilter := eventTypeAny
 	if v, ok := args["event_type"].(string); ok && v != "" {
 		eventTypeFilter = v
 	}
@@ -505,14 +519,14 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 		testAfterWaitSubscribeHook()
 	}
 
-	item, err := h.storage.GetBacklogItem(ctx, itemID)
+	item, err := h.storage.GetBacklogItem(waitCtx, itemID)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
 	}
-	verdict := latestReviewVerdict(ctx, h.storage, itemID)
+	verdict := latestReviewVerdict(waitCtx, h.storage, itemID)
 	if res := currentStateWaitResult(item, verdict, eventTypeFilter); res != nil {
 		return okResult(*res), nil
 	}
@@ -547,7 +561,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 				continue
 			}
 			kind := backlogEventKindFilterValue(payload.Kind)
-			if eventTypeFilter != "any" && kind != eventTypeFilter {
+			if eventTypeFilter != eventTypeAny && kind != eventTypeFilter {
 				continue
 			}
 			return okResult(buildMatchedWaitResult(itemID, payload)), nil
@@ -2204,8 +2218,8 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 			mcpgo.WithString("event_type",
 				mcpgo.Description("Only return when an event of this kind fires (default any). verdict_recorded is the usual choice after request_review — it also returns immediately if a verdict is already recorded. any returns immediately if a verdict already exists or the item is already archived. status_changed/item_removed never return immediately (no 'already true' answer for those)."),
-				mcpgo.Enum("any", "verdict_recorded", "status_changed", "item_archived", "item_removed"),
-				mcpgo.DefaultString("any"),
+				mcpgo.Enum(eventTypeAny, eventTypeVerdictRecorded, eventTypeStatusChanged, eventTypeItemArchived, eventTypeItemRemoved),
+				mcpgo.DefaultString(eventTypeAny),
 			),
 			mcpgo.WithNumber("timeout_seconds",
 				mcpgo.Description("How long to wait in seconds (default 30, max 60)"),

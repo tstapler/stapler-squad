@@ -4432,6 +4432,20 @@ func TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails(t *te
 
 // --- wait_for_backlog_event ---
 
+// waitCallOutcome carries both the result and error of a
+// waitForBacklogEvent call made on a spawned goroutine back to the main
+// test goroutine. require.NoError (and other testify t.FailNow()-triggering
+// assertions) must only be called from the goroutine running the test, per
+// the testing.T contract — calling it from a spawned goroutine just halts
+// that goroutine via runtime.Goexit() without failing the test or unblocking
+// a channel receive, which would make a real failure hang until the test's
+// own outer timeout instead of reporting. So the goroutine sends both values
+// through this struct and the main goroutine asserts after receiving.
+type waitCallOutcome struct {
+	res *mcpgo.CallToolResult
+	err error
+}
+
 func decodeWaitResult(t *testing.T, res *mcpgo.CallToolResult) WaitForBacklogEventResult {
 	t.Helper()
 	require.Len(t, res.Content, 1)
@@ -4516,7 +4530,7 @@ func TestWaitForBacklogEvent_ReturnsImmediatelyWhenVerdictAlreadyRecorded(t *tes
 	require.NoError(t, err)
 
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
-	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(30)})
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "event_type": "verdict_recorded", "timeout_seconds": float64(30)})
 
 	start := time.Now()
 	result, err := handler.waitForBacklogEvent(ctx, req)
@@ -4545,7 +4559,7 @@ func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testin
 	require.NoError(t, err)
 
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
-	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "event_type": "any", "timeout_seconds": float64(30)})
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "event_type": "item_archived", "timeout_seconds": float64(30)})
 
 	start := time.Now()
 	result, err := handler.waitForBacklogEvent(ctx, req)
@@ -4589,11 +4603,10 @@ func TestWaitForBacklogEvent_ReturnsMatchedEventOnLiveVerdict(t *testing.T) {
 	handler := &backlogHandlers{storage: storage, eventBus: bus}
 	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
 
-	resultCh := make(chan *mcpgo.CallToolResult, 1)
+	resultCh := make(chan waitCallOutcome, 1)
 	go func() {
 		res, callErr := handler.waitForBacklogEvent(ctx, req)
-		require.NoError(t, callErr)
-		resultCh <- res
+		resultCh <- waitCallOutcome{res: res, err: callErr}
 	}()
 
 	waitSubscriberCount(t, bus, 1)
@@ -4610,8 +4623,9 @@ func TestWaitForBacklogEvent_ReturnsMatchedEventOnLiveVerdict(t *testing.T) {
 	})
 
 	select {
-	case result := <-resultCh:
-		out := decodeWaitResult(t, result)
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
+		out := decodeWaitResult(t, outcome.res)
 		require.True(t, out.EventReceived)
 		require.False(t, out.FromCurrentState)
 		require.Equal(t, "verdict_recorded", out.EventKind)
@@ -4645,11 +4659,10 @@ func TestWaitForBacklogEvent_FiltersByEventType(t *testing.T) {
 		"timeout_seconds": float64(5),
 	})
 
-	resultCh := make(chan *mcpgo.CallToolResult, 1)
+	resultCh := make(chan waitCallOutcome, 1)
 	go func() {
 		res, callErr := handler.waitForBacklogEvent(ctx, req)
-		require.NoError(t, callErr)
-		resultCh <- res
+		resultCh <- waitCallOutcome{res: res, err: callErr}
 	}()
 
 	waitSubscriberCount(t, bus, 1)
@@ -4686,8 +4699,9 @@ func TestWaitForBacklogEvent_FiltersByEventType(t *testing.T) {
 	})
 
 	select {
-	case result := <-resultCh:
-		out := decodeWaitResult(t, result)
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
+		out := decodeWaitResult(t, outcome.res)
 		require.True(t, out.EventReceived)
 		require.Equal(t, "verdict_recorded", out.EventKind)
 		require.Equal(t, "matched", out.VerdictSummary)
@@ -4736,12 +4750,11 @@ func TestWaitForBacklogEvent_ConcurrentWaitersBothReceiveEvent(t *testing.T) {
 	handler := &backlogHandlers{storage: storage, eventBus: bus}
 	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
 
-	results := make(chan WaitForBacklogEventResult, 2)
+	results := make(chan waitCallOutcome, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
 			res, callErr := handler.waitForBacklogEvent(ctx, req)
-			require.NoError(t, callErr)
-			results <- decodeWaitResult(t, res)
+			results <- waitCallOutcome{res: res, err: callErr}
 		}()
 	}
 
@@ -4761,8 +4774,9 @@ func TestWaitForBacklogEvent_ConcurrentWaitersBothReceiveEvent(t *testing.T) {
 	var got []WaitForBacklogEventResult
 	for i := 0; i < 2; i++ {
 		select {
-		case r := <-results:
-			got = append(got, r)
+		case outcome := <-results:
+			require.NoError(t, outcome.err)
+			got = append(got, decodeWaitResult(t, outcome.res))
 		case <-time.After(3 * time.Second):
 			t.Fatal("timed out waiting for both concurrent waiters to return")
 		}
@@ -4806,14 +4820,13 @@ func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
-	resultCh := make(chan *mcpgo.CallToolResult, 1)
+	resultCh := make(chan waitCallOutcome, 1)
 	go func() {
 		res, callErr := handler.waitForBacklogEvent(ctx, makeToolReq(map[string]interface{}{
 			"item_id":         matchedItem.ID,
 			"timeout_seconds": float64(5),
 		}))
-		require.NoError(t, callErr)
-		resultCh <- res
+		resultCh <- waitCallOutcome{res: res, err: callErr}
 	}()
 	waitSubscriberCount(t, bus, 1)
 	bus.Publish(&events.Event{
@@ -4827,7 +4840,8 @@ func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
 		},
 	})
 	select {
-	case <-resultCh:
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("matched-path call did not return")
 	}
@@ -4877,4 +4891,125 @@ func TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace(t *testing.T) {
 	out := decodeWaitResult(t, result)
 	require.True(t, out.EventReceived, "an event published inside the subscribe hook must not be missed")
 	require.Equal(t, "landed in the race window", out.VerdictSummary)
+}
+
+// TestWaitForBacklogEvent_ReturnsWhenEventBusClosedWhileWaiting covers the
+// select loop's `case evt, ok := <-eventCh: if !ok { ... }` branch — the
+// EventBus being closed (e.g. a shutdown path) while a wait is in flight.
+// Previously untested (CRITICAL finding from code review): a bug here would
+// only surface as every in-flight wait hanging until its own
+// timeout_seconds elapses instead of returning promptly.
+func TestWaitForBacklogEvent_ReturnsWhenEventBusClosedWhileWaiting(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Bus closes mid-wait",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
+
+	resultCh := make(chan waitCallOutcome, 1)
+	start := time.Now()
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, req)
+		resultCh <- waitCallOutcome{res: res, err: callErr}
+	}()
+
+	waitSubscriberCount(t, bus, 1)
+	bus.Close()
+
+	select {
+	case outcome := <-resultCh:
+		elapsed := time.Since(start)
+		require.NoError(t, outcome.err)
+		require.Less(t, elapsed, 5*time.Second, "must return promptly on bus closure, not wait out the full timeout")
+		out := decodeWaitResult(t, outcome.res)
+		require.False(t, out.EventReceived)
+		require.NotNil(t, out.Error)
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForBacklogEvent did not return after the EventBus was closed")
+	}
+}
+
+// TestBuildMatchedWaitResult_MapsAllEventKinds is a direct table-driven unit
+// test of buildMatchedWaitResult (a pure function) covering the
+// item_updated/triage_progress_updated -> UpdatedFields mapping, the
+// item_removed -> RemovedReason/IsTerminal mapping, and session_attached —
+// none of which had any prior coverage.
+func TestBuildMatchedWaitResult_MapsAllEventKinds(t *testing.T) {
+	const itemID = "item-under-test"
+
+	tests := []struct {
+		name    string
+		payload *events.BacklogItemEventPayload
+		check   func(t *testing.T, res WaitForBacklogEventResult)
+	}{
+		{
+			name: "item_updated populates UpdatedFields",
+			payload: &events.BacklogItemEventPayload{
+				Kind:          events.BacklogChangeItemUpdated,
+				Item:          &session.BacklogItemData{ID: itemID, Status: string(session.BacklogStatusInProgress)},
+				UpdatedFields: []string{"title", "description"},
+			},
+			check: func(t *testing.T, res WaitForBacklogEventResult) {
+				require.Equal(t, "item_updated", res.EventKind)
+				require.Equal(t, []string{"title", "description"}, res.UpdatedFields)
+				require.False(t, res.IsTerminal)
+			},
+		},
+		{
+			name: "triage_progress_updated also populates UpdatedFields",
+			payload: &events.BacklogItemEventPayload{
+				Kind:          events.BacklogChangeTriageProgressUpdated,
+				Item:          &session.BacklogItemData{ID: itemID, Status: string(session.BacklogStatusInProgress)},
+				UpdatedFields: []string{"triage_notes"},
+			},
+			check: func(t *testing.T, res WaitForBacklogEventResult) {
+				require.Equal(t, "item_updated", res.EventKind)
+				require.Equal(t, []string{"triage_notes"}, res.UpdatedFields)
+			},
+		},
+		{
+			name: "item_removed populates RemovedReason and sets IsTerminal",
+			payload: &events.BacklogItemEventPayload{
+				Kind:          events.BacklogChangeItemRemoved,
+				Item:          &session.BacklogItemData{ID: itemID, Status: string(session.BacklogStatusInProgress)},
+				RemovedReason: "duplicate of #123",
+			},
+			check: func(t *testing.T, res WaitForBacklogEventResult) {
+				require.Equal(t, "item_removed", res.EventKind)
+				require.Equal(t, "duplicate of #123", res.RemovedReason)
+				require.True(t, res.IsTerminal)
+			},
+		},
+		{
+			name: "session_attached",
+			payload: &events.BacklogItemEventPayload{
+				Kind:      events.BacklogChangeSessionAttached,
+				Item:      &session.BacklogItemData{ID: itemID, Status: string(session.BacklogStatusInProgress)},
+				SessionID: "session-abc",
+			},
+			check: func(t *testing.T, res WaitForBacklogEventResult) {
+				require.Equal(t, "session_attached", res.EventKind)
+				require.Equal(t, itemID, res.ItemID)
+				require.Equal(t, string(session.BacklogStatusInProgress), res.Status)
+				require.False(t, res.IsTerminal)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := buildMatchedWaitResult(itemID, tc.payload)
+			require.True(t, res.Success)
+			require.True(t, res.EventReceived)
+			require.Equal(t, itemID, res.ItemID)
+			tc.check(t, res)
+		})
+	}
 }
