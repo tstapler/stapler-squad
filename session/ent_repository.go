@@ -162,6 +162,7 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		SetCreatedAt(data.CreatedAt).
 		SetUpdatedAt(data.UpdatedAt).
 		SetAutoYes(data.AutoYes).
+		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
 		SetIsExpanded(data.IsExpanded)
@@ -377,6 +378,7 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		SetStatus(int(data.Status)).
 		SetUpdatedAt(data.UpdatedAt).
 		SetAutoYes(data.AutoYes).
+		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
 		SetIsExpanded(data.IsExpanded)
@@ -1105,6 +1107,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		CreatedAt:           sess.CreatedAt,
 		UpdatedAt:           sess.UpdatedAt,
 		AutoYes:             sess.AutoYes,
+		AutoApprove:         sess.AutoApprove,
 		AutonomousMode:      sess.AutonomousMode,
 		Prompt:              sess.Prompt,
 		InitialPrompt:       sess.InitialPrompt,

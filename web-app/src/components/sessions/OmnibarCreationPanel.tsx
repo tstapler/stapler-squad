@@ -9,6 +9,7 @@ import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 import type { OmnibarFormState } from "./Omnibar";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { getConnectTransport } from "@/lib/api/transport";
+import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
@@ -63,6 +64,7 @@ export const SESSION_TYPES = [
 // type is selected above (see AUTONOMOUS_MODE_HINT usage below).
 export const AUTONOMOUS_MODE_HINT =
   "Hand off a well-defined task and walk away — e.g. a small bug fix or chore. An LLM reviewer approves risky tool calls instead of you; you'll be notified when it's done. To stop it, delete or hibernate the session.";
+
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
 
@@ -179,11 +181,20 @@ export function OmnibarCreationPanel({
   isDestinationPreviewLoading = false,
 }: OmnibarCreationPanelProps) {
   const {
-    sessionName, branch, program, category, autoYes,
+    sessionName, branch, program, category, autoYes, autoApprove,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
     parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
     autonomousMode,
   } = formState;
+
+  // If the program changes to an unsupported agent after auto-approve was checked
+  // (e.g. user picks "claude", checks the box, then switches to "codex"), force it back
+  // off rather than silently submitting a checked-but-disabled checkbox's stale true value.
+  useEffect(() => {
+    if (autoApprove && !isAutoApproveSupported(program)) {
+      setFormField("autoApprove", false);
+    }
+  }, [program, autoApprove, setFormField]);
 
   // Slash command autocomplete for the firstPrompt textarea.
   const firstPromptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -821,15 +832,35 @@ export function OmnibarCreationPanel({
                 />
               </div>
 
-              {/* Auto-Yes */}
+              {/* Auto-Yes: TapEnter keystroke fallback + --permission-mode bypassPermissions.
+                  Distinct mechanism from Auto-Approve below (auto_approve field) -- label
+                  deliberately avoids the word "approve" so the two aren't misread as the
+                  same setting; see session/instance.go's AutoApprove doc comment. */}
               <label className={checkboxClass}>
                 <input
                   type="checkbox"
                   checked={autoYes}
                   onChange={(e) => setFormField("autoYes", e.target.checked)}
                 />
-                <span>Auto-approve prompts (experimental)</span>
+                <span>Auto-accept prompts (Enter-key fallback, experimental)</span>
               </label>
+
+              {/* Auto-Approve (yolo mode) -- independent of Auto-Yes above; injects a
+                  per-agent CLI flag that skips permission/approval prompts entirely. */}
+              <label className={checkboxClass}>
+                <input
+                  type="checkbox"
+                  checked={autoApprove}
+                  disabled={!isAutoApproveSupported(program)}
+                  onChange={(e) => setFormField("autoApprove", e.target.checked)}
+                />
+                <span>⚡ Auto-approve (skip permission prompts)</span>
+              </label>
+              <span className={hint}>
+                {isAutoApproveSupported(program)
+                  ? "Skips ALL permission/approval prompts for this agent. Risk of unintended file changes — use only in disposable/sandboxed workspaces."
+                  : `Not supported for "${program || "this agent"}" yet.`}
+              </span>
             </div>
           </div>
         </div>

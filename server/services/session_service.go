@@ -1538,6 +1538,15 @@ func (s *SessionService) CreateSession(
 		initialPrompt += s.workspacePeersBlockFor(ctx, resolvedPath)
 	}
 
+	// auto_approve is representable-but-invalid for an agent yoloFlagFor can't inject a
+	// bypass flag for -- the Omnibar UI disables the checkbox client-side, but that's not
+	// a guarantee for other RPC callers (MCP tools, scripts, curl), so the invariant is
+	// enforced here too rather than left purely client-enforced.
+	if req.Msg.AutoApprove && !session.AutoApproveSupported(program) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("auto_approve is not supported for program %q", program))
+	}
+
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
 		Title:            req.Msg.Title,
@@ -1546,6 +1555,7 @@ func (s *SessionService) CreateSession(
 		Branch:           branch,
 		Program:          program,
 		AutoYes:          autoYes,
+		AutoApprove:      req.Msg.AutoApprove,
 		Prompt:           req.Msg.Prompt,
 		InitialPrompt:    initialPrompt,
 		ExistingWorktree: req.Msg.ExistingWorktree,
@@ -2007,6 +2017,24 @@ func (s *SessionService) UpdateSession(
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
 		sideEffectChanged = true
+	}
+
+	// Handle auto-approve toggle. Restart-on-Active-change (serialized against a
+	// concurrent program switch via restartTriggerMu) is handled inside SetAutoApprove.
+	// Same server-side invariant as CreateSession: auto_approve=true is rejected for an
+	// agent yoloFlagFor can't inject a bypass flag for, not just disabled client-side.
+	if req.Msg.AutoApprove != nil && *req.Msg.AutoApprove != instance.AutoApprove {
+		if *req.Msg.AutoApprove && !session.AutoApproveSupported(instance.Program) {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("auto_approve is not supported for program %q", instance.Program))
+		}
+		if err := instance.SetAutoApprove(*req.Msg.AutoApprove, func() error {
+			return s.storage.SaveInstances([]*session.Instance{instance})
+		}); err != nil {
+			log.Error("[UpdateSession] failed to restart session after auto-approve change", "session", instance.Title, "err", err)
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after auto-approve change: %w", err))
+		}
+		updatedFields = append(updatedFields, "auto_approve")
 	}
 
 	// Handle steering: inject a message into an active autonomous session.

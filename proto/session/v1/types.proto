@@ -244,6 +244,11 @@ message Session {
 
   // User-authored free-form markdown note attached to this session.
   string note = 73;
+
+  // auto_approve injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
+  // Independent of auto_yes — see auto_yes's own comment for the distinction.
+  bool auto_approve = 74;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's

@@ -348,7 +348,13 @@ type CreateSessionRequest struct {
 	CliFlags string `protobuf:"bytes,26,opt,name=cli_flags,json=cliFlags,proto3" json:"cli_flags,omitempty"`
 	// alias_name, when non-empty, resolves session defaults via the named alias preset.
 	// Path and profile are resolved from the alias config; path from req is used as override if non-empty.
-	AliasName     string `protobuf:"bytes,27,opt,name=alias_name,json=aliasName,proto3" json:"alias_name,omitempty"`
+	AliasName string `protobuf:"bytes,27,opt,name=alias_name,json=aliasName,proto3" json:"alias_name,omitempty"`
+	// auto_approve injects a per-agent CLI flag that skips permission/approval
+	// prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
+	// Independent of auto_yes — see auto_yes's own comment for the distinction.
+	// Defaults to false; never implicitly set true. Rejected server-side if the
+	// resolved program isn't a supported agent (see AutoApproveSupported).
+	AutoApprove   bool `protobuf:"varint,28,opt,name=auto_approve,json=autoApprove,proto3" json:"auto_approve,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -565,6 +571,13 @@ func (x *CreateSessionRequest) GetAliasName() string {
 	return ""
 }
 
+func (x *CreateSessionRequest) GetAutoApprove() bool {
+	if x != nil {
+		return x.AutoApprove
+	}
+	return false
+}
+
 type CreateSessionResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
@@ -639,7 +652,13 @@ type UpdateSessionRequest struct {
 	// Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
 	SteerMessage *string `protobuf:"bytes,11,opt,name=steer_message,json=steerMessage,proto3,oneof" json:"steer_message,omitempty"`
 	// Update the session's free-form note. Capped at 10,000 bytes.
-	Note          *string `protobuf:"bytes,12,opt,name=note,proto3,oneof" json:"note,omitempty"`
+	Note *string `protobuf:"bytes,12,opt,name=note,proto3,oneof" json:"note,omitempty"`
+	// Enable or disable auto-approve (yolo mode) on a session. Injects a
+	// per-agent CLI flag that skips permission/approval prompts entirely.
+	// Independent of autonomous_mode and of auto_yes (create-time only,
+	// not updatable). Toggling this on an Active session restarts it so the
+	// flag takes effect (see SetAutoApprove's doc comment).
+	AutoApprove   *bool `protobuf:"varint,13,opt,name=auto_approve,json=autoApprove,proto3,oneof" json:"auto_approve,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -756,6 +775,13 @@ func (x *UpdateSessionRequest) GetNote() string {
 		return *x.Note
 	}
 	return ""
+}
+
+func (x *UpdateSessionRequest) GetAutoApprove() bool {
+	if x != nil && x.AutoApprove != nil {
+		return *x.AutoApprove
+	}
+	return false
 }
 
 type UpdateSessionResponse struct {
@@ -15573,7 +15599,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x11GetSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"C\n" +
 	"\x12GetSessionResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xeb\a\n" +
+	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\x8e\b\n" +
 	"\x14CreateSessionRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1f\n" +
@@ -15605,12 +15631,13 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\benv_vars\x18\x19 \x03(\v2-.session.v1.CreateSessionRequest.EnvVarsEntryR\aenvVars\x12\x1b\n" +
 	"\tcli_flags\x18\x1a \x01(\tR\bcliFlags\x12\x1d\n" +
 	"\n" +
-	"alias_name\x18\x1b \x01(\tR\taliasName\x1a:\n" +
+	"alias_name\x18\x1b \x01(\tR\taliasName\x12!\n" +
+	"\fauto_approve\x18\x1c \x01(\bR\vautoApprove\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x0e\x10\x0fR\aone_off\"F\n" +
 	"\x15CreateSessionResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xd4\x04\n" +
+	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\x8d\x05\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x126\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x19.session.v1.SessionStatusH\x00R\x06status\x88\x01\x01\x12\x1f\n" +
@@ -15625,7 +15652,9 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x0fautonomous_mode\x18\n" +
 	" \x01(\bH\aR\x0eautonomousMode\x88\x01\x01\x12(\n" +
 	"\rsteer_message\x18\v \x01(\tH\bR\fsteerMessage\x88\x01\x01\x12\x17\n" +
-	"\x04note\x18\f \x01(\tH\tR\x04note\x88\x01\x01B\t\n" +
+	"\x04note\x18\f \x01(\tH\tR\x04note\x88\x01\x01\x12&\n" +
+	"\fauto_approve\x18\r \x01(\bH\n" +
+	"R\vautoApprove\x88\x01\x01B\t\n" +
 	"\a_statusB\v\n" +
 	"\t_categoryB\b\n" +
 	"\x06_titleB\n" +
@@ -15636,7 +15665,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\r_pause_reasonB\x12\n" +
 	"\x10_autonomous_modeB\x10\n" +
 	"\x0e_steer_messageB\a\n" +
-	"\x05_note\"F\n" +
+	"\x05_noteB\x0f\n" +
+	"\r_auto_approve\"F\n" +
 	"\x15UpdateSessionResponse\x12-\n" +
 	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"<\n" +
 	"\x14DeleteSessionRequest\x12\x0e\n" +
