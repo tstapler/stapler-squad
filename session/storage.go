@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -1202,6 +1203,37 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 		return fmt.Errorf("review verdicts not supported by this storage backend")
 	}
 	return er.SaveReviewVerdict(ctx, itemSessionID, verdict)
+}
+
+// ComputeCurrentDiffHash resolves itemID's most recent completed work
+// session's base..head commit range (via
+// GetRepoPathAndLatestCompletedWorkSessionCommits — two bounded, no-edge
+// queries, not GetBacklogItem/ListItemSessions' unbounded eager-loaded
+// fetch) and returns a content hash of that diff (git.DiffHashBetween), for
+// stamping onto a review verdict's DiffHash at save time — see
+// stuck_decisions.go's IsFlakyVerdictFlipFlop, which the hash feeds.
+//
+// Best-effort: any resolution failure (item/session lookup, missing SHAs, a
+// git error) returns "" rather than propagating an error, matching this
+// codebase's "best-effort, never blocks the write it's attached to"
+// convention (see e.g. SaveReviewVerdict's publish-hook comments) — a
+// missing DiffHash just means IsFlakyVerdictFlipFlop treats that verdict as
+// unknown, never as a false match.
+func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) string {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ""
+	}
+	repoPath, baseSHA, headSHA, err := er.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, itemID)
+	if err != nil || repoPath == "" || baseSHA == "" || headSHA == "" {
+		return ""
+	}
+	hash, err := git.DiffHashBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
+		return ""
+	}
+	return hash
 }
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.

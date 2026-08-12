@@ -4328,6 +4328,82 @@ func verdictsArg(outcome string) []interface{} {
 	}
 }
 
+// setupReviewSessionWithCompletedWorkSession is setupReviewSession plus a
+// real on-disk git repo (item.RepoPath) and a completed work-role
+// ItemSession with a valid Base/LastCommitSha range — the fixture shape
+// Storage.ComputeCurrentDiffHash needs to actually resolve a hash, rather
+// than best-effort-returning "".
+func setupReviewSessionWithCompletedWorkSession(t *testing.T, storage *session.Storage) (itemID, sessionUUID, repoPath string) {
+	t.Helper()
+	ctx := context.Background()
+
+	repoPath = initGitRepo(t)
+	baseSHA := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+	writeFile(t, repoPath, "foo.go", "package foo\n")
+	runGit(t, repoPath, "add", "foo.go")
+	runGit(t, repoPath, "commit", "-m", "work session change")
+	headSHA := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Review me",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	ws, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.SetItemSessionBaseCommit(ctx, ws.ID, baseSHA))
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, ws.ID, headSHA, "work session change", time.Now(), 1))
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, ws.ID, time.Now()))
+
+	sessUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	return item.ID, sessUUID, repoPath
+}
+
+// TestSubmitReviewVerdict_should_persistDiffHash_When_CompletedWorkSessionExists
+// is the write-site regression test for Story 3.2.1: submit_review_verdict
+// (the MCP tool the interactive review agent actually calls) must stamp
+// DiffHash on the saved verdict via Storage.ComputeCurrentDiffHash, not
+// leave it empty. Without this test, a typo'd itemID/ctx or an accidentally
+// dropped field at this specific call site would compile and pass every
+// other test while silently making IsFlakyVerdictFlipFlop permanently see
+// an empty hash (never a match) for every verdict submitted through this
+// path — the review agent's own submission path, the one most commonly
+// exercised in production.
+func TestSubmitReviewVerdict_should_persistDiffHash_When_CompletedWorkSessionExists(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID, _ := setupReviewSessionWithCompletedWorkSession(t, storage)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Looks good.",
+		"verdicts": verdictsArg("PASS"),
+	})
+
+	_, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+
+	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, itemID, 1)
+	require.NoError(t, err)
+	require.Len(t, recent, 1)
+	assert.NotEmpty(t, recent[0].DiffHash, "submit_review_verdict must stamp DiffHash via ComputeCurrentDiffHash, not leave it empty")
+}
+
 // TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsFail is
 // acceptance criterion 0/2's core regression guard: a FAIL verdict must drive
 // the review->in_progress transition (via AutoReopenSpawner, which owns

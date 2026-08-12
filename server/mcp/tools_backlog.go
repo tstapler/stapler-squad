@@ -709,6 +709,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		OverallOutcome: overallOutcome,
 		PerCriterion:   string(perCriterionJSON),
 		Summary:        summary,
+		DiffHash:       h.storage.ComputeCurrentDiffHash(ctx, itemID),
 	}
 
 	if saveErr := h.storage.SaveReviewVerdict(ctx, itemSession.ID, verdictData); saveErr != nil {
