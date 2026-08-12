@@ -1036,32 +1036,39 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
 
-	// Set remain-on-exit as a server-wide DEFAULT before the session exists,
-	// closing a race that's always present but usually wins locally and loses
-	// under CI's slower, -race-instrumented syscalls: t.setRemainOnExit()
-	// below only runs AFTER the new-session command below returns AND
-	// existence is confirmed, but a fast-exiting program (e.g. Program="true",
-	// which exits in microseconds) can already have destroyed the session --
-	// and, since it was the server's only session, killed the server itself --
-	// before that point, especially on a brand-new socket where there's no
-	// existing server to inherit an already-set option from. Setting the
-	// GLOBAL default first means a server that has to be freshly spawned for
-	// this call already has the option active from its very first session,
-	// before any program gets a chance to run. This command's own invocation
-	// safely spins up a sessionless server if none exists yet for this socket
-	// (a tmux server with zero sessions doesn't exit-on-empty until it has
-	// HAD at least one) -- confirmed via PR #445's diagnostic logging, which
-	// caught "no server running" on 100% of list-sessions polls immediately
-	// following a successful new-session for exactly this Program="true" case.
+	// Pre-configure the server, in ONE tmux invocation, before the session
+	// exists -- closing a race that's always present but usually wins locally
+	// and loses under CI's slower, -race-instrumented syscalls:
+	// t.setRemainOnExit() below only runs AFTER the new-session command below
+	// returns AND existence is confirmed, but a fast-exiting program (e.g.
+	// Program="true", which exits in microseconds) can already have
+	// destroyed the session -- and, since it was the server's only session,
+	// killed the server itself -- before that point, especially on a
+	// brand-new socket with no pre-existing server to inherit options from.
+	//
+	// MUST be one chained invocation (`cmd1 \; cmd2 \; cmd3`), not separate
+	// commands run back-to-back -- confirmed empirically (PR #445): a tmux
+	// server that reaches zero sessions exits near-instantly by default
+	// (exit-empty defaults to on), so `start-server` followed by a SEPARATE
+	// `set-option` invocation already finds "no server running" -- the
+	// server that start-server just reported success for is already gone by
+	// the time the next process connects. Chaining into one invocation means
+	// the server never has a gap where it's both running and unprotected:
+	// start-server brings it up, exit-empty off keeps a zero-session server
+	// alive, remain-on-exit on then protects the session new-session (below)
+	// is about to create from destruction the instant its program exits.
+	// `;` here is tmux's own command-separator syntax (parsed by tmux itself
+	// from distinct argv elements), not a shell operator -- no shell is
+	// involved via exec.Cmd, so no escaping is needed or applicable.
 	// Best-effort: log and continue on failure, matching every other
 	// non-essential tmux option set in this function (history-limit,
 	// setRemainOnExit itself) -- a failure here degrades to the pre-existing
 	// (racy) behavior, not a hard Start() failure.
-	remainOnExitCmd := t.buildTmuxCommand("set-option", "-g", "remain-on-exit", "on")
+	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
 	if err := runGatedErr(context.Background(), t.serverSocket, func() error {
-		return t.cmdExec.Run(remainOnExitCmd)
+		return t.cmdExec.Run(preconfigureCmd)
 	}); err != nil {
-		log.Warn("failed to pre-set global remain-on-exit before session creation", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err)
+		log.Warn("failed to pre-configure tmux server before session creation", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err)
 	}
 
 	// Create a new detached tmux session and start the program in it.
