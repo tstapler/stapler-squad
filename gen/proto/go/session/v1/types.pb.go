@@ -383,6 +383,9 @@ const (
 	DetectedStatus_DETECTED_STATUS_UNKNOWN           DetectedStatus = 9
 	DetectedStatus_DETECTED_STATUS_READY             DetectedStatus = 10
 	DetectedStatus_DETECTED_STATUS_WAITING_FOR_AGENT DetectedStatus = 11
+	// Claude is actively compacting/summarizing conversation history (distinct
+	// from the "N% until auto-compact" approaching indicator).
+	DetectedStatus_DETECTED_STATUS_COMPACTING DetectedStatus = 12
 )
 
 // Enum value maps for DetectedStatus.
@@ -400,6 +403,7 @@ var (
 		9:  "DETECTED_STATUS_UNKNOWN",
 		10: "DETECTED_STATUS_READY",
 		11: "DETECTED_STATUS_WAITING_FOR_AGENT",
+		12: "DETECTED_STATUS_COMPACTING",
 	}
 	DetectedStatus_value = map[string]int32{
 		"DETECTED_STATUS_UNSPECIFIED":       0,
@@ -414,6 +418,7 @@ var (
 		"DETECTED_STATUS_UNKNOWN":           9,
 		"DETECTED_STATUS_READY":             10,
 		"DETECTED_STATUS_WAITING_FOR_AGENT": 11,
+		"DETECTED_STATUS_COMPACTING":        12,
 	}
 )
 
@@ -532,6 +537,9 @@ const (
 	SubStatus_SUB_STATUS_SUCCESS SubStatus = 9
 	// Claude is waiting for one or more background agents to finish (e.g. "✻ Waiting for 2 background agents").
 	SubStatus_SUB_STATUS_WAITING_FOR_AGENT SubStatus = 10
+	// Claude is actively compacting/summarizing conversation history (distinct
+	// from the "N% until auto-compact" approaching indicator).
+	SubStatus_SUB_STATUS_COMPACTING SubStatus = 11
 )
 
 // Enum value maps for SubStatus.
@@ -548,6 +556,7 @@ var (
 		8:  "SUB_STATUS_READY",
 		9:  "SUB_STATUS_SUCCESS",
 		10: "SUB_STATUS_WAITING_FOR_AGENT",
+		11: "SUB_STATUS_COMPACTING",
 	}
 	SubStatus_value = map[string]int32{
 		"SUB_STATUS_UNSPECIFIED":       0,
@@ -561,6 +570,7 @@ var (
 		"SUB_STATUS_READY":             8,
 		"SUB_STATUS_SUCCESS":           9,
 		"SUB_STATUS_WAITING_FOR_AGENT": 10,
+		"SUB_STATUS_COMPACTING":        11,
 	}
 )
 
@@ -7209,7 +7219,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\fInstanceType\x12\x1d\n" +
 	"\x19INSTANCE_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15INSTANCE_TYPE_MANAGED\x10\x01\x12\x1a\n" +
-	"\x16INSTANCE_TYPE_EXTERNAL\x10\x02*\x8c\x03\n" +
+	"\x16INSTANCE_TYPE_EXTERNAL\x10\x02*\xac\x03\n" +
 	"\x0eDetectedStatus\x12\x1f\n" +
 	"\x1bDETECTED_STATUS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14DETECTED_STATUS_IDLE\x10\x01\x12\x1e\n" +
@@ -7223,13 +7233,14 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x17DETECTED_STATUS_UNKNOWN\x10\t\x12\x19\n" +
 	"\x15DETECTED_STATUS_READY\x10\n" +
 	"\x12%\n" +
-	"!DETECTED_STATUS_WAITING_FOR_AGENT\x10\v*\x98\x01\n" +
+	"!DETECTED_STATUS_WAITING_FOR_AGENT\x10\v\x12\x1e\n" +
+	"\x1aDETECTED_STATUS_COMPACTING\x10\f*\x98\x01\n" +
 	"\fWorkingState\x12\x1d\n" +
 	"\x19WORKING_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14WORKING_STATE_ACTIVE\x10\x01\x12\x1c\n" +
 	"\x18WORKING_STATE_PROCESSING\x10\x02\x12\x16\n" +
 	"\x12WORKING_STATE_IDLE\x10\x03\x12\x19\n" +
-	"\x15WORKING_STATE_WAITING\x10\x04*\xb6\x02\n" +
+	"\x15WORKING_STATE_WAITING\x10\x04*\xd1\x02\n" +
 	"\tSubStatus\x12\x1a\n" +
 	"\x16SUB_STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSUB_STATUS_IDLE\x10\x01\x12\x19\n" +
@@ -7242,7 +7253,8 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x10SUB_STATUS_READY\x10\b\x12\x16\n" +
 	"\x12SUB_STATUS_SUCCESS\x10\t\x12 \n" +
 	"\x1cSUB_STATUS_WAITING_FOR_AGENT\x10\n" +
-	"*\xc9\x01\n" +
+	"\x12\x19\n" +
+	"\x15SUB_STATUS_COMPACTING\x10\v*\xc9\x01\n" +
 	"\x0eRateLimitState\x12 \n" +
 	"\x1cRATE_LIMIT_STATE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15RATE_LIMIT_STATE_NONE\x10\x01\x12\x1c\n" +

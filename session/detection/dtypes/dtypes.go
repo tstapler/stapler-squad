@@ -23,6 +23,7 @@ type StatusPatterns struct {
 	Active          []StatusPattern `yaml:"active"`            // Actively executing commands
 	Success         []StatusPattern `yaml:"success"`           // Task completed successfully
 	WaitingForAgent []StatusPattern `yaml:"waiting_for_agent"` // Waiting for background agent(s)
+	Compacting      []StatusPattern `yaml:"compacting"`        // Actively compacting/summarizing conversation history
 }
 
 // BinaryDetector provides per-binary pattern sets and optional content filtering.

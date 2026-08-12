@@ -29,6 +29,7 @@ func TestDetectedStatusToProto(t *testing.T) {
 		{"StatusExecuting", StatusExecuting, sessionv1.DetectedStatus_DETECTED_STATUS_EXECUTING},
 		{"StatusSuccess", StatusSuccess, sessionv1.DetectedStatus_DETECTED_STATUS_SUCCESS},
 		{"StatusWaitingForAgent", StatusWaitingForAgent, sessionv1.DetectedStatus_DETECTED_STATUS_WAITING_FOR_AGENT},
+		{"StatusCompacting", StatusCompacting, sessionv1.DetectedStatus_DETECTED_STATUS_COMPACTING},
 	}
 
 	for _, tt := range tests {
@@ -76,6 +77,7 @@ func TestDetectedStatusToSubStatus(t *testing.T) {
 		{"StatusExecuting", StatusExecuting, sessionv1.SubStatus_SUB_STATUS_PROCESSING},
 		{"StatusSuccess", StatusSuccess, sessionv1.SubStatus_SUB_STATUS_SUCCESS},
 		{"StatusWaitingForAgent", StatusWaitingForAgent, sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT},
+		{"StatusCompacting", StatusCompacting, sessionv1.SubStatus_SUB_STATUS_COMPACTING},
 	}
 
 	for _, tt := range tests {
