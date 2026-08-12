@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -100,7 +101,10 @@ func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 // assertion below is a best-effort regression guard on top of that, not independent proof —
 // for this specific corrupted-packed-refs fixture, an errantly-invoked RemoveReference would
 // also fail to parse the file and leave it unchanged, so the assertion alone can't
-// distinguish "never called" from "called but failed before writing."
+// distinguish "never called" from "called but failed before writing." See
+// TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails below for a test that
+// proves, via a fault injected below the packed-refs layer, that a real branch ref actually
+// still resolves after the classification helper both call sites share returns this error.
 func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 	repoDir := setupTestRepo(t)
 
@@ -124,6 +128,71 @@ func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) 
 	require.NoError(t, readErr)
 	assert.Equal(t, before, after,
 		"packed-refs must be untouched after a ref-check error (regression guard, see doc comment above for what this does and doesn't prove)")
+}
+
+// refFailStorer wraps a real storage.Storer and forces Reference() to return a fabricated
+// non-ErrReferenceNotFound error for one specific ref, while passing every other operation
+// through to the real underlying storer unchanged. This lets a test force branchRefExists's
+// error path against a branch that has a real, resolvable ref — something the
+// corrupted-packed-refs fixture used elsewhere in this file cannot do, since corrupting
+// packed-refs necessarily makes the whole ref store unreadable (including for independent
+// post-hoc verification), not just the one branch under test.
+type refFailStorer struct {
+	storage.Storer
+	failRef plumbing.ReferenceName
+	err     error
+}
+
+func (s *refFailStorer) Reference(name plumbing.ReferenceName) (*plumbing.Reference, error) {
+	if name == s.failRef {
+		return nil, s.err
+	}
+	return s.Storer.Reference(name)
+}
+
+// TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails proves the literal
+// requirement behind AC5 (worktree-branch-exists-race): when branchRefExists — the single
+// helper both Setup() and setupNewWorktree() call — encounters a non-ErrReferenceNotFound
+// error, the real branch ref on disk is left completely untouched. Unlike the
+// corrupted-packed-refs fixture, this uses a wrapped storer to fail only the read for the
+// target branch, leaving the rest of the real filesystem-backed ref store fully intact and
+// independently verifiable: a freshly-opened, unwrapped repo confirms the branch ref still
+// resolves to its original commit after the forced error.
+func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing.T) {
+	repoDir := setupTestRepo(t)
+
+	branchName := "existing-feature-fault-injected"
+	cmd := safeexec.CommandContext(context.Background(), "git", "branch", branchName)
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	realRepo, err := git.PlainOpen(repoDir)
+	require.NoError(t, err)
+
+	branchRef := plumbing.NewBranchReferenceName(branchName)
+	beforeRef, err := realRepo.Reference(branchRef, false)
+	require.NoError(t, err)
+	expectedHash := beforeRef.Hash()
+
+	fakeErr := errors.New("simulated ref-read I/O error")
+	faultyRepo := &git.Repository{
+		Storer: &refFailStorer{Storer: realRepo.Storer, failRef: branchRef, err: fakeErr},
+	}
+
+	exists, err := branchRefExists(faultyRepo, branchRef)
+	require.Error(t, err)
+	assert.False(t, exists)
+	assert.False(t, errors.Is(err, plumbing.ErrReferenceNotFound),
+		"a genuine ref-read failure must not be classified as ErrReferenceNotFound")
+	assert.ErrorIs(t, err, fakeErr)
+
+	// Prove the branch ref genuinely still exists and resolves to the same commit, via a
+	// completely independent, freshly-opened repo untouched by the fault injection above.
+	freshRepo, err := git.PlainOpen(repoDir)
+	require.NoError(t, err)
+	afterRef, err := freshRepo.Reference(branchRef, false)
+	require.NoError(t, err, "branch ref must still exist and resolve after a ref-check error")
+	assert.Equal(t, expectedHash, afterRef.Hash())
 }
 
 // TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers setupNewWorktree()'s
