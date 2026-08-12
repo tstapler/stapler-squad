@@ -33,7 +33,7 @@ import {
   detectionInfo, detectionBadge, unknown,
   shortcuts, shortcut, shortcutKey, completionError as completionErrorClass,
   pathIndicator, pathIndicatorValid, pathIndicatorInvalid, pathIndicatorLoading,
-  createButton,
+  createButton, error as errorClass,
 } from "./Omnibar.css";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
@@ -1280,6 +1280,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
               setInput(e.target.value);
               setDropdownDismissed(false);
               setDropdownIndex(-1);
+              setError(null);
             }}
             autoComplete="off"
             autoCorrect="off"
@@ -1397,6 +1398,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 <span>{shellCommand ? `Run "${shellCommand}"` : "Open terminal"}</span>
                 {shellDir ? <span> in {shellDir}</span> : null}
               </div>
+              {error && (
+                <div
+                  className={errorClass}
+                  role="alert"
+                  aria-live="assertive"
+                  data-testid="spawn-shell-error"
+                >
+                  {error}
+                </div>
+              )}
               {!shellCommand && !shellDir && recentCommands.length > 0 && (
                 <div data-testid="spawn-shell-recent-commands">
                   {recentCommands.map((cmd) => (
