@@ -120,6 +120,11 @@ test.describe("triage-question-answer", () => {
 
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
+      // Two separate onboarding modals can intercept pointer events on first
+      // load: the app-wide "One place for all your AI coding sessions" tour
+      // and the backlog-specific "How backlog items work" tour. Both must be
+      // suppressed (see backlog-plan-approval-flicker.spec.ts).
+      localStorage.setItem("stapler-squad:onboarded", "true");
       localStorage.setItem("stapler-squad:backlog-onboarded", "true");
     });
   });
@@ -216,9 +221,12 @@ test.describe("triage-question-answer", () => {
       await input.fill("Yes, offline-first for the mobile client.");
       await page.getByTestId("triage-question-answer-submit-0").click();
 
-      const errorBanner = page.getByTestId("triage-error-banner");
+      // TriageDiffSection's answer-form error path renders the shared
+      // InlineError component (role="alert", no data-testid) rather than the
+      // old TriageErrorBanner — see fix commit 255d22505's headline override
+      // ("Failed to submit answer") wired at the call site.
+      const errorBanner = page.getByRole("alert").filter({ hasText: "Failed to submit answer" });
       await expect(errorBanner).toBeVisible();
-      await expect(errorBanner).toHaveAttribute("role", "alert");
 
       // The form never closed — input-0 is still rendered with the typed
       // draft intact (a silent no-op / lost answer would instead have

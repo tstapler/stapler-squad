@@ -94,6 +94,11 @@ test.describe("plan-review", () => {
 
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
+      // Two separate onboarding modals can intercept pointer events on first
+      // load: the app-wide "One place for all your AI coding sessions" tour
+      // and the backlog-specific "How backlog items work" tour. Both must be
+      // suppressed (see backlog-plan-approval-flicker.spec.ts).
+      localStorage.setItem("stapler-squad:onboarded", "true");
       localStorage.setItem("stapler-squad:backlog-onboarded", "true");
     });
   });

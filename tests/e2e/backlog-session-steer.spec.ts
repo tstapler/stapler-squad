@@ -116,6 +116,14 @@ test.describe("backlog-session-steer", () => {
   test.beforeEach(async ({ page }) => {
     client = new SessionClient(BASE_URL);
     await page.addInitScript(() => {
+      // Two separate onboarding modals can intercept pointer events on first
+      // load: the app-wide "One place for all your AI coding sessions" tour
+      // (useOnboarding.ts's ONBOARDED_KEY) and the backlog-specific "How
+      // backlog items work" tour (useBacklogTour.ts's BACKLOG_ONBOARDED_KEY).
+      // Both must be suppressed or a Steer click can get swallowed by
+      // whichever modal is still showing (see backlog-plan-approval-flicker
+      // .spec.ts, which documents this same pair).
+      localStorage.setItem("stapler-squad:onboarded", "true");
       localStorage.setItem("stapler-squad:backlog-onboarded", "true");
     });
   });
@@ -187,6 +195,15 @@ test.describe("backlog-session-steer", () => {
       const toggle = page.getByTestId(`session-steer-toggle-${realSessionId}`);
       const input = page.getByTestId(`session-steer-input-${realSessionId}`);
 
+      // This test spawns a real tmux-backed session via client.createSession
+      // (unlike the fake-sessionId tests elsewhere in this file), so the
+      // detail pane's first render can occasionally take longer than the
+      // default action timeout under load — wait explicitly before the
+      // first interaction rather than letting toggle.click() itself be the
+      // (shorter) implicit wait. See the matching comment on the
+      // ended-session test below.
+      await expect(toggle).toBeVisible({ timeout: 10000 });
+
       // Enter submits, same success path as clicking Send.
       await toggle.click();
       await input.fill("run the linter");
@@ -236,17 +253,18 @@ test.describe("backlog-session-steer", () => {
       await page.getByTestId(`session-steer-submit-${fakeSessionId}`).click();
 
       // useSessionService.updateSession() swallows the RPC error and returns
-      // null; handleSteerSession re-throws a generic message so
-      // SessionsSection's composer catch can keep itself open (ADR-001). Both
-      // the composer's own inline steerError span and BacklogItemDetail's
-      // action toast render this same text with role="alert" — assert the
-      // composer's specifically (scoped to the steer form), and `.first()`
-      // guards against Playwright's strict-mode multi-match error if the
-      // toast is still on screen too.
+      // null; handleSteerSession re-throws the real error message read from
+      // the sessions-error redux slice (fix commit 255d22505 — previously a
+      // hardcoded "Failed to steer session." for every failure cause) so
+      // SessionsSection's composer catch can keep itself open (ADR-001) with
+      // the actual failure reason. Both the composer's own inline steerError
+      // span and BacklogItemDetail's action toast render this same text with
+      // role="alert" — assert the composer's specifically (scoped to the
+      // steer form).
       await expect(
         page
           .locator(`#session-steer-composer-${fakeSessionId}`)
-          .locator('[role="alert"]', { hasText: "Failed to steer session." })
+          .locator('[role="alert"]', { hasText: "session is not accepting input" })
       ).toBeVisible();
       await expect(input).toBeVisible();
       await expect(input).toHaveValue("this must not be lost");
