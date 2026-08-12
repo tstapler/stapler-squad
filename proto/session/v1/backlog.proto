@@ -1083,6 +1083,10 @@ enum StuckReason {
   // (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview) was
   // skipped because the item already has an active work or review session.
   STUCK_REASON_RESPAWN_BLOCKED_ACTIVE = 14;
+  // STUCK_REASON_MULTIPLE_REASONS: see domain.StuckReasonMultipleReasons — synthetic aggregate signal for multiple simultaneous stuck reasons.
+  STUCK_REASON_MULTIPLE_REASONS = 15;
+  // STUCK_REASON_BOUNCE_CAP_EXHAUSTED: see domain.StuckReasonBounceCapExhausted — synthetic aggregate signal for a bouncing item that exhausted its remediation cap.
+  STUCK_REASON_BOUNCE_CAP_EXHAUSTED = 16;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
