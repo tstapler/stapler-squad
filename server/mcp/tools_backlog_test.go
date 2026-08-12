@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"go.uber.org/goleak"
 )
 
 // newTestBacklogStorage creates a temporary Storage for testing.
@@ -4427,4 +4428,453 @@ func TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails(t *te
 	assert.Contains(t, tc.Text, "Review verdict submitted",
 		"AutoReopenAfterFailedReview's CAS failure must not surface as a tool error — the normal success text must still be returned")
 	assert.Equal(t, []string{itemID}, reopener.calledWith())
+}
+
+// --- wait_for_backlog_event ---
+
+func decodeWaitResult(t *testing.T, res *mcpgo.CallToolResult) WaitForBacklogEventResult {
+	t.Helper()
+	require.Len(t, res.Content, 1)
+	tc, ok := res.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	var out WaitForBacklogEventResult
+	require.NoError(t, json.Unmarshal([]byte(tc.Text), &out))
+	return out
+}
+
+func TestWaitForBacklogEvent_ReturnsErrorWhenEventBusNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "No event bus",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: nil}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID})
+
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, ErrEventStreamUnavailable, errObj["code"])
+}
+
+func TestWaitForBacklogEvent_ReturnsErrorForInvalidItemID(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+
+	req := makeToolReq(map[string]interface{}{"item_id": "not-a-uuid"})
+	result, err := handler.waitForBacklogEvent(context.Background(), req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+}
+
+func TestWaitForBacklogEvent_ReturnsItemNotFoundForUnknownItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+
+	req := makeToolReq(map[string]interface{}{"item_id": "00000000-0000-0000-0000-000000000099"})
+	result, err := handler.waitForBacklogEvent(context.Background(), req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, ErrItemNotFound, errObj["code"])
+}
+
+func TestWaitForBacklogEvent_ReturnsImmediatelyWhenVerdictAlreadyRecorded(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Already reviewed",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewOutcomePass,
+		Summary:        "lgtm",
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(30)})
+
+	start := time.Now()
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+
+	require.Less(t, elapsed, 5*time.Second, "must return immediately from the precheck, not wait out timeout_seconds")
+	out := decodeWaitResult(t, result)
+	require.True(t, out.Success)
+	require.True(t, out.EventReceived)
+	require.True(t, out.FromCurrentState)
+	require.Equal(t, "verdict_recorded", out.EventKind)
+	require.Equal(t, string(session.ReviewOutcomePass), out.VerdictOutcome)
+}
+
+func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Already archived",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.ArchiveBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "event_type": "any", "timeout_seconds": float64(30)})
+
+	start := time.Now()
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+
+	require.Less(t, elapsed, 5*time.Second)
+	out := decodeWaitResult(t, result)
+	require.True(t, out.EventReceived)
+	require.True(t, out.FromCurrentState)
+	require.Equal(t, "item_archived", out.EventKind)
+	require.True(t, out.IsTerminal)
+}
+
+// waitSubscriberCount polls until the eventBus reports the expected
+// subscriber count, avoiding a sleep-based race — mirrors the fix-flaky-
+// tests rule's "prefer a synchronization primitive" guidance.
+func waitSubscriberCount(t *testing.T, bus *events.EventBus, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if bus.SubscriberCount() == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for SubscriberCount() == %d (got %d)", want, bus.SubscriberCount())
+}
+
+func TestWaitForBacklogEvent_ReturnsMatchedEventOnLiveVerdict(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Awaiting verdict",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
+
+	resultCh := make(chan *mcpgo.CallToolResult, 1)
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, req)
+		require.NoError(t, callErr)
+		resultCh <- res
+	}()
+
+	waitSubscriberCount(t, bus, 1)
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeVerdictRecorded,
+			Item: &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+			Verdict: &session.ReviewVerdictData{
+				OverallOutcome: session.ReviewOutcomePass,
+				Summary:        "ship it",
+			},
+		},
+	})
+
+	select {
+	case result := <-resultCh:
+		out := decodeWaitResult(t, result)
+		require.True(t, out.EventReceived)
+		require.False(t, out.FromCurrentState)
+		require.Equal(t, "verdict_recorded", out.EventKind)
+		require.Equal(t, string(session.ReviewOutcomePass), out.VerdictOutcome)
+		require.Equal(t, "ship it", out.VerdictSummary)
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForBacklogEvent did not return after matching event was published")
+	}
+}
+
+func TestWaitForBacklogEvent_FiltersByEventType(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Filtered wait",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	otherItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Different item",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"event_type":      "verdict_recorded",
+		"timeout_seconds": float64(5),
+	})
+
+	resultCh := make(chan *mcpgo.CallToolResult, 1)
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, req)
+		require.NoError(t, callErr)
+		resultCh <- res
+	}()
+
+	waitSubscriberCount(t, bus, 1)
+
+	// Wrong item, status_transition kind — must be ignored.
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeStatusTransition,
+			Item: &session.BacklogItemData{ID: otherItem.ID, Status: string(session.BacklogStatusInProgress)},
+		},
+	})
+	// Right item, wrong kind (status_transition, filter wants verdict_recorded) — must be ignored.
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind:      events.BacklogChangeStatusTransition,
+			Item:      &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusInProgress)},
+			OldStatus: string(session.BacklogStatusReview),
+			NewStatus: string(session.BacklogStatusInProgress),
+		},
+	})
+	// Right item, right kind — must match.
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeVerdictRecorded,
+			Item: &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+			Verdict: &session.ReviewVerdictData{
+				OverallOutcome: session.ReviewOutcomePass,
+				Summary:        "matched",
+			},
+		},
+	})
+
+	select {
+	case result := <-resultCh:
+		out := decodeWaitResult(t, result)
+		require.True(t, out.EventReceived)
+		require.Equal(t, "verdict_recorded", out.EventKind)
+		require.Equal(t, "matched", out.VerdictSummary)
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForBacklogEvent did not return the correctly-filtered event")
+	}
+}
+
+func TestWaitForBacklogEvent_TimesOutWithNoEvent(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Never verdicted",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(1)})
+
+	start := time.Now()
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, elapsed, 1*time.Second, "must actually wait, not return an instant false-positive timeout")
+	out := decodeWaitResult(t, result)
+	require.True(t, out.Success)
+	require.False(t, out.EventReceived)
+	require.NotNil(t, out.Error)
+	require.Equal(t, "WAIT_TIMEOUT", out.Error.Code)
+}
+
+func TestWaitForBacklogEvent_ConcurrentWaitersBothReceiveEvent(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Two waiters",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
+
+	results := make(chan WaitForBacklogEventResult, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			res, callErr := handler.waitForBacklogEvent(ctx, req)
+			require.NoError(t, callErr)
+			results <- decodeWaitResult(t, res)
+		}()
+	}
+
+	waitSubscriberCount(t, bus, 2)
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeVerdictRecorded,
+			Item: &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+			Verdict: &session.ReviewVerdictData{
+				OverallOutcome: session.ReviewOutcomePass,
+				Summary:        "both should see this",
+			},
+		},
+	})
+
+	var got []WaitForBacklogEventResult
+	for i := 0; i < 2; i++ {
+		select {
+		case r := <-results:
+			got = append(got, r)
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for both concurrent waiters to return")
+		}
+	}
+
+	require.Len(t, got, 2)
+	for _, r := range got {
+		require.True(t, r.EventReceived)
+		require.Equal(t, string(session.ReviewOutcomePass), r.VerdictOutcome)
+		require.Equal(t, "both should see this", r.VerdictSummary)
+	}
+}
+
+func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+
+	// Baseline is captured after storage setup (not before) — opening the
+	// sqlite-backed Storage starts its own long-lived database/sql connection
+	// pool goroutines that are test-infra noise, not something
+	// waitForBacklogEvent itself could leak.
+	baseline := goleak.IgnoreCurrent()
+
+	// Timeout-exit path.
+	timeoutItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Leak check: timeout",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = handler.waitForBacklogEvent(ctx, makeToolReq(map[string]interface{}{
+		"item_id":         timeoutItem.ID,
+		"timeout_seconds": float64(1),
+	}))
+	require.NoError(t, err)
+
+	// Matched-event-exit path.
+	matchedItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Leak check: matched",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	resultCh := make(chan *mcpgo.CallToolResult, 1)
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, makeToolReq(map[string]interface{}{
+			"item_id":         matchedItem.ID,
+			"timeout_seconds": float64(5),
+		}))
+		require.NoError(t, callErr)
+		resultCh <- res
+	}()
+	waitSubscriberCount(t, bus, 1)
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeVerdictRecorded,
+			Item: &session.BacklogItemData{ID: matchedItem.ID, Status: string(session.BacklogStatusReview)},
+			Verdict: &session.ReviewVerdictData{
+				OverallOutcome: session.ReviewOutcomePass,
+			},
+		},
+	})
+	select {
+	case <-resultCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("matched-path call did not return")
+	}
+
+	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+		"both calls must Unsubscribe on exit")
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace proves the
+// subscribe-before-read ordering: an event published inside
+// testAfterWaitSubscribeHook (after Subscribe returns, before the precheck
+// read) is not missed. This var is shared package state — do not run this
+// test with t.Parallel() relative to other tests using the same hook.
+func TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Race window",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	testAfterWaitSubscribeHook = func() {
+		bus.Publish(&events.Event{
+			Type: events.EventBacklogItemChanged,
+			BacklogItemPayload: &events.BacklogItemEventPayload{
+				Kind: events.BacklogChangeVerdictRecorded,
+				Item: &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+				Verdict: &session.ReviewVerdictData{
+					OverallOutcome: session.ReviewOutcomePass,
+					Summary:        "landed in the race window",
+				},
+			},
+		})
+	}
+	t.Cleanup(func() { testAfterWaitSubscribeHook = nil })
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(2)})
+
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	require.NoError(t, err)
+
+	out := decodeWaitResult(t, result)
+	require.True(t, out.EventReceived, "an event published inside the subscribe hook must not be missed")
+	require.Equal(t, "landed in the race window", out.VerdictSummary)
 }
