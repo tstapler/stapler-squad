@@ -57,13 +57,25 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks
+.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks
 
 # Default target
 help: ## Show this help message
 	@echo "Stapler Squad Development Makefile"
 	@echo "================================="
 	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: ports
+ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
+	@base=$$(python3 -c "import zlib; print(61000 + zlib.crc32(b'stapler-squad') % 4525)" 2>/dev/null || echo 62871); \
+	echo "Manual dev port block (base $$base = 61000 + CRC32(\"stapler-squad\") % 4525):"; \
+	echo "  $$base = manual instance #1 - PORT"; \
+	echo "  $$((base+1)) = manual instance #1 - --remote-port"; \
+	echo "  $$((base+2)) = manual instance #2 - PORT"; \
+	echo "  $$((base+3)) = manual instance #2 - --remote-port"; \
+	echo "  $$((base+4))-$$((base+9)) = spare"; \
+	echo ""; \
+	echo "Fixed (documented, do not reassign): :8543 main service, :8444 remote-access default"
 
 # Registry targets
 # Per-feature files live under docs/registry/features/ — one file per RPC/component.
@@ -156,7 +168,7 @@ web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FIL
 		cd web-app && pnpm install --frozen-lockfile; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@cd web-app && NEXT_BUILD_MODE=development pnpm run build
+	@cd web-app && NEXT_BUILD_MODE=development ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -496,7 +508,19 @@ test-race: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with race detector en
 	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short ./...
 
 test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
-	go test -race -tags integration ./...
+	# ./session and ./session/tmux are the only integration-tagged packages that
+	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
+	# Running the full suite's default per-package parallelism let those two
+	# packages' tmux-heavy tests fork/poll real tmux servers concurrently and
+	# compete for scheduler time, which was the root cause of
+	# TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff intermittently
+	# missing its reconnect-backoff cycle count under `make ci` while always
+	# passing in isolation (see registryPollTimeout's comment in
+	# session/tmux/server_registry_integration_test.go). -p 1 serializes just
+	# these two packages against each other; everything else still runs in
+	# parallel via the second invocation.
+	go test -race -tags integration -p 1 ./session ./session/tmux
+	go test -race -tags integration $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
 	go test -v -tags=harness -run TestTriageHarness ./server/services/

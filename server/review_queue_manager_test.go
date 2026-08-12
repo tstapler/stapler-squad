@@ -9,11 +9,39 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/testutil"
 )
+
+// TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic is the regression test
+// for a nil-pointer panic: a ReactiveQueueManager constructed but never Start()ed has a nil
+// rqm.ctx. A controller can report a status change before Start() runs (e.g. in a test
+// fixture, or a race during startup), and OnControllerStatusChange used to read rqm.ctx.Done()
+// directly instead of the baseContext() helper already used elsewhere in this file to guard
+// exactly this case.
+func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.T) {
+	queue := session.NewReviewQueue()
+	statusManager := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusManager, nil)
+	eventBus := events.NewEventBus(10)
+	t.Cleanup(eventBus.Close)
+
+	rqm := NewReactiveQueueManager(queue, poller, eventBus, statusManager, nil)
+	// rqm.ctx is intentionally nil here — Start() is never called.
+
+	require.NotPanics(t, func() {
+		rqm.OnControllerStatusChange(&session.Instance{Title: "never-started"}, detection.DetectedStatus(0))
+	})
+
+	// OnControllerStatusChange dispatches to a background goroutine; give it a moment to
+	// run so a reintroduced nil-pointer panic surfaces in this test rather than crashing
+	// the process asynchronously during an unrelated later test.
+	time.Sleep(50 * time.Millisecond)
+}
 
 // TestReactiveQueueManagerIntegration tests the full reactive queue workflow
 func TestReactiveQueueManagerIntegration(t *testing.T) {

@@ -949,3 +949,147 @@ func TestBug4_AcceptEditsPattern(t *testing.T) {
 		t.Errorf("DetectFromLines with ⏵⏵ accept-edits bar: got %s, want StatusIdle", got)
 	}
 }
+
+// TestBug_BatchedToolCallSummary_NotClassifiedIdle guards against the newer Claude Code
+// batched multi-tool-call summary line (e.g. "✻ Searching for 9 patterns, reading 2 files,
+// running 7 shell commands…") being misclassified as StatusUnknown/StatusIdle/StatusReady.
+//
+// Root cause: claude_thinking_verb required the spinner glyph + capitalized verb to be
+// immediately followed by an ellipsis or 1-3 dots ("Roosting…"). The batched summary format
+// interposes a comma-separated clause list ("Searching for 9 patterns, reading 2 files, ...")
+// between the verb and the ellipsis, so the line fell through the whole priority chain to the
+// StatusUnknown catch-all — which session/autonomous_driver.go's waitForIdle treats as idle,
+// eventually firing a spurious "keep going" nudge after the 60s settle window.
+//
+// The widened pattern requires the batched-clause branch to contain a digit (a tool-call
+// count) and to end the line with the ellipsis/dots — see claude.go's claude_thinking_verb
+// doc comment for why those two constraints exist (they prevent ordinary multi-sentence prose
+// with a mid-line period, like the claude_cost_summary.txt fixture's "I've completed the
+// implementation. Here's a summary..." line, from false-matching).
+func TestBug_BatchedToolCallSummary_NotClassifiedIdle(t *testing.T) {
+	sd := NewStatusDetector()
+
+	cases := []struct {
+		name  string
+		input string
+		want  DetectedStatus
+	}{
+		{
+			name:  "reported shape — unicode ellipsis",
+			input: "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…",
+			want:  StatusExecuting,
+		},
+		{
+			name:  "ASCII dots instead of unicode ellipsis",
+			input: "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands...",
+			want:  StatusExecuting,
+		},
+		{
+			name:  "reduced-motion glyph variant",
+			input: "● Searching for 9 patterns, reading 2 files, running 7 shell commands…",
+			want:  StatusExecuting,
+		},
+		{
+			name:  "single clause, singular counts",
+			input: "✻ Reading for 1 pattern…",
+			want:  StatusExecuting,
+		},
+		{
+			name:  "indented — task manager sub-item",
+			input: "  ✽ Searching for 12 patterns, reading 3 files…",
+			want:  StatusExecuting,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sd.Detect([]byte(tc.input))
+			if got != tc.want {
+				t.Errorf("Detect(%q) = %s, want %s\n"+
+					"  Batched multi-tool-call summary lines must classify as Active/StatusExecuting,\n"+
+					"  not fall through to StatusUnknown (which waitForIdle treats as idle).",
+					tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBug_BatchedToolCallSummary_ProseNotFalsePositive guards the widened claude_thinking_verb
+// pattern against matching ordinary Claude output that happens to start with a spinner glyph
+// (e.g. the "●" markdown bullet Claude also uses for prose, not just spinner frames) and contain
+// a digit — the batched-clause branch requires the literal "for <N>" immediately after the verb
+// and a real ellipsis/three-dot terminator specifically to exclude these shapes, which were
+// caught in code review as reachable via ordinary single- and multi-sentence bullet completions
+// (e.g. "Added 3 new tests..." and "Fixed 3 bugs." are both common Claude output, not contrived).
+func TestBug_BatchedToolCallSummary_ProseNotFalsePositive(t *testing.T) {
+	sd := NewStatusDetector()
+
+	cases := []struct {
+		name  string
+		input string
+		want  DetectedStatus
+	}{
+		{
+			name:  "bulleted prose sentence with mid-line period",
+			input: "● I've completed the implementation. Here's a summary of what was done:",
+			want:  StatusSuccess, // matches the unrelated "I've completed" task_complete pattern
+		},
+		{
+			name:  "bulleted prose with digit but no trailing ellipsis",
+			input: "● Reviewed 3 files and found no issues. Ready for the next step.",
+			want:  StatusUnknown,
+		},
+		{
+			name:  "single-sentence bullet completion ending in one period",
+			input: "● Fixed 3 bugs.",
+			want:  StatusUnknown,
+		},
+		{
+			name:  "single-sentence bullet completion, different verb and count",
+			input: "● Added 2 tests.",
+			want:  StatusUnknown,
+		},
+		{
+			name:  "multi-sentence bullet with digit and trailing ellipsis, no 'for'",
+			input: "* Added 3 new tests to cover edge cases…",
+			want:  StatusUnknown,
+		},
+		{
+			name:  "dialog/workflow content with digit and trailing ellipsis, no 'for'",
+			input: "● Workflow(Migrate all 137 backend features to the typed TypeScript+Go catalog…",
+			want:  StatusUnknown,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sd.Detect([]byte(tc.input))
+			if got != tc.want {
+				t.Errorf("Detect(%q) = %s, want %s\n"+
+					"  Ordinary prose/dialog starting with a glyph bullet must not false-match the\n"+
+					"  widened batched tool-call summary branch of claude_thinking_verb.",
+					tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBug_BatchedToolCallSummary_WithContextFromLines mirrors the real pane capture shape:
+// the batched summary line followed by a separate "esc to interrupt" footer line, replayed
+// through DetectFromLines/DetectWithContextFromLines like a live autonomous-driver poll would.
+func TestBug_BatchedToolCallSummary_WithContextFromLines(t *testing.T) {
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…",
+		"esc to interrupt                                                    12% until auto-compact",
+	}
+
+	got := sd.DetectFromLines(lines)
+	if got != StatusExecuting {
+		t.Errorf("DetectFromLines(batched summary + esc-to-interrupt footer) = %s, want StatusExecuting", got)
+	}
+
+	gotCtx, _ := sd.DetectWithContextFromLines(lines)
+	if gotCtx != StatusExecuting {
+		t.Errorf("DetectWithContextFromLines(batched summary + esc-to-interrupt footer) = %s, want StatusExecuting", gotCtx)
+	}
+}

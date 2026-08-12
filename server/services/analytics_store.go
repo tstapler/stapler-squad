@@ -116,6 +116,11 @@ type AnalyticsSummary struct {
 	// EscalationReasonCounts breaks down escalations by category (classifier.EscalationCategory
 	// string values) — no-match, explicit-rule, domain-age, secret-scan, unclassifiable.
 	EscalationReasonCounts map[string]int `json:"escalation_reason_counts"`
+
+	// RiskLevelCounts breaks down escalations by classifier.RiskLevel string value
+	// ("low"/"medium"/"high"/"critical"), scoped to escalated decisions only — same scope as
+	// EscalationReasonCounts, so the two breakdowns share a denominator.
+	RiskLevelCounts map[string]int `json:"risk_level_counts"`
 }
 
 // AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite
@@ -366,6 +371,9 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	subcommandStats := make(map[string]SubcommandStat)
 	// escalation-reason breakdown: category → count
 	escalationReasonCounts := make(map[string]int)
+	// risk-level breakdown: classifier.RiskLevel string → count (same scope as
+	// escalationReasonCounts, so both tables share a denominator)
+	riskLevelCounts := make(map[string]int)
 
 	for _, e := range entries {
 		summary.TotalDecisions++
@@ -442,6 +450,9 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 		if e.Decision == "escalate" || (e.Decision == "auto_deny" && e.RuleID == classifier.RuleIDSecretScan) {
 			cat := classifier.CategorizeEscalationRuleID(e.RuleID)
 			escalationReasonCounts[string(cat)]++
+			if e.RiskLevel != "" {
+				riskLevelCounts[e.RiskLevel]++
+			}
 		}
 	}
 
@@ -476,6 +487,7 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	}
 
 	summary.EscalationReasonCounts = escalationReasonCounts
+	summary.RiskLevelCounts = riskLevelCounts
 
 	return summary
 }

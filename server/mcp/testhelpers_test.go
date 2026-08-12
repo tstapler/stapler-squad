@@ -45,6 +45,10 @@ func (s *stubStore) UpdateInstanceLastUserResponse(title string, t time.Time) er
 	return nil
 }
 
+func (s *stubStore) UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error {
+	return nil
+}
+
 func (s *stubStore) ListInstanceData() ([]session.InstanceData, error) {
 	if s.loadErr != nil {
 		return nil, s.loadErr

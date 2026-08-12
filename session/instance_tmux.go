@@ -80,6 +80,34 @@ func isClaude(program string) bool {
 	return false
 }
 
+// yoloFlagByAgent maps a supported agent's basename to the CLI flag that
+// bypasses its tool/permission-approval prompts entirely. This is a separate
+// mechanism from AutoYes's --permission-mode injection in buildClaudeCommand
+// -- see Instance.AutoApprove's doc comment.
+var yoloFlagByAgent = map[string]string{
+	"claude": "--dangerously-skip-permissions",
+	"aider":  "--yes-always", // NOT "--yes" -- verified against the installed
+	// aider binary's --help (v0.78.0): --yes-always is the current flag.
+}
+
+// yoloFlagFor returns the yolo/auto-approve flag for the agent detected in
+// program's whitespace-delimited tokens (basename match, mirroring isClaude),
+// or "" if the agent has no known flag.
+func yoloFlagFor(program string) string {
+	for _, token := range strings.Fields(program) {
+		if flag, ok := yoloFlagByAgent[filepath.Base(token)]; ok {
+			return flag
+		}
+	}
+	return ""
+}
+
+// AutoApproveSupported reports whether program is a recognized agent that
+// AutoApprove can inject a bypass flag for.
+func AutoApproveSupported(program string) bool {
+	return yoloFlagFor(program) != ""
+}
+
 // pm returns the process manager, lazy-initializing with the default TmuxBackend if nil.
 // This mirrors the old embedded-struct behaviour where a zero-value TmuxProcessManager
 // was always valid for method calls (session == nil → IsAlive()/HasSession() return false).
@@ -106,9 +134,19 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	var cmd string
 	switch p := classifyProgram(i.Program).(type) {
 	case claudeProgram:
+		// AutoApprove is injected inside buildClaudeCommand, before the
+		// trailing "--" prompt separator -- see that function's comment for
+		// why appending it here (after the separator) would be silently
+		// swallowed as inert positional text instead of a real flag.
 		cmd = i.buildClaudeCommand(p.base, claudeSessionID)
 	case plainProgram:
 		cmd = p.cmd
+		if i.AutoApprove {
+			if flag := yoloFlagFor(i.Program); flag != "" {
+				cmd = cmd + " " + flag
+				log.ForSession(i.Title).Debug("auto-approve flag injected", "program", i.Program, "flag", flag)
+			}
+		}
 	default:
 		panic(fmt.Sprintf("unknown programKind %T", p))
 	}
@@ -153,6 +191,20 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 	}
 	if i.AutoYes {
 		parts = append(parts, "--permission-mode", PermissionModeBypassPermissions)
+	}
+	if i.AutoApprove {
+		// Must be appended here, before the "--" prompt separator below --
+		// once "--" is emitted, claude treats every subsequent token as
+		// positional, so appending this after the separator (e.g. in
+		// buildLaunchCommand, post-switch) would be silently ignored as
+		// prompt text rather than parsed as a real flag. Verified empirically
+		// that Claude CLI accepts this alongside AutoYes's --permission-mode
+		// bypassPermissions on the same command line without error (both
+		// bypass in the same direction; harmless if both are set).
+		if flag := yoloFlagFor(base); flag != "" {
+			parts = append(parts, flag)
+			log.ForSession(i.Title).Debug("auto-approve flag injected", "program", i.Program, "flag", flag)
+		}
 	}
 	if i.OneShot {
 		parts = append(parts, "-p", "--output-format", "json")

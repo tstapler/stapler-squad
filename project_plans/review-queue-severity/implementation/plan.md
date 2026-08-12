@@ -712,3 +712,36 @@ is severity-first, and the severity filter narrows the list.
 - **Task 8.3.1** — `ADR-001-risk-level-vocabulary-and-fail-safe-representation.md` already
   written in `project_plans/review-queue-severity/decisions/` as part of this planning pass —
   no further action; referenced here for completeness of the task hierarchy.
+
+## Implementation Deviations
+
+**Task 6.2.2 (snapshot-order-freeze) was not implemented as specified.** The plan calls for
+moving severity sort computation to `reviewingIdsSnapshot` capture/refresh time (a dedicated
+frozen-order mechanism, plus a stability test simulating a poll that changes underlying data
+but not snapshot membership), to prevent visible reordering of already-rendered rows while a
+user is mid-review.
+
+**What shipped instead**: severity sort runs inside the same live `allFilteredItems` `useMemo`
+as every other `SortField` (priority/age/diffSize/name — none of which have a freeze
+mechanism either), with an inline comment at the `case "severity":` branch
+(`ReviewQueuePanel.tsx`) explaining why.
+
+**Reasoning**: `reviewingIdsSnapshot` already freezes *membership* — a session not in the
+snapshot can't appear in `items` regardless of sort field, so a genuinely new item can never
+appear mid-review without an explicit "N new items added" banner click. The remaining risk
+Task 6.2.2 was written to cover is an *already-visible* item's sort key changing under it. For
+every other `SortField` that's a live risk (priority/age/diffSize genuinely mutate over a
+session's lifetime) — but `PendingApproval.RiskLevel` is captured once at approval creation
+and never re-derived (`server/services/approval_store.go`, same contract as
+`EscalationReason`/`EscalationCategory`), so an already-visible item's `risk_level` cannot
+change while the user is reviewing it. The scenario the freeze exists to prevent has no live
+trigger for this specific field.
+
+**Why this is a deviation worth recording, not silently accepting**: an independent
+architecture review (sdd:6-verify Layer 2) flagged this as a CONCERN — a plan requirement and
+its regression test were dropped based on a judgment call that, while independently assessed
+as "plausible," was made unilaterally during implementation rather than reviewed before
+Epic 6 shipped. This section is that review, made explicit rather than left as only a code
+comment. If a future risk-level *re-derivation* path is ever added (e.g. re-classifying a
+stale approval against updated rules), this reasoning breaks and Task 6.2.2's freeze
+mechanism should be revisited for real.

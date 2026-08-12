@@ -120,6 +120,20 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 	return nil
 }
 
+// RenameBranch renames the worktree's current branch in place (git branch -m) and
+// updates g.branchName to match. Used to move a worktree created under a
+// provisional name onto the final branch name once it's known, without losing the
+// worktree's existing content or commits — e.g. TriggerTriage names its worktree
+// before the LLM call reveals the item's slug, then renames it afterward to the
+// same "backlog/<item>" branch a later SpawnSessionFromItem will look for.
+func (g *GitWorktree) RenameBranch(newBranchName string) error {
+	if _, err := g.runGitCommand(g.worktreePath, "branch", "-m", newBranchName); err != nil {
+		return fmt.Errorf("failed to rename branch to %q: %w", newBranchName, err)
+	}
+	g.branchName = newBranchName
+	return nil
+}
+
 // stageAndCommit stages all changes (minus scaffolding), then commits — unless
 // the only staged change was a scaffolding file that staging just untracked, in
 // which case it skips the commit gracefully instead of failing on git's

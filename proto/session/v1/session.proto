@@ -333,6 +333,10 @@ service SessionService {
   // GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
   rpc GetEscapeAnalyticsSummary(GetEscapeAnalyticsSummaryRequest) returns (GetEscapeAnalyticsSummaryResponse) {}
 
+  // GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
+  // across all sessions, plus a per-session breakdown to spot outliers.
+  rpc GetEscapeAnalyticsGlobalSummary(GetEscapeAnalyticsGlobalSummaryRequest) returns (GetEscapeAnalyticsGlobalSummaryResponse) {}
+
   // HibernateSession checkpoints the session state, kills the AI process, and
   // transitions the session to Hibernated status.
   rpc HibernateSession(HibernateSessionRequest) returns (HibernateSessionResponse) {}
@@ -581,6 +585,13 @@ message CreateSessionRequest {
   // alias_name, when non-empty, resolves session defaults via the named alias preset.
   // Path and profile are resolved from the alias config; path from req is used as override if non-empty.
   string alias_name = 27;
+
+  // auto_approve injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
+  // Independent of auto_yes — see auto_yes's own comment for the distinction.
+  // Defaults to false; never implicitly set true. Rejected server-side if the
+  // resolved program isn't a supported agent (see AutoApproveSupported).
+  bool auto_approve = 28;
 }
 
 message CreateSessionResponse {
@@ -628,6 +639,13 @@ message UpdateSessionRequest {
 
   // Update the session's free-form note. Capped at 10,000 bytes.
   optional string note = 12;
+
+  // Enable or disable auto-approve (yolo mode) on a session. Injects a
+  // per-agent CLI flag that skips permission/approval prompts entirely.
+  // Independent of autonomous_mode and of auto_yes (create-time only,
+  // not updatable). Toggling this on an Active session restarts it so the
+  // flag takes effect (see SetAutoApprove's doc comment).
+  optional bool auto_approve = 13;
 }
 
 message UpdateSessionResponse {
@@ -2170,6 +2188,9 @@ message FeatureFlag {
   bool enabled = 2;
   // Human-readable description of what the feature does.
   string description = 3;
+  // Optional human-readable status line (e.g. why a controller-backed flag is
+  // currently off). Empty when not applicable.
+  string status_detail = 4;
 }
 
 message GetFeatureFlagsRequest {}
@@ -2267,6 +2288,26 @@ message GetEscapeAnalyticsSummaryRequest {
 
 message GetEscapeAnalyticsSummaryResponse {
   repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+}
+
+message GetEscapeAnalyticsGlobalSummaryRequest {
+  optional google.protobuf.Timestamp start_time = 1;
+  optional google.protobuf.Timestamp end_time = 2;
+}
+
+message GetEscapeAnalyticsGlobalSummaryResponse {
+  repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+  repeated SessionEscapeSummary per_session = 5;
+}
+
+message SessionEscapeSummary {
+  string session_id = 1;
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;

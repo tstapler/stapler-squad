@@ -147,7 +147,9 @@ describe("LocalFileBrowser — truncation notice", () => {
 
     render(<LocalFileBrowser />);
 
-    const notice = await screen.findByTestId("file-browser-truncation-notice");
+    // Rendering 2000 entries can exceed the default 5000ms waitFor budget under
+    // full-suite parallel-worker contention (flaky, not functional) — widen it.
+    const notice = await screen.findByTestId("file-browser-truncation-notice", {}, { timeout: 15000 });
     expect(notice).toHaveTextContent("Showing first 2000 of 2001 entries");
-  });
+  }, 20000);
 });

@@ -12,6 +12,10 @@ on:
       - 'web-app/**.css'
       - 'web-app/**.ts'
       - 'web-app/**.tsx'
+      - 'web-app/src/**'
+      - 'web-app/package.json'
+      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/jest.config.js'
       - 'tests/e2e/**'
       - '.github/workflows/lint.yml'
   workflow_dispatch:
@@ -26,6 +30,10 @@ on:
       - 'web-app/**.css'
       - 'web-app/**.ts'
       - 'web-app/**.tsx'
+      - 'web-app/src/**'
+      - 'web-app/package.json'
+      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/jest.config.js'
       - 'tests/e2e/**'
       - '.github/workflows/lint.yml'
 
@@ -62,6 +70,10 @@ jobs:
       - name: Install web-app dependencies
         working-directory: web-app
         run: pnpm install --frozen-lockfile
+
+      - name: Jest
+        working-directory: web-app
+        run: npx jest --ci --maxWorkers=4
 
       - name: Generate protobuf code
         run: buf generate proto

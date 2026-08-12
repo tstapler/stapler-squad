@@ -33,6 +33,8 @@ jobs:
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install frontend scanner dependencies
         run: cd tools/scanner/frontend && pnpm install --silent

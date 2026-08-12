@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tstapler/stapler-squad/session/procinfo"
 )
@@ -15,6 +16,10 @@ type HistoryFileInfo struct {
 	ConversationUUID string
 	HistoryFilePath  string
 	ProjectDir       string
+	// ModTime is the on-disk mtime of the winning candidate. Populated by
+	// DetectByPath; left zero by Detect() since the PID-based fast path is
+	// process ground truth and doesn't need mtime gating.
+	ModTime time.Time
 }
 
 // ProcessFileInspector is the interface used by HistoryFileDetector.
@@ -195,6 +200,7 @@ func (d *HistoryFileDetector) DetectByPath(projectPath string) (*HistoryFileInfo
 		ConversationUUID: best.uuid,
 		HistoryFilePath:  best.path,
 		ProjectDir:       projectDir,
+		ModTime:          time.Unix(0, best.modTime),
 	}, nil
 }
 

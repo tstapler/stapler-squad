@@ -49,6 +49,13 @@ test.describe("session-completion-summary", () => {
       const sessionsPage = new SessionsPage(page);
       const detail = new SessionDetailPage(page);
 
+      // Pre-seed the first-visit onboarding dialog as dismissed so it doesn't
+      // intercept clicks later in the flow (same pattern as session-notes.spec.ts,
+      // ci-status-badge.spec.ts).
+      await page.addInitScript(() => {
+        localStorage.setItem("stapler-squad:onboarded", "true");
+      });
+
       await sessionsPage.goto();
       await expect(sessionsPage.searchInput).toBeVisible({ timeout: 15000 });
 
@@ -58,34 +65,32 @@ test.describe("session-completion-summary", () => {
       // a plain shell exits deterministically on `exit`, whereas a real
       // Claude Code process would not exit on its own. ---
       await sessionsPage.newSessionButton.click();
-      // SESSION_TYPES' one_off entry's visible label is "Temporary (no git)"
-      // (OmnibarCreationPanel.tsx) -- not literally "one-off" anymore. See
-      // session-notes.spec.ts for the same pattern.
       await page.getByRole("radio", { name: /temporary \(no git\)/i }).click();
 
       const sessionTitle = `e2e-summary-${Date.now()}`;
       await page.getByLabel("Session Name").fill(sessionTitle);
 
       await page.getByText("Advanced Options").click();
-      // exact:true -- non-exact substring matching also matches session-row
-      // aria-labels containing "program: <name>" (SessionsPage lists demo
-      // sessions), making the plain getByLabel("Program") ambiguous.
       await page.getByLabel("Program", { exact: true }).selectOption("bash");
 
-      // Collapse Advanced Options back: the expanded panel pushes the Create
-      // Session footer button below the viewport with no internal scroll,
-      // making it unclickable. formState.program persists across the toggle.
-      await page.getByText("Advanced Options").click();
+      // --- Regression check for the modal-clipping bug: with Advanced Options
+      // expanded, the footer can exceed the viewport unless .modal scrolls
+      // (Omnibar.css.ts). Assert the submit button is actually within the
+      // viewport bounds after scrolling, not just DOM-attached/"visible". ---
+      const submitButton = page.getByTestId("omnibar-footer-submit");
+      await submitButton.scrollIntoViewIfNeeded();
+      const viewport = page.viewportSize();
+      await expect(async () => {
+        const box = await submitButton.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+        expect(box!.y).toBeGreaterThanOrEqual(0);
+      }).toPass({ timeout: 5000 });
 
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",
       );
-      // Exact "Create Session" (not the broader /create|start/i) to avoid matching
-      // the omnibar's own "Create new session" trigger button; `.first()` because
-      // the creation panel renders a submit button in both its mobile and desktop
-      // layouts simultaneously (see `.claude/rules/feature-testing-registry.md`
-      // and session-notes.spec.ts's identical pattern).
-      await page.getByRole("button", { name: "Create Session", exact: true }).last().click();
+      await submitButton.click();
       await createRequest;
 
       // OmnibarContext's handleCreateSession navigates to /?session=<id> on
