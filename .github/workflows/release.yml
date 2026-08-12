@@ -56,11 +56,20 @@ jobs:
       - name: Install web dependencies
         run: cd web-app && pnpm install --frozen-lockfile
 
+      # See .github/actions/prepare/action.yml's "Set up buf" step for why
+      # this installs the raw binary with a retry wrapper instead of using
+      # bufbuild/buf-setup-action directly.
       - name: Set up buf
-        uses: bufbuild/buf-setup-action@v1
-        with:
-          version: '1.41.0'
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          BUF_VERSION: '1.41.0'
+        run: |
+          mkdir -p "$RUNNER_TEMP/buf-bin"
+          scripts/retry-with-backoff.sh -n 5 -s 10 -- \
+            curl -sSL -o "$RUNNER_TEMP/buf-bin/buf" \
+            "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-$(uname -s)-$(uname -m)"
+          chmod +x "$RUNNER_TEMP/buf-bin/buf"
+          echo "$RUNNER_TEMP/buf-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/buf-bin/buf" --version
 
       - name: Generate protobuf code
         run: buf generate
