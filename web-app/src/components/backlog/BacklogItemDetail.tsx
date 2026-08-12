@@ -42,6 +42,8 @@ import { PullRequestSection } from "./detail/PullRequestSection";
 import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
+import { PlanVerdictBox } from "./PlanVerdictBox";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
@@ -86,6 +88,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     cancelTriage,
     spawnSessionFromItem,
     approvePlan,
+    rejectPlan,
     overrideVerdict,
     triggerReReview,
     triggerShipPR,
@@ -823,6 +826,35 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     [item, triggerTriage, load]
   );
 
+  // Story 4.3.1: RejectPlan only persists state (ADR-002) — it does not
+  // itself trigger regeneration. handleRegeneratePlanWithFeedback is the
+  // separate, explicit follow-up action PlanVerdictBox renders once an item
+  // is in the changes_requested state.
+  const handleRejectPlan = useCallback(
+    async (reason: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:reject_plan`;
+      setActionLoading("reject_plan");
+      try {
+        await rejectPlan(item.id, reason);
+        showActionToast("Revisions requested.", "success", toastKey);
+        await load();
+      } catch (e) {
+        showActionToast(e instanceof Error ? e.message : "Reject failed.", "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, rejectPlan, load, showActionToast]
+  );
+
+  const handleRegeneratePlanWithFeedback = useCallback(async () => {
+    if (!item?.planRejectionReason) return;
+    await triggerTriage(item.id, item.planRejectionReason);
+    await load();
+  }, [item, triggerTriage, load]);
+
   const handleApplyTriageSuggestions = useCallback(
     async (preApplyCriteria: AcCriterion[]) => {
       if (!item) return;
@@ -1345,6 +1377,28 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           </h3>
           <AcCriteriaList criteria={item.acCriteria} />
         </div>
+
+        {/* Plan Review (Story 4.3.1): rendered immediately before Actions,
+            NOT after PlanArtifactsSection's plan-artifacts display as
+            plan.md originally described — Story 3.1.3's later refactor
+            (see the CollapsibleGroup comment below) already pulled
+            ActionsSection out ahead of the collapsible group so it stays
+            reachable without expanding anything; PlanVerdictBox follows the
+            same always-visible convention and sits right above it, so
+            Approve (in ActionsSection) and Request Changes (here) are both
+            reachable without navigating away (AC3). */}
+        {(item.status === "ready" ||
+          item.status === "queued" ||
+          derivePlanReviewStatus(item) !== "no_plan") && (
+          <PlanVerdictBox
+            status={derivePlanReviewStatus(item)}
+            rejectionReason={item.planRejectionReason}
+            readOnly={terminalState !== null}
+            actionPending={actionLoading === "reject_plan"}
+            onReject={handleRejectPlan}
+            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
+          />
+        )}
 
         {/* Actions */}
         <ActionsSection

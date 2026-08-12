@@ -1,0 +1,27 @@
+{
+  "id": "backlog-plan-verdict-box",
+  "type": "frontend",
+  "name": "Plan review status card with Request Changes / Regenerate actions",
+  "component": "PlanVerdictBox",
+  "path": "web-app/src/components/backlog/PlanVerdictBox.tsx",
+  "filePath": "web-app/src/components/backlog/PlanVerdictBox.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "PlanVerdictBox_should_RenderIconAndLabel_When_StatusIsno_plan",
+    "PlanVerdictBox_should_RenderIconAndLabel_When_StatusIspending_review",
+    "PlanVerdictBox_should_RenderIconAndLabel_When_StatusIsapproved",
+    "PlanVerdictBox_should_RenderIconAndLabel_When_StatusIschanges_requested",
+    "PlanVerdictBox_should_RenderIconAndLabel_When_StatusIsskipped",
+    "PlanVerdictBox — status rendering > renders role=status with aria-live=polite and aria-atomic=true",
+    "PlanVerdictBox — Request Changes form > submit button is disabled until a non-empty reason is typed",
+    "PlanVerdictBox — Request Changes form > submitting a non-empty reason calls onReject with the typed text",
+    "PlanVerdictBox — Request Changes form > Cancel returns focus to the Request Changes toggle button",
+    "PlanVerdictBox — Request Changes form > Escape in the textarea cancels the form",
+    "PlanVerdictBox — Regenerate with feedback > only renders the Regenerate button when status is changes_requested",
+    "PlanVerdictBox — Regenerate with feedback > renders the Regenerate button and reason text when status is changes_requested",
+    "PlanVerdictBox — readOnly mode > hides the reject toggle and the regenerate button when readOnly",
+    "BacklogItemDetail_should_ShowApproveAndRequestChangesSimultaneously_When_ItemHasPendingReviewPlan"
+  ],
+  "lastModified": "2026-08-12T00:00:00Z"
+}

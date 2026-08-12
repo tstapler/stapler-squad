@@ -118,6 +118,10 @@ const overrideVerdict = jest.fn();
 // question-answer wiring test can assert on the exact call made when the
 // mocked TriageReviewPanel's onAnswerQuestion prop is invoked.
 const triggerTriage = jest.fn().mockResolvedValue(undefined);
+// Hoisted (Task 4.3.1d, backlog-operator-feedback-loop) so the plan-review
+// integration test can assert on the exact call made when PlanVerdictBox's
+// Request Changes form is submitted.
+const rejectPlan = jest.fn();
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   // mapBacklogItem is a real (unmocked) named export — BacklogItemDetail's
@@ -131,6 +135,7 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
     cancelTriage: jest.fn(),
     spawnSessionFromItem: jest.fn(),
     approvePlan: jest.fn(),
+    rejectPlan,
     overrideVerdict,
     triggerReReview: jest.fn(),
     triggerShipPR: jest.fn(),
@@ -197,6 +202,7 @@ beforeEach(() => {
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
   overrideVerdict.mockReset();
   triggerTriage.mockClear().mockResolvedValue(undefined);
+  rejectPlan.mockReset().mockResolvedValue(null);
   // Story 3.1.4's per-section expand state (useSectionExpandState) and
   // "Show N more" state (useShowMore) both persist to localStorage keyed
   // by itemId — clear between tests so one test's expand/collapse
@@ -1300,5 +1306,62 @@ describe("BacklogItemDetail — Epic 1.1: triage question answer wiring", () => 
         "Q: Should retries be per-workflow or global?\nA: Per-workflow, default to global"
       );
     });
+  });
+});
+
+// Story 4.3.1 (Gap 3b): PlanVerdictBox (real, unmocked component — unlike
+// GateVerdictBox above) renders alongside ActionsSection so Approve and
+// Request Changes are both reachable in the same place (AC3), and rejecting
+// a plan updates the card in place (AC3/AC5).
+describe("BacklogItemDetail — Epic 4.3: plan review wiring", () => {
+  it("BacklogItemDetail_should_ShowApproveAndRequestChangesSimultaneously_When_ItemHasPendingReviewPlan", async () => {
+    const session = makeSession({ role: "triage" });
+    const pendingReviewItem: BacklogItem = {
+      ...makeItem([session]),
+      status: "ready",
+      planApproved: false,
+      planArtifactsPath: "/tmp/plans/item-1.md",
+    };
+    getBacklogItem.mockReset().mockResolvedValue(pendingReviewItem);
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Both actions visible at once (AC3).
+    expect(screen.getByText("Pending review")).toBeInTheDocument();
+    expect(screen.getByTestId("backlog-action-approve-plan")).toBeInTheDocument();
+    expect(screen.getByTestId("backlog-action-reject-plan")).toBeInTheDocument();
+
+    // Open the Request Changes form, type a reason, and submit.
+    fireEvent.click(screen.getByTestId("backlog-action-reject-plan"));
+    fireEvent.change(screen.getByTestId("plan-reject-reason"), {
+      target: { value: "Please split this into two smaller tasks." },
+    });
+
+    const rejectedItem: BacklogItem = {
+      ...pendingReviewItem,
+      planRejectionReason: "Please split this into two smaller tasks.",
+    };
+    getBacklogItem.mockResolvedValue(rejectedItem);
+
+    fireEvent.click(screen.getByTestId("backlog-action-reject-plan-submit"));
+
+    await waitFor(() => {
+      expect(rejectPlan).toHaveBeenCalledWith(
+        "item-1",
+        "Please split this into two smaller tasks."
+      );
+    });
+
+    // Card updates in place: "Revisions requested", reason text visible, Regenerate button present.
+    await waitFor(() => {
+      expect(screen.getByText("Revisions requested")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Please split this into two smaller tasks.")).toBeInTheDocument();
+    expect(screen.getByTestId("backlog-action-regenerate-plan")).toBeInTheDocument();
   });
 });
