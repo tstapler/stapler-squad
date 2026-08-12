@@ -60,6 +60,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		UpdatedAt:            time.Now(),
 		Program:              snap.Program,
 		AutoYes:              snap.AutoYes,
+		AutoApprove:          snap.AutoApprove,
 		Prompt:               snap.Prompt,
 		InitialPrompt:        snap.InitialPrompt,
 		Category:             snap.Category,
@@ -227,6 +228,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		CreatedAt:        data.CreatedAt,
 		UpdatedAt:        data.UpdatedAt,
 		Program:          data.Program,
+		AutoYes:          data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
+		AutoApprove:      data.AutoApprove,
 		Prompt:           data.Prompt,
 		InitialPrompt:    data.InitialPrompt,
 		Category:         data.Category,

@@ -45,19 +45,20 @@ func portHistoryFailureIsExpected(portErr error) bool {
 // non-nil it runs after the field mutation but before an Active-session restart, so
 // callers can make the new program durable even if the subsequent restart fails.
 //
-// The whole operation runs under a per-instance lock (programSwitchMu) so a manual
-// program-switch request and an automatic capacity-monitor fallback firing near-
-// simultaneously serialize instead of double-restarting or double-porting history. This
-// is the single implementation shared by the UpdateSession RPC handler and the
-// capacity-monitor auto-fallback path (SessionService.UpdateSessionProgram) so the two
-// entry points can't drift.
+// The whole operation runs under a per-instance lock (restartTriggerMu, shared with
+// SetAutoApprove) so a manual program-switch request, an automatic capacity-monitor
+// fallback, and a post-creation auto-approve toggle firing near-simultaneously serialize
+// instead of double-restarting or double-porting history. This is the single
+// implementation shared by the UpdateSession RPC handler and the capacity-monitor
+// auto-fallback path (SessionService.UpdateSessionProgram) so the two entry points can't
+// drift.
 //
 // changed reports whether the resolved program actually differed from the current one; a
 // no-op skips persist/restart entirely. err is only ever a Restart failure — persist
 // failures are logged, not returned, matching the pre-existing best-effort save semantics.
 func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist func() error) (changed bool, resolvedProgram string, err error) {
-	i.programSwitchMu.Lock()
-	defer i.programSwitchMu.Unlock()
+	i.restartTriggerMu.Lock()
+	defer i.restartTriggerMu.Unlock()
 
 	resolvedProgram = rawProgram
 	if resolvedProgram == "" {

@@ -219,6 +219,20 @@ func (_u *SessionUpdate) SetNillableAutoYes(v *bool) *SessionUpdate {
 	return _u
 }
 
+// SetAutoApprove sets the "auto_approve" field.
+func (_u *SessionUpdate) SetAutoApprove(v bool) *SessionUpdate {
+	_u.mutation.SetAutoApprove(v)
+	return _u
+}
+
+// SetNillableAutoApprove sets the "auto_approve" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableAutoApprove(v *bool) *SessionUpdate {
+	if v != nil {
+		_u.SetAutoApprove(*v)
+	}
+	return _u
+}
+
 // SetAutonomousMode sets the "autonomous_mode" field.
 func (_u *SessionUpdate) SetAutonomousMode(v bool) *SessionUpdate {
 	_u.mutation.SetAutonomousMode(v)
@@ -1176,6 +1190,9 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AutoYes(); ok {
 		_spec.SetField(session.FieldAutoYes, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AutoApprove(); ok {
+		_spec.SetField(session.FieldAutoApprove, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.AutonomousMode(); ok {
 		_spec.SetField(session.FieldAutonomousMode, field.TypeBool, value)
 	}
@@ -1806,6 +1823,20 @@ func (_u *SessionUpdateOne) SetAutoYes(v bool) *SessionUpdateOne {
 func (_u *SessionUpdateOne) SetNillableAutoYes(v *bool) *SessionUpdateOne {
 	if v != nil {
 		_u.SetAutoYes(*v)
+	}
+	return _u
+}
+
+// SetAutoApprove sets the "auto_approve" field.
+func (_u *SessionUpdateOne) SetAutoApprove(v bool) *SessionUpdateOne {
+	_u.mutation.SetAutoApprove(v)
+	return _u
+}
+
+// SetNillableAutoApprove sets the "auto_approve" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableAutoApprove(v *bool) *SessionUpdateOne {
+	if v != nil {
+		_u.SetAutoApprove(*v)
 	}
 	return _u
 }
@@ -2796,6 +2827,9 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if value, ok := _u.mutation.AutoYes(); ok {
 		_spec.SetField(session.FieldAutoYes, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AutoApprove(); ok {
+		_spec.SetField(session.FieldAutoApprove, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.AutonomousMode(); ok {
 		_spec.SetField(session.FieldAutonomousMode, field.TypeBool, value)
