@@ -2008,27 +2008,49 @@ func (s *SessionService) UpdateSession(
 		sideEffectChanged = true
 	}
 
-	// Handle steering: inject a message into an active autonomous session.
+	// Handle steering: inject a message into an active session. Autonomous
+	// sessions keep the existing ClaudeController command-queue path (ADR-001);
+	// non-autonomous, Instance-backed sessions fall back to the same PTY send
+	// primitive the MCP steer_session tool already uses (tools_terminal.go's
+	// SendKeys fallback branch) so browser-originated steering reaches ordinary
+	// backlog work/review sessions too, not just autonomous ones.
 	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
-		if !instance.AutonomousMode {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("steer_message can only be sent to sessions with autonomous_mode enabled"))
-		}
-		controller := instance.GetController()
-		if controller != nil {
-			if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
-				log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
-			} else {
-				log.Info("[UpdateSession] steering message sent", "session", instance.Title)
-				s.eventBus.Publish(events.NewNotificationEvent(
-					instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
-					int32(10), // NotificationType_INFO
-					int32(2),  // NotificationPriority_MEDIUM
-					"Steering input sent",
-					fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
-					nil,
-				))
+		if instance.AutonomousMode {
+			// Unchanged: autonomous sessions keep the ClaudeController command-queue path.
+			controller := instance.GetController()
+			if controller != nil {
+				if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
+					log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
+				} else {
+					log.Info("[UpdateSession] steering message sent", "session", instance.Title)
+					s.eventBus.Publish(events.NewNotificationEvent(
+						instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
+						int32(10), // NotificationType_INFO
+						int32(2),  // NotificationPriority_MEDIUM
+						"Steering input sent",
+						fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
+						nil,
+					))
+				}
 			}
+		} else {
+			// New: non-autonomous, Instance-backed sessions get the same PTY send
+			// primitive the MCP steer_session tool already falls back to. Unlike the
+			// autonomous branch, a send failure IS returned to the caller so the UI
+			// can surface it (research/ux.md's Gap 2 error-state table).
+			if err := instance.SendKeys(*req.Msg.SteerMessage + "\r"); err != nil {
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("failed to steer session %q: %w", instance.Title, err))
+			}
+			log.Info("[UpdateSession] steering message sent", "session", instance.Title)
+			s.eventBus.Publish(events.NewNotificationEvent(
+				instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
+				int32(10), // NotificationType_INFO
+				int32(2),  // NotificationPriority_MEDIUM
+				"Steering input sent",
+				fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
+				nil,
+			))
 		}
 	}
 

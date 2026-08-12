@@ -1161,6 +1161,125 @@ func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *test
 }
 
 // --------------------------------------------------------------------------
+// UpdateSession — steer_message (ADR-001: widened steer RPC)
+// --------------------------------------------------------------------------
+
+// TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys verifies
+// AC7: a non-autonomous, live Instance-backed session now steers via
+// Instance.SendKeys (the same primitive the MCP steer_session tool's PTY
+// fallback uses) instead of unconditionally rejecting with FailedPrecondition.
+//
+// Instance.processManager isn't exported for injection from this package (see
+// the note on TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition
+// above), so this drives a real Instance.Resume() with the package-level
+// backend switched to the native PTY backend — the same real-subprocess
+// approach session/native_process_manager_test.go uses — rather than a
+// fake/mock SendKeys recorder, to get a genuinely "started" Instance whose
+// SendKeys call actually succeeds.
+func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires PTY allocation")
+	}
+
+	session.RegisterBackendProvider(session.BackendNative)
+	defer session.RegisterBackendProvider(session.BackendTmux)
+
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "steerable-work-session",
+		Path:        t.TempDir(),
+		Status:      session.Paused,
+		Program:     "bash",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := inst.Resume(); err != nil {
+		t.Skipf("PTY not available in this environment: %v", err)
+	}
+	t.Cleanup(func() { _ = inst.KillSession() })
+	require.False(t, inst.AutonomousMode, "regression guard: instance must not be autonomous for this test")
+
+	addInstanceToPoller(fix.poller, inst)
+
+	msg := "focus on the auth module first"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "steerable-work-session",
+		SteerMessage: &msg,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+}
+
+// TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_ReturnsFailedPrecondition
+// verifies the other half of AC7's error contract: unlike the autonomous
+// branch (which only logs a send failure), a SendKeys failure on the
+// non-autonomous branch is returned to the caller as FailedPrecondition so
+// the UI can surface it. A never-started Instance deterministically fails
+// SendKeys ("cannot send keys to instance that has not been started or is
+// paused"), giving a real failure without needing a fake ProcessManager.
+func TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_ReturnsFailedPrecondition(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "never-started-work-session",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	msg := "focus on the auth module first"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "never-started-work-session",
+		SteerMessage: &msg,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
+// TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController is a
+// regression guard (AC7's "no parallel steering implementation"): the
+// pre-existing autonomous branch (ClaudeController.SendCommandImmediate) must
+// be untouched by widening the handler to add the non-autonomous SendKeys
+// branch. An autonomous session with no live controller wired still returns
+// success (a send failure on this branch is only logged, never rejected),
+// exactly like the pre-widening behavior.
+func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:          "autonomous-session",
+		Path:           "/tmp/test",
+		Status:         session.Active,
+		Program:        "claude",
+		Permissions:    session.GetManagedPermissions(),
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	msg := "focus on the auth module first"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "autonomous-session",
+		SteerMessage: &msg,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+}
+
+// --------------------------------------------------------------------------
 // ResumeCrashedSession
 // --------------------------------------------------------------------------
 
