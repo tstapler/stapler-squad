@@ -271,6 +271,7 @@ export function useSessionService(
             category: request.category,
             prompt: request.prompt,
             autoYes: request.autoYes,
+            autoApprove: request.autoApprove ?? false,
             existingWorktree: request.existingWorktree,
             sessionType: request.sessionType,
             createIfMissing: request.createIfMissing ?? false,
@@ -320,6 +321,7 @@ export function useSessionService(
           workingDir: updates.workingDir,
           rateLimitEnabled: updates.rateLimitEnabled,
           autonomousMode: updates.autonomousMode,
+          autoApprove: updates.autoApprove,
           steerMessage: updates.steerMessage,
         });
 

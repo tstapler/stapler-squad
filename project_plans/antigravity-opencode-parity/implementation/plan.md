@@ -546,7 +546,37 @@ For each (T1–T6):
   func installOpenCode() {
   ```
 - AC: Comment is present; code is unchanged. `go build ./cmd/ssq-hooks/` passes.
-- **Status: not implemented — the proxy this comment would have documented is itself being replaced. Do not implement this task; it is retained only as a record of what was originally planned and never landed.**
+- **Status (2026-08-11 re-verification, see `research/features.md` R4 addendum): this task was
+  never actually done** — no comment exists above `installOpenCode()` in the current codebase
+  (`implementation/validation.md`'s ST-03 corrected accordingly). More importantly, its premise is
+  now known incomplete: this section's "no PreToolUse hook system" claim covers only the static
+  `hook`/`permission` config schema, not OpenCode's separate JS/TS plugin API
+  (`@opencode-ai/plugin`'s `tool.execute.before`), which **is** a real PreToolUse-equivalent
+  (`throw`-to-block, confirmed against the locally installed plugin package and
+  [opencode.ai/docs/plugins/](https://opencode.ai/docs/plugins/)). This section's own "Revisit"
+  line has now triggered — do not write the comment as originally specified (it would assert a
+  false "no PreToolUse hook" premise). **Not implemented — the proxy this comment would have
+  documented is itself being replaced** by the follow-on backlog item "Implement
+  patchOpenCodeHooks(): replace open-code proxy wrapper with native plugin hook."
+
+**Open questions raised here — all resolved by that follow-on item, not re-researched:**
+1. **`AutoEscalate` → OpenCode UI mapping** — resolved: `tool.execute.before` has no tri-state
+   channel (`permission.ask` is confirmed broken, see point 4), so `Escalate` maps to fail-closed
+   deny. Decision and full rationale recorded in `docs/adr/ADR-027-opencode-escalate-fail-closed.md`.
+2. **Subagent (`task`-tool) coverage under `tool.execute.before`** — resolved, live-tested:
+   confirmed fires for both the delegating `task` call and the subagent's own tool calls (under a
+   distinct `sessionID`), refuting issue #5894's original bypass report as a test-methodology
+   artifact, per the repo collaborator's rebuttal. The `batch`-tool blind spot cited in #5894's
+   follow-up was not reproducible against this opencode version's default agent (no distinct batch
+   tool exposed) — recorded as an inconclusive, documented gap, not a solved problem. See
+   `project_plans/opencode-native-hooks/live-verification-notes.md` §4-5 for the full test detail.
+3. **`opencode run` startup failure in this environment** — resolved: fixed 33 broken
+   `~/.config/opencode/agents/*.md` frontmatter files (invalid `tools:` shape, null `description`)
+   blocking `opencode run` entirely; live interception tests then ran successfully against a real
+   session (`live-verification-notes.md`).
+4. **`permission.ask` should not be used as the gating mechanism** — confirmed and used as the
+   basis for point 1 above; see `research/features.md`'s R4 addendum for #7006/#19927.
+   `tool.execute.before` is used instead.
 
 ---
 

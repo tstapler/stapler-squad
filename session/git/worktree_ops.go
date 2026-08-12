@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -13,6 +14,22 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )
+
+// branchRefExists reports whether branchRef exists in repo, distinguishing a genuine
+// "no such branch" (plumbing.ErrReferenceNotFound) from any other ref-read error (I/O,
+// lock contention from a concurrent git worktree add/git branch, etc.) — the latter must
+// never be treated as "branch does not exist".
+func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bool, error) {
+	_, err := repo.Reference(branchRef, false)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, plumbing.ErrReferenceNotFound):
+		return false, nil
+	default:
+		return false, fmt.Errorf("failed to check branch reference %s: %w", branchRef, err)
+	}
+}
 
 // Setup creates a new worktree for the session
 func (g *GitWorktree) Setup() error {
@@ -40,9 +57,13 @@ func (g *GitWorktree) Setup() error {
 		}
 
 		branchRef := plumbing.NewBranchReferenceName(g.branchName)
-		if _, err := repo.Reference(branchRef, false); err == nil {
-			branchExists = true
+		exists, err := branchRefExists(repo, branchRef)
+		if err != nil {
+			log.Error("failed to check branch reference", "branch", g.branchName, "error", err)
+			errChan <- err
+			return
 		}
+		branchExists = exists
 		errChan <- nil
 	}()
 
@@ -232,7 +253,12 @@ func (g *GitWorktree) setupNewWorktree() error {
 
 	// Check if the branch already exists - if so, use it instead of cleaning up
 	branchRef := plumbing.NewBranchReferenceName(g.branchName)
-	if _, err := repo.Reference(branchRef, false); err == nil {
+	exists, err := branchRefExists(repo, branchRef)
+	if err != nil {
+		log.Error("failed to check branch reference", "branch", g.branchName, "error", err)
+		return err
+	}
+	if exists {
 		// Branch exists - use setupFromExistingBranch instead
 		log.Info("branch already exists, using existing branch for worktree", "branch", g.branchName)
 		return g.setupFromExistingBranch()

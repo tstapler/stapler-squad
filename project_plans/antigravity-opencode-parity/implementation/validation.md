@@ -276,12 +276,30 @@ These verify non-behavioral artifacts: fixture files, doc comments, and TODO ann
 
 **ST-03: SUPERSEDED — `installOpenCode()` now installs a native plugin hook, not a rationale comment**
 
-**Revised 2026-08-11.** This test was marked PASS in the original readiness gate below despite the comment it asserts on never actually being written (`cmd/ssq-hooks/main.go`'s `installOpenCode()` at HEAD carries only its original one-line comment; no grep-based test for it exists in `main_test.go`) — a validation gap: a structural test that was never run against the real code, marked PASS anyway. R4's premise also changed (see `research/features.md`'s R4 addendum): `@opencode-ai/plugin`'s `tool.execute.before` is a real pre-execute hook, so the "proxy is correct, document why" scope this test covered no longer applies at all.
-
-ST-03 is replaced by real behavioral tests against `patchOpenCodeHooks()` and the new `--opencode` check adapter — see the triage validation plan for "Implement patchOpenCodeHooks()" (`TestPatchOpenCodeHooks_NewFile`/`_Idempotent`, `TestInstallOpenCode_RemovesStaleWrapper`, `TestWriteOpenCodeHookDecision_*`, `TestParseOpenCodePayload_*`, plus the mandatory live-session verification that throwing inside `tool.execute.before` actually blocks a tool call — this repo's own evidence rules require running it, not asserting file contents, precisely because of the gap this ST-03 entry represents).
-
+- **CORRECTED 2026-08-11 (was falsely marked PASS below — see Readiness Gate Criterion 1):** No
+  such comment exists. `grep -n 'file_edited\|session_completed\|no PreToolUse' cmd/ssq-hooks/main.go`
+  returns zero hits; `installOpenCode()` (`cmd/ssq-hooks/main.go:1052`) has no comment block above
+  it at all. This test was never actually run/verified when the original PASS was recorded — the
+  discrepancy was caught during the 2026-08-11 re-verification of R4 (see
+  `research/features.md`'s R4 addendum).
+- Original method (never executed): Read `cmd/ssq-hooks/main.go`; locate `func installOpenCode()`. Assert that the preceding block comment contains the string `"file_edited"` and `"session_completed"` (naming the two hook types confirmed by research), and contains `"no PreToolUse"` or equivalent phrasing.
+- **Not remediated by adding the comment**: the 2026-08-11 re-verification found the "no
+  PreToolUse" premise itself is incomplete — a real PreToolUse-equivalent (`tool.execute.before`,
+  the plugin API) does exist — so writing a comment asserting "no PreToolUse hook exists" would
+  have documented something false. Wiring `installOpenCode()` to the plugin API was instead scoped
+  as a separate follow-on backlog item ("Implement patchOpenCodeHooks()...") and has since been
+  implemented there — ST-03 is now superseded entirely, not just corrected: `installOpenCode()`
+  writes a native plugin (`patchOpenCodeHooks()`), so there is no rationale comment left to assert
+  or test for. Replaced by real behavioral tests against `patchOpenCodeHooks()` and the new
+  `--opencode` check adapter (`TestPatchOpenCodeHooks_NewFile`/`_Idempotent`,
+  `TestInstallOpenCode_RemovesStaleWrapper`, `TestWriteOpenCodeHookDecision_*`,
+  `TestParseOpenCodePayload_*`, plus mandatory live-session verification that throwing inside
+  `tool.execute.before` actually blocks a tool call — see
+  `project_plans/opencode-native-hooks/live-verification-notes.md`).
 - Requirements: R4 (revised)
 - Plan ref: E7 (revised)
+- Status: **FAIL** (as originally specified) → **SUPERSEDED** (2026-08-11, by the follow-on
+  implementation item)
 
 ---
 
@@ -318,12 +336,16 @@ Fix the opencode config error and run `opencode run "say hello"` to confirm one-
 | R1 | UT-01, UT-02, UT-03 | PASS |
 | R2 | IT-01 through IT-06 | PASS |
 | R3 | UT-05–UT-12, ST-01, ST-02 | PASS |
-| R4 | ST-03 (superseded 2026-08-11 — see revised entry above) | SUPERSEDED |
+| R4 | ST-03, IT-07 | **SUPERSEDED** — ST-03 FAIL→SUPERSEDED (corrected 2026-08-11, then resolved by the follow-on `patchOpenCodeHooks()` implementation item; see ST-03 above), IT-07 PASS |
 | R5 | UT-13–UT-18 | PASS |
 | R6 | UT-01, UT-04 | PASS |
 | R7 | All UT-01–UT-18 | PASS |
 
-**Result: PASS (7/7)**
+**Result: PASS (6/7)** — **CORRECTED 2026-08-11**: originally recorded as 7/7 PASS, but ST-03 was
+never actually verified (see ST-03 above); R4 is PARTIAL, not PASS. This does not reopen R1–R3/
+R5–R7, which were independently checked and hold. Remediation (wiring `installOpenCode()` to the
+now-confirmed plugin API) is scoped as a separate follow-on backlog item, not a reason to revert
+this project's original ship decision.
 
 ### Criterion 2: Plan has clear acceptance criteria for every task
 

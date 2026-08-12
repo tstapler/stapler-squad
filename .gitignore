@@ -61,6 +61,7 @@ tests/e2e/playwright-report-dev-mode/
 tests/e2e/test-results/
 tests/e2e/node_modules/
 tests/e2e/test-results-dev-mode/
+tests/e2e/fixtures/*-theme.json
 
 # Scratch benchmark output files (not the committed baselines in benchmarks/go/)
 bench-current.txt
@@ -103,3 +104,6 @@ benchmarks/
 # Backlog context files injected into worktrees — never source files
 .backlog-context.md
 .claude/commands/backlog/
+
+# Runtime session-data artifacts leaked into the repo root by local dev runs
+/session/*/scrollback.jsonl.zst

@@ -212,9 +212,10 @@ var methodToID = map[string]string{
 	"GenerateSuggestedRule": "approval:generate-suggested-rule",
 	"ValidateRules":         "approval:validate-rules",
 	// Analytics RPCs
-	"GetEscapeAnalyticsSummary": "analytics:get-escape-summary",
-	"GetProgramAnalytics":       "analytics:get-program",
-	"QueryEscapeAnalytics":      "analytics:query-escape",
+	"GetEscapeAnalyticsSummary":       "analytics:get-escape-summary",
+	"GetEscapeAnalyticsGlobalSummary": "analytics:get-escape-global-summary",
+	"GetProgramAnalytics":             "analytics:get-program",
+	"QueryEscapeAnalytics":            "analytics:query-escape",
 	// Feature flags RPCs
 	"GetFeatureFlags":   "feature-flag:get",
 	"UpdateFeatureFlag": "feature-flag:update",
@@ -237,6 +238,11 @@ var methodToID = map[string]string{
 	"DeleteBacklogItem": "backlog:delete-item",
 	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
 	"WatchBacklogItems": "backlog:watch",
+	// Import external session RPCs (ImportService in import.proto)
+	"PreviewImportExternalSession": "import:preview",
+	"CommitImportExternalSession":  "import:commit",
+	"ConfirmKillExternalSession":   "import:confirm_kill",
+	"CancelPendingKill":            "import:cancel_pending_kill",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

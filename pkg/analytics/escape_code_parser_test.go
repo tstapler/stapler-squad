@@ -330,6 +330,39 @@ func TestParsePartialSequences(t *testing.T) {
 	}
 }
 
+// TestParsePartialSequences_LongSequenceAcrossChunkBoundary guards against a
+// regression where a fixed-size scan-back window (formerly 50 bytes) failed
+// to detect a trailing incomplete escape sequence whose start byte was more
+// than that window's size away from the end of the chunk — e.g. a long OSC
+// title/hyperlink payload split across two PTY reads.
+func TestParsePartialSequences_LongSequenceAcrossChunkBoundary(t *testing.T) {
+	store := NewEscapeCodeStore()
+	store.SetEnabled(true)
+	parser := NewEscapeCodeParser(store, "test-session")
+	parser.SetEnabled(true)
+
+	longPayload := strings.Repeat("a", 100)
+
+	// First chunk: OSC 0 (set title) with a long, unterminated payload.
+	parser.Parse([]byte("\x1b]0;"+longPayload), 0)
+
+	entries := store.GetAll()
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 entries (partial), got %d", len(entries))
+	}
+
+	// Second chunk: terminate with BEL.
+	parser.Parse([]byte("\x07"), 0)
+
+	entries = store.GetAll()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry after completion, got %d", len(entries))
+	}
+	if entries[0].Category != CategoryOSC {
+		t.Errorf("category = %v, want %v", entries[0].Category, CategoryOSC)
+	}
+}
+
 func TestParserDisabled(t *testing.T) {
 	store := NewEscapeCodeStore()
 	store.SetEnabled(true)
