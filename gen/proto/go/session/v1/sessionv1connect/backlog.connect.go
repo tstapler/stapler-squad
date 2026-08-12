@@ -72,6 +72,9 @@ const (
 	// BacklogServiceApprovePlanProcedure is the fully-qualified name of the BacklogService's
 	// ApprovePlan RPC.
 	BacklogServiceApprovePlanProcedure = "/session.v1.BacklogService/ApprovePlan"
+	// BacklogServiceRejectPlanProcedure is the fully-qualified name of the BacklogService's RejectPlan
+	// RPC.
+	BacklogServiceRejectPlanProcedure = "/session.v1.BacklogService/RejectPlan"
 	// BacklogServiceSuggestNextItemProcedure is the fully-qualified name of the BacklogService's
 	// SuggestNextItem RPC.
 	BacklogServiceSuggestNextItemProcedure = "/session.v1.BacklogService/SuggestNextItem"
@@ -192,6 +195,10 @@ type BacklogServiceClient interface {
 	CancelTriage(context.Context, *connect.Request[v1.CancelTriageRequest]) (*connect.Response[v1.CancelTriageResponse], error)
 	// ApprovePlan marks the planning artifacts for an item as approved.
 	ApprovePlan(context.Context, *connect.Request[v1.ApprovePlanRequest]) (*connect.Response[v1.ApprovePlanResponse], error)
+	// RejectPlan records a rejection reason for an item's current plan
+	// artifacts and clears any existing approval. Does not itself trigger
+	// regeneration — see project_plans/plan-approval-ux/decisions/ADR-002.
+	RejectPlan(context.Context, *connect.Request[v1.RejectPlanRequest]) (*connect.Response[v1.RejectPlanResponse], error)
 	// SuggestNextItem recommends the highest-priority actionable backlog item.
 	SuggestNextItem(context.Context, *connect.Request[v1.SuggestNextItemRequest]) (*connect.Response[v1.SuggestNextItemResponse], error)
 	// OverrideVerdict manually overrides a review verdict for an item session.
@@ -369,6 +376,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+BacklogServiceApprovePlanProcedure,
 			connect.WithSchema(backlogServiceMethods.ByName("ApprovePlan")),
+			connect.WithClientOptions(opts...),
+		),
+		rejectPlan: connect.NewClient[v1.RejectPlanRequest, v1.RejectPlanResponse](
+			httpClient,
+			baseURL+BacklogServiceRejectPlanProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("RejectPlan")),
 			connect.WithClientOptions(opts...),
 		),
 		suggestNextItem: connect.NewClient[v1.SuggestNextItemRequest, v1.SuggestNextItemResponse](
@@ -563,6 +576,7 @@ type backlogServiceClient struct {
 	triggerTriage               *connect.Client[v1.TriggerTriageRequest, v1.TriggerTriageResponse]
 	cancelTriage                *connect.Client[v1.CancelTriageRequest, v1.CancelTriageResponse]
 	approvePlan                 *connect.Client[v1.ApprovePlanRequest, v1.ApprovePlanResponse]
+	rejectPlan                  *connect.Client[v1.RejectPlanRequest, v1.RejectPlanResponse]
 	suggestNextItem             *connect.Client[v1.SuggestNextItemRequest, v1.SuggestNextItemResponse]
 	overrideVerdict             *connect.Client[v1.OverrideVerdictRequest, v1.OverrideVerdictResponse]
 	triggerReReview             *connect.Client[v1.TriggerReReviewRequest, v1.TriggerReReviewResponse]
@@ -657,6 +671,11 @@ func (c *backlogServiceClient) CancelTriage(ctx context.Context, req *connect.Re
 // ApprovePlan calls session.v1.BacklogService.ApprovePlan.
 func (c *backlogServiceClient) ApprovePlan(ctx context.Context, req *connect.Request[v1.ApprovePlanRequest]) (*connect.Response[v1.ApprovePlanResponse], error) {
 	return c.approvePlan.CallUnary(ctx, req)
+}
+
+// RejectPlan calls session.v1.BacklogService.RejectPlan.
+func (c *backlogServiceClient) RejectPlan(ctx context.Context, req *connect.Request[v1.RejectPlanRequest]) (*connect.Response[v1.RejectPlanResponse], error) {
+	return c.rejectPlan.CallUnary(ctx, req)
 }
 
 // SuggestNextItem calls session.v1.BacklogService.SuggestNextItem.
@@ -835,6 +854,10 @@ type BacklogServiceHandler interface {
 	CancelTriage(context.Context, *connect.Request[v1.CancelTriageRequest]) (*connect.Response[v1.CancelTriageResponse], error)
 	// ApprovePlan marks the planning artifacts for an item as approved.
 	ApprovePlan(context.Context, *connect.Request[v1.ApprovePlanRequest]) (*connect.Response[v1.ApprovePlanResponse], error)
+	// RejectPlan records a rejection reason for an item's current plan
+	// artifacts and clears any existing approval. Does not itself trigger
+	// regeneration — see project_plans/plan-approval-ux/decisions/ADR-002.
+	RejectPlan(context.Context, *connect.Request[v1.RejectPlanRequest]) (*connect.Response[v1.RejectPlanResponse], error)
 	// SuggestNextItem recommends the highest-priority actionable backlog item.
 	SuggestNextItem(context.Context, *connect.Request[v1.SuggestNextItemRequest]) (*connect.Response[v1.SuggestNextItemResponse], error)
 	// OverrideVerdict manually overrides a review verdict for an item session.
@@ -1008,6 +1031,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		BacklogServiceApprovePlanProcedure,
 		svc.ApprovePlan,
 		connect.WithSchema(backlogServiceMethods.ByName("ApprovePlan")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceRejectPlanHandler := connect.NewUnaryHandler(
+		BacklogServiceRejectPlanProcedure,
+		svc.RejectPlan,
+		connect.WithSchema(backlogServiceMethods.ByName("RejectPlan")),
 		connect.WithHandlerOptions(opts...),
 	)
 	backlogServiceSuggestNextItemHandler := connect.NewUnaryHandler(
@@ -1212,6 +1241,8 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceCancelTriageHandler.ServeHTTP(w, r)
 		case BacklogServiceApprovePlanProcedure:
 			backlogServiceApprovePlanHandler.ServeHTTP(w, r)
+		case BacklogServiceRejectPlanProcedure:
+			backlogServiceRejectPlanHandler.ServeHTTP(w, r)
 		case BacklogServiceSuggestNextItemProcedure:
 			backlogServiceSuggestNextItemHandler.ServeHTTP(w, r)
 		case BacklogServiceOverrideVerdictProcedure:
@@ -1329,6 +1360,10 @@ func (UnimplementedBacklogServiceHandler) CancelTriage(context.Context, *connect
 
 func (UnimplementedBacklogServiceHandler) ApprovePlan(context.Context, *connect.Request[v1.ApprovePlanRequest]) (*connect.Response[v1.ApprovePlanResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ApprovePlan is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) RejectPlan(context.Context, *connect.Request[v1.RejectPlanRequest]) (*connect.Response[v1.RejectPlanResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.RejectPlan is not implemented"))
 }
 
 func (UnimplementedBacklogServiceHandler) SuggestNextItem(context.Context, *connect.Request[v1.SuggestNextItemRequest]) (*connect.Response[v1.SuggestNextItemResponse], error) {

@@ -2526,7 +2526,13 @@ func (s *BacklogService) TriggerTriage(
 		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
 			pap = filepath.Join(triageWorkDir, "project_plans", result.Title, "implementation")
 		}
-		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
+		approvalReset := false
+		clearedReason := ""
+		update := session.BacklogItemUpdate{
+			PlanArtifactsPath:   &pap,
+			PlanApproved:        &approvalReset,
+			PlanRejectionReason: &clearedReason,
+		}
 		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)

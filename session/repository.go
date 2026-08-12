@@ -440,6 +440,12 @@ type BacklogItemData struct {
 	PlanApproved      bool
 	PlanApprovedAt    *time.Time
 	PlanArtifactsPath string
+	// PlanRejectionReason is the free-text reason from the most recent
+	// RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage
+	// completion, and on backward transition to idea/refining. See
+	// project_plans/plan-approval-ux/decisions/ADR-001.
+	PlanRejectionReason string
+	PlanRejectedAt      *time.Time
 	// QueuedAt is set when a fresh spawn hit the concurrency cap and the item
 	// was transitioned to "queued" instead of rejected. Nil unless Status ==
 	// BacklogStatusQueued (or the item was previously queued). Drives FIFO
@@ -598,6 +604,10 @@ type BacklogItemUpdate struct {
 	PlanApproved      *bool
 	PlanApprovedAt    *time.Time
 	PlanArtifactsPath *string
+	// PlanRejectionReason and PlanRejectedAt follow the same partial-update-
+	// presence convention: nil means "leave untouched".
+	PlanRejectionReason *string
+	PlanRejectedAt      *time.Time
 	// QueuedAt and QueuedAutonomous follow the same partial-update-presence
 	// convention as PlanApprovedAt: nil means "leave untouched".
 	QueuedAt         *time.Time
