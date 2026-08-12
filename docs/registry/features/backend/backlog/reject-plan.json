@@ -12,7 +12,8 @@
     "TestRejectPlan_EmptyReason_ReturnsInvalidArgument",
     "TestRejectPlan_WhitespaceOnlyReason_ReturnsInvalidArgument",
     "TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
-    "TestRejectPlan_ClearsExistingApproval"
+    "TestRejectPlan_ClearsExistingApproval",
+    "tests/e2e/plan-review.spec.ts"
   ],
   "lastModified": "2026-08-12T00:00:00Z"
 }

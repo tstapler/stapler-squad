@@ -14,7 +14,8 @@
     "SessionsSection_should_SubmitOnEnterKey_When_ComposerOpen",
     "SessionsSection_should_CancelAndReturnFocusToToggle_When_EscapePressed",
     "SessionsSection_should_DisableSendWithoutClosingComposer_When_SessionEndsWhileComposerOpen",
-    "SessionsSection_should_KeepComposerOpenAndShowError_When_OnSteerSessionRejects"
+    "SessionsSection_should_KeepComposerOpenAndShowError_When_OnSteerSessionRejects",
+    "tests/e2e/backlog-session-steer.spec.ts"
   ],
   "lastModified": "2026-08-12T00:00:00Z"
 }

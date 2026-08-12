@@ -144,6 +144,7 @@ var methodToID = map[string]string{
 	"TriggerTriage":               "backlog:trigger-triage",
 	"CancelTriage":                "backlog:cancel-triage",
 	"ApprovePlan":                 "backlog:approve-plan",
+	"RejectPlan":                  "backlog:reject-plan",
 	"SuggestNextItem":             "backlog:suggest-next",
 	"OverrideVerdict":             "backlog:override-verdict",
 	"TriggerReReview":             "backlog:trigger-re-review",

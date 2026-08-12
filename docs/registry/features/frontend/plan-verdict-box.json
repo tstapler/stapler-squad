@@ -21,7 +21,8 @@
     "PlanVerdictBox — Regenerate with feedback > only renders the Regenerate button when status is changes_requested",
     "PlanVerdictBox — Regenerate with feedback > renders the Regenerate button and reason text when status is changes_requested",
     "PlanVerdictBox — readOnly mode > hides the reject toggle and the regenerate button when readOnly",
-    "BacklogItemDetail_should_ShowApproveAndRequestChangesSimultaneously_When_ItemHasPendingReviewPlan"
+    "BacklogItemDetail_should_ShowApproveAndRequestChangesSimultaneously_When_ItemHasPendingReviewPlan",
+    "tests/e2e/plan-review.spec.ts"
   ],
   "lastModified": "2026-08-12T00:00:00Z"
 }
