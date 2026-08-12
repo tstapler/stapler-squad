@@ -529,6 +529,45 @@ func TestDiffHashBetween_ShouldReturnStableHash_WhenBaseEqualsHead(t *testing.T)
 	assert.NotEmpty(t, hash)
 }
 
+// TestDiffHashBetween_ShouldReturnDifferentHash_WhenSameLineCountsButDifferentContent
+// guards the exact false-collision shape a counts-only hash (path+status+
+// addition-count+deletion-count) would miss: two attempts that both replace
+// exactly one line of the same file (same +1/-1 shape) but with genuinely
+// different replacement text must not hash the same.
+func TestDiffHashBetween_ShouldReturnDifferentHash_WhenSameLineCountsButDifferentContent(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("line1\nline2\nline3\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "add foo.go")
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("line1\nCHANGED_A\nline3\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "attempt 1: replace line2 with CHANGED_A")
+	headSHA1 := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	runGit(t, work, "reset", "--hard", baseSHA)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("line1\nCHANGED_B\nline3\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "attempt 2: replace line2 with CHANGED_B")
+	headSHA2 := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	// Sanity check: both attempts really do produce the identical +1/-1 shape
+	// a counts-only hash would have collapsed to the same tuple.
+	stats1, err := FileStatsBetween(work, baseSHA, headSHA1)
+	require.NoError(t, err)
+	stats2, err := FileStatsBetween(work, baseSHA, headSHA2)
+	require.NoError(t, err)
+	require.Equal(t, stats1, stats2, "test setup must produce identical FileStat shape for this regression test to be meaningful")
+
+	h1, err := DiffHashBetween(work, baseSHA, headSHA1)
+	require.NoError(t, err)
+	h2, err := DiffHashBetween(work, baseSHA, headSHA2)
+	require.NoError(t, err)
+	assert.NotEqual(t, h1, h2, "two genuinely different edits with the identical addition/deletion counts must not collide")
+}
+
 // TestDiffHashBetween_ShouldReturnError_WhenBaseSHADoesNotExistInRepo mirrors
 // FileStatsBetween's identical error-propagation test — DiffHashBetween is a thin
 // wrapper and must not swallow the underlying resolution error.

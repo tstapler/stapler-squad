@@ -159,12 +159,17 @@ func IsFlakyVerdictFlipFlop(recent []ReviewVerdictSummary) bool {
 	return latest.OverallOutcome != prior.OverallOutcome
 }
 
-// testOnlyReworkMinAttempts is how many consecutive rework attempts (most
+// TestOnlyReworkMinAttempts is how many consecutive rework attempts (most
 // recent first) must have touched test-only files before
 // IsTestOnlyReworkCycle trips. An unvalidated starting guess — no
 // calibration corpus exists yet beyond the n≈3 items (ccbfe7a6, e271db3d,
-// 92d679fd) that motivated this item; see validation.md.
-const testOnlyReworkMinAttempts = 2
+// 92d679fd) that motivated this item; see validation.md. Exported: callers
+// that build the []string attempt list to pass in (e.g.
+// recentWorkSessionFileLists in server/services/backlog_service_triage.go)
+// must request at least this many attempts, and must reference this
+// constant rather than duplicating the literal — a hardcoded copy at the
+// call site would silently go stale if this threshold is ever retuned.
+const TestOnlyReworkMinAttempts = 2
 
 // testFileSuffixes are the file-path suffixes IsTestOnlyReworkCycle treats as
 // a test/spec file. Deliberately a fixed suffix list, not a regex/glob DSL —
@@ -189,12 +194,12 @@ func isTestFile(path string) bool {
 }
 
 // IsTestOnlyReworkCycle reports whether every file touched across the last
-// testOnlyReworkMinAttempts rework attempts (most recent first — one
+// TestOnlyReworkMinAttempts rework attempts (most recent first — one
 // []string of changed file paths per attempt) is a test/spec file. A
 // legitimate fix touches production code somewhere; a run of test-only
 // diffs is suggestive of chasing a non-deterministic failure by editing the
 // test rather than the underlying code. False on fewer than
-// testOnlyReworkMinAttempts attempts, on any attempt with no file data at
+// TestOnlyReworkMinAttempts attempts, on any attempt with no file data at
 // all (no signal, don't guess), or on any attempt touching a non-test file.
 //
 // Known false-positive source (documented, not filtered — purely
@@ -203,10 +208,10 @@ func isTestFile(path string) bool {
 // test-coverage-improvement item also produces test-only rework cycles by
 // design.
 func IsTestOnlyReworkCycle(fileListsByAttempt [][]string) bool {
-	if len(fileListsByAttempt) < testOnlyReworkMinAttempts {
+	if len(fileListsByAttempt) < TestOnlyReworkMinAttempts {
 		return false
 	}
-	for _, files := range fileListsByAttempt[:testOnlyReworkMinAttempts] {
+	for _, files := range fileListsByAttempt[:TestOnlyReworkMinAttempts] {
 		if len(files) == 0 {
 			return false
 		}

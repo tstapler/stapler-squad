@@ -338,23 +338,9 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 		return nil, nil
 	}
 
-	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
-	}
-
-	baseCommit, err := repo.CommitObject(plumbing.NewHash(baseSHA))
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", baseSHA, repoPath, err)
-	}
-	headCommit, err := repo.CommitObject(plumbing.NewHash(headSHA))
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", headSHA, repoPath, err)
-	}
-
-	patch, err := baseCommit.Patch(headCommit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+		return nil, err
 	}
 
 	var stats []FileStat
@@ -406,25 +392,90 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 	return stats, nil
 }
 
-// DiffHashBetween returns a stable content hash of the file-level diff
-// between baseSHA and headSHA in the repo at repoPath, built from
-// FileStatsBetween's already content-aware stats — no separate tree/patch
-// walk needed (path+status+line-counts collide only when the underlying
-// diff itself is identical). Feeds session.IsFlakyVerdictFlipFlop's
-// DiffHash comparison: the same code reviewed twice must hash identically;
-// any real change to the diff must not. Unlike a hash of the (possibly
-// token-capped) prompt text sent to a reviewer, this is computed from the
-// full, untruncated diff, so two different diffs that happen to share a
-// truncated prefix can never collide here.
+// diffPatchBetween opens repoPath, resolves baseSHA/headSHA, and returns the
+// object.Patch between them — the shared resolve+diff step behind both
+// FileStatsBetween and DiffHashBetween.
+func diffPatchBetween(repoPath, baseSHA, headSHA string) (*object.Patch, error) {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+
+	baseCommit, err := repo.CommitObject(plumbing.NewHash(baseSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", baseSHA, repoPath, err)
+	}
+	headCommit, err := repo.CommitObject(plumbing.NewHash(headSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", headSHA, repoPath, err)
+	}
+
+	patch, err := baseCommit.Patch(headCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+	}
+	return patch, nil
+}
+
+// DiffHashBetween returns a stable content hash of the diff between baseSHA
+// and headSHA in the repo at repoPath — the actual added/removed line
+// content per file, not just per-file counts (a per-file
+// path+status+addition-count+deletion-count tuple can collide across two
+// genuinely different edits, e.g. two different single-line replacements on
+// the same file both show as one addition and one deletion; hashing the
+// actual line text avoids that false-collision shape). Feeds
+// session.IsFlakyVerdictFlipFlop's DiffHash comparison: the same code
+// reviewed twice must hash identically; any real change to the diff must
+// not. Unlike a hash of the (possibly token-capped) prompt text sent to a
+// reviewer, this is computed from the full, untruncated diff, so two
+// different diffs that happen to share a truncated prefix can never
+// collide here.
 func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
-	stats, err := FileStatsBetween(repoPath, baseSHA, headSHA)
+	if baseSHA == headSHA {
+		return fmt.Sprintf("%x", sha256.Sum256(nil)), nil
+	}
+
+	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
 	if err != nil {
 		return "", err
 	}
-	sort.Slice(stats, func(i, j int) bool { return stats[i].Path < stats[j].Path })
+
+	type fileDigest struct {
+		path    string
+		content string
+	}
+	digests := make([]fileDigest, 0, len(patch.FilePatches()))
+	for _, fp := range patch.FilePatches() {
+		from, to := fp.Files()
+		path := ""
+		status := ""
+		switch {
+		case from == nil:
+			status, path = "added", to.Path()
+		case to == nil:
+			status, path = "deleted", from.Path()
+		case from.Path() != to.Path():
+			status, path = "renamed:"+from.Path(), to.Path()
+		default:
+			status, path = "modified", to.Path()
+		}
+
+		var b strings.Builder
+		b.WriteString(status)
+		b.WriteByte('\n')
+		for _, chunk := range fp.Chunks() {
+			fmt.Fprintf(&b, "%d:%s\n", chunk.Type(), chunk.Content())
+		}
+		digests = append(digests, fileDigest{path: path, content: b.String()})
+	}
+	sort.Slice(digests, func(i, j int) bool { return digests[i].path < digests[j].path })
+
 	h := sha256.New()
-	for _, s := range stats {
-		fmt.Fprintf(h, "%s|%s|%d|%d\n", s.Path, s.Status, s.Additions, s.Deletions)
+	for _, d := range digests {
+		h.Write([]byte(d.path))
+		h.Write([]byte{'\n'})
+		h.Write([]byte(d.content))
+		h.Write([]byte{0})
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }

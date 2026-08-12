@@ -347,6 +347,50 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 	return &result, nil
 }
 
+// GetRepoPathAndLatestCompletedWorkSessionCommits returns itemID's RepoPath
+// plus the Base/LastCommitSha of its most recent completed (session_role ==
+// work, ended_at set) ItemSession — the minimal data
+// Storage.ComputeCurrentDiffHash needs. Unlike GetBacklogItem (which also
+// eager-loads StatusEvents/ProgressNotes) and ListItemSessions (unbounded,
+// eager-loads ReviewVerdict for every session), this pushes the "most recent
+// completed work session" filter/order/limit into SQL — two bounded, no-edge
+// queries regardless of how many sessions/events/notes the item has
+// accumulated, rather than O(sessions_for_item) work on every review-verdict
+// save. baseSHA/headSHA are both "" (no error) when the item has no
+// completed work session yet.
+func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA string, err error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return "", "", "", fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	item, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ID(parsedID)).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return "", "", "", fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+		}
+		return "", "", "", fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
+	}
+
+	ws, err := r.client.ItemSession.Query().
+		Where(
+			itemsession.HasBacklogItemWith(backlogitem.ID(parsedID)),
+			itemsession.SessionRoleEQ(SessionRoleWork),
+			itemsession.EndedAtNotNil(),
+		).
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		First(ctx)
+	if ent.IsNotFound(err) {
+		return item.RepoPath, "", "", nil
+	}
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to query latest completed work session for item %s: %w", itemID, err)
+	}
+	return item.RepoPath, ws.BaseCommitSha, ws.LastCommitSha, nil
+}
+
 // excludedTerminalStatuses returns the statuses filter.ExcludeDone/ExcludeArchived
 // ask to exclude from a default (no explicit Statuses) query, as a slice for
 // StatusNotIn. The two flags are independent — either, both, or neither may be

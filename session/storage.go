@@ -1205,10 +1205,12 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 }
 
 // ComputeCurrentDiffHash resolves itemID's most recent completed work
-// session (MostRecentCompletedWorkSession) and returns a content hash of its
-// base..head diff (git.DiffHashBetween), for stamping onto a review
-// verdict's DiffHash at save time — see stuck_decisions.go's
-// IsFlakyVerdictFlipFlop, which the hash feeds.
+// session's base..head commit range (via
+// GetRepoPathAndLatestCompletedWorkSessionCommits — two bounded, no-edge
+// queries, not GetBacklogItem/ListItemSessions' unbounded eager-loaded
+// fetch) and returns a content hash of that diff (git.DiffHashBetween), for
+// stamping onto a review verdict's DiffHash at save time — see
+// stuck_decisions.go's IsFlakyVerdictFlipFlop, which the hash feeds.
 //
 // Best-effort: any resolution failure (item/session lookup, missing SHAs, a
 // git error) returns "" rather than propagating an error, matching this
@@ -1217,21 +1219,17 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 // missing DiffHash just means IsFlakyVerdictFlipFlop treats that verdict as
 // unknown, never as a false match.
 func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) string {
-	item, err := s.GetBacklogItem(ctx, itemID)
-	if err != nil || item == nil || item.RepoPath == "" {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
 		return ""
 	}
-	sessions, err := s.ListItemSessions(ctx, itemID)
+	repoPath, baseSHA, headSHA, err := er.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, itemID)
+	if err != nil || repoPath == "" || baseSHA == "" || headSHA == "" {
+		return ""
+	}
+	hash, err := git.DiffHashBetween(repoPath, baseSHA, headSHA)
 	if err != nil {
-		return ""
-	}
-	ws := MostRecentCompletedWorkSession(sessions)
-	if ws == nil || ws.BaseCommitSha == "" || ws.LastCommitSha == "" {
-		return ""
-	}
-	hash, err := git.DiffHashBetween(item.RepoPath, ws.BaseCommitSha, ws.LastCommitSha)
-	if err != nil {
-		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, ws.BaseCommitSha, ws.LastCommitSha, err)
+		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
 		return ""
 	}
 	return hash

@@ -247,7 +247,7 @@ func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, c
 	flip := session.IsFlakyVerdictFlipFlop(recentVerdicts)
 	testOnly := false
 	if repoPath != "" {
-		testOnly = session.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, 2))
+		testOnly = session.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, session.TestOnlyReworkMinAttempts))
 	}
 	if !flip && !testOnly {
 		return
