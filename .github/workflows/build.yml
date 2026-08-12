@@ -102,18 +102,25 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: web-app/pnpm-lock.yaml
 
+      # Cache the buf binary so most runs skip the network entirely.
+      - name: Cache buf binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/buf-bin
+          key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
       # See .github/actions/prepare/action.yml's "Set up buf" step for why
       # this installs the raw binary with a retry wrapper instead of using
       # bufbuild/buf-setup-action directly.
       - name: Set up buf
-        env:
-          BUF_VERSION: '1.41.0'
         run: |
           mkdir -p "$RUNNER_TEMP/buf-bin"
-          scripts/retry-with-backoff.sh -n 5 -s 10 -- \
-            curl -sSL -o "$RUNNER_TEMP/buf-bin/buf" \
-            "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-$(uname -s)-$(uname -m)"
-          chmod +x "$RUNNER_TEMP/buf-bin/buf"
+          if [ ! -x "$RUNNER_TEMP/buf-bin/buf" ]; then
+            scripts/retry-with-backoff.sh -n 5 -s 10 -- \
+              curl -sSL -o "$RUNNER_TEMP/buf-bin/buf" \
+              "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-$(uname -s)-$(uname -m)"
+            chmod +x "$RUNNER_TEMP/buf-bin/buf"
+          fi
           echo "$RUNNER_TEMP/buf-bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/buf-bin/buf" --version
 
