@@ -36,6 +36,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		CreatedAt:          timestamppb.New(snap.CreatedAt),
 		UpdatedAt:          timestamppb.New(snap.UpdatedAt),
 		AutoYes:            snap.AutoYes,
+		AutoApprove:        snap.AutoApprove,
 		AutonomousMode:     snap.Autonomous.AutonomousMode,
 		AutonomousTurn:     snap.Autonomous.AutonomousTurn,
 		AutonomousMaxTurns: snap.Autonomous.AutonomousMaxTurns,

@@ -20100,6 +20100,7 @@ type SessionMutation struct {
 	created_at             *time.Time
 	updated_at             *time.Time
 	auto_yes               *bool
+	auto_approve           *bool
 	autonomous_mode        *bool
 	prompt                 *string
 	program                *string
@@ -20775,6 +20776,42 @@ func (m *SessionMutation) OldAutoYes(ctx context.Context) (v bool, err error) {
 // ResetAutoYes resets all changes to the "auto_yes" field.
 func (m *SessionMutation) ResetAutoYes() {
 	m.auto_yes = nil
+}
+
+// SetAutoApprove sets the "auto_approve" field.
+func (m *SessionMutation) SetAutoApprove(b bool) {
+	m.auto_approve = &b
+}
+
+// AutoApprove returns the value of the "auto_approve" field in the mutation.
+func (m *SessionMutation) AutoApprove() (r bool, exists bool) {
+	v := m.auto_approve
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAutoApprove returns the old "auto_approve" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldAutoApprove(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAutoApprove is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAutoApprove requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAutoApprove: %w", err)
+	}
+	return oldValue.AutoApprove, nil
+}
+
+// ResetAutoApprove resets all changes to the "auto_approve" field.
+func (m *SessionMutation) ResetAutoApprove() {
+	m.auto_approve = nil
 }
 
 // SetAutonomousMode sets the "autonomous_mode" field.
@@ -22653,7 +22690,7 @@ func (m *SessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SessionMutation) Fields() []string {
-	fields := make([]string, 0, 43)
+	fields := make([]string, 0, 44)
 	if m.title != nil {
 		fields = append(fields, session.FieldTitle)
 	}
@@ -22686,6 +22723,9 @@ func (m *SessionMutation) Fields() []string {
 	}
 	if m.auto_yes != nil {
 		fields = append(fields, session.FieldAutoYes)
+	}
+	if m.auto_approve != nil {
+		fields = append(fields, session.FieldAutoApprove)
 	}
 	if m.autonomous_mode != nil {
 		fields = append(fields, session.FieldAutonomousMode)
@@ -22813,6 +22853,8 @@ func (m *SessionMutation) Field(name string) (ent.Value, bool) {
 		return m.UpdatedAt()
 	case session.FieldAutoYes:
 		return m.AutoYes()
+	case session.FieldAutoApprove:
+		return m.AutoApprove()
 	case session.FieldAutonomousMode:
 		return m.AutonomousMode()
 	case session.FieldPrompt:
@@ -22908,6 +22950,8 @@ func (m *SessionMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldUpdatedAt(ctx)
 	case session.FieldAutoYes:
 		return m.OldAutoYes(ctx)
+	case session.FieldAutoApprove:
+		return m.OldAutoApprove(ctx)
 	case session.FieldAutonomousMode:
 		return m.OldAutonomousMode(ctx)
 	case session.FieldPrompt:
@@ -23057,6 +23101,13 @@ func (m *SessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAutoYes(v)
+		return nil
+	case session.FieldAutoApprove:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAutoApprove(v)
 		return nil
 	case session.FieldAutonomousMode:
 		v, ok := value.(bool)
@@ -23609,6 +23660,9 @@ func (m *SessionMutation) ResetField(name string) error {
 		return nil
 	case session.FieldAutoYes:
 		m.ResetAutoYes()
+		return nil
+	case session.FieldAutoApprove:
+		m.ResetAutoApprove()
 		return nil
 	case session.FieldAutonomousMode:
 		m.ResetAutonomousMode()
