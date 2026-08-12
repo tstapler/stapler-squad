@@ -2638,6 +2638,21 @@ func (s *BacklogService) TriggerTriage(
 			s.notifyTriagePersistFailure(cleanupCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
 
+		// Close out the ItemSession and release triageInFlight together, right here —
+		// not after the optional auto-spawn below. The item's status already flipped to
+		// Ready above, so a caller polling on status (or a human clicking "retry") can
+		// legitimately re-trigger triage now; leaving triageInFlight held through
+		// auto-spawn's own I/O (SpawnSessionFromItem creates a worktree, etc.) only
+		// stretched a window where a well-timed retry got a spurious AlreadyExists —
+		// exactly what made TestTriggerTriage_RefineWithFeedback flaky in CI. ended_at
+		// and triageInFlight are updated in the same spot deliberately: both are inputs
+		// to the orphan-liveness check (IsTriageLive / tombstoneOrphanTriageSessions
+		// above), so moving one without the other would let a concurrent reconciliation
+		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
+		// simply between here and its final log line.
+		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+		s.triageInFlight.Delete(itemID)
+
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
 		// auto-spawn. Autonomous: true bypasses the planning-approval gate the same way
 		// AutoReopenForPRFix's spawn already does — a human never gets to review the plan
@@ -2654,7 +2669,6 @@ func (s *BacklogService) TriggerTriage(
 			}
 		}
 
-		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 		log.InfoLog.Printf("[TriggerTriage] headless triage complete item=%s elapsed=%s suggestions=%d tasks=%d",
 			itemID, callElapsed.Round(time.Second), len(result.Suggestions), len(result.Tasks))
 	}()
