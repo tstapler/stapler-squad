@@ -633,6 +633,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setFormState(INITIAL_FORM_STATE);
       setUIState({ showAdvanced: false, dropdownIndex: -1, dropdownDismissed: false, resultHighlightIndex: -1, atSuggestIndex: -1 });
       setError(null);
+      // Defense-in-depth: handleSubmit's own finally blocks already reset this on
+      // success/failure, but this instance never unmounts across open/close cycles, so
+      // also clear it here in case onClose() didn't synchronously flip isOpen after a
+      // submission (the original bug this guards against — see Omnibar.submitReset.test.tsx).
+      setIsSubmitting(false);
       lastSuggestedNameRef.current = "";
       prevDetectionTypeRef.current = null;
       dispatchMode({ kind: "reset_to_discovery" });
@@ -1063,6 +1068,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
+      } finally {
         setIsSubmitting(false);
       }
       return;
@@ -1108,6 +1114,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
+      } finally {
         setIsSubmitting(false);
       }
       return;

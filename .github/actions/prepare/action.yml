@@ -1,6 +1,12 @@
 name: 'Prepare: Protos, Ent ORM, and Web UI'
 description: 'Generates protobuf code, ent ORM code, and builds the web UI into server/web/dist'
 
+inputs:
+  github_token:
+    description: 'GitHub token passed to buf-setup-action to avoid its unauthenticated download rate limit'
+    required: false
+    default: ''
+
 runs:
   using: composite
   steps:
@@ -29,6 +35,7 @@ runs:
       uses: bufbuild/buf-setup-action@v1
       with:
         version: '1.41.0'
+        github_token: ${{ inputs.github_token }}
 
     - name: Generate protobuf code
       shell: bash

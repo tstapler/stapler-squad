@@ -324,7 +324,15 @@ type Instance struct {
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
-	// claudeSessionMu protects claudeSession and claudeSessionIDSavedCallback.
+	// conversationClearedAt records when ClearConversationState() last ran, so
+	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
+	// predating an explicit "start fresh" request. In-memory only — does not
+	// survive a process restart (see ADR-001, Consequences). Guarded by
+	// claudeSessionMu, not i.mu.
+	conversationClearedAt time.Time
+
+	// claudeSessionMu protects claudeSession, conversationClearedAt, and
+	// claudeSessionIDSavedCallback.
 	// Separate from mu to avoid holding the instance write lock during persistence I/O.
 	claudeSessionMu sync.RWMutex
 
@@ -867,6 +875,25 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	})
 }
 
+// recoverConversationBeforeLaunch tries to recover a persisted conversation UUID
+// from disk BEFORE initTmuxSession() reads it to decide whether to embed --resume.
+// Shared by startLocked() and legacy start() so the two call sites can't drift
+// (pre-mortem failure mode #4). Falls through to tryExtractConversationUUID's
+// DetectByPath fallback, guarded by conversationClearedAt.
+//
+// Only changes the actual launch command for a genuinely fresh Instance:
+// initTmuxSession() early-returns via HasSession() whenever a TmuxSession object
+// already exists in-process (e.g. after KillSession()), so this recovery is a
+// no-op for in-process restart-churn — confirmed by
+// TestKillSessionThenStart_DoesNotRebuildLaunchCommand; see plan.md Risk Control
+// item 8.
+func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
+	if firstTimeSetup || i.pm().IsAlive() || i.HasClaudeSession() {
+		return
+	}
+	i.tryExtractConversationUUID()
+}
+
 // startLocked is the actor-safe body of Start(). Called only from within
 // sendSyncErr/send closures. The param is named actorState (not s) to make
 // actor-only ownership visually distinct and prevent future edits from treating
@@ -891,6 +918,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	i.recoverConversationBeforeLaunch(firstTimeSetup)
 	i.initTmuxSession()
 
 	i.pm().ResetExitOnce()
@@ -1072,6 +1100,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	if i.Title == "" {
 		return fmt.Errorf("instance title cannot be empty")
 	}
+
+	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
 	i.initTmuxSession()
 
