@@ -307,6 +307,7 @@ type ReviewVerdictSummary struct {
 	OverallOutcome string
 	PerCriterion   string // JSON []CriterionVerdict
 	Summary        string
+	DiffHash       string
 	DiffTokenCount int
 	DiffTruncated  bool
 	OverrideBy     string

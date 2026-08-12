@@ -583,6 +583,7 @@ func recordTerminalReviewVerdict(storage *Storage, itemID string, acSnapshot AcC
 	}, ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        summary,
+		DiffHash:       storage.ComputeCurrentDiffHash(cleanupCtx, itemID),
 	})
 	if err != nil {
 		return ItemSessionSummary{}, err

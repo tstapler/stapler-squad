@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -1201,6 +1202,39 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 		return fmt.Errorf("review verdicts not supported by this storage backend")
 	}
 	return er.SaveReviewVerdict(ctx, itemSessionID, verdict)
+}
+
+// ComputeCurrentDiffHash resolves itemID's most recent completed work
+// session (MostRecentCompletedWorkSession) and returns a content hash of its
+// base..head diff (git.DiffHashBetween), for stamping onto a review
+// verdict's DiffHash at save time — see stuck_decisions.go's
+// IsFlakyVerdictFlipFlop, which the hash feeds.
+//
+// Best-effort: any resolution failure (item/session lookup, missing SHAs, a
+// git error) returns "" rather than propagating an error, matching this
+// codebase's "best-effort, never blocks the write it's attached to"
+// convention (see e.g. SaveReviewVerdict's publish-hook comments) — a
+// missing DiffHash just means IsFlakyVerdictFlipFlop treats that verdict as
+// unknown, never as a false match.
+func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) string {
+	item, err := s.GetBacklogItem(ctx, itemID)
+	if err != nil || item == nil || item.RepoPath == "" {
+		return ""
+	}
+	sessions, err := s.ListItemSessions(ctx, itemID)
+	if err != nil {
+		return ""
+	}
+	ws := MostRecentCompletedWorkSession(sessions)
+	if ws == nil || ws.BaseCommitSha == "" || ws.LastCommitSha == "" {
+		return ""
+	}
+	hash, err := git.DiffHashBetween(item.RepoPath, ws.BaseCommitSha, ws.LastCommitSha)
+	if err != nil {
+		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, ws.BaseCommitSha, ws.LastCommitSha, err)
+		return ""
+	}
+	return hash
 }
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.

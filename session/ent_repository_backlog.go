@@ -69,6 +69,7 @@ func reviewVerdictToSummary(rv *ent.ReviewVerdict) *ReviewVerdictSummary {
 		OverallOutcome: rv.OverallOutcome,
 		PerCriterion:   rv.PerCriterion,
 		Summary:        rv.Summary,
+		DiffHash:       rv.DiffHash,
 		DiffTokenCount: rv.DiffTokenCount,
 		DiffTruncated:  rv.DiffTruncated,
 		OverrideBy:     rv.OverrideBy,

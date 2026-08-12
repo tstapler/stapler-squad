@@ -2,9 +2,11 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -402,6 +404,29 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 	}
 
 	return stats, nil
+}
+
+// DiffHashBetween returns a stable content hash of the file-level diff
+// between baseSHA and headSHA in the repo at repoPath, built from
+// FileStatsBetween's already content-aware stats — no separate tree/patch
+// walk needed (path+status+line-counts collide only when the underlying
+// diff itself is identical). Feeds session.IsFlakyVerdictFlipFlop's
+// DiffHash comparison: the same code reviewed twice must hash identically;
+// any real change to the diff must not. Unlike a hash of the (possibly
+// token-capped) prompt text sent to a reviewer, this is computed from the
+// full, untruncated diff, so two different diffs that happen to share a
+// truncated prefix can never collide here.
+func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
+	stats, err := FileStatsBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(stats, func(i, j int) bool { return stats[i].Path < stats[j].Path })
+	h := sha256.New()
+	for _, s := range stats {
+		fmt.Fprintf(h, "%s|%s|%d|%d\n", s.Path, s.Status, s.Additions, s.Deletions)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // CheckoutBranch checks out a branch in an existing repository.

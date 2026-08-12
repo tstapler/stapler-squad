@@ -129,6 +129,114 @@ func IsRepeatedNoVerdictFailure(hadVerdict []bool) bool {
 	return true
 }
 
+// IsFlakyVerdictFlipFlop reports whether the two most recent review verdicts
+// (most recent first, as returned by Storage.GetRecentReviewVerdictSummaries)
+// share the same non-empty DiffHash but landed on a different OverallOutcome
+// — i.e. the identical reviewed diff got two different answers, the
+// signature of a flaky/non-deterministic review rather than a real fix or
+// regression (the code under review never changed between attempts). An
+// empty DiffHash is "unknown, not computed" and is never treated as a match
+// — two unknowns are not evidence of anything. False on fewer than 2
+// verdicts, and false when the outcomes agree (that repeated-same-outcome
+// shape is IsRepeatedFailure's job, not this one).
+//
+// Known false-positive source (documented, not filtered — see
+// validation.md): a manual OverrideBy="user" verdict interleaved with an
+// automated one can look identical to a flip-flop but is actually a human
+// correction, not model variance. OverrideBy isn't part of
+// []ReviewVerdictSummary today, so it can't be excluded here.
+func IsFlakyVerdictFlipFlop(recent []ReviewVerdictSummary) bool {
+	if len(recent) < 2 {
+		return false
+	}
+	latest, prior := recent[0], recent[1]
+	if latest.DiffHash == "" || prior.DiffHash == "" {
+		return false
+	}
+	if latest.DiffHash != prior.DiffHash {
+		return false
+	}
+	return latest.OverallOutcome != prior.OverallOutcome
+}
+
+// testOnlyReworkMinAttempts is how many consecutive rework attempts (most
+// recent first) must have touched test-only files before
+// IsTestOnlyReworkCycle trips. An unvalidated starting guess — no
+// calibration corpus exists yet beyond the n≈3 items (ccbfe7a6, e271db3d,
+// 92d679fd) that motivated this item; see validation.md.
+const testOnlyReworkMinAttempts = 2
+
+// testFileSuffixes are the file-path suffixes IsTestOnlyReworkCycle treats as
+// a test/spec file. Deliberately a fixed suffix list, not a regex/glob DSL —
+// see plan.md's explicit scope guard against introducing a rules DSL for
+// this predicate.
+var testFileSuffixes = []string{
+	"_test.go",
+	".test.ts",
+	".test.tsx",
+	".spec.ts",
+	".spec.tsx",
+}
+
+// isTestFile reports whether path ends in one of testFileSuffixes.
+func isTestFile(path string) bool {
+	for _, suffix := range testFileSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTestOnlyReworkCycle reports whether every file touched across the last
+// testOnlyReworkMinAttempts rework attempts (most recent first — one
+// []string of changed file paths per attempt) is a test/spec file. A
+// legitimate fix touches production code somewhere; a run of test-only
+// diffs is suggestive of chasing a non-deterministic failure by editing the
+// test rather than the underlying code. False on fewer than
+// testOnlyReworkMinAttempts attempts, on any attempt with no file data at
+// all (no signal, don't guess), or on any attempt touching a non-test file.
+//
+// Known false-positive source (documented, not filtered — purely
+// informational, never gates the reopen decision, so this rate is accepted
+// rather than suppressed here; see validation.md): a legitimate
+// test-coverage-improvement item also produces test-only rework cycles by
+// design.
+func IsTestOnlyReworkCycle(fileListsByAttempt [][]string) bool {
+	if len(fileListsByAttempt) < testOnlyReworkMinAttempts {
+		return false
+	}
+	for _, files := range fileListsByAttempt[:testOnlyReworkMinAttempts] {
+		if len(files) == 0 {
+			return false
+		}
+		for _, f := range files {
+			if !isTestFile(f) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// MostRecentCompletedWorkSession returns the most recent completed
+// (EndedAt != nil) work-role ItemSession from sessions, or nil if none
+// exists. sessions must be ordered oldest-first, as Storage.ListItemSessions
+// returns. Exported: called from server/services at review-verdict-save time
+// to resolve which work session's diff a given verdict is reviewing (feeds
+// the DiffHash computation IsFlakyVerdictFlipFlop consumes), and by the
+// stuck-item reconciler to build IsTestOnlyReworkCycle's per-attempt file
+// lists. Only considers completed sessions — reading a still-in-progress
+// session's commit range risks racing an in-flight write (see validation.md).
+func MostRecentCompletedWorkSession(sessions []ItemSessionSummary) *ItemSessionSummary {
+	for i := len(sessions) - 1; i >= 0; i-- {
+		if sessions[i].Role == SessionRoleWork && sessions[i].EndedAt != nil {
+			return &sessions[i]
+		}
+	}
+	return nil
+}
+
 // prReadyToMergeSolo is the solo-operator PR readiness predicate (ADR-001
 // "Single-user readiness"). It applies every blocking-exclusion
 // github.DerivePRPriority uses (draft, changes-requested, CI-failure, not
