@@ -1145,6 +1145,18 @@ func (l *BacklogLifecycleListener) resolveStuckLogged(ctx context.Context, er *E
 	}
 }
 
+// resolveBouncingAndCapExhausted resolves both domain.StuckReasonBouncing and
+// domain.StuckReasonBounceCapExhausted for itemID via resolveStuckLogged.
+// bounce_cap_exhausted (Signal 2, plan.md Epic 1.3) can only ever coexist
+// with an open bouncing row, so every site that resolves bouncing must
+// resolve bounce_cap_exhausted alongside it or the marker would outlive the
+// condition it describes. Centralizes reconcileBouncingItems' two identical
+// resolve-pairs (merged and shipped-without-PR branches).
+func (l *BacklogLifecycleListener) resolveBouncingAndCapExhausted(ctx context.Context, er *EntRepository, itemID, caller string) {
+	l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonBouncing, caller)
+	l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonBounceCapExhausted, caller)
+}
+
 // findOpenStuckStateFor returns the row for (itemID, reason) from rows, if present.
 func findOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool) {
 	for _, row := range rows {
@@ -1460,15 +1472,11 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 				} else {
 					log.InfoLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (PR #%d already merged)", item.ID, item.PrNumber)
-					// Best-effort: clear any bouncing row from a prior tick
-					// immediately, rather than waiting for the next
-					// selfHealStuck sweep to notice the terminal status.
-					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBouncing, "reconcileBouncingItems/merged")
-					// Signal 2 (Epic 1.3, plan.md Story 1.3.2): bounce_cap_exhausted
-					// can only ever coexist with an open bouncing row, so it must
-					// clear alongside bouncing here rather than outliving the
-					// condition it describes.
-					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBounceCapExhausted, "reconcileBouncingItems/merged")
+					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
+					// Signal 2) row from a prior tick immediately, rather than
+					// waiting for the next selfHealStuck sweep to notice the
+					// terminal status.
+					l.resolveBouncingAndCapExhausted(ctx, er, item.ID, "reconcileBouncingItems/merged")
 				}
 				continue
 			}
@@ -1488,13 +1496,10 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, bounceMainBranch), transErr)
 				} else {
 					log.InfoLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (commit %s shipped to %s without a PR)", item.ID, sha, bounceMainBranch)
-					// Best-effort: clear any bouncing row from a prior tick
-					// immediately, rather than waiting for the next
-					// selfHealStuck sweep to notice the terminal status.
-					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBouncing, "reconcileBouncingItems/shipped-no-pr")
-					// Signal 2 (Epic 1.3, plan.md Story 1.3.2): see the identical
+					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
+					// Signal 2) row from a prior tick — see the identical
 					// comment at the merged-PR branch above.
-					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBounceCapExhausted, "reconcileBouncingItems/shipped-no-pr")
+					l.resolveBouncingAndCapExhausted(ctx, er, item.ID, "reconcileBouncingItems/shipped-no-pr")
 				}
 				continue
 			}
@@ -1665,13 +1670,10 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonStaleWork:
 			resolve = row.ItemStatus != BacklogStatusInProgress
-		case domain.StuckReasonBouncing:
-			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
-		case domain.StuckReasonBounceCapExhausted:
-			// Mirrors StuckReasonBouncing's own anchor scope immediately above:
-			// bounce_cap_exhausted can only ever coexist with an open bouncing
-			// row (Signal 2, plan.md Epic 1.3), so it shares the same
-			// non-terminal anchor. This is a backstop for any status
+		case domain.StuckReasonBouncing, domain.StuckReasonBounceCapExhausted:
+			// bounce_cap_exhausted (Signal 2, plan.md Epic 1.3) can only ever
+			// coexist with an open bouncing row, so it shares bouncing's exact
+			// non-terminal anchor — this is a backstop for any status
 			// transition that bypasses reconcileBouncingItems' explicit
 			// resolve-alongside-bouncing call sites above.
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
@@ -1756,6 +1758,7 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Co
 
 	for itemID, rows := range byItem {
 		var nonEscalation []OpenStuckStateData
+		var bouncingRow OpenStuckStateData
 		var hasBouncing, hasAbandonedReview bool
 		for _, row := range rows {
 			if row.Reason == domain.StuckReasonMultipleReasons || row.Reason == domain.StuckReasonBounceCapExhausted {
@@ -1763,6 +1766,7 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Co
 			}
 			if row.Reason == domain.StuckReasonBouncing {
 				hasBouncing = true
+				bouncingRow = row
 			}
 			if row.Reason == domain.StuckReasonAbandonedReview {
 				hasAbandonedReview = true
@@ -1770,11 +1774,16 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Co
 			nonEscalation = append(nonEscalation, row)
 		}
 
+		// Structural-coupling exclusion (ADR-001, plan.md Task 1.2.2a):
+		// evaluated in-process from bouncingRow (already fetched above via
+		// FindOpenStuckStates) rather than via l.storage.RemediationBlocked,
+		// which would re-query every open stuck row across the whole system
+		// again just to look up the one row already in hand. Mirrors
+		// RemediationBlocked's own decision set (session/backlog_remediation.go):
+		// blocked iff the gate is parked or mid-backoff, not eligible/granted.
 		if hasBouncing && hasAbandonedReview {
-			blocked, blockedErr := l.storage.RemediationBlocked(ctx, itemID, domain.StuckReasonBouncing)
-			if blockedErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation RemediationBlocked item=%s: %v", itemID, blockedErr)
-			} else if blocked {
+			switch evaluateRemediation(bouncingRow, time.Now(), serverStartTime) {
+			case remediationSkippedParked, remediationSkippedNotDue:
 				filtered := make([]OpenStuckStateData, 0, len(nonEscalation))
 				for _, row := range nonEscalation {
 					if row.Reason != domain.StuckReasonAbandonedReview {

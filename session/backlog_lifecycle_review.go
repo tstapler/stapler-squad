@@ -221,18 +221,34 @@ func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context
 		// naming the retry loop specifically. Best-effort throughout: log a
 		// warning on error, never block the reopen attempt below on these
 		// writes.
-		if _, markErr := l.storage.MarkStuck(ctx, itemID, domain.StuckReasonBounceCapExhausted, itemStatus, "bouncing remediation cap exhausted while bouncing reason still open"); markErr != nil {
+		applied, markErr := l.storage.MarkStuck(ctx, itemID, domain.StuckReasonBounceCapExhausted, itemStatus, "bouncing remediation cap exhausted while bouncing reason still open")
+		if markErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuck(bounce_cap_exhausted) item=%s: %v", itemID, markErr)
 		}
-		log.WarningLog.Printf("[BacklogLifecycle] bounce cap exhausted while still bouncing item=%s", itemID)
-		l.notify(itemID,
-			"Bounce cap exhausted — retry loop not converging",
-			fmt.Sprintf("%s — automated rework hit its retry cap (%d attempts) while still bouncing between in_progress and review. This is evidence the retry loop itself isn't converging, not a transient failure — a different approach may be needed before using Reset.", itemTitle, MaxRemediationAttempts),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
-		)
-		if _, notifiedErr := l.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBounceCapExhausted); notifiedErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuckNotified(bounce_cap_exhausted) item=%s: %v", itemID, notifiedErr)
+		// Only notify if the row was actually written. If MarkStuck's
+		// expectedStatus precondition failed closed (itemStatus drifted from
+		// the DB's live value between fetch and this call), applied is false
+		// and there is no durable row backing this notification — firing it
+		// anyway would be exactly the "one-time toast with nothing durable
+		// behind it" ADR-001 chose synthetic StuckReason rows to avoid.
+		// justParked is a one-shot signal (RemediationDue never returns it
+		// true twice for the same park), so there is no later retry if this
+		// tick is skipped — matches reconcileMultiReasonEscalation's and
+		// reconcileBouncingItems' own `if !applied { continue }` guard. Note:
+		// this only guards the notify/MarkStuckNotified below, NOT the
+		// reopen-attempt logic further down this function — a failed mark
+		// must not block the actual auto-reopen.
+		if applied {
+			log.WarningLog.Printf("[BacklogLifecycle] bounce cap exhausted while still bouncing item=%s", itemID)
+			l.notify(itemID,
+				"Bounce cap exhausted — retry loop not converging",
+				fmt.Sprintf("%s — automated rework hit its retry cap (%d attempts) while still bouncing between in_progress and review. This is evidence the retry loop itself isn't converging, not a transient failure — a different approach may be needed before using Reset.", itemTitle, MaxRemediationAttempts),
+				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+				4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
+			)
+			if _, notifiedErr := l.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBounceCapExhausted); notifiedErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuckNotified(bounce_cap_exhausted) item=%s: %v", itemID, notifiedErr)
+			}
 		}
 	}
 	if !due {

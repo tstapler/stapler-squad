@@ -127,6 +127,13 @@ export function StuckItemsSection() {
           const key = itemKey(item);
           if (next.has(key)) continue;
 
+          // Only MULTIPLE_REASONS gets de-escalation copy, not
+          // BOUNCE_CAP_EXHAUSTED — intentional, not an oversight:
+          // bounce_cap_exhausted can only ever coexist with an open bouncing
+          // row (backend invariant, see reconcileBouncingItems' paired
+          // resolve), so it never resolves independently while the item
+          // still has open non-escalation reasons. If that invariant ever
+          // changes, this condition needs the same OR as isEscalationReason.
           const isDeescalation =
             item.reason === StuckReason.MULTIPLE_REASONS && nextItemIds.has(item.itemId);
 
