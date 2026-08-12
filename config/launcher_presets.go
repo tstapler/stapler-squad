@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // LauncherPreset is one hand-authored entry in launcher-presets.json: a named,
@@ -76,6 +77,11 @@ func validateLauncherPresets(file *LauncherPresetsFile) error {
 
 		if len(p.Argv) == 0 {
 			return fmt.Errorf("preset %q has no argv", p.ID)
+		}
+		for j, tok := range p.Argv {
+			if strings.TrimSpace(tok) == "" {
+				return fmt.Errorf("preset %q has an empty argv element at position %d", p.ID, j+1)
+			}
 		}
 		if p.Label == "" {
 			return fmt.Errorf("preset %q has no label", p.ID)

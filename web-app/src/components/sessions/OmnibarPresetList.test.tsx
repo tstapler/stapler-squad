@@ -68,4 +68,14 @@ describe("OmnibarPresetList", () => {
     await userEvent.keyboard("{Enter}");
     expect(onSelect).toHaveBeenCalledWith(mockPresets[1]);
   });
+
+  it("OmnibarPresetList_should_CallOnSelect_When_SpacePressedOnRow", async () => {
+    const onSelect = jest.fn();
+    render(<OmnibarPresetList presets={mockPresets} loading={false} loadError={null} onSelect={onSelect} />);
+
+    const row = screen.getAllByTestId("preset-row")[0];
+    row.focus();
+    await userEvent.keyboard(" ");
+    expect(onSelect).toHaveBeenCalledWith(mockPresets[0]);
+  });
 });

@@ -102,6 +102,48 @@ func TestLoadLauncherPresets_should_ReturnEmptyArgvError_When_PresetArgvIsEmpty(
 	}
 }
 
+func TestLoadLauncherPresets_should_ReturnEmptyArgvElementError_When_ArgvContainsBlankString(t *testing.T) {
+	dir := t.TempDir()
+	path := writeLauncherPresetsFile(t, dir, `{
+		"version": 1,
+		"presets": [
+			{"id": "codex", "label": "Codex", "argv": ["codex", "  "]}
+		]
+	}`)
+
+	file, err := config.LoadLauncherPresets(path)
+	if err == nil {
+		t.Fatal("expected an empty-argv-element error, got nil")
+	}
+	if file != nil {
+		t.Errorf("expected nil file on validation error, got %+v", file)
+	}
+	if !strings.Contains(err.Error(), "codex") {
+		t.Errorf("expected error to name preset id %q, got: %s", "codex", err.Error())
+	}
+}
+
+func TestLoadLauncherPresets_should_ReturnUnsupportedVersionError_When_VersionIsNot1(t *testing.T) {
+	dir := t.TempDir()
+	path := writeLauncherPresetsFile(t, dir, `{
+		"version": 2,
+		"presets": [
+			{"id": "codex", "label": "Codex", "argv": ["codex"]}
+		]
+	}`)
+
+	file, err := config.LoadLauncherPresets(path)
+	if err == nil {
+		t.Fatal("expected an unsupported-version error, got nil")
+	}
+	if file != nil {
+		t.Errorf("expected nil file on validation error, got %+v", file)
+	}
+	if !strings.Contains(err.Error(), "2") {
+		t.Errorf("expected error to name the unsupported version, got: %s", err.Error())
+	}
+}
+
 func TestLoadLauncherPresets_should_ReturnNotExistError_When_FileIsMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "launcher-presets.json")

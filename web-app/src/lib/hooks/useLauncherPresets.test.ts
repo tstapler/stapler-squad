@@ -79,5 +79,37 @@ describe("useLauncherPresets", () => {
 
       await waitFor(() => expect(mockGetLauncherPresets).toHaveBeenCalledTimes(2));
     });
+
+    it("useLauncherPresets_should_IgnoreStaleFetch_When_RefetchFiresBeforePriorFetchResolves", async () => {
+      // The first fetch (triggered by mount) is left unresolved; refetch() fires a second
+      // fetch that resolves first. The stale first response must never overwrite the
+      // second, newer one once it finally resolves.
+      let resolveFirst!: (v: unknown) => void;
+      const firstResponse = new Promise((resolve) => {
+        resolveFirst = resolve;
+      });
+      mockGetLauncherPresets.mockReturnValueOnce(firstResponse);
+      mockGetLauncherPresets.mockResolvedValueOnce({
+        presets: [{ id: "newer", label: "Newer", argv: ["newer"], program: "", defaultPath: "" }],
+        loadError: "",
+      });
+
+      const { result } = renderHook(() => useLauncherPresets());
+
+      act(() => {
+        result.current.refetch();
+      });
+      await waitFor(() => expect(result.current.presets.map((p) => p.id)).toEqual(["newer"]));
+
+      // The stale first fetch resolves after the newer one already landed.
+      await act(async () => {
+        resolveFirst({
+          presets: [{ id: "stale", label: "Stale", argv: ["stale"], program: "", defaultPath: "" }],
+          loadError: "",
+        });
+      });
+
+      expect(result.current.presets.map((p) => p.id)).toEqual(["newer"]);
+    });
   });
 });
