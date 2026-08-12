@@ -86,10 +86,12 @@ export const cardHeader = style({
   gap: vars.space["2"],
 });
 
-export const icon = style({});
-
 export const iconNoPlan = style({ color: vars.color.textMuted });
-export const iconPendingReview = style({ color: vars.color.primary });
+// accentText (not primary) — primary fails WCAG AA (4.09:1) against this
+// card's accentBg background; accentText is tuned per-theme to guarantee
+// >=4.5:1. See theme.css.ts's accentText notes and InlineNotice.css.ts's
+// icon style for the same fix applied to an identical pairing.
+export const iconPendingReview = style({ color: vars.color.accentText });
 export const iconApproved = style({ color: vars.color.success, fontWeight: vars.fontWeight.bold });
 export const iconChangesRequested = style({ color: vars.color.criticalText });
 export const iconSkipped = style({ color: vars.color.textMuted });
@@ -103,7 +105,8 @@ export const label = style({
 });
 
 export const labelNoPlan = style({ color: vars.color.textMuted });
-export const labelPendingReview = style({ color: vars.color.primary });
+// See iconPendingReview above — same WCAG AA contrast fix.
+export const labelPendingReview = style({ color: vars.color.accentText });
 export const labelApproved = style({ color: vars.color.success });
 export const labelChangesRequested = style({ color: vars.color.criticalText });
 export const labelSkipped = style({ color: vars.color.textMuted });

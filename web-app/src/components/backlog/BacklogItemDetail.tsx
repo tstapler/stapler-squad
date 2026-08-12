@@ -20,7 +20,9 @@ import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { useAppSelector } from "@/lib/store";
+import { store } from "@/lib/store/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
+import { selectSessionsError } from "@/lib/store/sessionsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -498,10 +500,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // the same widened UpdateSession RPC/hook the general session list's own
   // Steer dialog uses (AC7). Mirrors handleDeleteSession's shape.
   // updateSession() itself swallows RPC errors and returns null rather than
-  // throwing (it dispatches to the session-service redux error slice) — so
-  // failure is re-thrown here, letting SessionsSection's inline composer
-  // (which awaits onSteerSession) catch it, keep itself open, and surface
-  // the error instead of closing optimistically.
+  // throwing (it dispatches the real failure message to the shared
+  // session-service redux error slice instead — see useSessionService.ts's
+  // updateSession) — so failure is re-thrown here, letting SessionsSection's
+  // inline composer (which awaits onSteerSession) catch it, keep itself
+  // open, and surface the error instead of closing optimistically. Read the
+  // real message via store.getState() rather than a memoized selector value
+  // (e.g. useAppSelector) — updateSession's dispatch happens synchronously
+  // before it resolves, but a selector captured in this callback's closure
+  // would still reflect the pre-call render and lag one render behind.
   const handleSteerSession = useCallback(
     async (s: LinkedSession, message: string) => {
       const toastKey = `${s.sessionId}:steer`;
@@ -509,7 +516,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       try {
         const result = await updateSession(s.sessionId, { steerMessage: message });
         if (!result) {
-          throw new Error("Failed to steer session.");
+          throw new Error(selectSessionsError(store.getState()) ?? "Failed to steer session.");
         }
         showActionToast("Steering message sent.", "success", toastKey);
       } catch (err) {

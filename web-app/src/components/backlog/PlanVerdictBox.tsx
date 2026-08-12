@@ -82,6 +82,7 @@ export function PlanVerdictBox({
   const [localPending, setLocalPending] = useState(false);
   const [regeneratePending, setRegeneratePending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionErrorHeadline, setActionErrorHeadline] = useState("Action failed");
 
   const isPending = localPending || actionPending;
   const canSubmit = reason.trim().length > 0 && !isPending;
@@ -117,6 +118,7 @@ export function PlanVerdictBox({
       setShowReject(false);
       setReason("");
     } catch (err) {
+      setActionErrorHeadline("Failed to request changes");
       setActionError("Action failed. Please try again.");
       console.error(err);
     } finally {
@@ -130,6 +132,7 @@ export function PlanVerdictBox({
     try {
       await onRegenerateWithFeedback();
     } catch (err) {
+      setActionErrorHeadline("Failed to regenerate plan");
       setActionError("Action failed. Please try again.");
       console.error(err);
     } finally {
@@ -175,9 +178,13 @@ export function PlanVerdictBox({
       )}
 
       {actionError && (
+        // Dismiss-only: neither reject-plan nor regenerate-plan failure has
+        // a wireable retry here (the user re-triggers the action via the
+        // still-open form/button below), so offering a "Retry" that just
+        // clears state would misrepresent what the button does.
         <InlineError
           type="transient"
-          onRetry={() => setActionError(null)}
+          headline={actionErrorHeadline}
           onDismiss={() => setActionError(null)}
           customMessage={actionError}
         />

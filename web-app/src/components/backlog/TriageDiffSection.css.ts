@@ -88,6 +88,7 @@ export const questionRow = style({
 
 export const answerToggle = style({
   alignSelf: "flex-start",
+  minHeight: "44px",
   backgroundColor: "transparent",
   color: vars.color.primary,
   border: "none",
@@ -140,6 +141,7 @@ export const answerActions = style({
 });
 
 export const answerSubmitButton = style({
+  minHeight: "44px",
   backgroundColor: vars.color.primary,
   color: vars.color.primaryText,
   border: "none",
@@ -168,6 +170,7 @@ export const answerSubmitButton = style({
 });
 
 export const answerCancelButton = style({
+  minHeight: "44px",
   backgroundColor: "transparent",
   color: vars.color.textSecondary,
   border: `1px solid ${vars.color.borderColor}`,

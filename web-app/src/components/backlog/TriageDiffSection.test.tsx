@@ -105,7 +105,7 @@ describe("TriageDiffSection_question_answer_submit", () => {
     expect(screen.queryByTestId("triage-question-answer-toggle-0")).not.toBeInTheDocument();
   });
 
-  it("surfaces an inline error banner and keeps the answer when onAnswerQuestion rejects", async () => {
+  it("surfaces an inline error and keeps the answer when onAnswerQuestion rejects", async () => {
     const onAnswerQuestion = jest.fn().mockRejectedValue(new Error("Retriage already in flight"));
     renderWithQuestion(onAnswerQuestion);
 
@@ -116,12 +116,55 @@ describe("TriageDiffSection_question_answer_submit", () => {
     fireEvent.click(screen.getByTestId("triage-question-answer-submit-0"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("triage-error-banner")).toHaveTextContent("Retriage already in flight");
+      expect(screen.getByRole("alert")).toHaveTextContent("Retriage already in flight");
     });
+    expect(screen.getByRole("alert")).toHaveTextContent("Failed to submit answer");
     // The answer was not silently dropped — the form (and its typed draft) is still there.
     expect(screen.getByTestId("triage-question-answer-input-0")).toHaveValue(
       "Per-workflow, default to global"
     );
+  });
+
+  it("retries the submit with the same draft when Retry is clicked after a failure", async () => {
+    const onAnswerQuestion = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("Retriage already in flight"))
+      .mockResolvedValueOnce(undefined);
+    renderWithQuestion(onAnswerQuestion);
+
+    fireEvent.click(screen.getByTestId("triage-question-answer-toggle-0"));
+    fireEvent.change(screen.getByTestId("triage-question-answer-input-0"), {
+      target: { value: "Per-workflow, default to global" },
+    });
+    fireEvent.click(screen.getByTestId("triage-question-answer-submit-0"));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry submitting answer" }));
+
+    await waitFor(() => {
+      expect(onAnswerQuestion).toHaveBeenCalledTimes(2);
+      expect(screen.getByText(/✓ Answered: Per-workflow, default to global/)).toBeInTheDocument();
+    });
+  });
+
+  it("dismisses the form (discarding the draft) when the error's dismiss button is clicked", async () => {
+    const onAnswerQuestion = jest.fn().mockRejectedValue(new Error("Retriage already in flight"));
+    renderWithQuestion(onAnswerQuestion);
+
+    const toggle = screen.getByTestId("triage-question-answer-toggle-0");
+    fireEvent.click(toggle);
+    fireEvent.change(screen.getByTestId("triage-question-answer-input-0"), {
+      target: { value: "Per-workflow, default to global" },
+    });
+    fireEvent.click(screen.getByTestId("triage-question-answer-submit-0"));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+
+    expect(screen.queryByTestId("triage-question-answer-input-0")).not.toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 
   it("returns focus to the toggle button after Cancel", () => {

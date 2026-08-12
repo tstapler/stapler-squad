@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AcCriterion, TriageSuggestion } from "@/lib/hooks/useBacklogService";
 import { composeQuestionAnswerFeedback } from "@/lib/backlog/composeQuestionAnswerFeedback";
-import { TriageErrorBanner } from "./TriageErrorBanner";
+import { InlineError } from "./InlineError";
 import * as styles from "./TriageDiffSection.css";
 
 interface TriageDiffSectionProps {
@@ -193,13 +193,18 @@ export function TriageDiffSection({ currentCriteria, suggestedSuggestions, onAns
                       {isOpen && (
                         <div className={styles.answerForm} role="form" aria-label={`Answer: ${q.text}`}>
                           {errorIndex === i && errorMessage && (
-                            <TriageErrorBanner
-                              message={errorMessage}
-                              onReload={() => {
-                                setErrorIndex(null);
-                                setErrorMessage(undefined);
-                              }}
-                              onSkip={() => handleCancel(i)}
+                            // Real retry: re-attempts submit with the same
+                            // draft (still in answerDrafts, untouched on
+                            // failure). Dismiss closes the form entirely,
+                            // matching the prior "Skip without applying"
+                            // behavior (discards the in-progress answer).
+                            <InlineError
+                              type="transient"
+                              headline="Failed to submit answer"
+                              retryAriaLabel="Retry submitting answer"
+                              customMessage={errorMessage}
+                              onRetry={() => void handleSubmit(i, q.text)}
+                              onDismiss={() => handleCancel(i)}
                             />
                           )}
                           <textarea
