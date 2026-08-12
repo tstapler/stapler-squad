@@ -1012,6 +1012,45 @@ func validateWorkDir(workDir string) error {
 	return nil
 }
 
+// preconfigureServerBeforeSession sets exit-empty off and remain-on-exit on,
+// in ONE chained tmux invocation, before the session in start() below is
+// created -- closing a race that's always present but usually wins locally
+// and loses under CI's slower, -race-instrumented syscalls:
+// t.setRemainOnExit() only runs AFTER the new-session command returns AND
+// existence is confirmed, but a fast-exiting program (e.g. Program="true",
+// which exits in microseconds) can already have destroyed the session --
+// and, since it was the server's only session, killed the server itself --
+// before that point, especially on a brand-new socket with no pre-existing
+// server to inherit options from.
+//
+// MUST be one chained invocation (`cmd1 \; cmd2 \; cmd3`), not separate
+// commands run back-to-back -- confirmed empirically (PR #445): a tmux
+// server that reaches zero sessions exits near-instantly by default
+// (exit-empty defaults to on), so `start-server` followed by a SEPARATE
+// `set-option` invocation already finds "no server running" -- the server
+// that start-server just reported success for is already gone by the time
+// the next process connects. Chaining into one invocation means the server
+// never has a gap where it's both running and unprotected: start-server
+// brings it up, exit-empty off keeps a zero-session server alive,
+// remain-on-exit on then protects the session new-session (in start()) is
+// about to create from destruction the instant its program exits. `;` here
+// is tmux's own command-separator syntax (parsed by tmux itself from
+// distinct argv elements), not a shell operator -- no shell is involved via
+// exec.Cmd, so no escaping is needed or applicable.
+//
+// Best-effort: log and continue on failure, matching every other
+// non-essential tmux option set in start() (history-limit,
+// setRemainOnExit itself) -- a failure here degrades to the pre-existing
+// (racy) behavior, not a hard Start() failure.
+func (t *TmuxSession) preconfigureServerBeforeSession() {
+	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
+	if err := runGatedErr(context.Background(), t.serverSocket, func() error {
+		return t.cmdExec.Run(preconfigureCmd)
+	}); err != nil {
+		log.Warn("failed to pre-configure tmux server before session creation", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err)
+	}
+}
+
 // start is the internal implementation for Start and StartWithCleanup
 func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupFunc) error {
 	// Use a no-cache check here to detect stale sessions from previous server runs.
@@ -1036,40 +1075,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
 
-	// Pre-configure the server, in ONE tmux invocation, before the session
-	// exists -- closing a race that's always present but usually wins locally
-	// and loses under CI's slower, -race-instrumented syscalls:
-	// t.setRemainOnExit() below only runs AFTER the new-session command below
-	// returns AND existence is confirmed, but a fast-exiting program (e.g.
-	// Program="true", which exits in microseconds) can already have
-	// destroyed the session -- and, since it was the server's only session,
-	// killed the server itself -- before that point, especially on a
-	// brand-new socket with no pre-existing server to inherit options from.
-	//
-	// MUST be one chained invocation (`cmd1 \; cmd2 \; cmd3`), not separate
-	// commands run back-to-back -- confirmed empirically (PR #445): a tmux
-	// server that reaches zero sessions exits near-instantly by default
-	// (exit-empty defaults to on), so `start-server` followed by a SEPARATE
-	// `set-option` invocation already finds "no server running" -- the
-	// server that start-server just reported success for is already gone by
-	// the time the next process connects. Chaining into one invocation means
-	// the server never has a gap where it's both running and unprotected:
-	// start-server brings it up, exit-empty off keeps a zero-session server
-	// alive, remain-on-exit on then protects the session new-session (below)
-	// is about to create from destruction the instant its program exits.
-	// `;` here is tmux's own command-separator syntax (parsed by tmux itself
-	// from distinct argv elements), not a shell operator -- no shell is
-	// involved via exec.Cmd, so no escaping is needed or applicable.
-	// Best-effort: log and continue on failure, matching every other
-	// non-essential tmux option set in this function (history-limit,
-	// setRemainOnExit itself) -- a failure here degrades to the pre-existing
-	// (racy) behavior, not a hard Start() failure.
-	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
-	if err := runGatedErr(context.Background(), t.serverSocket, func() error {
-		return t.cmdExec.Run(preconfigureCmd)
-	}); err != nil {
-		log.Warn("failed to pre-configure tmux server before session creation", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err)
-	}
+	t.preconfigureServerBeforeSession()
 
 	// Create a new detached tmux session and start the program in it.
 	// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
