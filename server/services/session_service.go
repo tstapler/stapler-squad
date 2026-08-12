@@ -1587,34 +1587,27 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
-	// Create instance using NewInstance constructor
-	instance, err := session.NewInstance(instanceOpts)
+	// Construct and persist the instance (Creating status) via the shared
+	// domain function -- see session/create_managed_instance.go (Story
+	// 1.2.0a). This does NOT start tmux/the process; that happens in the
+	// async goroutine below, exactly as before this extraction.
+	instance, err := session.CreateManagedInstance(ctx, session.CreateManagedInstanceParams{
+		Options:         instanceOpts,
+		Storage:         s.storage,
+		Registry:        s.registry,
+		CreateIfMissing: req.Msg.CreateIfMissing,
+		ResumeID:        req.Msg.ResumeId,
+	})
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to create instance: %w", err))
-	}
-
-	// Register in the live-handle map BEFORE persisting to storage so there is never
-	// a window where the session is findable by storage.FindInstanceDataByID but has
-	// no live actor. ForceRelease (not the release closure) is used in the rollback
-	// path because a concurrent Acquire racing between Register and AddInstance failure
-	// could bump refcount to 2, making plain release() decrement 2→1 and leave a
-	// phantom entry alive.
-	if s.registry != nil {
-		live := session.NewLiveInstance(instance)
-		if _, regErr := s.registry.Register(live); regErr != nil {
-			live.Stop()
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to register instance: %w", regErr))
+		switch {
+		case errors.Is(err, session.ErrPathNotExist), errors.Is(err, session.ErrResumePathNotExist):
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		case errors.Is(err, session.ErrInstanceConstructionFailed):
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		default:
+			// Covers ErrInstanceRegistrationFailed and ErrInstanceSaveFailed.
+			return nil, connect.NewError(connect.CodeInternal, err)
 		}
-		// Note: AddInstance failure rolls back via ForceRelease below.
-	}
-
-	// Save the instance to storage with Creating status immediately so the client
-	// can receive the session and show a spinner while initialization proceeds.
-	if err := s.storage.AddInstance(instance); err != nil {
-		if s.registry != nil {
-			s.registry.ForceRelease(instance.GetStableID())
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
 	// Add the session to the poller so WatchSessions picks it up immediately.

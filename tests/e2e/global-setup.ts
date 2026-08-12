@@ -32,6 +32,10 @@ async function globalSetup(config: FullConfig) {
       'clean-theme.json': 'clean',
     };
     const origin = process.env.TEST_SERVER_URL!;
+    // fixtures/*-theme.json are gitignored (rewritten every run), so the
+    // directory itself doesn't exist on a fresh checkout — ensure it exists
+    // before writing into it.
+    fs.mkdirSync(fixturesDir, { recursive: true });
     for (const [filename, themeName] of Object.entries(themeFixtures)) {
       const fixture = { origins: [{ origin, localStorage: [{ name: 'stapler-theme', value: themeName }] }] };
       fs.writeFileSync(path.join(fixturesDir, filename), JSON.stringify(fixture));

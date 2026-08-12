@@ -238,6 +238,11 @@ var methodToID = map[string]string{
 	"DeleteBacklogItem": "backlog:delete-item",
 	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
 	"WatchBacklogItems": "backlog:watch",
+	// Import external session RPCs (ImportService in import.proto)
+	"PreviewImportExternalSession": "import:preview",
+	"CommitImportExternalSession":  "import:commit",
+	"ConfirmKillExternalSession":   "import:confirm_kill",
+	"CancelPendingKill":            "import:cancel_pending_kill",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)
