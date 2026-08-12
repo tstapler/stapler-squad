@@ -272,3 +272,63 @@ func TestBroadcast_NoSendOnClosedPanic(t *testing.T) {
 	// Clean up client 1.
 	sess.UnsubscribeFromControlModeUpdates(id1)
 }
+
+// TestBroadcastControlModeUpdate_ClosesSlowSubscriber_When_ChannelFull is the regression
+// test for the bug this fix addresses: a subscriber whose channel is full used to have its
+// update silently dropped, which can strip partial escape sequences (cursor positioning,
+// erase-line, SGR resets) from the exact byte stream rendered in the browser terminal,
+// producing corrupted/overlapping rendering. The correct behavior — mirroring
+// NativeProcessManager.fanOut in session/native_process_manager.go — is to close and remove
+// the slow subscriber instead, so the consumer observes end-of-stream rather than silently
+// missing bytes mid-stream.
+func TestBroadcastControlModeUpdate_ClosesSlowSubscriber_When_ChannelFull(t *testing.T) {
+	sess := newRefcountTestSession(t)
+
+	// Subscribe one client and never drain it, so its buffered channel fills up.
+	slowID, slowCh := sess.SubscribeToControlModeUpdates()
+	// Subscribe a second, healthy client that we drain in lockstep with the send loop
+	// below. A background goroutine racing the tight send loop isn't guaranteed to keep
+	// up — if it loses that race, healthyCh fills too and gets closed just like slowCh,
+	// making the test flaky. Draining synchronously here guarantees healthyCh never holds
+	// more than one buffered message, regardless of scheduling.
+	healthyID, healthyCh := sess.SubscribeToControlModeUpdates()
+
+	// Fill the slow subscriber's buffer (capacity 100) and then push past it so a
+	// subsequent broadcast observes a full channel, while keeping the healthy
+	// subscriber's channel drained.
+	for i := 0; i < 101; i++ {
+		sess.broadcastControlModeUpdate([]byte("x"))
+		<-healthyCh
+	}
+
+	// The slow subscriber must be closed and removed, not left silently missing bytes.
+	// Every receive is bounded by its own timeout so pre-fix code (which never closes the
+	// channel) fails fast with a clear message instead of hanging the test run.
+	deadline := time.After(time.Second)
+drain:
+	for {
+		select {
+		case _, ok := <-slowCh:
+			if !ok {
+				break drain
+			}
+		case <-deadline:
+			t.Fatal("slow subscriber's channel was never closed")
+		}
+	}
+
+	sess.controlModeSubMu.RLock()
+	_, slowExists := sess.controlModeSubscribers[slowID]
+	_, healthyExists := sess.controlModeSubscribers[healthyID]
+	sess.controlModeSubMu.RUnlock()
+
+	if slowExists {
+		t.Error("slow subscriber should have been removed after its channel filled up")
+	}
+	if !healthyExists {
+		t.Error("healthy subscriber should not have been removed")
+	}
+
+	sess.UnsubscribeFromControlModeUpdates(healthyID)
+	<-drained
+}
