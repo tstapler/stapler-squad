@@ -1095,6 +1095,14 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return fmt.Errorf("error starting tmux session: %w", err)
 	}
 
+	// `tmux new-session -d` reported success (exit 0) at this point -- confirmed
+	// unambiguously via PID and socket file existence, not just the exit code,
+	// since a false-positive exit 0 with a not-yet-listening server is exactly
+	// the failure mode under investigation for PR #445's CI-only flake (see
+	// DoesSessionExistNoCache's expanded error log for the other half of this
+	// diagnostic pair).
+	log.Info("tmux new-session command succeeded", "session", t.sanitizedName, "serverSocket", t.serverSocket, "stderr", stderrOutput)
+
 	// Invalidate cache so the poll loop gets a fresh check immediately.
 	// The pre-creation DoesSessionExist() call above caches a "false" result,
 	// and the 5s cache TTL would otherwise cause the first 5s of the
@@ -2101,7 +2109,13 @@ func (t *TmuxSession) DoesSessionExistNoCache() bool {
 
 		output, err := t.listSessionsRaw(ctx)
 		if err != nil {
-			log.Warn("DoesSessionExistNoCache: tmux list-sessions failed", "session", t.sanitizedName, "err", err)
+			// output is included: the Go error alone (e.g. "exit status 1") never
+			// carries tmux's own stderr text (e.g. "no server running on <socket>",
+			// "error connecting to <socket> (No such file or directory)"), which is
+			// the one piece of evidence that actually distinguishes "server never
+			// came up" from "server up but genuinely doesn't have this session yet"
+			// -- see the incident this comment documents in PR #445.
+			log.Warn("DoesSessionExistNoCache: tmux list-sessions failed", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err, "output", string(output))
 			// Only attempt auto-recovery for the default server (not isolated test servers).
 			if t.serverSocket == "" && serverNotRunning(output) {
 				recoverFromServerFailure(t.serverSocket, "DoesSessionExistNoCache")
