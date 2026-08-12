@@ -1,8 +1,10 @@
 "use client";
+// +feature: backlog:session-steer
 
+import { useEffect, useRef, useState } from "react";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection, CollapsibleGroup } from "@/components/ui/Collapsible";
-import { classifySessionKind, type SessionKind } from "@/lib/backlog/sessionKind";
+import { classifySessionKind, isSteerable, type SessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
 import { useShowMore } from "@/lib/hooks/useShowMore";
@@ -27,6 +29,13 @@ export interface SessionsSectionProps {
   deletingSessionId: string | null;
   defaultExpanded: boolean;
   onDeleteSession: (session: LinkedSession) => void;
+  /**
+   * Steers a live work/review session via the widened UpdateSession RPC
+   * (Epic 2.1). Rejects on failure so the inline composer (Task 2.2.2c) can
+   * keep itself open and surface the error instead of closing optimistically.
+   */
+  onSteerSession: (session: LinkedSession, message: string) => Promise<void>;
+  steeringSessionId: string | null;
 }
 
 const SHOW_MORE_CAP = 5;
@@ -48,6 +57,8 @@ export function SessionsSection({
   deletingSessionId,
   defaultExpanded,
   onDeleteSession,
+  onSteerSession,
+  steeringSessionId,
 }: SessionsSectionProps) {
   const { visible, hasMore, remaining, showAll } = useShowMore(
     item.id,
@@ -55,6 +66,54 @@ export function SessionsSection({
     item.linkedSessions,
     SHOW_MORE_CAP
   );
+
+  // Steer composer state (Story 2.2.2). Mirrors TriageDiffSection's
+  // openIndex/draft/toggleRefs shape (Gap 1's same inline-disclosure
+  // pattern) — keyed by sessionId rather than array index since sessions
+  // aren't positionally stable across a "show more" expansion.
+  const [openSteerFor, setOpenSteerFor] = useState<string | null>(null);
+  const [steerDraft, setSteerDraft] = useState("");
+  const [steerError, setSteerError] = useState<string | null>(null);
+  const steerToggleRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const steerInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (openSteerFor !== null) {
+      steerInputRef.current?.focus();
+    }
+  }, [openSteerFor]);
+
+  const handleSteerCancel = () => {
+    const toggle = openSteerFor ? steerToggleRefs.current[openSteerFor] : null;
+    setOpenSteerFor(null);
+    setSteerDraft("");
+    setSteerError(null);
+    toggle?.focus();
+  };
+
+  const handleSteerSubmit = async (s: LinkedSession) => {
+    const message = steerDraft.trim();
+    if (!message) return;
+    // Belt-and-suspenders re-check (pre-mortem failure #2, P2): the Send
+    // button's disabled state already re-derives isSteerable(s) live on
+    // every render, but a stale click event could still slip through if the
+    // session ended between render and click — don't make the network call.
+    if (!isSteerable(s)) {
+      setSteerError("Session has ended — steering is unavailable.");
+      return;
+    }
+    setSteerError(null);
+    try {
+      await onSteerSession(s, message);
+      setSteerDraft("");
+      setOpenSteerFor(null);
+      steerToggleRefs.current[s.sessionId]?.focus();
+    } catch (err) {
+      // Keep the composer open and surface the error inline — don't close
+      // optimistically on a failed RPC call.
+      setSteerError(err instanceof Error ? err.message : "Failed to steer session.");
+    }
+  };
 
   if (item.linkedSessions.length === 0) return null;
 
@@ -163,6 +222,36 @@ export function SessionsSection({
                         {isOrphan && <span className={styles.sessionEndedBadge}>ended</span>}
                       </a>
                     )}
+                    {/* Steer control (Story 2.2.2, ADR-002): never rendered for a
+                        synthetic row (headless triage/review, blocked-guardrail,
+                        manual-review-marker) — those rows are already a collapsed
+                        diagnostic panel, not an action surface. For an ended
+                        work/review row it renders disabled+reason instead of being
+                        absent, since "this used to be steerable" is real state
+                        information. */}
+                    {!isSynthetic && (
+                      <button
+                        type="button"
+                        ref={(el) => {
+                          steerToggleRefs.current[s.sessionId] = el;
+                        }}
+                        className={sectionStyles.sessionSteerBtn}
+                        disabled={!isSteerable(s) || steeringSessionId === s.sessionId}
+                        aria-disabled={!isSteerable(s)}
+                        aria-expanded={openSteerFor === s.sessionId}
+                        aria-controls={`session-steer-composer-${s.sessionId}`}
+                        title={!isSteerable(s) && s.endedAt ? "Session has ended — steering is unavailable" : undefined}
+                        aria-label={`Steer session ${s.sessionId}`}
+                        data-testid={`session-steer-toggle-${s.sessionId}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setSteerError(null);
+                          setOpenSteerFor(s.sessionId);
+                        }}
+                      >
+                        Steer
+                      </button>
+                    )}
                     <button
                       className={styles.sessionDeleteBtn}
                       disabled={deletingSessionId === s.sessionId}
@@ -175,6 +264,57 @@ export function SessionsSection({
                       {deletingSessionId === s.sessionId ? "…" : "Delete"}
                     </button>
                   </div>
+                  {!isSynthetic && openSteerFor === s.sessionId && (
+                    <div
+                      id={`session-steer-composer-${s.sessionId}`}
+                      className={sectionStyles.steerComposer}
+                      role="form"
+                      aria-label={`Steer session ${s.sessionId}`}
+                    >
+                      <input
+                        ref={steerInputRef}
+                        type="text"
+                        className={sectionStyles.steerInput}
+                        value={steerDraft}
+                        onChange={(e) => setSteerDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void handleSteerSubmit(s);
+                          if (e.key === "Escape") handleSteerCancel();
+                        }}
+                        placeholder="Steering message…"
+                        data-testid={`session-steer-input-${s.sessionId}`}
+                        disabled={steeringSessionId === s.sessionId}
+                      />
+                      <button
+                        type="button"
+                        className={sectionStyles.steerSubmitButton}
+                        onClick={() => void handleSteerSubmit(s)}
+                        // Re-derives isSteerable(s) from the current s prop on every
+                        // render rather than closing over the value from when the
+                        // composer was opened — a session that ends while the
+                        // composer is open must disable Send without requiring
+                        // close/reopen (pre-mortem failure #2, P2).
+                        disabled={steeringSessionId === s.sessionId || !steerDraft.trim() || !isSteerable(s)}
+                        aria-busy={steeringSessionId === s.sessionId}
+                        data-testid={`session-steer-submit-${s.sessionId}`}
+                      >
+                        {steeringSessionId === s.sessionId ? "Sending…" : "Send"}
+                      </button>
+                      <button
+                        type="button"
+                        className={sectionStyles.steerCancelButton}
+                        onClick={handleSteerCancel}
+                        data-testid={`session-steer-cancel-${s.sessionId}`}
+                      >
+                        Cancel
+                      </button>
+                      {steerError && (
+                        <span className={sectionStyles.steerError} role="alert">
+                          {steerError}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className={styles.pipelineGroup} role="group" aria-label="Pipeline">
                     <span className={styles.pipelineLabel}>Pipeline:</span>{" "}
                     {pipelineDisplay.kind === "unrecognized" ? (

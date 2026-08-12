@@ -96,7 +96,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     listPipelineModes,
     lastError,
   } = useBacklogService();
-  const { deleteSession } = useSessionService();
+  const { deleteSession, updateSession } = useSessionService();
   const { showActionToast } = useNotifications();
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +105,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [steeringSessionId, setSteeringSessionId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<"id" | "link" | null>(null);
 
   // Epic 3.4 "what ran" surface: the currently-fetched mode list, used only
@@ -488,6 +489,35 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       }
     },
     [item, cancelTriage, track, deleteSession, showActionToast, load]
+  );
+
+  // Epic 2.2 (Story 2.2.2, ADR-002): steers a live work/review session via
+  // the same widened UpdateSession RPC/hook the general session list's own
+  // Steer dialog uses (AC7). Mirrors handleDeleteSession's shape.
+  // updateSession() itself swallows RPC errors and returns null rather than
+  // throwing (it dispatches to the session-service redux error slice) — so
+  // failure is re-thrown here, letting SessionsSection's inline composer
+  // (which awaits onSteerSession) catch it, keep itself open, and surface
+  // the error instead of closing optimistically.
+  const handleSteerSession = useCallback(
+    async (s: LinkedSession, message: string) => {
+      const toastKey = `${s.sessionId}:steer`;
+      setSteeringSessionId(s.sessionId);
+      try {
+        const result = await updateSession(s.sessionId, { steerMessage: message });
+        if (!result) {
+          throw new Error("Failed to steer session.");
+        }
+        showActionToast("Steering message sent.", "success", toastKey);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to steer session.";
+        showActionToast(msg, "error", toastKey);
+        throw err instanceof Error ? err : new Error(msg);
+      } finally {
+        setSteeringSessionId(null);
+      }
+    },
+    [updateSession, showActionToast]
   );
 
   // Epic 3.4: fetch the current mode list once, for resolving each linked
@@ -1409,6 +1439,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             deletingSessionId={deletingSessionId}
             defaultExpanded={sessionsExpanded}
             onDeleteSession={handleDeleteSession}
+            onSteerSession={handleSteerSession}
+            steeringSessionId={steeringSessionId}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />

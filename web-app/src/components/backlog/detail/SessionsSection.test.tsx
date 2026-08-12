@@ -1,6 +1,7 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SessionsSection } from "./SessionsSection";
+import type { SessionsSectionProps } from "./SessionsSection";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 
 jest.mock("../SessionMonitor", () => ({ SessionMonitor: () => null }));
@@ -67,6 +68,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -106,6 +109,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -123,6 +128,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -139,6 +146,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -162,6 +171,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -188,6 +199,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -240,6 +253,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -266,5 +281,169 @@ describe("SessionsSection", () => {
 
     fireEvent.click(manualHeader);
     expect(screen.getByText("Verified manually.")).toBeInTheDocument();
+  });
+});
+
+/** Renders SessionsSection with sensible defaults, overridable per test. */
+function renderSteerSection(
+  linkedSessions: LinkedSession[],
+  overrides: Partial<SessionsSectionProps> = {}
+) {
+  const onSteerSession = overrides.onSteerSession ?? jest.fn().mockResolvedValue(undefined);
+  const props: SessionsSectionProps = {
+    item: makeItem(linkedSessions),
+    pipelineModes: [],
+    latestWorkSession: undefined,
+    deletingSessionId: null,
+    defaultExpanded: true,
+    onDeleteSession: jest.fn(),
+    onSteerSession,
+    steeringSessionId: null,
+    ...overrides,
+  };
+  const view = render(<SessionsSection {...props} />);
+  return { ...view, onSteerSession };
+}
+
+describe("SessionsSection steer control (Story 2.2.2, ADR-002)", () => {
+  it("SessionsSection_should_NotRenderSteerControl_When_SessionIsHeadlessTriage", () => {
+    const session = makeSession({
+      sessionId: "headless-triage-a1b2c3d4",
+      role: "triage",
+      entityId: "e-headless",
+    });
+    renderSteerSection([session]);
+
+    expect(screen.queryByTestId("session-steer-toggle-headless-triage-a1b2c3d4")).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_RenderEnabledSteerControl_When_SessionIsLiveWork", () => {
+    const session = makeSession({ sessionId: "work-live-1", role: "work" });
+    renderSteerSection([session]);
+
+    const toggle = screen.getByTestId("session-steer-toggle-work-live-1");
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).not.toBeDisabled();
+  });
+
+  it("SessionsSection_should_RenderDisabledSteerControlWithTitle_When_WorkSessionHasEnded", () => {
+    const session = makeSession({
+      sessionId: "work-ended-1",
+      role: "work",
+      endedAt: new Date().toISOString(),
+    });
+    renderSteerSection([session]);
+
+    const toggle = screen.getByTestId("session-steer-toggle-work-ended-1");
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAttribute("title", "Session has ended — steering is unavailable");
+  });
+
+  it("SessionsSection_should_CallOnSteerSessionWithTrimmedMessage_When_SendClicked", async () => {
+    const session = makeSession({ sessionId: "work-live-2", role: "work" });
+    const { onSteerSession } = renderSteerSection([session]);
+
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-2"));
+    const input = screen.getByTestId("session-steer-input-work-live-2");
+    fireEvent.change(input, { target: { value: "  please pause and check X  " } });
+    fireEvent.click(screen.getByTestId("session-steer-submit-work-live-2"));
+
+    await waitFor(() => {
+      expect(onSteerSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "work-live-2" }),
+        "please pause and check X"
+      );
+    });
+
+    // Composer closes and clears on success.
+    await waitFor(() => {
+      expect(screen.queryByTestId("session-steer-input-work-live-2")).not.toBeInTheDocument();
+    });
+  });
+
+  it("SessionsSection_should_SubmitOnEnterKey_When_ComposerOpen", async () => {
+    const session = makeSession({ sessionId: "work-live-3", role: "work" });
+    const { onSteerSession } = renderSteerSection([session]);
+
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-3"));
+    const input = screen.getByTestId("session-steer-input-work-live-3");
+    fireEvent.change(input, { target: { value: "steer via enter" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(onSteerSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "work-live-3" }),
+        "steer via enter"
+      );
+    });
+  });
+
+  it("SessionsSection_should_CancelAndReturnFocusToToggle_When_EscapePressed", () => {
+    const session = makeSession({ sessionId: "work-live-4", role: "work" });
+    renderSteerSection([session]);
+
+    const toggle = screen.getByTestId("session-steer-toggle-work-live-4");
+    fireEvent.click(toggle);
+    const input = screen.getByTestId("session-steer-input-work-live-4");
+    fireEvent.change(input, { target: { value: "draft to discard" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByTestId("session-steer-input-work-live-4")).not.toBeInTheDocument();
+    expect(toggle).toHaveFocus();
+  });
+
+  it("SessionsSection_should_DisableSendWithoutClosingComposer_When_SessionEndsWhileComposerOpen", () => {
+    // Pre-mortem failure #2 (P2): the Send button must re-derive
+    // isSteerable(s) from the current `s` prop on every render, not close
+    // over the value from when the composer was opened.
+    const session = makeSession({ sessionId: "work-live-5", role: "work" });
+    const { rerender } = renderSteerSection([session]);
+
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-5"));
+    const input = screen.getByTestId("session-steer-input-work-live-5");
+    fireEvent.change(input, { target: { value: "in-flight steer" } });
+
+    const submitBtn = screen.getByTestId("session-steer-submit-work-live-5");
+    expect(submitBtn).not.toBeDisabled();
+
+    // Same session object, now ended — simulate a poll/refresh landing while
+    // the composer is still open.
+    const endedSession: LinkedSession = { ...session, endedAt: new Date().toISOString() };
+    const item = makeItem([endedSession]);
+    rerender(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn().mockResolvedValue(undefined)}
+        steeringSessionId={null}
+      />
+    );
+
+    // Composer stays mounted (no close/reopen required)...
+    expect(screen.getByTestId("session-steer-input-work-live-5")).toBeInTheDocument();
+    // ...but Send is now disabled.
+    expect(screen.getByTestId("session-steer-submit-work-live-5")).toBeDisabled();
+  });
+
+  it("SessionsSection_should_KeepComposerOpenAndShowError_When_OnSteerSessionRejects", async () => {
+    const session = makeSession({ sessionId: "work-live-6", role: "work" });
+    const onSteerSession = jest.fn().mockRejectedValue(new Error("steer failed: session busy"));
+    renderSteerSection([session], { onSteerSession });
+
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-6"));
+    const input = screen.getByTestId("session-steer-input-work-live-6");
+    fireEvent.change(input, { target: { value: "retry me" } });
+    fireEvent.click(screen.getByTestId("session-steer-submit-work-live-6"));
+
+    await waitFor(() => {
+      expect(screen.getByText("steer failed: session busy")).toBeInTheDocument();
+    });
+    // Composer remains open on failure — not closed optimistically.
+    expect(screen.getByTestId("session-steer-input-work-live-6")).toBeInTheDocument();
   });
 });
