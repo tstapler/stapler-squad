@@ -70,6 +70,11 @@ func TestBranchRefExists_ReturnsError_When_PackedRefsCorrupted(t *testing.T) {
 // TestSetup_SurfacesError_When_BranchRefIsMalformed is the regression test for the bug: a
 // non-ErrReferenceNotFound repo.Reference() error must surface from Setup() instead of being
 // silently treated as "branch does not exist" and falling through to worktree creation.
+// Both the sentinel check and the message check matter here: cleanupExistingBranch() (see
+// worktree_branch.go) also touches the same corrupted packed-refs file and fails with its
+// own, differently-worded error if the misclassification bug is reintroduced, so the
+// sentinel check is what actually pins this test to branchRefExists's own classification
+// rather than to whichever call site happens to fail first on this fixture.
 func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 	repoDir := setupTestRepo(t)
 
@@ -81,6 +86,8 @@ func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 
 	err = wt.Setup()
 	require.Error(t, err, "Setup() must surface a malformed ref as an error, not silently treat it as branch-absent")
+	assert.False(t, errors.Is(err, plumbing.ErrReferenceNotFound),
+		"a genuine ref-read failure must not be classified as ErrReferenceNotFound")
 	assert.Contains(t, err.Error(), "failed to check branch reference")
 
 	// Must not have fallen through to worktree creation.
@@ -119,6 +126,8 @@ func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) 
 
 	err = wt.setupNewWorktree()
 	require.Error(t, err, "setupNewWorktree() must surface a malformed ref as an error")
+	assert.False(t, errors.Is(err, plumbing.ErrReferenceNotFound),
+		"a genuine ref-read failure must not be classified as ErrReferenceNotFound")
 	assert.Contains(t, err.Error(), "failed to check branch reference")
 
 	_, statErr := os.Stat(wt.worktreePath)
