@@ -164,6 +164,15 @@ jobs:
         run: ./scripts/build-tmux.sh
 
       - name: Run tests with coverage (pinned tmux 3.4)
+        # STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: production default is 10s
+        # (session/tmux/tmux.go's sessionCreateTimeoutDefault) -- this only
+        # widens the budget for this CI job, where a fully-loaded runner
+        # running every package's -race suite concurrently can occasionally
+        # exceed 10s of pure CPU-scheduling delay spinning up even an
+        # isolated tmux -L server, not lock contention. See tmux.go's
+        # sessionCreateTimeout doc comment for the incident this closes.
+        env:
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           TMUX_BIN="$(pwd)/bin/tmux" go test -race -coverprofile=coverage.out \
             -covermode=atomic ./server/... ./session/... ./config/... \

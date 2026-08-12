@@ -194,9 +194,32 @@ const (
 	sessionExistsTimeout        = 3 * time.Second
 	sessionExistsNoCacheTimeout = 5 * time.Second
 	existsCacheDefaultTTL       = 5 * time.Second // registry fast-path is push-based; this is only the subprocess fallback
-	sessionCreateTimeout        = 10 * time.Second
+	sessionCreateTimeoutDefault = 10 * time.Second
 	sessionPollInitialDelay     = 5 * time.Millisecond
 )
+
+// sessionCreateTimeout is sessionCreateTimeoutDefault unless overridden via
+// STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS (unset/invalid -> default, no
+// production behavior change). Exists for CI specifically: even with a
+// per-test isolated tmux -L server (NewTmuxSessionWithServerSocket), a brand
+// new server still has to fork and become responsive within this budget, and
+// a fully-loaded CI runner (many packages' -race suites competing for CPU)
+// can occasionally exceed 10s just on scheduling delay, not lock contention
+// -- confirmed via TestCommitImportExternalSession_PersistsAndLinksAndSuspends_
+// When_StartAndSuspendSucceed failing deterministically twice in the same CI
+// run (Makefile's own coverage-then-verbose-rerun fallback) even after socket
+// isolation removed cross-test contention as a cause. A var (not const) so
+// it's computed once at package init, ponytail: global var read at init,
+// per-process override only -- add a setter if a future caller needs to vary
+// it mid-process.
+var sessionCreateTimeout = func() time.Duration {
+	if raw := os.Getenv("STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS"); raw != "" {
+		if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return sessionCreateTimeoutDefault
+}()
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
