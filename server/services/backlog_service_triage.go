@@ -2532,6 +2532,7 @@ func (s *BacklogService) TriggerTriage(
 			PlanArtifactsPath:   &pap,
 			PlanApproved:        &approvalReset,
 			PlanRejectionReason: &clearedReason,
+			ClearPlanRejectedAt: true,
 		}
 		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {

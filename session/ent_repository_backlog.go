@@ -626,7 +626,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.PlanRejectionReason != nil {
 		u.SetPlanRejectionReason(*update.PlanRejectionReason)
 	}
-	if update.PlanRejectedAt != nil {
+	if update.ClearPlanRejectedAt {
+		u.ClearPlanRejectedAt()
+	} else if update.PlanRejectedAt != nil {
 		u.SetPlanRejectedAt(*update.PlanRejectedAt)
 	}
 	if update.PrURL != nil {
@@ -754,7 +756,7 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	if update.PlanRejectionReason != nil {
 		fields = append(fields, "planRejectionReason")
 	}
-	if update.PlanRejectedAt != nil {
+	if update.PlanRejectedAt != nil || update.ClearPlanRejectedAt {
 		fields = append(fields, "planRejectedAt")
 	}
 	if update.PrURL != nil {

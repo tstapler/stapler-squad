@@ -729,6 +729,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 			PlanApproved:        &planApproved,
 			PlanArtifactsPath:   &planArtifactsPath,
 			PlanRejectionReason: &rejectionReason,
+			ClearPlanRejectedAt: true,
 		}, nil); resetErr != nil {
 			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to reset planning state for item %s: %v", req.Msg.ItemId, resetErr)
 		} else {
@@ -777,6 +778,7 @@ func (s *BacklogService) ApprovePlan(
 		PlanApproved:        &approved,
 		PlanApprovedAt:      &now,
 		PlanRejectionReason: &clearedReason,
+		ClearPlanRejectedAt: true,
 	}
 
 	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, nil)

@@ -605,9 +605,16 @@ type BacklogItemUpdate struct {
 	PlanApprovedAt    *time.Time
 	PlanArtifactsPath *string
 	// PlanRejectionReason and PlanRejectedAt follow the same partial-update-
-	// presence convention: nil means "leave untouched".
+	// presence convention: nil means "leave untouched", a non-nil pointer
+	// explicitly sets it. Since a plain pointer can't distinguish "leave
+	// untouched" from "clear it back to nil", use ClearPlanRejectedAt to
+	// explicitly clear the timestamp back to nil (e.g. alongside resetting
+	// PlanRejectionReason back to "" on approval/re-triage) — see
+	// PrFeedbackAddressedAt/ClearPrFeedbackAddressedAt below for the same
+	// pattern.
 	PlanRejectionReason *string
 	PlanRejectedAt      *time.Time
+	ClearPlanRejectedAt bool
 	// QueuedAt and QueuedAutonomous follow the same partial-update-presence
 	// convention as PlanApprovedAt: nil means "leave untouched".
 	QueuedAt         *time.Time

@@ -874,6 +874,7 @@ func TestApprovePlan_ClearsExistingRejectionReason(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.Equal(t, "missing caching plan", rejectResp.Msg.Item.PlanRejectionReason)
+	require.NotNil(t, rejectResp.Msg.Item.PlanRejectedAt)
 
 	approveResp, err := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
 		ItemId: itemID,
@@ -881,6 +882,7 @@ func TestApprovePlan_ClearsExistingRejectionReason(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, approveResp.Msg.Item.PlanApproved)
 	assert.Empty(t, approveResp.Msg.Item.PlanRejectionReason)
+	assert.Nil(t, approveResp.Msg.Item.PlanRejectedAt, "plan_rejected_at must be cleared symmetrically with plan_rejection_reason on approval")
 }
 
 // ─── RejectPlan ───────────────────────────────────────────────────────────────
@@ -1051,6 +1053,7 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 	}))
 	require.NoError(t, err)
 	require.Equal(t, "needs a different approach entirely", rejectResp.Msg.Item.PlanRejectionReason)
+	require.NotNil(t, rejectResp.Msg.Item.PlanRejectedAt)
 
 	transResp, err := svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       item.ID,
@@ -1058,11 +1061,13 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 	}))
 	require.NoError(t, err)
 	assert.Empty(t, transResp.Msg.Item.PlanRejectionReason)
+	assert.Nil(t, transResp.Msg.Item.PlanRejectedAt, "plan_rejected_at must be cleared symmetrically with plan_rejection_reason on backward transition")
 	assert.False(t, transResp.Msg.Item.PlanApproved)
 
 	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
 	assert.Empty(t, fetched.PlanRejectionReason, "plan_rejection_reason must be cleared on a fresh read too")
+	assert.Nil(t, fetched.PlanRejectedAt, "plan_rejected_at must be cleared on a fresh read too")
 }
 
 // initGitRepoWithCommit initialises a minimal git repository with an initial commit so
@@ -3642,6 +3647,7 @@ func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.Equal(t, "This missed the mobile case entirely.", rejectResp.Msg.Item.PlanRejectionReason)
+	require.NotNil(t, rejectResp.Msg.Item.PlanRejectedAt)
 
 	_, refineErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
 		ItemId:   item.ID,
@@ -3652,6 +3658,10 @@ func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady) && updated.PlanRejectionReason == ""
 	}, 5*time.Second, 50*time.Millisecond, "refine completion should clear plan_rejection_reason")
+
+	updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, loadErr)
+	assert.Nil(t, updated.PlanRejectedAt, "plan_rejected_at must be cleared symmetrically with plan_rejection_reason on refine completion")
 }
 
 // TestTriggerTriage_RefineWithFeedback_RequiresPriorResult: feedback on an item

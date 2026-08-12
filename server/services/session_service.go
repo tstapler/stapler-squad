@@ -2022,15 +2022,7 @@ func (s *SessionService) UpdateSession(
 				if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
 					log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
 				} else {
-					log.Info("[UpdateSession] steering message sent", "session", instance.Title)
-					s.eventBus.Publish(events.NewNotificationEvent(
-						instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
-						int32(10), // NotificationType_INFO
-						int32(2),  // NotificationPriority_MEDIUM
-						"Steering input sent",
-						fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
-						nil,
-					))
+					s.notifySteerSent(instance, *req.Msg.SteerMessage)
 				}
 			}
 		} else {
@@ -2038,19 +2030,28 @@ func (s *SessionService) UpdateSession(
 			// primitive the MCP steer_session tool already falls back to. Unlike the
 			// autonomous branch, a send failure IS returned to the caller so the UI
 			// can surface it (research/ux.md's Gap 2 error-state table).
-			if err := instance.SendKeys(*req.Msg.SteerMessage + "\r"); err != nil {
+			//
+			// SendKeys is bounded with a timeout, mirroring terminal_service.go's
+			// WriteToSession — a browser click against a wedged/dead session must not
+			// hang this RPC handler goroutine forever.
+			text := session.BuildSubmittableInput(*req.Msg.SteerMessage, true)
+			errCh := make(chan error, 1)
+			go func() { errCh <- instance.SendKeys(text) }()
+
+			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			select {
+			case err := <-errCh:
+				if err != nil {
+					return nil, connect.NewError(connect.CodeFailedPrecondition,
+						fmt.Errorf("failed to steer session %q: %w", instance.Title, err))
+				}
+			case <-timeoutCtx.Done():
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("failed to steer session %q: %w", instance.Title, err))
+					fmt.Errorf("timed out steering session %q", instance.Title))
 			}
-			log.Info("[UpdateSession] steering message sent", "session", instance.Title)
-			s.eventBus.Publish(events.NewNotificationEvent(
-				instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
-				int32(10), // NotificationType_INFO
-				int32(2),  // NotificationPriority_MEDIUM
-				"Steering input sent",
-				fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
-				nil,
-			))
+			s.notifySteerSent(instance, *req.Msg.SteerMessage)
 		}
 	}
 
@@ -2110,6 +2111,21 @@ func (s *SessionService) UpdateSession(
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
+}
+
+// notifySteerSent logs and publishes the "steering input sent" notification
+// shared by both the autonomous and non-autonomous steer branches in
+// UpdateSession.
+func (s *SessionService) notifySteerSent(instance *session.Instance, steerMessage string) {
+	log.Info("[UpdateSession] steering message sent", "session", instance.Title)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
+		int32(10), // NotificationType_INFO
+		int32(2),  // NotificationPriority_MEDIUM
+		"Steering input sent",
+		fmt.Sprintf("%s: %s", instance.Title, steerMessage),
+		nil,
+	))
 }
 
 // HibernateSession checkpoints the session state, kills the AI process, and
