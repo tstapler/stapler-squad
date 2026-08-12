@@ -4251,3 +4251,239 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	require.NoError(t, err)
 	assert.Empty(t, open, "leaving pr_pending must resolve the pr_pending_no_pr row via the status-anchored self-heal sweep")
 }
+
+// TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_ThresholdFirstCrossed
+// verifies the escalate branch: an item with 2 simultaneously open,
+// independent (non-coupled) non-escalation reasons gets a durable
+// multiple_reasons row within one tick, but is NOT notified on the same tick
+// that created the row (multiReasonEscalationNotifyReady's dwell gate).
+func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_ThresholdFirstCrossed(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Multi-reason item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	require.True(t, applied)
+	applied, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "no progress")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	require.True(t, ok, "an item with 2 open non-escalation reasons must get a multiple_reasons row")
+	assert.Nil(t, row.NotifiedAt, "must not notify on the tick that created the row")
+	assert.Empty(t, notifier.calls, "must not notify on the tick that created the row")
+}
+
+// TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen
+// verifies the notify branch: once the multiple_reasons row has been open
+// past multiReasonNotifyDwell and the condition still holds, the next tick
+// notifies exactly once and marks the row notified.
+func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Multi-reason item, dwell elapsed",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "no progress")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	// First tick: creates the row, does not notify.
+	listener.reconcileMultiReasonEscalation(ctx, er)
+	require.Empty(t, notifier.calls)
+
+	backdateStuckFirstDetected(t, er, item.ID, domain.StuckReasonMultipleReasons, time.Now().Add(-61*time.Second))
+
+	// Second tick: dwell elapsed, condition still holds.
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, "Multiple stuck reasons open", notifier.calls[0].Title)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	require.True(t, ok)
+	assert.NotNil(t, row.NotifiedAt, "row must be marked notified after the dwell-gated notify fires")
+
+	// Third tick: already notified, must not re-notify.
+	listener.reconcileMultiReasonEscalation(ctx, er)
+	assert.Len(t, notifier.calls, 1, "must notify at most once per row lifetime")
+}
+
+// TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold
+// verifies the de-escalate branch: once one of the two underlying reasons
+// resolves (dropping the non-escalation count below multiReasonThreshold),
+// the next tick resolves the multiple_reasons row.
+func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Multi-reason item, de-escalating",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "no progress")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	require.True(t, ok, "row must be open before de-escalation")
+
+	_, err = er.ResolveStuck(ctx, item.ID, domain.StuckReasonStaleWork)
+	require.NoError(t, err)
+
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err = er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok = findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "multiple_reasons row must resolve once the open-reason count drops below threshold")
+}
+
+// TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount_When_Counting
+// is the ADR-001 self-reinforcement guard: an item with a single
+// non-escalation reason (bouncing) plus its own already-open
+// multiple_reasons row must NOT count the multiple_reasons row itself toward
+// the threshold — only 1 non-escalation reason is open, so the escalation
+// must actually de-escalate/resolve, not stay pinned open by counting itself.
+func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount_When_Counting(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Self-reinforcement guard item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	// Seed the escalation row directly (as if a prior tick had wrongly counted
+	// itself, or it survived from a since-resolved second reason).
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonMultipleReasons, BacklogStatusInProgress, "bouncing, multiple_reasons")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "multiple_reasons must not count itself toward its own threshold — with only 1 real reason open, it must resolve")
+}
+
+// TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBouncingAndAbandonedReviewOpen
+// is the structural-coupling regression guard (Task 1.2.2a/e): bouncing and
+// abandoned_review co-occur on nearly every bouncing item whose reopen gate
+// is currently blocked (mid-backoff) — see markAbandonedReview's own
+// identical gate, TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue.
+// With only that coupled pair open, escalation must NOT fire.
+func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBouncingAndAbandonedReviewOpen(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Coupled bouncing+abandoned_review item",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	// Drive the bouncing gate into "blocked" (mid-backoff), mirroring
+	// TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue's seeding.
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonAbandonedReview, BacklogStatusReview, "stuck in review")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "the coupled bouncing+abandoned_review pair alone must not self-escalate")
+}
+
+// TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusIndependentReasonOpen
+// is the companion case to the exclusion guard above: the same coupled
+// bouncing+abandoned_review pair PLUS one genuinely independent third reason
+// (push_failed) must still escalate — confirming the coupling exclusion
+// narrows the count rather than disabling escalation outright.
+func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusIndependentReasonOpen(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Coupled pair plus independent reason item",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonAbandonedReview, BacklogStatusReview, "stuck in review")
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview, "push failed")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	require.True(t, ok, "bouncing+push_failed (abandoned_review excluded by the coupling guard) is still 2 independent reasons — must escalate")
+	assert.Contains(t, row.Context, "bouncing")
+	assert.Contains(t, row.Context, "push_failed")
+	assert.NotContains(t, row.Context, "abandoned_review", "the coupled abandoned_review row must be excluded from the escalation context")
+}

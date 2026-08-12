@@ -1062,6 +1062,16 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.selfHealStuck(ctx, er)
 	})
 
+	// Multi-reason escalation detector (Signal 1, Epic 1.2): marks/refreshes a
+	// durable multiple_reasons row for any item with 2+ simultaneously open
+	// non-escalation stuck reasons, and dwell-gated-notifies once. Registered
+	// immediately after self_heal (not before it) so a terminal-status item's
+	// stale non-escalation rows have already been cleared this tick before
+	// being counted — see reconcileMultiReasonEscalation's doc comment.
+	l.runStuckDetector("multi_reason_escalation", &okNames, &panickedNames, func() {
+		l.reconcileMultiReasonEscalation(ctx, er)
+	})
+
 	// Auto-archive items that have sat in "done" for longer than maxDoneAge.
 	// Registered immediately before archive_terminal_sessions so a freshly
 	// archived item's work sessions are swept in the same tick — see
@@ -1665,16 +1675,154 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		case domain.StuckReasonPRNeedsFix:
 			resolve = row.ItemStatus != BacklogStatusPRPending
 		default:
-			// autonomous_stuck, push_failed, rework_cap, and any future reason
-			// with no non-terminal anchor: stays open until the blanket
-			// terminal rule above catches it, or its own event-site resolves
-			// it first.
+			// autonomous_stuck, push_failed, rework_cap, multiple_reasons, and
+			// any future reason with no non-terminal anchor: stays open until
+			// the blanket terminal rule above catches it, or its own
+			// event-site resolves it first. multiple_reasons specifically is
+			// resolved by its own detector (reconcileMultiReasonEscalation's
+			// de-escalate branch), not a status-anchor case here — its
+			// "resolved" condition is "count of other open reasons dropped
+			// below multiReasonThreshold", which has no single item-status
+			// anchor to check.
 			continue
 		}
 		if !resolve {
 			continue
 		}
 		l.resolveStuckLogged(ctx, er, row.ItemID, row.Reason, "selfHealStuck")
+	}
+}
+
+// reconcileMultiReasonEscalation groups every open BacklogStuckState row by
+// item and, for any item with multiReasonThreshold or more simultaneously
+// open *non-escalation* stuck reasons, marks/refreshes a durable
+// domain.StuckReasonMultipleReasons row (Signal 1 — see plan.md Epic 1.2).
+// Computed fresh from FindOpenStuckStates every tick (never a cached count,
+// per research/pitfalls.md §2), so the signal can never drift from the live
+// set of open reasons. Registered immediately after self_heal in
+// ReconcileStuck so a terminal-status item's stale rows have already been
+// cleared this tick before they're counted.
+//
+// Two exclusions apply before counting (see ADR-001 and Task 1.2.2a):
+//  1. domain.StuckReasonMultipleReasons and domain.StuckReasonBounceCapExhausted
+//     themselves never count toward their own trigger — otherwise the
+//     escalation row would be self-reinforcing.
+//  2. domain.StuckReasonAbandonedReview is excluded when the same item also
+//     has an open domain.StuckReasonBouncing row whose remediation gate is
+//     currently blocked (parked or mid-backoff) — abandoned_review and
+//     bouncing are structurally coupled in that state, not two independent
+//     signals: markAbandonedReview (backlog_lifecycle_review.go) already
+//     skips its own respawn for exactly this condition
+//     (TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue). Without
+//     this exclusion, bouncing+abandoned_review would co-occur on nearly
+//     every bouncing item, degrading "2 simultaneous reasons" from a
+//     distinguishing signal to "most bouncing items" (pre-mortem.md
+//     Failure #1, P1).
+//
+// Notification is dwell-gated and notify-once per row lifetime
+// (multiReasonEscalationNotifyReady, keyed off the row's FirstDetectedAt) so
+// a single-tick threshold crossing doesn't notify immediately. De-escalation
+// (ResolveStuck) is NOT dwell-gated — it fires the same tick the count first
+// drops below threshold (see plan.md Pattern Decisions' "Flap control"
+// rows and Unresolved Questions for why no hysteresis is applied here yet).
+// Best-effort throughout: errors are logged, never returned.
+func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Context, er *EntRepository) {
+	open, err := er.FindOpenStuckStates(ctx)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation FindOpenStuckStates error: %v", err)
+		return
+	}
+
+	byItem := make(map[string][]OpenStuckStateData)
+	for _, row := range open {
+		byItem[row.ItemID] = append(byItem[row.ItemID], row)
+	}
+
+	for itemID, rows := range byItem {
+		var nonEscalation []OpenStuckStateData
+		var hasBouncing, hasAbandonedReview bool
+		for _, row := range rows {
+			if row.Reason == domain.StuckReasonMultipleReasons || row.Reason == domain.StuckReasonBounceCapExhausted {
+				continue
+			}
+			if row.Reason == domain.StuckReasonBouncing {
+				hasBouncing = true
+			}
+			if row.Reason == domain.StuckReasonAbandonedReview {
+				hasAbandonedReview = true
+			}
+			nonEscalation = append(nonEscalation, row)
+		}
+
+		if hasBouncing && hasAbandonedReview {
+			blocked, blockedErr := l.storage.RemediationBlocked(ctx, itemID, domain.StuckReasonBouncing)
+			if blockedErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation RemediationBlocked item=%s: %v", itemID, blockedErr)
+			} else if blocked {
+				filtered := make([]OpenStuckStateData, 0, len(nonEscalation))
+				for _, row := range nonEscalation {
+					if row.Reason != domain.StuckReasonAbandonedReview {
+						filtered = append(filtered, row)
+					}
+				}
+				nonEscalation = filtered
+			}
+		}
+
+		existingRow, hasExistingRow := findOpenStuckStateFor(rows, itemID, domain.StuckReasonMultipleReasons)
+
+		if !isMultiReasonEscalated(len(nonEscalation)) {
+			if hasExistingRow {
+				if _, resolveErr := er.ResolveStuck(ctx, itemID, domain.StuckReasonMultipleReasons); resolveErr != nil {
+					log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation ResolveStuck item=%s: %v", itemID, resolveErr)
+				} else {
+					log.InfoLog.Printf("[BacklogLifecycle] de-escalated item=%s open_reasons=%d", itemID, len(nonEscalation))
+				}
+			}
+			continue
+		}
+
+		reasonLabels := make([]string, 0, len(nonEscalation))
+		for _, row := range nonEscalation {
+			reasonLabels = append(reasonLabels, string(row.Reason))
+		}
+		contextString := strings.Join(reasonLabels, ", ")
+
+		applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonMultipleReasons, rows[0].ItemStatus, contextString)
+		if markErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuck item=%s: %v", itemID, markErr)
+			continue
+		}
+		if !applied {
+			continue
+		}
+		log.InfoLog.Printf("[BacklogLifecycle] escalated item=%s open_reasons=%d", itemID, len(nonEscalation))
+
+		// Determine notify-readiness from the pre-MarkStuck row, if one was
+		// already open this tick: MarkStuck does not change FirstDetectedAt
+		// or NotifiedAt for a row that was already open (only for one it
+		// reopens from a resolved state), so the pre-fetched values are
+		// still accurate post-MarkStuck. A freshly-created row (no
+		// existingRow) was just opened this tick, so it is never
+		// notify-ready yet.
+		if !hasExistingRow {
+			continue
+		}
+		if existingRow.NotifiedAt != nil {
+			continue
+		}
+		if !multiReasonEscalationNotifyReady(existingRow.FirstDetectedAt, time.Now()) {
+			continue
+		}
+		l.notify(itemID,
+			"Multiple stuck reasons open",
+			fmt.Sprintf("%s — %d stuck reasons currently open simultaneously (%s). This combination is a stronger signal than any single reason alone.", rows[0].ItemTitle, len(nonEscalation), contextString),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
+		)
+		if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonMultipleReasons); notifyErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		}
 	}
 }
 
