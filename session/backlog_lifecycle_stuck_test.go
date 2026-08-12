@@ -2637,6 +2637,68 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
 }
 
+// TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingResolves
+// verifies Signal 2's resolve-alongside-bouncing wiring (plan.md Story
+// 1.3.2): bounce_cap_exhausted can only ever coexist with an open bouncing
+// row, so it must clear in the same tick bouncing itself resolves via the
+// merged-PR branch, rather than outliving the condition it describes.
+func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingResolves(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item, capped, with merged PR",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 173
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-capped-merged", "")
+
+	// Seed both bouncing and bounce_cap_exhausted open — the exact live shape
+	// once a bouncing item's remediation gate has already parked.
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "5 cycles, capped")
+	require.NoError(t, err)
+	require.True(t, applied)
+	applied, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBounceCapExhausted, BacklogStatusInProgress, "cap exhausted while bouncing")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// 3 in_progress->review round trips with no PASS verdict — the exact
+	// shape isBouncing flags (mirrors the sibling merged-PR test above).
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-capped-merged")
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+		"an item whose linked PR already merged must transition to done, not stay bouncing")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "both bouncing and bounce_cap_exhausted must resolve once the item's PR is confirmed merged")
+}
+
 // TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge
 // is a regression test for one of the sibling "silent status-transition
 // failure" instances found by the silenttransition lint analyzer (same shape
@@ -3480,6 +3542,65 @@ func TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass(t *t
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "bouncing row must resolve once the item reaches done")
+}
+
+// TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInProgressOrReview
+// is the backstop test for Task 1.3.2b: an open bounce_cap_exhausted row must
+// resolve via selfHealStuck's own status-anchor case (mirroring bouncing's
+// own anchor scope) once the item's status leaves in_progress/review —
+// exercised here with a NON-terminal status (pr_pending) so this asserts the
+// reason-specific case fires, not the blanket terminal-status rule (which a
+// done/archived status would exercise instead, per
+// TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass
+// immediately above).
+func TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInProgressOrReview(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bounce cap exhausted item now pr_pending",
+		Status: string(BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBounceCapExhausted, BacklogStatusPRPending, "cap exhausted while bouncing, now pr_pending")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "bounce_cap_exhausted row must resolve once the item's status leaves in_progress/review, mirroring bouncing's own anchor rule")
+}
+
+// TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInReview
+// verifies the negative case: the row must stay open while the item is still
+// anchored in review (one of bounce_cap_exhausted's two valid anchor statuses).
+func TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInReview(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bounce cap exhausted item still in review",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBounceCapExhausted, BacklogStatusReview, "cap exhausted while bouncing")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "bounce_cap_exhausted row must stay open while the item is still in review")
+	assert.Equal(t, domain.StuckReasonBounceCapExhausted, open[0].Reason)
 }
 
 // TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal

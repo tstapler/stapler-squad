@@ -129,7 +129,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
 			)
 		}
-		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title)
+		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title, BacklogStatus(item.Status))
 		return
 	}
 
@@ -146,7 +146,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 
 	switch overall {
 	case ReviewVerdictFail, ReviewVerdictPartial, ReviewVerdictUnverifiable:
-		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title)
+		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title, BacklogStatus(item.Status))
 	case ReviewVerdictPass:
 		if workEntry == nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] handleReviewSessionExited item=%s: PASS verdict but no work session found — cannot push", item.ID)
@@ -191,7 +191,15 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 // behave exactly as they did before this gate existed. Best-effort: gate
 // query/write errors are logged, never returned, and fail OPEN (still
 // attempts the reopen) rather than silently stranding the item.
-func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context, itemID, itemTitle string) {
+//
+// itemStatus must be the item's actual current status at the call site (NOT
+// hardcoded) — it is passed straight through to MarkStuck's expectedStatus
+// precondition below when the cap is hit while still bouncing (Signal 2, see
+// plan.md Story 1.3.1). handleReviewSessionExited's item is in "review"
+// status at both of its call sites, never "in_progress"; a hardcoded
+// BacklogStatusInProgress would make that MarkStuck call silently no-op
+// (applied=false) every time.
+func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context, itemID, itemTitle string, itemStatus BacklogStatus) {
 	reopener := l.getAutoReopener()
 	if reopener == nil {
 		return
@@ -203,12 +211,29 @@ func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context
 		due = true // fail open — see doc comment above
 	}
 	if justParked {
+		// Signal 2 (Epic 1.3, plan.md Story 1.3.1): the cap being hit while
+		// "bouncing" is still open is itself evidence the retry loop isn't
+		// converging, not just an ordinary single-reason park — mark a
+		// durable, differentiated bounce_cap_exhausted row so it's
+		// distinguishable in the Stuck Items UI and durable across restarts,
+		// and upgrade this park's notification from the generic
+		// WARNING/HIGH "Auto-rework paused" copy to ERROR/URGENT framing
+		// naming the retry loop specifically. Best-effort throughout: log a
+		// warning on error, never block the reopen attempt below on these
+		// writes.
+		if _, markErr := l.storage.MarkStuck(ctx, itemID, domain.StuckReasonBounceCapExhausted, itemStatus, "bouncing remediation cap exhausted while bouncing reason still open"); markErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuck(bounce_cap_exhausted) item=%s: %v", itemID, markErr)
+		}
+		log.WarningLog.Printf("[BacklogLifecycle] bounce cap exhausted while still bouncing item=%s", itemID)
 		l.notify(itemID,
-			"Auto-rework paused",
-			fmt.Sprintf("%s — automated rework has been retried %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			"Bounce cap exhausted — retry loop not converging",
+			fmt.Sprintf("%s — automated rework hit its retry cap (%d attempts) while still bouncing between in_progress and review. This is evidence the retry loop itself isn't converging, not a transient failure — a different approach may be needed before using Reset.", itemTitle, MaxRemediationAttempts),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
 		)
+		if _, notifiedErr := l.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBounceCapExhausted); notifiedErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuckNotified(bounce_cap_exhausted) item=%s: %v", itemID, notifiedErr)
+		}
 	}
 	if !due {
 		log.InfoLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate item=%s: bouncing remediation backoff not yet due, skipping auto-reopen", itemID)

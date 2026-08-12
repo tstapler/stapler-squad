@@ -1464,6 +1464,11 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 					// immediately, rather than waiting for the next
 					// selfHealStuck sweep to notice the terminal status.
 					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBouncing, "reconcileBouncingItems/merged")
+					// Signal 2 (Epic 1.3, plan.md Story 1.3.2): bounce_cap_exhausted
+					// can only ever coexist with an open bouncing row, so it must
+					// clear alongside bouncing here rather than outliving the
+					// condition it describes.
+					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBounceCapExhausted, "reconcileBouncingItems/merged")
 				}
 				continue
 			}
@@ -1487,6 +1492,9 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 					// immediately, rather than waiting for the next
 					// selfHealStuck sweep to notice the terminal status.
 					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBouncing, "reconcileBouncingItems/shipped-no-pr")
+					// Signal 2 (Epic 1.3, plan.md Story 1.3.2): see the identical
+					// comment at the merged-PR branch above.
+					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBounceCapExhausted, "reconcileBouncingItems/shipped-no-pr")
 				}
 				continue
 			}
@@ -1658,6 +1666,14 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		case domain.StuckReasonStaleWork:
 			resolve = row.ItemStatus != BacklogStatusInProgress
 		case domain.StuckReasonBouncing:
+			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
+		case domain.StuckReasonBounceCapExhausted:
+			// Mirrors StuckReasonBouncing's own anchor scope immediately above:
+			// bounce_cap_exhausted can only ever coexist with an open bouncing
+			// row (Signal 2, plan.md Epic 1.3), so it shares the same
+			// non-terminal anchor. This is a backstop for any status
+			// transition that bypasses reconcileBouncingItems' explicit
+			// resolve-alongside-bouncing call sites above.
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			// Generalized 2026-08-03 to also anchor at queued (see
