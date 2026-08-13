@@ -469,6 +469,40 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered HeadlessService handler", "path", hlAPIPath)
 	}
 
+	// Register ImportService handler (import-external-session, Phase 1).
+	// Gated behind STAPLER_SQUAD_ENABLE_SESSION_IMPORT: only the three
+	// mutating RPCs (CommitImportExternalSession, ConfirmKillExternalSession,
+	// CancelPendingKill) return CodeUnimplemented when the flag is off, per
+	// Story 1.3.2 / plan.md Task 0. PreviewImportExternalSession is
+	// read-only (no persistence, no signaling) and must always be reachable
+	// regardless of flag state, so it is deliberately excluded from the
+	// gated method list -- gating the whole handler (as
+	// NewFeatureFlagInterceptor would) incorrectly blocks Preview too. Uses
+	// CodeUnimplemented rather than the CodeNotFound used by the
+	// config-persisted "backlog" flag, since this is an unshipped/opt-in
+	// capability rather than a togglable UI feature.
+	suspendedStore, err := session.NewSuspendedProcessStore()
+	if err != nil {
+		log.Error("failed to create suspended process store, import-external-session disabled", "error", err)
+	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
+		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
+	}
+	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
+	importOpts := append(
+		ConnectOptions(deps.ErrorRegistry),
+		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
+			"session_import",
+			func() bool { return config.ImportSessionEnabled() },
+			"CommitImportExternalSession",
+			"ConfirmKillExternalSession",
+			"CancelPendingKill",
+		)),
+	)
+	importPath, importHandler := sessionv1connect.NewImportServiceHandler(importSvc, importOpts...)
+	importAPIPath := "/api" + importPath
+	srv.RegisterConnectHandler(importAPIPath, http.StripPrefix("/api", importHandler))
+	log.Info("Registered ImportService handler", "path", importAPIPath)
+
 	// Wire external session support into the unified WebSocket handler
 	wsHandler.SetExternalSessionSupport(deps.ExternalDiscovery)
 	log.Info("Unified WebSocket handler configured for external session support")

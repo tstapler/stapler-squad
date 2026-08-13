@@ -224,7 +224,7 @@ func TestPortHistoryFailureIsExpected(t *testing.T) {
 // under `go test -race`, part of `make ci`'s test-race target) for AC3: two goroutines
 // calling SwitchProgram on the same instance concurrently — mimicking a manual
 // UpdateSession request racing an automatic capacity-monitor fallback — must serialize
-// through programSwitchMu rather than both reading the pre-change Program and both
+// through restartTriggerMu rather than both reading the pre-change Program and both
 // deciding independently, which is what would let them double-restart/double-port.
 func TestSwitchProgram_ConcurrentCalls_Serialize(t *testing.T) {
 	inst := minimalInstance(t)

@@ -1083,6 +1083,13 @@ enum StuckReason {
   // (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview) was
   // skipped because the item already has an active work or review session.
   STUCK_REASON_RESPAWN_BLOCKED_ACTIVE = 14;
+  // STUCK_REASON_LIKELY_FLAKY: see domain.StuckReasonLikelyFlaky
+  // (session/domain/backlog.go) — behavioral evidence (a review-verdict
+  // flip-flop on an unchanged diff, or a test-file-only rework cycle) that
+  // this item's review outcome may be non-deterministic rather than a real
+  // pass/fail signal. Purely informational — never gates the reopen/park
+  // decision; present as a hint to verify, not a confident verdict.
+  STUCK_REASON_LIKELY_FLAKY = 15;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

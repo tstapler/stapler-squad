@@ -51,6 +51,7 @@ interface SessionRowProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
@@ -150,7 +151,7 @@ function SessionRowInner({
   onPause, onResume, onDelete,
   onClone, onOpenInNewPane, onNewWorkspace,
   onRestart, onCreateCheckpoint, onRunOneShot,
-  onSetRateLimitEnabled, onToggleAutonomousMode, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
+  onSetRateLimitEnabled, onToggleAutonomousMode, onToggleAutoApprove, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
   suppressApprovalSubStatus = false,
   visibleColumns = DEFAULT_VISIBLE_COLUMNS,
@@ -419,6 +420,7 @@ function SessionRowInner({
           onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onToggleAutoApprove={onToggleAutoApprove}
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}

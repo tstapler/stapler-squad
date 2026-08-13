@@ -118,6 +118,15 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
 	}
 
+	// Populate github_pr_url for pre-existing sessions that have a known PR
+	// number/owner/repo but were created before CreateSession started
+	// building the URL itself (idempotent) — see
+	// github_pr_url_backfill.go.
+	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
+	}
+
 	return repo, nil
 }
 
@@ -153,6 +162,7 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		SetCreatedAt(data.CreatedAt).
 		SetUpdatedAt(data.UpdatedAt).
 		SetAutoYes(data.AutoYes).
+		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
 		SetIsExpanded(data.IsExpanded)
@@ -368,6 +378,7 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		SetStatus(int(data.Status)).
 		SetUpdatedAt(data.UpdatedAt).
 		SetAutoYes(data.AutoYes).
+		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
 		SetIsExpanded(data.IsExpanded)
@@ -1096,6 +1107,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		CreatedAt:           sess.CreatedAt,
 		UpdatedAt:           sess.UpdatedAt,
 		AutoYes:             sess.AutoYes,
+		AutoApprove:         sess.AutoApprove,
 		AutonomousMode:      sess.AutonomousMode,
 		Prompt:              sess.Prompt,
 		InitialPrompt:       sess.InitialPrompt,

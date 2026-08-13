@@ -194,9 +194,32 @@ const (
 	sessionExistsTimeout        = 3 * time.Second
 	sessionExistsNoCacheTimeout = 5 * time.Second
 	existsCacheDefaultTTL       = 5 * time.Second // registry fast-path is push-based; this is only the subprocess fallback
-	sessionCreateTimeout        = 10 * time.Second
+	sessionCreateTimeoutDefault = 10 * time.Second
 	sessionPollInitialDelay     = 5 * time.Millisecond
 )
+
+// sessionCreateTimeout is sessionCreateTimeoutDefault unless overridden via
+// STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS (unset/invalid -> default, no
+// production behavior change). Exists for CI specifically: even with a
+// per-test isolated tmux -L server (NewTmuxSessionWithServerSocket), a brand
+// new server still has to fork and become responsive within this budget, and
+// a fully-loaded CI runner (many packages' -race suites competing for CPU)
+// can occasionally exceed 10s just on scheduling delay, not lock contention
+// -- confirmed via TestCommitImportExternalSession_PersistsAndLinksAndSuspends_
+// When_StartAndSuspendSucceed failing deterministically twice in the same CI
+// run (Makefile's own coverage-then-verbose-rerun fallback) even after socket
+// isolation removed cross-test contention as a cause. A var (not const) so
+// it's computed once at package init, ponytail: global var read at init,
+// per-process override only -- add a setter if a future caller needs to vary
+// it mid-process.
+var sessionCreateTimeout = func() time.Duration {
+	if raw := os.Getenv("STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS"); raw != "" {
+		if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return sessionCreateTimeoutDefault
+}()
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
@@ -989,6 +1012,45 @@ func validateWorkDir(workDir string) error {
 	return nil
 }
 
+// preconfigureServerBeforeSession sets exit-empty off and remain-on-exit on,
+// in ONE chained tmux invocation, before the session in start() below is
+// created -- closing a race that's always present but usually wins locally
+// and loses under CI's slower, -race-instrumented syscalls:
+// t.setRemainOnExit() only runs AFTER the new-session command returns AND
+// existence is confirmed, but a fast-exiting program (e.g. Program="true",
+// which exits in microseconds) can already have destroyed the session --
+// and, since it was the server's only session, killed the server itself --
+// before that point, especially on a brand-new socket with no pre-existing
+// server to inherit options from.
+//
+// MUST be one chained invocation (`cmd1 \; cmd2 \; cmd3`), not separate
+// commands run back-to-back -- confirmed empirically (PR #445): a tmux
+// server that reaches zero sessions exits near-instantly by default
+// (exit-empty defaults to on), so `start-server` followed by a SEPARATE
+// `set-option` invocation already finds "no server running" -- the server
+// that start-server just reported success for is already gone by the time
+// the next process connects. Chaining into one invocation means the server
+// never has a gap where it's both running and unprotected: start-server
+// brings it up, exit-empty off keeps a zero-session server alive,
+// remain-on-exit on then protects the session new-session (in start()) is
+// about to create from destruction the instant its program exits. `;` here
+// is tmux's own command-separator syntax (parsed by tmux itself from
+// distinct argv elements), not a shell operator -- no shell is involved via
+// exec.Cmd, so no escaping is needed or applicable.
+//
+// Best-effort: log and continue on failure, matching every other
+// non-essential tmux option set in start() (history-limit,
+// setRemainOnExit itself) -- a failure here degrades to the pre-existing
+// (racy) behavior, not a hard Start() failure.
+func (t *TmuxSession) preconfigureServerBeforeSession() {
+	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
+	if err := runGatedErr(context.Background(), t.serverSocket, func() error {
+		return t.cmdExec.Run(preconfigureCmd)
+	}); err != nil {
+		log.Warn("failed to pre-configure tmux server before session creation", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err)
+	}
+}
+
 // start is the internal implementation for Start and StartWithCleanup
 func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupFunc) error {
 	// Use a no-cache check here to detect stale sessions from previous server runs.
@@ -1012,6 +1074,8 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	if err := validateWorkDir(workDir); err != nil {
 		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
+
+	t.preconfigureServerBeforeSession()
 
 	// Create a new detached tmux session and start the program in it.
 	// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
@@ -1071,6 +1135,14 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		}
 		return fmt.Errorf("error starting tmux session: %w", err)
 	}
+
+	// `tmux new-session -d` reported success (exit 0) at this point -- confirmed
+	// unambiguously via PID and socket file existence, not just the exit code,
+	// since a false-positive exit 0 with a not-yet-listening server is exactly
+	// the failure mode under investigation for PR #445's CI-only flake (see
+	// DoesSessionExistNoCache's expanded error log for the other half of this
+	// diagnostic pair).
+	log.Info("tmux new-session command succeeded", "session", t.sanitizedName, "serverSocket", t.serverSocket, "stderr", stderrOutput)
 
 	// Invalidate cache so the poll loop gets a fresh check immediately.
 	// The pre-creation DoesSessionExist() call above caches a "false" result,
@@ -2078,7 +2150,13 @@ func (t *TmuxSession) DoesSessionExistNoCache() bool {
 
 		output, err := t.listSessionsRaw(ctx)
 		if err != nil {
-			log.Warn("DoesSessionExistNoCache: tmux list-sessions failed", "session", t.sanitizedName, "err", err)
+			// output is included: the Go error alone (e.g. "exit status 1") never
+			// carries tmux's own stderr text (e.g. "no server running on <socket>",
+			// "error connecting to <socket> (No such file or directory)"), which is
+			// the one piece of evidence that actually distinguishes "server never
+			// came up" from "server up but genuinely doesn't have this session yet"
+			// -- see the incident this comment documents in PR #445.
+			log.Warn("DoesSessionExistNoCache: tmux list-sessions failed", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err, "output", string(output))
 			// Only attempt auto-recovery for the default server (not isolated test servers).
 			if t.serverSocket == "" && serverNotRunning(output) {
 				recoverFromServerFailure(t.serverSocket, "DoesSessionExistNoCache")
