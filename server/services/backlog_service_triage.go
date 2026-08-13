@@ -1601,6 +1601,13 @@ func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree
 	}
 
 	if git.IsGitRepo(resolvedRepo) {
+		// No special-case fallback for a zero-commit repo: findGitRepoRoot
+		// (session/git/util.go, called by both GitWorktree constructors before
+		// Setup runs) auto-creates an initial commit for exactly that case, so
+		// CreateBacklogWorktree already succeeds instead of erroring — see
+		// TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit.
+		// Any other git-managed worktree failure must hard-fail per BUG-057, not
+		// silently fall back to an unscoped directory session.
 		log.ErrorLog.Printf("[SpawnSessionFromItem] worktree creation failed for git-managed repo %s (%v)", resolvedRepo, wtErr)
 		return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create git worktree: %w", wtErr))
 	}
