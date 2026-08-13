@@ -57,6 +57,10 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE
 	case domain.StuckReasonLikelyFlaky:
 		return sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY
+	case domain.StuckReasonMultipleReasons:
+		return sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS
+	case domain.StuckReasonBounceCapExhausted:
+		return sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -98,6 +102,10 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonRespawnBlockedActive
 	case sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY:
 		return domain.StuckReasonLikelyFlaky
+	case sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS:
+		return domain.StuckReasonMultipleReasons
+	case sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED:
+		return domain.StuckReasonBounceCapExhausted
 	default:
 		return ""
 	}

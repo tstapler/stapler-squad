@@ -20,7 +20,7 @@ func TestPatternSet_MatchLines_should_returnError_When_errorStringPresent(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, name, _ := ps.MatchLines("Error: something went wrong", nil)
+	status, name, _, _ := ps.MatchLines("Error: something went wrong", nil)
 	if status != StatusError {
 		t.Errorf("got status %v, want StatusError", status)
 	}
@@ -36,9 +36,48 @@ func TestPatternSet_MatchLines_should_returnUnknown_When_noMatchAndCatchAll(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, _, _ := ps.MatchLines("some generic output with no pattern match", nil)
+	status, _, _, _ := ps.MatchLines("some generic output with no pattern match", nil)
 	if status != StatusUnknown {
 		t.Errorf("got status %v, want StatusUnknown (catch-all renders no badge)", status)
+	}
+}
+
+func TestPatternSet_MatchLines_should_returnCount_When_waitingForBackgroundAgentMatches(t *testing.T) {
+	ps, err := NewPatternSet(getDefaultPatterns())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _, _, count := ps.MatchLines("✻ Waiting for 2 background agents to finish", nil)
+	if status != StatusWaitingForAgent {
+		t.Errorf("got status %v, want StatusWaitingForAgent", status)
+	}
+	if count != 2 {
+		t.Errorf("got count %d, want 2", count)
+	}
+}
+
+func TestPatternSet_MatchLines_should_returnCount_When_shellsStillRunningMatches(t *testing.T) {
+	ps, err := NewPatternSet(getDefaultPatterns())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _, _, count := ps.MatchLines("1 shell still running", nil)
+	if status != StatusWaitingForAgent {
+		t.Errorf("got status %v, want StatusWaitingForAgent", status)
+	}
+	if count != 1 {
+		t.Errorf("got count %d, want 1", count)
+	}
+}
+
+func TestPatternSet_MatchLines_should_returnZero_When_noWaitingForAgentPatternMatches(t *testing.T) {
+	ps, err := NewPatternSet(getDefaultPatterns())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, count := ps.MatchLines("Thinking...", nil)
+	if count != 0 {
+		t.Errorf("got count %d, want 0", count)
 	}
 }
 

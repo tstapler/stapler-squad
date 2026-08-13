@@ -1557,6 +1557,62 @@ func TestReportPRCreated_should_ReturnError_When_PersistFails(t *testing.T) {
 	require.False(t, m["success"].(bool), "report_pr_created must not silently succeed when the storage write fails")
 }
 
+// TestReportPRCreated_should_RejectCall_When_ItemStatusIneligible (AC6): an
+// item whose status is not "review" or "pr_pending" must be rejected with a
+// message naming its actual status, before any storage write or PR
+// verification is attempted — distinct from AC7's genuine-CAS-race message
+// (TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand),
+// which only fires for a race that happens after this status check passes.
+func TestReportPRCreated_should_RejectCall_When_ItemStatusIneligible(t *testing.T) {
+	for _, status := range []session.BacklogStatus{
+		session.BacklogStatusIdea,
+		session.BacklogStatusReady,
+		session.BacklogStatusDone,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			item, sessionUUID := setupReportPRCreatedFixture(t, storage, status)
+
+			verifyCalled := false
+			handler := &backlogHandlers{
+				storage:              storage,
+				resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+				verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+					verifyCalled = true
+					return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+				},
+			}
+			ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+			req := makeToolReq(map[string]interface{}{
+				"item_id":   item.ID,
+				"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+				"pr_number": float64(42),
+				"summary":   "Implemented the feature.",
+			})
+
+			result, err := handler.reportPRCreated(ctxWithUUID, req)
+			require.NoError(t, err)
+
+			m := parseResult(t, result)
+			require.False(t, m["success"].(bool))
+			errObj, ok := m["error"].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+			msg := errObj["message"].(string)
+			assert.Contains(t, msg, "is at status")
+			assert.Contains(t, msg, string(status), "the message must name the item's actual status")
+			assert.NotContains(t, msg, "item state changed since your last read",
+				"a structurally ineligible status must not surface the genuine-CAS-race message")
+			assert.False(t, verifyCalled, "the status guard must short-circuit before any GitHub verification call")
+
+			fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(status), fetched.Status, "a rejected call must not change the item's status")
+		})
+	}
+}
+
 // TestReportPRCreated_should_NoOp_When_AlreadyPRPendingSamePR verifies the
 // idempotency contract: calling report_pr_created again for a PR already
 // recorded on a pr_pending item is a no-op success, not an error.

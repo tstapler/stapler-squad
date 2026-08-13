@@ -160,6 +160,30 @@ const (
 	// comments in session/stuck_decisions.go); the UI should present this as a
 	// hint to verify, not a confident verdict.
 	StuckReasonLikelyFlaky StuckReason = "likely_flaky"
+	// StuckReasonMultipleReasons: a synthetic, aggregate reason marking an
+	// item that has multiReasonThreshold or more *other*, non-escalation
+	// stuck reasons open simultaneously (session/stuck_decisions.go's
+	// isMultiReasonEscalated). Set/resolved by reconcileMultiReasonEscalation
+	// (session/backlog_lifecycle_stuck.go) as the count of open non-escalation
+	// reasons crosses the threshold in either direction. Deliberately excludes
+	// itself and StuckReasonBounceCapExhausted from its own count (ADR-001)
+	// to avoid a self-reinforcing escalation loop. Unlike every other
+	// StuckReason, this one carries no independent remediation action of its
+	// own — it exists purely as an operator-visible severity signal that an
+	// item is stuck for multiple simultaneous reasons, not a single narrow
+	// one.
+	StuckReasonMultipleReasons StuckReason = "multiple_reasons"
+	// StuckReasonBounceCapExhausted: a synthetic, aggregate reason marking an
+	// item whose bouncing remediation gate hit MaxRemediationAttempts while
+	// StuckReasonBouncing itself is still open (autoReopenWithBackoffGate,
+	// session/backlog_lifecycle.go). Signals that automated remediation has
+	// given up retrying and the item now needs human intervention. Resolved
+	// by reconcileBouncingItems once StuckReasonBouncing itself resolves, or
+	// by the selfHealStuck backstop once the item's status leaves
+	// in_progress/review entirely. Like StuckReasonMultipleReasons, this is a
+	// meta/aggregate signal with no independent remediation action of its
+	// own.
+	StuckReasonBounceCapExhausted StuckReason = "bounce_cap_exhausted"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -179,6 +203,8 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonPRNeedsFix,
 	StuckReasonRespawnBlockedActive,
 	StuckReasonLikelyFlaky,
+	StuckReasonMultipleReasons,
+	StuckReasonBounceCapExhausted,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -188,7 +214,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
-		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky:
+		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonMultipleReasons, StuckReasonBounceCapExhausted:
 		return true
 	}
 	return false
@@ -446,11 +472,12 @@ func ValidTransitions() map[BacklogStatus]map[BacklogStatus]bool {
 
 // Sentinel errors for transition guards.
 var (
-	ErrACRequired            = errors.New("acceptance criteria required before marking ready")
-	ErrPlanRequired          = errors.New("plan must be approved or skip_planning must be true before spawning work session")
-	ErrPlanArtifactsRequired = errors.New("plan artifacts path is required when planning is not skipped")
-	ErrVerdictRequired       = errors.New("PASS verdict or manual override required before marking done")
-	ErrCodeNotOnMain         = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
+	ErrACRequired                   = errors.New("acceptance criteria required before marking ready")
+	ErrPlanRequired                 = errors.New("plan must be approved or skip_planning must be true before spawning work session")
+	ErrPlanArtifactsRequired        = errors.New("plan artifacts path is required when planning is not skipped")
+	ErrVerdictRequired              = errors.New("PASS verdict or manual override required before marking done")
+	ErrCodeNotOnMain                = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
+	ErrVerdictClearRequiredForReady = errors.New("item has a recorded PASS verdict; provide override_reason to send it back to ready anyway")
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
@@ -500,6 +527,21 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		criteria, err := ParseAcCriteria(item.AcCriteria)
 		if err != nil || len(criteria) == 0 {
 			return ErrACRequired
+		}
+		return nil
+
+	case (from == BacklogStatusReview || from == BacklogStatusPRPending) && to == BacklogStatusReady:
+		// Backward "re-spawn without re-triaging" edge. Without this guard, an
+		// item that already has a recorded PASS verdict can be sent back to
+		// ready and get permanently stuck: report_pr_created only accepts
+		// review/pr_pending, so the item can never complete that RPC again
+		// without a status transition first. Scoped to review/pr_pending only —
+		// must not affect the unrelated done->ready backward edge.
+		if item.OverrideReason != "" {
+			return nil
+		}
+		if item.OverallOutcome == ReviewOutcomePass {
+			return ErrVerdictClearRequiredForReady
 		}
 		return nil
 

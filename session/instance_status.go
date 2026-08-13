@@ -18,6 +18,9 @@ type InstanceStatusInfo struct {
 	LastCommandStatus  string                   // Status of last command
 	IsControllerActive bool                     // Whether ClaudeController is running
 	IdleState          detection.IdleStateInfo  // NEW: Idle state information
+	// SubagentCount is the count of background agents/shells/monitors from the
+	// WaitingForAgent detector; 0 unless ClaudeStatus == detection.StatusWaitingForAgent.
+	SubagentCount int
 }
 
 // InstanceStatusManager manages status information for instances.
@@ -73,10 +76,11 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 
 	if info.IsControllerActive {
 		// Combined call: one hash + one cache read covers both status and idle state.
-		claudeStatus, statusContext, idleInfo := controller.GetStatusAndIdleInfo()
+		claudeStatus, statusContext, idleInfo, subagentCount := controller.GetStatusAndIdleInfo()
 		info.ClaudeStatus = claudeStatus
 		info.StatusContext = statusContext
 		info.IdleState = idleInfo
+		info.SubagentCount = subagentCount
 
 		info.QueuedCommands = controller.GetQueuedCommandsCount()
 
