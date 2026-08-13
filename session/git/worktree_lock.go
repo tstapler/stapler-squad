@@ -75,10 +75,15 @@ func lockForRepo(repoPath string) (*repoWorktreeLock, error) {
 	return l, nil
 }
 
-// withRepoWorktreeLock serializes fn against every other goroutine and OS process (on this
+// WithRepoWorktreeLock serializes fn against every other goroutine and OS process (on this
 // machine) operating on repoPath's git worktree metadata. See repoWorktreeLock's doc comment
 // for why both mu and flock are required.
-func withRepoWorktreeLock(repoPath string, fn func() error) error {
+//
+// Exported so callers outside this package that need to run other repoPath-mutating work
+// (e.g. session.RepairCorruptedGitRepo's destructive re-clone) in the same critical section
+// as a GitWorktree.Setup()/Remove() can do so via GitWorktree.SetupLocked() — see that
+// method's doc comment for the race this closes.
+func WithRepoWorktreeLock(repoPath string, fn func() error) error {
 	l, err := lockForRepo(repoPath)
 	if err != nil {
 		return err
