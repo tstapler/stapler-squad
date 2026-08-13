@@ -616,3 +616,26 @@ func TestDiffHashBetween_ShouldReturnError_WhenBaseSHADoesNotExistInRepo(t *test
 	require.Error(t, err)
 	assert.Empty(t, hash)
 }
+
+// TestDiffHashBetween_ShouldNotPanic_WhenDiffContainsSymlinkChange guards against a
+// nil-pointer panic: go-git's FilePatch.Files() returns (nil, nil) for a symlink tree
+// entry regardless of whether it was added, modified, or deleted (Mode.IsFile() is
+// false for symlinks), which previously reached the "from == nil" branch below and
+// dereferenced a nil "to" via to.Path(). Mirrors
+// TestFileStatsBetween_ShouldOmitBinaryFiles_WhenBinaryContentChanges's zero-chunk-skip
+// fix for the same underlying go-git behavior.
+func TestDiffHashBetween_ShouldNotPanic_WhenDiffContainsSymlinkChange(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.Symlink("foo.go", filepath.Join(work, "link.go")))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "notes.txt"), []byte("hello\n"), 0o644))
+	runGit(t, work, "add", "link.go", "notes.txt")
+	runGit(t, work, "commit", "-m", "add symlink and notes.txt")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	hash, err := DiffHashBetween(work, baseSHA, headSHA)
+	require.NoError(t, err, "a symlink in the diff must not cause an error or panic")
+	assert.NotEmpty(t, hash)
+}
