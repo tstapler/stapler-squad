@@ -347,6 +347,32 @@ branches, per AC3/AC4.
 **As a** test maintainer, **I want** a helper that confirms a subprocess died
 from `SIGBUS`/`SIGSEGV` specifically, **so that** the test's "expected crash"
 branch is no longer just "any non-nil error."
+
+**IMPLEMENTATION DEVIATION (root-cause finding made during Task 3.1.1a, supersedes
+the design below):** the `syscall.WaitStatus.Signaled()`/`.Signal()` design this
+story specifies does not work — verified empirically, not assumed. Built the test
+binary and ran the actual crash helper directly
+(`GOGITSTORE_TRUNC_HELPER=1 ./gogitstore.test -test.run=...`): with the default
+`GOTRACEBACK`, the process exits via a controlled `os.Exit(2)` — `$?` is `2`, not
+a signal-death exit — after printing `fatal error: fault` +
+`[signal SIGBUS: bus error ...]`. Testing `GOTRACEBACK=crash` (the mode the Go
+docs describe as re-raising a fatal signal) instead exits via `SIGABRT` (`$?`=134),
+never the original `SIGBUS`/`SIGSEGV`. **In neither mode does
+`syscall.WaitStatus.Signal()` ever equal `SIGBUS`/`SIGSEGV`** — Go's own runtime
+signal handler intercepts the hardware fault before the OS can report it as the
+process's death signal, so a `WaitStatus`-based check can never match a genuine
+crash from this fault and would always fall through to the "not confirmed"
+branch. The only place the signal is actually recorded is Go's own crash-dump
+text, whose `[signal SIGBUS: ...]`/`[signal SIGSEGV: ...]` line format is stable
+across `GOTRACEBACK` modes (confirmed identical in both captured runs above).
+**Implemented instead:** `isExpectedFaultSignal(output []byte) (bool, string)`
+parses the subprocess's captured stdout+stderr for that line — no `syscall`
+import, no `*exec.ExitError`/`WaitStatus` type assertion, no build-tag split.
+This also **resolves** the architecture-review's Windows-CI-justification concern
+by elimination: since the helper does no syscall-package type assertion at all,
+it compiles identically on `windows` (verified: `GOOS=windows go vet
+./session/unfinished/gogitstore/...` clean) — `trunc_fault_signal_windows_test.go`
+was deleted as dead scaffolding rather than kept.
 **Acceptance Criteria**:
 - AC3 (infrastructure half): a structural signal check is available and
   portable across `linux`/`darwin`/`windows`. **Correction (architecture-review
@@ -447,6 +473,27 @@ branch is no longer just "any non-nil error."
   ```
 - Files: `session/unfinished/gogitstore/trunc_fault_signal_windows_test.go`
 
+##### As-built (supersedes Tasks 3.1.1a/b/c per the deviation note above)
+- `trunc_fault_signal_test.go` has no build tag, no `syscall`/`errors`/`os/exec`
+  import for the helper itself (only `bytes` + `testing`, plus `os/exec` in one
+  test for a synthetic negative-case error). `isExpectedFaultSignal(output
+  []byte) (bool, string)` matches Go's crash-dump `[signal SIGBUS:`/`[signal
+  SIGSEGV:` text.
+- Three direct unit tests (not two): SIGBUS-line match, SIGSEGV-line match, and
+  no-fault-signature-present. The SIGBUS fixture is a byte-for-byte excerpt of
+  this package's own genuine crash dump (captured via the same
+  `GOGITSTORE_TRUNC_HELPER=1` re-exec `mmap_truncation_test.go` already uses),
+  not a hand-guessed format.
+- `trunc_fault_signal_windows_test.go` (Task 3.1.1b) was not created —
+  deleted after being briefly written, since the portable text-parsing
+  implementation compiles identically on `windows` with no stub needed
+  (verified: `GOOS=windows go vet ./session/unfinished/gogitstore/...` clean).
+- Verified 5/5 passing (`-count=5`) for both the new direct tests and the full
+  `TestMmapIndexHandle_TruncateWhileMapped_*` cluster, with the wired-in
+  signal-confirmed log line (`"subprocess crashed with a Go runtime-confirmed
+  bus error"`) appearing in all 5 crash-branch runs — not just the unconfirmed
+  fallback text.
+
 #### Story 3.1.2: Wire the helper into the err != nil branch
 **As a** future maintainer debugging a red `gogitstore` CI run, **I want**
 the test's "expected crash" log to say whether the signal was actually
@@ -462,10 +509,12 @@ silently accepted as if the fault had been proven.
   - *Given* `mmap_truncation_test.go`'s `err != nil` branch (currently lines
     127-130) after this task's change, *When* the subprocess is killed by
     `SIGBUS` (the common real-world case, confirmed 5/5 on this Linux
-    machine per `requirements.md`), *Then* the test logs `"subprocess killed
-    by bus error (expected — this IS the point of the test)"` and returns
-    without failing — identical externally-observable pass/fail outcome to
-    today, strictly better diagnostic text.
+    machine per `requirements.md`), *Then* the test logs `"subprocess crashed
+    with a Go runtime-confirmed bus error (expected — this IS the point of
+    the test)"` and returns without failing — identical externally-observable
+    pass/fail outcome to today, strictly better diagnostic text. (As-built:
+    "Go runtime-confirmed" — see the As-built note under Story 3.1.1 for why
+    this is text-parsed from Go's crash dump rather than a WaitStatus check.)
   - *Given* the same branch, *When* the subprocess instead fails for an
     unrelated reason (e.g. `-test.run` regex matched nothing, produces a
     non-signal exit), *Then* the test logs `"subprocess did not exit cleanly

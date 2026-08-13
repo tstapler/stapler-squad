@@ -15,8 +15,9 @@ import (
 
 // writeCapabilityCheckFakeClaudeScript writes a fake `claude` binary that records one
 // invocation per call (by appending a line to countPath) and emits a
-// firstCallJSONResult envelope wrapping resultText. Mirrors the pattern used in
-// session/review_gate_test.go's writeOccupyAwareFakeClaudeScript.
+// firstCallJSONResult envelope wrapping resultText. Invoked via
+// NewShellWrappedProcessRunnerForTesting (not exec'd directly by path — see that
+// constructor's doc comment).
 func writeCapabilityCheckFakeClaudeScript(t *testing.T, scriptDir, countPath, resultText string) string {
 	t.Helper()
 	scriptPath := filepath.Join(scriptDir, "fake-claude.sh")
@@ -52,7 +53,7 @@ func TestCodebaseReadCapabilitySelfCheck_RunsOnceAcrossConcurrentCallers(t *test
 	countPath := filepath.Join(scriptDir, "count.txt")
 	scriptPath := writeCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, capabilityCheckMarkerValue)
 
-	runner := NewProcessRunnerForTesting(scriptPath)
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 8}, runner)
 
 	check := &CodebaseReadCapabilitySelfCheck{}
@@ -83,7 +84,7 @@ func TestCodebaseReadCapabilitySelfCheck_Success_CachesOK(t *testing.T) {
 	countPath := filepath.Join(scriptDir, "count.txt")
 	scriptPath := writeCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, capabilityCheckMarkerValue)
 
-	runner := NewProcessRunnerForTesting(scriptPath)
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2}, runner)
 
 	check := &CodebaseReadCapabilitySelfCheck{}
@@ -103,7 +104,7 @@ func TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureAndDoesNotRetry(t 
 	// degraded/misconfigured claude CLI that fails to actually read the file.
 	scriptPath := writeCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, "not the marker")
 
-	runner := NewProcessRunnerForTesting(scriptPath)
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2}, runner)
 
 	check := &CodebaseReadCapabilitySelfCheck{}
@@ -139,7 +140,7 @@ func TestCodebaseReadCapabilitySelfCheck_CallerCtxAlreadyExpired_ProbeStillSucce
 	countPath := filepath.Join(scriptDir, "count.txt")
 	scriptPath := writeSlowCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, capabilityCheckMarkerValue, 200*time.Millisecond)
 
-	runner := NewProcessRunnerForTesting(scriptPath)
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2}, runner)
 
 	check := &CodebaseReadCapabilitySelfCheck{}

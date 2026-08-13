@@ -152,3 +152,17 @@ func (f *FakeRunner) ArgsContainSequence(n int, seq ...string) bool {
 func NewProcessRunnerForTesting(claudeBin string) *ProcessRunner {
 	return &ProcessRunner{claudeBin: claudeBin}
 }
+
+// NewShellWrappedProcessRunnerForTesting constructs a ProcessRunner that execs
+// scriptPath through "sh" instead of forking/exec'ing scriptPath directly.
+// Use this instead of NewProcessRunnerForTesting when the test writes its own
+// fake-claude shell script to a freshly-created temp file: direct exec-by-path
+// of a just-written, just-chmod'd script can be refused by OS-level exec
+// restrictions (Gatekeeper, TCC, or third-party endpoint security software) on
+// some platforms, even though the exec bit and shebang line are both correct.
+// Invoking through the pre-existing, already-trusted "sh" binary sidesteps
+// that restriction because the OS is never asked to approve a freshly-written
+// file for direct execution.
+func NewShellWrappedProcessRunnerForTesting(scriptPath string) *ProcessRunner {
+	return &ProcessRunner{claudeBin: scriptPath, interpreter: "sh"}
+}

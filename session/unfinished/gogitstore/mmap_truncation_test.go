@@ -125,8 +125,13 @@ func TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection(t *testing
 	out, err := cmd.CombinedOutput()
 
 	if err != nil {
-		t.Logf("subprocess did not exit cleanly (expected — this IS the point of the test): err=%v\noutput:\n%s", err, out)
-		return
+		if matched, detail := isExpectedFaultSignal(out); matched {
+			t.Logf("subprocess crashed with a Go runtime-confirmed %s (expected — this IS the point of the test)", detail)
+			return
+		} else {
+			t.Logf("subprocess did not exit cleanly (expected but signal not confirmed as SIGBUS/SIGSEGV: %s): err=%v\noutput:\n%s", detail, err, out)
+			return
+		}
 	}
 	t.Logf("subprocess exited cleanly; full output:\n%s", out)
 	if bytes.Contains(out, []byte("ORDINARY_RECOVER_CAUGHT_IT")) || bytes.Contains(out, []byte("NO_FAULT_OCCURRED")) {
