@@ -220,6 +220,13 @@ func pathEscapesRoot(root, candidate string) bool {
 // GetEffectiveRootDir returns the root directory where this session operates.
 // For worktree sessions, this is the worktree path. For directory sessions, this is Path.
 // Used for injecting configuration files (e.g., .claude/settings.local.json).
+//
+// This returns the worktree path as recorded, without checking whether it
+// still exists on disk — callers that do path-string correlation (e.g.
+// HistoryLinker matching against ~/.claude/projects/<hashed-path>) need the
+// nominal path regardless of whether the directory is currently present. For
+// callers that need to actually read from the filesystem, use Workspace(),
+// which falls back to the repo root when the worktree is gone.
 func (i *Instance) GetEffectiveRootDir() string {
 	if i.gitManager.HasWorktree() {
 		if p := i.gitManager.GetWorktreePath(); p != "" {
@@ -232,10 +239,24 @@ func (i *Instance) GetEffectiveRootDir() string {
 // Workspace returns where this session is operating.
 // Use this as the single source of truth for path resolution instead of
 // accessing inst.Path directly, which is wrong for worktree sessions.
+//
+// Falls back to RepoRoot if the worktree path no longer exists on disk (e.g.
+// a paused session's worktree was removed while its branch/metadata
+// persisted) — otherwise filesystem-reading callers like ListFiles would try
+// to read a directory that's gone and surface a bare "directory not found: ."
+// with no indication why.
 func (i *Instance) Workspace() Workspace {
+	repoRoot := i.Path
+	effectivePath := i.GetEffectiveRootDir()
+	if effectivePath != repoRoot {
+		if _, err := os.Stat(effectivePath); err != nil {
+			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.Title, "worktreePath", effectivePath)
+			effectivePath = repoRoot
+		}
+	}
 	return Workspace{
-		EffectivePath: i.GetEffectiveRootDir(),
-		RepoRoot:      i.Path,
+		EffectivePath: effectivePath,
+		RepoRoot:      repoRoot,
 	}
 }
 

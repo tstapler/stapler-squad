@@ -79,3 +79,54 @@ func TestEnsureDirectorySessionPath_NoopWhenPathIsAnExistingFile(t *testing.T) {
 	require.NoError(t, statErr)
 	require.False(t, info.IsDir(), "the existing file must be left untouched, not replaced with a directory")
 }
+
+// TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk documents
+// that GetEffectiveRootDir must stay disk-existence-agnostic: HistoryLinker
+// correlates sessions by the nominal worktree path string (see
+// TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath in
+// history_linker_test.go), which requires the raw path regardless of whether
+// the directory is actually present on disk.
+func TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
+
+	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
+	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+
+	require.Equal(t, worktreePath, inst.GetEffectiveRootDir())
+}
+
+// TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk is a
+// regression test for the "directory not found: ." ListFiles bug: a worktree
+// removed from disk (e.g. by pause_session, which preserves the branch but
+// deletes the worktree directory) left GetEffectiveRootDir's stale path
+// flowing straight into filesystem-reading callers like FileService.ListFiles.
+// Workspace() must fall back to RepoRoot when the worktree path no longer
+// exists, while GetEffectiveRootDir itself stays unchanged (see the test
+// above) for HistoryLinker's path-string correlation use case.
+func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
+
+	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
+	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+
+	ws := inst.Workspace()
+	require.Equal(t, repoPath, ws.EffectivePath, "must fall back to RepoRoot when the worktree path is gone")
+	require.Equal(t, repoPath, ws.RepoRoot)
+}
+
+// TestWorkspace_UsesWorktreePath_WhenPresentOnDisk verifies Workspace() does
+// NOT fall back when the worktree path genuinely exists — the fallback must
+// be a real disk-existence check, not an unconditional preference for RepoRoot.
+func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := t.TempDir()
+
+	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
+	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+
+	ws := inst.Workspace()
+	require.Equal(t, worktreePath, ws.EffectivePath)
+	require.Equal(t, repoPath, ws.RepoRoot)
+}
