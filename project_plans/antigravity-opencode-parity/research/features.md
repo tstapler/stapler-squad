@@ -161,6 +161,72 @@ This allows per-command-prefix bash gating (e.g., `{"rm -rf": "deny"}`), but it 
 
 ---
 
+## R4 addendum (2026-08-11 re-verification): the plugin API is a real PreToolUse-equivalent
+
+**The 2026-07-01 research above is incomplete, not wrong about what it checked.** It only inspected
+the static `hook`/`permission` config schema (`opencode.json`) and missed OpenCode's separate JS/TS
+**plugin system** (`@opencode-ai/plugin`), which exposes a `Hooks` interface with a
+`tool.execute.before` hook — a real, `throw`-to-block, intercept-before-execute hook, functionally
+equivalent to Claude's `PreToolUse`.
+
+**Verified directly (VERIFIED, 2026-08-11):**
+- Local install: `~/.config/opencode/node_modules/@opencode-ai/plugin/dist/index.d.ts` (package
+  version 1.3.10, installed alongside opencode CLI 1.4.0 — `opencode --version`) declares
+  `"tool.execute.before"?: (input: { tool: string; sessionID: string; callID: string }, output: { args: any }) => Promise<void>`
+  on the `Hooks` interface, alongside `"tool.execute.after"`, `"permission.ask"`, and
+  `"command.execute.before"`. This is distinct from — and not visible in — the `hook`/`permission`
+  config-schema types (`file_edited`/`session_completed`/`permission.*`) that the original R4
+  research read from `@opencode-ai/sdk/dist/gen/types.gen.d.ts`.
+- Docs: [opencode.ai/docs/plugins/](https://opencode.ai/docs/plugins/) (page last updated
+  2026-08-09) documents `tool.execute.before` with two worked examples — mutating
+  `output.args.command` to escape a bash command, and `throw new Error(...)` inside the hook to
+  block a `read` call on `.env` files. Throwing aborts the tool call; this is the block semantic
+  `PreToolUse` needs.
+- This hook predates the original 2026-07-01 research by roughly six months — it is not new
+  since that research ran; the research simply looked at the wrong API surface (config schema vs.
+  plugin `Hooks` interface).
+
+**Two other plugin hooks exist and are relevant but should NOT be relied on for this class of
+gating:**
+- `"permission.ask"` — looks like the natural fit for a permission-prompt-driven gate, but is
+  **broken/unreliable**, not merely undocumented. [Issue #7006](https://github.com/anomalyco/opencode/issues/7006)
+  ("`permission.ask` plugin hook is defined but not triggered", open as of 2026-08-11) reports it
+  never fires at all. [Issue #19927](https://github.com/anomalyco/opencode/issues/19927)
+  ("`permission.ask` plugin hook is bypassed for first-encounter commands (`needsAsk=true`)",
+  closed 2026-07-03 as `not_planned` by the repo's stale-issue bot, not because it was fixed —
+  the linked root-cause analysis in the issue thread, an `if (!needsAsk)` guard in
+  `packages/opencode/src/permission/index.ts`, was never merged) confirms the hook is unwired
+  for exactly the case (a command seen for the first time) where a permission gate matters most.
+  **Do not build `patchOpenCodeHooks()` on `permission.ask`** — use `tool.execute.before`, which
+  is independently wired and has a working `throw`-to-block path.
+- `"tool.execute.before"` coverage of subagent (`task`-tool-spawned) tool calls is **disputed, not
+  confirmed broken**: [Issue #5894](https://github.com/anomalyco/opencode/issues/5894) originally
+  reported subagent tool calls bypass `tool.execute.before` entirely (a claimed security-policy
+  bypass), but maintainer replies in the thread (closed 2026-04-15 as `completed`) dispute the
+  repro — one maintainer could not reproduce it and traced the reporter's test case to the
+  subagent using the `bash` tool to invoke commands rather than a hooked tool; another maintainer
+  confirmed hooks are loaded per-`Instance` and load fresh for the subagent's own session/prompt
+  loop, so they should fire. Net: likely fine, but not independently re-verified against a live
+  ssq-hooks-style plugin in this environment — worth a live-session check before the follow-on
+  implementation item ships, not before this doc correction.
+
+**`opencode run` (needed to live-test any of this) does not complete end-to-end in this
+environment today** — see Issue 2 in `implementation/validation.md`'s adversarial-issues section
+(a local `~/.config/opencode/agents/skills/*.md` config error). This blocks live verification of
+`tool.execute.before` actually intercepting a real session in this environment; the findings above
+are from static inspection of the installed plugin package's type declarations and the public docs
+page, not a live-fired hook.
+
+**Revised conclusion for R4:** OpenCode has no JSON/`hooks.json`-style declarative hook config
+comparable to Claude's `settings.json` hooks — that part of the original research still holds. But
+it does have a real code-level `PreToolUse`-equivalent via the JS/TS plugin API
+(`tool.execute.before`), which the original research missed by only reading the config-schema
+types. The proxy-wrapper approach (`installOpenCode()`) is no longer the only available intercept
+point — replacing it with a native plugin-based hook is now feasible. That replacement
+(`patchOpenCodeHooks()`) is scoped as its own follow-on backlog item, not implemented here.
+
+---
+
 ## R5: Open Code detection patterns
 
 **Current patterns (from `session/detection/binaries/opencode.go`):**

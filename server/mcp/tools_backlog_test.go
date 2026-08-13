@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"go.uber.org/goleak"
 )
 
 // newTestBacklogStorage creates a temporary Storage for testing.
@@ -1001,6 +1002,43 @@ func TestRequestReview_RejectsWhenSessionNotLinked(t *testing.T) {
 	require.Equal(t, ErrPermissionDenied, errObj["code"])
 }
 
+// TestFormatDirtyPathsRejectionMessage_ListsEachPath verifies the message names the
+// specific dirty paths instead of a blanket "git add -A" instruction.
+func TestFormatDirtyPathsRejectionMessage_ListsEachPath(t *testing.T) {
+	msg := formatDirtyPathsRejectionMessage([]string{"server/handler.go", "scratch.txt"})
+	assert.Contains(t, msg, "server/handler.go")
+	assert.Contains(t, msg, "scratch.txt")
+	assert.NotContains(t, msg, "git add -A")
+}
+
+// TestFormatDirtyPathsRejectionMessage_CapsAtMaxPaths verifies a large path list is
+// capped with an "...and N more" suffix rather than listed in full.
+func TestFormatDirtyPathsRejectionMessage_CapsAtMaxPaths(t *testing.T) {
+	paths := make([]string, 15)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("file-%d.txt", i)
+	}
+
+	msg := formatDirtyPathsRejectionMessage(paths)
+
+	for i := 0; i < maxRejectionMessagePaths; i++ {
+		assert.Contains(t, msg, paths[i])
+	}
+	for i := maxRejectionMessagePaths; i < len(paths); i++ {
+		assert.NotContains(t, msg, paths[i])
+	}
+	assert.Contains(t, msg, "...and 5 more")
+}
+
+// TestFormatDirtyPathsRejectionMessage_EmptyPaths_UsesGenericWording verifies the
+// fallback wording when no specific paths are available (e.g. GetWorktreeDirtyPaths
+// itself errored).
+func TestFormatDirtyPathsRejectionMessage_EmptyPaths_UsesGenericWording(t *testing.T) {
+	msg := formatDirtyPathsRejectionMessage(nil)
+	assert.Contains(t, msg, "uncommitted changes")
+	assert.NotContains(t, msg, "git add -A")
+}
+
 // --- request_review: Phase 2 CAS generalization (Epic 4.1) ---
 
 // TestRequestReview_TransitionsPRPendingItemToReview verifies FR1's happy
@@ -1900,6 +1938,28 @@ func TestCreateBacklogItem_should_ReturnError_When_PriorityOutOfRange(t *testing
 	require.False(t, m["success"].(bool), "create_backlog_item must reject an out-of-range priority")
 }
 
+// TestCreateBacklogItem_should_Succeed_When_NoSessionUUID is the regression
+// test for the bug where a manually-registered MCP client (e.g. `claude mcp
+// add` from a plain terminal with no STAPLER_SESSION_UUID set) got a hard
+// PERMISSION_DENIED from create_backlog_item even though the tool's write
+// path (storage.CreateBacklogItem) takes no session parameter and creates no
+// session/item link — the session UUID was only ever used for the audit-trail
+// log line, so there was no real invariant to protect by rejecting the call.
+func TestCreateBacklogItem_should_Succeed_When_NoSessionUUID(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := context.Background() // No session UUID injected — simulates a manual MCP client.
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title": "Filed from a manual MCP client",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Filed from a manual MCP client")
+}
+
 // TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds verifies
 // the happy path against a stubbed GitHub API — title/body land on the new
 // item and Notes records the source issue URL, mirroring
@@ -1942,6 +2002,39 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 	assert.Equal(t, "bug: something is broken", fetched.Title)
 	assert.Equal(t, "Steps to reproduce...", fetched.Description)
 	assert.Contains(t, fetched.Notes, "https://github.com/tstapler/stapler-squad/issues/316")
+}
+
+// TestImportGitHubIssue_should_Succeed_When_NoSessionUUID mirrors
+// TestCreateBacklogItem_should_Succeed_When_NoSessionUUID's regression
+// coverage for import_github_issue: it has the same "session UUID used only
+// for the audit log" shape, so a manual MCP client must not be rejected.
+func TestImportGitHubIssue_should_Succeed_When_NoSessionUUID(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"number": 318, "title": "filed via manual mcp client", "body": "...",
+			"html_url": "https://github.com/tstapler/stapler-squad/issues/318",
+			"user": {"login": "tstapler"}, "state": "open"
+		}`))
+	}))
+	defer srv.Close()
+	prevBaseURL := githubpkg.GhBaseURL
+	githubpkg.GhBaseURL = srv.URL + "/"
+	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := context.Background() // No session UUID injected — simulates a manual MCP client.
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/issues/318",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "filed via manual mcp client")
 }
 
 // TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet
@@ -2021,6 +2114,7 @@ func TestDecideOverridePolicy(t *testing.T) {
 		v              PRVerification
 		overrideReason string
 		callerLogin    string
+		forceOverride  bool
 		wantAccept     bool
 		wantCode       connect.Code
 	}{
@@ -2093,11 +2187,37 @@ func TestDecideOverridePolicy(t *testing.T) {
 			callerLogin:    "tstapler",
 			wantAccept:     true,
 		},
+		{
+			name:           "forceOverride: matched branch still rejects without override_reason (reassignment AC1)",
+			v:              NewPRVerification(true, true, "backlog/x", githubpkg.PRStateOpen, "tstapler"),
+			overrideReason: "",
+			callerLogin:    "tstapler",
+			forceOverride:  true,
+			wantAccept:     false,
+			wantCode:       connect.CodeInvalidArgument,
+		},
+		{
+			name:           "forceOverride: matched branch still rejects on author mismatch (reassignment AC9)",
+			v:              NewPRVerification(true, true, "backlog/x", githubpkg.PRStateOpen, "someone-else"),
+			overrideReason: "correcting a bad PR",
+			callerLogin:    "tstapler",
+			forceOverride:  true,
+			wantAccept:     false,
+			wantCode:       connect.CodePermissionDenied,
+		},
+		{
+			name:           "forceOverride: matched branch, reason given, author matches, open state accepts",
+			v:              NewPRVerification(true, true, "backlog/x", githubpkg.PRStateOpen, "tstapler"),
+			overrideReason: "correcting a bad PR",
+			callerLogin:    "tstapler",
+			forceOverride:  true,
+			wantAccept:     true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			accept, code, _ := decideOverridePolicy(tt.v, tt.overrideReason, tt.callerLogin)
+			accept, code, _ := decideOverridePolicy(tt.v, tt.overrideReason, tt.callerLogin, tt.forceOverride)
 			assert.Equal(t, tt.wantAccept, accept)
 			if !tt.wantAccept {
 				assert.Equal(t, tt.wantCode, code)
@@ -2395,6 +2515,462 @@ func TestReportPRCreated_should_RejectCall_When_PRNumberDoesNotExist(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
 	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// --- report_pr_created: reassignment from pr_pending ---
+
+// setupReportPRCreatedReassignmentFixture creates a pr_pending-status item
+// with a linked work session and an already-tracked PR (trackedPRNumber),
+// mirroring setupReportPRCreatedFixture but for the reassignment path (item
+// already pr_pending rather than review). Optionally seeds
+// PrFeedbackAddressedAt so AC7 (clearing it on reassignment) can be asserted.
+func setupReportPRCreatedReassignmentFixture(t *testing.T, storage *session.Storage, trackedPRNumber int, seedFeedbackAddressedAt bool) (*session.BacklogItemData, string) {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Ship it",
+		Status: string(session.BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	prURL := fmt.Sprintf("https://github.com/tstapler/stapler-squad/pull/%d", trackedPRNumber)
+	update := session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &trackedPRNumber}
+	if seedFeedbackAddressedAt {
+		seeded := time.Now().Add(-time.Hour)
+		update.PrFeedbackAddressedAt = &seeded
+	}
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, update, nil)
+	require.NoError(t, err)
+
+	return updated, sessionUUID
+}
+
+// TestReportPRCreated_should_ReassignPR_When_AlreadyPRPendingWithOverrideReason
+// (AC0): a work session may correct an already-tracked PR to a different one
+// when the item is pr_pending, given a valid override_reason and a new PR
+// that verifies on GitHub as open and self-authored.
+func TestReportPRCreated_should_ReassignPR_When_AlreadyPRPendingWithOverrideReason(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Corrected the tracked PR after closing the polluted one.",
+		"override_reason": "tracked branch was polluted by another session; opened a clean PR instead and closed the original",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "pr_pending")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, 200, fetched.PrNumber)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/200", fetched.PrURL)
+}
+
+// TestReportPRCreated_should_RejectReassignment_When_AlreadyPRPendingMissingOverrideReason
+// (AC1): reassignment from pr_pending without override_reason is rejected
+// before any GitHub call, even though nothing about the new PR itself has
+// been checked yet — a matching branch does not excuse the missing reason.
+func TestReportPRCreated_should_RejectReassignment_When_AlreadyPRPendingMissingOverrideReason(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	verifyCalled := false
+	loginCalled := false
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			verifyCalled = true
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) {
+			loginCalled = true
+			return "tstapler", nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number": float64(200),
+		"summary":   "Trying to correct the PR without a reason.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "override_reason")
+	assert.False(t, verifyCalled, "must reject before any GitHub verification when reassigning without override_reason")
+	assert.False(t, loginCalled, "resolveCallerGitHubLogin must not be called when override_reason is missing")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 100, fetched.PrNumber, "tracked PR must remain unchanged")
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+}
+
+// TestReportPRCreated_should_RejectReassignment_When_CurrentPRAlreadyMerged
+// (AC2): once the currently tracked PR is merged, reassignment is
+// hard-rejected with no override escape hatch — a merged PR's association
+// with the item must never be silently swapped, even with override_reason
+// set. The new PR's own verification must never even run.
+func TestReportPRCreated_should_RejectReassignment_When_CurrentPRAlreadyMerged(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateMerged, "tstapler"), nil
+			}
+			t.Fatalf("verifyPRMatchesBranch called for new PR #%d — must hard-reject before verifying the new PR once the currently tracked PR is already merged", prNumber)
+			return PRVerification{}, nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Trying to reassign a merged PR.",
+		"override_reason": "trying anyway",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "already merged")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 100, fetched.PrNumber, "tracked PR must remain unchanged")
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+}
+
+// TestReportPRCreated_should_RejectSecondReassignment_When_ConcurrentCASRace
+// (AC3): two concurrent reassignment calls racing on the same pr_pending
+// item, each correcting to a different new PR number, must result in exactly
+// one winner via the same atomic CAS write TestReportPRCreated_
+// LoserPRNeverPersists_WhenCASPreconditionFails exercises for the review ->
+// pr_pending path — the loser gets a clear error and its PR number never
+// lands, even transiently.
+func TestReportPRCreated_should_RejectSecondReassignment_When_ConcurrentCASRace(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	// readBarrier forces both goroutines' pre-write GetBacklogItem reads
+	// (routed through the getBacklogItemFor seam) to complete before either
+	// is allowed to proceed into SetBacklogItemPRAndTransition's write — see
+	// TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails's doc
+	// comment for why this matters.
+	var readBarrier sync.WaitGroup
+	readBarrier.Add(2)
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		it, getErr := storage.GetBacklogItem(fnCtx, itemID)
+		readBarrier.Done()
+		readBarrier.Wait()
+		return it, getErr
+	}
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		getBacklogItemFn:     getBacklogItemFn,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	type prRaceResult struct {
+		prNumber int
+		result   *mcpgo.CallToolResult
+		err      error
+	}
+
+	var wg sync.WaitGroup
+	var startBarrier sync.WaitGroup
+	startBarrier.Add(1)
+	results := make(chan prRaceResult, 2)
+
+	race := func(prNumber int) {
+		defer wg.Done()
+		startBarrier.Wait()
+		req := makeToolReq(map[string]interface{}{
+			"item_id":         item.ID,
+			"pr_url":          fmt.Sprintf("https://github.com/tstapler/stapler-squad/pull/%d", prNumber),
+			"pr_number":       float64(prNumber),
+			"summary":         fmt.Sprintf("Racing reassignment call for PR #%d.", prNumber),
+			"override_reason": "racing correction",
+		})
+		result, callErr := handler.reportPRCreated(ctxWithUUID, req)
+		results <- prRaceResult{prNumber: prNumber, result: result, err: callErr}
+	}
+
+	wg.Add(2)
+	go race(300)
+	go race(400)
+	startBarrier.Done()
+	wg.Wait()
+	close(results)
+
+	var successes, failures int
+	var winnerPRNumber int
+	for rr := range results {
+		require.NoError(t, rr.err)
+		require.Len(t, rr.result.Content, 1)
+		tc, ok := rr.result.Content[0].(mcpgo.TextContent)
+		require.True(t, ok)
+
+		// The success path returns plain (non-JSON) text; errResult always
+		// emits a JSON-encoded MCPResult.
+		var parsed map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(tc.Text), &parsed); jsonErr != nil {
+			successes++
+			winnerPRNumber = rr.prNumber
+			continue
+		}
+		failures++
+	}
+
+	require.Equal(t, 1, successes, "exactly one racer should win the CAS reassignment")
+	require.Equal(t, 1, failures, "the loser must see an error, not silently succeed")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, winnerPRNumber, fetched.PrNumber,
+		"the persisted PrNumber must match whichever racer's reassignment actually won the CAS — the loser's PR number must never land, even transiently")
+}
+
+// TestReportPRCreated_should_RecordDistinctAuditNote_When_Reassigned (AC6):
+// the audit trail must distinguish a reassignment from a first-time PR
+// recording — SetBacklogItemPRAndTransition's progress note Status is
+// "pr_corrected" on reassignment, never the first-time "pr_created".
+func TestReportPRCreated_should_RecordDistinctAuditNote_When_Reassigned(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Corrected the tracked PR.",
+		"override_reason": "tracked branch was polluted; opened a clean PR instead",
+	})
+
+	_, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	notes, err := storage.ListProgressNotesForItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, notes)
+	found := false
+	for _, n := range notes {
+		assert.NotEqual(t, "pr_created", n.Status, "a reassignment must not be recorded with the same note status as a first-time recording")
+		if n.Status == "pr_corrected" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a progress note with status=pr_corrected distinguishing this reassignment from a first-time PR recording")
+}
+
+// TestReportPRCreated_should_ClearPrFeedbackAddressedAt_When_Reassigned
+// (AC7): reassigning to a new PR must not leave the old PR's
+// feedback-dedup watermark in place.
+func TestReportPRCreated_should_ClearPrFeedbackAddressedAt_When_Reassigned(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, true)
+	require.NotNil(t, item.PrFeedbackAddressedAt, "fixture must seed pr_feedback_addressed_at")
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Corrected the tracked PR.",
+		"override_reason": "tracked branch was polluted; opened a clean PR instead",
+	})
+
+	_, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetched.PrFeedbackAddressedAt, "pr_feedback_addressed_at must be cleared when the tracked PR is reassigned")
+}
+
+// TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand
+// (AC8): a CAS failure from an out-of-band status change between this call's
+// read and its write must surface as a friendly, actionable message — not
+// the raw internal precondition-failed error. Uses the getBacklogItemFn seam
+// to inject a write (bumping updated_at) between the handler's read and its
+// own primary write, simulating another action landing in that gap.
+func TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		it, getErr := storage.GetBacklogItem(fnCtx, itemID)
+		if getErr != nil {
+			return it, getErr
+		}
+		title := "Retitled out from under this call"
+		if _, updErr := storage.UpdateBacklogItem(fnCtx, itemID, session.BacklogItemUpdate{Title: &title}, nil); updErr != nil {
+			return it, updErr
+		}
+		return it, nil
+	}
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		getBacklogItemFn:     getBacklogItemFn,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+		"pr_number": float64(42),
+		"summary":   "Implemented the feature.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInternalError, errObj["code"].(string))
+	msg := errObj["message"].(string)
+	assert.Contains(t, msg, "item state changed since your last read")
+	assert.NotContains(t, msg, "precondition failed", "must surface the friendly wrapped message, not the raw internal error text")
+}
+
+// TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch (AC9):
+// the reassignment path requires the new PR's author to match the caller's
+// verified GitHub identity, even when the new PR's branch matches this
+// item's tracked branch — the same gate the review-path override already
+// enforces (TestReportPRCreated_should_RejectCall_When_UnrelatedPRAuthorMismatch).
+func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+			if prNumber == 100 {
+				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "someone-else"), nil
+		},
+		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"pr_url":          "https://github.com/tstapler/stapler-squad/pull/200",
+		"pr_number":       float64(200),
+		"summary":         "Attempting to reassign to someone else's PR.",
+		"override_reason": "trying anyway",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "someone-else")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 100, fetched.PrNumber, "tracked PR must remain unchanged on author mismatch")
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
 }
 
 // fakeTriageHeadlessPool is a minimal headless.PoolClient stub used only to
@@ -3808,6 +4384,82 @@ func verdictsArg(outcome string) []interface{} {
 	}
 }
 
+// setupReviewSessionWithCompletedWorkSession is setupReviewSession plus a
+// real on-disk git repo (item.RepoPath) and a completed work-role
+// ItemSession with a valid Base/LastCommitSha range — the fixture shape
+// Storage.ComputeCurrentDiffHash needs to actually resolve a hash, rather
+// than best-effort-returning "".
+func setupReviewSessionWithCompletedWorkSession(t *testing.T, storage *session.Storage) (itemID, sessionUUID, repoPath string) {
+	t.Helper()
+	ctx := context.Background()
+
+	repoPath = initGitRepo(t)
+	baseSHA := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+	writeFile(t, repoPath, "foo.go", "package foo\n")
+	runGit(t, repoPath, "add", "foo.go")
+	runGit(t, repoPath, "commit", "-m", "work session change")
+	headSHA := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Review me",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	ws, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.SetItemSessionBaseCommit(ctx, ws.ID, baseSHA))
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, ws.ID, headSHA, "work session change", time.Now(), 1))
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, ws.ID, time.Now()))
+
+	sessUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	return item.ID, sessUUID, repoPath
+}
+
+// TestSubmitReviewVerdict_should_persistDiffHash_When_CompletedWorkSessionExists
+// is the write-site regression test for Story 3.2.1: submit_review_verdict
+// (the MCP tool the interactive review agent actually calls) must stamp
+// DiffHash on the saved verdict via Storage.ComputeCurrentDiffHash, not
+// leave it empty. Without this test, a typo'd itemID/ctx or an accidentally
+// dropped field at this specific call site would compile and pass every
+// other test while silently making IsFlakyVerdictFlipFlop permanently see
+// an empty hash (never a match) for every verdict submitted through this
+// path — the review agent's own submission path, the one most commonly
+// exercised in production.
+func TestSubmitReviewVerdict_should_persistDiffHash_When_CompletedWorkSessionExists(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID, _ := setupReviewSessionWithCompletedWorkSession(t, storage)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Looks good.",
+		"verdicts": verdictsArg("PASS"),
+	})
+
+	_, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+
+	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, itemID, 1)
+	require.NoError(t, err)
+	require.Len(t, recent, 1)
+	assert.NotEmpty(t, recent[0].DiffHash, "submit_review_verdict must stamp DiffHash via ComputeCurrentDiffHash, not leave it empty")
+}
+
 // TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsFail is
 // acceptance criterion 0/2's core regression guard: a FAIL verdict must drive
 // the review->in_progress transition (via AutoReopenSpawner, which owns
@@ -3944,4 +4596,588 @@ func TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails(t *te
 	assert.Contains(t, tc.Text, "Review verdict submitted",
 		"AutoReopenAfterFailedReview's CAS failure must not surface as a tool error — the normal success text must still be returned")
 	assert.Equal(t, []string{itemID}, reopener.calledWith())
+}
+
+// --- wait_for_backlog_event ---
+
+// waitCallOutcome carries both the result and error of a
+// waitForBacklogEvent call made on a spawned goroutine back to the main
+// test goroutine. require.NoError (and other testify t.FailNow()-triggering
+// assertions) must only be called from the goroutine running the test, per
+// the testing.T contract — calling it from a spawned goroutine just halts
+// that goroutine via runtime.Goexit() without failing the test or unblocking
+// a channel receive, which would make a real failure hang until the test's
+// own outer timeout instead of reporting. So the goroutine sends both values
+// through this struct and the main goroutine asserts after receiving.
+type waitCallOutcome struct {
+	res *mcpgo.CallToolResult
+	err error
+}
+
+func decodeWaitResult(t *testing.T, res *mcpgo.CallToolResult) WaitForBacklogEventResult {
+	t.Helper()
+	require.Len(t, res.Content, 1)
+	tc, ok := res.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	var out WaitForBacklogEventResult
+	require.NoError(t, json.Unmarshal([]byte(tc.Text), &out))
+	return out
+}
+
+func TestWaitForBacklogEvent_ReturnsErrorWhenEventBusNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "No event bus",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: nil}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID})
+
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, ErrEventStreamUnavailable, errObj["code"])
+}
+
+func TestWaitForBacklogEvent_ReturnsErrorForInvalidItemID(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+
+	req := makeToolReq(map[string]interface{}{"item_id": "not-a-uuid"})
+	result, err := handler.waitForBacklogEvent(context.Background(), req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+}
+
+func TestWaitForBacklogEvent_ReturnsItemNotFoundForUnknownItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+
+	req := makeToolReq(map[string]interface{}{"item_id": "00000000-0000-0000-0000-000000000099"})
+	result, err := handler.waitForBacklogEvent(context.Background(), req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, ErrItemNotFound, errObj["code"])
+}
+
+func TestWaitForBacklogEvent_ReturnsImmediatelyWhenVerdictAlreadyRecorded(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Already reviewed",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewOutcomePass,
+		Summary:        "lgtm",
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "event_type": "verdict_recorded", "timeout_seconds": float64(30)})
+
+	start := time.Now()
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+
+	require.Less(t, elapsed, 5*time.Second, "must return immediately from the precheck, not wait out timeout_seconds")
+	out := decodeWaitResult(t, result)
+	require.True(t, out.Success)
+	require.True(t, out.EventReceived)
+	require.True(t, out.FromCurrentState)
+	require.Equal(t, "verdict_recorded", out.EventKind)
+	require.Equal(t, string(session.ReviewOutcomePass), out.VerdictOutcome)
+}
+
+func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Already archived",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.ArchiveBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "event_type": "item_archived", "timeout_seconds": float64(30)})
+
+	start := time.Now()
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+
+	require.Less(t, elapsed, 5*time.Second)
+	out := decodeWaitResult(t, result)
+	require.True(t, out.EventReceived)
+	require.True(t, out.FromCurrentState)
+	require.Equal(t, "item_archived", out.EventKind)
+	require.True(t, out.IsTerminal)
+}
+
+// waitSubscriberCount polls until the eventBus reports the expected
+// subscriber count, avoiding a sleep-based race — mirrors the fix-flaky-
+// tests rule's "prefer a synchronization primitive" guidance.
+func waitSubscriberCount(t *testing.T, bus *events.EventBus, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if bus.SubscriberCount() == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for SubscriberCount() == %d (got %d)", want, bus.SubscriberCount())
+}
+
+func TestWaitForBacklogEvent_ReturnsMatchedEventOnLiveVerdict(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Awaiting verdict",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
+
+	resultCh := make(chan waitCallOutcome, 1)
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, req)
+		resultCh <- waitCallOutcome{res: res, err: callErr}
+	}()
+
+	waitSubscriberCount(t, bus, 1)
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeVerdictRecorded,
+			Item: &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+			Verdict: &session.ReviewVerdictData{
+				OverallOutcome: session.ReviewOutcomePass,
+				Summary:        "ship it",
+			},
+		},
+	})
+
+	select {
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
+		out := decodeWaitResult(t, outcome.res)
+		require.True(t, out.EventReceived)
+		require.False(t, out.FromCurrentState)
+		require.Equal(t, "verdict_recorded", out.EventKind)
+		require.Equal(t, string(session.ReviewOutcomePass), out.VerdictOutcome)
+		require.Equal(t, "ship it", out.VerdictSummary)
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForBacklogEvent did not return after matching event was published")
+	}
+}
+
+func TestWaitForBacklogEvent_FiltersByEventType(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Filtered wait",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	otherItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Different item",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"event_type":      "verdict_recorded",
+		"timeout_seconds": float64(5),
+	})
+
+	resultCh := make(chan waitCallOutcome, 1)
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, req)
+		resultCh <- waitCallOutcome{res: res, err: callErr}
+	}()
+
+	waitSubscriberCount(t, bus, 1)
+
+	// Wrong item, status_transition kind — must be ignored.
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeStatusTransition,
+			Item: &session.BacklogItemData{ID: otherItem.ID, Status: string(session.BacklogStatusInProgress)},
+		},
+	})
+	// Right item, wrong kind (status_transition, filter wants verdict_recorded) — must be ignored.
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind:      events.BacklogChangeStatusTransition,
+			Item:      &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusInProgress)},
+			OldStatus: string(session.BacklogStatusReview),
+			NewStatus: string(session.BacklogStatusInProgress),
+		},
+	})
+	// Right item, right kind — must match.
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeVerdictRecorded,
+			Item: &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+			Verdict: &session.ReviewVerdictData{
+				OverallOutcome: session.ReviewOutcomePass,
+				Summary:        "matched",
+			},
+		},
+	})
+
+	select {
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
+		out := decodeWaitResult(t, outcome.res)
+		require.True(t, out.EventReceived)
+		require.Equal(t, "verdict_recorded", out.EventKind)
+		require.Equal(t, "matched", out.VerdictSummary)
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForBacklogEvent did not return the correctly-filtered event")
+	}
+}
+
+func TestWaitForBacklogEvent_TimesOutWithNoEvent(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Never verdicted",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(1)})
+
+	start := time.Now()
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, elapsed, 1*time.Second, "must actually wait, not return an instant false-positive timeout")
+	out := decodeWaitResult(t, result)
+	require.True(t, out.Success)
+	require.False(t, out.EventReceived)
+	require.NotNil(t, out.Error)
+	require.Equal(t, "WAIT_TIMEOUT", out.Error.Code)
+}
+
+func TestWaitForBacklogEvent_ConcurrentWaitersBothReceiveEvent(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Two waiters",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
+
+	results := make(chan waitCallOutcome, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			res, callErr := handler.waitForBacklogEvent(ctx, req)
+			results <- waitCallOutcome{res: res, err: callErr}
+		}()
+	}
+
+	waitSubscriberCount(t, bus, 2)
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeVerdictRecorded,
+			Item: &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+			Verdict: &session.ReviewVerdictData{
+				OverallOutcome: session.ReviewOutcomePass,
+				Summary:        "both should see this",
+			},
+		},
+	})
+
+	var got []WaitForBacklogEventResult
+	for i := 0; i < 2; i++ {
+		select {
+		case outcome := <-results:
+			require.NoError(t, outcome.err)
+			got = append(got, decodeWaitResult(t, outcome.res))
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for both concurrent waiters to return")
+		}
+	}
+
+	require.Len(t, got, 2)
+	for _, r := range got {
+		require.True(t, r.EventReceived)
+		require.Equal(t, string(session.ReviewOutcomePass), r.VerdictOutcome)
+		require.Equal(t, "both should see this", r.VerdictSummary)
+	}
+}
+
+func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+
+	// Baseline is captured after storage setup (not before) — opening the
+	// sqlite-backed Storage starts its own long-lived database/sql connection
+	// pool goroutines that are test-infra noise, not something
+	// waitForBacklogEvent itself could leak.
+	baseline := goleak.IgnoreCurrent()
+
+	// Timeout-exit path.
+	timeoutItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Leak check: timeout",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = handler.waitForBacklogEvent(ctx, makeToolReq(map[string]interface{}{
+		"item_id":         timeoutItem.ID,
+		"timeout_seconds": float64(1),
+	}))
+	require.NoError(t, err)
+
+	// Matched-event-exit path.
+	matchedItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Leak check: matched",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	resultCh := make(chan waitCallOutcome, 1)
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, makeToolReq(map[string]interface{}{
+			"item_id":         matchedItem.ID,
+			"timeout_seconds": float64(5),
+		}))
+		resultCh <- waitCallOutcome{res: res, err: callErr}
+	}()
+	waitSubscriberCount(t, bus, 1)
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind: events.BacklogChangeVerdictRecorded,
+			Item: &session.BacklogItemData{ID: matchedItem.ID, Status: string(session.BacklogStatusReview)},
+			Verdict: &session.ReviewVerdictData{
+				OverallOutcome: session.ReviewOutcomePass,
+			},
+		},
+	})
+	select {
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("matched-path call did not return")
+	}
+
+	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+		"both calls must Unsubscribe on exit")
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace proves the
+// subscribe-before-read ordering: an event published inside
+// testAfterWaitSubscribeHook (after Subscribe returns, before the precheck
+// read) is not missed. This var is shared package state — do not run this
+// test with t.Parallel() relative to other tests using the same hook.
+func TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Race window",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	testAfterWaitSubscribeHook = func() {
+		bus.Publish(&events.Event{
+			Type: events.EventBacklogItemChanged,
+			BacklogItemPayload: &events.BacklogItemEventPayload{
+				Kind: events.BacklogChangeVerdictRecorded,
+				Item: &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+				Verdict: &session.ReviewVerdictData{
+					OverallOutcome: session.ReviewOutcomePass,
+					Summary:        "landed in the race window",
+				},
+			},
+		})
+	}
+	t.Cleanup(func() { testAfterWaitSubscribeHook = nil })
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(2)})
+
+	result, err := handler.waitForBacklogEvent(ctx, req)
+	require.NoError(t, err)
+
+	out := decodeWaitResult(t, result)
+	require.True(t, out.EventReceived, "an event published inside the subscribe hook must not be missed")
+	require.Equal(t, "landed in the race window", out.VerdictSummary)
+}
+
+// TestWaitForBacklogEvent_ReturnsWhenEventBusClosedWhileWaiting covers the
+// select loop's `case evt, ok := <-eventCh: if !ok { ... }` branch — the
+// EventBus being closed (e.g. a shutdown path) while a wait is in flight.
+// Previously untested (CRITICAL finding from code review): a bug here would
+// only surface as every in-flight wait hanging until its own
+// timeout_seconds elapses instead of returning promptly.
+func TestWaitForBacklogEvent_ReturnsWhenEventBusClosedWhileWaiting(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Bus closes mid-wait",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
+
+	resultCh := make(chan waitCallOutcome, 1)
+	start := time.Now()
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, req)
+		resultCh <- waitCallOutcome{res: res, err: callErr}
+	}()
+
+	waitSubscriberCount(t, bus, 1)
+	bus.Close()
+
+	select {
+	case outcome := <-resultCh:
+		elapsed := time.Since(start)
+		require.NoError(t, outcome.err)
+		require.Less(t, elapsed, 5*time.Second, "must return promptly on bus closure, not wait out the full timeout")
+		out := decodeWaitResult(t, outcome.res)
+		require.False(t, out.EventReceived)
+		require.NotNil(t, out.Error)
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForBacklogEvent did not return after the EventBus was closed")
+	}
+}
+
+// TestBuildMatchedWaitResult_MapsAllEventKinds is a direct table-driven unit
+// test of buildMatchedWaitResult (a pure function) covering the
+// item_updated/triage_progress_updated -> UpdatedFields mapping, the
+// item_removed -> RemovedReason/IsTerminal mapping, and session_attached —
+// none of which had any prior coverage.
+func TestBuildMatchedWaitResult_MapsAllEventKinds(t *testing.T) {
+	const itemID = "item-under-test"
+
+	tests := []struct {
+		name    string
+		payload *events.BacklogItemEventPayload
+		check   func(t *testing.T, res WaitForBacklogEventResult)
+	}{
+		{
+			name: "item_updated populates UpdatedFields",
+			payload: &events.BacklogItemEventPayload{
+				Kind:          events.BacklogChangeItemUpdated,
+				Item:          &session.BacklogItemData{ID: itemID, Status: string(session.BacklogStatusInProgress)},
+				UpdatedFields: []string{"title", "description"},
+			},
+			check: func(t *testing.T, res WaitForBacklogEventResult) {
+				require.Equal(t, "item_updated", res.EventKind)
+				require.Equal(t, []string{"title", "description"}, res.UpdatedFields)
+				require.False(t, res.IsTerminal)
+			},
+		},
+		{
+			name: "triage_progress_updated also populates UpdatedFields",
+			payload: &events.BacklogItemEventPayload{
+				Kind:          events.BacklogChangeTriageProgressUpdated,
+				Item:          &session.BacklogItemData{ID: itemID, Status: string(session.BacklogStatusInProgress)},
+				UpdatedFields: []string{"triage_notes"},
+			},
+			check: func(t *testing.T, res WaitForBacklogEventResult) {
+				require.Equal(t, "item_updated", res.EventKind)
+				require.Equal(t, []string{"triage_notes"}, res.UpdatedFields)
+			},
+		},
+		{
+			name: "item_removed populates RemovedReason and sets IsTerminal",
+			payload: &events.BacklogItemEventPayload{
+				Kind:          events.BacklogChangeItemRemoved,
+				Item:          &session.BacklogItemData{ID: itemID, Status: string(session.BacklogStatusInProgress)},
+				RemovedReason: "duplicate of #123",
+			},
+			check: func(t *testing.T, res WaitForBacklogEventResult) {
+				require.Equal(t, "item_removed", res.EventKind)
+				require.Equal(t, "duplicate of #123", res.RemovedReason)
+				require.True(t, res.IsTerminal)
+			},
+		},
+		{
+			name: "session_attached",
+			payload: &events.BacklogItemEventPayload{
+				Kind:      events.BacklogChangeSessionAttached,
+				Item:      &session.BacklogItemData{ID: itemID, Status: string(session.BacklogStatusInProgress)},
+				SessionID: "session-abc",
+			},
+			check: func(t *testing.T, res WaitForBacklogEventResult) {
+				require.Equal(t, "session_attached", res.EventKind)
+				require.Equal(t, itemID, res.ItemID)
+				require.Equal(t, string(session.BacklogStatusInProgress), res.Status)
+				require.False(t, res.IsTerminal)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := buildMatchedWaitResult(itemID, tc.payload)
+			require.True(t, res.Success)
+			require.True(t, res.EventReceived)
+			require.Equal(t, itemID, res.ItemID)
+			tc.check(t, res)
+		})
+	}
 }

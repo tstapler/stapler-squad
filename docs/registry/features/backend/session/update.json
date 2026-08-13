@@ -10,7 +10,17 @@
   "testIds": [
     "TestUpdateSession_NoteUpdate",
     "TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument",
-    "TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload"
+    "TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload",
+    "TestUpdateSession_ProgramUpdate_ActiveSession_RestartFailure_ReturnsInternal",
+    "TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart",
+    "TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault",
+    "TestUpdateSession_ProgramAndOtherField_SinglePublish",
+    "TestUpdateSessionProgram_RealInstance_SwitchesAndPersists",
+    "TestUpdateSessionProgram_NotFound",
+    "TestUpdateSessionProgram_PublishesPlainEvent_WhenStatusManagerNil",
+    "TestUpdateSessionProgram_PublishesPlainEvent_WhenControllerNotRegistered",
+    "TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload",
+    "TestUpdateSession_should_RejectAutoApprove_When_ProgramUnsupported"
   ],
-  "lastModified": "2026-08-10T05:53:16Z"
+  "lastModified": "2026-08-11T21:27:24Z"
 }

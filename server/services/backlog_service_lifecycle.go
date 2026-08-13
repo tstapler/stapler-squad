@@ -412,8 +412,21 @@ func (s *BacklogService) UpdateBacklogItem(
 		// but a future caller relying on whole-request atomicity across
 		// both would be surprised — flagged in code review, not silently
 		// left unstated.
+		// nil guard: this RPC never calls GitHub (see the scoped-out-gap
+		// comment above) and so has no way to verify override_reason/merged
+		// state/author for a reassignment. SetBacklogItemPRAndTransition
+		// centrally enforces that a nil guard cannot reassign an
+		// already-pr_pending item to a different PR — this operator path
+		// still supports first-time association (review -> pr_pending) and
+		// the idempotent same-PR-number no-op, same as before this change;
+		// it can no longer silently swap an already-tracked PR (including a
+		// merged one) with zero verification.
 		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
-		if setErr := s.storage.SetBacklogItemPRAndTransition(ctx, req.Msg.ItemId, prURL, prNumber, note); setErr != nil {
+		if setErr := s.storage.SetBacklogItemPRAndTransition(ctx, updated, prURL, prNumber, note, nil); setErr != nil {
+			if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("cannot associate PR: item %q already has PR #%d tracked (status pr_pending) — this manual override endpoint does not support reassigning an already-tracked PR to a different one (no GitHub verification is performed here); use report_pr_created from a work session instead: %w", req.Msg.ItemId, updated.PrNumber, setErr))
+			}
 			if errors.Is(setErr, session.ErrPreconditionFailed) {
 				current, reloadErr := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 				status := "unknown"
@@ -421,7 +434,7 @@ func (s *BacklogService) UpdateBacklogItem(
 					status = current.Status
 				}
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("cannot associate PR: item must be in %q status to link a PR, but is currently %q", session.BacklogStatusReview, status))
+					fmt.Errorf("cannot associate PR: item must be in %q or %q status to link a PR, but is currently %q", session.BacklogStatusReview, session.BacklogStatusPRPending, status))
 			}
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to associate PR: %w", setErr))
 		}
@@ -927,6 +940,7 @@ func (s *BacklogService) OverrideVerdict(
 	if verdictErr := s.storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        fmt.Sprintf("Manual override: %s", req.Msg.OverrideReason),
+		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, itemID),
 		OverrideBy:     "user",
 		OverrideReason: req.Msg.OverrideReason,
 		OverrideAt:     &now,
@@ -1046,6 +1060,7 @@ func (s *BacklogService) SubmitManualReview(
 		OverallOutcome: overall,
 		PerCriterion:   string(perCriterionJSON),
 		Summary:        req.Msg.Summary,
+		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, req.Msg.ItemId),
 		OverrideBy:     "user",
 		OverrideReason: "manual review",
 		OverrideAt:     &now,

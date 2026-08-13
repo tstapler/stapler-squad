@@ -36,6 +36,22 @@ export const CLAUDE_MODELS: ModelOption[] = [
   { value: "claude-haiku-4",             label: "Claude Haiku 4" },
 ];
 
+/**
+ * Model-family pseudo-entries. The `family:` prefix is intentionally left
+ * unresolved here — resolution to a concrete model ID happens server-side at
+ * workflow fire-time (server/workflows/model_families.go's ResolveModel,
+ * called from scheduler.go's FireNow), not client-side, so a new Anthropic
+ * release becomes "latest" without a frontend redeploy.
+ */
+export const MODEL_FAMILIES: ModelOption[] = [
+  { value: "family:opus",   label: "Opus (latest)" },
+  { value: "family:sonnet", label: "Sonnet (latest)" },
+  { value: "family:haiku",  label: "Haiku (latest)" },
+];
+
+/** Every model suggestion offered in the Workflow model picker: families first, then concrete IDs. */
+export const MODEL_AUTOCOMPLETE_OPTIONS: ModelOption[] = [...MODEL_FAMILIES, ...CLAUDE_MODELS];
+
 export function getProgramDisplay(program?: string): string {
   if (!program) return "Claude Code (default)";
   const option = PROGRAMS.find((p) => p.value === program);

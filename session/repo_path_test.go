@@ -188,3 +188,58 @@ func TestParseGitHubURLWithHosts_RejectsLocalLookingPaths(t *testing.T) {
 		})
 	}
 }
+
+// TestGitHubRefPRURL_should_BuildCanonicalURL_When_PRNumberSet is the
+// regression test for the PR #463 bug: CreateSession parsed a GitHub PR URL
+// into a GitHubRef but never populated GitHubPRURL on the created session,
+// leaving the VCS panel's PR link broken. PRURL() is the single function both
+// CreateSession (server/services/session_service.go) and the startup backfill
+// migration (github_pr_url_backfill.go) now call instead of formatting the
+// URL inline in two places.
+func TestGitHubRefPRURL_should_BuildCanonicalURL_When_PRNumberSet(t *testing.T) {
+	ref := &GitHubRef{Host: "github.com", Owner: "tstapler", Repo: "stapler-squad", PRNumber: 463}
+
+	got := ref.PRURL()
+
+	want := "https://github.com/tstapler/stapler-squad/pull/463"
+	if got != want {
+		t.Errorf("PRURL() = %q, want %q", got, want)
+	}
+}
+
+// TestGitHubRefPRURL_should_NormalizeHost_When_HostIsGitHubEnterprise proves
+// PRURL() routes through github.NormalizeHost rather than embedding the raw
+// host string, so GHES hosts are handled the same way whether the ref came
+// from CreateSession's live parse or the backfill's path-recovered host.
+func TestGitHubRefPRURL_should_NormalizeHost_When_HostIsGitHubEnterprise(t *testing.T) {
+	ref := &GitHubRef{Host: "github.mycorp.com", Owner: "acme", Repo: "widgets", PRNumber: 7}
+
+	got := ref.PRURL()
+
+	want := "https://" + github.NormalizeHost("github.mycorp.com") + "/acme/widgets/pull/7"
+	if got != want {
+		t.Errorf("PRURL() = %q, want %q", got, want)
+	}
+}
+
+// TestGitHubRefPRURL_should_ReturnEmpty_When_PRNumberNotSet guards the
+// zero-value case (a repo/branch ref, not a PR ref) — must not fabricate a
+// "/pull/0" URL.
+func TestGitHubRefPRURL_should_ReturnEmpty_When_PRNumberNotSet(t *testing.T) {
+	ref := &GitHubRef{Host: "github.com", Owner: "tstapler", Repo: "stapler-squad"}
+
+	if got := ref.PRURL(); got != "" {
+		t.Errorf("PRURL() = %q, want empty string when PRNumber is unset", got)
+	}
+}
+
+// TestGitHubRefPRURL_should_ReturnEmpty_When_RefIsNil guards the nil-receiver
+// case — CreateSession's gitHubRef is a *GitHubRef that can be nil for
+// non-GitHub session creation, so PRURL() must not panic if ever called on it.
+func TestGitHubRefPRURL_should_ReturnEmpty_When_RefIsNil(t *testing.T) {
+	var ref *GitHubRef
+
+	if got := ref.PRURL(); got != "" {
+		t.Errorf("PRURL() = %q, want empty string for a nil ref", got)
+	}
+}

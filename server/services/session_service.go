@@ -176,6 +176,12 @@ type SessionService struct {
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
 
+	// quotaGate feeds account-wide rate-limit detections into the quota
+	// headroom gate that pauses/resumes backlog automation. Late-wired via
+	// SetQuotaGate since QuotaGate needs backlogCtrl, which doesn't exist yet
+	// inside NewSessionService.
+	quotaGate *QuotaGate
+
 	// analyticsClient is the ent client for the analytics database (escape events, etc.).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
 	analyticsClient *ent.Client
@@ -1135,6 +1141,12 @@ func (s *SessionService) SetFeatureController(name string, c FeatureController) 
 	s.featureFlagSvc.SetFeatureController(name, c)
 }
 
+// SetStatusDetailProvider wires an optional status-detail provider for the
+// named feature flag. Delegates to FeatureFlagService.
+func (s *SessionService) SetStatusDetailProvider(name string, fn func() string) {
+	s.featureFlagSvc.SetStatusDetailProvider(name, fn)
+}
+
 // ListSessions returns all sessions with optional filtering.
 // This includes both managed sessions and external mux-enabled sessions.
 // +api: session:list
@@ -1281,13 +1293,14 @@ func (s *SessionService) GetSession(
 }
 
 // workspacePeersBlockFor returns a one-time "other active sessions in this workspace"
-// nudge for a new session being created at repoPath, or "" on any detection/lookup
-// failure, when there's no concrete storage backing this service, or when there are no
-// peers (AC5). Best-effort: this is a convenience nudge, not required session context.
-// Delegates to session.WorkspacePeersBlockForPath, shared with BacklogService's
-// initialPromptFor so the two callers can't drift on how the nudge is built.
+// nudge for a new session being created at repoPath, or "" when the workspacePeersNudgeFlagName
+// feature flag is off (default), on any detection/lookup failure, when there's no concrete
+// storage backing this service, or when there are no peers. Best-effort: this is a
+// convenience nudge, not required session context. Delegates to
+// session.WorkspacePeersBlockForPath, shared with BacklogService's initialPromptFor so the
+// two callers can't drift on how the nudge is built.
 func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return session.WorkspacePeersBlockForPath(ctx, s.concStorage, repoPath)
+	return workspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
 // CreateSession initializes a new AI agent session with tmux and git worktree.
@@ -1517,11 +1530,21 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
-	// One-time workspace-peers nudge for genuinely new sessions (not resumes) — AC5.
-	// Best-effort: any detection/lookup failure just omits the nudge.
+	// One-time workspace-peers nudge for genuinely new sessions (not resumes), when the
+	// workspacePeersNudgeFlagName feature flag is enabled. Best-effort: any detection/lookup
+	// failure just omits the nudge.
 	initialPrompt := req.Msg.InitialPrompt
 	if req.Msg.ResumeId == "" {
 		initialPrompt += s.workspacePeersBlockFor(ctx, resolvedPath)
+	}
+
+	// auto_approve is representable-but-invalid for an agent yoloFlagFor can't inject a
+	// bypass flag for -- the Omnibar UI disables the checkbox client-side, but that's not
+	// a guarantee for other RPC callers (MCP tools, scripts, curl), so the invariant is
+	// enforced here too rather than left purely client-enforced.
+	if req.Msg.AutoApprove && !session.AutoApproveSupported(program) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("auto_approve is not supported for program %q", program))
 	}
 
 	// Build instance options
@@ -1532,6 +1555,7 @@ func (s *SessionService) CreateSession(
 		Branch:           branch,
 		Program:          program,
 		AutoYes:          autoYes,
+		AutoApprove:      req.Msg.AutoApprove,
 		Prompt:           req.Msg.Prompt,
 		InitialPrompt:    initialPrompt,
 		ExistingWorktree: req.Msg.ExistingWorktree,
@@ -1559,37 +1583,31 @@ func (s *SessionService) CreateSession(
 		instanceOpts.ClonedRepoPath = clonedRepoPath
 		if gitHubRef.PRNumber > 0 {
 			instanceOpts.GitHubPRNumber = gitHubRef.PRNumber
+			instanceOpts.GitHubPRURL = gitHubRef.PRURL()
 		}
 	}
 
-	// Create instance using NewInstance constructor
-	instance, err := session.NewInstance(instanceOpts)
+	// Construct and persist the instance (Creating status) via the shared
+	// domain function -- see session/create_managed_instance.go (Story
+	// 1.2.0a). This does NOT start tmux/the process; that happens in the
+	// async goroutine below, exactly as before this extraction.
+	instance, err := session.CreateManagedInstance(ctx, session.CreateManagedInstanceParams{
+		Options:         instanceOpts,
+		Storage:         s.storage,
+		Registry:        s.registry,
+		CreateIfMissing: req.Msg.CreateIfMissing,
+		ResumeID:        req.Msg.ResumeId,
+	})
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to create instance: %w", err))
-	}
-
-	// Register in the live-handle map BEFORE persisting to storage so there is never
-	// a window where the session is findable by storage.FindInstanceDataByID but has
-	// no live actor. ForceRelease (not the release closure) is used in the rollback
-	// path because a concurrent Acquire racing between Register and AddInstance failure
-	// could bump refcount to 2, making plain release() decrement 2→1 and leave a
-	// phantom entry alive.
-	if s.registry != nil {
-		live := session.NewLiveInstance(instance)
-		if _, regErr := s.registry.Register(live); regErr != nil {
-			live.Stop()
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to register instance: %w", regErr))
+		switch {
+		case errors.Is(err, session.ErrPathNotExist), errors.Is(err, session.ErrResumePathNotExist):
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		case errors.Is(err, session.ErrInstanceConstructionFailed):
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		default:
+			// Covers ErrInstanceRegistrationFailed and ErrInstanceSaveFailed.
+			return nil, connect.NewError(connect.CodeInternal, err)
 		}
-		// Note: AddInstance failure rolls back via ForceRelease below.
-	}
-
-	// Save the instance to storage with Creating status immediately so the client
-	// can receive the session and show a spinner while initialization proceeds.
-	if err := s.storage.AddInstance(instance); err != nil {
-		if s.registry != nil {
-			s.registry.ForceRelease(instance.GetStableID())
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
 	// Add the session to the poller so WatchSessions picks it up immediately.
@@ -1835,11 +1853,9 @@ func (s *SessionService) UpdateSession(
 
 	// Find the instance to update
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -1847,6 +1863,11 @@ func (s *SessionService) UpdateSession(
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
+
+	// Captured before any rename below mutates instance.Title in-memory. A narrow
+	// metadata update must key its WHERE clause off the pre-rename title, or it misses
+	// the DB row entirely once instance.Title has already moved to the new value.
+	currentTitle := instance.Title
 
 	// Validate the note length before any field below mutates live in-memory state
 	// (SetTitleDirect/SetCategory publish immediately via snapshot.Store, not staged
@@ -1860,6 +1881,16 @@ func (s *SessionService) UpdateSession(
 	// Track which fields are being updated for event publishing
 	var updatedFields []string
 
+	// Metadata fields (title/category/note/working_dir) persist via a single narrow
+	// UPDATE (UpdateInstanceMetadata) instead of the full-row SaveInstances rewrite.
+	// A non-nil pointer here means "this field was part of the request".
+	var metaTitle, metaCategory, metaNote, metaWorkingDir *string
+
+	// sideEffectChanged tracks fields (tags, status, rate_limit_enabled, autonomous_mode)
+	// that still need the full-row SaveInstances write — e.g. tags requires managing the
+	// tags M2M relation, which a narrow column UPDATE can't replicate.
+	var sideEffectChanged bool
+
 	// Handle title update (before status change so rename is atomic with resume)
 	if req.Msg.Title != nil && *req.Msg.Title != "" && *req.Msg.Title != instance.Title {
 		// Check if new title already exists
@@ -1870,12 +1901,27 @@ func (s *SessionService) UpdateSession(
 		}
 		instance.SetTitleDirect(*req.Msg.Title)
 		updatedFields = append(updatedFields, "title")
+		metaTitle = req.Msg.Title
 	}
 
 	// Handle category update
 	if req.Msg.Category != nil {
 		instance.SetCategory(*req.Msg.Category)
 		updatedFields = append(updatedFields, "category")
+		metaCategory = req.Msg.Category
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
+		metaNote = req.Msg.Note
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
 	}
 
 	// Handle note update. Length already validated above.
@@ -1896,6 +1942,7 @@ func (s *SessionService) UpdateSession(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update tags: %w", err))
 		}
 		updatedFields = append(updatedFields, "tags")
+		sideEffectChanged = true
 	}
 
 	// Handle program update. Empty string means "System default" — resolve to the
@@ -1903,9 +1950,26 @@ func (s *SessionService) UpdateSession(
 	// the capacity-monitor auto-fallback path (UpdateSessionProgram below) via
 	// Instance.SwitchProgram so the two entry points can't drift or double-restart.
 	if req.Msg.Program != nil {
+		// Flush any pending title/category/note rename now, keyed on currentTitle,
+		// before SwitchProgram's callback below can trigger its own SaveInstances
+		// call. That call persists via instance.ToInstanceData(), whose Title is
+		// already the in-memory-renamed value — looking the DB row up by that new
+		// title (before the narrow rename below has run) misses the still-old-titled
+		// row and duplicates it via saveInstancesToRepo's Create fallback, exactly
+		// the orphaned/duplicate-row bug this file's UpdateSessionMetadata exists to
+		// avoid. Flushing here first keeps every later persist call in this handler
+		// looking up the same, already-correct row.
+		if metaTitle != nil || metaCategory != nil || metaNote != nil {
+			if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, nil); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+			}
+			if metaTitle != nil {
+				currentTitle = *metaTitle
+			}
+			metaTitle, metaCategory, metaNote = nil, nil, nil
+		}
 		changed, _, switchErr := instance.SwitchProgram(ctx, *req.Msg.Program, func() error {
-			instances[instanceIndex] = instance
-			return s.storage.SaveInstances(instances)
+			return s.storage.SaveInstances([]*session.Instance{instance})
 		})
 		if changed {
 			updatedFields = append(updatedFields, "program")
@@ -1920,6 +1984,7 @@ func (s *SessionService) UpdateSession(
 	if req.Msg.WorkingDir != nil {
 		instance.SetWorkingDir(*req.Msg.WorkingDir)
 		updatedFields = append(updatedFields, "working_dir")
+		metaWorkingDir = req.Msg.WorkingDir
 	}
 
 	// Handle rate limit enabled toggle. SetRateLimitEnabled persists to the
@@ -1933,6 +1998,7 @@ func (s *SessionService) UpdateSession(
 			}
 		}
 		updatedFields = append(updatedFields, "rate_limit_enabled")
+		sideEffectChanged = true
 	}
 
 	// Handle autonomous mode toggle. Starting/stopping the AutonomousDriver is a
@@ -1949,6 +2015,25 @@ func (s *SessionService) UpdateSession(
 			s.autonomousSvc.stopAndDeregisterDriver(instance.Title)
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
+		sideEffectChanged = true
+	}
+
+	// Handle auto-approve toggle. Restart-on-Active-change (serialized against a
+	// concurrent program switch via restartTriggerMu) is handled inside SetAutoApprove.
+	// Same server-side invariant as CreateSession: auto_approve=true is rejected for an
+	// agent yoloFlagFor can't inject a bypass flag for, not just disabled client-side.
+	if req.Msg.AutoApprove != nil && *req.Msg.AutoApprove != instance.AutoApprove {
+		if *req.Msg.AutoApprove && !session.AutoApproveSupported(instance.Program) {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("auto_approve is not supported for program %q", instance.Program))
+		}
+		if err := instance.SetAutoApprove(*req.Msg.AutoApprove, func() error {
+			return s.storage.SaveInstances([]*session.Instance{instance})
+		}); err != nil {
+			log.Error("[UpdateSession] failed to restart session after auto-approve change", "session", instance.Title, "err", err)
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after auto-approve change: %w", err))
+		}
+		updatedFields = append(updatedFields, "auto_approve")
 	}
 
 	// Handle steering: inject a message into an active autonomous session.
@@ -1994,6 +2079,7 @@ func (s *SessionService) UpdateSession(
 				instance.SetPauseReason(*req.Msg.PauseReason)
 			}
 			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
 		} else if targetStatus != session.Paused && instance.Status == session.Paused {
 			// Resume from paused state
 			if err := instance.Resume(); err != nil {
@@ -2002,31 +2088,29 @@ func (s *SessionService) UpdateSession(
 			// Clear pause reason only after a successful resume.
 			instance.SetPauseReason("")
 			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
 		}
 	}
 
-	// Update the instance in the list and save
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	// Persist changes. The narrow metadata UPDATE runs first so a title rename lands
+	// under currentTitle in the DB before any side-effecting SaveInstances call below
+	// looks the row up by the already-in-memory-mutated new title — doing it in the
+	// other order would miss the still-old-titled DB row and orphan it via
+	// SaveInstances' Update-fails-so-Create fallback (see UpdateSessionMetadata).
+	if metaTitle != nil || metaCategory != nil || metaNote != nil || metaWorkingDir != nil {
+		if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, metaWorkingDir); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+		}
+	}
+	if sideEffectChanged {
+		if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+		}
 	}
 
 	// Publish events based on what was updated
 	if len(updatedFields) > 0 {
-		// Publish general update event, including detection state when available.
-		if s.statusManager != nil {
-			statusInfo := s.statusManager.GetStatus(instance)
-			if statusInfo.IsControllerActive {
-				s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
-					instance, updatedFields,
-					statusInfo.ClaudeStatus, statusInfo.StatusContext,
-				))
-			} else {
-				s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
-			}
-		} else {
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
-		}
+		s.publishSessionUpdatedEvent(instance, updatedFields)
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
@@ -2051,11 +2135,9 @@ func (s *SessionService) HibernateSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -2082,8 +2164,7 @@ func (s *SessionService) HibernateSession(
 	// session does not linger with a stale queue entry until reconcileSessions fires.
 	s.removeFromAllPollers(instance.Title)
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -2111,11 +2192,9 @@ func (s *SessionService) ResumeHibernatedSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -2127,8 +2206,7 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -2159,11 +2237,9 @@ func (s *SessionService) ResumeCrashedSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -2175,8 +2251,7 @@ func (s *SessionService) ResumeCrashedSession(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -2350,7 +2425,11 @@ func (s *SessionService) WatchSessions(
 				}
 			}
 			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-				if adapters.StatusToProto(inst.Status) != *req.Msg.StatusFilter {
+				// inst.GetStatus() reads the lock-free published snapshot rather than
+				// inst.Status directly -- see reconcileSessions' identical fix
+				// (9fcded805) for why a raw field read here races with the actor's
+				// transitionToLocked write under -race.
+				if adapters.StatusToProto(session.Status(inst.GetStatus())) != *req.Msg.StatusFilter {
 					continue
 				}
 			}
@@ -2383,7 +2462,7 @@ func (s *SessionService) WatchSessions(
 			}
 
 			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-				if event.Session != nil && adapters.StatusToProto(event.Session.Status) != *req.Msg.StatusFilter {
+				if event.Session != nil && adapters.StatusToProto(session.Status(event.Session.GetStatus())) != *req.Msg.StatusFilter {
 					continue
 				}
 			}
@@ -3081,11 +3160,9 @@ func (s *SessionService) RenameSession(
 
 	// Find the instance to rename
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -3110,9 +3187,11 @@ func (s *SessionService) RenameSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to rename session: %w", err))
 	}
 
-	// Update the instance in the list and save
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	// Narrow single-row rename, keyed on the pre-mutation title. The generic
+	// SaveInstances path looks the DB row up by the (already renamed) in-memory
+	// title, misses the still-old-titled row, and falls into a Create fallback that
+	// orphans it — using oldTitle as the WHERE key avoids that.
+	if err := s.storage.UpdateInstanceMetadata(oldTitle, &req.Msg.NewTitle, nil, nil, nil); err != nil {
 		// Try to rollback the rename
 		instance.SetTitleDirect(oldTitle)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save renamed instance: %w", err))
@@ -4184,6 +4263,13 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 	// Session state sync (rate_limit_state/rate_limit_reset_time) must fire
 	// regardless of Hidden — only the Notifications-page entry above is gated.
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
+
+	// Feed the account-wide quota gate's hard/reactive override signal. Not
+	// gated on inst.Hidden (unlike the notification above) — a rate limit hit
+	// by a hidden/headless session still consumes real account quota.
+	if s.quotaGate != nil {
+		s.quotaGate.recordRateLimitEvent(time.Now())
+	}
 }
 
 // onRateLimitRecovery publishes the rate-limit-recovery notification for inst.
@@ -4657,10 +4743,31 @@ func (s *SessionService) GetProviderLimits(
 	}), nil
 }
 
+// publishSessionUpdatedEvent publishes a SessionUpdated event for instance covering
+// updatedFields, using the statusManager-aware NewSessionUpdatedEventWithDetection variant
+// when a controller is actively running (so clients see live ClaudeStatus/StatusContext),
+// and falling back to the plain NewSessionUpdatedEvent otherwise. Shared by UpdateSession's
+// end-of-handler publish and UpdateSessionProgram (the capacity-monitor auto-fallback path)
+// so the two program-switch entry points publish identically instead of drifting.
+func (s *SessionService) publishSessionUpdatedEvent(instance *session.Instance, updatedFields []string) {
+	if s.statusManager != nil {
+		statusInfo := s.statusManager.GetStatus(instance)
+		if statusInfo.IsControllerActive {
+			s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
+				instance, updatedFields,
+				statusInfo.ClaudeStatus, statusInfo.StatusContext,
+			))
+			return
+		}
+	}
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
+}
+
 // UpdateSessionProgram handles switching programs for a session, doing the history
 // porting, DB save, and PTY restart. Shares its implementation with the UpdateSession RPC
-// handler via Instance.SwitchProgram (see session/instance_program.go) so the two
-// program-switch entry points — this auto-fallback path and the manual RPC — can't drift.
+// handler via Instance.SwitchProgram (see session/instance_program.go) and
+// publishSessionUpdatedEvent above so the two program-switch entry points — this
+// auto-fallback path and the manual RPC — can't drift.
 func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID string, newProgram string) error {
 	inst := s.findInstance(sessionID)
 	if inst == nil {
@@ -4677,7 +4784,7 @@ func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID str
 		return fmt.Errorf("failed to restart session: %w", err)
 	}
 
-	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))
+	s.publishSessionUpdatedEvent(inst, []string{"program"})
 
 	return nil
 }
@@ -4692,6 +4799,12 @@ func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
 	if s.capacityMonitor != nil {
 		s.capacityMonitor.tokenStore = store
 	}
+}
+
+// SetQuotaGate wires the account-wide quota gate so onRateLimitDetected can
+// feed it the hard/reactive override signal.
+func (s *SessionService) SetQuotaGate(g *QuotaGate) {
+	s.quotaGate = g
 }
 
 // GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.

@@ -38,6 +38,8 @@ func (f *fakeInstanceStore) DeleteInstance(_ string) error { return nil }
 
 func (f *fakeInstanceStore) UpdateInstanceLastUserResponse(_ string, _ time.Time) error { return nil }
 
+func (f *fakeInstanceStore) UpdateInstanceMetadata(_ string, _, _, _, _ *string) error { return nil }
+
 // buildUploadRequest constructs a multipart/form-data POST request with the given
 // session_id and file fields.
 func buildUploadRequest(t *testing.T, sessionID, filename string, body []byte) *http.Request {
