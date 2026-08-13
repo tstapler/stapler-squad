@@ -221,6 +221,9 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Run CI comment-gate unit tests
+        run: cd tools/ci-gates && pnpm install --silent && pnpm test
+
       - name: Generate feature E2E coverage report
         id: coverage
         run: |
@@ -229,24 +232,56 @@ jobs:
           echo "$OUTPUT"
           SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")
           echo "summary=${SUMMARY}" >> $GITHUB_OUTPUT
+          PCT=$(echo "$OUTPUT" | grep -oE '\([0-9.]+%\)' | tr -d '()%' | head -1)
+          echo "pct=${PCT:-}" >> $GITHUB_OUTPUT
         continue-on-error: true
 
       - name: Post feature coverage PR comment
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        continue-on-error: true
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           COVERAGE_SUMMARY: ${{ steps.coverage.outputs.summary }}
+          COVERAGE_PCT: ${{ steps.coverage.outputs.pct }}
         with:
           script: |
-            const marker = '<!-- feature-coverage -->';
+            const { isActionable, buildMarker, findExisting } = require('./tools/ci-gates/coverage-delta.js');
             const summary = process.env.COVERAGE_SUMMARY || 'Feature coverage report unavailable';
-            const body = `${marker}\n## 📊 Feature E2E Coverage\n\n${summary}\n\n> Run \`make e2e-report\` locally to view the full Allure report.`;
+            const currentPct = parseFloat(process.env.COVERAGE_PCT);
+
+            // Recency guard (resolves adversarial-review Blocker 1 for this
+            // workflow): build.yml also runs on push-to-main with 5 unrelated
+            // jobs, so it can't take a workflow-level concurrency block the
+            // way ux-analysis.yml/e2e-video.yml do without cancelling those
+            // too — instead, skip only this mutation if a newer push has
+            // already superseded the commit this run was triggered for.
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            if (pr.data.head.sha !== context.payload.pull_request.head.sha) {
+              core.info('Skipping feature-coverage comment: a newer push has superseded this run.');
+              return;
+            }
+
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
-            const existing = comments.find(c => c.body.includes(marker));
+            const existing = findExisting(comments);
+
+            require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Feature E2E Coverage\n${summary}\n`);
+
+            if (!isActionable({ existingBody: existing ? existing.body : null, currentPct })) {
+              // Unchanged coverage is the steady state, not a resolved
+              // problem — left untouched, never deleted (see coverage-delta.js).
+              return;
+            }
+
+            const marker = buildMarker(process.env.COVERAGE_PCT || 'N/A');
+            const body = `${marker}\n## 📊 Feature E2E Coverage\n\n${summary}\n\n> Run \`make e2e-report\` locally to view the full Allure report.`;
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
@@ -262,7 +297,6 @@ jobs:
                 body,
               });
             }
-        continue-on-error: true
 
       - name: Check new RPCs have tests
         run: |
