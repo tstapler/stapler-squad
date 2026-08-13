@@ -265,6 +265,17 @@ in Story 2.1.1 actually covers every affected call site, not just some.
 **Files**: `session/headless/capability_check_test.go`,
 `session/headless/pool_test.go`
 
+**Scope note (architecture-review concern, resolved by documentation):**
+`requirements.md`'s AC1 wording also names `caller_test.go` as sharing "the
+same pattern," but this plan deliberately does not migrate it.
+`caller_test.go`'s `TestFindClaudeBinary_*` tests write fixture scripts to
+disk only to exercise `findClaudeBinary`'s executable-bit discovery
+(`os.Stat`) — none of them ever fork/exec the written file (confirmed via
+`grep -n "WriteFile\|ProcessRunner{\|exec\.\|StartProcess\|\.Run(" caller_test.go`:
+only `os.WriteFile` hits, no exec calls), so they cannot hit the
+Gatekeeper/TCC exec-refusal this plan targets and are correctly out of
+scope.
+
 ##### Task 2.1.2a: Migrate capability_check_test.go's 4 call sites + fix stale doc comment (~4 min)
 - In `session/headless/capability_check_test.go`, change all 4 occurrences of
   `NewProcessRunnerForTesting(scriptPath)` (lines 55, 86, 106, 142) to
@@ -338,9 +349,17 @@ from `SIGBUS`/`SIGSEGV` specifically, **so that** the test's "expected crash"
 branch is no longer just "any non-nil error."
 **Acceptance Criteria**:
 - AC3 (infrastructure half): a structural signal check is available and
-  portable across the platforms this repo's CI actually builds for
-  (`linux`, `darwin`, `windows` — confirmed via `.github/workflows/build.yml`
-  matrix).
+  portable across `linux`/`darwin`/`windows`. **Correction (architecture-review
+  concern):** this is precedent-following scaffolding (mirrors
+  `zombie_reaper.go`/`zombie_reaper_windows.go`), not a CI-driven requirement —
+  verified that no CI job in this repo ever compiles, vets, or runs this
+  package's `_test.go` files on Windows (`build.yml`'s `windows` leg only
+  `go build`s the root main package; `go test -race ./...` and
+  `golangci-lint` both run exclusively on `ubuntu-latest`, confirmed via
+  `grep -rn "runs-on" .github/workflows/*.yml`). The stub exists so a
+  hypothetical native-Windows `go vet ./...` run wouldn't break this
+  currently-zero-`syscall`-import package, not because CI would catch its
+  absence.
   - *Given* an `*exec.ExitError` from a process killed by `SIGBUS` on Linux,
     *When* `isExpectedFaultSignal(err)` is called from
     `trunc_fault_signal_test.go` (built on `!windows`), *Then* it returns
