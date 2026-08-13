@@ -1547,60 +1547,81 @@ func runInputReadLoop(
 			}
 
 			// Handle ScrollbackRequest — client requesting historical terminal scrollback.
-			// FromSequence is treated as a line offset from the end of tmux's history:
-			//   offset=0   → capture-pane -S -(limit)   -E -1     (most recent history)
-			//   offset=500 → capture-pane -S -(500+limit) -E -501 (next page back)
-			// Uses -J to join tmux soft-wrapped lines, making content width-agnostic so
-			// it re-wraps correctly in xterm.js after a terminal resize.
+			// Request validation, tmux capture, response construction, and writing to
+			// the stream all live in handleScrollbackRequest — split out purely to keep
+			// this loop's cognitive complexity under the lint gate; behavior is unchanged.
 			if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
-				const maxScrollbackLimit = 1000
-				limit := int(scrollbackReq.Limit)
-				if limit <= 0 || limit > maxScrollbackLimit {
-					limit = maxScrollbackLimit
-				}
-				offset := scrollbackReq.FromSequence
-
-				startLine := fmt.Sprintf("-%d", offset+uint64(limit))
-				endLine := fmt.Sprintf("-%d", offset+1)
-				content, sbErr := onScrollbackRequest(startLine, endLine)
-				if sbErr != nil {
-					log.Warn("[streamViaControlMode] ScrollbackRequest tmux capture failed", "session", sessionID, "err", sbErr)
-				} else {
-					trimmed := strings.TrimRight(content, "\n")
-					linesReturned := 0
-					if trimmed != "" {
-						linesReturned = strings.Count(trimmed, "\n") + 1
-					}
-					hasMore := linesReturned >= limit
-					oldestSeq := offset + uint64(linesReturned)
-
-					var chunks []*sessionv1.ScrollbackChunk
-					if linesReturned > 0 {
-						chunks = []*sessionv1.ScrollbackChunk{{Data: []byte(content)}}
-					}
-					sbResp := &sessionv1.TerminalData{
-						SessionId: sessionID,
-						Data: &sessionv1.TerminalData_ScrollbackResponse{
-							ScrollbackResponse: &sessionv1.ScrollbackResponse{
-								Chunks:         chunks,
-								HasMore:        hasMore,
-								TotalLines:     uint64(linesReturned),
-								OldestSequence: oldestSeq,
-								NewestSequence: offset,
-							},
-						},
-					}
-					if respBytes, merr := proto.Marshal(sbResp); merr != nil {
-						log.Error("[streamViaControlMode] failed to marshal scrollback response", "session", sessionID, "err", merr)
-					} else {
-						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
-					}
-				}
+				handleScrollbackRequest(stream, sessionID, scrollbackReq, onScrollbackRequest)
 			}
 
 			// Note: CurrentPaneRequest is now handled in handshake (not in input loop)
 		}
 	}
+}
+
+// handleScrollbackRequest answers a client's request for historical terminal
+// scrollback, extracted out of runInputReadLoop to keep that loop's cognitive
+// complexity under the lint gate (a pure move — behavior is unchanged from
+// what previously lived inline in the ScrollbackRequest branch).
+//
+// FromSequence is treated as a line offset from the end of tmux's history:
+//
+//	offset=0   → capture-pane -S -(limit)   -E -1     (most recent history)
+//	offset=500 → capture-pane -S -(500+limit) -E -501 (next page back)
+//
+// Uses -J to join tmux soft-wrapped lines, making content width-agnostic so
+// it re-wraps correctly in xterm.js after a terminal resize.
+func handleScrollbackRequest(
+	stream *connectWebSocketStream,
+	sessionID string,
+	scrollbackReq *sessionv1.ScrollbackRequest,
+	onScrollbackRequest func(startLine, endLine string) (string, error),
+) {
+	const maxScrollbackLimit = 1000
+	limit := int(scrollbackReq.Limit)
+	if limit <= 0 || limit > maxScrollbackLimit {
+		limit = maxScrollbackLimit
+	}
+	offset := scrollbackReq.FromSequence
+
+	startLine := fmt.Sprintf("-%d", offset+uint64(limit))
+	endLine := fmt.Sprintf("-%d", offset+1)
+	content, sbErr := onScrollbackRequest(startLine, endLine)
+	if sbErr != nil {
+		log.Warn("[streamViaControlMode] ScrollbackRequest tmux capture failed", "session", sessionID, "err", sbErr)
+		return
+	}
+
+	trimmed := strings.TrimRight(content, "\n")
+	linesReturned := 0
+	if trimmed != "" {
+		linesReturned = strings.Count(trimmed, "\n") + 1
+	}
+	hasMore := linesReturned >= limit
+	oldestSeq := offset + uint64(linesReturned)
+
+	var chunks []*sessionv1.ScrollbackChunk
+	if linesReturned > 0 {
+		chunks = []*sessionv1.ScrollbackChunk{{Data: []byte(content)}}
+	}
+	sbResp := &sessionv1.TerminalData{
+		SessionId: sessionID,
+		Data: &sessionv1.TerminalData_ScrollbackResponse{
+			ScrollbackResponse: &sessionv1.ScrollbackResponse{
+				Chunks:         chunks,
+				HasMore:        hasMore,
+				TotalLines:     uint64(linesReturned),
+				OldestSequence: oldestSeq,
+				NewestSequence: offset,
+			},
+		},
+	}
+	respBytes, merr := proto.Marshal(sbResp)
+	if merr != nil {
+		log.Error("[streamViaControlMode] failed to marshal scrollback response", "session", sessionID, "err", merr)
+		return
+	}
+	_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
 }
 
 // streamViaTmuxCapturePane handles WebSocket streaming using tmux capture-pane polling.
