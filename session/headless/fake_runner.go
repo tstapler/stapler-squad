@@ -142,17 +142,6 @@ func (f *FakeRunner) ArgsContainSequence(n int, seq ...string) bool {
 	return false
 }
 
-// NewProcessRunnerForTesting constructs a ProcessRunner pointed at claudeBin (typically
-// a small fake shell script in a test). Exists because Pool.CallWithOptions's WorkDir
-// one-shot path type-asserts on the concrete *ProcessRunner type (a FakeRunner is
-// rejected — see TestPool_CallWithOptions_WorkDir_FakeRunner_ReturnsError), so tests in
-// other packages that need to exercise real WorkDir/AllowedTools/PermissionMode
-// propagation cannot use FakeRunner and have no other way to construct a ProcessRunner
-// (its fields are unexported).
-func NewProcessRunnerForTesting(claudeBin string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: claudeBin}
-}
-
 // NewShellWrappedProcessRunnerForTesting constructs a ProcessRunner that execs
 // scriptPath through "sh" instead of forking/exec'ing scriptPath directly.
 // Use this instead of NewProcessRunnerForTesting when the test writes its own

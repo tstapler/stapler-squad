@@ -10,20 +10,13 @@ import (
 // confirming the process died from SIGBUS or SIGSEGV — the two signals a
 // truncated-mmap-read fault can raise.
 //
-// This inspects the subprocess's own printed diagnostics rather than its
-// exec.ExitError/syscall.WaitStatus, because Go's runtime installs a signal
-// handler for these hardware faults and never lets the OS report the death
-// as a raw signal exit: verified directly (GOGITSTORE_TRUNC_HELPER=1 re-exec
-// of this package's own crash helper) that with the default GOTRACEBACK the
-// process performs a controlled os.Exit(2) after printing "fatal error:
-// fault\n[signal SIGBUS: bus error ...]", and even with GOTRACEBACK=crash the
-// runtime re-raises SIGABRT (exit 134), never the original fault signal —
-// syscall.WaitStatus.Signal() is SIGBUS/SIGSEGV in neither case. Go's crash
-// dump's "[signal SIGxxx: ...]" line is the one place that signal is actually
-// recorded, and its format is stable across GOTRACEBACK modes and platforms
-// (this repo's runtime source: preprintpanics/dopanic_m), so string-matching
-// it is more portable than a WaitStatus check would ever be — no build-tag
-// split is needed since this does no syscall-package type assertion at all.
+// This string-matches the subprocess's printed diagnostics rather than
+// inspecting exec.ExitError/syscall.WaitStatus, because Go's runtime installs
+// its own signal handler for these hardware faults and never lets the OS
+// report the death as a raw signal exit — WaitStatus.Signal() can never equal
+// SIGBUS/SIGSEGV, across every GOTRACEBACK mode. See
+// project_plans/fix-flaky-headless-tests/implementation/plan.md's Story
+// 3.1.1 for the full investigation.
 func isExpectedFaultSignal(output []byte) (matched bool, detail string) {
 	switch {
 	case bytes.Contains(output, []byte("[signal SIGBUS:")):

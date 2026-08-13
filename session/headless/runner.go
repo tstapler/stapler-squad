@@ -62,13 +62,19 @@ type ProcessRunner struct {
 // directory to workDir, preserving any existing allowedTools/permissionMode/
 // disallowedTools. Used by CallBlocking for per-call directory override.
 func (r *ProcessRunner) WithWorkDir(workDir string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir, allowedTools: r.allowedTools, permissionMode: r.permissionMode, disallowedTools: r.disallowedTools, interpreter: r.interpreter}
+	cp := *r
+	cp.workDir = workDir
+	return &cp
 }
 
 // WithToolAccess returns a copy of this ProcessRunner with allowedTools/permissionMode/
 // disallowedTools set, preserving any existing workDir.
 func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode, disallowedTools string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: r.workDir, allowedTools: allowedTools, permissionMode: permissionMode, disallowedTools: disallowedTools, interpreter: r.interpreter}
+	cp := *r
+	cp.allowedTools = allowedTools
+	cp.permissionMode = permissionMode
+	cp.disallowedTools = disallowedTools
+	return &cp
 }
 
 // toolAccessArgs returns the --allowedTools/--permission-mode/--disallowedTools flag
