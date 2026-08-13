@@ -224,6 +224,31 @@ jobs:
       - name: Run CI comment-gate unit tests
         run: cd tools/ci-gates && pnpm install --silent && pnpm test
 
+      - name: Check new RPCs have tests
+        run: |
+          make registry-generate
+          git diff --exit-code docs/registry/features/ || {
+            echo "Registry out of date — run: make registry-generate"
+            exit 1
+          }
+          NEW_FILES=$(git diff --name-only origin/main -- 'docs/registry/features/backend/**' 2>/dev/null || true)
+          for f in $NEW_FILES; do
+            if [ -f "$f" ] && jq -e '.tested == false' "$f" > /dev/null 2>&1; then
+              echo "ERROR: New RPC $f has no test (tested: false). Add a test and set tested: true."
+              exit 1
+            fi
+          done
+          # Also validate the typed catalog
+          cd web-app && pnpm install --frozen-lockfile --silent && pnpm run validate-catalog
+
+      # Runs after "Check new RPCs have tests" deliberately: that step is what
+      # actually generates docs/registry/backend-features.json (via `make
+      # registry-generate`, a gitignored artifact — see .gitignore:98). This
+      # step used to run before it and always found no registry file,
+      # producing "Feature E2E coverage: N/A" on every single run regardless
+      # of the actionability gate below — confirmed live via PR #462's first
+      # review pass. Root-caused and fixed by reordering rather than papering
+      # over the symptom in the gate logic.
       - name: Generate feature E2E coverage report
         id: coverage
         run: |
@@ -248,6 +273,16 @@ jobs:
             const { isActionable, buildMarker, findExisting } = require('./tools/ci-gates/coverage-delta.js');
             const summary = process.env.COVERAGE_SUMMARY || 'Feature coverage report unavailable';
             const currentPct = parseFloat(process.env.COVERAGE_PCT);
+
+            // A NaN currentPct means the tool genuinely couldn't compute a
+            // number even with the registry available (a real failure, not
+            // "no change yet") — there's nothing actionable to report, so
+            // this skips rather than posting an uninformative comment.
+            if (isNaN(currentPct)) {
+              core.warning('Feature coverage report produced no parseable percentage; skipping comment.');
+              require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Feature E2E Coverage\n${summary}\n`);
+              return;
+            }
 
             // Recency guard (resolves adversarial-review Blocker 1 for this
             // workflow): build.yml also runs on push-to-main with 5 unrelated
@@ -280,7 +315,7 @@ jobs:
               return;
             }
 
-            const marker = buildMarker(process.env.COVERAGE_PCT || 'N/A');
+            const marker = buildMarker(currentPct);
             const body = `${marker}\n## 📊 Feature E2E Coverage\n\n${summary}\n\n> Run \`make e2e-report\` locally to view the full Allure report.`;
             if (existing) {
               await github.rest.issues.updateComment({
@@ -297,23 +332,6 @@ jobs:
                 body,
               });
             }
-
-      - name: Check new RPCs have tests
-        run: |
-          make registry-generate
-          git diff --exit-code docs/registry/features/ || {
-            echo "Registry out of date — run: make registry-generate"
-            exit 1
-          }
-          NEW_FILES=$(git diff --name-only origin/main -- 'docs/registry/features/backend/**' 2>/dev/null || true)
-          for f in $NEW_FILES; do
-            if [ -f "$f" ] && jq -e '.tested == false' "$f" > /dev/null 2>&1; then
-              echo "ERROR: New RPC $f has no test (tested: false). Add a test and set tested: true."
-              exit 1
-            fi
-          done
-          # Also validate the typed catalog
-          cd web-app && pnpm install --frozen-lockfile --silent && pnpm run validate-catalog
 
       # Benchmark comparison on PRs is handled by benchmark.yml (tier-1 job),
       # which posts a PR comment via benchstat. Removed dead step that ran
