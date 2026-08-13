@@ -560,6 +560,46 @@ func TestAddBacklogItemDependency_should_RejectCycle_When_LongerCycleWouldClose(
 	require.ErrorIs(t, err, ErrDependencyCycle)
 }
 
+// TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDeleted
+// covers AC7's hard-delete half: a deleted item can never reach `done`, so the
+// schema's entsql.OnDelete(Cascade) annotation on blocking_dependencies /
+// blocked_by_dependencies (session/ent/schema/backlog_item.go) removes the
+// dependency row along with the deleted blocker, which — via
+// UnresolvedBlockerItemIDs's row-based check — unblocks the dependent on the
+// next pass. This mirrors the archived-blocker-is-resolved behavior
+// (TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_BlockerNeverShipped)
+// and is the intended outcome, not an oversight.
+func TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDeleted(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
+	require.NoError(t, err)
+	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked item"})
+	require.NoError(t, err)
+
+	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+		BlockerID: blocker.ID,
+		BlockedID: blocked.ID,
+	})
+	require.NoError(t, err)
+
+	unresolved, err := repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})
+	require.NoError(t, err)
+	assert.True(t, unresolved[blocked.ID], "expected blocked item to be unresolved before blocker is deleted")
+
+	require.NoError(t, repo.DeleteBacklogItem(ctx, blocker.ID))
+
+	unresolved, err = repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})
+	require.NoError(t, err)
+	assert.False(t, unresolved[blocked.ID], "expected blocked item to be eligible once blocker is hard-deleted")
+
+	count, err := repo.GetEntClient().BacklogItemDependency.Query().Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "expected the dependency row to be cascade-deleted along with the blocker")
+}
+
 // TestAddBacklogItemDependency_should_NoOp_When_SamePairAddedTwice locks in
 // the upsert semantics: adding an already-existing (blocker, blocked) pair
 // must succeed silently rather than erroring on the unique-index conflict.
