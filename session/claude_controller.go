@@ -966,6 +966,44 @@ func (cc *ClaudeController) GetIdleStateInfo() detection.IdleStateInfo {
 	}
 }
 
+// resolveStatusFromTail computes status/desc/subagent-count from the filtered tail content
+// on a status-cache miss, including the spinner-activity fallbacks and the non-active-result
+// debug log. Extracted from GetStatusAndIdleInfo to keep that function's branching within
+// lint's complexity gate.
+func (cc *ClaudeController) resolveStatusFromTail(filtered, tail string) (detection.DetectedStatus, string, int) {
+	var status detection.DetectedStatus
+	var desc string
+	var count int
+	lines := lastNLines(filtered, statusDetectionLinesWindow)
+	if sd := cc.statusDetector.Load(); sd != nil {
+		status, desc, count = sd.DetectWithContextAndCountFromLines(lines)
+		if status == detection.StatusUnknown && len(filtered) == 0 && detection.HasClaudeSpinnerActivity(tail) {
+			status = detection.StatusExecuting
+			desc = "spinner_verb: active spinner in filtered-to-empty tail"
+		}
+		if status == detection.StatusUnknown && len(lines) <= 1 && detection.HasClaudeSpinnerActivity(tail) {
+			status = detection.StatusExecuting
+			desc = "spinner_verb: active spinner in single-line tail"
+		}
+	}
+	if status == detection.StatusReady || status == detection.StatusIdle || status == detection.StatusUnknown {
+		snippet := tail
+		if len(snippet) > 512 {
+			snippet = snippet[len(snippet)-512:]
+		}
+		log.Debug("GetStatusAndIdleInfo: non-active result",
+			"session", cc.sessionName,
+			"status", status,
+			"desc", desc,
+			"subagent_count", count,
+			"tail_len", len(tail),
+			"filtered_len", len(filtered),
+			"tail_snippet", fmt.Sprintf("%q", snippet),
+		)
+	}
+	return status, desc, count
+}
+
 // GetStatusAndIdleInfo returns both the detected status and idle state info in one call.
 // Saves one GetRecentHash (murmur3 over 4KB) and one cache.Read on every poll tick
 // compared to calling GetCurrentStatus + GetIdleStateInfo separately.
@@ -1036,33 +1074,7 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 	if statusHit {
 		status, desc, count = cachedStatus, cachedDesc, cachedCount
 	} else {
-		lines := lastNLines(filtered, statusDetectionLinesWindow)
-		if sd := cc.statusDetector.Load(); sd != nil {
-			status, desc, count = sd.DetectWithContextAndCountFromLines(lines)
-			if status == detection.StatusUnknown && len(filtered) == 0 && detection.HasClaudeSpinnerActivity(tail) {
-				status = detection.StatusExecuting
-				desc = "spinner_verb: active spinner in filtered-to-empty tail"
-			}
-			if status == detection.StatusUnknown && len(lines) <= 1 && detection.HasClaudeSpinnerActivity(tail) {
-				status = detection.StatusExecuting
-				desc = "spinner_verb: active spinner in single-line tail"
-			}
-		}
-		if status == detection.StatusReady || status == detection.StatusIdle || status == detection.StatusUnknown {
-			snippet := tail
-			if len(snippet) > 512 {
-				snippet = snippet[len(snippet)-512:]
-			}
-			log.Debug("GetStatusAndIdleInfo: non-active result",
-				"session", cc.sessionName,
-				"status", status,
-				"desc", desc,
-				"subagent_count", count,
-				"tail_len", len(tail),
-				"filtered_len", len(filtered),
-				"tail_snippet", fmt.Sprintf("%q", snippet),
-			)
-		}
+		status, desc, count = cc.resolveStatusFromTail(filtered, tail)
 	}
 
 	if idleHit {

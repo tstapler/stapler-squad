@@ -422,6 +422,56 @@ func (sd *StatusDetector) DetectForProgram(output []byte, program string) Detect
 	return sd.Detect(output)
 }
 
+// crSegmentScanResult is the outcome of scanning one \r-split line's segments in
+// scanCRSegments. When terminal is true, the caller must return (status, desc, count)
+// immediately — a definitive, higher-urgency match was found. Otherwise status/desc/count
+// carry the (possibly unchanged) best-candidate triple for the caller to fold back in.
+type crSegmentScanResult struct {
+	terminal bool
+	status   DetectedStatus
+	desc     string
+	count    int
+}
+
+// scanCRSegments scans the \r-split segments of a single terminal line in reverse order
+// (most recent segment first), applying the same urgency rules detectFromLines uses across
+// whole lines. bestStatus is the best candidate found so far on earlier (higher) lines;
+// it is only consulted, never assumed non-empty, so callers must fold non-terminal results
+// back in themselves (see detectFromLines).
+//
+// The last segment is always authoritative. Earlier segments: only promote high-urgency
+// statuses (Active, NeedsApproval, InputRequired, Error) — these represent session states
+// that can be visually hidden by a TUI overlay writing via \r but still indicate the session
+// needs attention. Low-urgency statuses (Success, Processing, Idle) in earlier segments were
+// overwritten and should not override the visual display.
+func (sd *StatusDetector) scanCRSegments(line string, bestStatus DetectedStatus) crSegmentScanResult {
+	segs := strings.Split(line, "\r")
+	result := crSegmentScanResult{status: bestStatus}
+	for j := len(segs) - 1; j >= 0; j-- {
+		if strings.TrimSpace(segs[j]) == "" {
+			continue
+		}
+		s, desc, count := sd.detectWithContextFromString(segs[j])
+		if s == StatusUnknown {
+			continue
+		}
+		if s == StatusReady {
+			if result.status == StatusUnknown {
+				result.status, result.desc, result.count = StatusReady, desc, count
+			}
+			continue
+		}
+		if j == len(segs)-1 || s == StatusExecuting || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
+			return crSegmentScanResult{terminal: true, status: s, desc: desc, count: count}
+		}
+		// Low-urgency earlier segment: record as candidate but keep scanning.
+		if result.status == StatusUnknown {
+			result.status, result.desc, result.count = s, desc, count
+		}
+	}
+	return result
+}
+
 // detectFromLines is the shared implementation for DetectFromLines and DetectWithContextFromLines.
 // Scans lines in reverse (most recent first), handling CR-split segments.
 // See DetectFromLines for the full algorithm documentation.
@@ -434,34 +484,13 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 			continue
 		}
 		if strings.ContainsRune(lines[i], '\r') {
-			segs := strings.Split(lines[i], "\r")
-			for j := len(segs) - 1; j >= 0; j-- {
-				if strings.TrimSpace(segs[j]) == "" {
-					continue
-				}
-				s, desc, count := sd.detectWithContextFromString(segs[j])
-				if s == StatusUnknown {
-					continue
-				}
-				if s == StatusReady {
-					if bestStatus == StatusUnknown {
-						bestStatus, bestDesc, bestCount = StatusReady, desc, count
-					}
-					continue
-				}
-				// The last segment is always authoritative.
-				// Earlier segments: only promote high-urgency statuses (Active, NeedsApproval,
-				// InputRequired, Error) — these represent session states that can be visually
-				// hidden by a TUI overlay writing via \r but still indicate the session needs
-				// attention. Low-urgency statuses (Success, Processing, Idle) in earlier
-				// segments were overwritten and should not override the visual display.
-				if j == len(segs)-1 || s == StatusExecuting || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
-					return s, desc, count
-				}
-				// Low-urgency earlier segment: record as candidate but keep scanning.
-				if bestStatus == StatusUnknown {
-					bestStatus, bestDesc, bestCount = s, desc, count
-				}
+			wasUnknown := bestStatus == StatusUnknown
+			res := sd.scanCRSegments(lines[i], bestStatus)
+			if res.terminal {
+				return res.status, res.desc, res.count
+			}
+			if wasUnknown && res.status != StatusUnknown {
+				bestStatus, bestDesc, bestCount = res.status, res.desc, res.count
 			}
 			continue // all segments of this CR line handled above
 		}
