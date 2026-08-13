@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -878,5 +879,148 @@ func TestStripAnsiCodesHandlesNonLetterCSITerminators(t *testing.T) {
 				t.Errorf("stripAnsiCodes(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestInvalidateSnapshotForcesRecapture verifies that invalidateSnapshot causes the
+// next getOrRefreshSnapshot to re-run captureFn.
+//
+// Regression guard for garbled-terminal-on-connect: streamViaControlMode performs a
+// ±1 resize nudge to force the TUI to repaint, which makes any cached capture-pane
+// content stale by construction (it was captured at the pre-nudge dimensions). The
+// nudge cannot rely on markSnapshotDirty to invalidate it, because markSnapshotDirty
+// is only called from the output-forwarding goroutine, which does not start until
+// after the initial snapshot has already been captured and sent.
+func TestInvalidateSnapshotForcesRecapture(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	calls := 0
+	captureFn := func() (string, error) {
+		calls++
+		return fmt.Sprintf("content%d", calls), nil
+	}
+
+	// Populate the cache (simulates a snapshot captured at the previous dimensions).
+	if _, err := h.getOrRefreshSnapshot("sess1", captureFn); err != nil {
+		t.Fatalf("unexpected error priming cache: %v", err)
+	}
+
+	// A resize nudge just forced a repaint — the cached content is now stale.
+	h.invalidateSnapshot("sess1")
+
+	got, err := h.getOrRefreshSnapshot("sess1", captureFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("captureFn called %d times after invalidate, want 2 (stale snapshot was served)", calls)
+	}
+	if got != "content2" {
+		t.Errorf("got %q after invalidate, want %q", got, "content2")
+	}
+}
+
+// TestInvalidateSnapshotOnUnknownSessionIsNoOp verifies invalidating an absent
+// session neither panics nor creates a cache entry.
+func TestInvalidateSnapshotOnUnknownSessionIsNoOp(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	h.invalidateSnapshot("nonexistent-session")
+
+	if _, ok := h.snapshotCache.Load("nonexistent-session"); ok {
+		t.Error("invalidateSnapshot created a cache entry for an unknown session")
+	}
+}
+
+// TestWaitForQuiescenceReturnsAfterQuietForWhenNoProducer documents that
+// waitForQuiescence degenerates to a fixed quietFor sleep when nothing ever signals
+// the channel. streamViaControlMode's initial call is in exactly that situation: the
+// only producer (the output-forwarding goroutine) starts after the call site, so the
+// "wait for the TUI to finish redrawing" is really a short fixed delay and its
+// timeout warning can never fire.
+//
+// This test pins the current semantics so the trap is visible; making the initial
+// wait genuinely quiescence-driven requires subscribing a producer before the nudge.
+func TestWaitForQuiescenceReturnsAfterQuietForWhenNoProducer(t *testing.T) {
+	ch := make(chan struct{}, 16) // no producer, mirroring the initial-nudge call site
+
+	start := time.Now()
+	waitForQuiescence(ch, 500*time.Millisecond, 50*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if elapsed >= 400*time.Millisecond {
+		t.Errorf("waited %v — expected to return after quietFor (~50ms), not the 500ms timeout", elapsed)
+	}
+	if elapsed < 40*time.Millisecond {
+		t.Errorf("returned after %v — expected to wait at least quietFor (~50ms)", elapsed)
+	}
+}
+
+// fakeCursorPositioner is a cursorPositioner stub for withCursorSync tests.
+type fakeCursorPositioner struct {
+	x, y int
+	err  error
+}
+
+func (f fakeCursorPositioner) GetPaneCursorPosition() (int, int, error) {
+	return f.x, f.y, f.err
+}
+
+// TestWithCursorSyncAppendsOneBasedCUP verifies the trailing CUP escape converts
+// tmux's 0-based cursor coords to CUP's 1-based row;col form.
+func TestWithCursorSyncAppendsOneBasedCUP(t *testing.T) {
+	got := withCursorSync("content", fakeCursorPositioner{x: 4, y: 9})
+	want := "content\x1b[10;5H"
+	if got != want {
+		t.Errorf("withCursorSync = %q, want %q", got, want)
+	}
+}
+
+// TestWithCursorSyncPassesThroughOnErrorOrNilTarget verifies content is returned
+// unchanged when the cursor position is unavailable.
+func TestWithCursorSyncPassesThroughOnErrorOrNilTarget(t *testing.T) {
+	if got := withCursorSync("content", nil); got != "content" {
+		t.Errorf("nil target: got %q, want unchanged", got)
+	}
+	failing := fakeCursorPositioner{x: 1, y: 1, err: fmt.Errorf("pane gone")}
+	if got := withCursorSync("content", failing); got != "content" {
+		t.Errorf("error target: got %q, want unchanged", got)
+	}
+}
+
+// TestAllSnapshotSendsUseCursorSync guards the invariant that every full-screen
+// snapshot send ends with a cursor-sync.
+//
+// prepareSnapshotContent deliberately strips absolute-cursor codes, so a snapshot
+// written without a trailing CUP leaves xterm.js's cursor desynced from the tmux pane
+// cursor; relative cursor-up redraws from an Ink TUI then rewind to the wrong row and
+// each repaint stacks below the previous one ("billowing"). The post-resize snapshot
+// omitted this call, which meant resizing to clear a garbled pane left interactive
+// menus stacking their previously highlighted option.
+//
+// This is a source-level guard because the snapshot sends live inside long-lived
+// streaming goroutines with no injectable seam. If those are ever refactored behind a
+// single snapshot-composition helper, replace this with a direct test of that helper.
+func TestAllSnapshotSendsUseCursorSync(t *testing.T) {
+	src, err := os.ReadFile("connectrpc_websocket.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+
+	for i, line := range strings.Split(string(src), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		// Snapshot frames are composed as <prefix> + prepareSnapshotContent(...).
+		if !strings.Contains(trimmed, "prepareSnapshotContent(") {
+			continue
+		}
+		// Skip the helper's own declaration.
+		if strings.HasPrefix(trimmed, "func prepareSnapshotContent") {
+			continue
+		}
+		if !strings.Contains(trimmed, "withCursorSync(") {
+			t.Errorf("connectrpc_websocket.go:%d composes a snapshot without withCursorSync:\n\t%s", i+1, trimmed)
+		}
 	}
 }

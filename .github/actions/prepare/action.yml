@@ -25,10 +25,25 @@ runs:
       shell: bash
       run: cd web-app && pnpm install --frozen-lockfile
 
+    # Pre-populate buf-action's own tool-cache lookup path (runner.tool_cache
+    # == $RUNNER_TOOL_CACHE, what its tc.find()/tc.cacheFile() calls read and
+    # write) so most runs skip the network download entirely. Cache the whole
+    # "buf" directory rather than a specific .../<version>/<arch> subpath:
+    # tc's internal arch segment comes from Node's process.arch ("x64",
+    # lowercase), not the runner.arch context ("X64", uppercase) — pinning
+    # the path to runner.arch here would silently create/restore the wrong
+    # directory and always miss.
+    - name: Cache buf binary
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/buf
+        key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
     - name: Set up buf
-      uses: bufbuild/buf-setup-action@v1
+      uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
       with:
         version: '1.41.0'
+        setup_only: 'true'
 
     - name: Generate protobuf code
       shell: bash
@@ -38,11 +53,24 @@ runs:
       shell: bash
       run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
+    # Warms webpack's persistent cache (which holds next/font's downloaded
+    # font files) across runs, so most builds skip the fonts.gstatic.com
+    # network fetch entirely instead of relying on the retry below.
+    - name: Cache Next.js build cache
+      uses: actions/cache@v4
+      with:
+        path: web-app/.next/cache
+        key: nextjs-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+        restore-keys: |
+          nextjs-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+          nextjs-${{ runner.os }}-
 
     - name: Build web UI
       shell: bash
       working-directory: web-app
-      run: pnpm run build
+      # next/font fetches fonts from fonts.gstatic.com at build time; retry
+      # with backoff since that's an external network call, not our code.
+      run: ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
 
     - name: Copy web UI to dist
       shell: bash

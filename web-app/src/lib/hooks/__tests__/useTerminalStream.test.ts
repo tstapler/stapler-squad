@@ -6,6 +6,7 @@
  */
 
 import { renderHook, act, waitFor } from '@testing-library/react';
+import { FOREGROUND_CONNECT_TIMEOUT_MS, CONNECT_TIMEOUT_MS, FOREGROUND_FAST_ATTEMPTS } from '@/lib/utils/backoff';
 
 // ---------------------------------------------------------------------------
 // Mock heavy infrastructure before any hook import
@@ -140,27 +141,35 @@ interface PushStream<T> {
   end(): void;
 }
 
-function makePushStream<T>(): PushStream<T> {
+function makePushStream<T>(signal?: AbortSignal): PushStream<T> {
   const queue: T[] = [];
-  const resolvers: Array<() => void> = [];
+  const resolvers: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
   let done = false;
+  let aborted = false;
+
+  signal?.addEventListener('abort', () => {
+    aborted = true;
+    const pending = resolvers.splice(0);
+    pending.forEach((r) => r.reject(new Error('aborted')));
+  });
 
   const push = (msg: T) => {
     queue.push(msg);
-    resolvers.shift()?.();
+    resolvers.shift()?.resolve();
   };
 
   const end = () => {
     done = true;
-    resolvers.shift()?.();
+    resolvers.shift()?.resolve();
   };
 
   const iterable: AsyncIterable<T> = {
     [Symbol.asyncIterator]() {
       return {
         async next(): Promise<IteratorResult<T>> {
+          if (aborted) throw new Error('aborted');
           while (queue.length === 0 && !done) {
-            await new Promise<void>((resolve) => resolvers.push(resolve));
+            await new Promise<void>((resolve, reject) => resolvers.push({ resolve, reject }));
           }
           if (queue.length > 0) {
             return { value: queue.shift()!, done: false };
@@ -1067,5 +1076,359 @@ describe('useTerminalStream — connection-generation guard (Story 2.2)', () => 
     expect(onInputDropped).toHaveBeenCalledWith(bufferedBeforePush + 1);
 
     stream2.end();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Foreground fast reconnect — `foreground` option + connect-timeout
+// ---------------------------------------------------------------------------
+
+describe('useTerminalStream — foreground connect-timeout', () => {
+  const RECONNECT_OPTIONS = {
+    ...BASE_OPTIONS,
+    autoConnect: false,
+  };
+
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_RECONNECT_V2 = 'true';
+    jest.useFakeTimers();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'info').mockImplementation(() => {});
+    mockStreamTerminal.mockReset();
+  });
+
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('useTerminalStream_should_connectAsBeforeChange_When_foregroundOmitted', async () => {
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValue(stream.iterable);
+
+    const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
+
+    await act(async () => { result.current.connect(); });
+    await act(async () => { stream.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+  });
+
+  it('connect_should_abortAndRetry_When_foregroundTrueAndFirstAttemptExceedsFastTimeout', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      capturedSignal = opts?.signal;
+      return makePushStream(opts?.signal).iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    await act(async () => { result.current.connect(); });
+    expect(capturedSignal?.aborted).toBe(false);
+
+    await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(result.current.terminalState).toBe('DISCONNECTED'));
+    expect(capturedSignal?.aborted).toBe(true);
+
+    // Not stuck in CONNECTING: the backoff-scheduled retry reaches CONNECTING again.
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    await waitFor(() => expect(result.current.terminalState).toBe('CONNECTING'));
+  });
+
+  it('connect_should_notAbort_When_notForegroundAndOnlyFastTimeoutElapsed', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      capturedSignal = opts?.signal;
+      return makePushStream(opts?.signal).iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: false })
+    );
+
+    await act(async () => { result.current.connect(); });
+    await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+    expect(capturedSignal?.aborted).toBe(false);
+
+    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS - FOREGROUND_CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(capturedSignal?.aborted).toBe(true));
+  });
+
+  it('connect_should_useNormalTimeout_When_foregroundTrueAndFastWindowExhausted', async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const streams: ReturnType<typeof makePushStream<object>>[] = [];
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      signals.push(opts?.signal);
+      const s = makePushStream<object>(opts?.signal);
+      streams.push(s);
+      return s.iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    // Consume the FOREGROUND_FAST_ATTEMPTS fast-timeout attempts.
+    await act(async () => { result.current.connect(); });
+    for (let i = 0; i < FOREGROUND_FAST_ATTEMPTS; i++) {
+      await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+      await waitFor(() => expect(signals[i]?.aborted).toBe(true));
+      // Backoff delay between attempts is uniform(0, 1000ms) at this codebase's
+      // existing BackoffState(1000, 30_000) — 1000ms always covers it.
+      await act(async () => { jest.advanceTimersByTime(1000); });
+      await waitFor(() => expect(streams.length).toBe(i + 2));
+    }
+
+    // Next attempt (fast window exhausted) must use the normal timeout.
+    const attemptIndex = FOREGROUND_FAST_ATTEMPTS;
+    await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+    expect(signals[attemptIndex]?.aborted).toBe(false);
+
+    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS - FOREGROUND_CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(signals[attemptIndex]?.aborted).toBe(true));
+  });
+
+  it('useTerminalStream_should_resetFastWindow_When_foregroundTransitionsFalseToTrue', async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const streams: ReturnType<typeof makePushStream<object>>[] = [];
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      signals.push(opts?.signal);
+      const s = makePushStream<object>(opts?.signal);
+      streams.push(s);
+      return s.iterable;
+    });
+
+    const { result, rerender } = renderHook(
+      (props: { foreground: boolean }) =>
+        useTerminalStream({ ...RECONNECT_OPTIONS, foreground: props.foreground }),
+      { initialProps: { foreground: true } }
+    );
+
+    // Exhaust the fast window (2 attempts), leaving a 3rd attempt in flight that
+    // was scheduled (before any flip) using the normal timeout.
+    await act(async () => { result.current.connect(); });
+    for (let i = 0; i < FOREGROUND_FAST_ATTEMPTS; i++) {
+      await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+      await waitFor(() => expect(signals[i]?.aborted).toBe(true));
+      await act(async () => { jest.advanceTimersByTime(1000); });
+      await waitFor(() => expect(streams.length).toBe(i + 2));
+    }
+    // streams[FOREGROUND_FAST_ATTEMPTS] is now in flight, fast window exhausted.
+
+    // Flip false -> true. The in-flight attempt is unaffected (snapshot-at-schedule-time
+    // — see plan.md's Pattern Decisions) and keeps using the normal timeout it was
+    // already scheduled with; only attempts *started after* the reset are fast again.
+    await act(async () => { rerender({ foreground: false }); });
+    await act(async () => { rerender({ foreground: true }); });
+
+    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(signals[FOREGROUND_FAST_ATTEMPTS]?.aborted).toBe(true));
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    await waitFor(() => expect(streams.length).toBe(FOREGROUND_FAST_ATTEMPTS + 2));
+
+    // The next attempt — started after the reset — uses the fast timeout again.
+    const resetAttemptIndex = FOREGROUND_FAST_ATTEMPTS + 1;
+    await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(signals[resetAttemptIndex]?.aborted).toBe(true));
+  });
+
+  it('useTerminalStream_should_clearStaleBackoffTimerAndReconnectImmediately_When_foregroundTransitionsFalseToTrue', async () => {
+    // Pre-mortem Failure #1 (P1): resetting counters alone is not enough — a
+    // pending reconnectTimerRef backoff delay computed while backgrounded must
+    // also be cleared, with an immediate reconnect, on the false->true transition.
+    const streams: ReturnType<typeof makePushStream<object>>[] = [];
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      const s = makePushStream<object>(opts?.signal);
+      streams.push(s);
+      return s.iterable;
+    });
+
+    const { result, rerender } = renderHook(
+      (props: { foreground: boolean }) =>
+        useTerminalStream({ ...RECONNECT_OPTIONS, foreground: props.foreground }),
+      { initialProps: { foreground: false } }
+    );
+
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(streams.length).toBe(1));
+    await act(async () => { streams[0].push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    // Clean close schedules a pending reconnectTimerRef backoff delay (0-1000ms).
+    await act(async () => { streams[0].end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    // Flip foreground before that stale delay elapses — a second connect should
+    // fire immediately, without needing to advance any timers.
+    await act(async () => { rerender({ foreground: true }); });
+    await waitFor(() => expect(streams.length).toBe(2));
+
+    // The original stale timer must not ALSO fire a duplicate 3rd connect.
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    expect(streams.length).toBe(2);
+  });
+
+  it('connect_should_notAbort_When_firstMessageArrivesBeforeConnectTimeoutFires', async () => {
+    // Pre-mortem Failure #3 (P2): a message that already landed must not be
+    // retroactively aborted by a connect-timeout timer firing afterward.
+    let capturedSignal: AbortSignal | undefined;
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      capturedSignal = opts?.signal;
+      return stream.iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    await act(async () => { result.current.connect(); });
+    await act(async () => { stream.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    // Advance past the connect-timeout duration — must NOT abort a healthy connection.
+    await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+    expect(capturedSignal?.aborted).toBe(false);
+    expect(result.current.isConnected).toBe(true);
+  });
+
+  it('useTerminalStream_should_notLeakConnectTimeout_When_disconnectCalledBeforeFirstMessage', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      capturedSignal = opts?.signal;
+      return makePushStream(opts?.signal).iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    await act(async () => { result.current.connect(); });
+    await act(async () => { await result.current.disconnect(); });
+
+    const warnSpy = console.warn as jest.Mock;
+    warnSpy.mockClear();
+
+    // Advance well past both the fast and normal connect-timeout durations — the
+    // pending connect-timeout must have been cleared by disconnect(), so no
+    // trigger=connect-timeout log/abort fires against the torn-down attempt.
+    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS); });
+    const timeoutWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('trigger=connect-timeout'));
+    expect(timeoutWarnings.length).toBe(0);
+    expect(capturedSignal?.aborted).toBe(false);
+  });
+
+  it('connect_should_notScheduleConnectTimeout_When_reconnectV2FlagDisabled', async () => {
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    let capturedSignal: AbortSignal | undefined;
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      capturedSignal = opts?.signal;
+      return makePushStream(opts?.signal).iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    await act(async () => { result.current.connect(); });
+    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS + 1000); }); // well past both timeouts
+    expect(capturedSignal?.aborted).toBe(false);
+  });
+
+  it('connect_should_clearConnectTimeout_When_synchronousThrowBeforeMessageLoopStarts', async () => {
+    // Regression test for the sdd:6-verify MUST FIX: the connect-timeout timer is
+    // scheduled before streamTerminal() is called; if that call throws synchronously
+    // (e.g. proto validation, MessageQueue construction) the outer catch block must
+    // still clear the timer, or it fires a stale trigger=connect-timeout warning
+    // against an attempt that's already dead.
+    mockStreamTerminal.mockImplementation(() => {
+      throw new Error('synchronous setup failure');
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    const warnSpy = console.warn as jest.Mock;
+    warnSpy.mockClear();
+
+    await act(async () => { result.current.connect(); });
+    expect(result.current.isConnected).toBe(false);
+
+    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS + 1000); });
+    const timeoutWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('trigger=connect-timeout'));
+    expect(timeoutWarnings.length).toBe(0);
+  });
+
+  it('connect_should_notCallOnError_When_connectTimeoutAborts', async () => {
+    // Code review finding: a connect-timeout abort is our own deliberate fast-retry
+    // optimization, not a real failure — it must not be surfaced via onError, since
+    // callers (e.g. TerminalOutput.tsx) count onError calls toward a user-visible
+    // "connection failed" attempt counter/banner. A real, non-timeout stream error
+    // still must reach onError (asserted below via the separate hard-fail-code path).
+    const onError = jest.fn();
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      return makePushStream(opts?.signal).iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true, onError })
+    );
+
+    await act(async () => { result.current.connect(); });
+    await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(result.current.terminalState).toBe('DISCONNECTED'));
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('connect_should_callOnError_When_streamErrorsForARealNonTimeoutReason', async () => {
+    // Symmetry check for the fix above: onError suppression is scoped specifically
+    // to connect-timeout-triggered aborts, not stream errors in general.
+    const onError = jest.fn();
+    mockStreamTerminal.mockImplementation(() => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            throw new Error('genuine stream failure');
+          },
+        };
+      },
+    }));
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true, onError })
+    );
+
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(onError.mock.calls[0][0].message).toBe('genuine stream failure');
+  });
+
+  it('connect_should_beNoOp_When_calledAgainWhileAlreadyConnecting', async () => {
+    // Regression guard for the invariant firstMessageRef/connectTimeoutRef rely on
+    // (documented at their declaration): connect()'s own isConnectedRef/isConnectingRef
+    // re-entrancy guard must prevent two attempts from touching that shared state at once.
+    let callCount = 0;
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      callCount++;
+      return makePushStream(opts?.signal).iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    await act(async () => {
+      result.current.connect();
+      result.current.connect();
+    });
+
+    expect(callCount).toBe(1);
   });
 });

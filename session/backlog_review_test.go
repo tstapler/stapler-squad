@@ -163,6 +163,20 @@ func TestBuildReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testin
 	assert.NotContains(t, prompt, "## No-Diff Verification")
 }
 
+// TestBuildReviewPrompt_InstructsEndingSessionAfterSubmitReviewVerdict is the
+// regression guard for BUG-047 (reviewer submits a verdict and then never
+// exits, leaving the item wedged in "review" forever — see
+// AutoReopenAfterFailedReview's and reconcileUnprocessedReviewVerdicts' doc
+// comments for the backend side of this fix). Symmetric to the work-role
+// prompt's explicit "Do NOT end your session" instruction — the review-role
+// prompt must tell the reviewer the opposite: end the session once the
+// verdict is in.
+func TestBuildReviewPrompt_InstructsEndingSessionAfterSubmitReviewVerdict(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	prompt := BuildReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, uuid.New().String(), "")
+	assert.Contains(t, prompt, "End your session immediately after calling submit_review_verdict")
+}
+
 // TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection verifies
 // that non-empty verification notes are rendered in a distinctly-labeled section
 // separate from the diff, so the reviewer can tell it apart from code-derived evidence.
@@ -905,4 +919,59 @@ func TestDegradeIfUnverified_ToolReadsOnePathMissingAmongMultiple_ForcesUnverifi
 
 	assert.Equal(t, ReviewOutcomeUnverifiable, overall)
 	assert.Equal(t, "codebase-read-degraded", path)
+}
+
+// TestGetWorktreeDirtyPaths_ReturnsPathsForDirtyWorktree verifies untracked and staged
+// modified files are both reported.
+func TestGetWorktreeDirtyPaths_ReturnsPathsForDirtyWorktree(t *testing.T) {
+	repo := setupTestGitRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("new"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Test\nmodified\n"), 0o644))
+
+	paths, err := GetWorktreeDirtyPaths(repo)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"untracked.txt", "README.md"}, paths)
+}
+
+// TestGetWorktreeDirtyPaths_EmptyForCleanWorktree verifies a freshly committed repo with
+// no working-tree changes returns an empty, non-error result.
+func TestGetWorktreeDirtyPaths_EmptyForCleanWorktree(t *testing.T) {
+	repo := setupTestGitRepo(t)
+
+	paths, err := GetWorktreeDirtyPaths(repo)
+	require.NoError(t, err)
+	assert.Empty(t, paths)
+}
+
+// TestGetWorktreeDirtyPaths_HandlesRenamedFile verifies a rename reports only the new
+// path (not the old one), reusing parsePorcelainV2Z's existing rename-continuation-token
+// handling rather than a naive reimplementation.
+func TestGetWorktreeDirtyPaths_HandlesRenamedFile(t *testing.T) {
+	repo := setupTestGitRepo(t)
+
+	mv := safeexec.CommandContext(context.Background(), "git", "mv", "README.md", "RENAMED.md")
+	mv.Dir = repo
+	require.NoError(t, mv.Run())
+
+	addCmd := safeexec.CommandContext(context.Background(), "git", "add", "-A")
+	addCmd.Dir = repo
+	require.NoError(t, addCmd.Run())
+
+	paths, err := GetWorktreeDirtyPaths(repo)
+	require.NoError(t, err)
+	assert.Contains(t, paths, "RENAMED.md")
+	assert.NotContains(t, paths, "README.md")
+}
+
+// TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil verifies a non-git directory
+// is treated as a no-op ((nil, nil)) rather than surfacing vc.ErrNoVCSFound as an error
+// — unlike IsWorktreeDirty, which errors in this case via its underlying `git status`
+// subprocess failing.
+func TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil(t *testing.T) {
+	dir := t.TempDir()
+
+	paths, err := GetWorktreeDirtyPaths(dir)
+	require.NoError(t, err)
+	assert.Nil(t, paths)
 }

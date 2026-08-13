@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import {
   useBacklogSourcesService,
   type ItemSource,
   type SyncHistoryResult,
 } from "@/lib/hooks/useBacklogSourcesService";
+import { routes } from "@/lib/routes";
 import { PLUGIN_SCHEMAS } from "./backlogSourceSchemas";
+import { BackwardSyncConfirmDialog } from "./BackwardSyncConfirmDialog";
 import * as styles from "./BacklogSourcesSettings.css";
 
 function formatDate(iso?: string): string {
@@ -17,15 +20,80 @@ function formatDate(iso?: string): string {
  * Settings panel for configuring backlog item sources (e.g. GitHub repos to
  * sync issues/PRs from): add a source, enable/disable, sync now, view history.
  */
+// Non-transient sync failures (auth revoked/expired) warrant a persistent,
+// row-level warning that doesn't require expanding history to notice
+// (Story 4.3.2) — a rate limit or a one-off network blip does not.
+//
+// A bare "403" match used to be enough, but GitHub's rate-limit response is
+// ALSO a 403 (session/backlog_plugin_github.go's Fetch/CloseIssue render it
+// as "github_issues: rate limited (status 403)" / "... rate limited closing
+// issue ..."), so a bare "403" false-positives on transient rate-limiting.
+// Match on 401 (GitHub never uses 401 for rate limiting) and specific auth
+// phrasing instead, and explicitly exclude anything already identified as a
+// rate limit.
+function isAuthFailure(errorMessage?: string): boolean {
+  if (!errorMessage) return false;
+  const lower = errorMessage.toLowerCase();
+  if (lower.includes("rate limit")) return false;
+  return (
+    lower.includes("401") ||
+    lower.includes("403") ||
+    lower.includes("bad credentials") ||
+    lower.includes("revoked") ||
+    lower.includes("requires authentication")
+  );
+}
+
 export function BacklogSourcesSettings() {
-  const { listItemSources, createItemSource, setItemSourceEnabled, deleteItemSource, triggerSync, getSyncHistory, lastError, clearError } =
-    useBacklogSourcesService();
+  const {
+    listItemSources,
+    createItemSource,
+    setItemSourceEnabled,
+    setForwardSyncEnabled,
+    setBackwardSyncEnabled,
+    setForwardSyncCloseLabel,
+    deleteItemSource,
+    triggerSync,
+    getSyncHistory,
+    previewBackwardSyncImpact,
+    lastError,
+    clearError,
+  } = useBacklogSourcesService();
 
   const [sources, setSources] = useState<ItemSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  // Per-source in-flight guards for the enabled/forward-sync toggles — same
+  // pattern as backwardSyncPreviewPendingId below, added to close a
+  // stale-closure double-click bug: without this, a rapid second click
+  // reads the same (still-current) `source.enabled` / `source.forwardSyncEnabled`
+  // prop and sends the same target value twice instead of toggling back.
+  const [enabledTogglePendingId, setEnabledTogglePendingId] = useState<string | null>(null);
+  const [forwardSyncTogglePendingId, setForwardSyncTogglePendingId] = useState<string | null>(null);
   const [historyBySource, setHistoryBySource] = useState<Record<string, SyncHistoryResult>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Local in-progress edits to the close-label input, keyed by source id —
+  // committed to the backend on blur rather than per keystroke.
+  const [closeLabelDrafts, setCloseLabelDrafts] = useState<Record<string, string>>({});
+
+  // Epic 4.4: first-enable-of-backward-sync confirmation. sourceId of the
+  // toggle currently awaiting PreviewBackwardSyncImpact — shows a
+  // pending/disabled toggle state while true (UX round 2: visibility of
+  // system status).
+  const [backwardSyncPreviewPendingId, setBackwardSyncPreviewPendingId] = useState<string | null>(null);
+  // Distinct, per-row inline error when the preview RPC itself fails — kept
+  // separate from the shared top-level `lastError` banner so it's directly
+  // testable and scoped to the row that triggered it.
+  const [backwardSyncPreviewErrors, setBackwardSyncPreviewErrors] = useState<Record<string, string>>({});
+  // Pending confirmation dialog state: set once a preview returns a nonzero
+  // itemCount; the toggle only actually flips (setBackwardSyncEnabled) on
+  // Confirm — never as a side effect of the preview call itself.
+  const [backwardSyncConfirm, setBackwardSyncConfirm] = useState<{
+    source: ItemSource;
+    itemCount: number;
+    sampleTitles: string[];
+    possiblyIncomplete: boolean;
+  } | null>(null);
 
   const [pluginId, setPluginId] = useState(PLUGIN_SCHEMAS[0].id);
   const [displayName, setDisplayName] = useState("");
@@ -49,7 +117,19 @@ export function BacklogSourcesSettings() {
     const list = await listItemSources();
     setSources(list);
     setLoading(false);
-  }, [listItemSources]);
+
+    // Eagerly load each source's sync history so the row-level
+    // non-transient-failure warning (Story 4.3.2) can render without the
+    // user needing to expand history first.
+    const histories = await Promise.all(list.map((s) => getSyncHistory(s.id)));
+    setHistoryBySource((prev) => {
+      const next = { ...prev };
+      list.forEach((s, i) => {
+        next[s.id] = histories[i];
+      });
+      return next;
+    });
+  }, [listItemSources, getSyncHistory]);
 
   useEffect(() => {
     refresh();
@@ -58,7 +138,7 @@ export function BacklogSourcesSettings() {
   const canSubmit =
     Boolean(displayName.trim()) &&
     schema.fields.every((f) => Boolean(fieldValues[f.key]?.trim())) &&
-    (!schema.requiresToken || Boolean(token.trim())) &&
+    (!schema.requiresToken || schema.credentialsManagedExternally || Boolean(token.trim())) &&
     !submitting;
 
   const handleAddSource = async () => {
@@ -73,7 +153,7 @@ export function BacklogSourcesSettings() {
       pluginId,
       displayName: displayName.trim(),
       configJson: JSON.stringify(config),
-      token: schema.requiresToken ? token.trim() : "",
+      token: schema.requiresToken && !schema.credentialsManagedExternally ? token.trim() : "",
     });
     setSubmitting(false);
     if (created) {
@@ -85,8 +165,103 @@ export function BacklogSourcesSettings() {
   };
 
   const handleToggleEnabled = async (source: ItemSource) => {
-    const updated = await setItemSourceEnabled(source.id, source.displayName, !source.enabled);
+    if (enabledTogglePendingId === source.id) return;
+    setEnabledTogglePendingId(source.id);
+    try {
+      const updated = await setItemSourceEnabled(source, !source.enabled);
+      if (updated) await refresh();
+    } finally {
+      setEnabledTogglePendingId(null);
+    }
+  };
+
+  const handleToggleForwardSync = async (source: ItemSource) => {
+    if (forwardSyncTogglePendingId === source.id) return;
+    setForwardSyncTogglePendingId(source.id);
+    try {
+      const updated = await setForwardSyncEnabled(source, !source.forwardSyncEnabled);
+      if (updated) await refresh();
+    } finally {
+      setForwardSyncTogglePendingId(null);
+    }
+  };
+
+  // Turning backward sync OFF still flips directly on click — only turning
+  // it ON routes through PreviewBackwardSyncImpact + a confirmation dialog
+  // (Epic 4.4), since only enabling can immediately bulk-archive items.
+  const handleToggleBackwardSync = async (source: ItemSource) => {
+    if (source.backwardSyncEnabled) {
+      const updated = await setBackwardSyncEnabled(source, false);
+      if (updated) await refresh();
+      return;
+    }
+
+    setBackwardSyncPreviewErrors((prev) => {
+      const next = { ...prev };
+      delete next[source.id];
+      return next;
+    });
+    setBackwardSyncPreviewPendingId(source.id);
+    const preview = await previewBackwardSyncImpact(source.id);
+    setBackwardSyncPreviewPendingId(null);
+
+    if (preview === null) {
+      setBackwardSyncPreviewErrors((prev) => ({
+        ...prev,
+        [source.id]: "Couldn't check impact — try again",
+      }));
+      return;
+    }
+
+    if (preview.itemCount === 0 && !preview.possiblyIncomplete) {
+      // No impact to preview, and the fetch was exhaustive — flip
+      // immediately, no dialog (don't add friction where there's nothing to
+      // warn about). If possiblyIncomplete is true, itemCount: 0 is not
+      // trustworthy as "nothing to warn about" — the underlying fetch hit
+      // its page cap, so older closed issues could exist beyond what was
+      // sampled (the exact under-reporting failure mode PreviewBackwardSyncImpact
+      // exists to prevent) — fall through to the confirmation dialog instead
+      // of silently skipping it.
+      const updated = await setBackwardSyncEnabled(source, true);
+      if (updated) await refresh();
+      return;
+    }
+
+    setBackwardSyncConfirm({
+      source,
+      itemCount: preview.itemCount,
+      sampleTitles: preview.sampleTitles,
+      possiblyIncomplete: preview.possiblyIncomplete,
+    });
+  };
+
+  const handleConfirmBackwardSync = async () => {
+    if (!backwardSyncConfirm) return;
+    const { source } = backwardSyncConfirm;
+    setBackwardSyncConfirm(null);
+    const updated = await setBackwardSyncEnabled(source, true);
     if (updated) await refresh();
+  };
+
+  const handleCancelBackwardSync = () => {
+    setBackwardSyncConfirm(null);
+  };
+
+  const handleCloseLabelChange = async (source: ItemSource, closeLabel: string) => {
+    const updated = await setForwardSyncCloseLabel(source, closeLabel);
+    if (updated) {
+      await refresh();
+      // Clear the local draft now that the server has the committed value —
+      // otherwise closeLabelValue's `closeLabelDrafts[source.id] ?? ...`
+      // fallback keeps pinning to this stale local value forever and the
+      // input never reconciles with server truth again (e.g. after another
+      // client changes it).
+      setCloseLabelDrafts((prev) => {
+        const next = { ...prev };
+        delete next[source.id];
+        return next;
+      });
+    }
   };
 
   const handleDelete = async (source: ItemSource) => {
@@ -135,15 +310,31 @@ export function BacklogSourcesSettings() {
           ) : sources.length === 0 ? (
             <span className={styles.empty}>No sources configured.</span>
           ) : (
-            sources.map((source) => (
+            sources.map((source) => {
+              const mostRecentSyncError = historyBySource[source.id]?.events?.[0]?.errorMessage;
+              const closeLabelValue = closeLabelDrafts[source.id] ?? source.forwardSyncCloseLabel;
+              return (
               <div key={source.id} className={styles.listItem} data-testid={`source-row-${source.id}`}>
                 <div className={styles.listItemHeader}>
                   <span className={styles.listItemName}>{source.displayName}</span>
+                  {isAuthFailure(mostRecentSyncError) && (
+                    <span
+                      className={styles.authWarning}
+                      data-testid={`source-row-${source.id}-auth-warning`}
+                      role="alert"
+                    >
+                      ⚠ Sync failing — check credentials
+                    </span>
+                  )}
                   <span className={styles.listItemMeta}>{source.pluginId}</span>
                   <button
                     role="switch"
                     aria-checked={source.enabled}
-                    className={`${styles.toggle} ${source.enabled ? styles.toggleOn : ""}`}
+                    aria-busy={enabledTogglePendingId === source.id}
+                    disabled={enabledTogglePendingId === source.id}
+                    className={`${styles.toggle} ${source.enabled ? styles.toggleOn : ""} ${
+                      enabledTogglePendingId === source.id ? styles.togglePending : ""
+                    }`}
                     onClick={() => handleToggleEnabled(source)}
                     aria-label={`${source.enabled ? "Disable" : "Enable"} ${source.displayName}`}
                   />
@@ -156,6 +347,71 @@ export function BacklogSourcesSettings() {
                   </button>
                 </div>
                 <span className={styles.listItemMeta}>Last synced: {formatDate(source.lastSyncedAt)}</span>
+
+                <div className={styles.syncDirectionGroup}>
+                  <span className={styles.subHeading}>Sync with GitHub</span>
+                  <div className={styles.syncDirectionRow}>
+                    <button
+                      role="switch"
+                      aria-checked={source.forwardSyncEnabled}
+                      aria-busy={forwardSyncTogglePendingId === source.id}
+                      disabled={forwardSyncTogglePendingId === source.id}
+                      className={`${styles.toggle} ${source.forwardSyncEnabled ? styles.toggleOn : ""} ${
+                        forwardSyncTogglePendingId === source.id ? styles.togglePending : ""
+                      }`}
+                      onClick={() => handleToggleForwardSync(source)}
+                      aria-label={`${source.forwardSyncEnabled ? "Disable" : "Enable"} closing GitHub issues when done`}
+                    />
+                    <span>Close GitHub issues when I finish here</span>
+                  </div>
+                  {source.forwardSyncEnabled && (
+                    <input
+                      type="text"
+                      className={styles.input}
+                      placeholder="Label to apply on close (optional)"
+                      aria-label={`Close label for ${source.displayName}`}
+                      value={closeLabelValue}
+                      onChange={(e) =>
+                        setCloseLabelDrafts((prev) => ({ ...prev, [source.id]: e.target.value }))
+                      }
+                      onBlur={() => handleCloseLabelChange(source, closeLabelValue)}
+                    />
+                  )}
+                  <div className={styles.syncDirectionRow}>
+                    <button
+                      role="switch"
+                      aria-checked={source.backwardSyncEnabled}
+                      aria-busy={backwardSyncPreviewPendingId === source.id}
+                      disabled={backwardSyncPreviewPendingId === source.id}
+                      className={`${styles.toggle} ${source.backwardSyncEnabled ? styles.toggleOn : ""} ${
+                        backwardSyncPreviewPendingId === source.id ? styles.togglePending : ""
+                      }`}
+                      onClick={() => handleToggleBackwardSync(source)}
+                      aria-label={`${source.backwardSyncEnabled ? "Disable" : "Enable"} reflecting GitHub status back`}
+                    />
+                    <span>Reflect GitHub status back here</span>
+                    {backwardSyncPreviewPendingId === source.id && (
+                      <span className={styles.previewPendingLabel}>Checking impact…</span>
+                    )}
+                  </div>
+                  {backwardSyncPreviewErrors[source.id] && (
+                    <div
+                      className={styles.previewError}
+                      role="alert"
+                      data-testid={`source-row-${source.id}-preview-error`}
+                    >
+                      {backwardSyncPreviewErrors[source.id]}
+                    </div>
+                  )}
+                  {source.forwardSyncEnabled && source.backwardSyncEnabled && (
+                    <div className={styles.bothDirectionsWarning}>
+                      Both directions are enabled — closing this item&apos;s issue may be observed and
+                      re-applied by backward sync. Verify this doesn&apos;t create a loop for items you also
+                      edit manually.
+                    </div>
+                  )}
+                </div>
+
                 <div className={styles.actionRow}>
                   <button
                     className={styles.smallBtn}
@@ -194,7 +450,8 @@ export function BacklogSourcesSettings() {
                   </div>
                 )}
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </section>
@@ -229,20 +486,38 @@ export function BacklogSourcesSettings() {
               />
             ))}
           </div>
-          {schema.requiresToken && (
-            <input
-              type="password"
-              className={styles.input}
-              placeholder={schema.tokenLabel}
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-            />
+          {schema.requiresToken && schema.credentialsManagedExternally ? (
+            <p className={styles.description}>
+              This source authenticates using a connected GitHub account. Connect one under{" "}
+              <Link href={routes.unfinished}>GitHub accounts</Link> if you haven&apos;t already.
+            </p>
+          ) : (
+            schema.requiresToken && (
+              <input
+                type="password"
+                className={styles.input}
+                placeholder={schema.tokenLabel}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            )
           )}
           <button className={styles.addBtn} onClick={handleAddSource} disabled={!canSubmit}>
             {submitting ? "Adding…" : "Add Source"}
           </button>
         </div>
       </section>
+
+      {backwardSyncConfirm && (
+        <BackwardSyncConfirmDialog
+          sourceDisplayName={backwardSyncConfirm.source.displayName}
+          itemCount={backwardSyncConfirm.itemCount}
+          sampleTitles={backwardSyncConfirm.sampleTitles}
+          possiblyIncomplete={backwardSyncConfirm.possiblyIncomplete}
+          onConfirm={handleConfirmBackwardSync}
+          onCancel={handleCancelBackwardSync}
+        />
+      )}
     </div>
   );
 }

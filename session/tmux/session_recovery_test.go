@@ -214,13 +214,13 @@ func testSessionRecoveryWithRealTmux(t *testing.T) {
 	t.Cleanup(func() {
 		killServerCtx, killServerCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killServerCancel()
-		_ = safeexec.CommandContext(killServerCtx, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killServerCtx, Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Clean up any existing session on the isolated server
 	killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer killCancel()
-	killCmd := safeexec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-session", "-t", tmuxSessionName)
+	killCmd := safeexec.CommandContext(killCtx, Binary(), "-L", socketName, "kill-session", "-t", tmuxSessionName)
 	_ = killCmd.Run()
 
 	// Create session using our RestoreWithWorkDir logic on the isolated server.

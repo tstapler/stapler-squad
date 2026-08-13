@@ -94,6 +94,7 @@ func TestExtractPRURL_NotFound(t *testing.T) {
 func TestBatchCreateSessions_SemaphoreLimitsConcurrency(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const total = 6
 	// Use titles that will fail validation (empty path) so goroutines exit immediately —
@@ -135,6 +136,7 @@ func TestBatchCreateSessions_MaxConcurrencyEnforced(t *testing.T) {
 	// Verify that the server caps MaxConcurrency at 3 even if caller requests more.
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	var peak int64
 	done := make(chan struct{})
@@ -164,6 +166,7 @@ func TestBatchCreateSessions_MaxConcurrencyEnforced(t *testing.T) {
 func TestBatchCreateSessions_EmptyRequest(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	resp, err := svc.BatchCreateSessions(t.Context(), connect.NewRequest(&sessionv1.BatchCreateSessionsRequest{}))
 	if err != nil {
@@ -178,6 +181,7 @@ func TestBatchCreateSessions_EmptyRequest(t *testing.T) {
 func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// The first "dup" passes validation and reaches real session creation.
 	// Isolate config to this test and use a trivial program so it doesn't spawn

@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/schema"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
@@ -119,6 +120,10 @@ func init() {
 	approvalruleDescSafePythonImportsOnly := approvalruleFields[23].Descriptor()
 	// approvalrule.DefaultSafePythonImportsOnly holds the default value on creation for the safe_python_imports_only field.
 	approvalrule.DefaultSafePythonImportsOnly = approvalruleDescSafePythonImportsOnly.Default.(bool)
+	// approvalruleDescRequireCiPassing is the schema descriptor for require_ci_passing field.
+	approvalruleDescRequireCiPassing := approvalruleFields[24].Descriptor()
+	// approvalrule.DefaultRequireCiPassing holds the default value on creation for the require_ci_passing field.
+	approvalrule.DefaultRequireCiPassing = approvalruleDescRequireCiPassing.Default.(bool)
 	backlogitemFields := schema.BacklogItem{}.Fields()
 	_ = backlogitemFields
 	// backlogitemDescTitle is the schema descriptor for title field.
@@ -182,27 +187,27 @@ func init() {
 	// backlogitem.DefaultQueuedAutonomous holds the default value on creation for the queued_autonomous field.
 	backlogitem.DefaultQueuedAutonomous = backlogitemDescQueuedAutonomous.Default.(bool)
 	// backlogitemDescPrNumber is the schema descriptor for pr_number field.
-	backlogitemDescPrNumber := backlogitemFields[24].Descriptor()
+	backlogitemDescPrNumber := backlogitemFields[28].Descriptor()
 	// backlogitem.DefaultPrNumber holds the default value on creation for the pr_number field.
 	backlogitem.DefaultPrNumber = backlogitemDescPrNumber.Default.(int)
 	// backlogitemDescShippedApprovedCount is the schema descriptor for shipped_approved_count field.
-	backlogitemDescShippedApprovedCount := backlogitemFields[26].Descriptor()
+	backlogitemDescShippedApprovedCount := backlogitemFields[30].Descriptor()
 	// backlogitem.DefaultShippedApprovedCount holds the default value on creation for the shipped_approved_count field.
 	backlogitem.DefaultShippedApprovedCount = backlogitemDescShippedApprovedCount.Default.(int)
 	// backlogitemDescShippedChangesReqCount is the schema descriptor for shipped_changes_req_count field.
-	backlogitemDescShippedChangesReqCount := backlogitemFields[27].Descriptor()
+	backlogitemDescShippedChangesReqCount := backlogitemFields[31].Descriptor()
 	// backlogitem.DefaultShippedChangesReqCount holds the default value on creation for the shipped_changes_req_count field.
 	backlogitem.DefaultShippedChangesReqCount = backlogitemDescShippedChangesReqCount.Default.(int)
 	// backlogitemDescShippedSnapshotCaptureFailed is the schema descriptor for shipped_snapshot_capture_failed field.
-	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[30].Descriptor()
+	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[36].Descriptor()
 	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
 	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[32].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[38].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[33].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[39].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -363,24 +368,32 @@ func init() {
 	escapeevent.IDValidator = escapeeventDescID.Validators[0].(func(string) error)
 	itemsessionFields := schema.ItemSession{}.Fields()
 	_ = itemsessionFields
+	// itemsessionDescEndReason is the schema descriptor for end_reason field.
+	itemsessionDescEndReason := itemsessionFields[5].Descriptor()
+	// itemsession.DefaultEndReason holds the default value on creation for the end_reason field.
+	itemsession.DefaultEndReason = itemsessionDescEndReason.Default.(string)
 	// itemsessionDescPipelineModeSnapshot is the schema descriptor for pipeline_mode_snapshot field.
-	itemsessionDescPipelineModeSnapshot := itemsessionFields[6].Descriptor()
+	itemsessionDescPipelineModeSnapshot := itemsessionFields[7].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshot holds the default value on creation for the pipeline_mode_snapshot field.
 	itemsession.DefaultPipelineModeSnapshot = itemsessionDescPipelineModeSnapshot.Default.(string)
 	// itemsessionDescPipelineModeSnapshotHash is the schema descriptor for pipeline_mode_snapshot_hash field.
-	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[7].Descriptor()
+	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[8].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshotHash holds the default value on creation for the pipeline_mode_snapshot_hash field.
 	itemsession.DefaultPipelineModeSnapshotHash = itemsessionDescPipelineModeSnapshotHash.Default.(string)
+	// itemsessionDescBaseCommitSha is the schema descriptor for base_commit_sha field.
+	itemsessionDescBaseCommitSha := itemsessionFields[11].Descriptor()
+	// itemsession.DefaultBaseCommitSha holds the default value on creation for the base_commit_sha field.
+	itemsession.DefaultBaseCommitSha = itemsessionDescBaseCommitSha.Default.(string)
 	// itemsessionDescCommitCountSinceSpawn is the schema descriptor for commit_count_since_spawn field.
-	itemsessionDescCommitCountSinceSpawn := itemsessionFields[13].Descriptor()
+	itemsessionDescCommitCountSinceSpawn := itemsessionFields[15].Descriptor()
 	// itemsession.DefaultCommitCountSinceSpawn holds the default value on creation for the commit_count_since_spawn field.
 	itemsession.DefaultCommitCountSinceSpawn = itemsessionDescCommitCountSinceSpawn.Default.(int)
 	// itemsessionDescCreatedAt is the schema descriptor for created_at field.
-	itemsessionDescCreatedAt := itemsessionFields[16].Descriptor()
+	itemsessionDescCreatedAt := itemsessionFields[18].Descriptor()
 	// itemsession.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsession.DefaultCreatedAt = itemsessionDescCreatedAt.Default.(func() time.Time)
 	// itemsessionDescEstimatedCostUsd is the schema descriptor for estimated_cost_usd field.
-	itemsessionDescEstimatedCostUsd := itemsessionFields[17].Descriptor()
+	itemsessionDescEstimatedCostUsd := itemsessionFields[19].Descriptor()
 	// itemsession.DefaultEstimatedCostUsd holds the default value on creation for the estimated_cost_usd field.
 	itemsession.DefaultEstimatedCostUsd = itemsessionDescEstimatedCostUsd.Default.(float64)
 	// itemsessionDescID is the schema descriptor for id field.
@@ -393,12 +406,20 @@ func init() {
 	itemsourceDescEnabled := itemsourceFields[4].Descriptor()
 	// itemsource.DefaultEnabled holds the default value on creation for the enabled field.
 	itemsource.DefaultEnabled = itemsourceDescEnabled.Default.(bool)
+	// itemsourceDescForwardSyncEnabled is the schema descriptor for forward_sync_enabled field.
+	itemsourceDescForwardSyncEnabled := itemsourceFields[5].Descriptor()
+	// itemsource.DefaultForwardSyncEnabled holds the default value on creation for the forward_sync_enabled field.
+	itemsource.DefaultForwardSyncEnabled = itemsourceDescForwardSyncEnabled.Default.(bool)
+	// itemsourceDescBackwardSyncEnabled is the schema descriptor for backward_sync_enabled field.
+	itemsourceDescBackwardSyncEnabled := itemsourceFields[6].Descriptor()
+	// itemsource.DefaultBackwardSyncEnabled holds the default value on creation for the backward_sync_enabled field.
+	itemsource.DefaultBackwardSyncEnabled = itemsourceDescBackwardSyncEnabled.Default.(bool)
 	// itemsourceDescCreatedAt is the schema descriptor for created_at field.
-	itemsourceDescCreatedAt := itemsourceFields[7].Descriptor()
+	itemsourceDescCreatedAt := itemsourceFields[10].Descriptor()
 	// itemsource.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsource.DefaultCreatedAt = itemsourceDescCreatedAt.Default.(func() time.Time)
 	// itemsourceDescUpdatedAt is the schema descriptor for updated_at field.
-	itemsourceDescUpdatedAt := itemsourceFields[8].Descriptor()
+	itemsourceDescUpdatedAt := itemsourceFields[11].Descriptor()
 	// itemsource.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	itemsource.DefaultUpdatedAt = itemsourceDescUpdatedAt.Default.(func() time.Time)
 	// itemsource.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -493,34 +514,44 @@ func init() {
 	sessionDescAutoYes := sessionFields[10].Descriptor()
 	// session.DefaultAutoYes holds the default value on creation for the auto_yes field.
 	session.DefaultAutoYes = sessionDescAutoYes.Default.(bool)
+	// sessionDescAutoApprove is the schema descriptor for auto_approve field.
+	sessionDescAutoApprove := sessionFields[11].Descriptor()
+	// session.DefaultAutoApprove holds the default value on creation for the auto_approve field.
+	session.DefaultAutoApprove = sessionDescAutoApprove.Default.(bool)
 	// sessionDescAutonomousMode is the schema descriptor for autonomous_mode field.
-	sessionDescAutonomousMode := sessionFields[11].Descriptor()
+	sessionDescAutonomousMode := sessionFields[12].Descriptor()
 	// session.DefaultAutonomousMode holds the default value on creation for the autonomous_mode field.
 	session.DefaultAutonomousMode = sessionDescAutonomousMode.Default.(bool)
 	// sessionDescProgram is the schema descriptor for program field.
-	sessionDescProgram := sessionFields[13].Descriptor()
+	sessionDescProgram := sessionFields[14].Descriptor()
 	// session.ProgramValidator is a validator for the "program" field. It is called by the builders before save.
 	session.ProgramValidator = sessionDescProgram.Validators[0].(func(string) error)
 	// sessionDescIsExpanded is the schema descriptor for is_expanded field.
-	sessionDescIsExpanded := sessionFields[16].Descriptor()
+	sessionDescIsExpanded := sessionFields[17].Descriptor()
 	// session.DefaultIsExpanded holds the default value on creation for the is_expanded field.
 	session.DefaultIsExpanded = sessionDescIsExpanded.Default.(bool)
 	// sessionDescOneShot is the schema descriptor for one_shot field.
-	sessionDescOneShot := sessionFields[27].Descriptor()
+	sessionDescOneShot := sessionFields[28].Descriptor()
 	// session.DefaultOneShot holds the default value on creation for the one_shot field.
 	session.DefaultOneShot = sessionDescOneShot.Default.(bool)
 	// sessionDescHidden is the schema descriptor for hidden field.
-	sessionDescHidden := sessionFields[32].Descriptor()
+	sessionDescHidden := sessionFields[33].Descriptor()
 	// session.DefaultHidden holds the default value on creation for the hidden field.
 	session.DefaultHidden = sessionDescHidden.Default.(bool)
 	// sessionDescGithubPrNumber is the schema descriptor for github_pr_number field.
-	sessionDescGithubPrNumber := sessionFields[37].Descriptor()
+	sessionDescGithubPrNumber := sessionFields[39].Descriptor()
 	// session.DefaultGithubPrNumber holds the default value on creation for the github_pr_number field.
 	session.DefaultGithubPrNumber = sessionDescGithubPrNumber.Default.(int)
 	// sessionDescSessionArtifacts is the schema descriptor for session_artifacts field.
-	sessionDescSessionArtifacts := sessionFields[40].Descriptor()
+	sessionDescSessionArtifacts := sessionFields[42].Descriptor()
 	// session.DefaultSessionArtifacts holds the default value on creation for the session_artifacts field.
 	session.DefaultSessionArtifacts = sessionDescSessionArtifacts.Default.(string)
+	// sessionDescNote is the schema descriptor for note field.
+	sessionDescNote := sessionFields[43].Descriptor()
+	// session.DefaultNote holds the default value on creation for the note field.
+	session.DefaultNote = sessionDescNote.Default.(string)
+	// session.NoteValidator is a validator for the "note" field. It is called by the builders before save.
+	session.NoteValidator = sessionDescNote.Validators[0].(func(string) error)
 	sessiongoalFields := schema.SessionGoal{}.Fields()
 	_ = sessiongoalFields
 	// sessiongoalDescSessionUUID is the schema descriptor for session_uuid field.
@@ -563,6 +594,70 @@ func init() {
 	sessiongoalDescID := sessiongoalFields[0].Descriptor()
 	// sessiongoal.DefaultID holds the default value on creation for the id field.
 	sessiongoal.DefaultID = sessiongoalDescID.Default.(func() uuid.UUID)
+	sessionsummaryFields := schema.SessionSummary{}.Fields()
+	_ = sessionsummaryFields
+	// sessionsummaryDescSessionID is the schema descriptor for session_id field.
+	sessionsummaryDescSessionID := sessionsummaryFields[1].Descriptor()
+	// sessionsummary.SessionIDValidator is a validator for the "session_id" field. It is called by the builders before save.
+	sessionsummary.SessionIDValidator = sessionsummaryDescSessionID.Validators[0].(func(string) error)
+	// sessionsummaryDescStatus is the schema descriptor for status field.
+	sessionsummaryDescStatus := sessionsummaryFields[3].Descriptor()
+	// sessionsummary.DefaultStatus holds the default value on creation for the status field.
+	sessionsummary.DefaultStatus = sessionsummaryDescStatus.Default.(string)
+	// sessionsummaryDescNarrativeFallbackUsed is the schema descriptor for narrative_fallback_used field.
+	sessionsummaryDescNarrativeFallbackUsed := sessionsummaryFields[5].Descriptor()
+	// sessionsummary.DefaultNarrativeFallbackUsed holds the default value on creation for the narrative_fallback_used field.
+	sessionsummary.DefaultNarrativeFallbackUsed = sessionsummaryDescNarrativeFallbackUsed.Default.(bool)
+	// sessionsummaryDescDiffFilesChanged is the schema descriptor for diff_files_changed field.
+	sessionsummaryDescDiffFilesChanged := sessionsummaryFields[6].Descriptor()
+	// sessionsummary.DefaultDiffFilesChanged holds the default value on creation for the diff_files_changed field.
+	sessionsummary.DefaultDiffFilesChanged = sessionsummaryDescDiffFilesChanged.Default.(int)
+	// sessionsummaryDescDiffAdded is the schema descriptor for diff_added field.
+	sessionsummaryDescDiffAdded := sessionsummaryFields[7].Descriptor()
+	// sessionsummary.DefaultDiffAdded holds the default value on creation for the diff_added field.
+	sessionsummary.DefaultDiffAdded = sessionsummaryDescDiffAdded.Default.(int)
+	// sessionsummaryDescDiffRemoved is the schema descriptor for diff_removed field.
+	sessionsummaryDescDiffRemoved := sessionsummaryFields[8].Descriptor()
+	// sessionsummary.DefaultDiffRemoved holds the default value on creation for the diff_removed field.
+	sessionsummary.DefaultDiffRemoved = sessionsummaryDescDiffRemoved.Default.(int)
+	// sessionsummaryDescDecisionsAutoApproved is the schema descriptor for decisions_auto_approved field.
+	sessionsummaryDescDecisionsAutoApproved := sessionsummaryFields[9].Descriptor()
+	// sessionsummary.DefaultDecisionsAutoApproved holds the default value on creation for the decisions_auto_approved field.
+	sessionsummary.DefaultDecisionsAutoApproved = sessionsummaryDescDecisionsAutoApproved.Default.(int)
+	// sessionsummaryDescDecisionsManuallyApproved is the schema descriptor for decisions_manually_approved field.
+	sessionsummaryDescDecisionsManuallyApproved := sessionsummaryFields[10].Descriptor()
+	// sessionsummary.DefaultDecisionsManuallyApproved holds the default value on creation for the decisions_manually_approved field.
+	sessionsummary.DefaultDecisionsManuallyApproved = sessionsummaryDescDecisionsManuallyApproved.Default.(int)
+	// sessionsummaryDescDecisionsDenied is the schema descriptor for decisions_denied field.
+	sessionsummaryDescDecisionsDenied := sessionsummaryFields[11].Descriptor()
+	// sessionsummary.DefaultDecisionsDenied holds the default value on creation for the decisions_denied field.
+	sessionsummary.DefaultDecisionsDenied = sessionsummaryDescDecisionsDenied.Default.(int)
+	// sessionsummaryDescDecisionsReviewQueueResolved is the schema descriptor for decisions_review_queue_resolved field.
+	sessionsummaryDescDecisionsReviewQueueResolved := sessionsummaryFields[12].Descriptor()
+	// sessionsummary.DefaultDecisionsReviewQueueResolved holds the default value on creation for the decisions_review_queue_resolved field.
+	sessionsummary.DefaultDecisionsReviewQueueResolved = sessionsummaryDescDecisionsReviewQueueResolved.Default.(int)
+	// sessionsummaryDescDecisionsStillOpen is the schema descriptor for decisions_still_open field.
+	sessionsummaryDescDecisionsStillOpen := sessionsummaryFields[13].Descriptor()
+	// sessionsummary.DefaultDecisionsStillOpen holds the default value on creation for the decisions_still_open field.
+	sessionsummary.DefaultDecisionsStillOpen = sessionsummaryDescDecisionsStillOpen.Default.(int)
+	// sessionsummaryDescCostDataUnavailable is the schema descriptor for cost_data_unavailable field.
+	sessionsummaryDescCostDataUnavailable := sessionsummaryFields[19].Descriptor()
+	// sessionsummary.DefaultCostDataUnavailable holds the default value on creation for the cost_data_unavailable field.
+	sessionsummary.DefaultCostDataUnavailable = sessionsummaryDescCostDataUnavailable.Default.(bool)
+	// sessionsummaryDescCreatedAt is the schema descriptor for created_at field.
+	sessionsummaryDescCreatedAt := sessionsummaryFields[25].Descriptor()
+	// sessionsummary.DefaultCreatedAt holds the default value on creation for the created_at field.
+	sessionsummary.DefaultCreatedAt = sessionsummaryDescCreatedAt.Default.(func() time.Time)
+	// sessionsummaryDescUpdatedAt is the schema descriptor for updated_at field.
+	sessionsummaryDescUpdatedAt := sessionsummaryFields[26].Descriptor()
+	// sessionsummary.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	sessionsummary.DefaultUpdatedAt = sessionsummaryDescUpdatedAt.Default.(func() time.Time)
+	// sessionsummary.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	sessionsummary.UpdateDefaultUpdatedAt = sessionsummaryDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// sessionsummaryDescID is the schema descriptor for id field.
+	sessionsummaryDescID := sessionsummaryFields[0].Descriptor()
+	// sessionsummary.IDValidator is a validator for the "id" field. It is called by the builders before save.
+	sessionsummary.IDValidator = sessionsummaryDescID.Validators[0].(func(string) error)
 	shellFields := schema.Shell{}.Fields()
 	_ = shellFields
 	// shellDescCommand is the schema descriptor for command field.

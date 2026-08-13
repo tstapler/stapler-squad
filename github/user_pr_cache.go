@@ -122,6 +122,7 @@ type UserPRCache struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	startOnce    sync.Once
+	done         chan struct{} // closed when loop() returns; nil until Start
 }
 
 // NewUserPRCache creates a cache with default configuration.
@@ -141,13 +142,28 @@ func NewUserPRCacheWithConfig(cfg UserPRCacheConfig) *UserPRCache {
 func (c *UserPRCache) Start(ctx context.Context) {
 	c.startOnce.Do(func() {
 		c.ctx, c.cancel = context.WithCancel(ctx)
+		c.done = make(chan struct{})
 		go c.loop()
 	})
 }
 
-// Stop halts background polling.
+// Stop halts background polling and blocks until loop() has actually exited.
+// Without waiting here, a caller (notably a test's t.Cleanup) can return while
+// loop()'s unconditional first fetch (see loop's doc comment) is still running,
+// letting it race the next caller's use of shared package-level state (e.g.
+// go-keyring's mock, which a subsequent test re-initializes via MockInit) —
+// confirmed live via `go test -race`: TestListGitHubAccounts_
+// AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts raced
+// against a prior test's still-running fetch() on go-keyring's global state.
+// Safe to call before Start (done is nil, no-op) or more than once (cancel and
+// a receive on an already-closed channel are both idempotent).
 func (c *UserPRCache) Stop() {
-	c.cancel()
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.done != nil {
+		<-c.done
+	}
 }
 
 // SetOnUpdated atomically registers a callback invoked after every successful
@@ -298,8 +314,10 @@ func (c *UserPRCache) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// loop is the background polling goroutine.
+// loop is the background polling goroutine. Closes c.done on exit so Stop can
+// block until this goroutine has genuinely finished (see Stop's doc comment).
 func (c *UserPRCache) loop() {
+	defer close(c.done)
 	// Fetch immediately on start.
 	if err := c.fetch(); err != nil {
 		log.Warn("UserPRCache: initial fetch failed", "err", err)

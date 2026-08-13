@@ -19,7 +19,9 @@ func newRoutingTestService(t *testing.T) *SessionService {
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
-	return NewSessionService(storage, bus)
+	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
+	return svc
 }
 
 // TestStreamTerminalRouting_WebSocketPathTakesPrecedenceOverGeneralHandler

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -94,7 +96,12 @@ var (
 				// load-time read of the flag (rather than a live BacklogController,
 				// which BuildCoreDeps doesn't construct) is sufficient.
 				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled)
+				// No BacklogService on this stdio fallback path (buildMCPDeps only
+				// builds Phase 1 CoreDeps) — submit_review_verdict's eager
+				// review->in_progress transition is skipped here, and
+				// create_backlog_item/import_github_issue skip auto-triage; see
+				// RunServer's doc comment.
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil)
 			}
 
 			// Enable test mode if flag is set
@@ -174,6 +181,12 @@ var (
 				}
 			}
 
+			// Load user-defined detector plugins from the config dir's detectors/
+			// subfolder and start watching it for changes. Never fatal.
+			if err := detection.InitPlugins(ctx); err != nil {
+				log.Warn("failed to initialize detector plugins", "err", err)
+			}
+
 			if daemonFlag {
 				err := daemon.RunDaemon(cfg)
 				log.Error("failed to start daemon", "err", err)
@@ -181,6 +194,25 @@ var (
 			}
 
 			// Web server mode (default and only mode)
+			// Acquire an exclusive, process-lifetime lock before touching any
+			// shared state (tmux server, ent DB) so a prior process that
+			// launchd/systemd has lost track of (see
+			// .claude/rules/service-restart-orphan-process.md) can't race
+			// this one over the same instance directory.
+			configDir, err := config.GetConfigDir()
+			if err != nil {
+				return fmt.Errorf("failed to resolve config directory: %w", err)
+			}
+			instanceLock, err := config.AcquireInstanceLock(configDir, config.DefaultInstanceLockTimeout)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if unlockErr := instanceLock.Unlock(); unlockErr != nil {
+					log.Warn("Failed to release instance lock", "err", unlockErr)
+				}
+			}()
+
 			// Initialize OpenTelemetry for APM (Datadog, etc.)
 			telemetryCfg := telemetry.DefaultConfig()
 			telemetryProvider, err := telemetry.Initialize(ctx, telemetryCfg)
@@ -232,13 +264,19 @@ var (
 				cfg.PasskeyRPID = rpIDFlag
 			}
 
-			// Detect LAN IP for hostname resolution and display
-			lanIP, _ := getOutboundIP()
-			lanIPStr := "127.0.0.1"
-			if lanIP != nil {
-				lanIPStr = lanIP.String()
+			// Detect every LAN IP (not just the OS-preferred outbound one, which
+			// can be a VPN tunnel) for hostname resolution and display.
+			lanIPs := detectLANIPs()
+			hostnameSeen := make(map[string]bool)
+			var hostnames []string
+			for _, ip := range lanIPs {
+				for _, name := range resolveLANHostnames(ip) {
+					if !hostnameSeen[name] {
+						hostnameSeen[name] = true
+						hostnames = append(hostnames, name)
+					}
+				}
 			}
-			hostnames := resolveLANHostnames(lanIPStr)
 
 			app := warren.New()
 			var (
@@ -608,13 +646,19 @@ var (
 			}
 			fmt.Fprintf(os.Stderr, "New setup token written to %s (valid 1h)\n", setupTokenPath)
 
-			lanIP, err := getOutboundIP()
-			if err != nil {
-				lanIP = net.ParseIP("127.0.0.1")
-			}
-			lanIPStr := lanIP.String()
+			lanIPs := detectLANIPs()
+			lanIPStr := lanIPs[0]
 
-			hostnames := resolveLANHostnames(lanIPStr)
+			var hostnames []string
+			hostnameSeen := make(map[string]bool)
+			for _, ip := range lanIPs {
+				for _, name := range resolveLANHostnames(ip) {
+					if !hostnameSeen[name] {
+						hostnameSeen[name] = true
+						hostnames = append(hostnames, name)
+					}
+				}
+			}
 
 			displayHost := rpID
 			if displayHost == "" {
@@ -638,7 +682,9 @@ var (
 			for _, hn := range hostnames {
 				addHost(hn)
 			}
-			addHost(lanIPStr)
+			for _, ip := range lanIPs {
+				addHost(ip)
+			}
 
 			for _, host := range hosts {
 				caURL := fmt.Sprintf("https://%s:%d/auth/ca.pem", host, port)
@@ -761,6 +807,20 @@ func resolveLANHostnames(lanIPStr string) []string {
 		}
 	}
 
+	// 1b. macOS split-DNS scopes forward lookups by search domain (e.g. a
+	// VPN profile routes *.corp.example to a corp resolver and a home
+	// router's domain to the router), but a PTR query has no domain
+	// suffix to match against — so it always falls through to the
+	// system's default/unscoped resolver. If that default is a VPN/corp
+	// resolver, a LAN router's PTR record (e.g. a UniFi "Local DNS
+	// Record") is silently invisible to step 1 above even though it
+	// exists and answers fine when queried directly. Ask every
+	// nameserver scutil knows about — including scoped ones — so that
+	// record isn't lost.
+	for _, name := range reverseDNSViaKnownNameservers(lanIPStr) {
+		add(name)
+	}
+
 	// 2. Linux-specific: mDNS reverse lookup via avahi-resolve
 	avahiCtx, avahiCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer avahiCancel()
@@ -842,6 +902,75 @@ func getDNSSearchDomains() []string {
 	return domains
 }
 
+// scutilNameservers extracts every nameserver IP scutil knows about,
+// including ones scoped to a single search domain (e.g. a LAN router
+// handling only a home domain while a VPN resolver handles everything
+// else). Returns nil on non-macOS systems where scutil isn't present.
+func scutilNameservers() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := safeexec.CommandContext(ctx, "scutil", "--dns").Output()
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var servers []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		// Format: "nameserver[N] : 192.168.1.1"
+		if !strings.HasPrefix(line, "nameserver[") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ns := strings.TrimSpace(parts[1])
+		if ns != "" && !seen[ns] {
+			seen[ns] = true
+			servers = append(servers, ns)
+		}
+	}
+	return servers
+}
+
+// reverseDNSViaKnownNameservers performs a PTR lookup for lanIPStr against
+// every nameserver scutil reports, rather than relying on the OS's default
+// resolver selection. A PTR query carries no domain suffix, so per-domain
+// split-DNS scoping (which routes forward lookups like *.home.example to a
+// LAN router and everything else to a VPN/corp resolver) can't route it
+// correctly — it always falls through to whichever resolver is unscoped or
+// listed first. Querying each known nameserver directly finds a LAN-only
+// PTR record that step 1's net.LookupAddr would otherwise miss.
+func reverseDNSViaKnownNameservers(lanIPStr string) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, server := range scutilNameservers() {
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		found, err := resolver.LookupAddr(ctx, lanIPStr)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, name := range found {
+			name = strings.TrimSuffix(name, ".")
+			if name != "" && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
 // getOutboundIP detects the primary LAN IP by consulting the OS routing table.
 // No data is sent – this just triggers a routing lookup.
 func getOutboundIP() (net.IP, error) {
@@ -853,37 +982,108 @@ func getOutboundIP() (net.IP, error) {
 	return conn.LocalAddr().(*net.UDPAddr).IP, nil
 }
 
+// listNonLoopbackIPs enumerates every non-loopback, non-link-local IPv4
+// address bound to an up local interface. getOutboundIP only reports the
+// single interface the OS routing table picks for outbound internet traffic
+// -- typically a VPN tunnel when one is active -- so it can miss the real LAN
+// entirely (and any hostnames that only resolve on that LAN, e.g. a router's
+// local DNS record). This enumerates all of them instead.
+func listNonLoopbackIPs() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var ips []string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			ip4 := ip.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+				continue
+			}
+			s := ip4.String()
+			if !seen[s] {
+				seen[s] = true
+				ips = append(ips, s)
+			}
+		}
+	}
+	return ips
+}
+
+// detectLANIPs returns every LAN IP that TLS certs and WebAuthn origins
+// should cover: the OS-preferred outbound address first (preserving prior
+// single-IP behavior and its use as the default display/rpID address), then
+// any other interface addresses listNonLoopbackIPs finds that
+// getOutboundIP's routing-table heuristic missed.
+func detectLANIPs() []string {
+	seen := make(map[string]bool)
+	var ips []string
+	if lanIP, err := getOutboundIP(); err == nil && lanIP != nil {
+		s := lanIP.String()
+		seen[s] = true
+		ips = append(ips, s)
+	}
+	for _, ip := range listNonLoopbackIPs() {
+		if !seen[ip] {
+			seen[ip] = true
+			ips = append(ips, ip)
+		}
+	}
+	if len(ips) == 0 {
+		ips = []string{"127.0.0.1"}
+	}
+	return ips
+}
+
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
 func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int) error {
-	// Detect LAN IP for QR code URLs and TLS cert SANs.
-	lanIP, err := getOutboundIP()
-	if err != nil {
-		log.Warn("Could not detect LAN IP; using localhost", "err", err)
-		lanIP = net.ParseIP("127.0.0.1")
-	}
-	lanIPStr := lanIP.String()
+	// Detect every LAN IP (not just the OS-preferred outbound one, which can
+	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
+	lanIPs := detectLANIPs()
+	lanIPStr := lanIPs[0]
 
-	// Use hostnames already resolved and stored on the server.
+	// Use hostnames already resolved and stored on the server -- this is
+	// already a flattened, deduplicated union across every detected LAN IP
+	// (see the early detectLANIPs()-based resolution that feeds SetHostnames).
 	hostnames := srv.GetHostnames()
 
 	remoteAddr := fmt.Sprintf("0.0.0.0:%d", remotePort)
 
-	// Build SAN list for the TLS cert (include localhost, IP, and all hostnames).
-	// WebAuthn rpID must be a hostname, so including the LAN IP in the SANs
-	// is fine for HTTPS but rpID itself must be a hostname for most browsers.
-	sans := make([]string, 0, 3+len(hostnames))
-	sans = append(sans, "localhost", "127.0.0.1", lanIPStr)
-	sans = append(sans, hostnames...)
+	// Build one SAN set per network the server answers on, so each leaf cert
+	// only ever advertises its own network's identity. WebAuthn rpID must be
+	// a hostname, so including the LAN IP in the SANs is fine for HTTPS, but
+	// rpID itself must be a hostname for most browsers.
+	networks := map[string][]string{
+		"127.0.0.1": {"localhost", "127.0.0.1"},
+	}
+	for _, ip := range lanIPs {
+		networks[ip] = append([]string{ip}, resolveLANHostnames(ip)...)
+	}
 
-	tlsPaths, err := server.EnsureTLSCerts(sans)
+	caFile, netCerts, err := server.EnsureNetworkTLSCerts(networks)
 	if err != nil {
 		return fmt.Errorf("ensure TLS certs: %w", err)
 	}
 
-	tlsCfg, err := server.LoadTLSConfig(tlsPaths.CertFile, tlsPaths.KeyFile)
-	if err != nil {
-		return fmt.Errorf("load TLS config: %w", err)
+	tlsCfg := &tls.Config{
+		GetCertificate: server.GetCertificateByLocalAddr(netCerts),
+		MinVersion:     tls.VersionTLS12,
 	}
 
 	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
@@ -947,7 +1147,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	go setupMgr.WatchFile(ctx, setupTokenPath)
 
 	// Register auth routes on the shared mux (accessible via both servers).
-	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, tlsPaths.CAFile, displayHost, remotePort)
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
@@ -988,7 +1188,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 
 	log.Info("auth: remote access enabled", "port", remotePort, "rpID", rpID, "host", displayHost, "lan_ip", lanIPStr)
-	log.Info("auth: TLS CA cert", "path", tlsPaths.CAFile)
+	log.Info("auth: TLS CA cert", "path", caFile)
 	return nil
 }
 

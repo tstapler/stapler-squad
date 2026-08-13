@@ -239,6 +239,31 @@ func waitForQuiescence(updates <-chan struct{}, timeout, quietFor time.Duration)
 	}
 }
 
+// waitForPaneContent polls CapturePaneContentRaw while the instance is still in a
+// transient state (i.e. a concurrent Instance.Resume() may be mid-restore), giving up
+// immediately once the status settles into one that means capture will never succeed.
+func waitForPaneContent(instance *session.Instance) (string, error) {
+	const (
+		pollInterval = 150 * time.Millisecond
+		maxWait      = 5 * time.Second
+	)
+	deadline := time.Now().Add(maxWait)
+	for {
+		content, err := instance.CapturePaneContentRaw()
+		if err == nil {
+			return content, nil
+		}
+		switch instance.Snapshot().Status {
+		case session.Paused, session.Stopped, session.Hibernated, session.Crashed:
+			return "", err
+		}
+		if time.Now().After(deadline) {
+			return "", err
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
 // markSnapshotDirty marks a session's snapshot as dirty so the next connect captures fresh content.
 // Called on every terminal frame; xsync.Map.Compute is lock-free on the read path.
 func (h *ConnectRPCWebSocketHandler) markSnapshotDirty(sessionID string) {
@@ -249,6 +274,20 @@ func (h *ConnectRPCWebSocketHandler) markSnapshotDirty(sessionID string) {
 		snap.dirty = true
 		return snap, xsync.UpdateOp
 	})
+}
+
+// invalidateSnapshot drops a session's cached snapshot so the next getOrRefreshSnapshot
+// re-captures from tmux.
+//
+// This exists for callers that have just done something making the cached content stale
+// by construction, rather than merely suspecting new output — specifically the ±1 resize
+// nudge in streamViaControlMode, which repaints the TUI at the client's dimensions.
+// markSnapshotDirty cannot cover that case: its only call sites live in the
+// output-forwarding goroutine, which does not start until after the initial snapshot has
+// already been captured and sent, so a nudge-triggered repaint would otherwise leave the
+// cache "clean" and serve content captured at the pre-nudge dimensions.
+func (h *ConnectRPCWebSocketHandler) invalidateSnapshot(sessionID string) {
+	h.snapshotCache.Delete(sessionID)
 }
 
 // getOrRefreshSnapshot returns a cached snapshot if clean, otherwise calls captureFn to refresh.
@@ -624,6 +663,16 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 		log.Info("[streamViaControlMode] handshake dimensions, forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
 
+		// The nudge below repaints the TUI at targetCols x targetRows, so any snapshot
+		// cached from an earlier connection is stale by construction — it was captured at
+		// the previous dimensions. Drop it here so the capture at the end of this function
+		// re-reads the pane. Without this, getOrRefreshSnapshot sees a "clean" entry (the
+		// repaint cannot mark it dirty: markSnapshotDirty is only reachable from the
+		// output-forwarding goroutine, which starts later) and serves the old-dimension
+		// content, which xterm.js then paints live frames over — producing rows composited
+		// from two different wrap widths, duplicated table rows and stray glyphs.
+		h.invalidateSnapshot(sessionID)
+
 		// Nudge to (cols-1) so tmux always sends SIGWINCH regardless of current size
 		if targetCols > 1 {
 			if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr != nil {
@@ -634,9 +683,19 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		if err := instance.ResizePTY(targetCols, targetRows); err != nil {
 			log.Error("[streamViaControlMode] failed to resize", "err", err)
 		} else {
-			// Wait for TUI to complete its full redraw using quiescence detection
+			// Wait for the TUI to complete its full redraw before capturing.
+			//
+			// NOTE: nothing signals quiescenceCh yet at this point — its only producer is
+			// the output-forwarding goroutine started further down — so this currently
+			// degenerates to a fixed quietFor settle rather than real quiescence
+			// detection, and the timeout warning below cannot fire. quietFor is therefore
+			// set to match the 200ms post-nudge settle that streamViaTmuxCapture uses, so
+			// a slow repaint is less likely to be captured half-drawn. Making this
+			// genuinely quiescence-driven requires subscribing a producer before the
+			// nudge (the previous subscription was removed for performance — see the
+			// quiescenceCh comment above).
 			quiescenceStart := time.Now()
-			waitForQuiescence(quiescenceCh, 500*time.Millisecond, 50*time.Millisecond)
+			waitForQuiescence(quiescenceCh, 500*time.Millisecond, 200*time.Millisecond)
 			if elapsed := time.Since(quiescenceStart); elapsed >= 500*time.Millisecond-5*time.Millisecond {
 				log.Warn("[streamViaControlMode] initial quiescence timed out; session may be stalled", "elapsed", elapsed.Round(time.Millisecond), "session", sessionID)
 			}
@@ -647,11 +706,15 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	}
 
 	// Now capture content at correct dimensions.
-	// If capture fails (session died), proceed with empty content rather than trying
-	// to restart — automatic restarts can create reconnection loops when the session
-	// exits immediately (e.g. no API proxy running).
+	// If capture fails, it may be because a concurrent Instance.Resume() is still mid-restore
+	// (RestoreWithWorkDir racing this handler's own lazy-restore-skip path above, which only
+	// restores when the tmux session is absent — it does nothing if Resume() is already
+	// restoring an existing one). Poll briefly rather than immediately declaring the session
+	// stopped: the frontend's loading spinner stays up until the first WS message arrives, so
+	// withholding that message here is what turns a misleading "stopped" flash into a visible
+	// "still resuming" wait.
 	initialContent, err := h.getOrRefreshSnapshot(sessionID, func() (string, error) {
-		return instance.CapturePaneContentRaw()
+		return waitForPaneContent(instance)
 	})
 	if err != nil {
 		log.Info("[streamViaControlMode] capture-pane failed, sending stopped notice", "session", sessionID, "err", err)
@@ -923,11 +986,21 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				// (R1.3 — post-resize snapshot).
 				if snapContent, snapErr := instance.CapturePaneContentRaw(); snapErr == nil && snapContent != "" {
 					h.markSnapshotDirty(sessionID)
+					// withCursorSync is required here for the same reason as every other
+					// snapshot send (see its doc comment): prepareSnapshotContent strips the
+					// absolute-cursor codes, so without a trailing CUP the xterm.js cursor is
+					// left wherever the last snapshot byte landed while tmux's cursor sits at
+					// the process's working position. Relative cursor-up redraws from an Ink
+					// TUI then rewind to the wrong row and each repaint stacks below the last
+					// instead of overwriting it. This was the one snapshot send of five that
+					// omitted it, so resizing — the very action users take to clear a garbled
+					// pane — left the cursor desynced and made interactive menus billow.
+					fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(snapContent), instance)
 					snapMsg := &sessionv1.TerminalData{
 						SessionId: sessionID,
 						Data: &sessionv1.TerminalData_Output{
 							Output: &sessionv1.TerminalOutput{
-								Data: []byte(ansiSnapshotPrefix + prepareSnapshotContent(snapContent)),
+								Data: []byte(fullContent),
 							},
 						},
 					}
@@ -1212,12 +1285,15 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 				}
 
 				if snapContent, snapErr := shellSess.CapturePaneContentRaw(); snapErr == nil && snapContent != "" {
+					// Same cursor-sync requirement as the session post-resize snapshot —
+					// see withCursorSync's doc comment.
+					fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(snapContent), cursorTarget)
 					snapMsg := &sessionv1.TerminalData{
 						SessionId: sessionID,
 						ShellId:   shellID,
 						Data: &sessionv1.TerminalData_Output{
 							Output: &sessionv1.TerminalOutput{
-								Data: []byte(ansiSnapshotPrefix + prepareSnapshotContent(snapContent)),
+								Data: []byte(fullContent),
 							},
 						},
 					}
@@ -1832,9 +1908,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						// External sessions: Use tmux commands (best effort)
 						// External sessions may be attached to other terminals which control the actual size
 						rwCtx, rwCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						rwErr := runTmuxGatedErr(rwCtx, "", func() error {
-							return safeexec.CommandContext(rwCtx, "tmux", "resize-window", "-t", tmuxSessionName,
-								"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows)).Run()
+						rwArgs := tmux.ResolveSocket(snap.TmuxServerSocket).Args("resize-window", "-t", tmuxSessionName,
+							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
+						rwErr := runTmuxGatedErr(rwCtx, snap.TmuxServerSocket, func() error {
+							return safeexec.CommandContext(rwCtx, tmux.Binary(), rwArgs...).Run()
 						})
 						if rwErr != nil {
 							log.Warn("[streamViaTmuxCapture] failed to resize tmux window for external session", "tmux_session", tmuxSessionName, "err", rwErr)
@@ -1843,9 +1920,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 						// Also try to resize the pane
 						rpCtx, rpCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						rpErr := runTmuxGatedErr(rpCtx, "", func() error {
-							return safeexec.CommandContext(rpCtx, "tmux", "resize-pane", "-t", tmuxSessionName,
-								"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows)).Run()
+						rpArgs := tmux.ResolveSocket(snap.TmuxServerSocket).Args("resize-pane", "-t", tmuxSessionName,
+							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
+						rpErr := runTmuxGatedErr(rpCtx, snap.TmuxServerSocket, func() error {
+							return safeexec.CommandContext(rpCtx, tmux.Binary(), rpArgs...).Run()
 						})
 						if rpErr != nil {
 							log.Warn("[streamViaTmuxCapture] failed to resize tmux pane for external session", "tmux_session", tmuxSessionName, "err", rpErr)

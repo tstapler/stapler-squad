@@ -68,6 +68,7 @@ func TestAutonomousOrchestrationService_SetLifecycleContext(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Without SetLifecycleContext, driverCtx() should fall back to Background.
 	assert.NoError(t, svc.autonomousSvc.driverCtx().Err(), "driverCtx() should return non-cancelled ctx before SetLifecycleContext")
@@ -86,6 +87,7 @@ func TestAutonomousOrchestrationService_DriverRegistry_RegisterAndDeregister(t *
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	inst := &session.Instance{
 		Title: "reg-test",
@@ -110,6 +112,7 @@ func TestAutonomousOrchestrationService_DeleteSession_StopsRegisteredDriver(t *t
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "delete-driver-test"
 	addPausedAutonomousInstance(t, storage, title)
@@ -137,6 +140,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DeregistersDr
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "complete-driver-test"
 
@@ -167,6 +171,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "notif-race-test"
 	inst := &session.Instance{
@@ -238,6 +243,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-test"
 	inst := &session.Instance{
@@ -285,6 +291,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-done-test"
 	inst := &session.Instance{
@@ -351,6 +358,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	trigger := &fakeReviewGateTrigger{}
 	svc.SetReviewGateTrigger(trigger)
@@ -403,6 +411,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "not-linked-test"
 	inst := &session.Instance{
@@ -430,6 +439,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "dangling-item-session-test"
 	inst := &session.Instance{
@@ -479,6 +489,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "unrecognized-role-test"
 	inst := &session.Instance{
@@ -543,6 +554,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-resolves-test"
 	inst := &session.Instance{
@@ -600,6 +612,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-review-resolves-test"
 	inst := &session.Instance{
@@ -656,6 +669,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-still-stuck-test"
 	inst := &session.Instance{
@@ -706,6 +720,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "review-stuck-already-moved-on-test"
 	inst := &session.Instance{
@@ -765,6 +780,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "review-stuck-still-stuck-test"
 	inst := &session.Instance{
@@ -827,6 +843,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "triage-stuck-metadata-test"
 	inst := &session.Instance{
@@ -885,6 +902,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "hidden-generic-notif-test"
 	inst := &session.Instance{
@@ -931,6 +949,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "generic-notif-metadata-test"
 	inst := &session.Instance{
@@ -1060,9 +1079,14 @@ func (f *fakeFailingAutonomousStuckRespawner) AutoRespawnAutonomousWork(_ contex
 // from the terminal "Auto-rework paused" justParked notification.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOperator_When_RespawnAttemptFails(t *testing.T) {
 	storage := createTestStorage(t)
-	ctx := context.Background()
+	// A cancellable context (not context.Background()) so SetLifecycleContext's
+	// capacityMonitor.Start goroutine actually exits when the test ends, instead
+	// of leaking for the life of the test binary.
+	ctx, lifecycleCancel := context.WithCancel(context.Background())
+	t.Cleanup(lifecycleCancel)
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 	svc.SetLifecycleContext(ctx)
 
 	respawnErr := fmt.Errorf("headless pool exhausted")

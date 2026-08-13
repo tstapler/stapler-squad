@@ -5,7 +5,10 @@
   "method": "UpsertApprovalRule",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+  "tested": true,
+  "testIds": [
+    "rule-builder-ci-passing \u003e RuleBuilder_should_SubmitRequireCiPassingTrue_When_CheckboxCheckedAndSaved",
+    "rule-builder-ci-passing \u003e RuleBuilder_should_RevertCheckboxState_When_FormCancelled"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
 }

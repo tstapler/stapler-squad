@@ -251,6 +251,11 @@ service SessionService {
   // Returns the resolved values plus source metadata for per-field badges in the UI.
   rpc ResolveDefaults(ResolveDefaultsRequest) returns (ResolveDefaultsResponse) {}
 
+  // PreviewDestinationPath computes where a session's checkout/worktree would land,
+  // without performing any git or filesystem mutation. Used by the Omnibar to show a
+  // live destination hint before the user submits session creation.
+  rpc PreviewDestinationPath(PreviewDestinationPathRequest) returns (PreviewDestinationPathResponse) {}
+
   // UpdateGlobalDefaults replaces the global default fields.
   rpc UpdateGlobalDefaults(UpdateGlobalDefaultsRequest) returns (UpdateGlobalDefaultsResponse) {}
 
@@ -328,6 +333,10 @@ service SessionService {
   // GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
   rpc GetEscapeAnalyticsSummary(GetEscapeAnalyticsSummaryRequest) returns (GetEscapeAnalyticsSummaryResponse) {}
 
+  // GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
+  // across all sessions, plus a per-session breakdown to spot outliers.
+  rpc GetEscapeAnalyticsGlobalSummary(GetEscapeAnalyticsGlobalSummaryRequest) returns (GetEscapeAnalyticsGlobalSummaryResponse) {}
+
   // HibernateSession checkpoints the session state, kills the AI process, and
   // transitions the session to Hibernated status.
   rpc HibernateSession(HibernateSessionRequest) returns (HibernateSessionResponse) {}
@@ -335,6 +344,12 @@ service SessionService {
   // ResumeHibernatedSession re-launches the AI process for a Hibernated session,
   // transitioning it back to Active status.
   rpc ResumeHibernatedSession(ResumeHibernatedSessionRequest) returns (ResumeHibernatedSessionResponse) {}
+
+  // ResumeCrashedSession re-launches the AI process for a Crashed session
+  // (dead tmux pane detected by SessionHealthChecker), transitioning it back
+  // to Active status. Threads --resume automatically when a conversation UUID
+  // is known.
+  rpc ResumeCrashedSession(ResumeCrashedSessionRequest) returns (ResumeCrashedSessionResponse) {}
 
   // ============================================================================
   // Custom Shell RPCs
@@ -570,6 +585,13 @@ message CreateSessionRequest {
   // alias_name, when non-empty, resolves session defaults via the named alias preset.
   // Path and profile are resolved from the alias config; path from req is used as override if non-empty.
   string alias_name = 27;
+
+  // auto_approve injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
+  // Independent of auto_yes — see auto_yes's own comment for the distinction.
+  // Defaults to false; never implicitly set true. Rejected server-side if the
+  // resolved program isn't a supported agent (see AutoApproveSupported).
+  bool auto_approve = 28;
 }
 
 message CreateSessionResponse {
@@ -614,6 +636,16 @@ message UpdateSessionRequest {
   // Steering message to inject into an autonomous session mid-run.
   // Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
   optional string steer_message = 11;
+
+  // Update the session's free-form note. Capped at 10,000 bytes.
+  optional string note = 12;
+
+  // Enable or disable auto-approve (yolo mode) on a session. Injects a
+  // per-agent CLI flag that skips permission/approval prompts entirely.
+  // Independent of autonomous_mode and of auto_yes (create-time only,
+  // not updatable). Toggling this on an Active session restarts it so the
+  // flag takes effect (see SetAutoApprove's doc comment).
+  optional bool auto_approve = 13;
 }
 
 message UpdateSessionResponse {
@@ -857,6 +889,10 @@ message ListClaudeHistoryRequest {
   // When set, returns the page of results after the cursor position.
   // Leave empty to start from the beginning.
   string page_token = 5;
+  // When true, best-effort exclude sessions whose live Instance has
+  // Hidden=true — same semantics as SearchClaudeHistoryRequest's field of
+  // the same name. Default false.
+  optional bool exclude_automation_sessions = 6;
 }
 
 message ListClaudeHistoryResponse {
@@ -933,6 +969,11 @@ message GetClaudeHistoryMessagesRequest {
   // the tail of a large conversation file without loading the whole file.
   // Mutually exclusive with offset.
   bool tail = 4;
+  // When set, overrides offset: the server centers the returned page on
+  // this message index (offset = max(0, anchor_index - limit/2)),
+  // enabling forward/backward scroll paging without re-running search.
+  // Mutually exclusive with tail.
+  optional int32 anchor_index = 5;
 }
 
 message GetClaudeHistoryMessagesResponse {
@@ -970,6 +1011,16 @@ message SearchClaudeHistoryRequest {
   int32 limit = 6;
   // Number of results to skip for pagination (default: 0).
   int32 offset = 7;
+  // When true, collapse results to one entry per session (highest-scored
+  // hit kept; others counted via more_matches_in_session_count). Default false.
+  optional bool group_by_session = 8;
+  // When true, populate context_window/bookend_first/bookend_last on each
+  // retained result. Default false.
+  optional bool include_context = 9;
+  // When true, best-effort exclude sessions whose live Instance has
+  // Hidden=true. Sessions with no live Instance record are NOT excluded
+  // (signal unavailable, not assumed absent). Default false.
+  optional bool exclude_automation_sessions = 10;
 }
 
 message SearchClaudeHistoryResponse {
@@ -998,6 +1049,18 @@ message SearchResult {
   repeated SearchSnippet snippets = 6;
   // Metadata about the match source.
   SearchResultMetadata metadata = 7;
+  // Count of additional matching messages in this session beyond this hit.
+  // Only meaningful when the request set group_by_session=true.
+  int32 more_matches_in_session_count = 8;
+  // ±5 messages around message_index, read from the raw conversation file.
+  // Populated only when the request set include_context=true.
+  repeated ClaudeMessage context_window = 9;
+  // First 3 messages of the session. Empty when context_window already
+  // spans the full session (see contextWindowAndBookends).
+  repeated ClaudeMessage bookend_first = 10;
+  // Last 3 messages of the session. Empty when context_window already
+  // spans the full session.
+  repeated ClaudeMessage bookend_last = 11;
 }
 
 message SearchSnippet {
@@ -1251,6 +1314,10 @@ message ResolveApprovalRequest {
 
   // Optional reason shown to Claude when denying.
   optional string message = 3;
+
+  // When true, the caller explicitly acknowledges failing CI and re-submits an
+  // already-blocked approval; the server skips the CI-red guard for this request only.
+  bool override_ci_block = 4;
 }
 
 // ResolveApprovalResponse confirms the decision was received.
@@ -1734,6 +1801,21 @@ message GetSessionDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
 }
 
+// PreviewDestinationPath
+
+message PreviewDestinationPathRequest {
+  string input = 1;         // raw omnibar text (URL/shorthand or local path)
+  string mode = 2;          // "github_url" | "new_worktree" - client already knows which
+  string repo_path = 3;     // new_worktree only: resolved local repo path
+  string session_name = 4;  // new_worktree only: source string for the sanitized dir name
+}
+
+message PreviewDestinationPathResponse {
+  string path = 1;              // exact for github_url; a directory prefix for new_worktree
+  bool is_exact = 2;            // true only for github_url
+  string unresolved_reason = 3; // set (non-error) when input isn't resolvable yet
+}
+
 // ResolveDefaults
 
 message ResolveDefaultsRequest {
@@ -2137,6 +2219,9 @@ message FeatureFlag {
   bool enabled = 2;
   // Human-readable description of what the feature does.
   string description = 3;
+  // Optional human-readable status line (e.g. why a controller-backed flag is
+  // currently off). Empty when not applicable.
+  string status_detail = 4;
 }
 
 message GetFeatureFlagsRequest {}
@@ -2156,13 +2241,21 @@ message GetHookStatusResponse {
   bool rules_available = 3;
   // True when the ssq-hook-handler is available to install the notification hooks.
   bool notifications_available = 4;
+  // True when the Antigravity CLI rule-enforcement hook (ssq-hooks check --antigravity) is installed.
+  bool agy_rules_installed = 5;
+  // True when the Gemini CLI rule-enforcement hook (ssq-hooks check --gemini) is installed.
+  bool gemini_rules_installed = 6;
 }
 
 message InstallHooksRequest {
-  // Install the PreToolUse rule-enforcement hook.
+  // Install the PreToolUse rule-enforcement hook for Claude Code.
   bool install_rules = 1;
   // Install the Notification/Stop notification hooks.
   bool install_notifications = 2;
+  // Install the PreToolUse rule-enforcement hook for Antigravity CLI (agy).
+  bool install_agy_rules = 3;
+  // Install the BeforeTool rule-enforcement hook for Gemini CLI.
+  bool install_gemini_rules = 4;
 }
 
 message InstallHooksResponse {
@@ -2234,6 +2327,26 @@ message GetEscapeAnalyticsSummaryRequest {
 
 message GetEscapeAnalyticsSummaryResponse {
   repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+}
+
+message GetEscapeAnalyticsGlobalSummaryRequest {
+  optional google.protobuf.Timestamp start_time = 1;
+  optional google.protobuf.Timestamp end_time = 2;
+}
+
+message GetEscapeAnalyticsGlobalSummaryResponse {
+  repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+  repeated SessionEscapeSummary per_session = 5;
+}
+
+message SessionEscapeSummary {
+  string session_id = 1;
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
@@ -2349,6 +2462,15 @@ message ResumeHibernatedSessionRequest {
 }
 
 message ResumeHibernatedSessionResponse {
+  Session session = 1;
+}
+
+// ResumeCrashedSession messages
+message ResumeCrashedSessionRequest {
+  string id = 1;
+}
+
+message ResumeCrashedSessionResponse {
   Session session = 1;
 }
 

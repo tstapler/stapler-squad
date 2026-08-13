@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"runtime"
 	"strings"
 	"time"
@@ -212,7 +213,8 @@ func collectTmuxSnapshot(ctx context.Context, existingErrors []string) (TmuxSnap
 
 	// list-sessions
 	listCtx, listCancel := context.WithTimeout(ctx, 5*time.Second)
-	listOut, err := safeexec.CommandContext(listCtx, "tmux", "list-sessions").Output()
+	listArgs := tmux.ResolveSocket("").Args("list-sessions")
+	listOut, err := safeexec.CommandContext(listCtx, tmux.Binary(), listArgs...).Output()
 	listCancel()
 	if err != nil {
 		errors = append(errors, fmt.Sprintf("tmux list-sessions: %v", err))
@@ -237,7 +239,8 @@ func collectTmuxSnapshot(ctx context.Context, existingErrors []string) (TmuxSnap
 
 		// list-panes
 		panesCtx, panesCancel := context.WithTimeout(ctx, 5*time.Second)
-		panesOut, err := safeexec.CommandContext(panesCtx, "tmux", "list-panes", "-t", sessionName).Output()
+		panesArgs := tmux.ResolveSocket("").Args("list-panes", "-t", sessionName)
+		panesOut, err := safeexec.CommandContext(panesCtx, tmux.Binary(), panesArgs...).Output()
 		panesCancel()
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("tmux list-panes -t %s: %v", sessionName, err))
@@ -247,7 +250,8 @@ func collectTmuxSnapshot(ctx context.Context, existingErrors []string) (TmuxSnap
 
 		// capture-pane (visible area only, no full scrollback to avoid timeouts)
 		capCtx, capCancel := context.WithTimeout(ctx, 5*time.Second)
-		capOut, err := safeexec.CommandContext(capCtx, "tmux", "capture-pane", "-p", "-t", sessionName).Output()
+		capArgs := tmux.ResolveSocket("").Args("capture-pane", "-p", "-t", sessionName)
+		capOut, err := safeexec.CommandContext(capCtx, tmux.Binary(), capArgs...).Output()
 		capCancel()
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("tmux capture-pane -t %s: %v", sessionName, err))

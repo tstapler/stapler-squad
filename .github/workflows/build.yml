@@ -100,10 +100,30 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: web-app/pnpm-lock.yaml
 
+      # See .github/actions/prepare/action.yml's "Cache buf binary" step for
+      # why this caches the whole tool-cache "buf" dir rather than a specific
+      # .../<version>/<arch> subpath.
+      - name: Cache buf binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/buf
+          key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
       - name: Set up buf
-        uses: bufbuild/buf-setup-action@v1
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
         with:
           version: '1.41.0'
+          setup_only: 'true'
+
+      # See .github/actions/prepare/action.yml for why this cache exists.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-smoke-${{ runner.os }}-
 
       - name: make web-build (no manual pre-steps)
         run: make web-build
@@ -151,10 +171,34 @@ jobs:
         run: ./scripts/build-tmux.sh
 
       - name: Run tests with coverage (pinned tmux 3.4)
+        # STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: production default is 10s
+        # (session/tmux/tmux.go's sessionCreateTimeoutDefault) -- this only
+        # widens the budget for this CI job, where a fully-loaded runner
+        # running every package's -race suite concurrently can occasionally
+        # exceed 10s of pure CPU-scheduling delay spinning up even an
+        # isolated tmux -L server, not lock contention. See tmux.go's
+        # sessionCreateTimeout doc comment for the incident this closes.
+        env:
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           TMUX_BIN="$(pwd)/bin/tmux" go test -race -coverprofile=coverage.out \
             -covermode=atomic ./server/... ./session/... ./config/... \
             || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -v ./...; exit 1)
+
+      # PTY-triple (ptmx/attachCmd/attachCmdWaitOnce) race fix regression gate:
+      # these tests were validated locally at -count=20/-count=50 during development
+      # (see project_plans/tmux-ptmx-race-fix/), but the plain -race run above only
+      # executes each test once per CI run — not enough repetition to reliably catch
+      # a reintroduced race in a timing-sensitive test. Run them amplified here so
+      # CI keeps the same confidence level the fix was originally verified with.
+      - name: PTY-triple race regression (amplified repetitions)
+        run: |
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race ./server/... \
+            -run 'TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort|TestSessionService_CreateThenImmediateDelete_NoDataRace' \
+            -count=20
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race ./session/tmux/... \
+            -run 'TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized|TestDetach_ConcurrentWithGetPTY_NoDeadlock|TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock' \
+            -count=20
 
       - name: Run scanner unit tests
         run: cd tools/scanner && go test ./...

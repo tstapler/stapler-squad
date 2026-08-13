@@ -377,6 +377,44 @@ func TestLoadConfig(t *testing.T) {
 		assert.Equal(t, "test/", config.BranchPrefix)
 	})
 
+	t.Run("backfills quota defaults when existing config file missing quota field", func(t *testing.T) {
+		// A config.json written before this feature shipped has no "quota" key.
+		tempHome := t.TempDir()
+		configDir := filepath.Join(tempHome, ".stapler-squad")
+		err := os.MkdirAll(configDir, 0755)
+		require.NoError(t, err)
+
+		configPath := filepath.Join(configDir, ConfigFileName)
+		configContent := `{"default_program": "test-claude"}`
+		err = os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		originalHome := os.Getenv("HOME")
+		originalInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+		os.Setenv("HOME", tempHome)
+		os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+		defer func() {
+			os.Setenv("HOME", originalHome)
+			if originalInstance == "" {
+				os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+			} else {
+				os.Setenv("STAPLER_SQUAD_INSTANCE", originalInstance)
+			}
+		}()
+
+		config := LoadConfig()
+
+		assert.NotNil(t, config)
+		assert.False(t, config.Quota.Enabled)
+		assert.Equal(t, 20.0, config.Quota.PauseBelowHeadroomPct)
+		assert.Equal(t, 15.0, config.Quota.ResumeMarginPct)
+		assert.Equal(t, 2, config.Quota.ConsecutiveTicksToPause)
+		assert.Equal(t, 3, config.Quota.ConsecutiveTicksToResume)
+		assert.Equal(t, 30, config.Quota.RateLimitWindowMinutes)
+		assert.Equal(t, 10, config.Quota.ManualOverrideGraceMinutes)
+		assert.Equal(t, 300, config.Quota.ForegroundThrottleDelaySeconds)
+	})
+
 	t.Run("returns default config on invalid JSON", func(t *testing.T) {
 		// Create a temporary config directory
 		tempHome := t.TempDir()

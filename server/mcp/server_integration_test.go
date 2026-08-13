@@ -27,7 +27,7 @@ func expectedToolCount(t *testing.T) int {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
 	svc := services.NewSessionService(storage, nil)
-	s := NewCore(&stubStore{}, svc, nil, storage, nil, nil, nil)
+	s := NewCore(&stubStore{}, svc, nil, storage, nil, nil, nil, nil, nil)
 	return len(s.ListTools())
 }
 

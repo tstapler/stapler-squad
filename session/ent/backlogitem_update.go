@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -316,6 +317,46 @@ func (_u *BacklogItemUpdate) ClearPlanArtifactsPath() *BacklogItemUpdate {
 	return _u
 }
 
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (_u *BacklogItemUpdate) SetPlanRejectionReason(v string) *BacklogItemUpdate {
+	_u.mutation.SetPlanRejectionReason(v)
+	return _u
+}
+
+// SetNillablePlanRejectionReason sets the "plan_rejection_reason" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePlanRejectionReason(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPlanRejectionReason(*v)
+	}
+	return _u
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (_u *BacklogItemUpdate) ClearPlanRejectionReason() *BacklogItemUpdate {
+	_u.mutation.ClearPlanRejectionReason()
+	return _u
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (_u *BacklogItemUpdate) SetPlanRejectedAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetPlanRejectedAt(v)
+	return _u
+}
+
+// SetNillablePlanRejectedAt sets the "plan_rejected_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePlanRejectedAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPlanRejectedAt(*v)
+	}
+	return _u
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (_u *BacklogItemUpdate) ClearPlanRejectedAt() *BacklogItemUpdate {
+	_u.mutation.ClearPlanRejectedAt()
+	return _u
+}
+
 // SetUserModifiedFields sets the "user_modified_fields" field.
 func (_u *BacklogItemUpdate) SetUserModifiedFields(v string) *BacklogItemUpdate {
 	_u.mutation.SetUserModifiedFields(v)
@@ -373,6 +414,44 @@ func (_u *BacklogItemUpdate) SetNillableExternalID(v *string) *BacklogItemUpdate
 // ClearExternalID clears the value of the "external_id" field.
 func (_u *BacklogItemUpdate) ClearExternalID() *BacklogItemUpdate {
 	_u.mutation.ClearExternalID()
+	return _u
+}
+
+// SetExternalURL sets the "external_url" field.
+func (_u *BacklogItemUpdate) SetExternalURL(v string) *BacklogItemUpdate {
+	_u.mutation.SetExternalURL(v)
+	return _u
+}
+
+// SetNillableExternalURL sets the "external_url" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableExternalURL(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetExternalURL(*v)
+	}
+	return _u
+}
+
+// ClearExternalURL clears the value of the "external_url" field.
+func (_u *BacklogItemUpdate) ClearExternalURL() *BacklogItemUpdate {
+	_u.mutation.ClearExternalURL()
+	return _u
+}
+
+// SetLabels sets the "labels" field.
+func (_u *BacklogItemUpdate) SetLabels(v []string) *BacklogItemUpdate {
+	_u.mutation.SetLabels(v)
+	return _u
+}
+
+// AppendLabels appends value to the "labels" field.
+func (_u *BacklogItemUpdate) AppendLabels(v []string) *BacklogItemUpdate {
+	_u.mutation.AppendLabels(v)
+	return _u
+}
+
+// ClearLabels clears the value of the "labels" field.
+func (_u *BacklogItemUpdate) ClearLabels() *BacklogItemUpdate {
+	_u.mutation.ClearLabels()
 	return _u
 }
 
@@ -554,6 +633,46 @@ func (_u *BacklogItemUpdate) SetNillableShippedSnapshotAt(v *time.Time) *Backlog
 // ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
 func (_u *BacklogItemUpdate) ClearShippedSnapshotAt() *BacklogItemUpdate {
 	_u.mutation.ClearShippedSnapshotAt()
+	return _u
+}
+
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (_u *BacklogItemUpdate) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetPrFeedbackAddressedAt(v)
+	return _u
+}
+
+// SetNillablePrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePrFeedbackAddressedAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPrFeedbackAddressedAt(*v)
+	}
+	return _u
+}
+
+// ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
+func (_u *BacklogItemUpdate) ClearPrFeedbackAddressedAt() *BacklogItemUpdate {
+	_u.mutation.ClearPrFeedbackAddressedAt()
+	return _u
+}
+
+// SetGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field.
+func (_u *BacklogItemUpdate) SetGithubSyncedIssueUpdatedAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetGithubSyncedIssueUpdatedAt(v)
+	return _u
+}
+
+// SetNillableGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableGithubSyncedIssueUpdatedAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetGithubSyncedIssueUpdatedAt(*v)
+	}
+	return _u
+}
+
+// ClearGithubSyncedIssueUpdatedAt clears the value of the "github_synced_issue_updated_at" field.
+func (_u *BacklogItemUpdate) ClearGithubSyncedIssueUpdatedAt() *BacklogItemUpdate {
+	_u.mutation.ClearGithubSyncedIssueUpdatedAt()
 	return _u
 }
 
@@ -975,6 +1094,18 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.PlanArtifactsPathCleared() {
 		_spec.ClearField(backlogitem.FieldPlanArtifactsPath, field.TypeString)
 	}
+	if value, ok := _u.mutation.PlanRejectionReason(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectionReason, field.TypeString, value)
+	}
+	if _u.mutation.PlanRejectionReasonCleared() {
+		_spec.ClearField(backlogitem.FieldPlanRejectionReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.PlanRejectedAt(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PlanRejectedAtCleared() {
+		_spec.ClearField(backlogitem.FieldPlanRejectedAt, field.TypeTime)
+	}
 	if value, ok := _u.mutation.UserModifiedFields(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedFields, field.TypeString, value)
 	}
@@ -992,6 +1123,23 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.ExternalIDCleared() {
 		_spec.ClearField(backlogitem.FieldExternalID, field.TypeString)
+	}
+	if value, ok := _u.mutation.ExternalURL(); ok {
+		_spec.SetField(backlogitem.FieldExternalURL, field.TypeString, value)
+	}
+	if _u.mutation.ExternalURLCleared() {
+		_spec.ClearField(backlogitem.FieldExternalURL, field.TypeString)
+	}
+	if value, ok := _u.mutation.Labels(); ok {
+		_spec.SetField(backlogitem.FieldLabels, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedLabels(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, backlogitem.FieldLabels, value)
+		})
+	}
+	if _u.mutation.LabelsCleared() {
+		_spec.ClearField(backlogitem.FieldLabels, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.UserModifiedStatusAt(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedStatusAt, field.TypeTime, value)
@@ -1049,6 +1197,18 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.ShippedSnapshotAtCleared() {
 		_spec.ClearField(backlogitem.FieldShippedSnapshotAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PrFeedbackAddressedAt(); ok {
+		_spec.SetField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PrFeedbackAddressedAtCleared() {
+		_spec.ClearField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.GithubSyncedIssueUpdatedAt(); ok {
+		_spec.SetField(backlogitem.FieldGithubSyncedIssueUpdatedAt, field.TypeTime, value)
+	}
+	if _u.mutation.GithubSyncedIssueUpdatedAtCleared() {
+		_spec.ClearField(backlogitem.FieldGithubSyncedIssueUpdatedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.ShippedFileStats(); ok {
 		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
@@ -1629,6 +1789,46 @@ func (_u *BacklogItemUpdateOne) ClearPlanArtifactsPath() *BacklogItemUpdateOne {
 	return _u
 }
 
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (_u *BacklogItemUpdateOne) SetPlanRejectionReason(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetPlanRejectionReason(v)
+	return _u
+}
+
+// SetNillablePlanRejectionReason sets the "plan_rejection_reason" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePlanRejectionReason(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPlanRejectionReason(*v)
+	}
+	return _u
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (_u *BacklogItemUpdateOne) ClearPlanRejectionReason() *BacklogItemUpdateOne {
+	_u.mutation.ClearPlanRejectionReason()
+	return _u
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (_u *BacklogItemUpdateOne) SetPlanRejectedAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetPlanRejectedAt(v)
+	return _u
+}
+
+// SetNillablePlanRejectedAt sets the "plan_rejected_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePlanRejectedAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPlanRejectedAt(*v)
+	}
+	return _u
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (_u *BacklogItemUpdateOne) ClearPlanRejectedAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearPlanRejectedAt()
+	return _u
+}
+
 // SetUserModifiedFields sets the "user_modified_fields" field.
 func (_u *BacklogItemUpdateOne) SetUserModifiedFields(v string) *BacklogItemUpdateOne {
 	_u.mutation.SetUserModifiedFields(v)
@@ -1686,6 +1886,44 @@ func (_u *BacklogItemUpdateOne) SetNillableExternalID(v *string) *BacklogItemUpd
 // ClearExternalID clears the value of the "external_id" field.
 func (_u *BacklogItemUpdateOne) ClearExternalID() *BacklogItemUpdateOne {
 	_u.mutation.ClearExternalID()
+	return _u
+}
+
+// SetExternalURL sets the "external_url" field.
+func (_u *BacklogItemUpdateOne) SetExternalURL(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetExternalURL(v)
+	return _u
+}
+
+// SetNillableExternalURL sets the "external_url" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableExternalURL(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetExternalURL(*v)
+	}
+	return _u
+}
+
+// ClearExternalURL clears the value of the "external_url" field.
+func (_u *BacklogItemUpdateOne) ClearExternalURL() *BacklogItemUpdateOne {
+	_u.mutation.ClearExternalURL()
+	return _u
+}
+
+// SetLabels sets the "labels" field.
+func (_u *BacklogItemUpdateOne) SetLabels(v []string) *BacklogItemUpdateOne {
+	_u.mutation.SetLabels(v)
+	return _u
+}
+
+// AppendLabels appends value to the "labels" field.
+func (_u *BacklogItemUpdateOne) AppendLabels(v []string) *BacklogItemUpdateOne {
+	_u.mutation.AppendLabels(v)
+	return _u
+}
+
+// ClearLabels clears the value of the "labels" field.
+func (_u *BacklogItemUpdateOne) ClearLabels() *BacklogItemUpdateOne {
+	_u.mutation.ClearLabels()
 	return _u
 }
 
@@ -1867,6 +2105,46 @@ func (_u *BacklogItemUpdateOne) SetNillableShippedSnapshotAt(v *time.Time) *Back
 // ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
 func (_u *BacklogItemUpdateOne) ClearShippedSnapshotAt() *BacklogItemUpdateOne {
 	_u.mutation.ClearShippedSnapshotAt()
+	return _u
+}
+
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (_u *BacklogItemUpdateOne) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetPrFeedbackAddressedAt(v)
+	return _u
+}
+
+// SetNillablePrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePrFeedbackAddressedAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPrFeedbackAddressedAt(*v)
+	}
+	return _u
+}
+
+// ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
+func (_u *BacklogItemUpdateOne) ClearPrFeedbackAddressedAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearPrFeedbackAddressedAt()
+	return _u
+}
+
+// SetGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field.
+func (_u *BacklogItemUpdateOne) SetGithubSyncedIssueUpdatedAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetGithubSyncedIssueUpdatedAt(v)
+	return _u
+}
+
+// SetNillableGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableGithubSyncedIssueUpdatedAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetGithubSyncedIssueUpdatedAt(*v)
+	}
+	return _u
+}
+
+// ClearGithubSyncedIssueUpdatedAt clears the value of the "github_synced_issue_updated_at" field.
+func (_u *BacklogItemUpdateOne) ClearGithubSyncedIssueUpdatedAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearGithubSyncedIssueUpdatedAt()
 	return _u
 }
 
@@ -2318,6 +2596,18 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	if _u.mutation.PlanArtifactsPathCleared() {
 		_spec.ClearField(backlogitem.FieldPlanArtifactsPath, field.TypeString)
 	}
+	if value, ok := _u.mutation.PlanRejectionReason(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectionReason, field.TypeString, value)
+	}
+	if _u.mutation.PlanRejectionReasonCleared() {
+		_spec.ClearField(backlogitem.FieldPlanRejectionReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.PlanRejectedAt(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PlanRejectedAtCleared() {
+		_spec.ClearField(backlogitem.FieldPlanRejectedAt, field.TypeTime)
+	}
 	if value, ok := _u.mutation.UserModifiedFields(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedFields, field.TypeString, value)
 	}
@@ -2335,6 +2625,23 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.ExternalIDCleared() {
 		_spec.ClearField(backlogitem.FieldExternalID, field.TypeString)
+	}
+	if value, ok := _u.mutation.ExternalURL(); ok {
+		_spec.SetField(backlogitem.FieldExternalURL, field.TypeString, value)
+	}
+	if _u.mutation.ExternalURLCleared() {
+		_spec.ClearField(backlogitem.FieldExternalURL, field.TypeString)
+	}
+	if value, ok := _u.mutation.Labels(); ok {
+		_spec.SetField(backlogitem.FieldLabels, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedLabels(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, backlogitem.FieldLabels, value)
+		})
+	}
+	if _u.mutation.LabelsCleared() {
+		_spec.ClearField(backlogitem.FieldLabels, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.UserModifiedStatusAt(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedStatusAt, field.TypeTime, value)
@@ -2392,6 +2699,18 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.ShippedSnapshotAtCleared() {
 		_spec.ClearField(backlogitem.FieldShippedSnapshotAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PrFeedbackAddressedAt(); ok {
+		_spec.SetField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PrFeedbackAddressedAtCleared() {
+		_spec.ClearField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.GithubSyncedIssueUpdatedAt(); ok {
+		_spec.SetField(backlogitem.FieldGithubSyncedIssueUpdatedAt, field.TypeTime, value)
+	}
+	if _u.mutation.GithubSyncedIssueUpdatedAtCleared() {
+		_spec.ClearField(backlogitem.FieldGithubSyncedIssueUpdatedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.ShippedFileStats(); ok {
 		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)

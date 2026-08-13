@@ -69,10 +69,20 @@ jobs:
       - name: Install web dependencies
         run: cd web-app && pnpm install --frozen-lockfile
 
+      # See .github/actions/prepare/action.yml's "Cache buf binary" step for
+      # why this caches the whole tool-cache "buf" dir rather than a specific
+      # .../<version>/<arch> subpath.
+      - name: Cache buf binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/buf
+          key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
       - name: Set up buf
-        uses: bufbuild/buf-setup-action@v1
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
         with:
           version: '1.41.0'
+          setup_only: 'true'
 
       - name: Generate protobuf code
         run: buf generate

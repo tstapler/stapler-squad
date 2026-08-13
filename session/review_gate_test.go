@@ -408,6 +408,15 @@ func runGitOrFail(t *testing.T, dir string, args ...string) {
 	require.NoErrorf(t, err, "git %v failed: %s", args, out)
 }
 
+func runGitOutputOrFail(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "git %v failed: %s", args, out)
+	return string(out)
+}
+
 // forceEmptyBranchNameViaRawSQL forces the branch_name column of the worktrees row
 // for sessionName to ” via a raw SQL UPDATE against storage's own on-disk SQLite
 // file, bypassing the ent Worktree schema's Go-level NotEmpty() validator (which
@@ -627,6 +636,91 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	select {
 	case gotItemID := <-reopener.called:
 		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the cap/notify machinery eventually engages")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+	}
+}
+
+// TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass is the
+// regression test for the "no real work happened" class of false-verification bug:
+// unlike the diff-computation-failure tests above, this reproduces a session whose
+// diff computes successfully — no git error at all — but is empty because
+// BaseCommitSha and the repo's current HEAD are the same commit (e.g. a work
+// session that ended without ever committing, then got swept into review by
+// ReconcileStuckItems purely because its sessions had all ended). Before this fix,
+// Run had no check for this case at all: it would proceed to spawn a real review
+// session with nothing to review, risking a false PASS/UNVERIFIABLE verdict that
+// marks the item done despite zero shipped work — the same failure shape as
+// BUG-047/BUG-065 in the sibling reconciliation paths (backlog_lifecycle.go,
+// backlog_lifecycle_pr.go). The fix blocks with a distinct FAIL verdict and still
+// feeds the auto-reopen machinery, exactly like the diff-error blocks it sits next
+// to.
+func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "file.txt")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial commit")
+	headSHA := strings.TrimSpace(runGitOutputOrFail(t, repoDir, "rev-parse", "HEAD"))
+
+	itemData := BacklogItemData{
+		Title:              "Empty committed diff test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           repoDir,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// No SaveInstances call, so GetWorktreeDataBySessionUUID finds nothing and Run
+	// takes the no-worktree branch, diffing BaseCommitSha against repoPath's HEAD —
+	// which are the same commit, so the diff is genuinely empty with no error.
+	workIS.BaseCommitSha = headSHA
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
+
+	spawner := &mockReviewGateSpawner{}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+
+	reopener := newFakeAutoReopenSpawner()
+	getAutoReopener := func() AutoReopenSpawner { return reopener }
+
+	notifier := &fakeNotifier{}
+	getNotifier := func() Notifier { return notifier }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	var onPassCalled atomic.Bool
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+		onPassCalled.Store(true)
+	})
+
+	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the committed diff is empty")
+	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ReviewVerdictFail, outcome, "an empty committed diff must block with FAIL, not proceed to a real review that could false-PASS")
+
+	assert.Contains(t, notifier.titles(), "Review blocked — no changes to review")
+
+	select {
+	case gotItemID := <-reopener.called:
+		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the item returns to in_progress for real rework")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}

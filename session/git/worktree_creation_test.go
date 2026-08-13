@@ -292,7 +292,14 @@ func TestNewGitWorktreeFromExisting_DetectsBranchAndBase(t *testing.T) {
 	// commit", plants a brand-new disconnected initial commit directly inside the
 	// worktree directory, and returns the worktree path itself as the "repo root" —
 	// severing the worktree from its real branch/history entirely.
-	assert.Equal(t, repoDir, reopened.GetRepoPath(),
+	// git rev-parse --path-format=absolute (used by GetRepoPath's underlying
+	// implementation) canonicalizes through symlinks, so on macOS it returns
+	// /private/var/... for a t.TempDir() path under the /var/... symlink.
+	// Resolve repoDir the same way before comparing -- this is a path
+	// representation difference, not a behavioral one.
+	wantRepoDir, err := filepath.EvalSymlinks(repoDir)
+	require.NoError(t, err)
+	assert.Equal(t, wantRepoDir, reopened.GetRepoPath(),
 		"repo root must resolve to the main repo, not be conflated with the worktree's own path")
 
 	// Regression guard: the detected base SHA must resolve to a real object. In

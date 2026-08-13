@@ -167,6 +167,16 @@ var snapshotTests = []snapshotTest{
 		program:     "claude",
 		description: "Claude active with background task manager overlay — indented ✽ spinner (2 leading spaces) + esc to interrupt",
 	},
+	// Bug: batched multi-tool-call summary line (e.g. "✻ Searching for 9 patterns, reading
+	// 2 files, running 7 shell commands…") fell through to StatusUnknown because
+	// claude_thinking_verb required the ellipsis immediately after the verb. See
+	// bug_regression_test.go's TestBug_BatchedToolCallSummary_* for isolated regex cases.
+	{
+		fixture:     "claude_batched_tool_summary.txt",
+		expected:    StatusExecuting,
+		program:     "claude",
+		description: "Claude actively running a batched multi-tool-call summary (Searching for N patterns, reading M files, running K shell commands…)",
+	},
 }
 
 // TestSnapshotDetection runs the detector against each fixture file and

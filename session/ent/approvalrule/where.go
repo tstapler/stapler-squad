@@ -139,6 +139,11 @@ func SafePythonImportsOnly(v bool) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldEQ(FieldSafePythonImportsOnly, v))
 }
 
+// RequireCiPassing applies equality check predicate on the "require_ci_passing" field. It's identical to RequireCiPassingEQ.
+func RequireCiPassing(v bool) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldEQ(FieldRequireCiPassing, v))
+}
+
 // RuleIDEQ applies the EQ predicate on the "rule_id" field.
 func RuleIDEQ(v string) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldEQ(FieldRuleID, v))
@@ -1147,6 +1152,16 @@ func SafePythonImportsOnlyEQ(v bool) predicate.ApprovalRule {
 // SafePythonImportsOnlyNEQ applies the NEQ predicate on the "safe_python_imports_only" field.
 func SafePythonImportsOnlyNEQ(v bool) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldNEQ(FieldSafePythonImportsOnly, v))
+}
+
+// RequireCiPassingEQ applies the EQ predicate on the "require_ci_passing" field.
+func RequireCiPassingEQ(v bool) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldEQ(FieldRequireCiPassing, v))
+}
+
+// RequireCiPassingNEQ applies the NEQ predicate on the "require_ci_passing" field.
+func RequireCiPassingNEQ(v bool) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNEQ(FieldRequireCiPassing, v))
 }
 
 // And groups predicates with the AND operator between them.

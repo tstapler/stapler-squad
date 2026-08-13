@@ -33,6 +33,8 @@ jobs:
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build binary
         run: go build -o stapler-squad .

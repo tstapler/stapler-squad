@@ -1,6 +1,6 @@
-# Stapler Squad [![CI](https://github.com/TylerStaplerAtFanatics/stapler-squad/actions/workflows/build.yml/badge.svg)](https://github.com/TylerStaplerAtFanatics/stapler-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/TylerStaplerAtFanatics/stapler-squad)](https://github.com/TylerStaplerAtFanatics/stapler-squad/releases/latest)
+# Stapler Squad [![CI](https://github.com/tstapler/stapler-squad/actions/workflows/build.yml/badge.svg)](https://github.com/tstapler/stapler-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/tstapler/stapler-squad)](https://github.com/tstapler/stapler-squad/releases/latest)
 
-[Stapler Squad](https://TylerStaplerAtFanatics.github.io/stapler-squad/) is a web-based mission control for running multiple AI coding agents ([Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), [Aider](https://github.com/Aider-AI/aider)) simultaneously — with a real-time dashboard, automatic approval rules, and a structured review queue. Run it with `ssq`, then open `http://localhost:8543`.
+[Stapler Squad](https://tstapler.github.io/stapler-squad/) is a web-based mission control for running multiple AI coding agents ([Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), [Aider](https://github.com/Aider-AI/aider)) simultaneously — with a real-time dashboard, automatic approval rules, and a structured review queue. Run it with `ssq`, then open `http://localhost:8543`.
 
 ![Stapler Squad Demo](assets/demo.gif)
 
@@ -47,7 +47,7 @@ Both Homebrew and manual installation will install Stapler Squad as `ssq` on you
 #### Homebrew
 
 ```bash
-brew tap TylerStaplerAtFanatics/stapler-squad https://github.com/TylerStaplerAtFanatics/stapler-squad && brew install TylerStaplerAtFanatics/stapler-squad/stapler-squad
+brew tap tstapler/stapler-squad https://github.com/tstapler/stapler-squad && brew install tstapler/stapler-squad/stapler-squad
 ```
 
 This installs both `stapler-squad` and the `ssq` alias.
@@ -57,7 +57,7 @@ This installs both `stapler-squad` and the `ssq` alias.
 Download and install the latest pre-built binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TylerStaplerAtFanatics/stapler-squad/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash
 ```
 
 This puts the `ssq` binary in `~/.local/bin`.
@@ -65,7 +65,7 @@ This puts the `ssq` binary in `~/.local/bin`.
 To use a custom name for the binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TylerStaplerAtFanatics/stapler-squad/main/install.sh | bash -s -- --name <your-binary-name>
+curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash -s -- --name <your-binary-name>
 ```
 
 #### Build from Source
@@ -73,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/TylerStaplerAtFanatics/stapler-squa
 Build and install directly from source. The script installs Go via Homebrew if it isn't already present, then compiles the full application (web UI + server) and puts `ssq` in `~/.local/bin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TylerStaplerAtFanatics/stapler-squad/main/install.sh | bash -s -- --from-source
+curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash -s -- --from-source
 ```
 
 Or step by step:
@@ -83,7 +83,7 @@ Or step by step:
 brew install go node buf
 
 # 2. Clone the repository
-git clone https://github.com/TylerStaplerAtFanatics/stapler-squad.git
+git clone https://github.com/tstapler/stapler-squad.git
 cd stapler-squad
 
 # 3. Build (compiles proto code, Next.js web UI, and Go binary)
@@ -255,7 +255,7 @@ brew install tmux gh
 
 ```bash
 # Clone the repository
-git clone https://github.com/TylerStaplerAtFanatics/stapler-squad.git
+git clone https://github.com/tstapler/stapler-squad.git
 cd stapler-squad
 
 # Build (auto-installs go, buf, and node via Homebrew if missing)
@@ -489,4 +489,4 @@ The result is opinionated toward my own workflow: approval gates before agent ch
 
 ### Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=TylerStaplerAtFanatics/stapler-squad&type=Date)](https://www.star-history.com/#TylerStaplerAtFanatics/stapler-squad&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=tstapler/stapler-squad&type=Date)](https://www.star-history.com/#tstapler/stapler-squad&Date)

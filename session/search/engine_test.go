@@ -364,6 +364,57 @@ func TestSearchEngine_Persistence(t *testing.T) {
 	}
 }
 
+// TestSearchEngine_Persistence_LoadsSyncMetadata exercises the same
+// NewIndexStoreWithDir -> NewSearchEngineWithPersistence -> LoadIndex ->
+// GetSyncMetadata sequence NewSessionService runs at startup
+// (server/services/session_service.go). TestSearchEngine_Persistence already
+// covers the index/doc-store round trip but never touches sync metadata, so
+// a regression in SaveSyncMetadata/LoadSyncMetadata's wiring into
+// LoadIndex/GetSyncMetadata would go undetected.
+func TestSearchEngine_Persistence_LoadsSyncMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+	indexStore, err := NewIndexStoreWithDir(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create index store: %v", err)
+	}
+
+	engine := NewSearchEngineWithPersistence(indexStore)
+	engine.IndexMessage("session-1", 0, "user", "hello world", time.Now())
+
+	meta := NewIndexSyncMetadata()
+	meta.Sessions["session-1"] = &SessionIndexMetadata{
+		SessionID:    "session-1",
+		MessageCount: 1,
+		DocCount:     1,
+	}
+	meta.TotalSessions = 1
+	meta.TotalDocuments = 1
+	engine.syncMetadata = meta
+
+	if err := engine.SaveIndex(); err != nil {
+		t.Fatalf("SaveIndex failed: %v", err)
+	}
+	if err := engine.SaveSyncMetadata(); err != nil {
+		t.Fatalf("SaveSyncMetadata failed: %v", err)
+	}
+
+	loaded := NewSearchEngineWithPersistence(indexStore)
+	if err := loaded.LoadIndex(); err != nil {
+		t.Fatalf("LoadIndex failed: %v", err)
+	}
+
+	got := loaded.GetSyncMetadata()
+	if got == nil {
+		t.Fatal("GetSyncMetadata() = nil after LoadIndex, want persisted metadata")
+	}
+	if got.TotalSessions != 1 || got.TotalDocuments != 1 {
+		t.Errorf("GetSyncMetadata() = %+v, want TotalSessions=1 TotalDocuments=1", got)
+	}
+	if _, ok := got.Sessions["session-1"]; !ok {
+		t.Errorf("GetSyncMetadata().Sessions missing %q: %+v", "session-1", got.Sessions)
+	}
+}
+
 // Benchmark tests
 func BenchmarkSearchEngine_IndexMessage(b *testing.B) {
 	engine := NewSearchEngine()
