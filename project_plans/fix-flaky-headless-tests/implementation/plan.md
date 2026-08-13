@@ -11,6 +11,33 @@ documentation of the parts already correct and not touched.
 
 ---
 
+## Deviation from backlog AC4's literal wording (read this first)
+
+Backlog item `04e6841f-ff53-44bb-b737-04e8b52fe1c3`'s AC4 asks for cluster 3's
+signal check to be a "portable, **build-tag-gated** signal-check helper."
+The shipped `isExpectedFaultSignal` (`session/unfinished/gogitstore/
+trunc_fault_signal_test.go`) is deliberately **not** build-tag-gated — it has
+zero `//go:build` directives and zero `syscall`/platform-specific imports.
+
+This is not an unmet requirement; it's a corrected assumption. AC4's
+"build-tag-gated" phrasing assumed the originally-planned implementation
+(`syscall.WaitStatus`-based signal checking, which genuinely does need a
+`!windows`/`windows` split). That plan was found, empirically, during
+implementation, not to work at all for this specific fault
+(`WaitStatus.Signal()` can never equal `SIGBUS`/`SIGSEGV` for a Go-runtime
+crash — see the full reasoning and verification steps in Story 3.1.1's
+**"IMPLEMENTATION DEVIATION"** block below, ~line 351, and its **"As-built"**
+block, ~line 476). The replacement design (parsing Go's own crash-dump text)
+needs no build tag at all — confirmed via `GOOS=windows go vet
+./session/unfinished/gogitstore/...`, clean — which is a **stronger**
+portability result than build-tag-gating would have given, not a weaker one.
+Per this same backlog item's own AC7/AC8 philosophy ("findings that a change
+isn't needed are documented, not forced through anyway"), no build tag was
+added to satisfy AC4's literal implementation-detail wording once the
+underlying assumption behind that wording was shown not to hold.
+
+---
+
 ## Step 0.5 — Creative pass: alternatives for the clusters 1+2 fix
 
 Three distinct approaches were considered for making the fake-claude fixture
