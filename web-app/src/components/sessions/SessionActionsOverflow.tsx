@@ -9,6 +9,7 @@ import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
+import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 import {
   desktopActions,
   overflowContainer,
@@ -55,6 +56,7 @@ export interface SessionActionsOverflowProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
@@ -87,6 +89,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
   onUpdateTags,
@@ -117,6 +120,12 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isRunningOneShot, setIsRunningOneShot] = useState(false);
   const [oneShotResult, setOneShotResult] = useState<string | null>(null);
   const [isAutonomousConfirmOpen, setIsAutonomousConfirmOpen] = useState(false);
+  // Auto-approve toggle restart notice. SetAutoApprove (session/instance_actor_setters.go)
+  // restarts an Active session unconditionally in EITHER direction (the flag is baked into
+  // the launch command at spawn time), so unlike autonomous mode's enable-only friction,
+  // this dialog is shown for both enabling and disabling on an Active session.
+  const [isAutoApproveConfirmOpen, setIsAutoApproveConfirmOpen] = useState(false);
+  const [pendingAutoApproveValue, setPendingAutoApproveValue] = useState(false);
   const [isSteerOpen, setIsSteerOpen] = useState(false);
   const [steerMessage, setSteerMessage] = useState("");
   const [isClearConversationConfirmOpen, setIsClearConversationConfirmOpen] = useState(false);
@@ -143,6 +152,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const checkpointDialogRef = useRef<HTMLDivElement>(null);
   const autonomousConfirmDialogRef = useRef<HTMLDivElement>(null);
+  const autoApproveConfirmDialogRef = useRef<HTMLDivElement>(null);
   const steerDialogRef = useRef<HTMLDivElement>(null);
   const clearConversationDialogRef = useRef<HTMLDivElement>(null);
   const programConfirmDialogRef = useRef<HTMLDivElement>(null);
@@ -155,6 +165,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   useFocusTrap(deleteDialogRef, isDeleteConfirmOpen);
   useFocusTrap(checkpointDialogRef, isCheckpointOpen, checkpointTriggerRef);
   useFocusTrap(autonomousConfirmDialogRef, isAutonomousConfirmOpen);
+  useFocusTrap(autoApproveConfirmDialogRef, isAutoApproveConfirmOpen);
   useFocusTrap(steerDialogRef, isSteerOpen);
   useFocusTrap(clearConversationDialogRef, isClearConversationConfirmOpen, clearConversationTriggerRef);
   useFocusTrap(programConfirmDialogRef, isProgramRestartConfirmOpen);
@@ -271,7 +282,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   );
   const hasGroup2 = !!(onRunOneShot || onCreateCheckpoint);
   const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
-  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode);
+  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove);
   const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || onDelete);
 
   return (
@@ -421,6 +432,54 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 Run Autonomously
               </button>
               <button onClick={(e) => { e.stopPropagation(); setIsAutonomousConfirmOpen(false); }} className={cancelButton}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Auto-approve toggle: enabling always confirms with a danger warning (matches the
+          original asymmetric-friction design -- unsafe regardless of run state). Disabling
+          only reaches this dialog when Active, where it also shows a restart notice (AC6:
+          SetAutoApprove restarts unconditionally on ANY change while Active); disabling a
+          non-Active session applies immediately with no dialog (see the menu item above). */}
+      {isAutoApproveConfirmOpen && createPortal(
+        <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsAutoApproveConfirmOpen(false); }}>
+          <div
+            ref={autoApproveConfirmDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="autoApproveDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setIsAutoApproveConfirmOpen(false); }}
+          >
+            <h3 id="autoApproveDialogTitle">{pendingAutoApproveValue ? "Enable Auto-Approve" : "Disable Auto-Approve"}</h3>
+            {pendingAutoApproveValue ? (
+              <>
+                <p>&quot;{session.title}&quot; will skip ALL permission/approval prompts for its agent (e.g. file edits, shell commands).</p>
+                <p className={warningText}>
+                  This is genuinely unsafe outside a disposable/sandboxed workspace — unintended file modifications or data loss are possible.
+                  {isRunning ? " The session will restart to apply this." : ""} You can disable it at any time from this menu.
+                </p>
+              </>
+            ) : (
+              <p className={warningText}>&quot;{session.title}&quot; will restart to apply this change.</p>
+            )}
+            <div className={dialogActions}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleAutoApprove?.(session.id, pendingAutoApproveValue);
+                  setIsAutoApproveConfirmOpen(false);
+                }}
+                className={submitButton}
+              >
+                {pendingAutoApproveValue ? "Enable Auto-Approve" : "Disable & Restart"}
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setIsAutoApproveConfirmOpen(false); }} className={cancelButton}>
                 Cancel
               </button>
             </div>
@@ -726,6 +785,37 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   aria-label={`Give direction to ${session.title}`}
                 >
                   <span aria-hidden="true">🧭</span> Give direction
+                </button>
+              )}
+              {/* Gated on isAutoApproveSupported (pre-mortem #2): hidden entirely for an
+                  unsupported agent unless auto_approve is already on (so it can still be
+                  turned back off even if the program changed since). */}
+              {onToggleAutoApprove && (session.autoApprove || isAutoApproveSupported(session.program)) && (
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={session.autoApprove}
+                  className={overflowMenuItem}
+                  title="Skip all permission/approval prompts for this agent."
+                  aria-label={session.autoApprove ? `Disable auto-approve for ${session.title}` : `Enable auto-approve for ${session.title}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    close();
+                    const next = !session.autoApprove;
+                    // Enabling always confirms (the danger warning applies regardless of
+                    // run state -- matches the original asymmetric-friction design).
+                    // Disabling only confirms when Active, where it also restarts
+                    // (AC6); disabling a non-Active session is the safe direction and
+                    // never restarts, so it applies immediately.
+                    if (next || isRunning) {
+                      setPendingAutoApproveValue(next);
+                      setIsAutoApproveConfirmOpen(true);
+                    } else {
+                      onToggleAutoApprove(session.id, next);
+                    }
+                  }}
+                >
+                  <span aria-hidden="true">{session.autoApprove ? "⏹" : "⚡"}</span>{" "}
+                  {session.autoApprove ? "Disable auto-approve" : "Enable auto-approve"}
                 </button>
               )}
 

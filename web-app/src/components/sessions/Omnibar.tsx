@@ -83,6 +83,9 @@ export interface OmnibarFormState {
   // except one_off) rather than a session type of its own — see OmnibarCreationPanel's
   // "Autonomous mode" checkbox.
   autonomousMode: boolean;
+  // Auto-approve (yolo mode): injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely. Independent of autoYes — see OmnibarCreationPanel's checkbox comment.
+  autoApprove: boolean;
 }
 
 const INITIAL_FORM_STATE: OmnibarFormState = {
@@ -102,6 +105,7 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   createIfMissing: false,
   firstPrompt: "",
   autonomousMode: false,
+  autoApprove: false,
 };
 
 // Consolidated UI state
@@ -136,6 +140,9 @@ export interface OmnibarSessionData {
   createIfMissing?: boolean;
   // Autonomous mode: run without human permission prompts (LLM approves tool calls).
   autonomousMode?: boolean;
+  // Auto-approve (yolo mode): injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely. Independent of autoYes.
+  autoApprove?: boolean;
   // Permission mode passed to Claude Code (e.g. "auto" for autonomous sessions).
   permissionMode?: string;
   aliasName?: string;
@@ -215,7 +222,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
   // Convenience aliases for existing code
   // Destructure only fields needed for validation/submission logic in Omnibar.tsx
-  const { sessionName, program, category, autoYes, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType, createIfMissing } = formState;
+  const { sessionName, program, category, autoYes, autoApprove, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType, createIfMissing } = formState;
   const { showAdvanced } = uiState;
   const { dropdownIndex, dropdownDismissed, resultHighlightIndex, atSuggestIndex } = uiState;
   // Used in detection auto-fill effects
@@ -636,6 +643,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setFormState(INITIAL_FORM_STATE);
       setUIState({ showAdvanced: false, dropdownIndex: -1, dropdownDismissed: false, resultHighlightIndex: -1, atSuggestIndex: -1 });
       setError(null);
+      // Defense-in-depth: handleSubmit's own finally blocks already reset this on
+      // success/failure, but this instance never unmounts across open/close cycles, so
+      // also clear it here in case onClose() didn't synchronously flip isOpen after a
+      // submission (the original bug this guards against — see Omnibar.submitReset.test.tsx).
+      setIsSubmitting(false);
       lastSuggestedNameRef.current = "";
       prevDetectionTypeRef.current = null;
       dispatchMode({ kind: "reset_to_discovery" });
@@ -1056,6 +1068,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         sessionType: shellDir ? "directory" : "one_off",
         createIfMissing: Boolean(shellDir),
         autoYes: false,
+        autoApprove: false,
       };
       setIsSubmitting(true);
       setError(null);
@@ -1065,6 +1078,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
+      } finally {
         setIsSubmitting(false);
       }
       return;
@@ -1094,6 +1108,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         path: "",
         program: program || "",
         autoYes,
+        autoApprove,
         aliasName: String(aliasName),
         branch: aliasFinalBranch || undefined,
         extraCliFlags: extraFlags !== undefined ? String(extraFlags) : undefined,
@@ -1109,6 +1124,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
+      } finally {
         setIsSubmitting(false);
       }
       return;
@@ -1142,6 +1158,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           category: category.trim() || undefined,
           prompt: finalPrompt,
           autoYes,
+          autoApprove,
           sessionType: newProjectSessionType,
           isNewProject: true,
           initialPrompt: firstPromptText,
@@ -1160,6 +1177,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           category: category.trim() || undefined,
           prompt: finalPrompt,
           autoYes,
+          autoApprove,
           sessionType,
           existingWorktree: isOneOff ? undefined : (existingWorktree.trim() || undefined),
           workingDir: isOneOff ? undefined : (workingDir.trim() || undefined),
@@ -1222,6 +1240,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     program,
     category,
     autoYes,
+    autoApprove,
     existingWorktree,
     workingDir,
     parentDir,
@@ -1235,6 +1254,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     onClose,
     onRunWorkflow,
     formState.firstPrompt,
+    formState.autonomousMode,
     router,
     setTheme,
   ]);

@@ -222,10 +222,10 @@ describe("Omnibar alias namePrefix population", () => {
     resetDefaultRegistry();
   });
 
-  // When an alias is detected, the omnibar stays in discovery mode (InputType.Alias is
-  // not a CREATION_TYPE), so OmnibarCreationPanel is not rendered. The namePrefix
-  // population logic still runs and updates formState.sessionName, which is then used
-  // as the session title when the user submits. We verify the population logic by
+  // InputType.Alias IS a CREATION_TYPE (useModeReducer.ts), so detecting an alias
+  // switches the omnibar into creation mode and renders OmnibarCreationPanel. The
+  // namePrefix population logic runs and updates formState.sessionName, which is then
+  // used as the session title when the user submits. We verify the population logic by
   // submitting via Cmd+Enter and asserting the title passed to onCreateSession.
 
   it("populates session name with prefix+label when alias has namePrefix and label is typed", async () => {

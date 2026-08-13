@@ -920,3 +920,58 @@ func TestDegradeIfUnverified_ToolReadsOnePathMissingAmongMultiple_ForcesUnverifi
 	assert.Equal(t, ReviewOutcomeUnverifiable, overall)
 	assert.Equal(t, "codebase-read-degraded", path)
 }
+
+// TestGetWorktreeDirtyPaths_ReturnsPathsForDirtyWorktree verifies untracked and staged
+// modified files are both reported.
+func TestGetWorktreeDirtyPaths_ReturnsPathsForDirtyWorktree(t *testing.T) {
+	repo := setupTestGitRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("new"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Test\nmodified\n"), 0o644))
+
+	paths, err := GetWorktreeDirtyPaths(repo)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"untracked.txt", "README.md"}, paths)
+}
+
+// TestGetWorktreeDirtyPaths_EmptyForCleanWorktree verifies a freshly committed repo with
+// no working-tree changes returns an empty, non-error result.
+func TestGetWorktreeDirtyPaths_EmptyForCleanWorktree(t *testing.T) {
+	repo := setupTestGitRepo(t)
+
+	paths, err := GetWorktreeDirtyPaths(repo)
+	require.NoError(t, err)
+	assert.Empty(t, paths)
+}
+
+// TestGetWorktreeDirtyPaths_HandlesRenamedFile verifies a rename reports only the new
+// path (not the old one), reusing parsePorcelainV2Z's existing rename-continuation-token
+// handling rather than a naive reimplementation.
+func TestGetWorktreeDirtyPaths_HandlesRenamedFile(t *testing.T) {
+	repo := setupTestGitRepo(t)
+
+	mv := safeexec.CommandContext(context.Background(), "git", "mv", "README.md", "RENAMED.md")
+	mv.Dir = repo
+	require.NoError(t, mv.Run())
+
+	addCmd := safeexec.CommandContext(context.Background(), "git", "add", "-A")
+	addCmd.Dir = repo
+	require.NoError(t, addCmd.Run())
+
+	paths, err := GetWorktreeDirtyPaths(repo)
+	require.NoError(t, err)
+	assert.Contains(t, paths, "RENAMED.md")
+	assert.NotContains(t, paths, "README.md")
+}
+
+// TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil verifies a non-git directory
+// is treated as a no-op ((nil, nil)) rather than surfacing vc.ErrNoVCSFound as an error
+// — unlike IsWorktreeDirty, which errors in this case via its underlying `git status`
+// subprocess failing.
+func TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil(t *testing.T) {
+	dir := t.TempDir()
+
+	paths, err := GetWorktreeDirtyPaths(dir)
+	require.NoError(t, err)
+	assert.Nil(t, paths)
+}

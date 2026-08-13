@@ -1,9 +1,9 @@
 "use client";
 // +feature: history-search history-list
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
 import { SessionType } from "@/gen/session/v1/types_pb";
@@ -21,10 +21,11 @@ import { useHistoryGrouping } from "@/lib/hooks/useHistoryGrouping";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import * as styles from "./history.css";
 
-export default function HistoryBrowserPage() {
+function HistoryBrowserPageInner() {
   usePageView();
   const { track } = useAnalytics();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   // Core state
   const [entries, setEntries] = useState<ClaudeHistoryEntry[]>([]);
@@ -106,6 +107,39 @@ export default function HistoryBrowserPage() {
       if (messagesResponse.messages) setPreviewMessages([...messagesResponse.messages].reverse());
     } catch (err) { setError(`Failed to load entry details: ${err}`); }
     finally { setLoadingPreview(false); }
+  }, []);
+
+  // Deep-link support: ?sessionId=<id>&messageIndex=<n> opens that session
+  // directly on mount (e.g. from TriageRelatedWorkSection's result cards),
+  // bypassing the normal list-click flow. messageIndex centers the messages
+  // modal on that index when present; sessionId alone falls back to the
+  // session's default (unanchored) view.
+  useEffect(() => {
+    const deepLinkSessionId = searchParams.get("sessionId");
+    if (!deepLinkSessionId || !clientRef.current) return;
+    loadEntryDetail(deepLinkSessionId);
+
+    const messageIndexParam = searchParams.get("messageIndex");
+    if (messageIndexParam === null) return;
+    const messageIndex = Number(messageIndexParam);
+    if (!Number.isFinite(messageIndex)) return;
+
+    (async () => {
+      if (!clientRef.current) return;
+      try {
+        const response = await clientRef.current.getClaudeHistoryMessages({
+          id: deepLinkSessionId,
+          anchorIndex: messageIndex,
+          limit: 21,
+        });
+        setMessages(response.messages);
+        setShowMessages(true);
+      } catch (err) {
+        setError(`Failed to load anchored messages: ${err}`);
+      }
+    })();
+    // Only run once on mount — the deep link should not re-fire on unrelated re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSearch = useCallback(async () => {
@@ -404,5 +438,13 @@ export default function HistoryBrowserPage() {
         </div>
       )}
     </main>
+  );
+}
+
+export default function HistoryBrowserPage() {
+  return (
+    <Suspense>
+      <HistoryBrowserPageInner />
+    </Suspense>
   );
 }

@@ -34,14 +34,23 @@ type SessionHealthChecker struct {
 // a recovery attempt is triggered. Set to 2 to require two consecutive misses.
 const failureThreshold = 2
 
-// restartGracePeriod suppresses Crashed-status transitions for this long after
-// the health checker starts. A service restart can leave an orphaned pre-restart
-// process racing the new process over the same tmux server (see
+// restartGracePeriod suppresses Crashed/Stopped-status transitions for this long
+// after the health checker starts, but ONLY for sessions that already existed
+// before the checker started (see the sessionPredatesRestart check at its use
+// site below). A service restart can leave an orphaned pre-restart process
+// racing the new process over the same tmux server (see
 // .claude/rules/service-restart-orphan-process.md and
 // .claude/rules/tmux-keep-server-on-restart.md), which can surface as a spurious
-// dead-pane detection right after startup. During the grace period, dead panes
-// are still self-healed via the old kill+respawn behavior; only after it elapses
-// does a dead pane surface as a user-visible Crashed status.
+// dead-pane detection right after startup for one of those pre-existing
+// sessions. During the grace period, such dead panes are still self-healed via
+// the old kill+respawn behavior; only after it elapses does a dead pane surface
+// as a user-visible Crashed status.
+//
+// A session created after the checker started has no such ambiguity to protect
+// against -- it was spawned entirely within this process's lifetime, so there is
+// no orphaned pre-restart process that could be racing it. A dead pane on a
+// never-previously-alive session is therefore always a genuine, immediately
+// reportable exit, regardless of how soon after startup it happens.
 const restartGracePeriod = 60 * time.Second
 
 // markStartFailed fails an instance with a human-readable reason instead of
@@ -200,6 +209,23 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 		return result
 	}
 
+	// LoadInstances() (session/storage.go) always deserializes with
+	// deferStart=true so a bulk load at server startup doesn't block HTTP bind
+	// on cold-restoring every session -- but that leaves Started() false on
+	// every freshly-deserialized Active instance, even though its tmux backend
+	// is already wired (fromInstanceData's SetSession call runs regardless of
+	// deferStart). Every CheckAllSessions() tick goes through LoadInstances(),
+	// so without this, the switch below -- and therefore all dead-pane
+	// detection -- was skipped entirely for every Active session, on every
+	// tick, forever: TmuxAlive()/PaneProcessDead() both short-circuit false on
+	// !Started(), matching the exact remain-on-exit dead pane this checker
+	// exists to catch. instance here is a throwaway copy LoadInstances()
+	// constructs fresh on every call (not the live, actor-managed instance),
+	// so marking it started has no effect beyond this health check.
+	if instance.Status == Active && !instance.Started() {
+		instance.started.Store(true)
+	}
+
 	// Check if instance thinks it's started but tmux session doesn't exist
 	if instance.Started() {
 		switch {
@@ -259,7 +285,13 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 			result.RecoveryAttempted = true
 			_, exitCode, exitSignal := instance.PaneExitInfo()
 
-			if time.Since(h.startedAt) < restartGracePeriod {
+			// Only a session that already existed before this checker started could
+			// have been affected by a restart race; one created afterward was never
+			// "previously alive" from this process's perspective and gets no grace
+			// window. See restartGracePeriod's doc comment.
+			sessionPredatesRestart := instance.CreatedAt.Before(h.startedAt)
+
+			if sessionPredatesRestart && time.Since(h.startedAt) < restartGracePeriod {
 				// Within the post-startup grace window: fall back to the old
 				// silent kill+respawn behavior instead of surfacing a status
 				// change, since a dead-pane detection here is more likely a

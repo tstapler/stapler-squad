@@ -217,6 +217,17 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 				// One-shot sessions: BacklogLifecycleListener handles this; driver exits cleanly.
 				return
 			}
+			if initialPrompt == "" {
+				// No initial prompt was ever configured for this session (e.g. a plain
+				// terminal/bash session created without a task) -- sentInitial's "no
+				// prompt to send" bookkeeping trivially satisfies `st == Stopped` the
+				// moment the session ends, at any time, indistinguishable here from a
+				// real AI-agent task interrupted mid-run. There is no in-flight task to
+				// protect by retrying, so a user-initiated `exit` (or any other exit)
+				// must be left as a clean Stopped, not silently respawned underneath
+				// them moments later.
+				return
+			}
 			// CONCERN-2 guard: only restart if the session crashed quickly (within 5 minutes
 			// of sending the initial prompt). A session that ran for > 5 minutes and then stopped
 			// has likely completed its task normally. BacklogLifecycleListener handles that transition.

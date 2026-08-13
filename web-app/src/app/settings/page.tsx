@@ -10,6 +10,7 @@ import { DirectoryRulesManager } from "@/components/settings/DirectoryRulesManag
 import { AliasesManager } from "@/components/settings/AliasesManager";
 import { PushNotificationSettings } from "@/components/settings/PushNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
+import { InputModeSetting } from "@/components/settings/InputModeSetting";
 import { ConfigPageContent } from "@/app/config/ConfigPageContent";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { usePageView } from "@/lib/analytics/usePageView";
@@ -121,6 +122,9 @@ function SettingsPageInner() {
           <div className={styles.sectionGroup}>
             <section className={styles.section}>
               <ThemePicker />
+            </section>
+            <section className={styles.section}>
+              <InputModeSetting />
             </section>
             <section className={styles.section}>
               <PushNotificationSettings />

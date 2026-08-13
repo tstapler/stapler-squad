@@ -100,6 +100,14 @@ func (p *PRStatusPoller) PollInterval() time.Duration {
 	return p.config.PollInterval
 }
 
+// ETagCache returns the poller's shared *github.ETagCache, so other pollers
+// (e.g. WorktreePRPoller) reuse the same conditional-request cache instead of
+// each maintaining their own — per ADR-022, a separate cache would double
+// GitHub API call volume for repos both pollers hit.
+func (p *PRStatusPoller) ETagCache() *github.ETagCache {
+	return p.etagCache
+}
+
 // SetInstances replaces the full list of monitored instances.
 func (p *PRStatusPoller) SetInstances(instances []*Instance) {
 	p.mu.Lock()
