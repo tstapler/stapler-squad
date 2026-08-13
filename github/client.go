@@ -172,16 +172,17 @@ func CheckGHAuth() error {
 			return authErr, nil
 		}
 		defer resp.Body.Close()
-		_, _ = io.Copy(io.Discard, resp.Body)
 
 		var authErr error
-		switch resp.StatusCode {
-		case http.StatusOK:
-			// authenticated — no error
-		case http.StatusUnauthorized, http.StatusForbidden:
-			authErr = fmt.Errorf("GitHub is not authenticated (HTTP %d). Set GITHUB_TOKEN or run 'gh auth login'", resp.StatusCode)
-		default:
-			authErr = fmt.Errorf("GitHub auth check: unexpected status %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusOK {
+			_, _ = io.Copy(io.Discard, resp.Body)
+		} else {
+			// classifyGHResponse distinguishes real auth failures (401, or a
+			// 403 with no rate-limit signal) from rate limiting (403 with
+			// Retry-After or X-RateLimit-Remaining: 0, or 429) — a plain
+			// "not authenticated, run gh auth login" message on a rate-limited
+			// response is misleading and sends users to fix the wrong thing.
+			authErr = classifyGHResponse(resp, "", false)
 		}
 
 		ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
@@ -401,14 +402,8 @@ func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, e
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("GitHub API: unauthorized (401) – run 'gh auth login'")
-	}
-	if resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("GitHub API: forbidden (403) – check token permissions")
-	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned status %d for PR list", resp.StatusCode)
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -467,14 +462,8 @@ func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRIn
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, ErrNoPR
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("GitHub API: unauthorized (401) – run 'gh auth login'")
-	}
-	if resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("GitHub API: forbidden (403) – check token permissions")
-	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned status %d for PR #%d", resp.StatusCode, prNumber)
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)
