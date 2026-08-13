@@ -269,22 +269,30 @@ func (g *GitWorktree) setupNewWorktree() error {
 		return fmt.Errorf("failed to cleanup existing branch: %w", err)
 	}
 
-	output, err := g.runGitCommand(g.repoPath, "rev-parse", "HEAD")
-	if err != nil {
-		if strings.Contains(err.Error(), "fatal: ambiguous argument 'HEAD'") ||
-			strings.Contains(err.Error(), "fatal: not a valid object name") ||
-			strings.Contains(err.Error(), "fatal: HEAD: not a valid object name") {
-			return fmt.Errorf("this appears to be a brand new repository: please create an initial commit before creating an instance")
+	// A caller that already knows the commit it wants (e.g. NewGitWorktreeFromCommitSHA,
+	// or CreateBacklogWorktree resolving origin/main's true tip before branching) sets
+	// baseCommitSHA ahead of time — respect it instead of clobbering it with whatever
+	// repoPath's own checkout happens to have as HEAD right now. Only fall back to
+	// rev-parse HEAD (branch from the current checkout, same as always) when no base
+	// was pre-selected.
+	headCommit := g.baseCommitSHA
+	if headCommit == "" {
+		output, err := g.runGitCommand(g.repoPath, "rev-parse", "HEAD")
+		if err != nil {
+			if strings.Contains(err.Error(), "fatal: ambiguous argument 'HEAD'") ||
+				strings.Contains(err.Error(), "fatal: not a valid object name") ||
+				strings.Contains(err.Error(), "fatal: HEAD: not a valid object name") {
+				return fmt.Errorf("this appears to be a brand new repository: please create an initial commit before creating an instance")
+			}
+			return fmt.Errorf("failed to get HEAD commit hash: %w", err)
 		}
-		return fmt.Errorf("failed to get HEAD commit hash: %w", err)
+		headCommit = strings.TrimSpace(string(output))
+		g.baseCommitSHA = headCommit
 	}
-	headCommit := strings.TrimSpace(string(output))
-	g.baseCommitSHA = headCommit
 
-	// Create a new worktree from the HEAD commit
+	// Create a new worktree from the resolved base commit.
 	// Otherwise, we'll inherit uncommitted changes from the previous worktree.
 	// This way, we can start the worktree with a clean slate.
-	// TODO: we might want to give an option to use main/master instead of the current branch.
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
 		return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
 	}

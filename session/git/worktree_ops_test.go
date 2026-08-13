@@ -204,6 +204,51 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 	assert.Equal(t, expectedHash, afterRef.Hash())
 }
 
+// TestSetupNewWorktree_RespectsPreSetBaseCommitSHA is the regression test for the
+// stale-HEAD backlog-spawn bug: setupNewWorktree() used to unconditionally overwrite
+// baseCommitSHA with `rev-parse HEAD` of repoPath, silently discarding any base a caller
+// had already selected (e.g. NewGitWorktreeFromCommitSHA, or CreateBacklogWorktree
+// resolving origin/main's fetched tip). This asserts the worktree is branched from the
+// pre-set commit even though repoPath's own HEAD has since moved past it.
+func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
+	repoDir := setupTestRepo(t)
+
+	firstCommit, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err)
+	baseSHA := strings.TrimSpace(string(firstCommit))
+
+	// Advance repoPath's HEAD past baseSHA, simulating a shared checkout that has drifted
+	// ahead of (or independently of) the commit the caller actually wants to branch from.
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "later.txt"), []byte("later"), 0644))
+	for _, args := range [][]string{
+		{"-C", repoDir, "add", "."},
+		{"-C", repoDir, "commit", "-m", "second commit"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+	headCommit, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err)
+	require.NotEqual(t, baseSHA, strings.TrimSpace(string(headCommit)), "test setup must advance HEAD past baseSHA")
+
+	branchName := "backlog/pre-set-base-sha"
+	wt, _, err := NewGitWorktreeFromCommitSHA(repoDir, "test-pre-set-base", branchName, baseSHA)
+	require.NoError(t, err)
+
+	err = wt.setupNewWorktree()
+	require.NoError(t, err)
+	defer func() { _ = wt.Cleanup() }()
+
+	assert.Equal(t, baseSHA, wt.GetBaseCommitSHA(), "baseCommitSHA must remain the pre-set commit, not be overwritten by repoPath's HEAD")
+
+	worktreeHead, err := safeexec.CommandContext(context.Background(), "git", "-C", wt.worktreePath, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err)
+	assert.Equal(t, baseSHA, strings.TrimSpace(string(worktreeHead)), "worktree must be checked out at the pre-set base commit, not repoPath's current HEAD")
+
+	_, statErr := os.Stat(filepath.Join(wt.worktreePath, "later.txt"))
+	assert.True(t, os.IsNotExist(statErr), "worktree must not contain changes made after the pre-set base commit")
+}
+
 // TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers setupNewWorktree()'s
 // own reuse path directly, independent of Setup()'s upfront goroutine (which would normally
 // short-circuit straight to setupFromExistingBranch and never reach setupNewWorktree() at

@@ -179,6 +179,42 @@ func TestMergeMainIntoWorktree_should_ReturnError_When_MergeFailsForNonConflictR
 	assert.Equal(t, "uncommitted local edit\n", string(content))
 }
 
+// TestResolveOriginBranchSHA_ReturnsFetchedTip_When_OriginHasAdvanced is the regression
+// test for the stale-HEAD backlog-spawn bug's fetch primitive: it must return origin's
+// true current tip, not whatever repoPath's cached origin/main ref happened to be at
+// clone time (the same staleness that let a new backlog work session branch from a
+// days-old checkout instead of main's real tip).
+func TestResolveOriginBranchSHA_ReturnsFetchedTip_When_OriginHasAdvanced(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	staleSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "origin/main"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "advance.txt"), []byte("advance\n"), 0o644))
+	runGit(t, origin, "add", "advance.txt")
+	runGit(t, origin, "commit", "-m", "advance origin")
+	newTip := strings.TrimSpace(runGit(t, origin, "rev-parse", "HEAD"))
+	require.NotEqual(t, staleSHA, newTip, "test setup must advance origin past the clone's cached ref")
+
+	sha, err := ResolveOriginBranchSHA(work, "main")
+	require.NoError(t, err)
+	assert.Equal(t, newTip, sha, "must return origin's freshly-fetched tip, not the clone's stale cached ref")
+}
+
+// TestResolveOriginBranchSHA_ReturnsError_When_FetchFails verifies that an unreachable
+// origin surfaces as an error rather than silently returning a stale or empty SHA —
+// CreateBacklogWorktree relies on this to know when to fall back to the old
+// ambient-HEAD behavior instead of branching from a bogus commit.
+func TestResolveOriginBranchSHA_ReturnsError_When_FetchFails(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	sha, err := ResolveOriginBranchSHA(work, "main")
+	require.Error(t, err)
+	assert.Empty(t, sha)
+}
+
 // TestIsCommitOnMain_should_ReturnTrue_When_CommitIsMainTipLocally verifies the
 // simplest case: a commit that IS main's own local tip is trivially its own ancestor.
 func TestIsCommitOnMain_should_ReturnTrue_When_CommitIsMainTipLocally(t *testing.T) {

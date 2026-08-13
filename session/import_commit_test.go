@@ -104,13 +104,14 @@ func TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSu
 	}
 
 	result, err := CommitImportExternalSession(context.Background(), CommitImportParams{
-		Detector:     detector,
-		Storage:      store,
-		Linker:       linker,
-		Suspended:    suspended,
-		AliveChecker: &fakeAliveChecker{alive: true},
-		Candidate:    candidate,
-		OriginalPID:  pid,
+		Detector:         detector,
+		Storage:          store,
+		Linker:           linker,
+		Suspended:        suspended,
+		AliveChecker:     &fakeAliveChecker{alive: true},
+		Candidate:        candidate,
+		OriginalPID:      pid,
+		TmuxServerSocket: coldRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result.Instance)
@@ -164,13 +165,14 @@ func TestCommitImportExternalSession_CompensatingDeletesInstance_When_SuspendOri
 	}
 
 	result, err := CommitImportExternalSession(context.Background(), CommitImportParams{
-		Detector:     detector,
-		Storage:      store,
-		Linker:       linker,
-		Suspended:    suspended,
-		AliveChecker: &fakeAliveChecker{alive: true},
-		Candidate:    candidate,
-		OriginalPID:  nonexistentPID,
+		Detector:         detector,
+		Storage:          store,
+		Linker:           linker,
+		Suspended:        suspended,
+		AliveChecker:     &fakeAliveChecker{alive: true},
+		Candidate:        candidate,
+		OriginalPID:      nonexistentPID,
+		TmuxServerSocket: coldRestoreSocket(t),
 	})
 	if store.deletedInstance != nil {
 		t.Cleanup(func() { _ = store.deletedInstance.Kill() })
@@ -236,6 +238,7 @@ func TestCommitImportExternalSession_ReturnsError_When_AliveCheckerRejectsOrigin
 		Candidate:            candidate,
 		OriginalPID:          pid,
 		OriginalCreateTimeMs: 12345,
+		TmuxServerSocket:     coldRestoreSocket(t),
 	})
 	if store.deletedInstance != nil {
 		t.Cleanup(func() { _ = store.deletedInstance.Kill() })
