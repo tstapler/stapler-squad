@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -330,4 +331,49 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 	out, statErr := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", branchName).CombinedOutput()
 	require.NoError(t, statErr)
 	assert.True(t, strings.Contains(string(out), branchName), "branch must exist once the race resolves")
+}
+
+// TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo models the
+// real-world failure this fix addresses: several independent worktree creations (e.g. multiple
+// backlog-triage spawns, or duplicate server processes) hitting the same repo's shared
+// .git/worktrees/ administrative metadata at once, each for a distinct branch/worktree path.
+// Unlike TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate (which calls the
+// unlocked setupNewWorktree() directly to exercise same-branch self-heal logic), this test calls
+// the public, now-lock-wrapped Setup() to verify withRepoWorktreeLock actually prevents the
+// metadata race rather than merely tolerating one branch-create collision.
+func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	const n = 8
+
+	worktrees := make([]*GitWorktree, n)
+	for i := 0; i < n; i++ {
+		branchName := fmt.Sprintf("backlog/concurrent-setup-%d", i)
+		wt, _, err := NewGitWorktreeWithBranch(repoDir, fmt.Sprintf("test-concurrent-setup-%d", i), branchName)
+		require.NoError(t, err)
+		worktrees[i] = wt
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[i] = worktrees[i].Setup()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		assert.NoError(t, err, "concurrent Setup() for worktree %d must not fail due to a .git/worktrees/ metadata race", i)
+	}
+
+	for _, wt := range worktrees {
+		wt := wt
+		defer func() { _ = wt.Cleanup() }()
+	}
 }
