@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -115,6 +116,11 @@ type AnalyticsSummary struct {
 	// EscalationReasonCounts breaks down escalations by category (classifier.EscalationCategory
 	// string values) — no-match, explicit-rule, domain-age, secret-scan, unclassifiable.
 	EscalationReasonCounts map[string]int `json:"escalation_reason_counts"`
+
+	// RiskLevelCounts breaks down escalations by classifier.RiskLevel string value
+	// ("low"/"medium"/"high"/"critical"), scoped to escalated decisions only — same scope as
+	// EscalationReasonCounts, so the two breakdowns share a denominator.
+	RiskLevelCounts map[string]int `json:"risk_level_counts"`
 }
 
 // AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite
@@ -123,6 +129,10 @@ type AnalyticsStore struct {
 	storage *session.Storage
 	ch      chan AnalyticsEntry
 	dropped int64 // atomic counter for dropped entries
+
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 const analyticsBufferSize = 1000
@@ -137,9 +147,27 @@ func NewAnalyticsStore(storage *session.Storage) *AnalyticsStore {
 }
 
 // Start launches the background goroutine that flushes entries to disk.
-// It stops when ctx is canceled.
-func (s *AnalyticsStore) Start(ctx interface{ Done() <-chan struct{} }) {
-	go s.flush(ctx)
+// It stops when Stop is called or ctx is canceled.
+func (s *AnalyticsStore) Start(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.done = make(chan struct{})
+	go func() {
+		defer close(s.done)
+		s.flush(ctx)
+	}()
+}
+
+// Stop cancels the background flush goroutine and waits for it to drain and
+// exit. Idempotent — safe to call multiple times or before Start.
+func (s *AnalyticsStore) Stop() {
+	s.stopOnce.Do(func() {
+		if s.cancel == nil {
+			return
+		}
+		s.cancel()
+		<-s.done
+	})
 }
 
 // Record enqueues an analytics entry for async write. Non-blocking.
@@ -343,6 +371,9 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	subcommandStats := make(map[string]SubcommandStat)
 	// escalation-reason breakdown: category → count
 	escalationReasonCounts := make(map[string]int)
+	// risk-level breakdown: classifier.RiskLevel string → count (same scope as
+	// escalationReasonCounts, so both tables share a denominator)
+	riskLevelCounts := make(map[string]int)
 
 	for _, e := range entries {
 		summary.TotalDecisions++
@@ -419,6 +450,9 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 		if e.Decision == "escalate" || (e.Decision == "auto_deny" && e.RuleID == classifier.RuleIDSecretScan) {
 			cat := classifier.CategorizeEscalationRuleID(e.RuleID)
 			escalationReasonCounts[string(cat)]++
+			if e.RiskLevel != "" {
+				riskLevelCounts[e.RiskLevel]++
+			}
 		}
 	}
 
@@ -453,6 +487,7 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	}
 
 	summary.EscalationReasonCounts = escalationReasonCounts
+	summary.RiskLevelCounts = riskLevelCounts
 
 	return summary
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ func setupForkTestFixture(t *testing.T) *forkTestFixture {
 
 	bus := events.NewEventBus(16)
 	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire the ReviewQueuePoller so findInstance() can resolve instances.
 	queue := session.NewReviewQueue()
@@ -274,4 +276,41 @@ func TestGetSessionDiff_UnknownIDReturnsNotFound(t *testing.T) {
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+}
+
+// TestGetSessionDiff_CompletedDirectoryModeSessionReturnsRealDiff guards the
+// fix for a completed (not live) session with no git worktree
+// (Worktree.WorktreePath == "") but a real Path — a "directory" session.
+// Before the fix, GetSessionDiff's completed-session branch only computed
+// diff stats when Worktree.WorktreePath was set, so a directory-mode
+// session's real changes were silently discarded in favor of an empty
+// DiffStats{} — this must fail against that pre-fix code (no else-if branch
+// at all) and pass now that one exists.
+func TestGetSessionDiff_CompletedDirectoryModeSessionReturnsRealDiff(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "new-file.txt"), []byte("uncommitted change\n"), 0o644))
+
+	// Persisted (not live — never registered with the poller), directory-mode:
+	// Path set, no Worktree. GetSessionDiff's findInstance() must miss this
+	// session and fall through to the completed-session storage lookup.
+	const testUUID = "33333333-3333-3333-3333-333333333333"
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		UUID:    testUUID,
+		Title:   "directory-mode-diff-session",
+		Path:    repoPath,
+		Status:  session.Stopped,
+		Program: "claude",
+	}))
+
+	resp, err := fix.svc.GetSessionDiff(context.Background(), connect.NewRequest(&sessionv1.GetSessionDiffRequest{
+		Id: testUUID,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.DiffStats)
+	assert.Positive(t, resp.Msg.DiffStats.Added,
+		"a completed directory-mode session's real uncommitted changes must be reflected in the diff, not silently discarded")
 }

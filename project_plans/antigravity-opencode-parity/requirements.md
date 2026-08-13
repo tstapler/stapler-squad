@@ -39,7 +39,23 @@ Fix `installAgy()` to use first-found path logic (like Gemini's `installGemini()
 Research actual agy v1.0.13 TUI output strings. Add patterns for states currently missing: InputRequired, Error, Idle, Success. Update `AgyDetector.Patterns()` in `session/detection/binaries/agy.go`.
 
 ### R4: Open Code native hooks
-Research whether opencode has a native hooks system (hooks.json or settings.json). If yes, implement `patchOpenCodeHooks()` and `writeOpenCodeHookDecision()` and replace the proxy wrapper with native hook registration. If no, document why proxy is the right approach.
+Research whether opencode has a native hooks system. Two distinct things go under this name and
+must be evaluated separately:
+- **JSON `hooks.json`/`settings.json`-style declarative config**, comparable to Claude's
+  `settings.json` hooks — confirmed **absent** (2026-07-01 research; re-confirmed 2026-08-11, no
+  change). OpenCode's static config only exposes `hook.file_edited`/`hook.session_completed`
+  (post-hoc, not permission-gating) and `permission.*` (coarse allow/ask/deny by command prefix,
+  not a dynamic callout).
+- **JS/TS plugin API `tool.execute.before`** (`@opencode-ai/plugin`'s `Hooks` interface) —
+  confirmed **present** (2026-08-11 re-verification; missed by the original 2026-07-01 research,
+  which only read the config-schema types). This is a real, `throw`-to-block,
+  intercept-before-execute hook, functionally equivalent to Claude's `PreToolUse`. See
+  `research/features.md`'s R4 addendum for sources and verification detail.
+
+Given the plugin API's existence, `patchOpenCodeHooks()` and `writeOpenCodeHookDecision()`
+replacing the proxy wrapper with native hook registration is now feasible and should be
+implemented — but as a separate, follow-on backlog item (scoped from this research), not under
+this requirement. This requirement itself is satisfied by the corrected research record.
 
 ### R5: Open Code detection patterns
 Add missing detection pattern categories to `OpencodeDetector`: Ready (idle input prompt), Error, Idle, Success. Research opencode TUI output strings from opencode.ai docs and GitHub.

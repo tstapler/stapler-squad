@@ -40,12 +40,14 @@ jobs:
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # The integration test (TestMCPHandshakeSubprocess) spawns a real
       # --mcp subprocess and exercises the full MCP stdio handshake.
       # It calls `go build` internally, so the Go toolchain must be present.
       - name: Run MCP integration tests
         run: |
-          go test -tags=integration -timeout=120s -v -race \
+          go test -tags=integration -timeout=150s -v -race \
             ./server/mcp/... \
             ./server/services/...

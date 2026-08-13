@@ -262,6 +262,77 @@ func TestHandlePermissionRequest_EscalationReason_DomainAge(t *testing.T) {
 	if captured.EscalationCategory != "domain-age" {
 		t.Errorf("EscalationCategory = %q, want %q", captured.EscalationCategory, "domain-age")
 	}
+	if captured.RiskLevel != "high" {
+		t.Errorf("RiskLevel = %q, want %q (domain-age escalations are hardcoded RiskHigh)", captured.RiskLevel, "high")
+	}
+}
+
+// fakeCriticalEscalateClassifier always escalates with RiskCritical, independent of any real
+// seed rule table (no seed rule reaches Escalate+RiskCritical today — RiskCritical is reserved
+// for AutoDeny rules like force-push/env-write). Used to prove riskLevelString(RiskCritical)
+// threads through end-to-end without depending on the seed rule set staying exactly as-is.
+type fakeCriticalEscalateClassifier struct{}
+
+func (fakeCriticalEscalateClassifier) Classify(_ classifier.PermissionRequestPayload, _ classifier.ClassificationContext) classifier.ClassificationResult {
+	return classifier.ClassificationResult{Decision: classifier.Escalate, RiskLevel: classifier.RiskCritical, Reason: "fake critical escalation"}
+}
+
+func (fakeCriticalEscalateClassifier) BuildContext(_ string) classifier.ClassificationContext {
+	return classifier.ClassificationContext{}
+}
+
+// TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesRiskCriticalRule
+// covers plan.md Task 1.1.1/1.1.2: a classified Escalate result's RiskLevel must be threaded
+// onto PendingApproval.RiskLevel via riskLevelString, not dropped.
+func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesRiskCriticalRule(t *testing.T) {
+	h, store := newTestHandler(5 * time.Second)
+	h.SetClassifier(fakeCriticalEscalateClassifier{})
+
+	var captured PendingApproval
+	go waitForFirstApprovalThenResolve(t, store, &captured)
+
+	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "anything")
+
+	if captured.RiskLevel != "critical" {
+		t.Errorf("RiskLevel = %q, want %q", captured.RiskLevel, "critical")
+	}
+}
+
+// TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesSeedRule covers
+// the real seed-rule path (not a fake classifier): "git push" (no --force) matches
+// seed-escalate-git-push, an Escalate+RiskHigh rule, so RiskLevel must be "high", mirroring
+// the existing EscalationReason_ExplicitRule test's structure.
+func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesSeedRule(t *testing.T) {
+	h, store := newTestHandler(5 * time.Second)
+	h.SetClassifier(classifier.NewRuleBasedClassifier())
+
+	var captured PendingApproval
+	go waitForFirstApprovalThenResolve(t, store, &captured)
+
+	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "git push origin main")
+
+	if captured.RiskLevel != "high" {
+		t.Errorf("RiskLevel = %q, want %q", captured.RiskLevel, "high")
+	}
+}
+
+// TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation covers
+// pre-mortem.md Failure #1: when h.classifier is nil (no SetClassifier call) and no domain
+// checker fires, `escalation` is never assigned — riskLevelString(escalation.RiskLevel) would
+// naively return "low" (RiskLow is the Go zero value), silently mislabeling an unclassified
+// request as genuinely safe. RiskLevel must be "" (not recorded), never "low".
+func TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation(t *testing.T) {
+	h, store := newTestHandler(5 * time.Second)
+	// Deliberately no h.SetClassifier(...) call -- h.classifier stays nil.
+
+	var captured PendingApproval
+	go waitForFirstApprovalThenResolve(t, store, &captured)
+
+	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "anything")
+
+	if captured.RiskLevel != "" {
+		t.Errorf("RiskLevel = %q, want %q (unclassified requests must never appear as a real risk level)", captured.RiskLevel, "")
+	}
 }
 
 // TestTruncateEscalationReason covers the boundary cases the escalation-reasoning
@@ -337,6 +408,7 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	storage := createTestStorage(t)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 
 	store := NewApprovalStore("")
 	bus := events.NewEventBus(10)

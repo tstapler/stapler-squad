@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -258,7 +259,7 @@ func TestEnsureServerRunning_NoOp(t *testing.T) {
 	t.Cleanup(func() {
 		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel()
-		_ = safeexec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killCtx, Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the isolated server and keep it alive with a detached session.
@@ -266,7 +267,7 @@ func TestEnsureServerRunning_NoOp(t *testing.T) {
 	// the follow-up check in EnsureServerRunning to falsely report the server as dead.
 	newSessionCtx, newSessionCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer newSessionCancel()
-	require.NoError(t, safeexec.CommandContext(newSessionCtx, "tmux", "-L", socketName, "new-session", "-d", "-s", "keepalive").Run())
+	require.NoError(t, safeexec.CommandContext(newSessionCtx, Binary(), "-L", socketName, "new-session", "-d", "-s", "keepalive").Run())
 
 	// With the server running and a live session, EnsureServerRunning should be a no-op.
 	_, err := EnsureServerRunning(socketName)
@@ -286,7 +287,7 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 	t.Cleanup(func() {
 		killCtx2, killCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel2()
-		_ = safeexec.CommandContext(killCtx2, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killCtx2, Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Confirm no server is running on this socket yet.
@@ -300,7 +301,7 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 	// On macOS, tmux's default exit-empty=on causes the server to exit immediately
 	// when there are no sessions. Create a session to keep the server alive and
 	// verify the server is functional by confirming the session can be created.
-	createCmd := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "verify-alive")
+	createCmd := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "new-session", "-d", "-s", "verify-alive")
 	require.NoError(t, createCmd.Run(),
 		"should be able to create a session on the newly started server — server must be running")
 }
@@ -326,6 +327,84 @@ func TestStartServerSucceededDespiteError(t *testing.T) {
 	})
 }
 
+// TestServerStartAttempt covers the single-attempt decision: did start-server
+// actually succeed, or did it fail but a recheck shows the server running
+// anyway (the check-race startServerSucceededDespiteError recovers from)?
+func TestServerStartAttempt(t *testing.T) {
+	t.Run("succeeds when start-server itself succeeds", func(t *testing.T) {
+		calls := 0
+		startServer := func() ([]byte, error) {
+			calls++
+			return []byte("ok"), nil
+		}
+		isNotRunning := func() bool { t.Fatal("should not need a recheck when start-server succeeded"); return true }
+		ok, out, err := serverStartAttempt(startServer, isNotRunning)
+		require.True(t, ok)
+		require.NoError(t, err)
+		require.Equal(t, []byte("ok"), out)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("recovers when start-server errors but a recheck shows the server running", func(t *testing.T) {
+		startServer := func() ([]byte, error) { return []byte("server exited unexpectedly"), errors.New("exit status 1") }
+		isNotRunning := func() bool { return false } // running
+		ok, _, err := serverStartAttempt(startServer, isNotRunning)
+		require.True(t, ok, "a start-server error should be swallowed when the server is actually up")
+		require.Error(t, err, "the underlying error is still returned for logging even on recovery")
+	})
+
+	t.Run("fails when start-server errors and the server genuinely is not running", func(t *testing.T) {
+		startServer := func() ([]byte, error) { return nil, errors.New("exit status 1") }
+		isNotRunning := func() bool { return true } // not running
+		ok, _, err := serverStartAttempt(startServer, isNotRunning)
+		require.False(t, ok)
+		require.Error(t, err)
+	})
+}
+
+// TestEnsureServerRunningWithRetry covers the retry wrapper added around
+// serverStartAttempt to survive start-server failures (transient check-races
+// or genuine start failures) that outlast a single attempt under sustained
+// heavy system load -- see TestEnsureServerRunning_NoOp's original failure
+// and the doc comment above ensureServerRunningWithRetry in tmux.go.
+func TestEnsureServerRunningWithRetry(t *testing.T) {
+	t.Run("succeeds on the first attempt", func(t *testing.T) {
+		calls := 0
+		startServer := func() ([]byte, error) { calls++; return nil, nil }
+		isNotRunning := func() bool { return true }
+		_, err := ensureServerRunningWithRetry(startServer, isNotRunning, 5, time.Millisecond, 4*time.Millisecond)
+		require.NoError(t, err)
+		require.Equal(t, 1, calls, "should not retry once the first attempt succeeds")
+	})
+
+	t.Run("recovers after a couple of failed start-server calls", func(t *testing.T) {
+		calls := 0
+		startServer := func() ([]byte, error) {
+			calls++
+			if calls < 3 {
+				return nil, errors.New("exit status 1")
+			}
+			return nil, nil
+		}
+		isNotRunning := func() bool { return true } // never recovers via recheck alone
+		_, err := ensureServerRunningWithRetry(startServer, isNotRunning, 5, time.Millisecond, 4*time.Millisecond)
+		require.NoError(t, err, "should recover once a later attempt actually starts the server")
+		require.Equal(t, 3, calls)
+	})
+
+	t.Run("gives up once the attempt budget is exhausted", func(t *testing.T) {
+		calls := 0
+		startServer := func() ([]byte, error) {
+			calls++
+			return []byte("server exited unexpectedly"), errors.New("exit status 1")
+		}
+		isNotRunning := func() bool { return true } // never running
+		_, err := ensureServerRunningWithRetry(startServer, isNotRunning, 3, time.Millisecond, 4*time.Millisecond)
+		require.Error(t, err, "must still surface the error if the server genuinely never comes up")
+		require.Equal(t, 3, calls, "should attempt exactly the configured number of times")
+	})
+}
+
 // TestCreateKeepaliveSession verifies that a keepalive session is created and
 // that calling it again is idempotent.
 func TestCreateKeepaliveSession(t *testing.T) {
@@ -337,12 +416,12 @@ func TestCreateKeepaliveSession(t *testing.T) {
 	}
 	socketName := fmt.Sprintf("test_keepalive_%d_%d", os.Getpid(), rand.Int63())
 	t.Cleanup(func() {
-		_ = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the server with an anchor session to keep it alive while we test.
 	// (new-session -d is equivalent to start-server + create session atomically)
-	require.NoError(t, safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
+	require.NoError(t, safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
 
 	// Create keepalive session.
 	err := CreateKeepaliveSession(socketName)
@@ -350,7 +429,7 @@ func TestCreateKeepaliveSession(t *testing.T) {
 
 	// Verify the keepalive session exists.
 	keepaliveName := TmuxPrefix + "keepalive"
-	out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "has-session", "-t", keepaliveName).CombinedOutput()
+	out, err := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "has-session", "-t", keepaliveName).CombinedOutput()
 	require.NoError(t, err, "keepalive session should exist after CreateKeepaliveSession; output: %s", out)
 
 	// Calling it again should be idempotent (no error).
@@ -368,20 +447,20 @@ func TestSetExitEmpty(t *testing.T) {
 	}
 	socketName := fmt.Sprintf("test_exit_empty_%d_%d", os.Getpid(), rand.Int63())
 	t.Cleanup(func() {
-		_ = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the server WITH a detached session to prevent the server from exiting
 	// immediately due to exit-empty=on (the default). Using new-session -d starts
 	// both the server and an anchor session in one step.
-	require.NoError(t, safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
+	require.NoError(t, safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
 
 	// Set exit-empty off.
 	err := SetExitEmpty(socketName, false)
 	require.NoError(t, err, "SetExitEmpty(false) should succeed")
 
 	// Verify the option was set.
-	out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
+	out, err := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
 	require.NoError(t, err)
 	require.Contains(t, strings.ToLower(string(out)), "off",
 		"exit-empty should be off after SetExitEmpty(false)")
@@ -390,7 +469,7 @@ func TestSetExitEmpty(t *testing.T) {
 	err = SetExitEmpty(socketName, true)
 	require.NoError(t, err, "SetExitEmpty(true) should succeed")
 
-	out, err = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
+	out, err = safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
 	require.NoError(t, err)
 	require.Contains(t, strings.ToLower(string(out)), "on",
 		"exit-empty should be on after SetExitEmpty(true)")
@@ -840,4 +919,399 @@ func TestCapturePaneSemaphore(t *testing.T) {
 	require.LessOrEqual(t, maxSeen, maxConcurrent,
 		"concurrent capture-pane subprocesses (%d) exceeded semaphore limit (%d)", maxSeen, maxConcurrent)
 	require.Greater(t, maxSeen, 0, "at least one subprocess should have executed")
+}
+
+// ---------------------------------------------------------------------------
+// ptmxMu / PTY-triple synchronization (tmux-ptmx-race-fix)
+// ---------------------------------------------------------------------------
+
+// erroringPtyFactory always fails Start/StartWithSize, for testing PTY-attach error paths.
+type erroringPtyFactory struct{}
+
+func (erroringPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
+	return nil, nil, fmt.Errorf("boom: pty start failed")
+}
+
+func (erroringPtyFactory) StartWithSize(cmd *exec.Cmd, _ *pty.Winsize) (*os.File, *exec.Cmd, error) {
+	return nil, nil, fmt.Errorf("boom: pty start failed")
+}
+
+func (erroringPtyFactory) Close() {}
+
+func TestLockedPTMX_ReturnsNil_BeforeAnyTripleSet(t *testing.T) {
+	session := newTmuxSession("locked-ptmx-nil-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+	require.Nil(t, session.lockedPTMX())
+}
+
+func TestSetPTYTriple_AssignsAllThreeFieldsTogether(t *testing.T) {
+	session := newTmuxSession("set-pty-triple-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	cmd := safeexec.CommandContext(context.Background(), "true")
+	once := new(sync.Once)
+
+	session.setPTYTriple(r, cmd, once)
+
+	require.Equal(t, r, session.lockedPTMX())
+	require.Equal(t, cmd, session.attachCmd)          // allow-direct-ptmx-access: same-package assertion, not concurrent with anything
+	require.Equal(t, once, session.attachCmdWaitOnce) // allow-direct-ptmx-access: same-package assertion, not concurrent with anything
+	require.NoError(t, r.Close())
+}
+
+func TestClearPTYTriple_CapturesThenNilsAllThreeFields(t *testing.T) {
+	session := newTmuxSession("clear-pty-triple-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	cmd := safeexec.CommandContext(context.Background(), "true")
+	once := new(sync.Once)
+	session.setPTYTriple(r, cmd, once)
+
+	gotFile, gotCmd, gotOnce := session.clearPTYTriple()
+	require.Equal(t, r, gotFile)
+	require.Equal(t, cmd, gotCmd)
+	require.Equal(t, once, gotOnce)
+	require.Nil(t, session.lockedPTMX())
+
+	// Idempotent: calling it again with nothing installed returns nils, not a panic.
+	gotFile2, gotCmd2, gotOnce2 := session.clearPTYTriple()
+	require.Nil(t, gotFile2)
+	require.Nil(t, gotCmd2)
+	require.Nil(t, gotOnce2)
+
+	require.NoError(t, r.Close())
+}
+
+// TestPtmxMuDocComment_StatesLeafLockInvariant verifies the ptmxMu field declaration's
+// doc comment documents the lock-order invariant (AC4), by reading tmux.go's own source
+// rather than duplicating the lock list into a second, driftable source of truth.
+func TestPtmxMuDocComment_StatesLeafLockInvariant(t *testing.T) {
+	data, err := os.ReadFile("tmux.go")
+	require.NoError(t, err)
+	lines := strings.Split(string(data), "\n")
+
+	fieldLine := -1
+	for i, line := range lines {
+		if strings.Contains(line, "ptmxMu deadlock.Mutex") {
+			fieldLine = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, fieldLine, 0, "ptmxMu field declaration not found in tmux.go")
+
+	// Walk upward from the field declaration, collecting only the contiguous run of
+	// "//"-comment lines immediately preceding it -- this is that field's doc comment,
+	// not a fixed byte lookback that could drift into an unrelated preceding comment
+	// block if either grows or shrinks.
+	var commentLines []string
+	for i := fieldLine - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(trimmed, "//") {
+			break
+		}
+		commentLines = append([]string{trimmed}, commentLines...)
+	}
+	docComment := strings.ToLower(strings.Join(commentLines, "\n"))
+	require.NotEmpty(t, docComment, "ptmxMu field declaration has no preceding doc comment")
+
+	require.Contains(t, docComment, "leaf lock")
+	for _, lockName := range []string{"detachMutex", "controlModeSubMu", "controlModeStartMu", "cmdSendMu", "recoveryMu"} {
+		require.Contains(t, docComment, strings.ToLower(lockName),
+			"ptmxMu doc comment should name %s as part of its lock-order documentation", lockName)
+	}
+}
+
+// TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized forces the exact interleave
+// from the original -race report (GetPTY() vs closePTYAndAttachCmd()) by holding ptmxMu
+// before spawning either goroutine, so the fix's correctness is proven deterministically
+// rather than left to incidental scheduler timing.
+func TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized(t *testing.T) {
+	session := newTmuxSession("ptmx-race-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
+	session.ptmx = r // allow-direct-ptmx-access: pre-test setup, not concurrent with anything yet
+
+	session.ptmxMu.Lock()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	var getErr error
+	go func() {
+		defer wg.Done()
+		_, getErr = session.GetPTY()
+	}()
+	go func() {
+		defer wg.Done()
+		session.closePTYAndAttachCmd()
+	}()
+	session.ptmxMu.Unlock()
+
+	completed := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(completed)
+	}()
+	select {
+	case <-completed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetPTY/closePTYAndAttachCmd deadlocked under concurrent access — ptmxMu not released correctly")
+	}
+
+	if getErr != nil {
+		require.Contains(t, getErr.Error(), "not initialized",
+			"GetPTY's only valid error outcome when racing closePTYAndAttachCmd is the not-initialized error")
+	}
+}
+
+// TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock exercises the documented
+// detachMutex (outer) -> ptmxMu (inner/leaf) lock order: DetachSafely holds detachMutex
+// across a closePTYAndAttachCmd() call that internally acquires ptmxMu, while a concurrent
+// goroutine repeatedly calls GetPTY() (ptmxMu only). Neither ordering should ever deadlock.
+func TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
+	session := newTmuxSession("detach-getpty-nodeadlock-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+
+	const iterations = 20
+	detachDone := make(chan struct{})
+	var pipeErr error
+	go func() {
+		defer close(detachDone)
+		for i := 0; i < iterations; i++ {
+			r, w, err := os.Pipe()
+			if err != nil {
+				pipeErr = err
+				return
+			}
+			session.setPTYTriple(r, nil, nil)
+			session.attachCh = make(chan struct{})
+			session.wg = &sync.WaitGroup{}
+			_ = session.DetachSafely()
+			_ = w.Close()
+		}
+	}()
+
+	getDone := make(chan struct{})
+	go func() {
+		defer close(getDone)
+		for i := 0; i < iterations; i++ {
+			_, _ = session.GetPTY()
+		}
+	}()
+
+	select {
+	case <-detachDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("DetachSafely deadlocked against concurrent GetPTY — detachMutex/ptmxMu ordering broken")
+	}
+	require.NoError(t, pipeErr)
+	select {
+	case <-getDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetPTY deadlocked against concurrent DetachSafely — detachMutex/ptmxMu ordering broken")
+	}
+}
+
+// TestDetach_ConcurrentWithGetPTY_NoDeadlock covers the specific nesting
+// TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock does not: Detach() (unlike
+// DetachSafely) holds detachMutex across TWO separate ptmxMu acquisitions in
+// sequence -- closePTYAndAttachCmd() first, then Restore() -> RestoreWithWorkDir(),
+// which itself acquires ptmxMu via lockedPTMX()/setPTYTriple() in its retry loop.
+// This is exactly the nesting the ptmxMu doc comment and ADR-001 cite by name as
+// justification for treating ptmxMu as a safe leaf lock -- it needs its own
+// deadlock-guard test, not just DetachSafely's simpler one-acquisition case.
+func TestDetach_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
+	registry := NewFakeTmuxRegistry()
+	session := newTmuxSessionWithSocket("detach-restore-getpty-nodeadlock-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix, "", WithRegistry(registry))
+	registry.SetSessions([]string{session.sanitizedName})
+
+	const iterations = 10
+	detachDone := make(chan struct{})
+	go func() {
+		defer close(detachDone)
+		for i := 0; i < iterations; i++ {
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			session.setPTYTriple(r, nil, nil)
+			session.attachCh = make(chan struct{})
+			session.wg = &sync.WaitGroup{}
+			// Detach() panics on a fatal cleanup/restore error; the mocked PTY factory
+			// and registry are wired so DoesSessionExist()/ptyFactory.StartWithSize()
+			// always succeed, so no panic is expected -- this test's only concern is
+			// deadlock-freedom, not Detach()'s success/failure semantics.
+			session.Detach()
+			_ = w.Close()
+		}
+	}()
+
+	getDone := make(chan struct{})
+	go func() {
+		defer close(getDone)
+		for i := 0; i < iterations; i++ {
+			_, _ = session.GetPTY()
+		}
+	}()
+
+	select {
+	case <-detachDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Detach deadlocked against concurrent GetPTY — detachMutex/ptmxMu ordering broken across Restore()/RestoreWithWorkDir()")
+	}
+	select {
+	case <-getDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetPTY deadlocked against concurrent Detach")
+	}
+}
+
+// TestClosePTYAndAttachCmd_OnlyFirstConcurrentCallerPerformsCleanup covers the one accepted
+// behavioral side effect documented in AC6: only the first caller to acquire ptmxMu inside
+// clearPTYTriple() receives the non-nil snapshot, so a second concurrent caller is a fast
+// no-op instead of racing Close()/Kill()/Wait() against the first.
+func TestClosePTYAndAttachCmd_OnlyFirstConcurrentCallerPerformsCleanup(t *testing.T) {
+	session := newTmuxSession("close-serialize-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+
+	cmd := safeexec.CommandContext(context.Background(), "sleep", "5")
+	require.NoError(t, cmd.Start())
+	session.setPTYTriple(r, cmd, new(sync.Once))
+
+	var wg sync.WaitGroup
+	results := make([][]error, 2)
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			defer wg.Done()
+			results[i] = session.closePTYAndAttachCmd()
+		}(i)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent closePTYAndAttachCmd calls deadlocked")
+	}
+
+	require.Empty(t, results[0], "first concurrent close call should report no errors")
+	require.Empty(t, results[1], "second concurrent close call should report no errors (fast no-op)")
+	require.Nil(t, session.lockedPTMX(), "triple must be fully cleared after both calls complete")
+
+	// The real process must have been killed and reaped exactly once by the winning
+	// caller — a second Wait() (from the test, standing in for a hypothetical second
+	// caller that reused the same *exec.Cmd) must error, proving Wait ran already.
+	waitErr := cmd.Wait()
+	require.Error(t, waitErr, "process should already be reaped by closePTYAndAttachCmd; a second Wait should error")
+}
+
+func TestAttachToExisting_ReturnsSameWrappedError_When_PtyFactoryStartFails(t *testing.T) {
+	registry := NewFakeTmuxRegistry()
+	cmdExec := MockCmdExec{}
+	session := newTmuxSessionWithSocket("attach-existing-error-test", "echo", erroringPtyFactory{}, cmdExec, TmuxPrefix, "", WithRegistry(registry))
+	registry.SetSessions([]string{session.sanitizedName})
+
+	err := session.AttachToExisting()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), fmt.Sprintf("failed to attach PTY to session '%s':", session.sanitizedName))
+	require.Contains(t, err.Error(), "boom: pty start failed")
+}
+
+func TestGetPTY_ReturnsNotInitializedError_When_TripleNeverSet(t *testing.T) {
+	session := newTmuxSession("getpty-not-initialized-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+	file, err := session.GetPTY()
+	require.Nil(t, file)
+	require.EqualError(t, err, "PTY not initialized - session may not be started")
+}
+
+func TestTapEnter_TapDAndEnter_SendKeys_ReturnSameWrappedErrors_When_PTYNil(t *testing.T) {
+	tests := []struct {
+		name          string
+		call          func(*TmuxSession) error
+		wantMsgPrefix string // "" means the raw GetPTY error is returned unwrapped
+	}{
+		{
+			name:          "TapEnter",
+			call:          func(s *TmuxSession) error { return s.TapEnter() },
+			wantMsgPrefix: "error sending enter keystroke to PTY:",
+		},
+		{
+			name:          "TapDAndEnter",
+			call:          func(s *TmuxSession) error { return s.TapDAndEnter() },
+			wantMsgPrefix: "error sending enter keystroke to PTY:",
+		},
+		{
+			name: "SendKeys",
+			call: func(s *TmuxSession) error {
+				n, err := s.SendKeys("hello")
+				require.Equal(t, 0, n)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			session := newTmuxSession("tap-sendkeys-nil-pty-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+			err := tc.call(session)
+			require.Error(t, err)
+			if tc.wantMsgPrefix != "" {
+				require.Contains(t, err.Error(), tc.wantMsgPrefix)
+			}
+			require.Contains(t, err.Error(), "PTY not initialized")
+		})
+	}
+}
+
+func TestUpdateWindowSize_ReturnsSameErrors_When_PTYNilOrFdInvalid(t *testing.T) {
+	t.Run("nil PTY", func(t *testing.T) {
+		session := newTmuxSession("resize-nil-pty-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+		err := session.updateWindowSize(80, 24)
+		require.EqualError(t, err, "PTY is not initialized")
+	})
+
+	t.Run("closed fd", func(t *testing.T) {
+		// os.File.Fd() returns -1 once the file is closed (its internal Sysfd is reset),
+		// so a closed *os.File hits the fd<0 branch, not the /dev/fd stat branch below it.
+		session := newTmuxSession("resize-closed-fd-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+		require.NoError(t, r.Close())
+		t.Cleanup(func() { _ = w.Close() })
+		session.setPTYTriple(r, nil, nil)
+
+		resizeErr := session.updateWindowSize(80, 24)
+		require.Error(t, resizeErr)
+		require.Contains(t, resizeErr.Error(), "PTY file descriptor is invalid")
+	})
+}
+
+// TestLockedPTMX_ReflectsNewestGeneration_When_SetPTYTripleSwapsMidLoop is a proxy for the
+// Attach() stdin-forward goroutine's "re-snapshot every loop iteration" behavior: repeated
+// lockedPTMX() calls interleaved with a setPTYTriple() swap always observe the newest
+// generation, matching the pre-fix closure's implicit re-read semantics.
+func TestLockedPTMX_ReflectsNewestGeneration_When_SetPTYTripleSwapsMidLoop(t *testing.T) {
+	session := newTmuxSession("locked-ptmx-newest-generation-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+
+	r1, w1, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w1.Close() })
+	session.setPTYTriple(r1, nil, nil)
+	require.Equal(t, r1, session.lockedPTMX())
+
+	r2, w2, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w2.Close() })
+	session.setPTYTriple(r2, nil, nil)
+
+	require.Equal(t, r2, session.lockedPTMX())
+	require.NotEqual(t, r1, session.lockedPTMX())
+
+	require.NoError(t, r1.Close())
+	require.NoError(t, r2.Close())
 }

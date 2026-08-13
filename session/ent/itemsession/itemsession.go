@@ -37,6 +37,8 @@ const (
 	FieldTriageResult = "triage_result"
 	// FieldVerificationNotes holds the string denoting the verification_notes field in the database.
 	FieldVerificationNotes = "verification_notes"
+	// FieldBaseCommitSha holds the string denoting the base_commit_sha field in the database.
+	FieldBaseCommitSha = "base_commit_sha"
 	// FieldLastCommitSha holds the string denoting the last_commit_sha field in the database.
 	FieldLastCommitSha = "last_commit_sha"
 	// FieldLastCommitAt holds the string denoting the last_commit_at field in the database.
@@ -89,6 +91,7 @@ var Columns = []string{
 	FieldPipelineModeSnapshotHash,
 	FieldTriageResult,
 	FieldVerificationNotes,
+	FieldBaseCommitSha,
 	FieldLastCommitSha,
 	FieldLastCommitAt,
 	FieldLastCommitMessage,
@@ -129,6 +132,8 @@ var (
 	DefaultPipelineModeSnapshot string
 	// DefaultPipelineModeSnapshotHash holds the default value on creation for the "pipeline_mode_snapshot_hash" field.
 	DefaultPipelineModeSnapshotHash string
+	// DefaultBaseCommitSha holds the default value on creation for the "base_commit_sha" field.
+	DefaultBaseCommitSha string
 	// DefaultCommitCountSinceSpawn holds the default value on creation for the "commit_count_since_spawn" field.
 	DefaultCommitCountSinceSpawn int
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
@@ -200,6 +205,11 @@ func ByTriageResult(opts ...sql.OrderTermOption) OrderOption {
 // ByVerificationNotes orders the results by the verification_notes field.
 func ByVerificationNotes(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldVerificationNotes, opts...).ToFunc()
+}
+
+// ByBaseCommitSha orders the results by the base_commit_sha field.
+func ByBaseCommitSha(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBaseCommitSha, opts...).ToFunc()
 }
 
 // ByLastCommitSha orders the results by the last_commit_sha field.

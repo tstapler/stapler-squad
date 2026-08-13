@@ -164,6 +164,20 @@ func (_c *ItemSessionCreate) SetNillableVerificationNotes(v *string) *ItemSessio
 	return _c
 }
 
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (_c *ItemSessionCreate) SetBaseCommitSha(v string) *ItemSessionCreate {
+	_c.mutation.SetBaseCommitSha(v)
+	return _c
+}
+
+// SetNillableBaseCommitSha sets the "base_commit_sha" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableBaseCommitSha(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetBaseCommitSha(*v)
+	}
+	return _c
+}
+
 // SetLastCommitSha sets the "last_commit_sha" field.
 func (_c *ItemSessionCreate) SetLastCommitSha(v string) *ItemSessionCreate {
 	_c.mutation.SetLastCommitSha(v)
@@ -371,6 +385,10 @@ func (_c *ItemSessionCreate) defaults() {
 		v := itemsession.DefaultPipelineModeSnapshotHash
 		_c.mutation.SetPipelineModeSnapshotHash(v)
 	}
+	if _, ok := _c.mutation.BaseCommitSha(); !ok {
+		v := itemsession.DefaultBaseCommitSha
+		_c.mutation.SetBaseCommitSha(v)
+	}
 	if _, ok := _c.mutation.CommitCountSinceSpawn(); !ok {
 		v := itemsession.DefaultCommitCountSinceSpawn
 		_c.mutation.SetCommitCountSinceSpawn(v)
@@ -491,6 +509,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.VerificationNotes(); ok {
 		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
 		_node.VerificationNotes = value
+	}
+	if value, ok := _c.mutation.BaseCommitSha(); ok {
+		_spec.SetField(itemsession.FieldBaseCommitSha, field.TypeString, value)
+		_node.BaseCommitSha = value
 	}
 	if value, ok := _c.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
@@ -780,6 +802,24 @@ func (u *ItemSessionUpsert) UpdateVerificationNotes() *ItemSessionUpsert {
 // ClearVerificationNotes clears the value of the "verification_notes" field.
 func (u *ItemSessionUpsert) ClearVerificationNotes() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldVerificationNotes)
+	return u
+}
+
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (u *ItemSessionUpsert) SetBaseCommitSha(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldBaseCommitSha, v)
+	return u
+}
+
+// UpdateBaseCommitSha sets the "base_commit_sha" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateBaseCommitSha() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldBaseCommitSha)
+	return u
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (u *ItemSessionUpsert) ClearBaseCommitSha() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldBaseCommitSha)
 	return u
 }
 
@@ -1166,6 +1206,27 @@ func (u *ItemSessionUpsertOne) UpdateVerificationNotes() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearVerificationNotes() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearVerificationNotes()
+	})
+}
+
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (u *ItemSessionUpsertOne) SetBaseCommitSha(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetBaseCommitSha(v)
+	})
+}
+
+// UpdateBaseCommitSha sets the "base_commit_sha" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateBaseCommitSha() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateBaseCommitSha()
+	})
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (u *ItemSessionUpsertOne) ClearBaseCommitSha() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearBaseCommitSha()
 	})
 }
 
@@ -1741,6 +1802,27 @@ func (u *ItemSessionUpsertBulk) UpdateVerificationNotes() *ItemSessionUpsertBulk
 func (u *ItemSessionUpsertBulk) ClearVerificationNotes() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearVerificationNotes()
+	})
+}
+
+// SetBaseCommitSha sets the "base_commit_sha" field.
+func (u *ItemSessionUpsertBulk) SetBaseCommitSha(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetBaseCommitSha(v)
+	})
+}
+
+// UpdateBaseCommitSha sets the "base_commit_sha" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateBaseCommitSha() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateBaseCommitSha()
+	})
+}
+
+// ClearBaseCommitSha clears the value of the "base_commit_sha" field.
+func (u *ItemSessionUpsertBulk) ClearBaseCommitSha() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearBaseCommitSha()
 	})
 }
 

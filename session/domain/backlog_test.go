@@ -27,13 +27,13 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain13Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain15Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch.
-func TestAllStuckReasons_should_contain13Entries_When_Enumerated(t *testing.T) {
-	if len(AllStuckReasons) != 13 {
-		t.Errorf("len(AllStuckReasons) = %d, want 13", len(AllStuckReasons))
+func TestAllStuckReasons_should_contain15Entries_When_Enumerated(t *testing.T) {
+	if len(AllStuckReasons) != 15 {
+		t.Errorf("len(AllStuckReasons) = %d, want 15", len(AllStuckReasons))
 	}
 }
 
@@ -44,6 +44,25 @@ func TestAllStuckReasons_should_contain13Entries_When_Enumerated(t *testing.T) {
 func TestStuckReasonPRNeedsFix_should_beValid_When_Checked(t *testing.T) {
 	if !StuckReasonPRNeedsFix.IsValid() {
 		t.Errorf("StuckReasonPRNeedsFix.IsValid() = false, want true")
+	}
+}
+
+// TestStuckReasonLikelyFlaky_should_beValid_When_Checked confirms the new
+// Story 3.2.1 reason round-trips through IsValid like every other established
+// reason.
+func TestStuckReasonLikelyFlaky_should_beValid_When_Checked(t *testing.T) {
+	if !StuckReasonLikelyFlaky.IsValid() {
+		t.Errorf("StuckReasonLikelyFlaky.IsValid() = false, want true")
+	}
+}
+
+// TestStuckReasonRespawnBlockedActive_should_beValid_When_Checked confirms
+// the new reason (AutoRespawnAutonomousWork/AutoReopenForPRFix/
+// AutoRespawnReview's audit-trail fix) round-trips through IsValid exactly
+// like the other established reasons.
+func TestStuckReasonRespawnBlockedActive_should_beValid_When_Checked(t *testing.T) {
+	if !StuckReasonRespawnBlockedActive.IsValid() {
+		t.Errorf("StuckReasonRespawnBlockedActive.IsValid() = false, want true")
 	}
 }
 

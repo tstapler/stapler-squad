@@ -120,6 +120,20 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 	return nil
 }
 
+// RenameBranch renames the worktree's current branch in place (git branch -m) and
+// updates g.branchName to match. Used to move a worktree created under a
+// provisional name onto the final branch name once it's known, without losing the
+// worktree's existing content or commits — e.g. TriggerTriage names its worktree
+// before the LLM call reveals the item's slug, then renames it afterward to the
+// same "backlog/<item>" branch a later SpawnSessionFromItem will look for.
+func (g *GitWorktree) RenameBranch(newBranchName string) error {
+	if _, err := g.runGitCommand(g.worktreePath, "branch", "-m", newBranchName); err != nil {
+		return fmt.Errorf("failed to rename branch to %q: %w", newBranchName, err)
+	}
+	g.branchName = newBranchName
+	return nil
+}
+
 // stageAndCommit stages all changes (minus scaffolding), then commits — unless
 // the only staged change was a scaffolding file that staging just untracked, in
 // which case it skips the commit gracefully instead of failing on git's
@@ -413,6 +427,27 @@ func (g *GitWorktree) findExistingPR() (string, int, error) {
 		return "", 0, fmt.Errorf("no PR found")
 	}
 	return url, num, nil
+}
+
+// HasCommitsAheadOfMain reports whether this worktree's branch has at least
+// one commit not present on mainBranch — i.e. whether there is genuinely
+// anything to ship. Used as a pre-flight check before attempting CreatePR: a
+// branch with zero commits ahead of main makes `gh pr create` fail with "No
+// commits between X and Y", which is not a retryable push/PR failure (see
+// BUG-063) but a signal that the item was already fully addressed elsewhere.
+// Returns true (the safe, existing default: attempt PR creation as before) if
+// the check itself is inconclusive — an error opening the repo, or the branch
+// not existing locally — so a check failure never causes a caller to skip PR
+// creation for a branch that may well need it.
+func (g *GitWorktree) HasCommitsAheadOfMain(mainBranch string) (bool, error) {
+	status, err := BranchAheadBehind(g.repoPath, g.branchName, mainBranch)
+	if err != nil {
+		return true, err
+	}
+	if !status.BranchExists {
+		return true, nil
+	}
+	return status.AheadOfMain > 0, nil
 }
 
 // reviewInfo captures the blocking review that tripped HasBlockingReviews.

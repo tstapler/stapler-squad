@@ -53,15 +53,21 @@ func (ItemSession) Fields() []ent.Field {
 		field.String("verification_notes").
 			Optional().
 			Comment("Freeform verification evidence reported via request_review (commands run, manual checks performed) — not visible in the diff"),
+		field.String("base_commit_sha").
+			Optional().
+			Default("").
+			Comment("The worktree's pre-work HEAD SHA, captured once when this session spawns. This is the BASE of the review gate's base..HEAD diff — by construction always an ancestor of main. It is NOT evidence of anything having shipped: any \"is this session's work on main?\" check must read last_commit_sha (live-refreshed), never this. Splitting the two is the fix for BUG-047's collateral damage, where the spawn-time base SHA was written into last_commit_sha and made IsCommitOnMain trivially true, causing closeIfSupersededByMain to close a real, unmerged PR as \"superseded\"."),
 		field.String("last_commit_sha").
-			Optional(),
+			Optional().
+			Comment("The work session's CURRENT tip commit, re-read from the session's worktree HEAD on every reconciliation tick by refreshWorkSessionGitActivity (session/backlog_lifecycle.go) for as long as the session is active. Safe to treat as \"the latest commit this session authored\". For the pre-work baseline, use base_commit_sha."),
 		field.Time("last_commit_at").
 			Optional().
 			Nillable(),
 		field.String("last_commit_message").
 			Optional(),
 		field.Int("commit_count_since_spawn").
-			Default(0),
+			Default(0).
+			Comment("Number of commits reachable from last_commit_sha but not from base_commit_sha, recomputed alongside last_commit_sha on each refresh tick."),
 		field.Time("last_file_touch_at").
 			Optional().
 			Nillable(),

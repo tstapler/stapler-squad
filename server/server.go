@@ -133,6 +133,11 @@ func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	return srv
 }
 
+// sessionHealthCheckInterval is how often SessionHealthChecker polls for dead
+// tmux panes and stale sessions. With failureThreshold (session/health.go) at 2
+// consecutive misses, a dead pane surfaces within ~2x this interval.
+const sessionHealthCheckInterval = 15 * time.Second
+
 // wireDepsIntoServer wires pre-built ServerDependencies into srv: starts background
 // components, registers shutdown hooks, and mounts all ConnectRPC/HTTP handlers.
 // serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
@@ -144,6 +149,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	deps.PRStatusPoller.Start(serverCtx)
 	log.Info("PRStatusPoller started")
+
+	// Start SessionHealthChecker: polls for dead tmux panes (remain-on-exit
+	// placeholders left after the wrapped program exits) and stale
+	// started-but-tmux-missing instances, marking dead panes Crashed/Stopped so
+	// the UI can surface a banner instead of raw pane text. Previously this
+	// checker was constructed only in tests and never actually started in
+	// production -- see session/health.go.
+	if deps.Storage != nil {
+		healthChecker := session.NewSessionHealthChecker(deps.Storage)
+		healthCheckerStop := make(chan struct{})
+		go func() {
+			<-serverCtx.Done()
+			close(healthCheckerStop)
+		}()
+		go healthChecker.ScheduledHealthCheck(sessionHealthCheckInterval, healthCheckerStop)
+		log.Info("SessionHealthChecker started", "interval", sessionHealthCheckInterval)
+	}
 
 	// Start HistoryLinker: detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
@@ -218,6 +240,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// orphan-pruning sweep (enforceRetention → pruneOrphanedRecords).
 			// See buildSessionExistenceLookup for the uptime-gate rationale.
 			notifStore.SetSessionExistenceLookup(buildSessionExistenceLookup(storage, srv.startedAt))
+
+			// Wire the notification decision lister into SessionSummaryGenerator now
+			// that notifStore exists — session/session_summary_service.go's
+			// SetNotificationLister doc comment explains why this is late-bound rather
+			// than passed at construction (dependencies.go builds the generator before
+			// notifStore exists).
+			if deps.SessionSummaryGenerator != nil {
+				deps.SessionSummaryGenerator.SetNotificationLister(&notificationDecisionListerAdapter{store: notifStore})
+			}
 		}
 	}
 
@@ -359,6 +390,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered UnfinishedWorkService handler", "path", uwAPIPath)
 	}
 
+	// Register SessionSummaryService handler.
+	if deps.SessionSummaryGenerator != nil {
+		sessionSummaryService := services.NewSessionSummaryService(deps.SessionSummaryGenerator, deps.SessionService)
+		ssPath, ssHandler := sessionv1connect.NewSessionSummaryServiceHandler(sessionSummaryService, ConnectOptions(deps.ErrorRegistry)...)
+		ssAPIPath := "/api" + ssPath
+		srv.RegisterConnectHandler(ssAPIPath, http.StripPrefix("/api", ssHandler))
+		log.Info("Registered SessionSummaryService handler", "path", ssAPIPath)
+	}
+
 	// Register InsightsService handler for token usage analytics.
 	if deps.InsightsService != nil {
 		insightsPath, insightsHandler := sessionv1connect.NewInsightsServiceHandler(deps.InsightsService, ConnectOptions(deps.ErrorRegistry)...)
@@ -429,6 +469,40 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered HeadlessService handler", "path", hlAPIPath)
 	}
 
+	// Register ImportService handler (import-external-session, Phase 1).
+	// Gated behind STAPLER_SQUAD_ENABLE_SESSION_IMPORT: only the three
+	// mutating RPCs (CommitImportExternalSession, ConfirmKillExternalSession,
+	// CancelPendingKill) return CodeUnimplemented when the flag is off, per
+	// Story 1.3.2 / plan.md Task 0. PreviewImportExternalSession is
+	// read-only (no persistence, no signaling) and must always be reachable
+	// regardless of flag state, so it is deliberately excluded from the
+	// gated method list -- gating the whole handler (as
+	// NewFeatureFlagInterceptor would) incorrectly blocks Preview too. Uses
+	// CodeUnimplemented rather than the CodeNotFound used by the
+	// config-persisted "backlog" flag, since this is an unshipped/opt-in
+	// capability rather than a togglable UI feature.
+	suspendedStore, err := session.NewSuspendedProcessStore()
+	if err != nil {
+		log.Error("failed to create suspended process store, import-external-session disabled", "error", err)
+	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
+		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
+	}
+	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
+	importOpts := append(
+		ConnectOptions(deps.ErrorRegistry),
+		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
+			"session_import",
+			func() bool { return config.ImportSessionEnabled() },
+			"CommitImportExternalSession",
+			"ConfirmKillExternalSession",
+			"CancelPendingKill",
+		)),
+	)
+	importPath, importHandler := sessionv1connect.NewImportServiceHandler(importSvc, importOpts...)
+	importAPIPath := "/api" + importPath
+	srv.RegisterConnectHandler(importAPIPath, http.StripPrefix("/api", importHandler))
+	log.Info("Registered ImportService handler", "path", importAPIPath)
+
 	// Wire external session support into the unified WebSocket handler
 	wsHandler.SetExternalSessionSupport(deps.ExternalDiscovery)
 	log.Info("Unified WebSocket handler configured for external session support")
@@ -481,6 +555,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		inst := deps.SessionService.FindLiveInstance(sessionID)
 		return inst != nil && inst.AutonomousMode
 	})
+	// Thread the poller's live-configured interval into the CI-status staleness guard
+	// (Task 1.1.2b) so it can't silently desync from the real poll interval.
+	if deps.PRStatusPoller != nil {
+		approvalHandler.SetPollInterval(deps.PRStatusPoller.PollInterval())
+	}
+	// CI status (GitHubCheckConclusion/LastPRStatusCheck) is not persisted — it only
+	// lives on the poller's in-memory Instance — so the classifier's ci_passing
+	// condition (Task 1.1.2a) must read through the live registry, not deps.Storage.
+	approvalHandler.SetLiveInstanceFinder(deps.SessionService)
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 
@@ -499,7 +582,20 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register MCP HTTP transport at /mcp so Claude sessions can connect
 	// without spawning a subprocess. The URL is passed via --mcp-server to
 	// claude when creating new sessions (no settings-file injection needed).
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck)
+	//
+	// deps.BacklogService is nil-guarded here (mirroring the other three
+	// nil-checks on this same field in this function) rather than passed
+	// directly: boxing a nil *services.BacklogService straight into the
+	// session.AutoReopenSpawner interface parameter would produce a non-nil
+	// interface value around a nil pointer — submitReviewVerdict's own
+	// `h.autoReopener != nil` guard would then read true, and calling
+	// AutoReopenAfterFailedReview would panic on the nil receiver instead of
+	// being skipped.
+	var autoReopener session.AutoReopenSpawner
+	if deps.BacklogService != nil {
+		autoReopener = deps.BacklogService
+	}
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
@@ -514,6 +610,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Bind server lifecycle context so autonomous driver goroutines exit on shutdown.
 	deps.SessionService.SetLifecycleContext(serverCtx)
+
+	// Register SessionService shutdown so the AnalyticsStore flush goroutine
+	// exits cleanly instead of leaking for the life of the process.
+	srv.shutdownHooks = append(srv.shutdownHooks, deps.SessionService.Shutdown)
 
 	// Start background expiration cleanup for pending approvals
 	services.StartExpirationCleanup(context.Background(), deps.SessionService.GetApprovalStore())
@@ -594,6 +694,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Start EventBus analytics subscriber (maps session lifecycle events to analytics records).
 	analytics.StartAnalyticsSubscriber(serverCtx, deps.EventBus, analyticsProvider)
 	log.Info("Analytics EventBus subscriber started")
+
+	// Start EventBus GitHub forward-sync subscriber (closes the linked GitHub
+	// issue when a backlog item transitions to done — AC3). Shares
+	// BacklogService's plugin registry/key provider so behavior matches
+	// TriggerSync; both are nil-safe when the backlog feature isn't wired.
+	if deps.BacklogService != nil {
+		services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+	}
 
 	// Register analytics HTTP handler (POST /api/analytics, GET /api/analytics/summary).
 	analyticsHandler := handlers.NewAnalyticsHandlerWithClient(analyticsProvider, deps.AnalyticsEntClient)
@@ -1025,6 +1133,36 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	}()
 
 	return nil
+}
+
+// notificationDecisionListerAdapter adapts *notifications.NotificationHistoryStore.List
+// to session.NotificationDecisionLister, which BuildDecisionsSnapshot
+// (session/session_summary_snapshot.go) needs. session cannot import
+// server/notifications directly (server/notifications -> server/events ->
+// pkg/events -> session is a real import cycle — see session.DecisionRecord's doc
+// comment), so this thin adapter lives here where both packages are already
+// imported.
+type notificationDecisionListerAdapter struct {
+	store *notifications.NotificationHistoryStore
+}
+
+// ListDecisionRecords implements session.NotificationDecisionLister.
+func (a *notificationDecisionListerAdapter) ListDecisionRecords(_ context.Context, sessionID string) ([]session.DecisionRecord, error) {
+	records, _, err := a.store.List(notifications.ListOptions{
+		SessionID: sessionID,
+		Limit:     notifications.MaxNotifications, // unpaginated — need every record for this session
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]session.DecisionRecord, len(records))
+	for i, r := range records {
+		out[i] = session.DecisionRecord{
+			NotificationType: r.NotificationType,
+			ApprovalDecision: r.Metadata["approval_decision"],
+		}
+	}
+	return out, nil
 }
 
 // instanceDataLister is the narrow slice of *session.Storage that

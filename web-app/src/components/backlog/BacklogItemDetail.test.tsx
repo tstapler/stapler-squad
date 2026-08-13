@@ -14,7 +14,7 @@
  */
 
 import React from "react";
-import { render, screen, act, fireEvent, within } from "@testing-library/react";
+import { render, screen, act, fireEvent, within, waitFor } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
@@ -26,7 +26,25 @@ import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from 
 // focused on BacklogItemDetail's own render behavior.
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
-jest.mock("./TriageReviewPanel", () => ({ TriageReviewPanel: () => null }));
+// Stubbed to a minimal interactive shim (rather than plain `() => null`) so
+// Task 1.1.2c's wiring test can exercise the real onAnswerQuestion prop
+// BacklogItemDetail passes down, without standing up the full real
+// TriageReviewPanel/TriageDiffSection tree (already covered by
+// TriageReviewPanel.test.tsx and TriageDiffSection.test.tsx). No existing
+// test in this file renders an item matching the triageStatus==="completed"
+// && status==="idea" gate, so this is a no-op for every other test here.
+jest.mock("./TriageReviewPanel", () => ({
+  TriageReviewPanel: (props: { onAnswerQuestion?: (feedback: string) => Promise<void> }) =>
+    props.onAnswerQuestion ? (
+      <button
+        type="button"
+        data-testid="mock-triage-answer-question"
+        onClick={() => props.onAnswerQuestion!("Q: Should retries be per-workflow or global?\nA: Per-workflow, default to global")}
+      >
+        Mock answer question
+      </button>
+    ) : null,
+}));
 jest.mock("./TriageLoadingIndicator", () => ({ TriageLoadingIndicator: () => null }));
 
 // ReviewChangesModal makes a real ConnectRPC call on mount — stub it to a marker
@@ -96,6 +114,14 @@ const updateBacklogItem = jest.fn().mockResolvedValue(null);
 // can control resolution timing — needed for the actionLoading polling-
 // suspend regression test (Story 3.1.3, Task 3.1.3c).
 const overrideVerdict = jest.fn();
+// Hoisted (Task 1.1.2c, backlog-operator-feedback-loop) so the triage
+// question-answer wiring test can assert on the exact call made when the
+// mocked TriageReviewPanel's onAnswerQuestion prop is invoked.
+const triggerTriage = jest.fn().mockResolvedValue(undefined);
+// Hoisted (Task 4.3.1d, backlog-operator-feedback-loop) so the plan-review
+// integration test can assert on the exact call made when PlanVerdictBox's
+// Request Changes form is submitted.
+const rejectPlan = jest.fn();
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   // mapBacklogItem is a real (unmocked) named export — BacklogItemDetail's
@@ -105,10 +131,11 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: () => ({
     getBacklogItem,
     transitionStatus: jest.fn().mockResolvedValue(true),
-    triggerTriage: jest.fn(),
+    triggerTriage,
     cancelTriage: jest.fn(),
     spawnSessionFromItem: jest.fn(),
     approvePlan: jest.fn(),
+    rejectPlan,
     overrideVerdict,
     triggerReReview: jest.fn(),
     triggerShipPR: jest.fn(),
@@ -174,6 +201,8 @@ beforeEach(() => {
   updateBacklogItem.mockClear().mockResolvedValue(null);
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
   overrideVerdict.mockReset();
+  triggerTriage.mockClear().mockResolvedValue(undefined);
+  rejectPlan.mockReset().mockResolvedValue(null);
   // Story 3.1.4's per-section expand state (useSectionExpandState) and
   // "Show N more" state (useShowMore) both persist to localStorage keyed
   // by itemId — clear between tests so one test's expand/collapse
@@ -475,13 +504,19 @@ describe("BacklogItemDetail — Story 5.3.1: shouldPoll removal / live updates",
     });
     expect(screen.getByText("Refactor auth middleware")).toBeInTheDocument();
 
-    // Simulate a BacklogItemUpdatedEvent landing in backlogItemsSlice.
+    // Simulate a BacklogItemUpdatedEvent landing in backlogItemsSlice. A real
+    // event always carries a newer updated_at than what's already displayed
+    // — the loadGuard test suite covers the reverse (an older/stale live
+    // event must NOT stomp a newer item), so this fixture must be genuinely
+    // newer than makeItem's "2026-07-12T14:02:00Z" to exercise the normal
+    // "apply it" path rather than accidentally tripping that guard.
     mockLiveItemsMap = {
       "item-1": {
         id: "item-1",
         title: "Refactor auth middleware (renamed live)",
         status: "idea",
         priority: 3,
+        updatedAt: timestampFromDate(new Date("2026-07-12T14:05:00Z")),
       },
     };
 
@@ -1121,6 +1156,7 @@ describe("BacklogItemDetail — Story 3.1.5: auto-expand-on-status-change, first
         title: "Refactor auth middleware",
         status: "review",
         priority: 3,
+        updatedAt: timestampFromDate(new Date("2026-07-12T14:05:00Z")),
       },
     };
     await act(async () => {
@@ -1191,5 +1227,141 @@ describe("BacklogItemDetail — regression: Collapsible's defaultExpanded-in-gro
     expect(warnSpy).not.toHaveBeenCalled();
 
     warnSpy.mockRestore();
+  });
+});
+
+describe("BacklogItemDetail — Epic 4.2 (backlog-github-two-way-sync): Source section", () => {
+  it("BacklogItemDetail_should_OmitSourceSection_When_ExternalUrlEmpty", async () => {
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("collapsible-header-source")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderSourceSection_When_ExternalUrlPresent", async () => {
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([session]),
+      externalUrl: "https://github.com/acme/widget/issues/42",
+      externalId: "42",
+      labels: ["bug"],
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("collapsible-header-source")).toBeInTheDocument();
+  });
+});
+
+// project_plans/backlog-operator-feedback-loop Epic 1.1 (Task 1.1.2c):
+// answering a triage question inline must reach the exact same
+// triggerTriage(id, feedback) call the existing "Not quite — give feedback"
+// button already uses — no new RPC, no new triage-trigger code path.
+// TriageReviewPanel is stubbed above to a minimal shim that invokes
+// onAnswerQuestion with a fixed composed "Q:.../A:..." string; the composer
+// function itself is unit-tested in isolation in
+// composeQuestionAnswerFeedback.test.ts, and the toggle/textarea/submit UI
+// is covered in TriageDiffSection.test.tsx — this test only proves the
+// wiring from BacklogItemDetail down to the real triggerTriage RPC call.
+describe("BacklogItemDetail — Epic 1.1: triage question answer wiring", () => {
+  it("calls triggerTriage with the composed Q:/A: feedback when a question is answered", async () => {
+    const session = makeSession({ role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([session]),
+      status: "idea",
+      triageStatus: "completed",
+      triageResult: {
+        summary: "Looks mostly ready — one open question.",
+        suggestions: [
+          { text: "Should retries be per-workflow or global?", rationale: "question" },
+        ],
+        clarifyingQuestions: [],
+      },
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("mock-triage-answer-question"));
+
+    await waitFor(() => {
+      expect(triggerTriage).toHaveBeenCalledWith(
+        "item-1",
+        "Q: Should retries be per-workflow or global?\nA: Per-workflow, default to global"
+      );
+    });
+  });
+});
+
+// Story 4.3.1 (Gap 3b): PlanVerdictBox (real, unmocked component — unlike
+// GateVerdictBox above) renders alongside ActionsSection so Approve and
+// Request Changes are both reachable in the same place (AC3), and rejecting
+// a plan updates the card in place (AC3/AC5).
+describe("BacklogItemDetail — Epic 4.3: plan review wiring", () => {
+  it("BacklogItemDetail_should_ShowApproveAndRequestChangesSimultaneously_When_ItemHasPendingReviewPlan", async () => {
+    const session = makeSession({ role: "triage" });
+    const pendingReviewItem: BacklogItem = {
+      ...makeItem([session]),
+      status: "ready",
+      planApproved: false,
+      planArtifactsPath: "/tmp/plans/item-1.md",
+    };
+    getBacklogItem.mockReset().mockResolvedValue(pendingReviewItem);
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Both actions visible at once (AC3).
+    expect(screen.getByText("Pending review")).toBeInTheDocument();
+    expect(screen.getByTestId("backlog-action-approve-plan")).toBeInTheDocument();
+    expect(screen.getByTestId("backlog-action-reject-plan")).toBeInTheDocument();
+
+    // Open the Request Changes form, type a reason, and submit.
+    fireEvent.click(screen.getByTestId("backlog-action-reject-plan"));
+    fireEvent.change(screen.getByTestId("plan-reject-reason"), {
+      target: { value: "Please split this into two smaller tasks." },
+    });
+
+    const rejectedItem: BacklogItem = {
+      ...pendingReviewItem,
+      planRejectionReason: "Please split this into two smaller tasks.",
+    };
+    getBacklogItem.mockResolvedValue(rejectedItem);
+
+    fireEvent.click(screen.getByTestId("backlog-action-reject-plan-submit"));
+
+    await waitFor(() => {
+      expect(rejectPlan).toHaveBeenCalledWith(
+        "item-1",
+        "Please split this into two smaller tasks."
+      );
+    });
+
+    // Card updates in place: "Revisions requested", reason text visible, Regenerate button present.
+    await waitFor(() => {
+      expect(screen.getByText("Revisions requested")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Please split this into two smaller tasks.")).toBeInTheDocument();
+    expect(screen.getByTestId("backlog-action-regenerate-plan")).toBeInTheDocument();
   });
 });

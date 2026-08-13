@@ -69,10 +69,18 @@ func accountKey(ref AccountRef) string {
 	return keychainAccountPrefix + NormalizeHost(ref.Host) + ":" + ref.Username
 }
 
-// GetKeychainToken returns any stored GitHub token (first account, or the
-// legacy single-account slot). Kept for backward-compatibility with the
-// single-token auth flow.
+// GetKeychainToken returns a token for the default single-token auth flow
+// (getGHToken/newGHRequest), which always targets api.github.com. It must
+// therefore prefer a github.com account's token over any other configured
+// host: returning an enterprise account's token here sends valid credentials
+// to the wrong API and GitHub correctly rejects them as 401 Bad credentials,
+// regardless of account order in ListKeychainAccounts. Falls back to the
+// first account of any host, then the legacy single-account slot, only when
+// no github.com account is configured.
 func GetKeychainToken() string {
+	if tok := GetKeychainTokenForHost(defaultHost); tok != "" {
+		return tok
+	}
 	for _, ref := range ListKeychainAccounts() {
 		if tok := GetKeychainTokenForAccount(ref.Host, ref.Username); tok != "" {
 			return tok
@@ -118,6 +126,28 @@ func ListKeychainAccounts() []AccountRef {
 		accounts[i] = AccountRef{Username: username, Host: defaultHost}
 	}
 	return accounts
+}
+
+// GetKeychainTokenForHost returns any stored token for host, regardless of
+// which account it belongs to. Backlog sync plugins (session/backlog_plugin_github.go,
+// session/backlog_plugin_github_prs.go) only know a host, not a username, so they
+// can't call GetKeychainTokenForAccount directly. Falls back to the legacy
+// single-account slot for github.com when no named account matches.
+func GetKeychainTokenForHost(host string) string {
+	normalized := NormalizeHost(host)
+	for _, ref := range ListKeychainAccounts() {
+		if NormalizeHost(ref.Host) == normalized {
+			if tok := GetKeychainTokenForAccount(ref.Host, ref.Username); tok != "" {
+				return tok
+			}
+		}
+	}
+	if IsGitHubCom(host) {
+		if tok, err := keyringGet(keychainService, keychainTokenKey); err == nil {
+			return tok
+		}
+	}
+	return ""
 }
 
 // GetKeychainTokenForAccount returns the stored token for username on host, or "".

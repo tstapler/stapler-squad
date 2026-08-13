@@ -38,7 +38,7 @@ class GitHubPRDetector implements Detector {
       type: InputType.GitHubPR,
       confidence: 1.0,
       parsedValue: input.trim(),
-      suggestedName: `pr-${prNumber}-${repo}`,
+      suggestedName: `${owner}-${repo}-pr-${prNumber}`,
       gitHubRef,
     };
   }
@@ -69,7 +69,7 @@ class GitHubBranchDetector implements Detector {
       type: InputType.GitHubBranch,
       confidence: 1.0,
       parsedValue: input.trim(),
-      suggestedName: `${repo}-${branch.replace(/\//g, "-")}`,
+      suggestedName: `${owner}-${repo}-${branch.replace(/\//g, "-")}`,
       branch,
       gitHubRef,
     };

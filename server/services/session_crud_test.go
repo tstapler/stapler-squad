@@ -25,6 +25,7 @@ func newCRUDService(t *testing.T) *SessionService {
 func TestCreateSession_MissingTitle(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title: "",
@@ -39,6 +40,7 @@ func TestCreateSession_MissingTitle(t *testing.T) {
 func TestCreateSession_MissingPath(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title: "my-session",

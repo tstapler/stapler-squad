@@ -78,11 +78,29 @@ type ApprovalHandler struct {
 	timeout             time.Duration               // default 4m; overridable in tests
 	headlessPool        headlessPoolApprover        // optional: LLM approval for autonomous sessions
 	autonomousChecker   func(string) bool           // optional: returns true if sessionID is an autonomous session
+	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
+	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
 func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
-	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute}
+	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: session.DefaultPRStatusPollerConfig().PollInterval}
+}
+
+// SetPollInterval overrides the interval used to bound CI-status staleness (Task 1.1.2b).
+// Callers should pass the live PRStatusPoller's configured interval so the guard can't
+// silently desync from the poller if it's ever tuned.
+func (h *ApprovalHandler) SetPollInterval(d time.Duration) {
+	h.pollInterval = d
+}
+
+// SetLiveInstanceFinder wires the live in-memory instance lookup used to populate
+// ClassificationContext.CIStatus. GitHubCheckConclusion/LastPRStatusCheck are not
+// persisted in the ent schema (see Storage.UpdateInstancePRStatus) — they only live on
+// the in-memory Instance the PRStatusPoller keeps fresh — so a *session.Storage lookup
+// cannot see them; this must be the live registry (typically *SessionService).
+func (h *ApprovalHandler) SetLiveInstanceFinder(f LiveInstanceFinder) {
+	h.liveFinder = f
 }
 
 // approvalTimeout returns the configured timeout, falling back to 4 minutes.
@@ -237,6 +255,13 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// set below.
 	var escalation classifier.ClassificationResult
 
+	// classified is true only when escalation was genuinely assigned below (domain-age or a
+	// real classifier result). RiskLevel must never be read from escalation unless classified
+	// is true — escalation's zero value (classifier.RiskLow) is indistinguishable from a real
+	// Low risk, and reading it unconditionally would silently mislabel an unclassified/degraded
+	// request (e.g. h.classifier == nil) as safe. See pre-mortem.md Failure #1.
+	var classified bool
+
 	// Domain age check: if a Bash command is contacting a newly-registered domain,
 	// escalate immediately regardless of other rules.
 	if h.domainChecker != nil {
@@ -268,6 +293,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 					}
 					// Fall through to manual review queue (do NOT return here).
 					escalation = domainEscalation
+					classified = true
 					goto createApproval
 				}
 			}
@@ -289,6 +315,24 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	if h.classifier != nil {
 		start := time.Now()
 		classCtx := h.classifier.BuildContext(payload.Cwd)
+		if h.liveFinder != nil {
+			if inst := h.liveFinder.FindLiveInstance(sessionID); inst != nil {
+				// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
+				// fields on its own goroutine under inst.mu (session/instance.go's mu
+				// doc comment mandates Snapshot() for reads outside the actor).
+				ghInfo := inst.Snapshot().GitHub
+				if ghInfo.GitHubPRNumber > 0 {
+					classCtx.CIStatus = ghInfo.GitHubCheckConclusion
+					// Staleness guard (Task 1.1.2b): a cached conclusion older than 2x the
+					// poller's configured interval may no longer reflect the branch's real CI
+					// state. Treat it as unknown rather than risk gating an irreversible
+					// auto-approve (RequireCIPassing) on stale data.
+					if time.Since(ghInfo.LastPRStatusCheck) > 2*h.pollInterval {
+						classCtx.CIStatus = ""
+					}
+				}
+			}
+		}
 		result := h.classifier.Classify(payload, classCtx)
 		durationMs := time.Since(start).Milliseconds()
 
@@ -327,6 +371,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			return
 		case classifier.Escalate:
 			escalation = result
+			classified = true
 			// Fall through to manual review queue (createApproval label below).
 		default:
 			// Unrecognized classifier.ClassificationDecision (e.g. a future 4th value). Fail safe
@@ -342,6 +387,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			// assignment (not after) so escalation is never observably set without it.
 			result.RuleID = classifier.RuleIDUnexpectedDecision
 			escalation = result
+			classified = true
 		}
 	}
 
@@ -388,6 +434,10 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 
 	// Create a pending approval record
 	approvalID := uuid.New().String()
+	riskLevel := ""
+	if classified {
+		riskLevel = riskLevelString(escalation.RiskLevel)
+	}
 	approval := &PendingApproval{
 		ID:                 approvalID,
 		SessionID:          sessionID,
@@ -399,6 +449,7 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 		CreatedAt:          time.Now(),
 		EscalationReason:   truncateEscalationReason(classifier.EscalationReasonText(escalation)),
 		EscalationCategory: string(classifier.CategorizeEscalationRuleID(escalation.RuleID)),
+		RiskLevel:          riskLevel,
 		// Use the configured timeout (default 4 minutes), strictly less than the 5-minute hook timeout.
 		ExpiresAt: time.Now().Add(h.approvalTimeout()),
 	}
@@ -764,7 +815,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 				if err := json.Unmarshal(prRaw, &groups); err == nil {
 					for _, g := range groups {
 						for _, h := range g.Hooks {
-							if h.Type == "command" && strings.Contains(h.Command, hookApprovalURL()) {
+							if h.Type == "command" && hookCommandReferencesURL(h.Command, hookApprovalURL()) {
 								log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
 								return nil
 							}

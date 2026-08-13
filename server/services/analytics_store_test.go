@@ -1,12 +1,14 @@
 package services
 
 import (
+	"context"
 	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"go.uber.org/goleak"
 )
 
 func TestClassify_DailyBucketAutoApproveRate(t *testing.T) {
@@ -300,4 +302,85 @@ func TestComputeSummary_EscalationReasonCounts(t *testing.T) {
 		"unclassifiable": 1,
 		"explicit-rule":  1,
 	}, s.EscalationReasonCounts, "AC4: EscalationReasonCounts must bucket every escalate decision plus the secret-scan auto_deny special case, excluding the unrelated auto_allow entry")
+}
+
+// TestComputeSummary_should_PopulateRiskLevelCounts_When_EntriesSpanAllFourRiskLevels covers
+// plan.md Task 3.1.1/3.1.4 (AC5): risk_level_counts must be scoped to escalated decisions
+// only (same scope as EscalationReasonCounts), not the full auto_allow/auto_deny/escalate
+// traffic mix — see pre-mortem.md Failure #5 / adversarial-review.md's resolved blocker.
+func TestComputeSummary_should_PopulateRiskLevelCounts_When_EntriesSpanAllFourRiskLevels(t *testing.T) {
+	entries := []AnalyticsEntry{
+		{Decision: "escalate", RiskLevel: "critical"},
+		{Decision: "escalate", RiskLevel: "high"},
+		{Decision: "escalate", RiskLevel: "high"},
+		{Decision: "escalate", RiskLevel: "medium"},
+		{Decision: "escalate", RiskLevel: "low"},
+		{Decision: "auto_deny", RuleID: "secret-scan", RiskLevel: "critical"},
+		// Not escalate and not the secret-scan auto_deny special case — must be excluded,
+		// proving the breakdown isn't counting the full traffic mix.
+		{Decision: "auto_allow", RiskLevel: "low"},
+		{Decision: "auto_deny", RiskLevel: "high"},
+	}
+
+	s := ComputeSummary(entries)
+	assert.Equal(t, map[string]int{
+		"critical": 2,
+		"high":     2,
+		"medium":   1,
+		"low":      1,
+	}, s.RiskLevelCounts, "AC5: RiskLevelCounts must be scoped to escalate + secret-scan auto_deny only, matching EscalationReasonCounts' denominator")
+}
+
+// TestComputeSummary_should_ReturnEmptyRiskLevelCounts_When_NoEntriesInWindow covers the
+// zero-escalation edge case: an empty map, not a nil-panic or a spurious non-empty result.
+func TestComputeSummary_should_ReturnEmptyRiskLevelCounts_When_NoEntriesInWindow(t *testing.T) {
+	s := ComputeSummary(nil)
+	assert.Empty(t, s.RiskLevelCounts)
+}
+
+// TestAnalyticsStore_Stop_JoinsFlushGoroutine confirms Stop() actually waits for the
+// flush goroutine to exit rather than just signaling it — goleak.VerifyNone must see
+// nothing new relative to the pre-Start baseline immediately after Stop() returns,
+// with no polling/sleep needed.
+func TestAnalyticsStore_Stop_JoinsFlushGoroutine(t *testing.T) {
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+
+	baseline := goleak.IgnoreCurrent()
+	store.Start(context.Background())
+	store.Stop()
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestAnalyticsStore_Stop_Idempotent confirms Stop() can be called multiple times
+// (e.g. once via t.Cleanup and once explicitly) without panicking.
+func TestAnalyticsStore_Stop_Idempotent(t *testing.T) {
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+	store.Start(context.Background())
+
+	require.NotPanics(t, store.Stop)
+	require.NotPanics(t, store.Stop, "a second Stop() call must be a no-op, not a double-close panic")
+}
+
+// TestAnalyticsStore_Stop_BeforeStart_NoPanic confirms Stop() is safe to call on a
+// store that was never Start()ed (cancel is nil).
+func TestAnalyticsStore_Stop_BeforeStart_NoPanic(t *testing.T) {
+	store := NewAnalyticsStore(nil)
+	require.NotPanics(t, store.Stop)
+}
+
+// TestAnalyticsStore_Record_AfterStop_NoPanic confirms Record() after Stop() stays a
+// silent no-op (matching the existing buffer-full drop behavior) instead of panicking
+// on a send to a goroutine that is no longer draining the channel.
+func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+	store.Start(context.Background())
+	store.Stop()
+
+	require.NotPanics(t, func() {
+		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
+	})
 }

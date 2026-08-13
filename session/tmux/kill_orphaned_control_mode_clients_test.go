@@ -30,14 +30,14 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = safeexec.CommandContext(ctx, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	sessionName := "test_killcm_session"
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		newSessionCmd := safeexec.CommandContext(ctx, "tmux", "-L", socketName, "new-session", "-d", "-s", sessionName, "-x", "80", "-y", "24")
+		newSessionCmd := safeexec.CommandContext(ctx, Binary(), "-L", socketName, "new-session", "-d", "-s", sessionName, "-x", "80", "-y", "24")
 		require.NoError(t, newSessionCmd.Run())
 	}
 
@@ -50,7 +50,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		stdinRead, stdinWrite, err := os.Pipe()
 		require.NoError(t, err)
-		clientCmd := exec.Command("tmux", "-L", socketName, "-C", "attach-session", "-t", sessionName) //nolint:norawexec // isolated test-only tmux server, not the app's shared socket
+		clientCmd := exec.Command(Binary(), "-L", socketName, "-C", "attach-session", "-t", sessionName) //nolint:norawexec // isolated test-only tmux server, not the app's shared socket
 		clientCmd.Stdin = stdinRead
 		clientCmd.Stdout = io.Discard
 		clientCmd.Stderr = io.Discard
@@ -70,7 +70,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 	})
 
 	listClients := func() string {
-		out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "list-clients").Output()
+		out, err := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "list-clients").Output()
 		if err != nil {
 			return ""
 		}
@@ -91,7 +91,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: 100 * time.Millisecond, Description: "clients disappear"}))
 
 	// The session itself must survive -- only its clients were killed, not the session.
-	hasSessionCmd := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "has-session", "-t", sessionName)
+	hasSessionCmd := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "has-session", "-t", sessionName)
 	require.NoError(t, hasSessionCmd.Run(), "session should still exist after killing only its orphaned clients")
 }
 

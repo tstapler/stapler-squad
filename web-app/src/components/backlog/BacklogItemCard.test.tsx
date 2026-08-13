@@ -8,7 +8,7 @@
  */
 
 import React from "react";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { BacklogItemCard } from "./BacklogItemCard";
@@ -84,6 +84,44 @@ describe("BacklogItemCard — per-card pending state", () => {
     expect(button).toBeDisabled();
   });
 
+});
+
+describe("BacklogItemCard — last-review verdict badge", () => {
+  it("shows a FAIL badge when the item's most recent review verdict is FAIL", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "in_progress", gateVerdict: "FAIL" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("✗ FAIL")).toBeInTheDocument();
+  });
+
+  it("shows no badge when the item has never been reviewed", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "in_progress", gateVerdict: undefined })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/PASS|FAIL|PARTIAL|UNVERIFIABLE/)).not.toBeInTheDocument();
+  });
+
+  it("shows no badge for a PENDING verdict (review still running, not a card-worthy signal)", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "review", gateVerdict: "PENDING" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/PENDING/)).not.toBeInTheDocument();
+  });
 });
 
 describe("BacklogItemCard — flash on live update (Epic 6.1)", () => {
@@ -223,6 +261,97 @@ describe("BacklogItemCard — compact BlockerChip (Story 5.1.1)", () => {
     expect(screen.queryByTestId("blocker-chip")).not.toBeInTheDocument();
     // Footer still shows the action button as before.
     expect(screen.getByTestId("backlog-action-mark_ready")).toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-two-way-sync)", () => {
+  it("BacklogItemCard_should_RenderProvenanceBadge_When_ExternalUrlPresent", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://github.com/acme/widget/issues/42", externalId: "42" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
+    expect(badge).toHaveAttribute("href", "https://github.com/acme/widget/issues/42");
+    expect(badge).toHaveAttribute("target", "_blank");
+    expect(badge).toHaveTextContent("#42");
+  });
+
+  it("BacklogItemCard_should_OmitProvenanceBadge_When_ExternalUrlEmpty", () => {
+    render(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} />);
+
+    expect(screen.queryByRole("link", { name: /Imported from GitHub issue/ })).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_OmitProvenanceBadge_When_ExternalUrlPresentButExternalIdMissing", () => {
+    // Guards against a literal "Imported from GitHub issue #undefined" / "#undefined"
+    // badge — nothing in the type system enforces externalId always accompanying
+    // a real externalUrl, so the badge must not render on externalUrl alone.
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://github.com/acme/widget/issues/42", externalId: undefined })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByRole("link", { name: /Imported from GitHub issue/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_NotTriggerOnClick_When_ProvenanceBadgeClicked", () => {
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://github.com/acme/widget/issues/42", externalId: "42" })}
+        onAction={jest.fn()}
+        onClick={onClick}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Imported from GitHub issue #42" }));
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_NotTriggerCardOnClick_When_EnterPressedOnProvenanceBadge", () => {
+    // Regression test: the card's onKeyDown handler used to fire on ANY
+    // bubbled Enter/Space keydown, including from this nested focusable
+    // anchor — preventDefault() on the bubbled event meant a keyboard user
+    // could never actually follow the link via Enter. Guarding on
+    // `e.target === e.currentTarget` fixes it; this asserts the card's
+    // onClick (its keyboard-activation path) is not invoked when the event
+    // originates on the badge.
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://github.com/acme/widget/issues/42", externalId: "42" })}
+        onAction={jest.fn()}
+        onClick={onClick}
+      />
+    );
+
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
+    fireEvent.keyDown(badge, { key: "Enter" });
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_TriggerOnClick_When_EnterPressedOnCardItself", () => {
+    // Companion test: the guard must not break the card's own keyboard
+    // activation — Enter on the card (not a nested child) should still
+    // invoke onClick.
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={onClick} />
+    );
+
+    fireEvent.keyDown(screen.getByTestId("backlog-item-card"), { key: "Enter" });
+
+    expect(onClick).toHaveBeenCalledWith("item-1");
   });
 });
 

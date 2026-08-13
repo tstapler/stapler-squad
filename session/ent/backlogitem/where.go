@@ -141,6 +141,16 @@ func PlanArtifactsPath(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPlanArtifactsPath, v))
 }
 
+// PlanRejectionReason applies equality check predicate on the "plan_rejection_reason" field. It's identical to PlanRejectionReasonEQ.
+func PlanRejectionReason(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectedAt applies equality check predicate on the "plan_rejected_at" field. It's identical to PlanRejectedAtEQ.
+func PlanRejectedAt(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldPlanRejectedAt, v))
+}
+
 // UserModifiedFields applies equality check predicate on the "user_modified_fields" field. It's identical to UserModifiedFieldsEQ.
 func UserModifiedFields(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldUserModifiedFields, v))
@@ -154,6 +164,11 @@ func Notes(v string) predicate.BacklogItem {
 // ExternalID applies equality check predicate on the "external_id" field. It's identical to ExternalIDEQ.
 func ExternalID(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldExternalID, v))
+}
+
+// ExternalURL applies equality check predicate on the "external_url" field. It's identical to ExternalURLEQ.
+func ExternalURL(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldExternalURL, v))
 }
 
 // UserModifiedStatusAt applies equality check predicate on the "user_modified_status_at" field. It's identical to UserModifiedStatusAtEQ.
@@ -199,6 +214,11 @@ func ShippedSnapshotAt(v time.Time) predicate.BacklogItem {
 // PrFeedbackAddressedAt applies equality check predicate on the "pr_feedback_addressed_at" field. It's identical to PrFeedbackAddressedAtEQ.
 func PrFeedbackAddressedAt(v time.Time) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPrFeedbackAddressedAt, v))
+}
+
+// GithubSyncedIssueUpdatedAt applies equality check predicate on the "github_synced_issue_updated_at" field. It's identical to GithubSyncedIssueUpdatedAtEQ.
+func GithubSyncedIssueUpdatedAt(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldGithubSyncedIssueUpdatedAt, v))
 }
 
 // ShippedFileStats applies equality check predicate on the "shipped_file_stats" field. It's identical to ShippedFileStatsEQ.
@@ -986,6 +1006,131 @@ func PlanArtifactsPathContainsFold(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldContainsFold(FieldPlanArtifactsPath, v))
 }
 
+// PlanRejectionReasonEQ applies the EQ predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonNEQ applies the NEQ predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonNEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonIn applies the In predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldPlanRejectionReason, vs...))
+}
+
+// PlanRejectionReasonNotIn applies the NotIn predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonNotIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldPlanRejectionReason, vs...))
+}
+
+// PlanRejectionReasonGT applies the GT predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonGT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonGTE applies the GTE predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonGTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonLT applies the LT predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonLT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonLTE applies the LTE predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonLTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonContains applies the Contains predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonContains(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContains(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonHasPrefix applies the HasPrefix predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonHasPrefix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasPrefix(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonHasSuffix applies the HasSuffix predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonHasSuffix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasSuffix(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonIsNil applies the IsNil predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldPlanRejectionReason))
+}
+
+// PlanRejectionReasonNotNil applies the NotNil predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldPlanRejectionReason))
+}
+
+// PlanRejectionReasonEqualFold applies the EqualFold predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonEqualFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEqualFold(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectionReasonContainsFold applies the ContainsFold predicate on the "plan_rejection_reason" field.
+func PlanRejectionReasonContainsFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContainsFold(FieldPlanRejectionReason, v))
+}
+
+// PlanRejectedAtEQ applies the EQ predicate on the "plan_rejected_at" field.
+func PlanRejectedAtEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldPlanRejectedAt, v))
+}
+
+// PlanRejectedAtNEQ applies the NEQ predicate on the "plan_rejected_at" field.
+func PlanRejectedAtNEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldPlanRejectedAt, v))
+}
+
+// PlanRejectedAtIn applies the In predicate on the "plan_rejected_at" field.
+func PlanRejectedAtIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldPlanRejectedAt, vs...))
+}
+
+// PlanRejectedAtNotIn applies the NotIn predicate on the "plan_rejected_at" field.
+func PlanRejectedAtNotIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldPlanRejectedAt, vs...))
+}
+
+// PlanRejectedAtGT applies the GT predicate on the "plan_rejected_at" field.
+func PlanRejectedAtGT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldPlanRejectedAt, v))
+}
+
+// PlanRejectedAtGTE applies the GTE predicate on the "plan_rejected_at" field.
+func PlanRejectedAtGTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldPlanRejectedAt, v))
+}
+
+// PlanRejectedAtLT applies the LT predicate on the "plan_rejected_at" field.
+func PlanRejectedAtLT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldPlanRejectedAt, v))
+}
+
+// PlanRejectedAtLTE applies the LTE predicate on the "plan_rejected_at" field.
+func PlanRejectedAtLTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldPlanRejectedAt, v))
+}
+
+// PlanRejectedAtIsNil applies the IsNil predicate on the "plan_rejected_at" field.
+func PlanRejectedAtIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldPlanRejectedAt))
+}
+
+// PlanRejectedAtNotNil applies the NotNil predicate on the "plan_rejected_at" field.
+func PlanRejectedAtNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldPlanRejectedAt))
+}
+
 // UserModifiedFieldsEQ applies the EQ predicate on the "user_modified_fields" field.
 func UserModifiedFieldsEQ(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldUserModifiedFields, v))
@@ -1209,6 +1354,91 @@ func ExternalIDEqualFold(v string) predicate.BacklogItem {
 // ExternalIDContainsFold applies the ContainsFold predicate on the "external_id" field.
 func ExternalIDContainsFold(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldContainsFold(FieldExternalID, v))
+}
+
+// ExternalURLEQ applies the EQ predicate on the "external_url" field.
+func ExternalURLEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldExternalURL, v))
+}
+
+// ExternalURLNEQ applies the NEQ predicate on the "external_url" field.
+func ExternalURLNEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldExternalURL, v))
+}
+
+// ExternalURLIn applies the In predicate on the "external_url" field.
+func ExternalURLIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldExternalURL, vs...))
+}
+
+// ExternalURLNotIn applies the NotIn predicate on the "external_url" field.
+func ExternalURLNotIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldExternalURL, vs...))
+}
+
+// ExternalURLGT applies the GT predicate on the "external_url" field.
+func ExternalURLGT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldExternalURL, v))
+}
+
+// ExternalURLGTE applies the GTE predicate on the "external_url" field.
+func ExternalURLGTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldExternalURL, v))
+}
+
+// ExternalURLLT applies the LT predicate on the "external_url" field.
+func ExternalURLLT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldExternalURL, v))
+}
+
+// ExternalURLLTE applies the LTE predicate on the "external_url" field.
+func ExternalURLLTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldExternalURL, v))
+}
+
+// ExternalURLContains applies the Contains predicate on the "external_url" field.
+func ExternalURLContains(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContains(FieldExternalURL, v))
+}
+
+// ExternalURLHasPrefix applies the HasPrefix predicate on the "external_url" field.
+func ExternalURLHasPrefix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasPrefix(FieldExternalURL, v))
+}
+
+// ExternalURLHasSuffix applies the HasSuffix predicate on the "external_url" field.
+func ExternalURLHasSuffix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasSuffix(FieldExternalURL, v))
+}
+
+// ExternalURLIsNil applies the IsNil predicate on the "external_url" field.
+func ExternalURLIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldExternalURL))
+}
+
+// ExternalURLNotNil applies the NotNil predicate on the "external_url" field.
+func ExternalURLNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldExternalURL))
+}
+
+// ExternalURLEqualFold applies the EqualFold predicate on the "external_url" field.
+func ExternalURLEqualFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEqualFold(FieldExternalURL, v))
+}
+
+// ExternalURLContainsFold applies the ContainsFold predicate on the "external_url" field.
+func ExternalURLContainsFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContainsFold(FieldExternalURL, v))
+}
+
+// LabelsIsNil applies the IsNil predicate on the "labels" field.
+func LabelsIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldLabels))
+}
+
+// LabelsNotNil applies the NotNil predicate on the "labels" field.
+func LabelsNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldLabels))
 }
 
 // UserModifiedStatusAtEQ applies the EQ predicate on the "user_modified_status_at" field.
@@ -1709,6 +1939,56 @@ func PrFeedbackAddressedAtIsNil() predicate.BacklogItem {
 // PrFeedbackAddressedAtNotNil applies the NotNil predicate on the "pr_feedback_addressed_at" field.
 func PrFeedbackAddressedAtNotNil() predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNotNull(FieldPrFeedbackAddressedAt))
+}
+
+// GithubSyncedIssueUpdatedAtEQ applies the EQ predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldGithubSyncedIssueUpdatedAt, v))
+}
+
+// GithubSyncedIssueUpdatedAtNEQ applies the NEQ predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtNEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldGithubSyncedIssueUpdatedAt, v))
+}
+
+// GithubSyncedIssueUpdatedAtIn applies the In predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldGithubSyncedIssueUpdatedAt, vs...))
+}
+
+// GithubSyncedIssueUpdatedAtNotIn applies the NotIn predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtNotIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldGithubSyncedIssueUpdatedAt, vs...))
+}
+
+// GithubSyncedIssueUpdatedAtGT applies the GT predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtGT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldGithubSyncedIssueUpdatedAt, v))
+}
+
+// GithubSyncedIssueUpdatedAtGTE applies the GTE predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtGTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldGithubSyncedIssueUpdatedAt, v))
+}
+
+// GithubSyncedIssueUpdatedAtLT applies the LT predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtLT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldGithubSyncedIssueUpdatedAt, v))
+}
+
+// GithubSyncedIssueUpdatedAtLTE applies the LTE predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtLTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldGithubSyncedIssueUpdatedAt, v))
+}
+
+// GithubSyncedIssueUpdatedAtIsNil applies the IsNil predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldGithubSyncedIssueUpdatedAt))
+}
+
+// GithubSyncedIssueUpdatedAtNotNil applies the NotNil predicate on the "github_synced_issue_updated_at" field.
+func GithubSyncedIssueUpdatedAtNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldGithubSyncedIssueUpdatedAt))
 }
 
 // ShippedFileStatsEQ applies the EQ predicate on the "shipped_file_stats" field.

@@ -20,7 +20,9 @@ import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { useAppSelector } from "@/lib/store";
+import { store } from "@/lib/store/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
+import { selectSessionsError } from "@/lib/store/sessionsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -39,14 +41,18 @@ import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
 import { LastReviewResultSection } from "./detail/LastReviewResultSection";
 import { PullRequestSection } from "./detail/PullRequestSection";
+import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
+import { PlanVerdictBox } from "./PlanVerdictBox";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { NotesSection } from "./detail/NotesSection";
+import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -63,6 +69,7 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   spawn_session_autonomous: "Autonomous session started.",
   restart_session: "Session restarted.",
   approve_plan: "Plan approved.",
+  retry_triage: "Triage re-triggered.",
   mark_done: "Marked done.",
   override_done: "Overridden to done.",
   re_review: "Re-review triggered.",
@@ -83,6 +90,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     cancelTriage,
     spawnSessionFromItem,
     approvePlan,
+    rejectPlan,
     overrideVerdict,
     triggerReReview,
     triggerShipPR,
@@ -93,7 +101,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     listPipelineModes,
     lastError,
   } = useBacklogService();
-  const { deleteSession } = useSessionService();
+  const { deleteSession, updateSession } = useSessionService();
   const { showActionToast } = useNotifications();
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,6 +110,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [steeringSessionId, setSteeringSessionId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<"id" | "link" | null>(null);
 
   // Epic 3.4 "what ran" surface: the currently-fetched mode list, used only
@@ -110,6 +119,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // degrades every session's "Pipeline" group to the unrecognized-mode
   // fallback rather than blocking the rest of the item detail view.
   const [pipelineModes, setPipelineModes] = useState<PipelineMode[]>([]);
+
+  // Mirrors `item` on every render (assignment during render, not in an
+  // effect, so it's always current by the time an in-flight load() resolves)
+  // — lets load() compare a freshly-fetched result against whatever is
+  // currently displayed without needing `item` in its own dependency array.
+  const itemRef = useRef<BacklogItem | null>(null);
+  itemRef.current = item;
+
+  // Monotonic guard against out-of-order load() resolution (pitfall #4):
+  // each call captures its own sequence number, and only the response
+  // matching the most-recently-issued call is applied.
+  const loadSeqRef = useRef(0);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -224,6 +245,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setBufferedItem(mapped);
       return;
     }
+    // Guard against a stale live-store entry stomping more-current state
+    // (pitfall #2's other half, alongside load()'s matching guard below):
+    // backlogItemsSlice's own upsertItem guard only protects the 2nd+ write
+    // for a given item id — the *first* live event this component observes
+    // for an item (e.g. a "created" event delivered, after a connection
+    // delay, later than a separately-issued load()/GetBacklogItem fetch
+    // already completed) has no `existing` entry to compare against there,
+    // so it's accepted into the store unconditionally and would otherwise
+    // unconditionally overwrite this component's already-fresher `item`.
+    const current = itemRef.current;
+    const currentMs = current?.updatedAt ? new Date(current.updatedAt).getTime() : 0;
+    const mappedMs = mapped.updatedAt ? new Date(mapped.updatedAt).getTime() : 0;
+    if (current && mappedMs < currentMs) return;
     setItem(mapped);
     setNotesValue(mapped.notes ?? "");
     // editMode is read from the closure at the time this effect actually
@@ -321,6 +355,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
   const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
+  const [sourceExpanded, setSourceExpanded] = useSectionExpandState(itemId, "source", false);
+  const [manualOverrideExpanded, setManualOverrideExpanded] = useSectionExpandState(itemId, "manual-override", false);
 
   // Story 3.1.5: applies each status-dependent section's real default
   // exactly once, the first time `item` becomes available after this
@@ -378,6 +414,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ["workflow", workflowExpanded, setWorkflowExpanded],
     ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
     ["notes", notesExpanded, setNotesExpanded],
+    ["source", sourceExpanded, setSourceExpanded],
+    ["manual-override", manualOverrideExpanded, setManualOverrideExpanded],
   ];
   const openSectionKeys = sectionExpandEntries.filter(([, expanded]) => expanded).map(([key]) => key);
   const handleGroupValueChange = (next: string[]) => {
@@ -389,16 +427,29 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   };
 
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const result = await getBacklogItem(itemId);
-      if (!mountedRef.current) return;
+      // Drop this response if it's not the most recently issued load() call
+      // (pitfall #4 — resolution order isn't guaranteed to match call order)
+      // or the component has since unmounted.
+      if (!mountedRef.current || seq !== loadSeqRef.current) return;
       if (!result) {
         setError("Item not found.");
       } else {
-        setItem(result);
-        setNotesValue(result.notes ?? "");
+        // Guard against stomping a fresher live-watch/optimistic update with
+        // an older fetched result (pitfall #2) — `>=` is intentional: a
+        // same-millisecond result from the user's own just-triggered
+        // mutation must still apply, only a strictly *older* one is dropped.
+        const current = itemRef.current;
+        const currentMs = current?.updatedAt ? new Date(current.updatedAt).getTime() : 0;
+        const resultMs = result.updatedAt ? new Date(result.updatedAt).getTime() : 0;
+        if (!current || resultMs >= currentMs) {
+          setItem(result);
+          setNotesValue(result.notes ?? "");
+        }
       }
     } catch (e) {
       if (mountedRef.current) setError(e instanceof Error ? e.message : "Failed to load item.");
@@ -445,6 +496,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     [item, cancelTriage, track, deleteSession, showActionToast, load]
   );
 
+  // Epic 2.2 (Story 2.2.2, ADR-002): steers a live work/review session via
+  // the same widened UpdateSession RPC/hook the general session list's own
+  // Steer dialog uses (AC7). Mirrors handleDeleteSession's shape.
+  // updateSession() itself swallows RPC errors and returns null rather than
+  // throwing (it dispatches the real failure message to the shared
+  // session-service redux error slice instead — see useSessionService.ts's
+  // updateSession) — so failure is re-thrown here, letting SessionsSection's
+  // inline composer (which awaits onSteerSession) catch it, keep itself
+  // open, and surface the error instead of closing optimistically. Read the
+  // real message via store.getState() rather than a memoized selector value
+  // (e.g. useAppSelector) — updateSession's dispatch happens synchronously
+  // before it resolves, but a selector captured in this callback's closure
+  // would still reflect the pre-call render and lag one render behind.
+  const handleSteerSession = useCallback(
+    async (s: LinkedSession, message: string) => {
+      const toastKey = `${s.sessionId}:steer`;
+      setSteeringSessionId(s.sessionId);
+      try {
+        const result = await updateSession(s.sessionId, { steerMessage: message });
+        if (!result) {
+          throw new Error(selectSessionsError(store.getState()) ?? "Failed to steer session.");
+        }
+        showActionToast("Steering message sent.", "success", toastKey);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to steer session.";
+        showActionToast(msg, "error", toastKey);
+        throw err instanceof Error ? err : new Error(msg);
+      } finally {
+        setSteeringSessionId(null);
+      }
+    },
+    [updateSession, showActionToast]
+  );
+
   // Epic 3.4: fetch the current mode list once, for resolving each linked
   // session's frozen pipelineModeSnapshot to a name/drift state. Not
   // filtered by `enabled` — a since-disabled (but not deleted) mode is
@@ -483,6 +568,25 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item?.triageStatus]);
 
+  // retriggerTriageCore is shared by the standalone "Retry" button (InlineError,
+  // shown for the triage-failed banner) and the "retry_triage" action dispatched
+  // from ActionsSection's approve-plan-replacement affordance for a queued/ready
+  // item that's gated on plan approval with no usable triage result (see
+  // itemActions.ts — docs/tasks/backlog-feature-improvement.md's 2026-08-03
+  // entry, item be676dab). TriggerTriage only ever accepts idea/ready, so a
+  // queued item needs the same reset-to-idea step the manual "Return to Triage"
+  // action performs first — mirrors AutoRespawnTriage's server-side handling of
+  // the identical generalized case (server/services/backlog_service_triage.go).
+  const retriggerTriageCore = useCallback(
+    async (targetItemId: string, currentStatus: string) => {
+      if (currentStatus !== "idea" && currentStatus !== "ready") {
+        await transitionStatus(targetItemId, "idea");
+      }
+      await triggerTriage(targetItemId);
+    },
+    [transitionStatus, triggerTriage]
+  );
+
   const handleAction = useCallback(
     async (action: string) => {
       if (!item) return;
@@ -512,6 +616,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             break;
           case "approve_plan":
             await approvePlan(item.id);
+            break;
+          case "retry_triage":
+            await retriggerTriageCore(item.id, item.status);
             break;
           case "mark_done":
             await transitionStatus(item.id, "done");
@@ -568,7 +675,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
+    [item, transitionStatus, triggerTriage, retriggerTriageCore, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
   // Extracted verbatim from the inline manual-review-submit onClick handler
@@ -704,7 +811,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     const toastKey = `${item.id}:retrigger_triage`;
     setActionLoading("retrigger_triage");
     try {
-      await triggerTriage(item.id);
+      await retriggerTriageCore(item.id, item.status);
       showActionToast("Triage re-triggered.", "success", toastKey);
       await load();
     } catch (e) {
@@ -715,7 +822,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     } finally {
       if (mountedRef.current) setActionLoading(null);
     }
-  }, [item, triggerTriage, load, showActionToast]);
+  }, [item, retriggerTriageCore, load, showActionToast]);
 
   const handleRefineTriage = useCallback(
     async (feedback: string) => {
@@ -725,6 +832,35 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     },
     [item, triggerTriage, load]
   );
+
+  // Story 4.3.1: RejectPlan only persists state (ADR-002) — it does not
+  // itself trigger regeneration. handleRegeneratePlanWithFeedback is the
+  // separate, explicit follow-up action PlanVerdictBox renders once an item
+  // is in the changes_requested state.
+  const handleRejectPlan = useCallback(
+    async (reason: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:reject_plan`;
+      setActionLoading("reject_plan");
+      try {
+        await rejectPlan(item.id, reason);
+        showActionToast("Revisions requested.", "success", toastKey);
+        await load();
+      } catch (e) {
+        showActionToast(e instanceof Error ? e.message : "Reject failed.", "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, rejectPlan, load, showActionToast]
+  );
+
+  const handleRegeneratePlanWithFeedback = useCallback(async () => {
+    if (!item?.planRejectionReason) return;
+    await triggerTriage(item.id, item.planRejectionReason);
+    await load();
+  }, [item, triggerTriage, load]);
 
   const handleApplyTriageSuggestions = useCallback(
     async (preApplyCriteria: AcCriterion[]) => {
@@ -741,7 +877,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         throw new Error("Failed to apply suggestions — item may have been modified by another process. Reload and try again.");
       }
       // Step 2: Transition to ready
-      const transitioned = await transitionStatus(item.id, "ready", "idea");
+      const transitioned = await transitionStatus(item.id, "ready", { expectedStatus: "idea" });
       if (!transitioned) {
         throw new Error("Failed to mark item ready — please try again.");
       }
@@ -852,6 +988,70 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       }
     },
     [item, overrideVerdict, load, showActionToast]
+  );
+
+  // Manual overrides (ManualOverrideSection) — the operator escape hatch for
+  // an item whose automation has gotten wedged. Unlike the four handlers
+  // above (called from GateVerdictBox, status-conditional on being in
+  // review), these are always reachable regardless of status.
+  const handleManualStatusOverride = useCallback(
+    async (toStatus: string, reason: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:manual_override_status`;
+      setActionLoading("manual_override_status");
+      try {
+        // expectedUpdatedAt uses item.updatedAtRaw (the undecoded protobuf
+        // Timestamp), not item.updatedAt (a display-oriented ISO string) —
+        // an earlier version of this code built the precondition from the
+        // ISO string via `new Date(...)` + timestampFromDate, which is only
+        // millisecond-precision and can never exactly match the server's
+        // nanosecond-precision updated_at column (ent's CAS check is exact
+        // equality), so every write spuriously failed. Passing the raw
+        // Timestamp through verbatim avoids the round-trip entirely.
+        const ok = await transitionStatus(item.id, toStatus, {
+          expectedStatus: item.status,
+          expectedUpdatedAt: item.updatedAtRaw,
+          overrideReason: reason,
+        });
+        if (!ok) {
+          const msg = lastError?.message ?? "Someone else changed this item — reload and try again.";
+          showActionToast(msg, "error", toastKey);
+          throw new Error(msg);
+        }
+        showActionToast(`Status manually overridden to ${toStatus}.`, "success", toastKey);
+        await load();
+      } catch (e) {
+        showActionToast(e instanceof Error ? e.message : "Status override failed.", "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, transitionStatus, lastError, load, showActionToast]
+  );
+
+  const handleManualAssociatePR = useCallback(
+    async (prUrl: string, prNumber: number) => {
+      if (!item) return;
+      const toastKey = `${item.id}:manual_associate_pr`;
+      setActionLoading("manual_associate_pr");
+      try {
+        const updated = await updateBacklogItem(item.id, { ...currentFlags(), prUrl, prNumber });
+        if (!updated) {
+          const msg = lastError?.message ?? "Failed to link PR — please try again.";
+          showActionToast(msg, "error", toastKey);
+          throw new Error(msg);
+        }
+        showActionToast(`PR #${prNumber} linked — item moved to pr_pending.`, "success", toastKey);
+        await load();
+      } catch (e) {
+        showActionToast(e instanceof Error ? e.message : "PR association failed.", "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, updateBacklogItem, lastError, load, currentFlags, showActionToast]
   );
 
   const handleGateSkip = useCallback(async () => {
@@ -1106,8 +1306,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 triageResult={item.triageResult}
                 onApply={handleApplyTriageSuggestions}
                 onUndoApply={handleUndoTriageSuggestions}
-                onSkip={() => { void load(); }}
+                // Dismissing the panel is a purely client-local state change
+                // (localStorage + local React state, no server mutation) —
+                // nothing to refresh (pitfall #3). A load() here was a
+                // needless, unguarded race source that could stomp
+                // more-current live-store state with a redundant read.
+                onSkip={() => {}}
                 onRefine={handleRefineTriage}
+                onAnswerQuestion={handleRefineTriage}
               />
             </div>
           )}
@@ -1115,12 +1321,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         {/* Planning record — read-only triage result for items past idea status */}
         <PlanningSection item={item} />
 
-        {/* Triage failed banner */}
-        {item.triageStatus === "failed" && item.status === "idea" && (
-          <div className={styles.section}>
-            <InlineError type="permanent" onRetry={handleRetriggerTriage} />
-          </div>
-        )}
+        {/* Triage failed banner — generalized 2026-08-03
+            (docs/tasks/backlog-feature-improvement.md, item be676dab) from
+            idea-only to also cover a queued item gated on plan approval: a
+            triage session can end with no usable result AFTER the item has
+            already advanced past idea (e.g. queued via the WIP cap), and
+            before this fix that state rendered nothing at all — no summary,
+            no retry affordance, just the stuck badge. Not extended to
+            "ready": a ready item's CURRENT plan is reliably in place (see
+            itemActions.ts's doc comment), so a failed *later* refine attempt
+            there shouldn't imply the existing plan is invalid. */}
+        {item.triageStatus === "failed" &&
+          !item.skipPlanning &&
+          !item.planApproved &&
+          (item.status === "idea" || item.status === "queued") && (
+            <div className={styles.section}>
+              <InlineError
+                type="permanent"
+                customMessage={
+                  item.status === "queued"
+                    ? "This item's most recent triage session ended without producing a usable plan. Retry triage to generate one."
+                    : undefined
+                }
+                // InlineError itself has no disabled/loading state (unmodified,
+                // pre-existing component) — guard the same way
+                // TriageLoadingIndicator's onCancel does above, swapping in a
+                // no-op while a retry is already in flight. Without this, a
+                // double-click fires two concurrent retriggerTriageCore calls,
+                // each doing transitionStatus(id,"idea") + triggerTriage(id) —
+                // worse for a queued item (two competing status resets) than the
+                // pre-existing idea-only exposure of this same button.
+                onRetry={actionLoading !== null ? () => {} : handleRetriggerTriage}
+              />
+            </div>
+          )}
 
         {/* Diff modal — reused by the review-flow "View Changes" button above and
             the Version Control section's "View Diff" button below; works for any
@@ -1150,6 +1384,28 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           </h3>
           <AcCriteriaList criteria={item.acCriteria} />
         </div>
+
+        {/* Plan Review (Story 4.3.1): rendered immediately before Actions,
+            NOT after PlanArtifactsSection's plan-artifacts display as
+            plan.md originally described — Story 3.1.3's later refactor
+            (see the CollapsibleGroup comment below) already pulled
+            ActionsSection out ahead of the collapsible group so it stays
+            reachable without expanding anything; PlanVerdictBox follows the
+            same always-visible convention and sits right above it, so
+            Approve (in ActionsSection) and Request Changes (here) are both
+            reachable without navigating away (AC3). */}
+        {(item.status === "ready" ||
+          item.status === "queued" ||
+          derivePlanReviewStatus(item) !== "no_plan") && (
+          <PlanVerdictBox
+            status={derivePlanReviewStatus(item)}
+            rejectionReason={item.planRejectionReason}
+            readOnly={terminalState !== null}
+            actionPending={actionLoading === "reject_plan"}
+            onReject={handleRejectPlan}
+            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
+          />
+        )}
 
         {/* Actions */}
         <ActionsSection
@@ -1212,6 +1468,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             />
           )}
 
+          {item.externalUrl && (
+            <SourceSection
+              externalUrl={item.externalUrl}
+              externalId={item.externalId}
+              labels={item.labels ?? []}
+              defaultExpanded={sourceExpanded}
+            />
+          )}
+
           <DescriptionSection item={item} defaultExpanded={descriptionExpanded} />
 
           {item.planArtifactsPath && (
@@ -1235,6 +1500,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             deletingSessionId={deletingSessionId}
             defaultExpanded={sessionsExpanded}
             onDeleteSession={handleDeleteSession}
+            onSteerSession={handleSteerSession}
+            steeringSessionId={steeringSessionId}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />
@@ -1254,6 +1521,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               setNotesValue(item.notes ?? "");
               setEditingNotes(false);
             }}
+          />
+
+          <ManualOverrideSection
+            item={item}
+            defaultExpanded={manualOverrideExpanded}
+            readOnly={terminalState !== null}
+            onOverrideStatus={handleManualStatusOverride}
+            onAssociatePR={handleManualAssociatePR}
           />
         </CollapsibleGroup>
       </div>

@@ -34,6 +34,8 @@ const mockRevokeGitHubToken = jest.fn();
 (createClient as jest.Mock).mockReturnValue({
   addGitHubAccountWithToken: mockAddGitHubAccountWithToken,
   revokeGitHubToken: mockRevokeGitHubToken,
+  listGitHubCLIHosts: jest.fn().mockResolvedValue({ ghAvailable: false, hosts: [] }),
+  addGitHubAccountFromCLI: jest.fn(),
 });
 
 (createConnectTransport as jest.Mock).mockReturnValue({});

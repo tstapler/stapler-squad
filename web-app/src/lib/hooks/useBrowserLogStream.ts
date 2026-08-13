@@ -17,9 +17,10 @@ export interface BrowserLogEntry {
 
 export interface UseBrowserLogStreamOptions {
   /**
-   * Whether verbose debug-level console output also streams to the server.
-   * log/warn/error (and window.onerror/unhandledrejection) always stream
-   * regardless of this flag — it only gates the noisy `console.debug` level.
+   * Whether verbose console output (log/warn/debug) streams to the server.
+   * console.error, window.onerror, and unhandledrejection always stream
+   * regardless of this flag, so crash diagnostics survive even when a user
+   * never opts into the noisy levels.
    */
   enabled: boolean;
   /** Optional session ID to tag entries. */
@@ -58,9 +59,10 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
   useEffect(() => {
     // SSR guard
     if (typeof window === "undefined") return;
-    // Always install interceptors — log/warn/error and uncaught errors stream to the
-    // server unconditionally (see enqueue()); only console.debug is gated behind
-    // options.enabled, since that's the noisy, opt-in-only level.
+    // Always install interceptors — console.error and uncaught errors stream to the
+    // server unconditionally (see enqueue()) as a crash-diagnostics safety net;
+    // log/warn/debug are gated behind options.enabled, since those are the noisy,
+    // opt-in-only levels.
 
     const apiBase = baseUrlRef.current ?? getApiBaseUrl();
     const client = createClient(SessionService, getConnectTransport());
@@ -94,8 +96,8 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
     }
 
     function enqueue(level: BrowserLogEntry["level"], args: unknown[]): void {
-      // console.debug is opt-in only (noisy); log/warn/error always stream.
-      if (level === "debug" && !enabledRef.current) return;
+      // log/warn/debug are opt-in only (noisy); only error always streams.
+      if (level !== "error" && !enabledRef.current) return;
       if (intercepting) return; // reentrancy guard
       intercepting = true;
       try {

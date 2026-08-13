@@ -232,18 +232,21 @@ that** the condition means something (not a global/unscoped flag).
 - In `HandlePermissionRequest`, immediately after `classCtx := h.classifier.BuildContext(payload.Cwd)` (`server/services/approval_handler.go:282`), add the `FindInstanceDataByID` lookup and conditional assignment described above. Handle lookup error/nil gracefully (leave `CIStatus` as `""`, matching this handler's existing best-effort error style elsewhere in the function).
 - Files: `server/services/approval_handler.go`
 
-##### Task 1.1.2b: Add a bounded-staleness guard before trusting `CIStatus` (~4 min)
+##### Task 1.1.2b: Add a bounded-staleness guard before trusting `CIStatus` (~5 min)
 - Immediately after Task 1.1.2a's assignment of `classCtx.CIStatus = data.GitHubCheckConclusion`,
-  add: if `time.Since(data.LastPRStatusCheck) > 2 * pollInterval`, reset `classCtx.CIStatus
-  = ""` (treat as unknown) regardless of what `GitHubCheckConclusion` says. `pollInterval`
-  is the poller's configured interval — `PollInterval time.Duration`,
-  `session/pr_status_poller.go:26`, defaulting to `60 * time.Second`
-  (`session/pr_status_poller.go:41`). **Implementer TODO**: `ApprovalHandler` does not
-  currently hold a reference to the live `PRStatusPollerConfig`; confirm at implementation
-  time whether to (a) thread the configured interval into `ApprovalHandler` at construction
-  (alongside `storage`), or (b) reference a package-level default constant, so this guard
-  doesn't silently drift from the poller's real interval if it's ever changed. Either is
-  acceptable; hardcoding a second, disconnected `60 * time.Second` literal here is not.
+  add: if `time.Since(data.LastPRStatusCheck) > 2 * h.pollInterval`, reset `classCtx.CIStatus
+  = ""` (treat as unknown) regardless of what `GitHubCheckConclusion` says.
+- **Decision (resolved — pre-mortem.md Failure #1 P1)**: thread the poller's live configured
+  interval into `ApprovalHandler`, not a hardcoded literal. Add `pollInterval time.Duration`
+  to `ApprovalHandler`'s struct fields, set at construction from the same
+  `PRStatusPollerConfig.PollInterval` value the running `PRStatusPoller` is built with
+  (`session/pr_status_poller.go:26`, defaulting to `60 * time.Second` per
+  `session/pr_status_poller.go:41`) — mirroring how `storage` is already threaded in as a
+  constructor field (Task 1.1.2a). A second, disconnected `60 * time.Second` literal in
+  `approval_handler.go` is not acceptable: it would silently desync from the real poller
+  interval if that's ever tuned, undermining the exact freshness guarantee this guard exists
+  to provide for an irreversible auto-approve gate. Task 1.1.2c's test must assert the guard
+  reads `h.pollInterval` (constructed from the real config), not a duplicated constant.
 - Rationale: unlike the classifier's other, synchronous/local conditions (regex, file
   pattern), CI status is inherently async/network-sourced with no fresher local value to
   fall back to (`research/pitfalls.md` §4) — and `ci_passing` gates an irreversible
@@ -286,6 +289,10 @@ that** the condition means something (not a global/unscoped flag).
 ##### Task 1.1.3c: Wire `RequireCIPassing` through `rules_service.go`'s mapping functions (~5 min)
 - Update all 3 existing `SafePythonImportsOnly`-adjacent mapping sites to also carry `RequireCIPassing`: the proto→`RuleSpec` construction in `UpsertApprovalRule` (`server/services/rules_service.go:95-119`), `specToProto` (`:446-476`), and `ruleToSpec` (`:478-513`).
 - Files: `server/services/rules_service.go`
+
+##### Task 1.1.3d: Confirm AC9 — no session-creation-registry touchpoint is introduced (~2 min, verification only)
+- AC9: "session creation/session-type registry touchpoints (`.claude/rules/session-creation-registry.md`) are unaffected — confirm no new session type is introduced." This entire feature (Phase 1's `RequireCIPassing` classifier condition, Phase 2's approval-block/override, Phase 3's read-only diff-viewer badge) adds zero new `SessionType` proto enum values, zero new `CreateSessionRequest` fields, and touches none of the 7 registry touchpoints in `.claude/rules/session-creation-registry.md` — it only reads `Instance`/`InstanceData` fields (`GitHubPRNumber`, `GitHubCheckConclusion`, `LastPRStatusCheck`) that already exist on every session type. Verify by grepping the diff for `SESSION_TYPE_` and `sessionTypeMap` before considering this plan done — a hit in either would mean scope crept into session-creation and this AC has been violated.
+- Files: none (verification only)
 
 #### Story 1.1.4: Expose `RequireCIPassing` in the rule-builder UI
 **As a** rule author, **I want** a checkbox to require CI passing when creating/editing a rule, **so that** AC6 is reachable from the app, not only via direct JSON editing.
@@ -622,3 +629,32 @@ Goal 2 explicitly rejects").
 ##### Task 4.2.1d: Regenerate and verify (~3 min)
 - Run `make registry-generate`; diff `docs/registry/coverage-gaps.json` before/after and confirm no unexplained increase; commit the regenerated aggregate files alongside the per-feature sources.
 - Files: `docs/registry/coverage-gaps.json`, `docs/registry/backend-features.json`, `docs/registry/frontend-features.json`
+
+---
+
+## Implementation Deviations (discovered during Phase 1/2)
+
+Two corrections to this plan's assumptions, found while implementing Tasks 1.1.2a/2.2.2a:
+
+1. **`GitHubCheckConclusion`/`LastPRStatusCheck` are not persisted.** `Storage.UpdateInstancePRStatus`
+   (`session/storage.go:539-543`) is a deliberate no-op with the comment "PR fields are not
+   stored in the ent schema — they live in memory and are re-populated by PRStatusPoller on
+   each poll cycle." `session/ent/schema/session.go` has no `github_check_conclusion` or
+   `last_pr_status_check` column. This means `Storage.FindInstanceDataByID` (the lookup Tasks
+   1.1.2a and 2.2.2a specified) can **never** see these fields — they only exist on the live
+   in-memory `*session.Instance` objects the poller mutates directly. Fixed by reusing the
+   existing `LiveInstanceFinder` interface (`server/services/workspace_service.go:39-40`,
+   already satisfied by `*SessionService`) instead of `*session.Storage` for both gates:
+   `ApprovalHandler.liveFinder`/`SetLiveInstanceFinder` (Task 1.1.2a) and
+   `ApprovalService.liveFinder`/`SetLiveInstanceFinder` (Task 2.2.1a/2.2.2a). Both are wired
+   to `deps.SessionService` in `server/server.go`. `ApprovalService` still needed no `storage`
+   field at all — `LiveInstanceFinder` alone covers both `GitHubPRNumber` and
+   `GitHubCheckConclusion`. Ent schema/migration was not touched — persisting these fields was
+   out of scope and would be a much larger change than this plan's stated size.
+2. Adding `RequireCIPassing` (Task 1.1.3a-c) also required a previously-undocumented 3rd
+   persistence layer beyond `RuleSpec`/proto: rules are stored via `EntRepository.UpsertRule`/
+   `AllRules` (`session/ent_repository.go`) backed by `session/ent/schema/approvalrule.go`, not
+   only the JSON export path the plan's Migration Plan described. Added
+   `require_ci_passing` to the ent schema (`Default(false)`, same pattern as
+   `safe_python_imports_only`) and regenerated via `go run -mod=mod entgo.io/ent/cmd/ent
+   generate --feature sql/upsert ./schema` per `.claude/rules/ent-schema-generation.md`.

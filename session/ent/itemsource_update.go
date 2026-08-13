@@ -93,6 +93,54 @@ func (_u *ItemSourceUpdate) SetNillableEnabled(v *bool) *ItemSourceUpdate {
 	return _u
 }
 
+// SetForwardSyncEnabled sets the "forward_sync_enabled" field.
+func (_u *ItemSourceUpdate) SetForwardSyncEnabled(v bool) *ItemSourceUpdate {
+	_u.mutation.SetForwardSyncEnabled(v)
+	return _u
+}
+
+// SetNillableForwardSyncEnabled sets the "forward_sync_enabled" field if the given value is not nil.
+func (_u *ItemSourceUpdate) SetNillableForwardSyncEnabled(v *bool) *ItemSourceUpdate {
+	if v != nil {
+		_u.SetForwardSyncEnabled(*v)
+	}
+	return _u
+}
+
+// SetBackwardSyncEnabled sets the "backward_sync_enabled" field.
+func (_u *ItemSourceUpdate) SetBackwardSyncEnabled(v bool) *ItemSourceUpdate {
+	_u.mutation.SetBackwardSyncEnabled(v)
+	return _u
+}
+
+// SetNillableBackwardSyncEnabled sets the "backward_sync_enabled" field if the given value is not nil.
+func (_u *ItemSourceUpdate) SetNillableBackwardSyncEnabled(v *bool) *ItemSourceUpdate {
+	if v != nil {
+		_u.SetBackwardSyncEnabled(*v)
+	}
+	return _u
+}
+
+// SetForwardSyncCloseLabel sets the "forward_sync_close_label" field.
+func (_u *ItemSourceUpdate) SetForwardSyncCloseLabel(v string) *ItemSourceUpdate {
+	_u.mutation.SetForwardSyncCloseLabel(v)
+	return _u
+}
+
+// SetNillableForwardSyncCloseLabel sets the "forward_sync_close_label" field if the given value is not nil.
+func (_u *ItemSourceUpdate) SetNillableForwardSyncCloseLabel(v *string) *ItemSourceUpdate {
+	if v != nil {
+		_u.SetForwardSyncCloseLabel(*v)
+	}
+	return _u
+}
+
+// ClearForwardSyncCloseLabel clears the value of the "forward_sync_close_label" field.
+func (_u *ItemSourceUpdate) ClearForwardSyncCloseLabel() *ItemSourceUpdate {
+	_u.mutation.ClearForwardSyncCloseLabel()
+	return _u
+}
+
 // SetSyncCursor sets the "sync_cursor" field.
 func (_u *ItemSourceUpdate) SetSyncCursor(v string) *ItemSourceUpdate {
 	_u.mutation.SetSyncCursor(v)
@@ -275,6 +323,18 @@ func (_u *ItemSourceUpdate) sqlSave(ctx context.Context) (_node int, err error) 
 	}
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(itemsource.FieldEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ForwardSyncEnabled(); ok {
+		_spec.SetField(itemsource.FieldForwardSyncEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.BackwardSyncEnabled(); ok {
+		_spec.SetField(itemsource.FieldBackwardSyncEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ForwardSyncCloseLabel(); ok {
+		_spec.SetField(itemsource.FieldForwardSyncCloseLabel, field.TypeString, value)
+	}
+	if _u.mutation.ForwardSyncCloseLabelCleared() {
+		_spec.ClearField(itemsource.FieldForwardSyncCloseLabel, field.TypeString)
 	}
 	if value, ok := _u.mutation.SyncCursor(); ok {
 		_spec.SetField(itemsource.FieldSyncCursor, field.TypeString, value)
@@ -460,6 +520,54 @@ func (_u *ItemSourceUpdateOne) SetNillableEnabled(v *bool) *ItemSourceUpdateOne 
 	if v != nil {
 		_u.SetEnabled(*v)
 	}
+	return _u
+}
+
+// SetForwardSyncEnabled sets the "forward_sync_enabled" field.
+func (_u *ItemSourceUpdateOne) SetForwardSyncEnabled(v bool) *ItemSourceUpdateOne {
+	_u.mutation.SetForwardSyncEnabled(v)
+	return _u
+}
+
+// SetNillableForwardSyncEnabled sets the "forward_sync_enabled" field if the given value is not nil.
+func (_u *ItemSourceUpdateOne) SetNillableForwardSyncEnabled(v *bool) *ItemSourceUpdateOne {
+	if v != nil {
+		_u.SetForwardSyncEnabled(*v)
+	}
+	return _u
+}
+
+// SetBackwardSyncEnabled sets the "backward_sync_enabled" field.
+func (_u *ItemSourceUpdateOne) SetBackwardSyncEnabled(v bool) *ItemSourceUpdateOne {
+	_u.mutation.SetBackwardSyncEnabled(v)
+	return _u
+}
+
+// SetNillableBackwardSyncEnabled sets the "backward_sync_enabled" field if the given value is not nil.
+func (_u *ItemSourceUpdateOne) SetNillableBackwardSyncEnabled(v *bool) *ItemSourceUpdateOne {
+	if v != nil {
+		_u.SetBackwardSyncEnabled(*v)
+	}
+	return _u
+}
+
+// SetForwardSyncCloseLabel sets the "forward_sync_close_label" field.
+func (_u *ItemSourceUpdateOne) SetForwardSyncCloseLabel(v string) *ItemSourceUpdateOne {
+	_u.mutation.SetForwardSyncCloseLabel(v)
+	return _u
+}
+
+// SetNillableForwardSyncCloseLabel sets the "forward_sync_close_label" field if the given value is not nil.
+func (_u *ItemSourceUpdateOne) SetNillableForwardSyncCloseLabel(v *string) *ItemSourceUpdateOne {
+	if v != nil {
+		_u.SetForwardSyncCloseLabel(*v)
+	}
+	return _u
+}
+
+// ClearForwardSyncCloseLabel clears the value of the "forward_sync_close_label" field.
+func (_u *ItemSourceUpdateOne) ClearForwardSyncCloseLabel() *ItemSourceUpdateOne {
+	_u.mutation.ClearForwardSyncCloseLabel()
 	return _u
 }
 
@@ -675,6 +783,18 @@ func (_u *ItemSourceUpdateOne) sqlSave(ctx context.Context) (_node *ItemSource, 
 	}
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(itemsource.FieldEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ForwardSyncEnabled(); ok {
+		_spec.SetField(itemsource.FieldForwardSyncEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.BackwardSyncEnabled(); ok {
+		_spec.SetField(itemsource.FieldBackwardSyncEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ForwardSyncCloseLabel(); ok {
+		_spec.SetField(itemsource.FieldForwardSyncCloseLabel, field.TypeString, value)
+	}
+	if _u.mutation.ForwardSyncCloseLabelCleared() {
+		_spec.ClearField(itemsource.FieldForwardSyncCloseLabel, field.TypeString)
 	}
 	if value, ok := _u.mutation.SyncCursor(); ok {
 		_spec.SetField(itemsource.FieldSyncCursor, field.TypeString, value)
