@@ -764,6 +764,21 @@ func (s *Storage) ListBacklogItemSummaries(ctx context.Context, filter BacklogIt
 	return s.repo.ListBacklogItemSummaries(ctx, filter)
 }
 
+// AddBacklogItemDependency records a blocker/blocked dependency edge.
+func (s *Storage) AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+	return s.repo.AddBacklogItemDependency(ctx, edge)
+}
+
+// UnresolvedBlockerItemIDs returns the subset of itemIDs blocked by an unresolved dependency.
+func (s *Storage) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
+	return s.repo.UnresolvedBlockerItemIDs(ctx, itemIDs)
+}
+
+// UnresolvedBlockerIDs returns the specific blocker item IDs still unresolved for a single item.
+func (s *Storage) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
+	return s.repo.UnresolvedBlockerIDs(ctx, itemID)
+}
+
 // UpdateBacklogItem modifies an existing backlog item.
 func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)

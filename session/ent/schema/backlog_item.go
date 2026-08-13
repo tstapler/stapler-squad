@@ -182,6 +182,25 @@ func (BacklogItem) Edges() []ent.Edge {
 		edge.From("source", ItemSource.Type).
 			Ref("backlog_items").
 			Unique(),
+		// Cascade is deliberate, not an oversight: hard-deleting a
+		// BacklogItem (in either the blocker or blocked role) removes
+		// its BacklogItemDependency rows along with it. For a deleted
+		// blocker specifically, this means any dependent it was
+		// blocking becomes eligible for dequeue on the next pass — the
+		// same "resolved" outcome as an archived blocker
+		// (UnresolvedBlockerItemIDs's StatusNotIn(Done, Archived)
+		// query), just reached via row removal instead of a status
+		// value. A hard-deleted item can never transition to `done`,
+		// so leaving the dependency row in place would permanently
+		// strand the dependent with no way to resolve it — the same
+		// rationale that treats an archived blocker as resolved.
+		// Covered by
+		// TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDeleted
+		// in session/ent_repository_backlog_test.go.
+		edge.To("blocking_dependencies", BacklogItemDependency.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("blocked_by_dependencies", BacklogItemDependency.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }
 
