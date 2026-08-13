@@ -178,6 +178,27 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 		},
 		{
+			// Regression guard: the no-controller branch's status switch must include
+			// StatusCompacting alongside StatusExecuting/StatusProcessing/
+			// StatusWaitingForAgent, or a compacting session with no live controller
+			// falls through to the basicIdleThreshold fallback below and gets spuriously
+			// queued as ReasonIdle while Claude is actively compacting.
+			name:    "no_controller_compacting_removes_not_idle",
+			content: "✻ Compacting conversation… (esc to interrupt)",
+			statusInfo: InstanceStatusInfo{
+				IsControllerActive: false,
+			},
+			instSetup: func(inst *Instance) {
+				// UpdatedAt in the past would trigger basicIdleThreshold if the
+				// status switch didn't short-circuit first — proves the fix, not
+				// just the absence of a panic.
+				inst.UpdatedAt = time.Now().Add(-10 * time.Second)
+				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Second)
+			},
+			checkAction: true,
+			wantAction:  DetectionActionRemove,
+		},
+		{
 			name:    "no_controller_empty_content_idle_after_threshold",
 			content: "",
 			statusInfo: InstanceStatusInfo{
