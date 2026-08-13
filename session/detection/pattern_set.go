@@ -149,7 +149,7 @@ func (ps *PatternSet) MatchLines(text string, rawPTY []byte) (DetectedStatus, st
 	// this loop to after Active/Processing makes StatusCompacting unreachable.
 	for i, regex := range ps.compactingRegexes {
 		if regex.MatchString(text) {
-			return StatusCompacting, ps.patterns.Compacting[i].Name, ps.patterns.Compacting[i].Description
+			return StatusCompacting, ps.patterns.Compacting[i].Name, ps.patterns.Compacting[i].Description, 0
 		}
 	}
 	// Active

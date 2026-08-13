@@ -258,9 +258,9 @@ const StatusDetectionTailBytes = 4096
 // rawPTY must be the original PTY bytes before collapseCarriageReturns is applied.
 func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string, int) {
 	ps := sd.patternSet.Load()
-	status, name, desc := ps.MatchLines(text, rawPTY)
+	status, name, desc, count := ps.MatchLines(text, rawPTY)
 	sd.compactingCanary(status, text)
-	return status, name, desc
+	return status, name, desc, count
 }
 
 // compactingCanary is a TEMPORARY bake-in canary (see project_plans/context-compaction-
