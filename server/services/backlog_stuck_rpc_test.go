@@ -48,6 +48,8 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 		{domain.StuckReasonPRPendingNoPR, sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR},
 		{domain.StuckReasonReworkBlockedStale, sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE},
 		{domain.StuckReasonPRNeedsFix, sessionv1.StuckReason_STUCK_REASON_PR_NEEDS_FIX},
+		{domain.StuckReasonRespawnBlockedActive, sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE},
+		{domain.StuckReasonLikelyFlaky, sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY},
 	}
 	for _, c := range cases {
 		t.Run(string(c.reason), func(t *testing.T) {
@@ -481,6 +483,12 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// blocking session is still active would just re-mark the same row —
 	// exactly what the next reconcile tick already does for free.
 	domain.StuckReasonRespawnBlockedActive: true,
+	// StuckReasonLikelyFlaky: purely informational (plan.md option (c)) — a
+	// behavioral hint that the review outcome may be non-deterministic, not a
+	// condition with a "retry now" fix. There is nothing to remediate: the
+	// item's normal reopen/park flow already proceeds unaffected by this row
+	// (see notifyLikelyFlaky's doc comment in backlog_service_triage.go).
+	domain.StuckReasonLikelyFlaky: true,
 	// StuckReasonMultipleReasons and StuckReasonBounceCapExhausted
 	// (backlog-bounce-escalation, Epic 1.1) are synthetic, aggregate signals
 	// derived from other open stuck reasons/the remediation-attempt cap, not

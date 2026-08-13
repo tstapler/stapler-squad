@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/vc"
 )
 
 // secretPatterns lists compiled regexes for obvious secret patterns.
@@ -583,6 +585,7 @@ func recordTerminalReviewVerdict(storage *Storage, itemID string, acSnapshot AcC
 	}, ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        summary,
+		DiffHash:       storage.ComputeCurrentDiffHash(cleanupCtx, itemID),
 	})
 	if err != nil {
 		return ItemSessionSummary{}, err
@@ -632,6 +635,45 @@ func IsWorktreeDirty(ctx context.Context, worktreePath string) (bool, error) {
 		return false, fmt.Errorf("git status in %s: %w", worktreePath, err)
 	}
 	return len(strings.TrimSpace(string(out))) > 0, nil
+}
+
+// GetWorktreeDirtyPaths returns the specific paths with uncommitted changes
+// (untracked, modified, or renamed — new path only) in the git worktree at
+// worktreePath, deduplicated. Returns (nil, nil), not an error, when
+// worktreePath is not a git repository at all — unlike IsWorktreeDirty, which
+// surfaces that case as an error from the underlying `git status` subprocess.
+// Additive sibling to IsWorktreeDirty: does not replace its boolean-only
+// callers.
+//
+// Reuses vc.GitProvider.GetChangedFiles/parsePorcelainV2Z (NUL-safe,
+// rename-aware porcelain-v2 parsing) rather than reimplementing status
+// parsing — see session/vc/git_provider.go.
+func GetWorktreeDirtyPaths(worktreePath string) ([]string, error) {
+	provider, err := vc.NewGitProvider(worktreePath)
+	if err != nil {
+		if errors.Is(err, vc.ErrNoVCSFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("resolve vc provider for %s: %w", worktreePath, err)
+	}
+	changes, err := provider.GetChangedFiles()
+	if err != nil {
+		return nil, fmt.Errorf("get changed files in %s: %w", worktreePath, err)
+	}
+	// A path that is both staged and further modified in the worktree produces two
+	// FileChange entries with the same Path (one per XY half — see
+	// parsePorcelainV2Z's "1 "/"2 " record handling), so dedup here is required for
+	// correctness, not just defensive.
+	seen := make(map[string]struct{}, len(changes))
+	paths := make([]string, 0, len(changes))
+	for _, c := range changes {
+		if _, ok := seen[c.Path]; ok {
+			continue
+		}
+		seen[c.Path] = struct{}{}
+		paths = append(paths, c.Path)
+	}
+	return paths, nil
 }
 
 // GetGitDiff returns the diff of changes in worktreePath relative to baseSHA

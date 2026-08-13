@@ -75,6 +75,7 @@ interface SessionListProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernateSession?: (sessionId: string) => void;
@@ -115,6 +116,7 @@ interface SessionRowHandlers {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
+  onToggleAutoApprove?: (id: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (id: string, message: string) => void;
   onClearConversationState?: (id: string) => Promise<boolean>;
   onHibernateSession?: (id: string) => void;
@@ -153,6 +155,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
   onHibernateSession,
@@ -176,6 +179,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onRunOneShot={onRunOneShot}
       onSetRateLimitEnabled={onSetRateLimitEnabled}
       onToggleAutonomousMode={onToggleAutonomousMode}
+      onToggleAutoApprove={onToggleAutoApprove}
       onSteerAutonomousSession={onSteerAutonomousSession}
       onClearConversationState={onClearConversationState}
       onHibernate={onHibernateSession ? () => onHibernateSession(id) : undefined}
@@ -288,6 +292,7 @@ export function SessionList({
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
   onHibernateSession,
@@ -1395,6 +1400,7 @@ export function SessionList({
                     onRunOneShot={onRunOneShot}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
+                    onToggleAutoApprove={onToggleAutoApprove}
                     onSteerAutonomousSession={onSteerAutonomousSession}
                     onClearConversationState={onClearConversationState}
                     onHibernateSession={stableOnHibernateSession}
@@ -1578,6 +1584,7 @@ export function SessionList({
                   onRunOneShot={onRunOneShot}
                   onSetRateLimitEnabled={onSetRateLimitEnabled}
                   onToggleAutonomousMode={onToggleAutonomousMode}
+                  onToggleAutoApprove={onToggleAutoApprove}
                   onSteerAutonomousSession={onSteerAutonomousSession}
                   onClearConversationState={onClearConversationState}
                   onHibernate={onHibernateSession ? () => onHibernateSession(session.id) : undefined}

@@ -64,6 +64,20 @@ type GitHubRef struct {
 	Type     GitHubRefType
 }
 
+// PRURL returns the canonical URL of the PR this ref points at, or "" if
+// PRNumber is not set (e.g. a plain repo or branch ref). This is the single
+// source of truth for GitHub PR URL construction — session_service.go's
+// CreateSession handler and the github_pr_url_backfill.go migration both call
+// this instead of formatting the URL themselves, so a host-normalization or
+// URL-shape fix only has to be made once.
+func (r *GitHubRef) PRURL() string {
+	if r == nil || r.PRNumber <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/%s/%s/pull/%d",
+		github.NormalizeHost(r.Host), r.Owner, r.Repo, r.PRNumber)
+}
+
 // GitHubRefType indicates what kind of GitHub reference this is.
 type GitHubRefType int
 
@@ -171,6 +185,33 @@ func repoHost(ref *GitHubRef) string {
 		return "github.com"
 	}
 	return ref.Host
+}
+
+// hostFromClonedPath attempts to recover a GitHub host from a session's
+// persisted local path, for rows whose github_pr_url was never populated
+// (see runGitHubPRURLBackfill). Paths for GitHub-backed sessions follow the
+// GOPATH-style convention documented on RepoPathManager:
+// <baseDir>/<host>/<owner>/<repo>[/...]. Returns "" if path doesn't contain
+// an <owner>/<repo> segment pair immediately preceded by a host-shaped
+// segment (contains a "." or is "localhost") — guessing "github.com" for a
+// segment that isn't actually a hostname would produce an incorrect URL for
+// GitHub Enterprise rows.
+func hostFromClonedPath(path string, ref github.RepoRef) string {
+	if path == "" || !ref.IsValid() {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(path), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i+1] != ref.Owner() || parts[i+2] != ref.Repo() {
+			continue
+		}
+		host := parts[i]
+		if host != "localhost" && !strings.Contains(host, ".") {
+			continue
+		}
+		return host
+	}
+	return ""
 }
 
 // GetRepoPath returns the local path where a GitHub repo should be stored.

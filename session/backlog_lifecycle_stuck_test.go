@@ -3131,6 +3131,96 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason)
 }
 
+// TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToAnotherBranch
+// is the regression test for the 2026-08-12 live repro: worktree paths are
+// reused across sessions once a session ends, so a directory existing at a
+// stale session's recorded WorktreePath does not mean it still holds that
+// session's branch. resolveLatestWorkCommit used to trust any existing
+// directory's HEAD unconditionally, so once the path was reassigned to a
+// later, unrelated item's branch, the stale item's reconcile pass read that
+// later item's real (legitimately merged) commit as its own "shipped" work.
+// Confirmed live for backlog items 0f5d760b, 6f6f6f4e, and a3ca3918 in the
+// docspan repo: each was falsely marked done off another item's commit.
+//
+// The fix (session/backlog_lifecycle.go resolveLatestWorkCommit) checks that
+// the worktree path's currently checked-out branch still matches the
+// session's own recorded BranchName before trusting its HEAD; on a mismatch
+// it falls back to the existing repo-wide branch-name lookup, same as the
+// worktree-gone case.
+func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToAnotherBranch(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	repoPath, _ := setupBounceMainRepo(t)
+	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("stale item's unshipped work\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "feature.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "work that never merged")
+	staleFeatureSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Stale item whose worktree path got recycled",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	workSessionUUID := "recycled-worktree-work-session"
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// The stale session's worktree row still records its own branch ("feature")
+	// and the path it used to live at, but the directory at that path has since
+	// been reused by a later, unrelated session: it's now checked out on
+	// "other-item-branch" with a commit this item never authored.
+	inst := newTestInstance("recycled-worktree-instance")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "recycled-worktree-instance", "feature", staleFeatureSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	// A later, unrelated item is spawned into the very same path (worktree
+	// paths are recycled once a session ends), does real work, and gets
+	// merged. The path is left checked out on that later item's branch —
+	// exactly the state the reconciler finds when it later re-evaluates the
+	// stale session above.
+	runGitTestCmd(t, repoPath, "checkout", "-b", "other-item-branch")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "other-item.txt"), []byte("a later item's own commit\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "other-item.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "later item's real work")
+	runGitTestCmd(t, repoPath, "checkout", "main")
+	runGitTestCmd(t, repoPath, "merge", "--no-ff", "-m", "merge later item's work", "other-item-branch")
+	runGitTestCmd(t, repoPath, "checkout", "other-item-branch")
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status,
+		"a stale item must not be marked done off a commit read from its recycled worktree path's current (different) branch")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "the item must still go through normal bouncing detection instead of being silently marked done")
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason)
+}
+
 // TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedDirectlyToMainBranch
 // verifies BUG-039's fix doesn't regress the legitimate case
 // TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR

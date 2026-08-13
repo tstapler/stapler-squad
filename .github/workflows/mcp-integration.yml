@@ -40,6 +40,8 @@ jobs:
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # The integration test (TestMCPHandshakeSubprocess) spawns a real
       # --mcp subprocess and exercises the full MCP stdio handshake.

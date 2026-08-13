@@ -12,9 +12,35 @@ import (
 	"time"
 )
 
-// ghHTTPClient is the shared HTTP client used for all native GitHub REST calls.
-// The 30-second timeout matches the existing gh CLI call timeout.
-var ghHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// ghHTTPClient is the shared HTTP client used for all native GitHub REST and
+// GraphQL calls. The 30-second timeout matches the existing gh CLI call
+// timeout. Its Transport feeds every response through DefaultRateLimiter.Update
+// (see rate_limit.go) so IsLimited() reflects real GitHub rate-limit state.
+var ghHTTPClient = &http.Client{
+	Timeout:   30 * time.Second,
+	Transport: &rateLimitTransport{next: http.DefaultTransport},
+}
+
+// HTTPClient returns the shared GitHub HTTP client, so other packages (e.g.
+// session's backlog GitHub plugins) route their calls through the same
+// rate-limit-observing Transport instead of constructing their own client.
+func HTTPClient() *http.Client {
+	return ghHTTPClient
+}
+
+// rateLimitTransport wraps an http.RoundTripper and reports every response to
+// DefaultRateLimiter.Update, so callers never need to invoke Update manually.
+type rateLimitTransport struct {
+	next http.RoundTripper
+}
+
+func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.next.RoundTrip(req)
+	if resp != nil {
+		DefaultRateLimiter.Update(resp)
+	}
+	return resp, err
+}
 
 // GhBaseURL is the GitHub REST API base URL. Tests override this to point at
 // an httptest.Server so requests never reach the real API.

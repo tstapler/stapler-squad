@@ -114,6 +114,46 @@ func recentReviewHadVerdict(sessions []session.ItemSessionSummary, n int) []bool
 	return out
 }
 
+// recentWorkSessionFileLists returns up to n changed-file lists (most recent
+// first), one per completed (EndedAt != nil) work-role ItemSession in
+// sessions — computed lazily via go-git tree comparison of each session's
+// BaseCommitSha/LastCommitSha (git.FileStatsBetween; no git subshell, see
+// .claude/rules/prefer-go-git-over-subshells.md). sessions must be ordered
+// oldest-first, as Storage.ListItemSessions returns (mirrors
+// recentReviewHadVerdict's contract above). Feeds
+// session.IsTestOnlyReworkCycle.
+//
+// Only completed sessions are considered — reading a still-in-progress
+// session's commit range risks racing an in-flight write to the same
+// worktree (see validation.md's async-race edge case). A session with a
+// git-diff error, or missing SHAs, still occupies a rework-cycle slot with
+// an empty file list rather than being skipped outright: IsTestOnlyReworkCycle
+// treats an empty list as "no signal, don't guess" for that attempt, which is
+// the correct behavior for an attempt whose file data genuinely couldn't be
+// computed — silently skipping it instead would let the cycle compare across
+// a gap it never actually observed.
+func recentWorkSessionFileLists(repoPath string, sessions []session.ItemSessionSummary, n int) [][]string {
+	out := make([][]string, 0, n)
+	for i := len(sessions) - 1; i >= 0 && len(out) < n; i-- {
+		is := sessions[i]
+		if is.Role != session.SessionRoleWork || is.EndedAt == nil {
+			continue
+		}
+		var files []string
+		if is.BaseCommitSha != "" && is.LastCommitSha != "" {
+			if stats, err := git.FileStatsBetween(repoPath, is.BaseCommitSha, is.LastCommitSha); err != nil {
+				log.WarningLog.Printf("[recentWorkSessionFileLists] session=%s FileStatsBetween: %v", is.ID, err)
+			} else {
+				for _, fs := range stats {
+					files = append(files, fs.Path)
+				}
+			}
+		}
+		out = append(out, files)
+	}
+	return out
+}
+
 // notifyReworkCapHit publishes an operator-facing notification when the auto-rework
 // loop (review→rework or PR-fix→rework) hits reworkCap (see effectiveReworkCap) and
 // leaves an item stranded for manual action. No-op if no event bus is wired.
@@ -187,6 +227,49 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 		fmt.Sprintf("%s — the last two attempts failed the same way, so auto-rework stopped instead of retrying. Left for manual review.", itemTitle),
 		map[string]string{"item_id": itemID},
 	))
+}
+
+// notifyLikelyFlaky writes a durable, purely-informational StuckReasonLikelyFlaky
+// row (session/domain/backlog.go) when session.IsFlakyVerdictFlipFlop or
+// session.IsTestOnlyReworkCycle matches this item's recent review history —
+// behavioral evidence the review outcome may be non-deterministic rather than a
+// real pass/fail signal (see plan.md's option (c): a UI/stuck-state hint, not a
+// gate). Unlike notifyRepeatedFailure/notifyReworkCapHit, this never stops the
+// caller and publishes no operator-facing notification — it's evaluated as a
+// side observation alongside whatever AutoReopenAfterFailedReview decides next,
+// specifically so a misfiring heuristic can never newly stall an item that would
+// otherwise proceed. A MarkStuck/MarkStuckNotified failure is only logged,
+// matching every other MarkStuck call site's own convention.
+func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, currentStatus session.BacklogStatus, recentVerdicts []session.ReviewVerdictSummary, sessions []session.ItemSessionSummary, repoPath string) {
+	if s.storage == nil {
+		return
+	}
+	flip := session.IsFlakyVerdictFlipFlop(recentVerdicts)
+	testOnly := false
+	if repoPath != "" {
+		testOnly = session.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, session.TestOnlyReworkMinAttempts))
+	}
+	if !flip && !testOnly {
+		return
+	}
+
+	reason := "the last two review verdicts landed on different outcomes for what looks like the identical diff"
+	switch {
+	case testOnly && flip:
+		reason = "the last two review verdicts flip-flopped on an identical diff, and rework has been touching only test files"
+	case testOnly:
+		reason = "the last two rework attempts touched only test files — possibly chasing a flaky test rather than fixing the underlying code"
+	}
+
+	applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonLikelyFlaky, currentStatus,
+		fmt.Sprintf("possibly flaky — verify before assuming: %s.", reason))
+	if err != nil {
+		log.WarningLog.Printf("[notifyLikelyFlaky] MarkStuck item=%s: %v", itemID, err)
+	} else if applied {
+		if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonLikelyFlaky); notifyErr != nil {
+			log.WarningLog.Printf("[notifyLikelyFlaky] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		}
+	}
 }
 
 // notifySpawnAndRollbackFailed publishes an operator-facing notification and durable
@@ -1532,6 +1615,15 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// fast-looping infrastructure fault (e.g. a broken worktree diff) can't spend
 	// the whole cap in minutes.
 	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, 2)
+
+	// Story 3.2.1: purely informational — evaluated unconditionally, on every
+	// call, regardless of whether a circuit breaker below trips and returns
+	// early. Never gates the reopen/park decision itself (see
+	// StuckReasonLikelyFlaky's doc comment); a likely_flaky row can and often
+	// will co-occur with e.g. a bouncing row on the same underlying evidence
+	// (see plan.md's correlated-signal note).
+	s.notifyLikelyFlaky(ctx, itemID, session.BacklogStatus(item.Status), recentVerdicts, sessions, item.RepoPath)
+
 	if verdictErr != nil {
 		log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s GetRecentReviewVerdictSummaries: %v", itemID, verdictErr)
 	} else if session.IsRepeatedFailure(recentVerdicts) {
@@ -2546,6 +2638,21 @@ func (s *BacklogService) TriggerTriage(
 			s.notifyTriagePersistFailure(cleanupCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
 
+		// Close out the ItemSession and release triageInFlight together, right here —
+		// not after the optional auto-spawn below. The item's status already flipped to
+		// Ready above, so a caller polling on status (or a human clicking "retry") can
+		// legitimately re-trigger triage now; leaving triageInFlight held through
+		// auto-spawn's own I/O (SpawnSessionFromItem creates a worktree, etc.) only
+		// stretched a window where a well-timed retry got a spurious AlreadyExists —
+		// exactly what made TestTriggerTriage_RefineWithFeedback flaky in CI. ended_at
+		// and triageInFlight are updated in the same spot deliberately: both are inputs
+		// to the orphan-liveness check (IsTriageLive / tombstoneOrphanTriageSessions
+		// above), so moving one without the other would let a concurrent reconciliation
+		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
+		// simply between here and its final log line.
+		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+		s.triageInFlight.Delete(itemID)
+
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
 		// auto-spawn. Autonomous: true bypasses the planning-approval gate the same way
 		// AutoReopenForPRFix's spawn already does — a human never gets to review the plan
@@ -2562,7 +2669,6 @@ func (s *BacklogService) TriggerTriage(
 			}
 		}
 
-		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 		log.InfoLog.Printf("[TriggerTriage] headless triage complete item=%s elapsed=%s suggestions=%d tasks=%d",
 			itemID, callElapsed.Round(time.Second), len(result.Suggestions), len(result.Tasks))
 	}()
@@ -2911,6 +3017,7 @@ Do not modify the code. Only write the review verdict.
 			OverallOutcome: overall,
 			PerCriterion:   string(perCriterionJSON),
 			Summary:        reviewSummary,
+			DiffHash:       s.storage.ComputeCurrentDiffHash(cleanupCtx, item.ID),
 		})
 		if createErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review verdict: %w", createErr))
