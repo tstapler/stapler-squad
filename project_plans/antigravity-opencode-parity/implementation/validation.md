@@ -28,7 +28,7 @@ Requirements coverage: **7/7** (R1–R7 each have at least one test case).
 | R1 | Agy one-shot AI client (`agy --print` in `knownCLIAgents`) | UT-01, UT-02, UT-03 |
 | R2 | Agy hook install single-path logic | IT-01, IT-02, IT-03, IT-04, IT-05, IT-06 |
 | R3 | Agy detection patterns (Idle, Active; Error/Success TODO) | UT-05–UT-12, ST-01, ST-02 |
-| R4 | Open Code proxy approach documented (no native hooks) | ST-03, IT-07 |
+| R4 | SUPERSEDED 2026-08-11 — `@opencode-ai/plugin`'s `tool.execute.before` is a real native hook; proxy replaced by `patchOpenCodeHooks()` | ST-03 (superseded; see revised entry) |
 | R5 | Open Code detection patterns (braille spinner, error prefix) | UT-13–UT-18 |
 | R6 | Open Code one-shot `opencode run` with `PromptAsArg: true` | UT-01, UT-04 |
 | R7 | Test coverage parity: all new patterns have positive+negative tests | All UT-01–UT-18 |
@@ -274,7 +274,7 @@ These verify non-behavioral artifacts: fixture files, doc comments, and TODO ann
 - Requirements: R3
 - Plan ref: E4.S4.T2
 
-**ST-03: `installOpenCode()` in `cmd/ssq-hooks/main.go` has proxy rationale comment**
+**ST-03: SUPERSEDED — `installOpenCode()` now installs a native plugin hook, not a rationale comment**
 
 - **CORRECTED 2026-08-11 (was falsely marked PASS below — see Readiness Gate Criterion 1):** No
   such comment exists. `grep -n 'file_edited\|session_completed\|no PreToolUse' cmd/ssq-hooks/main.go`
@@ -283,15 +283,23 @@ These verify non-behavioral artifacts: fixture files, doc comments, and TODO ann
   discrepancy was caught during the 2026-08-11 re-verification of R4 (see
   `research/features.md`'s R4 addendum).
 - Original method (never executed): Read `cmd/ssq-hooks/main.go`; locate `func installOpenCode()`. Assert that the preceding block comment contains the string `"file_edited"` and `"session_completed"` (naming the two hook types confirmed by research), and contains `"no PreToolUse"` or equivalent phrasing.
-- **Not remediated by adding the comment now**: the 2026-08-11 re-verification found the "no
+- **Not remediated by adding the comment**: the 2026-08-11 re-verification found the "no
   PreToolUse" premise itself is incomplete — a real PreToolUse-equivalent (`tool.execute.before`,
   the plugin API) does exist — so writing a comment asserting "no PreToolUse hook exists" would
-  now be documenting something false. Correcting this doc's status is the right fix, not adding
-  the originally-specified comment. Actually wiring `installOpenCode()` to the plugin API is
-  scoped as a separate follow-on backlog item, not this one.
-- Requirements: R4
-- Plan ref: E7.S1.T1
-- Status: **FAIL** (as originally specified) — see correction above
+  have documented something false. Wiring `installOpenCode()` to the plugin API was instead scoped
+  as a separate follow-on backlog item ("Implement patchOpenCodeHooks()...") and has since been
+  implemented there — ST-03 is now superseded entirely, not just corrected: `installOpenCode()`
+  writes a native plugin (`patchOpenCodeHooks()`), so there is no rationale comment left to assert
+  or test for. Replaced by real behavioral tests against `patchOpenCodeHooks()` and the new
+  `--opencode` check adapter (`TestPatchOpenCodeHooks_NewFile`/`_Idempotent`,
+  `TestInstallOpenCode_RemovesStaleWrapper`, `TestWriteOpenCodeHookDecision_*`,
+  `TestParseOpenCodePayload_*`, plus mandatory live-session verification that throwing inside
+  `tool.execute.before` actually blocks a tool call — see
+  `project_plans/opencode-native-hooks/live-verification-notes.md`).
+- Requirements: R4 (revised)
+- Plan ref: E7 (revised)
+- Status: **FAIL** (as originally specified) → **SUPERSEDED** (2026-08-11, by the follow-on
+  implementation item)
 
 ---
 
@@ -328,7 +336,7 @@ Fix the opencode config error and run `opencode run "say hello"` to confirm one-
 | R1 | UT-01, UT-02, UT-03 | PASS |
 | R2 | IT-01 through IT-06 | PASS |
 | R3 | UT-05–UT-12, ST-01, ST-02 | PASS |
-| R4 | ST-03, IT-07 | **PARTIAL** — ST-03 FAIL (corrected 2026-08-11, see ST-03 above), IT-07 PASS |
+| R4 | ST-03, IT-07 | **SUPERSEDED** — ST-03 FAIL→SUPERSEDED (corrected 2026-08-11, then resolved by the follow-on `patchOpenCodeHooks()` implementation item; see ST-03 above), IT-07 PASS |
 | R5 | UT-13–UT-18 | PASS |
 | R6 | UT-01, UT-04 | PASS |
 | R7 | All UT-01–UT-18 | PASS |
