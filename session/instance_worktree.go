@@ -129,29 +129,47 @@ const backlogWorktreeMainBranch = "main"
 // doc comment for the sibling bug this was found alongside). Falls back to the old
 // ambient-HEAD behavior if origin can't be reached, so a spawn never hard-fails just
 // because a fetch did.
+//
+// The repair, branch resolution, worktree construction, and setup all run inside a single
+// git.WithRepoWorktreeLock critical section for resolvedRepo. RepairCorruptedGitRepo's
+// os.RemoveAll+re-clone used to run unlocked, racing a concurrent spawn's locked
+// `git worktree add` on the same repo — one process's repair could delete/recreate the repo
+// out from under another process mid-add, surfacing as git's generic "fatal: failed to
+// resolve HEAD as a valid ref". Setup runs via wt.SetupLocked() rather than wt.Setup() here
+// because this goroutine already holds the (non-reentrant) lock.
 func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 	resolvedRepo, err := ResolveSessionPath(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}
-	if err := RepairCorruptedGitRepo(resolvedRepo); err != nil {
-		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
-	}
-	branchName := BacklogBranchPrefix + branchSuffix
-	var wt *git.GitWorktree
-	if baseSHA, fetchErr := git.ResolveOriginBranchSHA(resolvedRepo, backlogWorktreeMainBranch); fetchErr == nil {
-		wt, _, err = git.NewGitWorktreeFromCommitSHA(resolvedRepo, branchSuffix, branchName, baseSHA)
-	} else {
-		log.Warn("failed to resolve origin main tip, falling back to ambient HEAD", "repoPath", resolvedRepo, "branch", backlogWorktreeMainBranch, "error", fetchErr)
-		wt, _, err = git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, branchName)
-	}
+
+	var worktreePath string
+	err = git.WithRepoWorktreeLock(resolvedRepo, func() error {
+		if err := RepairCorruptedGitRepo(resolvedRepo); err != nil {
+			return err
+		}
+		branchName := BacklogBranchPrefix + branchSuffix
+		var wt *git.GitWorktree
+		var err error
+		if baseSHA, fetchErr := git.ResolveOriginBranchSHA(resolvedRepo, backlogWorktreeMainBranch); fetchErr == nil {
+			wt, _, err = git.NewGitWorktreeFromCommitSHA(resolvedRepo, branchSuffix, branchName, baseSHA)
+		} else {
+			log.Warn("failed to resolve origin main tip, falling back to ambient HEAD", "repoPath", resolvedRepo, "branch", backlogWorktreeMainBranch, "error", fetchErr)
+			wt, _, err = git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, branchName)
+		}
+		if err != nil {
+			return err
+		}
+		if err := wt.SetupLocked(); err != nil {
+			return fmt.Errorf("setup: %w", err)
+		}
+		worktreePath = wt.GetWorktreePath()
+		return nil
+	})
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}
-	if err := wt.Setup(); err != nil {
-		return "", fmt.Errorf("CreateBacklogWorktree setup: %w", err)
-	}
-	return wt.GetWorktreePath(), nil
+	return worktreePath, nil
 }
 
 // resolveStartPath returns the effective start directory, applying WorkingDir on top of basePath.
