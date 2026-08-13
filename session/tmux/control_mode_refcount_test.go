@@ -331,3 +331,47 @@ drain:
 
 	sess.UnsubscribeFromControlModeUpdates(healthyID)
 }
+
+// TestBroadcastControlModeUpdate_KeepsBurstySubscriberOpen_When_ConsumerCatchesUpWithinGracePeriod
+// is the regression test for the bug fixed on top of the close-slow-subscriber change above:
+// fast typing (readline/prompt redraws emit several %output events per keystroke) can fill the
+// 100-slot buffer in a single burst while the consumer is mid-write on a coalesced WebSocket
+// frame — that consumer is healthy and about to drain, not stuck. Closing on the very first
+// instantaneously-full send disconnected the terminal for exactly this case. A subscriber that
+// drains within the bounded grace period must NOT be closed.
+func TestBroadcastControlModeUpdate_KeepsBurstySubscriberOpen_When_ConsumerCatchesUpWithinGracePeriod(t *testing.T) {
+	sess := newRefcountTestSession(t)
+
+	id, ch := sess.SubscribeToControlModeUpdates()
+
+	// Fill the buffer completely without draining, simulating a fast-typing burst that
+	// produces more control-mode output than the 100-slot buffer holds before the consumer
+	// gets its next scheduler turn.
+	for i := 0; i < 100; i++ {
+		sess.broadcastControlModeUpdate([]byte("x"))
+	}
+
+	// Simulate the consumer catching up shortly after — well within
+	// controlModeSlowSubscriberGrace — rather than being fully drained beforehand, so this
+	// exercises the actual race: room must open up mid-wait for the send below.
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		for i := 0; i < 100; i++ {
+			<-ch
+		}
+	}()
+
+	// This call observes the channel full and must wait for the drain above, not
+	// immediately close the subscriber.
+	sess.broadcastControlModeUpdate([]byte("y"))
+
+	sess.controlModeSubMu.RLock()
+	_, exists := sess.controlModeSubscribers[id]
+	sess.controlModeSubMu.RUnlock()
+
+	if !exists {
+		t.Error("subscriber was closed on a transient burst that cleared within the grace period; a bursty-but-healthy consumer must not be disconnected")
+	}
+
+	sess.UnsubscribeFromControlModeUpdates(id)
+}
