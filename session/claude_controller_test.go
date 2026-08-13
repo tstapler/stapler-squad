@@ -596,6 +596,7 @@ type mockInstance struct {
 	ptyReader  *os.File // nil = GetPTYReader() errors, matching the old always-error behavior
 	preview    string
 	previewErr error
+	program    string // "" (the zero value used by every test that doesn't care) matches no registered detector
 }
 
 func (m *mockInstance) GetTitle() string { return m.title }
@@ -622,6 +623,7 @@ func (m *mockInstance) GetCreatedAt() time.Time             { return time.Time{}
 func (m *mockInstance) SetLastMeaningfulOutput(_ time.Time) {}
 func (m *mockInstance) GetStatus() int                      { return 0 }
 func (m *mockInstance) WriteToPTY(_ []byte) (int, error)    { return 0, nil }
+func (m *mockInstance) GetProgram() string                  { return m.program }
 
 func newControllerWithMock(content string) (*ClaudeController, *mockInstance) {
 	inst := &mockInstance{title: "test", preview: content}
@@ -637,6 +639,34 @@ func newControllerWithMock(content string) (*ClaudeController, *mockInstance) {
 	}
 	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
 	return cc, inst
+}
+
+// TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryDisplayed is the
+// most direct regression test for the "no-op nudge into actively-working sessions" bug: it
+// exercises the exact mechanism the bug lived in, not a proxy for it.
+//
+// cc.IsIdle()/GetIdleState() reads pane content through detection.IdleDetector.DetectStateFromContent,
+// which runs the SAME StatusDetector this PR's pattern fix changes, then maps the result via
+// mapStatusToIdleState (session/detection/idle.go) — critically, StatusUnknown maps to
+// IdleStateWaiting (session/detection/idle.go's comment: "Unknown status - don't maintain
+// Unknown, default to Waiting"), i.e. treated as IDLE. Before the pattern widening, the reported
+// batched-summary pane text classified as StatusUnknown, so cc.IsIdle() incorrectly returned true
+// for a session that was actively working — this is the real site AutonomousDriver.run()'s
+// waitForIdle reads to decide whether a turn is warranted (both its settleWindow=0 startup path
+// and its settleWindow>0 post-turn path call cc.IsIdle() once to seed their decision). After the
+// fix, the same text classifies as StatusExecuting, which maps to IdleStateActive.
+func TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryDisplayed(t *testing.T) {
+	batchedSummary := "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…"
+	cc, _ := newControllerWithMock(batchedSummary)
+
+	if got := cc.IsIdle(); got {
+		t.Error("IsIdle() = true for a batched multi-tool-call summary pane — the session is " +
+			"actively working; this would let waitForIdle seed idleSince immediately and " +
+			"eventually fire a spurious no-op nudge")
+	}
+	if state, _ := cc.GetIdleState(); state != detection.IdleStateActive {
+		t.Errorf("GetIdleState() = %v, want IdleStateActive for a batched multi-tool-call summary pane", state)
+	}
 }
 
 // TestClaudeController_Start_TagsEscapeAnalyticsWithStableID is a regression test for
@@ -698,6 +728,106 @@ func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
 		if ev.SessionID != inst.stableID {
 			t.Errorf("event SessionID = %q, want %q", ev.SessionID, inst.stableID)
 		}
+	}
+}
+
+// TestClaudeController_Start_UsesPerProgramDetector_WhenRegistered covers
+// Story 2.4.1 AC1: when Instance.Program names a program with a registered
+// detector, Start() must build its StatusDetector from that program's
+// pattern set, not the hardcoded claude patterns getDefaultPatterns() /
+// NewStatusDetector() produce.
+//
+// This uses the built-in "gemini" detector (session/detection/binaries/gemini.go)
+// rather than injecting a real plugin file: detection.activeSnapshot is
+// unexported and package-private to session/detection, so there is no way to
+// mutate it from this package's tests and reliably restore it afterward
+// (detection.InitPlugins is the only exported registration path, and it is
+// guarded by a process-wide sync.Once with no reset hook — a bad fit for a
+// test that must clean up after itself). A built-in override exercises the
+// exact same code path (detection.ResolveDetectorForProgram resolving cc.instance.GetProgram()
+// against the live snapshot) with zero global state to leak into other tests.
+func TestClaudeController_Start_UsesPerProgramDetector_WhenRegistered(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	reader, writer, err := mockPTY()
+	if err != nil {
+		t.Fatalf("failed to create mock PTY: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	inst := &mockInstance{
+		title:     "gemini-session",
+		ptyReader: reader,
+		program:   "gemini",
+	}
+	cc, err := NewClaudeController(inst)
+	if err != nil {
+		t.Fatalf("NewClaudeController() failed: %v", err)
+	}
+	if err := cc.Start(context.Background()); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer cc.Stop()
+
+	sd := cc.statusDetector.Load()
+	if sd == nil {
+		t.Fatal("statusDetector not set after Start()")
+	}
+
+	// "esc to interrupt" only matches claude's built-in Active pattern
+	// (`esc\s+(to\s+)?(interrupt|cancel)`, session/detection/binaries/claude.go).
+	// gemini's built-in Active category is empty (session/detection/binaries/gemini.go),
+	// so this text must NOT resolve to StatusExecuting if Start() correctly
+	// wired up the gemini detector instead of falling back to claude's.
+	if status := sd.Detect([]byte("esc to interrupt")); status == detection.StatusExecuting {
+		t.Errorf(`Detect("esc to interrupt") = %v, want != %v — Start() used claude's default patterns instead of the registered "gemini" detector`, status, detection.StatusExecuting)
+	}
+
+	// Positive check: gemini's own pattern does resolve correctly.
+	if status := sd.Detect([]byte("✦ Working")); status != detection.StatusProcessing {
+		t.Errorf(`Detect("✦ Working") = %v, want %v (gemini_working pattern)`, status, detection.StatusProcessing)
+	}
+}
+
+// TestClaudeController_Start_FallsBackToDefaultDetector_WhenProgramUnregistered
+// is the regression-critical check for Story 2.4.1 AC2: a program with no
+// built-in or plugin detector registered (a bare shell name, or any test
+// mockInstance that leaves program unset) must construct exactly the same
+// StatusDetector Start() always has — NewStatusDetector()'s claude default
+// patterns — so every session that isn't running a program with a registered
+// detector sees no behavior change from this story.
+func TestClaudeController_Start_FallsBackToDefaultDetector_WhenProgramUnregistered(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	reader, writer, err := mockPTY()
+	if err != nil {
+		t.Fatalf("failed to create mock PTY: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	inst := &mockInstance{
+		title:     "bash-session",
+		ptyReader: reader,
+		program:   "bash", // no built-in or plugin detector registered for "bash"
+	}
+	cc, err := NewClaudeController(inst)
+	if err != nil {
+		t.Fatalf("NewClaudeController() failed: %v", err)
+	}
+	if err := cc.Start(context.Background()); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer cc.Stop()
+
+	sd := cc.statusDetector.Load()
+	if sd == nil {
+		t.Fatal("statusDetector not set after Start()")
+	}
+
+	if status := sd.Detect([]byte("esc to interrupt")); status != detection.StatusExecuting {
+		t.Errorf(`Detect("esc to interrupt") = %v, want %v — regression: Start() must fall back to NewStatusDetector()'s claude default patterns when no detector is registered for the program`, status, detection.StatusExecuting)
 	}
 }
 

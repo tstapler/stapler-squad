@@ -28,12 +28,14 @@ import {
   memoryBadgeWarning,
   memoryBadgeHigh,
   diffBadge,
+  noteIndicator,
   branchCell,
   rowMemoryPressure,
   checkboxCell,
   checkboxButton,
 } from "./SessionRow.css";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS, buildRowGridTemplate } from "./session-columns";
+import { truncateGoal } from "@/lib/utils/string";
 
 interface SessionRowProps {
   session: Session;
@@ -49,6 +51,7 @@ interface SessionRowProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
@@ -86,6 +89,8 @@ function getStatusDotValue(status: SessionStatus): string {
       return "needs-approval";
     case SessionStatus.HIBERNATED:
       return "hibernated";
+    case SessionStatus.CRASHED:
+      return "crashed";
     default:
       return "idle";
   }
@@ -99,6 +104,7 @@ const STATUS_DOT_LABELS: Record<string, string> = {
   "loading": "Loading",
   "needs-approval": "Needs Approval",
   "hibernated": "Hibernated",
+  "crashed": "Crashed",
 };
 
 function getStatusDotLabel(dotValue: string): string {
@@ -145,7 +151,7 @@ function SessionRowInner({
   onPause, onResume, onDelete,
   onClone, onOpenInNewPane, onNewWorkspace,
   onRestart, onCreateCheckpoint, onRunOneShot,
-  onSetRateLimitEnabled, onToggleAutonomousMode, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
+  onSetRateLimitEnabled, onToggleAutonomousMode, onToggleAutoApprove, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
   suppressApprovalSubStatus = false,
   visibleColumns = DEFAULT_VISIBLE_COLUMNS,
@@ -169,6 +175,9 @@ function SessionRowInner({
   // Show branch separately if the branch column is visible; otherwise fold into displayName.
   const showBranchCol = visibleColumns.includes("branch");
   const displayName = showBranchCol ? session.title : (session.branch || session.title);
+
+  const trimmedNote = session.note?.trim();
+  const noteTooltip = trimmedNote ? truncateGoal(trimmedNote, 120) : undefined;
 
   const memMB = Number(session.memoryRssMb ?? 0n);
   const memorySeverityClass =
@@ -271,6 +280,18 @@ function SessionRowInner({
             checkConclusion={session.githubCheckConclusion}
             compact={true}
           />
+          {noteTooltip && (
+            <Tooltip label={noteTooltip}>
+              <span
+                className={noteIndicator}
+                role="img"
+                aria-label="Has a note"
+                data-testid="badge-has-note"
+              >
+                📝
+              </span>
+            </Tooltip>
+          )}
         </span>
       </span>
 
@@ -399,6 +420,7 @@ function SessionRowInner({
           onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onToggleAutoApprove={onToggleAutoApprove}
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}

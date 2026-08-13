@@ -434,6 +434,20 @@ func (_u *ApprovalRuleUpdate) SetNillableSafePythonImportsOnly(v *bool) *Approva
 	return _u
 }
 
+// SetRequireCiPassing sets the "require_ci_passing" field.
+func (_u *ApprovalRuleUpdate) SetRequireCiPassing(v bool) *ApprovalRuleUpdate {
+	_u.mutation.SetRequireCiPassing(v)
+	return _u
+}
+
+// SetNillableRequireCiPassing sets the "require_ci_passing" field if the given value is not nil.
+func (_u *ApprovalRuleUpdate) SetNillableRequireCiPassing(v *bool) *ApprovalRuleUpdate {
+	if v != nil {
+		_u.SetRequireCiPassing(*v)
+	}
+	return _u
+}
+
 // Mutation returns the ApprovalRuleMutation object of the builder.
 func (_u *ApprovalRuleUpdate) Mutation() *ApprovalRuleMutation {
 	return _u.mutation
@@ -656,6 +670,9 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 	}
 	if value, ok := _u.mutation.SafePythonImportsOnly(); ok {
 		_spec.SetField(approvalrule.FieldSafePythonImportsOnly, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.RequireCiPassing(); ok {
+		_spec.SetField(approvalrule.FieldRequireCiPassing, field.TypeBool, value)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -1082,6 +1099,20 @@ func (_u *ApprovalRuleUpdateOne) SetNillableSafePythonImportsOnly(v *bool) *Appr
 	return _u
 }
 
+// SetRequireCiPassing sets the "require_ci_passing" field.
+func (_u *ApprovalRuleUpdateOne) SetRequireCiPassing(v bool) *ApprovalRuleUpdateOne {
+	_u.mutation.SetRequireCiPassing(v)
+	return _u
+}
+
+// SetNillableRequireCiPassing sets the "require_ci_passing" field if the given value is not nil.
+func (_u *ApprovalRuleUpdateOne) SetNillableRequireCiPassing(v *bool) *ApprovalRuleUpdateOne {
+	if v != nil {
+		_u.SetRequireCiPassing(*v)
+	}
+	return _u
+}
+
 // Mutation returns the ApprovalRuleMutation object of the builder.
 func (_u *ApprovalRuleUpdateOne) Mutation() *ApprovalRuleMutation {
 	return _u.mutation
@@ -1334,6 +1365,9 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 	}
 	if value, ok := _u.mutation.SafePythonImportsOnly(); ok {
 		_spec.SetField(approvalrule.FieldSafePythonImportsOnly, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.RequireCiPassing(); ok {
+		_spec.SetField(approvalrule.FieldRequireCiPassing, field.TypeBool, value)
 	}
 	_node = &ApprovalRule{config: _u.config}
 	_spec.Assign = _node.assignValues

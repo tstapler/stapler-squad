@@ -32,6 +32,19 @@ func (i *Instance) GetStableID() string {
 	return i.Title
 }
 
+// GetProgram returns the program this instance runs (e.g. "claude", "aider").
+//
+// Reads via Snapshot(), not a direct i.Program field access: actor commands
+// (SetProgram/SwitchProgram and friends) write i.Program directly outside
+// i.mu, publishing the change only by atomically storing a fresh snapshot at
+// the end of the mutation — the same reasoning as GetStatus's doc comment.
+// ClaudeController.Start reads this from a different goroutine than whatever
+// last set it, so only the atomic snapshot read is synchronized with that
+// write; a direct field read or an i.mu-guarded read would not be.
+func (i *Instance) GetProgram() string {
+	return i.Snapshot().Program
+}
+
 // MatchesID reports whether id refers to this instance.
 // Accepts the stable UUID, the legacy Title, or the full tmux session name
 // (e.g. "staplersquad_my-session") so that hook notifications sent from inside
@@ -298,7 +311,10 @@ func (i *Instance) GetPRDisplayInfo() string { return i.GitHub().PRDisplayInfo()
 func (i *Instance) IsGitHubSession() bool { return i.GitHub().IsGitHubSession() }
 
 // prUpdateResult is returned by UpdatePRStatus.
-type prUpdateResult struct{ PriorityChanged bool }
+type prUpdateResult struct {
+	PriorityChanged        bool
+	CheckConclusionChanged bool
+}
 
 // CurrentBranch returns the branch the session is currently on.
 // For worktree sessions, it returns the stored Branch field (set at creation and on worktree
@@ -332,6 +348,7 @@ func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, appro
 		// outside the actor — see runActor's doc comment in actor.go.
 		inst.mu.Lock()
 		result.PriorityChanged = priority != inst.GitHubPRPriority
+		result.CheckConclusionChanged = checkConclusion != inst.GitHubCheckConclusion
 		inst.GitHubPRState = state
 		inst.GitHubPRPriority = priority
 		inst.GitHubPRIsDraft = isDraft

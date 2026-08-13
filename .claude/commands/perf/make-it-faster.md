@@ -129,9 +129,13 @@ prompt: |
 
   | Issue | Location | Profile signal | Impact |
   |-------|----------|----------------|--------|
-  | `diffShortstatUncached` racy-clean re-hash + untracked-file walk | `session/unfinished/gogit_vcs_reader.go:850,877,926` | allocs: ~397GB cum (66% of all app allocations) | Re-hashes every stat-clean tracked file and reads every gitignore-blind untracked file's content on every 30s poll per worktree |
+  | `findConversationFilePath` fresh 1MB scanner buffer per file during walk | `session/history.go:360` | allocs: 36.05% cum (2026-08-06) | see PerfFix-1 below — pool the `bufio.Scanner` buffer instead of allocating fresh per file |
+  | `ArtifactExtractor.scanFile` fresh 10MB scanner buffer per call | `session/artifacts/scan.go:37` | allocs: 18.56%/20.96% cum (2026-08-06) | see PerfFix-2 below — shared pool with `tokens/parser.go` |
+  | `Parser.ParseReader` fresh 10MB scanner buffer per call | `session/tokens/parser.go:73` | allocs: 17.49%/20.46% cum (2026-08-06) | see PerfFix-3 below — shared pool with `artifacts/scan.go` |
 
   (2026-05-02 rows — hot-path `DebugLog.Printf` in `instance_status.go`/`review_queue_poller.go`/`control_mode.go`/`connectrpc_websocket.go`, and the ent `Get`-before-update in `ent_repository.go`/`storage.go` — verified fixed on 2026-07-13: no `DebugLog` calls remain in those files, mutex total dropped to ~1.4ms cum, and storage.go carries a "pre-fix: this loop re-queried..." comment. Removed per the prune rule above.)
+
+  (2026-07-13 row — `diffShortstatUncached` racy-clean re-hash + untracked-file walk in `session/unfinished/gogit_vcs_reader.go:850,877,926`, ~397GB cum/66% of all allocations — VERIFIED absent from the 2026-08-06 fresh `-alloc_space` top-N output: no longer appears at all, confirming the underlying fix shipped. Removed per the prune rule above.)
 
   ---
 
@@ -408,6 +412,10 @@ total allocation, or top-5 by cum ms for mutex/block).
 
 | Location | Profile | Signal (as of session date) | Fix direction |
 |----------|---------|--------|---------------|
-| `session/unfinished/gogit_vcs_reader.go:850,877,926` | allocs | ~397GB cum, 66% of all app allocations (2026-07-13) | see PerfFix-1/2/3 below — racy-clean re-hash + ungitignored untracked-file walk on every 30s poll |
+| `session/history.go:360` (`findConversationFilePath`) | allocs | 36.05% cum (2026-08-06) | pool the 1MB `bufio.Scanner` buffer instead of allocating fresh per file during `filepath.Walk` |
+| `session/artifacts/scan.go:37` (`scanFile`) | allocs | 18.56%/20.96% cum (2026-08-06) | pool the 10MB scanner buffer, share helper with `tokens/parser.go` |
+| `session/tokens/parser.go:73` (`ParseReader`) | allocs | 17.49%/20.46% cum (2026-08-06) | pool the 10MB scanner buffer, share helper with `artifacts/scan.go` |
 
 (2026-05-02 rows for `instance_status.go`/`review_queue_poller.go`/`control_mode.go`/`connectrpc_websocket.go` hot-path `DebugLog.Printf` calls and the `ent_repository.go`/`storage.go` Get-before-update — verified fixed on 2026-07-13 and pruned: no `DebugLog` calls remain in those files, mutex total is ~1.4ms cum, storage.go now carries a "pre-fix: this loop re-queried..." comment.)
+
+(2026-07-13 row for `session/unfinished/gogit_vcs_reader.go:850,877,926` racy-clean re-hash + untracked-file walk, ~397GB cum/66% of allocations — VERIFIED absent from the 2026-08-06 fresh `-alloc_space` top-N output, pruned per the rule above.)

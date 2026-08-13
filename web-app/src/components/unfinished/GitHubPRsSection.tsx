@@ -8,10 +8,13 @@ import { useGitHubPRs } from "@/lib/hooks/useGitHubPRs";
 import {
   GitHubUserService,
   type GitHubAccount,
+  type GitHubCLIHost,
   StartGitHubDeviceAuthRequestSchema,
   PollGitHubDeviceAuthRequestSchema,
   RevokeGitHubTokenRequestSchema,
   AddGitHubAccountWithTokenRequestSchema,
+  ListGitHubCLIHostsRequestSchema,
+  AddGitHubAccountFromCLIRequestSchema,
   DeviceAuthStatus,
 } from "@/gen/session/v1/github_user_pb";
 import { createClient } from "@connectrpc/connect";
@@ -21,11 +24,13 @@ import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import * as styles from "./GitHubPRsSection.css";
 
 function useGitHubUserClient() {
-  const transport = createConnectTransport({
-    baseUrl: getApiBaseUrl(),
-    interceptors: [createAuthInterceptor()],
-  });
-  return createClient(GitHubUserService, transport);
+  return useMemo(() => {
+    const transport = createConnectTransport({
+      baseUrl: getApiBaseUrl(),
+      interceptors: [createAuthInterceptor()],
+    });
+    return createClient(GitHubUserService, transport);
+  }, []);
 }
 
 function prCheckChip(pr: UserPR): React.ReactNode {
@@ -407,37 +412,173 @@ type AddAccountMode = "device" | "token";
 
 function AddAccountPanel({ errorMessage, onAuthComplete, onCancel }: DeviceAuthBannerProps) {
   const [mode, setMode] = useState<AddAccountMode>("device");
+  const [cliAvailable, setCliAvailable] = useState(false);
+  const [manualExpanded, setManualExpanded] = useState(false);
+  const modeChosenRef = useRef(false);
+
+  const handleCliAvailabilityChange = useCallback((available: boolean) => {
+    setCliAvailable(available);
+    // Once CLI credentials are importable, prefer the token tab over device flow —
+    // there's no reason to walk through device flow when credentials are already local.
+    if (available && !modeChosenRef.current) {
+      setMode("token");
+    }
+  }, []);
+
+  const showManualAuth = !cliAvailable || manualExpanded;
+
   return (
     <div className={styles.addAccountPanel} data-testid="github-add-account-panel">
-      <div className={styles.authTabs} role="tablist">
+      <CLIImportSection onAuthComplete={onAuthComplete} onAvailabilityChange={handleCliAvailabilityChange} />
+      {cliAvailable && !manualExpanded && (
         <button
-          role="tab"
-          aria-selected={mode === "device"}
-          className={mode === "device" ? styles.authTabActive : styles.authTab}
-          onClick={() => setMode("device")}
-          data-testid="github-auth-tab-device"
+          type="button"
+          className={styles.cancelButton}
+          onClick={() => setManualExpanded(true)}
+          data-testid="github-add-account-manual-toggle"
         >
-          Device flow
+          Set up manually instead
         </button>
-        <button
-          role="tab"
-          aria-selected={mode === "token"}
-          className={mode === "token" ? styles.authTabActive : styles.authTab}
-          onClick={() => setMode("token")}
-          data-testid="github-auth-tab-token"
-        >
-          Personal access token
-        </button>
-      </div>
-      {mode === "device" ? (
-        <DeviceAuthBanner
-          errorMessage={errorMessage}
-          onAuthComplete={onAuthComplete}
-          onCancel={onCancel}
-        />
-      ) : (
-        <TokenAuthForm onAuthComplete={onAuthComplete} onCancel={onCancel} />
       )}
+      {showManualAuth && (
+        <>
+          <div className={styles.authTabs} role="tablist">
+            <button
+              role="tab"
+              aria-selected={mode === "device"}
+              className={mode === "device" ? styles.authTabActive : styles.authTab}
+              onClick={() => {
+                modeChosenRef.current = true;
+                setMode("device");
+              }}
+              data-testid="github-auth-tab-device"
+            >
+              Device flow
+            </button>
+            <button
+              role="tab"
+              aria-selected={mode === "token"}
+              className={mode === "token" ? styles.authTabActive : styles.authTab}
+              onClick={() => {
+                modeChosenRef.current = true;
+                setMode("token");
+              }}
+              data-testid="github-auth-tab-token"
+            >
+              Personal access token
+            </button>
+          </div>
+          {mode === "device" ? (
+            <DeviceAuthBanner
+              errorMessage={errorMessage}
+              onAuthComplete={onAuthComplete}
+              onCancel={onCancel}
+            />
+          ) : (
+            <TokenAuthForm onAuthComplete={onAuthComplete} onCancel={onCancel} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// --- gh CLI host import ---
+
+type CLIImportState =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | { kind: "ready"; hosts: GitHubCLIHost[] }
+  | { kind: "error"; message: string };
+
+function CLIImportSection({
+  onAuthComplete,
+  onAvailabilityChange,
+}: {
+  onAuthComplete: () => void;
+  onAvailabilityChange?: (available: boolean) => void;
+}) {
+  const client = useGitHubUserClient();
+  const [state, setState] = useState<CLIImportState>({ kind: "loading" });
+  const [importingHost, setImportingHost] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    client
+      .listGitHubCLIHosts(create(ListGitHubCLIHostsRequestSchema, {}))
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.ghAvailable || res.hosts.length === 0) {
+          setState({ kind: "unavailable" });
+          onAvailabilityChange?.(false);
+        } else {
+          setState({ kind: "ready", hosts: res.hosts });
+          onAvailabilityChange?.(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setState({ kind: "unavailable" });
+          onAvailabilityChange?.(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // onAvailabilityChange is expected to be a stable setState-style callback from the parent
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client]);
+
+  const handleImport = useCallback(
+    async (host: string) => {
+      setImportingHost(host);
+      try {
+        await client.addGitHubAccountFromCLI(
+          create(AddGitHubAccountFromCLIRequestSchema, { host })
+        );
+        onAuthComplete();
+      } catch (err) {
+        setState({ kind: "error", message: String(err) });
+      } finally {
+        setImportingHost(null);
+      }
+    },
+    [client, onAuthComplete]
+  );
+
+  if (state.kind === "loading" || state.kind === "unavailable") {
+    return null;
+  }
+
+  return (
+    <div className={styles.cliImportSection} data-testid="github-cli-import-section">
+      <span className={styles.cliImportLabel}>Already logged in via gh CLI:</span>
+      {state.kind === "ready" && (
+        <div className={styles.cliImportHostList}>
+          {state.hosts.map((h) => (
+            <button
+              key={h.host}
+              type="button"
+              className={styles.cliImportHostButton}
+              disabled={h.alreadyAdded || importingHost === h.host}
+              onClick={() => handleImport(h.host)}
+              data-testid={`github-cli-import-host-${h.host}`}
+            >
+              {h.alreadyAdded
+                ? `${h.host}${h.username ? ` (${h.username})` : ""} — connected`
+                : importingHost === h.host
+                  ? `Importing ${h.host}…`
+                  : `Import ${h.host}${h.username ? ` (${h.username})` : ""}`}
+            </button>
+          ))}
+        </div>
+      )}
+      {state.kind === "error" && (
+        <span className={styles.authError} data-testid="github-cli-import-error">
+          {state.message}
+        </span>
+      )}
+      <span className={styles.cliImportDivider}>or paste a token manually</span>
     </div>
   );
 }

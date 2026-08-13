@@ -158,20 +158,30 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 	return result, nil
 }
 
-// GetBaseCommitSHAsForSessions returns a map of sessionUUID → last_commit_sha for the
-// given session UUIDs, including only rows where last_commit_sha is non-empty.
-// Used at startup to restore dirBaseSHA for directory-mode backlog sessions.
+// GetBaseCommitSHAsForSessions returns a map of sessionUUID → base_commit_sha for
+// the given session UUIDs, including only rows with a non-empty value. Used at
+// startup to restore dirBaseSHA for directory-mode backlog sessions — the
+// counterpart to the SetDirBaseSHA call at spawn.
+//
+// Reads base_commit_sha, falling back to last_commit_sha only for rows written
+// before the two were split. That fallback is safe precisely because the bug
+// being fixed meant the two fields held the same value on every legacy row; it
+// must NOT be extended to rows that have a base_commit_sha, since last_commit_sha
+// is now live-refreshed to the session's tip and would give a moving diff base.
 func (r *EntRepository) GetBaseCommitSHAsForSessions(ctx context.Context, sessionUUIDs []string) (map[string]string, error) {
 	rows, err := r.client.ItemSession.Query().
 		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
-		Select(itemsession.FieldSessionUUID, itemsession.FieldLastCommitSha).
+		Select(itemsession.FieldSessionUUID, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha).
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("GetBaseCommitSHAsForSessions: %w", err)
 	}
 	result := make(map[string]string, len(rows))
 	for _, row := range rows {
-		if row.LastCommitSha != "" {
+		switch {
+		case row.BaseCommitSha != "":
+			result[row.SessionUUID] = row.BaseCommitSha
+		case row.LastCommitSha != "":
 			result[row.SessionUUID] = row.LastCommitSha
 		}
 	}
@@ -305,19 +315,56 @@ func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id
 	return nil
 }
 
-// UpdateItemSessionGitActivity updates git-related fields on an ItemSession.
+// SetItemSessionBaseCommit records the worktree's pre-work HEAD SHA for the
+// item session, so the review gate can diff base..HEAD across every commit the
+// agent makes rather than just HEAD~1..HEAD.
+//
+// This is deliberately NOT UpdateItemSessionGitActivity: that function's fields
+// mean "the session's latest commit", and seeding them with the spawn-time base
+// SHA is what let closeIfSupersededByMain close real, unmerged PRs as
+// "superseded" — a branch's own base commit is by construction already an
+// ancestor of main, so IsCommitOnMain on it is always true (BUG-047).
+func (r *EntRepository) SetItemSessionBaseCommit(ctx context.Context, id, sha string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	if _, err := r.client.ItemSession.UpdateOneID(parsedID).
+		SetBaseCommitSha(sha).
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to set base commit sha on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionGitActivity records the item session's *current* tip commit
+// and the count of commits it has authored since its base. Called repeatedly by
+// refreshWorkSessionGitActivity (session/backlog_lifecycle.go) while the session
+// is active, so downstream "has this session's work landed on main?" checks read
+// live data. To record the spawn-time baseline instead, use
+// SetItemSessionBaseCommit.
 func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
+	// last_progress_at records when progress was *observed*, not when the commit
+	// was authored — deliberately time.Now() rather than commitAt. Git author
+	// timestamps survive rebases and cherry-picks, and this repo rebases session
+	// worktrees onto main routinely, so feeding an author date into the staleness
+	// clock (reconcileStaleWorkSessions, which reads this field) would push it
+	// backwards on a rebase and falsely flag a healthy, actively-committing
+	// session as stale_work — triggering automated remediation against a session
+	// that is working fine. Observing a new commit right now IS progress now.
+	// last_commit_at keeps the true author time for display.
 	_, err = r.client.ItemSession.UpdateOneID(parsedID).
 		SetLastCommitSha(sha).
 		SetLastCommitMessage(msg).
 		SetLastCommitAt(commitAt).
 		SetCommitCountSinceSpawn(commitCount).
-		SetLastProgressAt(commitAt).
+		SetLastProgressAt(time.Now()).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update git activity on item session %s: %w", id, err)
@@ -859,6 +906,7 @@ type OpenStuckStateData struct {
 	RemediationAttempts int32
 	NextRemediationAt   *time.Time
 	GraceBootTime       *time.Time
+	PlanArtifactsPath   string
 }
 
 // FindOpenStuckStates returns every BacklogStuckState row that is currently
@@ -901,6 +949,7 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 			data.ItemStatus = BacklogStatus(item.Status)
 			data.PrNumber = item.PrNumber
 			data.PrURL = item.PrURL
+			data.PlanArtifactsPath = item.PlanArtifactsPath
 		}
 		result = append(result, data)
 	}
@@ -942,9 +991,9 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 
 // GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for the
 // given BacklogItem UUID, most recent first. Reuses the existing
-// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome and
-// Summary are populated, since that's all callers (IsRepeatedFailure in
-// stuck_decisions.go) need.
+// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome,
+// Summary, and DiffHash are populated, since that's all callers
+// (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck_decisions.go) need.
 func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
 	parsedItemID, err := uuid.Parse(itemID)
 	if err != nil {
@@ -973,6 +1022,7 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 			ID:             is.Edges.ReviewVerdict.ID.String(),
 			OverallOutcome: is.Edges.ReviewVerdict.OverallOutcome,
 			Summary:        is.Edges.ReviewVerdict.Summary,
+			DiffHash:       is.Edges.ReviewVerdict.DiffHash,
 		})
 	}
 	return result, nil

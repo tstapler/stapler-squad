@@ -96,8 +96,9 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 
 	// review.md
 	files["review.md"] = fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n"+
-		"Do NOT end your session after this. Wait a bit, then call get_backlog_item (or /backlog/status) again — "+
-		"the verdict appears under \"Latest Review Verdict\" once the reviewer submits it.\n\n"+
+		"Do NOT end your session after this. Call wait_for_backlog_event(item_id, event_type=\"verdict_recorded\") "+
+		"instead of polling — it blocks until the verdict lands (or times out) and returns the outcome directly, "+
+		"or returns immediately if a verdict is already recorded.\n\n"+
 		"PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local "+
 		"CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part "+
 		"of this task, not a separate step someone else does.\n\n"+
@@ -236,24 +237,26 @@ func writeFile(path, content string) error {
 }
 
 // addWorktreeExcludes writes backlog-generated file patterns to
-// $GIT_DIR/info/exclude so they are invisible to git without touching
-// .gitignore (which would pollute the target repo).
+// $GIT_COMMON_DIR/info/exclude so they are invisible to git without touching
+// .gitignore (which would pollute the target repo). Resolving via
+// --git-common-dir (not --git-dir) matters for linked worktrees (`git worktree
+// add`): --git-dir there returns the worktree-private admin directory
+// (<common>/.git/worktrees/<name>), and git status never reads an info/exclude
+// written there — only the one under the shared common dir is honored. See
+// session/git/util.go's findMainRepoPathForWorktree for the same resolution.
 func addWorktreeExcludes(worktreePath string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()
 	if err != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] git rev-parse --git-dir in %s: %v", worktreePath, err)
+		log.WarningLog.Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
 		return
 	}
-	gitDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(worktreePath, gitDir)
-	}
+	gitCommonDir := strings.TrimSpace(string(out))
 
-	excludeFile := filepath.Join(gitDir, "info", "exclude")
+	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
 	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o755); mkErr != nil {
 		log.WarningLog.Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
 		return

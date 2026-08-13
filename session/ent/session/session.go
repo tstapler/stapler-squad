@@ -36,6 +36,8 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// FieldAutoYes holds the string denoting the auto_yes field in the database.
 	FieldAutoYes = "auto_yes"
+	// FieldAutoApprove holds the string denoting the auto_approve field in the database.
+	FieldAutoApprove = "auto_approve"
 	// FieldAutonomousMode holds the string denoting the autonomous_mode field in the database.
 	FieldAutonomousMode = "autonomous_mode"
 	// FieldPrompt holds the string denoting the prompt field in the database.
@@ -82,6 +84,8 @@ const (
 	FieldHidden = "hidden"
 	// FieldPauseReason holds the string denoting the pause_reason field in the database.
 	FieldPauseReason = "pause_reason"
+	// FieldExitReason holds the string denoting the exit_reason field in the database.
+	FieldExitReason = "exit_reason"
 	// FieldWorkflowID holds the string denoting the workflow_id field in the database.
 	FieldWorkflowID = "workflow_id"
 	// FieldArchivedAt holds the string denoting the archived_at field in the database.
@@ -96,6 +100,8 @@ const (
 	FieldGithubRepo = "github_repo"
 	// FieldSessionArtifacts holds the string denoting the session_artifacts field in the database.
 	FieldSessionArtifacts = "session_artifacts"
+	// FieldNote holds the string denoting the note field in the database.
+	FieldNote = "note"
 	// EdgeWorktree holds the string denoting the worktree edge name in mutations.
 	EdgeWorktree = "worktree"
 	// EdgeDiffStats holds the string denoting the diff_stats edge name in mutations.
@@ -173,6 +179,7 @@ var Columns = []string{
 	FieldCreatedAt,
 	FieldUpdatedAt,
 	FieldAutoYes,
+	FieldAutoApprove,
 	FieldAutonomousMode,
 	FieldPrompt,
 	FieldProgram,
@@ -196,6 +203,7 @@ var Columns = []string{
 	FieldLastPromptSignature,
 	FieldHidden,
 	FieldPauseReason,
+	FieldExitReason,
 	FieldWorkflowID,
 	FieldArchivedAt,
 	FieldGithubPrURL,
@@ -203,6 +211,7 @@ var Columns = []string{
 	FieldGithubOwner,
 	FieldGithubRepo,
 	FieldSessionArtifacts,
+	FieldNote,
 }
 
 // ForeignKeys holds the SQL foreign-keys that are owned by the "sessions"
@@ -250,6 +259,8 @@ var (
 	UpdateDefaultUpdatedAt func() time.Time
 	// DefaultAutoYes holds the default value on creation for the "auto_yes" field.
 	DefaultAutoYes bool
+	// DefaultAutoApprove holds the default value on creation for the "auto_approve" field.
+	DefaultAutoApprove bool
 	// DefaultAutonomousMode holds the default value on creation for the "autonomous_mode" field.
 	DefaultAutonomousMode bool
 	// ProgramValidator is a validator for the "program" field. It is called by the builders before save.
@@ -264,6 +275,10 @@ var (
 	DefaultGithubPrNumber int
 	// DefaultSessionArtifacts holds the default value on creation for the "session_artifacts" field.
 	DefaultSessionArtifacts string
+	// DefaultNote holds the default value on creation for the "note" field.
+	DefaultNote string
+	// NoteValidator is a validator for the "note" field. It is called by the builders before save.
+	NoteValidator func(string) error
 )
 
 // OrderOption defines the ordering options for the Session queries.
@@ -327,6 +342,11 @@ func ByUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByAutoYes orders the results by the auto_yes field.
 func ByAutoYes(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAutoYes, opts...).ToFunc()
+}
+
+// ByAutoApprove orders the results by the auto_approve field.
+func ByAutoApprove(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAutoApprove, opts...).ToFunc()
 }
 
 // ByAutonomousMode orders the results by the autonomous_mode field.
@@ -444,6 +464,11 @@ func ByPauseReason(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPauseReason, opts...).ToFunc()
 }
 
+// ByExitReason orders the results by the exit_reason field.
+func ByExitReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldExitReason, opts...).ToFunc()
+}
+
 // ByWorkflowID orders the results by the workflow_id field.
 func ByWorkflowID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldWorkflowID, opts...).ToFunc()
@@ -477,6 +502,11 @@ func ByGithubRepo(opts ...sql.OrderTermOption) OrderOption {
 // BySessionArtifacts orders the results by the session_artifacts field.
 func BySessionArtifacts(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSessionArtifacts, opts...).ToFunc()
+}
+
+// ByNote orders the results by the note field.
+func ByNote(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNote, opts...).ToFunc()
 }
 
 // ByWorktreeField orders the results by worktree field.

@@ -48,6 +48,8 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 		{domain.StuckReasonPRPendingNoPR, sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR},
 		{domain.StuckReasonReworkBlockedStale, sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE},
 		{domain.StuckReasonPRNeedsFix, sessionv1.StuckReason_STUCK_REASON_PR_NEEDS_FIX},
+		{domain.StuckReasonRespawnBlockedActive, sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE},
+		{domain.StuckReasonLikelyFlaky, sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY},
 	}
 	for _, c := range cases {
 		t.Run(string(c.reason), func(t *testing.T) {
@@ -121,6 +123,49 @@ func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *te
 	assert.WithinDuration(t, threeDaysAgo, got.FirstDetectedAt.AsTime(), 5*time.Second)
 	// allow_auto_merge is a Phase 4 concern — this handler must leave it unset.
 	assert.Nil(t, got.AllowAutoMerge)
+}
+
+// TestListStuckBacklogItems_should_PopulatePlanArtifactsPath verifies
+// plan_artifacts_path round-trips end to end — from the parent item's
+// column, through the FindOpenStuckStates join, through
+// stuckBacklogItemToProto — so the frontend's hasPlan gate
+// (StuckItemDetail.tsx) has real data to check instead of trusting `reason`
+// alone (research/pitfalls.md #1).
+func TestListStuckBacklogItems_should_PopulatePlanArtifactsPath(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	itemWithPlan, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "queued item with a plan",
+		Status: string(session.BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+	planPath := "project_plans/queued-item/plan.md"
+	_, err = storage.UpdateBacklogItem(ctx, itemWithPlan.ID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &planPath,
+	}, nil)
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, itemWithPlan.ID, domain.StuckReasonPlanNotApproved, time.Now(), "has a plan")
+
+	itemWithoutPlan, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "queued item with no plan yet",
+		Status: string(session.BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, itemWithoutPlan.ID, domain.StuckReasonPlanNotApproved, time.Now(), "no plan yet")
+
+	resp, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Items, 2)
+
+	byItemID := make(map[string]*sessionv1.StuckBacklogItem, len(resp.Msg.Items))
+	for _, it := range resp.Msg.Items {
+		byItemID[it.ItemId] = it
+	}
+
+	assert.Equal(t, planPath, byItemID[itemWithPlan.ID].PlanArtifactsPath)
+	assert.Empty(t, byItemID[itemWithoutPlan.ID].PlanArtifactsPath)
 }
 
 // TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called
@@ -412,6 +457,21 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// proceeds without killing the still-running session needs its own
 	// design, not built here).
 	domain.StuckReasonReworkBlockedStale: true,
+	// StuckReasonRespawnBlockedActive: deliberately notify + durably mark +
+	// resolve-once-the-guard-passes only, mirroring StuckReasonReworkBlockedStale
+	// above — a single reason spans three different triggering statuses/
+	// functions (AutoRespawnAutonomousWork/in_progress, AutoReopenForPRFix/
+	// pr_pending, AutoRespawnReview/review), so there is no single unambiguous
+	// "retry now" action to wire, and re-invoking any of the three while the
+	// blocking session is still active would just re-mark the same row —
+	// exactly what the next reconcile tick already does for free.
+	domain.StuckReasonRespawnBlockedActive: true,
+	// StuckReasonLikelyFlaky: purely informational (plan.md option (c)) — a
+	// behavioral hint that the review outcome may be non-deterministic, not a
+	// condition with a "retry now" fix. There is nothing to remediate: the
+	// item's normal reopen/park flow already proceeds unaffected by this row
+	// (see notifyLikelyFlaky's doc comment in backlog_service_triage.go).
+	domain.StuckReasonLikelyFlaky: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

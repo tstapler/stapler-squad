@@ -68,7 +68,8 @@ func (ps *PatternSet) compile() error {
 // MatchLines runs the pattern priority chain on the given text string and raw PTY bytes.
 // Returns (status, patternName, description, subagentCount). subagentCount is only ever
 // non-zero when the WaitingForAgent group wins — see the capturing group on the three
-// WaitingForAgent patterns in getDefaultPatterns().
+// WaitingForAgent patterns in binaries.ClaudeDetector.Patterns() (session/detection/binaries/claude.go),
+// the single source of truth delegated to by getDefaultPatterns().
 func (ps *PatternSet) MatchLines(text string, rawPTY []byte) (DetectedStatus, string, string, int) {
 	// Error patterns (highest priority)
 	for i, regex := range ps.errorRegexes {

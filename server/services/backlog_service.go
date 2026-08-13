@@ -596,10 +596,14 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 		RepoPath:   item.RepoPath,
 		Notes:      item.Notes,
 		ExternalId: item.ExternalID,
+		Labels:     item.Labels,
 		PrUrl:      item.PrURL,
 		PrNumber:   int32(item.PrNumber),
 		CreatedAt:  timestamppb.New(item.CreatedAt),
 		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+	}
+	if item.ExternalURL != "" {
+		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
@@ -632,33 +636,61 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
+// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
+// surface AllowedTransitions on the wire (backlogItemToProto below) — package
+// state is safe here since the underlying transitions map is never mutated
+// after construction. Not s.engine: backlogItemToProto is a free function
+// called from many BacklogService methods, and threading an engine parameter
+// through every call site would be a much larger change for the same result.
+var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
+
+// allowedTransitionStrings returns the string form of
+// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
+func allowedTransitionStrings(from session.BacklogStatus) []string {
+	targets := protoWorkflowEngine.AllowedTransitions(from)
+	out := make([]string, len(targets))
+	for i, t := range targets {
+		out[i] = string(t)
+	}
+	return out
+}
+
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                item.ID,
-		Title:             item.Title,
-		Description:       item.Description,
-		Priority:          int32(item.Priority),
-		Status:            item.Status,
-		RepoPath:          item.RepoPath,
-		SkipReviewGate:    item.SkipReviewGate,
-		SkipPlanning:      item.SkipPlanning,
-		AutoSpawnSession:  item.AutoSpawnSession,
-		AutoCreatePr:      item.AutoCreatePR,
-		PipelineMode:      &item.PipelineMode,
-		Category:          &item.Category,
-		PlanApproved:      item.PlanApproved,
-		PlanArtifactsPath: item.PlanArtifactsPath,
-		Notes:             item.Notes,
-		ExternalId:        item.ExternalID,
-		SourceId:          item.SourceID,
-		PrUrl:             item.PrURL,
-		PrNumber:          int32(item.PrNumber),
-		CreatedAt:         timestamppb.New(item.CreatedAt),
-		UpdatedAt:         timestamppb.New(item.UpdatedAt),
+		Id:                  item.ID,
+		Title:               item.Title,
+		Description:         item.Description,
+		Priority:            int32(item.Priority),
+		Status:              item.Status,
+		RepoPath:            item.RepoPath,
+		SkipReviewGate:      item.SkipReviewGate,
+		SkipPlanning:        item.SkipPlanning,
+		AutoSpawnSession:    item.AutoSpawnSession,
+		AutoCreatePr:        item.AutoCreatePR,
+		PipelineMode:        &item.PipelineMode,
+		Category:            &item.Category,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
+		Notes:               item.Notes,
+		ExternalId:          item.ExternalID,
+		Labels:              item.Labels,
+		SourceId:            item.SourceID,
+		PrUrl:               item.PrURL,
+		PrNumber:            int32(item.PrNumber),
+		CreatedAt:           timestamppb.New(item.CreatedAt),
+		UpdatedAt:           timestamppb.New(item.UpdatedAt),
+		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
+	}
+	if item.ExternalURL != "" {
+		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
+	}
+	if item.PlanRejectedAt != nil {
+		p.PlanRejectedAt = timestamppb.New(*item.PlanRejectedAt)
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
@@ -735,13 +767,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 // itemSourceToProto maps an ItemSourceData to the proto ItemSource message.
 func itemSourceToProto(src *session.ItemSourceData) *sessionv1.ItemSource {
 	p := &sessionv1.ItemSource{
-		Id:              src.ID,
-		PluginId:        src.PluginID,
-		DisplayName:     src.DisplayName,
-		Enabled:         src.Enabled,
-		TokenConfigured: src.TokenConfigured,
-		CreatedAt:       timestamppb.New(src.CreatedAt),
-		UpdatedAt:       timestamppb.New(src.UpdatedAt),
+		Id:                    src.ID,
+		PluginId:              src.PluginID,
+		DisplayName:           src.DisplayName,
+		Enabled:               src.Enabled,
+		ForwardSyncEnabled:    src.ForwardSyncEnabled,
+		BackwardSyncEnabled:   src.BackwardSyncEnabled,
+		ForwardSyncCloseLabel: src.ForwardSyncCloseLabel,
+		TokenConfigured:       src.TokenConfigured,
+		CreatedAt:             timestamppb.New(src.CreatedAt),
+		UpdatedAt:             timestamppb.New(src.UpdatedAt),
 	}
 	if src.LastSyncedAt != nil {
 		p.LastSyncedAt = timestamppb.New(*src.LastSyncedAt)

@@ -26,12 +26,14 @@ import { Session, DetectedStatus, SessionStatus } from "@/gen/session/v1/types_p
 const mockWatchSessions = jest.fn();
 const mockListSessions = jest.fn();
 const mockCreateSession = jest.fn();
+const mockUpdateSession = jest.fn();
 
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
     watchSessions: mockWatchSessions,
     listSessions: mockListSessions,
     createSession: mockCreateSession,
+    updateSession: mockUpdateSession,
   }),
 }));
 
@@ -383,5 +385,42 @@ describe("useSessionService — createSession timeout (AC2)", () => {
         result.current.createSession({ title: "hangy", path: "/tmp/x" })
       ).rejects.toThrow("the operation timed out");
     });
+  });
+});
+
+describe("useSessionService — updateSession request body", () => {
+  beforeEach(() => {
+    mockListSessions.mockResolvedValue({ sessions: [] });
+    mockWatchSessions.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise<never>(() => {}),
+      }),
+    }));
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // Regression guard against the "unlisted whitelist key silently dropped"
+  // failure mode: updateSession's request body is constructed field-by-field
+  // rather than spread, so a new UpdateSessionRequest field must be listed
+  // explicitly or it never reaches the RPC.
+  it("updateSession_should_IncludeNoteInRequestBody_When_UpdatesContainNote", async () => {
+    mockUpdateSession.mockResolvedValue({ session: { id: "s1", note: "x" } });
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => {
+      await result.current.updateSession("s1", { note: "x" });
+    });
+
+    expect(mockUpdateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "s1", note: "x" })
+    );
   });
 });

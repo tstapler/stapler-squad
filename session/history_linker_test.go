@@ -164,6 +164,27 @@ func TestHistoryLinker_RemoveInstance(t *testing.T) {
 	assert.Equal(t, []string{"keep"}, names)
 }
 
+// TestHistoryLinker_AddInstance_DedupesSameID guards the fix for
+// wireCallbacks (server/services/session_service.go) calling AddInstance on
+// every loadInstancesWithWiring pass, not just at server boot: registering
+// the same instance twice must not leave duplicate entries, or
+// correlateSession runs twice per poll tick for that session.
+func TestHistoryLinker_AddInstance_DedupesSameID(t *testing.T) {
+	inspector := &mockProcessInspector{files: []string{}}
+	detector := NewHistoryFileDetector(inspector)
+	linker := NewHistoryLinker(detector, nil)
+
+	inst := makeTestInstance("dup-session")
+	linker.AddInstance(inst)
+	linker.AddInstance(inst)
+	linker.AddInstance(inst)
+
+	linker.mu.RLock()
+	count := len(linker.instances)
+	linker.mu.RUnlock()
+	assert.Equal(t, 1, count, "expected AddInstance to dedupe repeated registrations of the same instance")
+}
+
 func TestHistoryLinker_StartAndStop(t *testing.T) {
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetector(inspector)

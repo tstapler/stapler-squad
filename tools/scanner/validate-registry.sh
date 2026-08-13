@@ -80,10 +80,24 @@ if ! ./tools/scanner/backend/cmd/scanner \
   exit 2
 fi
 if ! ./tools/scanner/backend/cmd/scanner \
+      proto/session/v1/import.proto \
+      server/services/ \
+      "${TEMP_BACKEND}" 2>&1; then
+  echo "ERROR: backend scanner failed (import.proto)" >&2
+  exit 2
+fi
+if ! ./tools/scanner/backend/cmd/scanner \
       proto/session/v1/github_user.proto \
       server/services/ \
       "${TEMP_BACKEND}" 2>&1; then
   echo "ERROR: backend scanner failed (github_user.proto)" >&2
+  exit 2
+fi
+if ! ./tools/scanner/backend/cmd/scanner \
+      proto/session/v1/session_summary.proto \
+      server/services/ \
+      "${TEMP_BACKEND}" 2>&1; then
+  echo "ERROR: backend scanner failed (session_summary.proto)" >&2
   exit 2
 fi
 

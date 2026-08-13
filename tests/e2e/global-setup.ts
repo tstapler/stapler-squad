@@ -19,8 +19,12 @@ async function globalSetup(config: FullConfig) {
 
     // Rewrite storageState fixture files with the actual server origin so
     // Playwright applies localStorage to the correct origin regardless of
-    // which dynamic port findFreePort() assigned.
+    // which dynamic port findFreePort() assigned. These files are gitignored
+    // (regenerated every run, see .gitignore's tests/e2e/fixtures/*-theme.json
+    // entry), so git checks out no tracked files here and the directory itself
+    // doesn't exist on a fresh checkout — create it before writing into it.
     const fixturesDir = path.join(__dirname, 'fixtures');
+    fs.mkdirSync(fixturesDir, { recursive: true });
     const themeFixtures: Record<string, string> = {
       'matrix-theme.json': 'matrix',
       'cyberpunk77-theme.json': 'cyberpunk77',
@@ -28,6 +32,10 @@ async function globalSetup(config: FullConfig) {
       'clean-theme.json': 'clean',
     };
     const origin = process.env.TEST_SERVER_URL!;
+    // fixtures/*-theme.json are gitignored (rewritten every run), so the
+    // directory itself doesn't exist on a fresh checkout — ensure it exists
+    // before writing into it.
+    fs.mkdirSync(fixturesDir, { recursive: true });
     for (const [filename, themeName] of Object.entries(themeFixtures)) {
       const fixture = { origins: [{ origin, localStorage: [{ name: 'stapler-theme', value: themeName }] }] };
       fs.writeFileSync(path.join(fixturesDir, filename), JSON.stringify(fixture));

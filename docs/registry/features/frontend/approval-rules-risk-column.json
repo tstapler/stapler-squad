@@ -1,0 +1,16 @@
+{
+  "id": "approval-rules-risk-column",
+  "type": "frontend",
+  "name": "Risk column (SeverityBadge) in the approval rules table",
+  "component": "ApprovalRulesPanel",
+  "path": "web-app/src/components/sessions/ApprovalRulesPanel.tsx",
+  "filePath": "web-app/src/components/sessions/ApprovalRulesPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "Risk column > ApprovalRulesPanel_should_RenderRiskColumnWithSeverityBadge_When_RuleHasRiskLevel",
+    "Risk column > ApprovalRulesPanel_should_RenderNotRecordedBadge_When_RuleRiskLevelIsEmpty",
+    "Risk column > ApprovalRulesPanel_should_ExposeRiskColumnWithoutAnyInteraction_When_TableRenders"
+  ],
+  "lastModified": "2026-08-10T00:00:00Z"
+}
