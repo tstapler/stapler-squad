@@ -110,6 +110,14 @@ type LifecycleListener interface {
 // kept in sync by comment, not by shared constant.
 const MaxNoteLength = 10000
 
+// MaxSteerMessageLength is the maximum length, in bytes, of a steer_message sent
+// via UpdateSession. No RPC in this server currently enforces a request-size cap
+// (see grep for WithReadMaxBytes across server/ — a known, pre-existing, repo-wide
+// gap), but steer_message is a new/widened free-text entry point that now reaches
+// ordinary work/review sessions, not just autonomous ones, so it gets an explicit
+// cap here rather than waiting on that broader fix. Matches MaxNoteLength's value.
+const MaxSteerMessageLength = 10000
+
 // Instance is a running instance of claude code.
 type Instance struct {
 	// ID is the stable, immutable identifier for this instance.

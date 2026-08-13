@@ -793,6 +793,15 @@ func (s *BacklogService) ApprovePlan(
 
 // --- RejectPlan ---
 
+// maxRejectReasonLength caps the free-text rejection reason. No RPC in this
+// server currently enforces a request-size cap (see grep for WithReadMaxBytes
+// across server/ — a known, pre-existing, repo-wide gap), but this is a new
+// mutating write path, so it gets an explicit cap rather than waiting on that
+// broader fix. Matches session.MaxNoteLength/MaxSteerMessageLength's value; a
+// local constant is used here since reject-reason isn't the same domain
+// concept as either of those and doesn't warrant coupling to them.
+const maxRejectReasonLength = 10000
+
 // RejectPlan records a rejection reason for the item's current plan
 // artifacts and clears any existing approval. Does not itself trigger
 // regeneration — see project_plans/plan-approval-ux/decisions/ADR-002.
@@ -808,6 +817,10 @@ func (s *BacklogService) RejectPlan(
 	reason := strings.TrimSpace(req.Msg.Reason)
 	if reason == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("reason is required"))
+	}
+	if len(reason) > maxRejectReasonLength {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("reason exceeds maximum length of %d bytes", maxRejectReasonLength))
 	}
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)

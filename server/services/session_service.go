@@ -2015,6 +2015,10 @@ func (s *SessionService) UpdateSession(
 	// SendKeys fallback branch) so browser-originated steering reaches ordinary
 	// backlog work/review sessions too, not just autonomous ones.
 	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
+		if len(*req.Msg.SteerMessage) > session.MaxSteerMessageLength {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("steer_message exceeds maximum length of %d bytes", session.MaxSteerMessageLength))
+		}
 		if instance.AutonomousMode {
 			// Unchanged: autonomous sessions keep the ClaudeController command-queue path.
 			controller := instance.GetController()
@@ -2048,7 +2052,7 @@ func (s *SessionService) UpdateSession(
 						fmt.Errorf("failed to steer session %q: %w", instance.Title, err))
 				}
 			case <-timeoutCtx.Done():
-				return nil, connect.NewError(connect.CodeFailedPrecondition,
+				return nil, connect.NewError(connect.CodeDeadlineExceeded,
 					fmt.Errorf("timed out steering session %q", instance.Title))
 			}
 			s.notifySteerSent(instance, *req.Msg.SteerMessage)

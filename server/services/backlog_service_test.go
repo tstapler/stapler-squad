@@ -951,6 +951,26 @@ func TestRejectPlan_WhitespaceOnlyReason_ReturnsInvalidArgument(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
+// TestRejectPlan_ReasonExceedsMaxLength_ReturnsInvalidArgument verifies that a
+// reason longer than maxRejectReasonLength is rejected with InvalidArgument,
+// mirroring the empty/whitespace-only guards above.
+func TestRejectPlan_ReasonExceedsMaxLength_ReturnsInvalidArgument(t *testing.T) {
+	svc := newBacklogService(t)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+
+	tooLong := strings.Repeat("a", maxRejectReasonLength+1)
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: createResp.Msg.Item.Id,
+		Reason: tooLong,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
 // TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition mirrors
 // ApprovePlan's equivalent guard: rejecting a plan that was never generated
 // makes no sense.

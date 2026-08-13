@@ -1279,6 +1279,36 @@ func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *tes
 	require.NotNil(t, resp.Msg.Session)
 }
 
+// TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument verifies
+// that a steer_message longer than session.MaxSteerMessageLength is rejected with
+// InvalidArgument before any send is attempted, mirroring the Note field's
+// length-cap guard (TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument)
+// — steer_message is a free-text entry point that now reaches ordinary
+// work/review sessions, not just autonomous ones, so it needs the same cap.
+func TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "steer-too-long-session",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	tooLong := strings.Repeat("a", session.MaxSteerMessageLength+1)
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "steer-too-long-session",
+		SteerMessage: &tooLong,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
 // --------------------------------------------------------------------------
 // ResumeCrashedSession
 // --------------------------------------------------------------------------
