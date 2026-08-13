@@ -131,6 +131,10 @@ type SessionService struct {
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
 
+	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
+	// (webhook-triggers Phase 5, FR7).
+	callbackConfigSvc *CallbackConfigService
+
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
 	launcherPresetsSvc *LauncherPresetsService
 
@@ -408,6 +412,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		pathCompletionSvc:  NewPathCompletionService(),
 		slashCommandSvc:    NewSlashCommandService(),
 		defaultsSvc:        NewDefaultsService(),
+		callbackConfigSvc:  NewCallbackConfigService(),
 		launcherPresetsSvc: NewLauncherPresetsService(),
 		projectSvc:         NewProjectService(concStorage),
 		checkpointSvc:      NewCheckpointService(storage, eventBus),
@@ -3716,6 +3721,15 @@ func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWM
 	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
 }
 
+// SetSharedCallbackConfig wires the *config.Config instance (and its guarding
+// mutex) CallbackDispatcher reads callback URLs from into this SessionService's
+// CallbackConfigService, so UpdateCallbackConfig can propagate a saved URL into
+// CallbackDispatcher's live view without a process restart. See
+// CallbackConfigService.SetSharedCallbackConfig.
+func (s *SessionService) SetSharedCallbackConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.callbackConfigSvc.SetSharedCallbackConfig(cfg, mu)
+}
+
 // UpsertProfile creates or updates a named profile.
 func (s *SessionService) UpsertProfile(ctx context.Context, req *connect.Request[sessionv1.UpsertProfileRequest]) (*connect.Response[sessionv1.UpsertProfileResponse], error) {
 	return s.defaultsSvc.UpsertProfile(ctx, req)
@@ -3734,6 +3748,20 @@ func (s *SessionService) UpsertDirectoryRule(ctx context.Context, req *connect.R
 // DeleteDirectoryRule removes a directory rule by path.
 func (s *SessionService) DeleteDirectoryRule(ctx context.Context, req *connect.Request[sessionv1.DeleteDirectoryRuleRequest]) (*connect.Response[sessionv1.DeleteDirectoryRuleResponse], error) {
 	return s.defaultsSvc.DeleteDirectoryRule(ctx, req)
+}
+
+// ─── Callback Config delegates (webhook-triggers Phase 5, FR7) ──────────────
+
+// +api: callback-config:get
+// GetCallbackConfig reports which outbound-callback URLs are configured.
+func (s *SessionService) GetCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.GetCallbackConfigRequest]) (*connect.Response[sessionv1.GetCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.GetCallbackConfig(ctx, req)
+}
+
+// +api: callback-config:update
+// UpdateCallbackConfig sets one or more outbound-callback URLs.
+func (s *SessionService) UpdateCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateCallbackConfigRequest]) (*connect.Response[sessionv1.UpdateCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.UpdateCallbackConfig(ctx, req)
 }
 
 // ListAliases returns all configured alias presets.
@@ -4562,6 +4590,17 @@ func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[s
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
 	}
 	return s.workflowSvc.RunWorkflow(ctx, req)
+}
+
+// +api: workflow:list-trigger-fire-events
+// ListTriggerFireEvents delegates to WorkflowService.
+func (s *SessionService) ListTriggerFireEvents(ctx context.Context, req *connect.Request[sessionv1.ListTriggerFireEventsRequest]) (*connect.Response[sessionv1.ListTriggerFireEventsResponse], error) {
+	if s.workflowSvc == nil {
+		return connect.NewResponse(&sessionv1.ListTriggerFireEventsResponse{
+			Events: []*sessionv1.TriggerFireEventProto{},
+		}), nil
+	}
+	return s.workflowSvc.ListTriggerFireEvents(ctx, req)
 }
 
 // GetDetectionEvents returns recent status-detection events for a session's Claude controller.
