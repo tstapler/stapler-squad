@@ -61,6 +61,16 @@ test('findExisting_should_MatchByStablePrefix_RegardlessOfEmbeddedPct', () => {
   assert.equal(findExisting(comments).id, 1);
 });
 
+test('findExisting_should_MatchLegacyBareMarker_When_PostedBeforeThePctFormatExisted', () => {
+  // Regression guard: a PR with an already-posted <!-- feature-coverage -->
+  // comment (the format this item replaced) must still be found — otherwise
+  // isActionable sees existingBody=null ("no prior state"), always posts,
+  // and the old comment is orphaned as a permanent duplicate forever
+  // (this workflow never deletes on unchanged, so nothing ever cleans it up).
+  const comments = [{ id: 7, body: '<!-- feature-coverage --> ## Coverage\n\nFeature E2E coverage: 21/50 tested (42%)' }];
+  assert.equal(findExisting(comments).id, 7);
+});
+
 test('buildMarker_should_EmbedCurrentPct', () => {
   assert.equal(buildMarker(48.3), '<!-- feature-coverage:pct=48.3 -->');
 });

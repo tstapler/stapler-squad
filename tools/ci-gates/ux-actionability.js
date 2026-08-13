@@ -12,11 +12,20 @@ const LIGHTHOUSE_THRESHOLD = 70;
 function isActionable({ axeOutcome, lighthouseScore, findingsCount }) {
   const score = parseInt(lighthouseScore, 10);
   const lighthouseParseFailed = isNaN(score);
-  const count = Number(findingsCount) || 0;
+  // analyze.ts writes findings_count=-1 before doing any real work, then
+  // overwrites it with the real count on successful completion — so a
+  // negative value here means the analysis started but crashed partway
+  // through (not "found nothing"). An *absent* value (empty string, when
+  // the whole Claude-analysis step was conditionally skipped because no
+  // API key is configured) stays 0, deliberately not actionable — that's
+  // an expected, permanent state for repos without the key, not a failure.
+  const count = findingsCount === undefined || findingsCount === '' ? 0 : Number(findingsCount);
+  const findingsCountUnknown = count < 0;
   return (
     axeOutcome !== 'success' ||
     lighthouseParseFailed ||
     score < LIGHTHOUSE_THRESHOLD ||
+    findingsCountUnknown ||
     count > 0
   );
 }

@@ -178,6 +178,11 @@ jobs:
               lighthouseEmoji = '⚠️';
             }
             const axeEmoji = axeResult === 'success' ? '✅' : '❌';
+            // -1 is analyze.ts's sentinel for "started but crashed before
+            // completing" (written before any real work, overwritten with
+            // the real count on success) — distinct from "step didn't run
+            // at all" (findingsCount stays 0, not actionable by design).
+            const claudeStatus = findingsCount < 0 ? 'analysis crashed — see run log' : `${findingsCount} finding(s)`;
 
             const summary = [
               '## UX Analysis',
@@ -186,7 +191,7 @@ jobs:
               '|-------|--------|---------|',
               `| ${axeEmoji} Axe Core (WCAG 2.1 AA) | ${axeResult} | Critical/serious violations block merge |`,
               `| ${lighthouseEmoji} Lighthouse Performance | Score: ${lighthouseScore} | Warning if < 70 (non-blocking) |`,
-              `| 🤖 Claude UX Analysis | ${findingsCount} finding(s) | See docs/qa/ for details |`,
+              `| 🤖 Claude UX Analysis | ${claudeStatus} | See docs/qa/ for details |`,
               '',
               '> Axe Core excludes terminal rendering areas (intentional design).',
               '> Lighthouse runs in desktop preset for this developer tool.',

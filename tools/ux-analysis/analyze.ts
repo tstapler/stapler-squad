@@ -227,6 +227,15 @@ function formatMarkdown(result: UXAnalysisResult): string {
 }
 
 async function main(): Promise<void> {
+  // Sentinel written before any real work: if main() throws below (and the
+  // caller's own error handling swallows it — see ux-analysis.yml's
+  // `|| true` + continue-on-error), this stays -1 rather than silently
+  // reading as "0 findings", which the actionability gate would otherwise
+  // treat as indistinguishable from a clean run that found nothing.
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, 'findings_count=-1\n');
+  }
+
   const { screenshots, prNumber, featureId, outputDir } = parseArgs();
 
   if (screenshots.length === 0) {

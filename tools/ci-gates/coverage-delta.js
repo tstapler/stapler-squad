@@ -3,8 +3,13 @@
 // Marker owns the previous percentage itself (`pct=NN.N`) rather than
 // scraping it out of the free-form summary sentence — a future edit to that
 // sentence's wording can't silently break parsing this way. Lookup uses the
-// stable prefix (not the full marker, which varies run to run since it
-// embeds the *current* run's pct).
+// broader, pre-`:pct=` prefix (not the full marker, which varies run to run
+// since it embeds the *current* run's pct) so it still matches the OLD
+// bare `<!-- feature-coverage -->` marker this format replaced — otherwise
+// a PR with an already-posted old-format comment gets a permanent
+// duplicate on its first post-deploy run, since findExisting would never
+// see it and isActionable would treat it as "no prior state".
+const LOOKUP_PREFIX = '<!-- feature-coverage';
 const MARKER_PREFIX = '<!-- feature-coverage:pct=';
 const MARKER_RE = /feature-coverage:pct=([\d.]+)/;
 
@@ -13,7 +18,7 @@ function buildMarker(currentPct) {
 }
 
 function findExisting(comments) {
-  return comments.find((c) => c.body.includes(MARKER_PREFIX));
+  return comments.find((c) => c.body.includes(LOOKUP_PREFIX));
 }
 
 function previousCoveragePct(existingBody) {

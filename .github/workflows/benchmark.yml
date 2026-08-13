@@ -106,11 +106,17 @@ jobs:
           else
             echo "No baseline yet — will be established on next push to main." > benchstat-tier1.txt
           fi
-          if node -e "process.exit(require('./tools/ci-gates/benchmark-regression.js').hasGoTier1Regression(require('fs').readFileSync('benchstat-tier1.txt','utf8')) ? 0 : 1)"; then
-            echo "has_regression=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_regression=false" >> "$GITHUB_OUTPUT"
+          # A bare `if <cmd>` is exempt from -e/pipefail, so a genuine crash
+          # in the gate script (require() failure, bad benchstat output) must
+          # be distinguished from a real "false" result — otherwise it's
+          # silently written as has_regression=false, exactly the kind of
+          # silently-suppressed comment pre-mortem.md names as this item's
+          # top risk.
+          if ! RESULT=$(node -e "console.log(require('./tools/ci-gates/benchmark-regression.js').hasGoTier1Regression(require('fs').readFileSync('benchstat-tier1.txt','utf8')))"); then
+            echo "::error::benchmark-regression.js failed to evaluate — failing loudly instead of silently suppressing the PR comment"
+            exit 1
           fi
+          echo "has_regression=${RESULT}" >> "$GITHUB_OUTPUT"
 
       - name: Post PR comment
         if: github.event_name == 'pull_request'

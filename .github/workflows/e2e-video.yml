@@ -252,16 +252,19 @@ jobs:
     needs: [detect-feature-changes, e2e-video]
     if: always() && github.event_name == 'pull_request' && needs.detect-feature-changes.outputs.record_features == 'true'
     steps:
-      # Required so the comment step below can require('./tools/ci-gates/video-anomaly.js') —
-      # this job has no other step that would populate the checkout.
-      - uses: actions/checkout@v4
-
       - name: Post PR comment with artifact links
         continue-on-error: true # advisory comment; never fail the job if posting is denied
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
-            const { videoAnomaly } = require('./tools/ci-gates/video-anomaly.js');
+            // Inlined rather than require('./tools/ci-gates/video-anomaly.js'):
+            // this job has no checkout (pull-requests: write, and adding one
+            // just to require() a PR-branch-controlled file would mean
+            // executing fork-controlled JS inside a privileged step for a
+            // one-line check — see tools/ci-gates/video-anomaly.js, which
+            // stays the tested source of truth for this exact logic; keep
+            // both in sync if the definition ever changes.
+            const videoAnomaly = (artifacts) => artifacts.length === 0;
             const marker = '<!-- e2e-videos -->';
             const pr = context.issue.number;
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
