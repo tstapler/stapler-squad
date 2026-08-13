@@ -1,8 +1,12 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/zalando/go-keyring"
 )
@@ -241,5 +245,68 @@ func TestGitHubRefPRURL_should_ReturnEmpty_When_RefIsNil(t *testing.T) {
 
 	if got := ref.PRURL(); got != "" {
 		t.Errorf("PRURL() = %q, want empty string for a nil ref", got)
+	}
+}
+
+// TestIsCorruptedClone_ReturnsFalse_When_RepoIsHealthy guards against false
+// positives: a normal repo with at least one commit must never be flagged as
+// corrupted, or EnsureRepoCloned would delete and re-clone perfectly good repos.
+func TestIsCorruptedClone_ReturnsFalse_When_RepoIsHealthy(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit failed: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if _, err := wt.Add("f.txt"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if _, err := wt.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}}); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	if isCorruptedClone(dir) {
+		t.Errorf("isCorruptedClone(%q) = true, want false for a healthy repo", dir)
+	}
+}
+
+// TestIsCorruptedClone_ReturnsTrue_When_HeadIsUnresolvable reproduces the
+// exact corruption signature left behind by an interrupted `git clone`: git's
+// internal bootstrap phase writes a placeholder symbolic HEAD
+// ("ref: refs/heads/.invalid") before the clone completes and rewrites it to
+// the real default branch (see builtin/clone.c / refs.c write_file call). If
+// the clone subprocess is killed in between, HEAD points at a ref that will
+// never exist.
+func TestIsCorruptedClone_ReturnsTrue_When_HeadIsUnresolvable(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := git.PlainInit(dir, false); err != nil {
+		t.Fatalf("PlainInit failed: %v", err)
+	}
+	headPath := filepath.Join(dir, ".git", "HEAD")
+	if err := os.WriteFile(headPath, []byte("ref: refs/heads/.invalid\n"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if !isCorruptedClone(dir) {
+		t.Errorf("isCorruptedClone(%q) = false, want true for an unresolvable-HEAD repo", dir)
+	}
+}
+
+// TestIsCorruptedClone_ReturnsTrue_When_NotAGitRepo guards the other failure
+// mode isCorruptedClone must catch: a directory that has a ".git" entry
+// os.Stat can see but that go-git can't open at all (e.g. a partially-written
+// or truncated clone) should also be treated as corrupted, not panic or be
+// silently treated as healthy.
+func TestIsCorruptedClone_ReturnsTrue_When_NotAGitRepo(t *testing.T) {
+	dir := t.TempDir()
+
+	if !isCorruptedClone(dir) {
+		t.Errorf("isCorruptedClone(%q) = false, want true for a non-git directory", dir)
 	}
 }

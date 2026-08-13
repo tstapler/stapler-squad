@@ -135,30 +135,23 @@ func IsGitRepo(path string) bool {
 	}
 }
 
+// findGitRepoRoot walks up from path looking for an existing git repository and
+// returns its root. It requires path to already exist: it must NOT fabricate a repo
+// when the path is missing. An earlier version silently ran os.MkdirAll + git.PlainInit
+// + createInitialCommit for a missing path, which was intended for genuine
+// new-project bootstrapping but was unconditionally shared by every caller —
+// including CreateBacklogWorktree's worktree constructors, which require repoPath to
+// already be a real, previously-cloned repository. When that path went transiently
+// missing (observed live: deleted mid-repair while the backlog automation loop kept
+// retrying), the fallback masked the real "repo is missing" error by fabricating a
+// disconnected repo with a single placeholder commit, which downstream worktree
+// creation then treated as real — producing broken sessions instead of a clear
+// failure. Genuine new-project initialization has its own dedicated function,
+// InitializeProjectDirectory (used by SessionTypeNewProject), which never routes
+// through here — so no caller needs findGitRepoRoot to create anything from scratch.
 func findGitRepoRoot(path string) (string, error) {
-	// First check if the directory exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// Directory doesn't exist - create it and initialize git
-		log.Info("directory does not exist, creating and initializing git repository", "path", path)
-
-		if err := os.MkdirAll(path, 0755); err != nil {
-			return "", fmt.Errorf("failed to create directory '%s': %w", path, err)
-		}
-
-		// Initialize git repository
-		repo, err := git.PlainInit(path, false)
-		if err != nil {
-			return "", fmt.Errorf("failed to initialize git repository at '%s': %w", path, err)
-		}
-
-		// Create initial commit (required for worktrees)
-		// Git worktrees require at least one commit to exist
-		if err := createInitialCommit(repo, path); err != nil {
-			return "", fmt.Errorf("failed to create initial commit at '%s': %w", path, err)
-		}
-
-		log.Info("successfully created and initialized git repository with initial commit", "path", path)
-		return path, nil
+		return "", fmt.Errorf("repository path does not exist: %s (expected an existing git repository; use InitializeProjectDirectory to bootstrap a new one)", path)
 	}
 
 	// Directory exists - find the git repo root
