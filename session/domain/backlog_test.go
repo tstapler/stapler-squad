@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // TestStuckReason_IsValid_should_returnTrueForKnown_And_FalseForUnknown verifies
 // that all six StuckReason constants validate as true, and an arbitrary unknown
@@ -86,5 +89,57 @@ func TestBacklogCategory_IsValid_should_ReturnTrue_When_KnownOrEmpty(t *testing.
 func TestBacklogCategory_IsValid_should_ReturnFalse_When_Unknown(t *testing.T) {
 	if BacklogCategory("banana").IsValid() {
 		t.Errorf(`BacklogCategory("banana").IsValid() = true, want false`)
+	}
+}
+
+// TestTransitionGuard_should_BlockDequeue_When_ItemHasUnresolvedBlockers
+// covers the ready/queued->in_progress guard's HasUnresolvedBlockers branch:
+// an item gated on a still-unresolved blocker must never be allowed to
+// dequeue/start, regardless of its plan-approval state, and a resolved (or
+// absent) blocker must not itself block the transition.
+func TestTransitionGuard_should_BlockDequeue_When_ItemHasUnresolvedBlockers(t *testing.T) {
+	cases := []struct {
+		name    string
+		from    BacklogStatus
+		blocked bool
+		wantErr error
+	}{
+		{
+			name:    "ready to in_progress blocked by unresolved blocker",
+			from:    BacklogStatusReady,
+			blocked: true,
+			wantErr: ErrUnresolvedBlockers,
+		},
+		{
+			name:    "queued to in_progress blocked by unresolved blocker",
+			from:    BacklogStatusQueued,
+			blocked: true,
+			wantErr: ErrUnresolvedBlockers,
+		},
+		{
+			name:    "ready to in_progress allowed once blockers resolved",
+			from:    BacklogStatusReady,
+			blocked: false,
+			wantErr: nil,
+		},
+		{
+			name:    "queued to in_progress allowed with no blockers at all",
+			from:    BacklogStatusQueued,
+			blocked: false,
+			wantErr: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := BacklogItemTransitionInput{
+				Status:                tc.from,
+				HasUnresolvedBlockers: tc.blocked,
+				SkipPlanning:          true, // isolate the blocker guard from the plan guard
+			}
+			err := TransitionGuard(item, BacklogStatusInProgress)
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("TransitionGuard(%+v, in_progress) = %v, want %v", item, err, tc.wantErr)
+			}
+		})
 	}
 }

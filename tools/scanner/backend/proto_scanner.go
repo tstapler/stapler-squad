@@ -171,6 +171,7 @@ var methodToID = map[string]string{
 	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
+	"AddBacklogItemDependency":    "backlog:add-item-dependency",
 	// GitHub issue import RPCs (BacklogService) - mapped to the method name
 	// itself, not a kebab-case backlog:* id: origin/main already has
 	// committed registry files under docs/registry/features/backend/{method

@@ -4341,3 +4341,96 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	require.NoError(t, err)
 	assert.Empty(t, open, "leaving pr_pending must resolve the pr_pending_no_pr row via the status-anchored self-heal sweep")
 }
+
+// --- blocked_by_dependency: reconcileBlockedByDependencyResolution orchestration ---
+//
+// The mark side (notifyBlockedByDependency, server/services/
+// backlog_service_triage.go) only runs from inside DequeueNextQueuedItems's
+// claim-error path, so a row marked once and then skipped by that sweep would
+// otherwise sit open forever even after its blocker ships or is archived.
+// These tests exercise reconcileBlockedByDependencyResolution directly to
+// confirm the independent sweep — not any inline resolve — is what
+// guarantees resolution.
+
+// TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHasShipped
+// is the positive case: once the blocker reaches BacklogStatusDone, the sweep
+// must resolve the blocked item's open blocked_by_dependency row.
+func TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHasShipped(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	blocker, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
+	require.NoError(t, err)
+	blocked, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "item blocked by a dependency that is about to ship",
+		Status: string(BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, er.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+		BlockerID: blocker.ID,
+		BlockedID: blocked.ID,
+	}))
+
+	applied, err := er.MarkStuck(ctx, blocked.ID, domain.StuckReasonBlockedByDependency, BacklogStatusQueued,
+		"blocked on unresolved dependency "+blocker.ID)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The blocker ships.
+	_, err = storage.TransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileBlockedByDependencyResolution(ctx, er)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	for _, row := range open {
+		assert.False(t, row.ItemID == blocked.ID && row.Reason == domain.StuckReasonBlockedByDependency,
+			"the blocked_by_dependency row must be resolved once its blocker ships")
+	}
+}
+
+// TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_BlockerStillUnresolved
+// is the negative case: the sweep must not clear a row while the blocker
+// genuinely remains unresolved.
+func TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_BlockerStillUnresolved(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	blocker, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item still in progress"})
+	require.NoError(t, err)
+	blocked, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "item blocked by a dependency that has not shipped",
+		Status: string(BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, er.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+		BlockerID: blocker.ID,
+		BlockedID: blocked.ID,
+	}))
+
+	applied, err := er.MarkStuck(ctx, blocked.ID, domain.StuckReasonBlockedByDependency, BacklogStatusQueued,
+		"blocked on unresolved dependency "+blocker.ID)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileBlockedByDependencyResolution(ctx, er)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	found := false
+	for _, row := range open {
+		if row.ItemID == blocked.ID && row.Reason == domain.StuckReasonBlockedByDependency {
+			found = true
+		}
+	}
+	assert.True(t, found, "the blocked_by_dependency row must stay open while the blocker remains unresolved")
+}

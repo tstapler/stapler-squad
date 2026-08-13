@@ -418,7 +418,19 @@ func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge Backl
 		return ErrDependencyCycle
 	}
 
-	existingIDs, err := r.client.BacklogItem.Query().
+	// The existence check, cycle check, and insert must all observe the same
+	// consistent snapshot of the dependency graph and commit atomically —
+	// otherwise two concurrent calls adding opposite-direction edges can each
+	// pass the cycle check before either commits, together closing a cycle
+	// the check was supposed to prevent (TOCTOU race). Run everything inside
+	// one transaction, following the pattern established by MarkStuck above.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("add backlog item dependency: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	existingIDs, err := tx.BacklogItem.Query().
 		Where(backlogitem.IDIn(blockerID, blockedID)).
 		IDs(ctx)
 	if err != nil {
@@ -435,7 +447,7 @@ func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge Backl
 		return fmt.Errorf("%w: blocked item %s does not exist", ErrNotFound, edge.BlockedID)
 	}
 
-	wouldCycle, err := r.dependencyReachable(ctx, blockedID, blockerID)
+	wouldCycle, err := dependencyReachable(ctx, tx.BacklogItemDependency, blockedID, blockerID)
 	if err != nil {
 		return fmt.Errorf("failed to check backlog item dependency cycle: %w", err)
 	}
@@ -443,7 +455,7 @@ func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge Backl
 		return ErrDependencyCycle
 	}
 
-	err = r.client.BacklogItemDependency.Create().
+	err = tx.BacklogItemDependency.Create().
 		SetBlockerID(blockerID).
 		SetBlockedID(blockedID).
 		OnConflictColumns(backlogitemdependency.FieldBlockerID, backlogitemdependency.FieldBlockedID).
@@ -455,6 +467,10 @@ func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge Backl
 	if err != nil && !ent.IsConstraintError(err) && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("failed to add backlog item dependency %s -> %s: %w", edge.BlockerID, edge.BlockedID, err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("add backlog item dependency: commit: %w", err)
+	}
 	return nil
 }
 
@@ -463,12 +479,15 @@ func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge Backl
 // traversal of "what does this item block, transitively"). Used to detect
 // whether adding a new blocker->blocked edge would close a cycle: the new
 // edge closes a cycle exactly when blocked (start) can already reach blocker
-// (target) through existing edges.
-func (r *EntRepository) dependencyReachable(ctx context.Context, start, target uuid.UUID) (bool, error) {
+// (target) through existing edges. Takes the BacklogItemDependency client
+// explicitly (rather than reading r.client) so callers can pass a
+// transaction's client and have the traversal observe that transaction's
+// consistent snapshot instead of racing concurrent commits.
+func dependencyReachable(ctx context.Context, client *ent.BacklogItemDependencyClient, start, target uuid.UUID) (bool, error) {
 	visited := map[uuid.UUID]bool{start: true}
 	frontier := []uuid.UUID{start}
 	for len(frontier) > 0 {
-		rows, err := r.client.BacklogItemDependency.Query().
+		rows, err := client.Query().
 			Where(backlogitemdependency.BlockerIDIn(frontier...)).
 			All(ctx)
 		if err != nil {

@@ -54,8 +54,8 @@ var ErrDependencyCycle = errors.New("backlog item dependency would create a cycl
 // two bare ID strings can't be silently swapped at a call site — see
 // .claude/rules/primitive-obsession-checklist.md.
 type BacklogItemDependencyEdge struct {
-	// BlockerID is the item that must reach a resolved status (done) before
-	// BlockedID is eligible for dequeue/start.
+	// BlockerID is the item that must reach a resolved status (done or
+	// archived) before BlockedID is eligible for dequeue/start.
 	BlockerID string
 	// BlockedID is the dependent item, gated until BlockerID resolves.
 	BlockedID string
