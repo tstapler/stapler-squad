@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
@@ -249,21 +250,37 @@ func sanitizeCloneOutput(output []byte, cloneURL string) string {
 }
 
 // isCorruptedClone reports whether repoPath's .git directory exists but HEAD
-// cannot be resolved — the signature left behind when a `git clone` subprocess
-// is killed (timeout, process kill, truncated network connection) after git's
-// internal bootstrap phase writes a placeholder HEAD ("ref: refs/heads/.invalid",
-// see builtin/clone.c's chicken-and-egg comment and refs.c's write_file call)
-// but before the clone completes and rewrites it to the real default branch.
-// A directory in this state passes a naive ".git exists" check forever, so
-// EnsureRepoCloned must detect it explicitly rather than trusting os.Stat.
+// still points at the literal placeholder ref git's internal bootstrap phase
+// writes before a `git clone` completes ("ref: refs/heads/.invalid", see
+// builtin/clone.c's chicken-and-egg comment and refs.c's write_file call) —
+// the signature left behind when the clone subprocess is killed (timeout,
+// process kill, truncated network connection) in between. A directory in
+// this state passes a naive ".git exists" check forever, so EnsureRepoCloned
+// must detect it explicitly rather than trusting os.Stat.
+//
+// This deliberately checks the *raw* symbolic HEAD target rather than
+// whether HEAD resolves: a brand-new, zero-commit repo (`git init`, no
+// commits yet) also has an unresolvable HEAD — it symbolically points at
+// "refs/heads/main" (or whatever the default branch is), which simply
+// doesn't exist as a ref yet ("unborn branch"). That's a legitimate, healthy
+// repo state, not corruption, and must not be misdiagnosed as an interrupted
+// clone (which would then fail trying to read a nonexistent origin remote
+// for re-clone instead of letting normal "create an initial commit" handling
+// take over).
 // Uses go-git per .claude/rules/prefer-go-git-over-subshells.md.
 func isCorruptedClone(repoPath string) bool {
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return true
 	}
-	_, err = repo.Head()
-	return err != nil
+	headRef, err := repo.Reference(plumbing.HEAD, false)
+	if err != nil {
+		return true
+	}
+	if headRef.Type() != plumbing.SymbolicReference {
+		return false
+	}
+	return headRef.Target() == plumbing.ReferenceName("refs/heads/.invalid")
 }
 
 // RepairCorruptedGitRepo detects and repairs the .invalid-HEAD clone corruption

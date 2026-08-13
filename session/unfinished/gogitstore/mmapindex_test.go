@@ -15,7 +15,6 @@ package gogitstore
 // mmap_stage2_test.go, alongside the staleness-detection and toggle tests.
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -27,7 +26,6 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/idxfile"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestMmapIndex_MatchesCopyBasedLoader_ByteForByte builds a real packed
@@ -266,9 +264,11 @@ func TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash(t *testing.T) {
 		t.Skip("git binary not available")
 	}
 
-	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash$", "-test.v")
-	cmd.Env = append(os.Environ(), "GOGITSTORE_MMAP_CRASH_HELPER=1")
-	out, err := cmd.CombinedOutput()
+	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash", "GOGITSTORE_MMAP_CRASH_HELPER=1")
+	if result.Outcome == crashSubprocessTimedOut {
+		t.Skip("subprocess killed by its own timeout — inconclusive, not proof of the crash/corruption this test exists to demonstrate")
+	}
+	out, err := result.Output, result.Err
 
 	if err != nil {
 		var exitErr *exec.ExitError

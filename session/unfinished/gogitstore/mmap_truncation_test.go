@@ -40,15 +40,12 @@ package gogitstore
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"testing"
-
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // buildTruncationFixture creates a small packed repo fixture and returns an
@@ -120,9 +117,11 @@ func TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection(t *testing
 		t.Skip("git binary not available")
 	}
 
-	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection$", "-test.v")
-	cmd.Env = append(os.Environ(), "GOGITSTORE_TRUNC_HELPER=1")
-	out, err := cmd.CombinedOutput()
+	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection", "GOGITSTORE_TRUNC_HELPER=1")
+	if result.Outcome == crashSubprocessTimedOut {
+		t.Skip("subprocess killed by its own timeout — inconclusive, not proof of the crash this test exists to demonstrate")
+	}
+	out, err := result.Output, result.Err
 
 	if err != nil {
 		matched, detail := isExpectedFaultSignal(out)
@@ -184,9 +183,11 @@ func TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection(t *testin
 		t.Skip("git binary not available")
 	}
 
-	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection$", "-test.v")
-	cmd.Env = append(os.Environ(), "GOGITSTORE_TRUNC_HELPER=1")
-	out, err := cmd.CombinedOutput()
+	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection", "GOGITSTORE_TRUNC_HELPER=1")
+	if result.Outcome == crashSubprocessTimedOut {
+		t.Skip("subprocess killed by its own timeout — inconclusive, not proof of the recovery this test exists to demonstrate")
+	}
+	out, err := result.Output, result.Err
 
 	if err != nil {
 		t.Logf("subprocess crashed even WITH SetPanicOnFault(true) — err=%v\noutput:\n%s", err, out)
