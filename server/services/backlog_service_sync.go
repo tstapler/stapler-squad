@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"connectrpc.com/connect"
@@ -59,7 +60,32 @@ func (s *BacklogService) AttachSessionToItem(
 				session.BacklogStatusIdea, session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status))
 	}
 
-	// 3. Snapshot current AC.
+	// 3. Reject attaching a session whose working directory is the item's own
+	// shared repo checkout rather than a dedicated worktree/directory. Unlike
+	// SpawnSessionFromItem (which always tries a worktree first and only falls
+	// back to a fresh, per-session directory — never the shared checkout
+	// itself), attaching an arbitrary pre-existing session had no such
+	// guarantee. Confirmed live 2026-07-21 on item 635a373d (PR #206): its
+	// attached session's effective root dir was literally item.RepoPath (the
+	// shared main checkout, used by countless other things), so a re-review
+	// computed its diff against whatever unrelated commits had landed there
+	// between review rounds — a wrong verdict, not a stuck one.
+	if instances, loadErr := s.storage.LoadInstances(); loadErr == nil {
+		for _, inst := range instances {
+			if inst.UUID != req.Msg.SessionUuid {
+				continue
+			}
+			if inst.Path != "" && item.RepoPath != "" &&
+				filepath.Clean(inst.GetEffectiveRootDir()) == filepath.Clean(item.RepoPath) {
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("session %q's working directory is the item's shared repo checkout (%q) — attach requires a dedicated worktree or directory so review diffs, reopen, and ship stay scoped to this item's own work",
+						req.Msg.SessionUuid, item.RepoPath))
+			}
+			break
+		}
+	}
+
+	// 4. Snapshot current AC.
 	acSnapshot := item.AcceptanceCriteria
 
 	// 4. Load prior sessions BEFORE creating this attach's own ItemSession, so the
@@ -101,9 +127,10 @@ func (s *BacklogService) AttachSessionToItem(
 				}
 				s.worktreeMu.Unlock()
 				// Capture pre-work HEAD SHA so the review gate can diff base..HEAD
-				// across all commits the agent makes (same as SpawnSessionFromItem step 12b).
+				// across all commits the agent makes (same as SpawnSessionFromItem step 12b) —
+				// into BaseCommitSha, never LastCommitSha (see SetItemSessionBaseCommit).
 				if baseSHA, shaErr := session.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
-					_ = s.storage.UpdateItemSessionGitActivity(ctx, is.ID, baseSHA, "", time.Now(), 0)
+					_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 					inst.SetDirBaseSHA(baseSHA)
 				}
 				// Persist synchronously so the review gate's worktree lookup (by session
@@ -178,6 +205,31 @@ func (s *BacklogService) TriggerSync(
 	return connect.NewResponse(&sessionv1.TriggerSyncResponse{}), nil
 }
 
+// Registry returns the plugin registry backing TriggerSync, or nil if none is
+// wired. Exposed so server.go can wire the GitHub forward-sync EventBus
+// subscriber (server/services/backlog_github_forward_sync.go) with the same
+// registry TriggerSync uses, without needing its own copy of the dependency
+// graph that builds it (see server/dependencies.go's syncRegistry).
+func (s *BacklogService) Registry() *session.PluginRegistry {
+	return s.pluginRegistry
+}
+
+// SyncLoopForForwardSync returns a *session.SyncLoop sharing this service's
+// plugin registry and encryption key provider — mirrors TriggerSync's own
+// inline SyncLoop construction below, but exposed for the GitHub forward-sync
+// EventBus subscriber, which only needs DecryptConfigToken from it (registry
+// access goes through Registry() above). Returns nil if no plugin registry is
+// wired, matching TriggerSync's CodeUnimplemented guard.
+func (s *BacklogService) SyncLoopForForwardSync() *session.SyncLoop {
+	if s.pluginRegistry == nil {
+		return nil
+	}
+	if s.syncKeyFunc != nil {
+		return session.NewSyncLoopWithKeyProvider(s.storage, s.pluginRegistry, s.syncKeyFunc)
+	}
+	return session.NewSyncLoop(s.storage, s.pluginRegistry)
+}
+
 // enterpriseHosts returns the configured GitHub Enterprise Server hostnames,
 // for passing to host-aware GitHub URL parsing.
 func (s *BacklogService) enterpriseHosts() []string {
@@ -206,7 +258,11 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid GitHub issue URL %q", req.Msg.IssueUrl))
 	}
 
-	issue, err := gh.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+	repo, err := gh.NewRepoRef(ref.Owner, ref.Repo)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	issue, err := gh.GetIssue(ctx, gh.AccountRef{Host: ref.Host, Username: req.Msg.AccountUsername}, repo, ref.IssueNumber)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fetch GitHub issue: %w", err))
 	}
@@ -233,21 +289,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create backlog item: %w", err))
 	}
 
-	triageTriggered := false
-	if !req.Msg.SkipPlanning && created.RepoPath != "" && s.headlessPool != nil {
-		// 30s gates only the synchronous path (item lookup + ItemSession creation).
-		// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
-		triageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		_, triageErr := s.TriggerTriage(triageCtx,
-			connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: created.ID}))
-		if triageErr != nil {
-			log.WarningLog.Printf("[ImportGitHubIssue] auto-triage failed for item %s: %v", created.ID, triageErr)
-			// Do not fail the import; log and continue.
-		} else {
-			triageTriggered = true
-		}
-	}
+	triageTriggered := s.MaybeTriggerTriage(ctx, created.ID, req.Msg.SkipPlanning, created.RepoPath)
 
 	return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
 		Item:            backlogItemToProto(created, s.buildCostLookup()),

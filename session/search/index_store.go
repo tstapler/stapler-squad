@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/config"
 )
 
 // IndexStore handles persistence of the search index to disk.
@@ -37,8 +39,22 @@ const (
 	syncMetadataFile  = "sync_metadata.json"
 )
 
-// NewIndexStore creates a new IndexStore that persists to ~/.claude/search_index/
+// NewIndexStore creates a new IndexStore that persists to ~/.claude/search_index/.
+// Under go test (config.IsTestMode), it persists under config.GetConfigDir()'s
+// test-isolated directory instead: every test in a package otherwise shares this
+// real, unbounded, developer-lifetime index (observed at 50MB+ / tens of
+// thousands of documents on an active dev machine), and gob-decoding it on every
+// NewIndexStore call is what made -race test runs blow CI's timeout budget —
+// unrelated to whatever the test itself exercises.
 func NewIndexStore() (*IndexStore, error) {
+	if config.IsTestMode() {
+		testDir, err := config.GetConfigDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get test config directory: %w", err)
+		}
+		return NewIndexStoreWithDir(filepath.Join(testDir, "search_index"))
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)

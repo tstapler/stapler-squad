@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // sddDefaultPipelineFlagName is shared between knownFeatureFlags below and
@@ -16,6 +17,28 @@ import (
 // so the flag name can't drift between where it's declared and where it's
 // read.
 const sddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
+
+// blockApprovalOnCIFailureFlagName is shared between knownFeatureFlags below and
+// ApprovalService.ResolveApproval's CI-red guard (approval_service.go) so the flag
+// name can't drift between where it's declared and where it's read.
+const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
+
+// workspacePeersNudgeFlagName is shared between knownFeatureFlags below and
+// workspacePeersBlockFor below so the flag name can't drift between where it's declared and
+// where it's read.
+const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+
+// workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
+// called by both SessionService.workspacePeersBlockFor (session_service.go) and
+// BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
+// drift on the gate itself, the same way session.WorkspacePeersBlockForPath already keeps
+// them from drifting on how the nudge is rendered.
+func workspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
+	if !config.LoadConfig().GetFeatureFlag(workspacePeersNudgeFlagName) {
+		return ""
+	}
+	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
+}
 
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
@@ -43,6 +66,14 @@ var knownFeatureFlags = []struct {
 		name:        sddDefaultPipelineFlagName,
 		description: "New backlog items with no explicitly chosen pipeline mode default to the 'sdd' pipeline mode (research, plan, validate, implement, and an adversarial verify pass before review) instead of the flat default pipeline. Never affects existing items or an item with any explicit pipeline_mode value, including an explicit empty one.",
 	},
+	{
+		name:        blockApprovalOnCIFailureFlagName,
+		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
+	},
+	{
+		name:        workspacePeersNudgeFlagName,
+		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
+	},
 }
 
 // FeatureFlagService handles GetFeatureFlags and UpdateFeatureFlag RPCs.
@@ -53,6 +84,11 @@ type FeatureFlagService struct {
 	// Wired via SetFeatureController. May be nil for features that only need
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
+
+	// statusDetailProviders maps feature flag names to a function returning an
+	// optional human-readable status line (e.g. why the flag is currently off).
+	// Wired via SetStatusDetailProvider. Absent name -> "".
+	statusDetailProviders map[string]func() string
 
 	// updateMu serializes UpdateFeatureFlag's read-toggle-rollback sequence so two
 	// concurrent toggles of the same flag can't race: without this, a slow caller's
@@ -78,6 +114,16 @@ func (f *FeatureFlagService) SetFeatureController(name string, c FeatureControll
 	f.featureControllers[name] = c
 }
 
+// SetStatusDetailProvider wires an optional status-detail provider for the
+// named feature flag. GetFeatureFlags calls fn on every request and populates
+// FeatureFlag.StatusDetail with its result (empty string when fn returns "").
+func (f *FeatureFlagService) SetStatusDetailProvider(name string, fn func() string) {
+	if f.statusDetailProviders == nil {
+		f.statusDetailProviders = make(map[string]func() string)
+	}
+	f.statusDetailProviders[name] = fn
+}
+
 // +api: feature-flags:list
 // GetFeatureFlags returns all known feature flags and their current state.
 func (f *FeatureFlagService) GetFeatureFlags(
@@ -96,10 +142,15 @@ func (f *FeatureFlagService) GetFeatureFlags(
 		if ctrl, ok := f.featureControllers[kf.name]; ok {
 			enabled = ctrl.IsEnabled()
 		}
+		var statusDetail string
+		if provider, ok := f.statusDetailProviders[kf.name]; ok {
+			statusDetail = provider()
+		}
 		flags = append(flags, &sessionv1.FeatureFlag{
-			Name:        kf.name,
-			Enabled:     enabled,
-			Description: kf.description,
+			Name:         kf.name,
+			Enabled:      enabled,
+			Description:  kf.description,
+			StatusDetail: statusDetail,
 		})
 	}
 
@@ -182,11 +233,17 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 
 	log.Info("feature flag updated", "feature", name, "enabled", enabled)
 
+	var statusDetail string
+	if provider, ok := f.statusDetailProviders[name]; ok {
+		statusDetail = provider()
+	}
+
 	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
 		Flag: &sessionv1.FeatureFlag{
-			Name:        name,
-			Enabled:     enabled,
-			Description: description,
+			Name:         name,
+			Enabled:      enabled,
+			Description:  description,
+			StatusDetail: statusDetail,
 		},
 	}), nil
 }

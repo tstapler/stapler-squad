@@ -1,0 +1,15 @@
+{
+  "id": "crashed-session-overlay",
+  "type": "frontend",
+  "description": "Terminal overlay, status badge/dot, and grouping shown when a session's tmux pane crashed (dead pane detected by SessionHealthChecker) — explains the crash and offers a one-tap Resume button instead of raw pane text",
+  "component": "SessionDetailView (crashed overlay), SessionCard, SessionRow, groupSessions",
+  "path": "web-app/src/components/sessions/SessionDetailView.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "crashed-session-ux > crashed-session-ux_should_showOverlay_When_crashedSessionOpened",
+    "crashed-session-ux > crashed-session-ux_should_resumeSession_When_overlayResumeClicked",
+    "crashed-session-ux > crashed-session-ux_should_showCrashedBadge_When_sessionListHasCrashedSession"
+  ],
+  "lastModified": "2026-08-10T00:00:00Z"
+}

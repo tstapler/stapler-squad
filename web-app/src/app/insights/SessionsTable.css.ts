@@ -64,6 +64,17 @@ export const thRight = style([
   { textAlign: "right" },
 ]);
 
+export const sortableTh = style({
+  cursor: "pointer",
+  display: "inline-block",
+  selectors: {
+    "&:focus-visible": {
+      outline: `2px solid ${vars.color.primary}`,
+      outlineOffset: "2px",
+    },
+  },
+});
+
 export const td = style({
   padding: `${vars.space[2]} ${vars.space[2]}`,
   color: vars.color.textPrimary,

@@ -152,3 +152,103 @@ func TestIsRepeatedNoVerdictFailure_should_returnFalse_When_EitherReviewHadAVerd
 	assert.False(t, IsRepeatedNoVerdictFailure([]bool{false, true}), "prior had a verdict — not a repeat of nothing")
 	assert.False(t, IsRepeatedNoVerdictFailure([]bool{true, true}), "both had verdicts — IsRepeatedFailure's job, not this one")
 }
+
+func TestIsFlakyVerdictFlipFlop_should_returnTrue_When_SameDiffHashDifferentOutcome(t *testing.T) {
+	recent := []ReviewVerdictSummary{
+		{DiffHash: "abc123", OverallOutcome: string(ReviewOutcomePass)},
+		{DiffHash: "abc123", OverallOutcome: string(ReviewOutcomeFail)},
+	}
+	assert.True(t, IsFlakyVerdictFlipFlop(recent), "identical diff, different outcome is the definition of a flip-flop")
+}
+
+func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_FewerThanTwoVerdicts(t *testing.T) {
+	assert.False(t, IsFlakyVerdictFlipFlop(nil))
+	assert.False(t, IsFlakyVerdictFlipFlop([]ReviewVerdictSummary{{DiffHash: "abc123", OverallOutcome: string(ReviewOutcomeFail)}}))
+}
+
+func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_EitherDiffHashEmpty(t *testing.T) {
+	latestEmpty := []ReviewVerdictSummary{
+		{DiffHash: "", OverallOutcome: string(ReviewOutcomePass)},
+		{DiffHash: "abc123", OverallOutcome: string(ReviewOutcomeFail)},
+	}
+	assert.False(t, IsFlakyVerdictFlipFlop(latestEmpty), "an unknown (empty) diff hash must never be treated as a match")
+
+	priorEmpty := []ReviewVerdictSummary{
+		{DiffHash: "abc123", OverallOutcome: string(ReviewOutcomePass)},
+		{DiffHash: "", OverallOutcome: string(ReviewOutcomeFail)},
+	}
+	assert.False(t, IsFlakyVerdictFlipFlop(priorEmpty), "an unknown (empty) diff hash must never be treated as a match")
+
+	bothEmpty := []ReviewVerdictSummary{
+		{DiffHash: "", OverallOutcome: string(ReviewOutcomePass)},
+		{DiffHash: "", OverallOutcome: string(ReviewOutcomeFail)},
+	}
+	assert.False(t, IsFlakyVerdictFlipFlop(bothEmpty), "two unknowns carry no signal")
+}
+
+func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_OutcomesAgree(t *testing.T) {
+	recent := []ReviewVerdictSummary{
+		{DiffHash: "abc123", OverallOutcome: string(ReviewOutcomeFail)},
+		{DiffHash: "abc123", OverallOutcome: string(ReviewOutcomeFail)},
+	}
+	assert.False(t, IsFlakyVerdictFlipFlop(recent), "matching outcomes is IsRepeatedFailure's job, not this one")
+}
+
+func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_DiffHashesDiffer(t *testing.T) {
+	recent := []ReviewVerdictSummary{
+		{DiffHash: "abc123", OverallOutcome: string(ReviewOutcomePass)},
+		{DiffHash: "def456", OverallOutcome: string(ReviewOutcomeFail)},
+	}
+	assert.False(t, IsFlakyVerdictFlipFlop(recent), "a genuinely different diff explains a different outcome — not flaky")
+}
+
+func TestIsTestOnlyReworkCycle_should_returnTrue_When_AllAttemptsTouchOnlyTestFiles(t *testing.T) {
+	attempts := [][]string{
+		{"session/stuck_decisions_test.go"},
+		{"web-app/src/lib/omnibar/detector.test.ts", "session/stuck_decisions_test.go"},
+	}
+	assert.True(t, IsTestOnlyReworkCycle(attempts))
+}
+
+func TestIsTestOnlyReworkCycle_should_returnFalse_When_FewerThanMinAttempts(t *testing.T) {
+	assert.False(t, IsTestOnlyReworkCycle(nil))
+	assert.False(t, IsTestOnlyReworkCycle([][]string{{"session/stuck_decisions_test.go"}}), "only one attempt of history — not enough to call it a cycle")
+}
+
+func TestIsTestOnlyReworkCycle_should_returnFalse_When_AnyCycleHasNoFileData(t *testing.T) {
+	attempts := [][]string{
+		{"session/stuck_decisions_test.go"},
+		{},
+	}
+	assert.False(t, IsTestOnlyReworkCycle(attempts), "no file data for an attempt is no signal, not a match")
+}
+
+func TestIsTestOnlyReworkCycle_should_returnFalse_When_AnyCycleTouchesNonTestFile(t *testing.T) {
+	attempts := [][]string{
+		{"session/stuck_decisions_test.go"},
+		{"session/stuck_decisions.go", "session/stuck_decisions_test.go"},
+	}
+	assert.False(t, IsTestOnlyReworkCycle(attempts), "a production file in any attempt breaks the test-only cycle")
+}
+
+func TestMostRecentCompletedWorkSession_should_returnLatestCompletedWorkSession_When_Present(t *testing.T) {
+	endedAt := time.Now()
+	sessions := []ItemSessionSummary{
+		{ID: "s1", Role: SessionRoleWork, EndedAt: &endedAt},
+		{ID: "s2", Role: SessionRoleReview, EndedAt: &endedAt},
+		{ID: "s3", Role: SessionRoleWork, EndedAt: &endedAt},
+	}
+	got := MostRecentCompletedWorkSession(sessions)
+	assert.NotNil(t, got)
+	assert.Equal(t, "s3", got.ID, "must pick the most recent (last in oldest-first order) completed work session")
+}
+
+func TestMostRecentCompletedWorkSession_should_returnNil_When_NoCompletedWorkSession(t *testing.T) {
+	assert.Nil(t, MostRecentCompletedWorkSession(nil))
+
+	stillRunning := []ItemSessionSummary{{ID: "s1", Role: SessionRoleWork, EndedAt: nil}}
+	assert.Nil(t, MostRecentCompletedWorkSession(stillRunning), "an in-progress session must not be picked — see validation.md's async-race edge case")
+
+	reviewOnly := []ItemSessionSummary{{ID: "s1", Role: SessionRoleReview, EndedAt: &time.Time{}}}
+	assert.Nil(t, MostRecentCompletedWorkSession(reviewOnly))
+}

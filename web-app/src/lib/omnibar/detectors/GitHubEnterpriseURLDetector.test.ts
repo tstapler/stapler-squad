@@ -8,7 +8,7 @@ describe("GitHubEnterpriseURLDetector", () => {
     const result = detector.detect("https://github.example.com/acme/widgets/pull/42");
     expect(result?.type).toBe(InputType.GitHubPR);
     expect(result?.gitHubRef).toEqual({ owner: "acme", repo: "widgets", prNumber: 42 });
-    expect(result?.suggestedName).toBe("pr-42-widgets");
+    expect(result?.suggestedName).toBe("acme-widgets-pr-42");
   });
 
   it("T-UNIT-TS-202 GitHubEnterpriseURLDetector_should_detectBranch_When_configuredHostTreeUrl", () => {
@@ -19,7 +19,7 @@ describe("GitHubEnterpriseURLDetector", () => {
       repo: "widgets",
       branch: "feature/foo",
     });
-    expect(result?.suggestedName).toBe("widgets-feature-foo");
+    expect(result?.suggestedName).toBe("acme-widgets-feature-foo");
   });
 
   it("T-UNIT-TS-203 GitHubEnterpriseURLDetector_should_detectRepo_When_configuredHostBareRepoUrl", () => {

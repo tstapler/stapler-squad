@@ -139,6 +139,94 @@ func TestBuildLaunchCommand_ClaudeEnvWrapper(t *testing.T) {
 	}
 }
 
+func TestYoloFlagFor_should_ReturnDangerouslySkipPermissions_When_ProgramIsClaude(t *testing.T) {
+	if got := yoloFlagFor("claude"); got != "--dangerously-skip-permissions" {
+		t.Errorf("yoloFlagFor(%q) = %q, want --dangerously-skip-permissions", "claude", got)
+	}
+}
+
+func TestYoloFlagFor_should_ReturnYesAlways_When_ProgramIsAider(t *testing.T) {
+	if got := yoloFlagFor("aider --model ollama_chat/gemma3:1b"); got != "--yes-always" {
+		t.Errorf("yoloFlagFor(...) = %q, want --yes-always", got)
+	}
+}
+
+func TestYoloFlagFor_should_ReturnEmpty_When_ProgramUnsupported(t *testing.T) {
+	if got := yoloFlagFor("codex"); got != "" {
+		t.Errorf("yoloFlagFor(%q) = %q, want empty", "codex", got)
+	}
+}
+
+func TestAutoApproveSupported_should_ReturnFalse_When_ProgramUnsupported(t *testing.T) {
+	if AutoApproveSupported("codex") {
+		t.Error("AutoApproveSupported(\"codex\") = true, want false")
+	}
+}
+
+func TestBuildLaunchCommand_should_AppendYoloFlag_When_AutoApproveTrueAndAgentSupported(t *testing.T) {
+	cases := []struct {
+		name    string
+		program string
+		want    string
+	}{
+		{"claude", "claude", "--dangerously-skip-permissions"},
+		{"aider", "aider --model ollama_chat/gemma3:1b", "--yes-always"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := &Instance{Program: tc.program, AutoApprove: true}
+			got := inst.buildLaunchCommand("")
+			if !strings.HasSuffix(got, tc.want) {
+				t.Errorf("buildLaunchCommand() = %q, want suffix %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildLaunchCommand_should_NotAppendFlag_When_AutoApproveTrueButAgentUnsupported(t *testing.T) {
+	inst := &Instance{Program: "codex", AutoApprove: true}
+	got := inst.buildLaunchCommand("")
+	if got != "codex" {
+		t.Errorf("buildLaunchCommand() = %q, want unchanged %q", got, "codex")
+	}
+}
+
+func TestBuildLaunchCommand_should_NotDoubleAppendFlag_When_AutoApproveAndAutoYesBothTrue(t *testing.T) {
+	inst := &Instance{Program: "claude", AutoApprove: true, AutoYes: true}
+	got := inst.buildLaunchCommand("")
+	if n := strings.Count(got, "--dangerously-skip-permissions"); n != 1 {
+		t.Errorf("expected --dangerously-skip-permissions exactly once, got %d occurrences in %q", n, got)
+	}
+	if n := strings.Count(got, "--permission-mode"); n != 1 {
+		t.Errorf("expected --permission-mode exactly once (from AutoYes), got %d occurrences in %q", n, got)
+	}
+}
+
+// TestBuildLaunchCommand_should_InjectYoloFlagBeforePromptSeparator_When_ClaudeHasInitialPrompt
+// is the regression guard for the architecture-review BLOCKER: appending the yolo flag
+// after buildClaudeCommand's trailing "--" prompt separator makes Claude's CLI parser treat
+// it as inert positional text instead of a real flag. A plain substring-containment
+// assertion (the original, buggy acceptance criterion) would pass even with that bug
+// present, since the flag string is still somewhere in the command -- this asserts ordering
+// instead, exercising the dominant creation path (a newly-created session with an initial
+// prompt, claudeSessionID == "").
+func TestBuildLaunchCommand_should_InjectYoloFlagBeforePromptSeparator_When_ClaudeHasInitialPrompt(t *testing.T) {
+	inst := &Instance{Program: "claude", AutoApprove: true, Prompt: "do the thing"}
+	got := inst.buildLaunchCommand("")
+
+	flagIdx := strings.Index(got, "--dangerously-skip-permissions")
+	sepIdx := strings.Index(got, "-- ")
+	if flagIdx == -1 {
+		t.Fatalf("expected --dangerously-skip-permissions in command, got %q", got)
+	}
+	if sepIdx == -1 {
+		t.Fatalf("expected a \"-- \" prompt separator in command, got %q", got)
+	}
+	if flagIdx > sepIdx {
+		t.Errorf("yolo flag must appear BEFORE the \"--\" prompt separator (else Claude treats it as inert positional text), got %q", got)
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	cases := []struct {
 		name  string

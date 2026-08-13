@@ -1,0 +1,14 @@
+{
+  "id": "insights-daily-spend-chart",
+  "type": "frontend",
+  "component": "DailySpendChart",
+  "path": "web-app/src/app/insights/DailySpendChart.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "DailySpendChart > DailySpendChart_should_showUnpricedFootnote_When_anyDayHasUnpricedModels",
+    "DailySpendChart > DailySpendChart_should_omitFootnote_When_noDayHasUnpricedModels",
+    "DailySpendChart > DailySpendChart_should_pluralizeFootnote_When_multipleDaysHaveUnpricedModels"
+  ],
+  "lastModified": "2026-08-02T00:00:00.000Z"
+}

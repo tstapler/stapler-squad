@@ -1,0 +1,17 @@
+{
+  "id": "severity-badge",
+  "type": "frontend",
+  "name": "Severity badge (colour-coded risk level indicator)",
+  "component": "SeverityBadge",
+  "path": "web-app/src/components/sessions/SeverityBadge.tsx",
+  "filePath": "web-app/src/components/sessions/SeverityBadge.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "SeverityBadge > SeverityBadge_should_RenderCriticalBadgeWithIconAndLabel_When_RiskLevelIsCritical",
+    "SeverityBadge > SeverityBadge_should_RenderNotRecordedState_When_RiskLevelIsEmptyString",
+    "SeverityBadge > SeverityBadge_should_RenderVisuallyDistinctFromLow_When_RiskLevelIsEmptyVsLow",
+    "SeverityBadge > SeverityBadge_should_PairIconAndTextWithColour_When_AnyOfFiveStatesRenders"
+  ],
+  "lastModified": "2026-08-10T00:00:00Z"
+}

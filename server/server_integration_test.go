@@ -444,6 +444,40 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 	}
 }
 
+// TestSessionService_CreateThenImmediateDelete_NoDataRace deliberately does NOT call
+// waitForLiveInstance before deleting: CreateSession's async controller-start goroutine
+// (which calls GetPTY()) is very likely still in flight when DeleteSession's cleanup
+// goroutine runs closePTYAndAttachCmd(). This is the exact interleave from the original
+// -race report. This test is a realistic, best-effort repro under real scheduler timing
+// (relying on -count=N outer repetition, not in-test concurrency, to raise the odds of
+// landing in the window across runs -- an earlier version raced several concurrent
+// create/delete pairs within one run, but that tripped the session store's SQLite
+// busy_timeout under -race's slowdown, an unrelated flake this test must not introduce).
+// The deterministic proof that the fix is correct is
+// TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized in session/tmux/tmux_test.go,
+// which forces the interleave directly instead of relying on timing.
+func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
+	installFakeClaudeBinary(t)
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	title := fmt.Sprintf("ptmx-race-repro-%d", time.Now().UnixNano())
+	resp, err := deps.SessionService.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   title,
+		Path:    t.TempDir(),
+		Program: "claude",
+	}))
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if _, err := deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: resp.Msg.Session.Id})); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+}
+
 // waitForResolvedAddr polls srv.GetAddr() until it reports a real, non-zero bound address
 // (i.e. no longer the pre-bind "localhost:0" placeholder), failing the test on timeout.
 func waitForResolvedAddr(t *testing.T, srv *Server, timeout time.Duration) string {

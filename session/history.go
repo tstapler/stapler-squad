@@ -330,6 +330,16 @@ type ClaudeConversationMessage struct {
 	Model     string
 }
 
+// conversationScanBufPool pools the 1MB scanner buffer used by
+// findConversationFilePath so a filepath.Walk over thousands of conversation
+// files doesn't allocate a fresh buffer per file.
+var conversationScanBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 1024*1024)
+		return &buf
+	},
+}
+
 // findConversationFilePath searches ~/.claude/projects/ for the JSONL file that
 // contains the given sessionID. It checks the first 5 lines of each file for a
 // reference to the sessionID, then stops the walk as soon as it finds a match.
@@ -356,8 +366,11 @@ func findConversationFilePath(sessionID string) (string, error) {
 		}
 		defer file.Close() //nolint:errcheck
 
+		bufPtr := conversationScanBufPool.Get().(*[]byte)
+		defer conversationScanBufPool.Put(bufPtr) //nolint:staticcheck
+
 		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+		scanner.Buffer(*bufPtr, 1024*1024)
 
 		for i := 0; i < 5 && scanner.Scan(); i++ {
 			if strings.Contains(string(scanner.Bytes()), sessionID) {

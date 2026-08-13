@@ -98,6 +98,7 @@ interface UseSessionServiceReturn {
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
   hibernateSession: (id: string) => Promise<Session | null>;
   resumeHibernatedSession: (id: string) => Promise<Session | null>;
+  resumeCrashedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
@@ -270,6 +271,7 @@ export function useSessionService(
             category: request.category,
             prompt: request.prompt,
             autoYes: request.autoYes,
+            autoApprove: request.autoApprove ?? false,
             existingWorktree: request.existingWorktree,
             sessionType: request.sessionType,
             createIfMissing: request.createIfMissing ?? false,
@@ -312,12 +314,14 @@ export function useSessionService(
           id,
           status: updates.status,
           category: updates.category,
+          note: updates.note,
           title: updates.title,
           program: updates.program,
           tags: updates.tags ?? [],
           workingDir: updates.workingDir,
           rateLimitEnabled: updates.rateLimitEnabled,
           autonomousMode: updates.autonomousMode,
+          autoApprove: updates.autoApprove,
           steerMessage: updates.steerMessage,
         });
 
@@ -418,6 +422,25 @@ export function useSessionService(
     [dispatch]
   );
 
+  // Resume a crashed session (Crashed → Active). Server-side resume of a dead
+  // tmux pane detected by SessionHealthChecker — threads --resume automatically
+  // when a conversation UUID is known, no manual copy/paste required.
+  const resumeCrashedSession = useCallback(
+    async (id: string): Promise<Session | null> => {
+      if (!clientRef.current) return null;
+      dispatch(setError(null));
+      try {
+        const response = await clientRef.current.resumeCrashedSession({ id });
+        if (response.session) dispatch(upsertSession(response.session));
+        return response.session ?? null;
+      } catch (err) {
+        console.error("[useSessionService] resumeCrashedSession failed:", err);
+        dispatch(setError(err instanceof Error ? err.message : "Failed to resume crashed session"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
 
   // Rename session
   const renameSession = useCallback(
@@ -1094,6 +1117,7 @@ export function useSessionService(
     resumeSession,
     hibernateSession,
     resumeHibernatedSession,
+    resumeCrashedSession,
     renameSession,
     restartSession,
     clearConversationState,

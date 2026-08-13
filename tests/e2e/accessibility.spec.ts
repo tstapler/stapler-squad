@@ -139,6 +139,13 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+      // Also suppress the separate, app-wide onboarding walkthrough
+      // (useOnboarding.ts's `stapler-squad:onboarded` key, gated
+      // independently of the backlog-specific tour above). It auto-opens
+      // ~800ms after mount on any page — including /backlog — and its
+      // modal Overlay intercepts pointer events on the backlog table,
+      // timing out BacklogPage.openItemDetail()'s row click.
+      localStorage.setItem('stapler-squad:onboarded', 'true');
     });
   });
 
@@ -296,6 +303,11 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
       await page.addInitScript((name) => {
         localStorage.setItem('stapler-theme', name);
         localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+        // See the describe-level beforeEach above for why this second key
+        // (the separate, app-wide onboarding walkthrough) also must be
+        // seeded — this test uses a fresh `context.newPage()` per
+        // iteration, which doesn't inherit that beforeEach's addInitScript.
+        localStorage.setItem('stapler-squad:onboarded', 'true');
       }, themeName);
 
       const backlogPage = new BacklogPage(page);

@@ -130,6 +130,36 @@ const (
 	// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry). Resolved
 	// once the PR becomes healthy again or the item reaches done.
 	StuckReasonPRNeedsFix StuckReason = "pr_needs_fix"
+	// StuckReasonRespawnBlockedActive: an automated respawn attempt
+	// (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview —
+	// server/services/backlog_service_triage.go) was skipped because the item
+	// already has an active work or review session, per
+	// findActiveWorkSession/findActiveReviewSession. Before this reason
+	// existed, all three call sites only log.InfoLog.Printf'd the skip —
+	// zero operator-visible signal and no audit record, strictly worse than
+	// spawnSessionAfterGates' own 8b guard (activeWorkSessionBlockedError),
+	// which at least returns a progress-enriched error to its synchronous
+	// caller (docs/tasks/backlog-feature-improvement.md, 2026-07-31/
+	// 2026-08-03 updates). Set by notifyRespawnBlockedByActiveSession, which
+	// reuses workSessionStaleness for the same "still active" vs. "likely
+	// stalled" distinction. Distinct from StuckReasonReworkBlockedStale
+	// (review-status-only, staleness-gated) since this fires regardless of
+	// staleness and covers three different item statuses (in_progress,
+	// pr_pending, review). Resolved the next time the guarding function runs
+	// past its active-session check (the block has cleared).
+	StuckReasonRespawnBlockedActive StuckReason = "respawn_blocked_active"
+	// StuckReasonLikelyFlaky: session.IsFlakyVerdictFlipFlop or
+	// session.IsTestOnlyReworkCycle matched on this item's recent review
+	// history — behavioral evidence (not a keyword match on title/description;
+	// see project_plans/backlog-bounce-escalation/decisions/ADR-002) that the
+	// review outcome may be non-deterministic rather than a real pass/fail
+	// signal. Purely informational: set alongside AutoReopenAfterFailedReview's
+	// existing reopen/park decision, never gating it — a misfiring heuristic
+	// here cannot newly stall an item that would otherwise proceed. Both
+	// predicates carry documented false-positive sources (see their doc
+	// comments in session/stuck_decisions.go); the UI should present this as a
+	// hint to verify, not a confident verdict.
+	StuckReasonLikelyFlaky StuckReason = "likely_flaky"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -147,6 +177,8 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonPRPendingNoPR,
 	StuckReasonReworkBlockedStale,
 	StuckReasonPRNeedsFix,
+	StuckReasonRespawnBlockedActive,
+	StuckReasonLikelyFlaky,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -155,7 +187,8 @@ func (r StuckReason) IsValid() bool {
 	case StuckReasonPRReadyUnmerged, StuckReasonReworkCap, StuckReasonAbandonedReview,
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
-		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix:
+		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
+		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky:
 		return true
 	}
 	return false

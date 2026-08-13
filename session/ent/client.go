@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
@@ -85,6 +86,8 @@ type Client struct {
 	Session *SessionClient
 	// SessionGoal is the client for interacting with the SessionGoal builders.
 	SessionGoal *SessionGoalClient
+	// SessionSummary is the client for interacting with the SessionSummary builders.
+	SessionSummary *SessionSummaryClient
 	// Shell is the client for interacting with the Shell builders.
 	Shell *ShellClient
 	// SourceSyncEvent is the client for interacting with the SourceSyncEvent builders.
@@ -125,6 +128,7 @@ func (c *Client) init() {
 	c.ReviewVerdict = NewReviewVerdictClient(c.config)
 	c.Session = NewSessionClient(c.config)
 	c.SessionGoal = NewSessionGoalClient(c.config)
+	c.SessionSummary = NewSessionSummaryClient(c.config)
 	c.Shell = NewShellClient(c.config)
 	c.SourceSyncEvent = NewSourceSyncEventClient(c.config)
 	c.Tag = NewTagClient(c.config)
@@ -241,6 +245,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ReviewVerdict:           NewReviewVerdictClient(cfg),
 		Session:                 NewSessionClient(cfg),
 		SessionGoal:             NewSessionGoalClient(cfg),
+		SessionSummary:          NewSessionSummaryClient(cfg),
 		Shell:                   NewShellClient(cfg),
 		SourceSyncEvent:         NewSourceSyncEventClient(cfg),
 		Tag:                     NewTagClient(cfg),
@@ -284,6 +289,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ReviewVerdict:           NewReviewVerdictClient(cfg),
 		Session:                 NewSessionClient(cfg),
 		SessionGoal:             NewSessionGoalClient(cfg),
+		SessionSummary:          NewSessionSummaryClient(cfg),
 		Shell:                   NewShellClient(cfg),
 		SourceSyncEvent:         NewSourceSyncEventClient(cfg),
 		Tag:                     NewTagClient(cfg),
@@ -322,8 +328,8 @@ func (c *Client) Use(hooks ...Hook) {
 		c.BacklogStatusEvent, c.BacklogStuckState, c.ClassificationAnalytics,
 		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
 		c.ItemSession, c.ItemSource, c.PipelineMode, c.Project, c.ReviewVerdict,
-		c.Session, c.SessionGoal, c.Shell, c.SourceSyncEvent, c.Tag, c.Workflow,
-		c.Worktree,
+		c.Session, c.SessionGoal, c.SessionSummary, c.Shell, c.SourceSyncEvent, c.Tag,
+		c.Workflow, c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -337,8 +343,8 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.BacklogStatusEvent, c.BacklogStuckState, c.ClassificationAnalytics,
 		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
 		c.ItemSession, c.ItemSource, c.PipelineMode, c.Project, c.ReviewVerdict,
-		c.Session, c.SessionGoal, c.Shell, c.SourceSyncEvent, c.Tag, c.Workflow,
-		c.Worktree,
+		c.Session, c.SessionGoal, c.SessionSummary, c.Shell, c.SourceSyncEvent, c.Tag,
+		c.Workflow, c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -385,6 +391,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Session.mutate(ctx, m)
 	case *SessionGoalMutation:
 		return c.SessionGoal.mutate(ctx, m)
+	case *SessionSummaryMutation:
+		return c.SessionSummary.mutate(ctx, m)
 	case *ShellMutation:
 		return c.Shell.mutate(ctx, m)
 	case *SourceSyncEventMutation:
@@ -3343,6 +3351,139 @@ func (c *SessionGoalClient) mutate(ctx context.Context, m *SessionGoalMutation) 
 	}
 }
 
+// SessionSummaryClient is a client for the SessionSummary schema.
+type SessionSummaryClient struct {
+	config
+}
+
+// NewSessionSummaryClient returns a client for the SessionSummary from the given config.
+func NewSessionSummaryClient(c config) *SessionSummaryClient {
+	return &SessionSummaryClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `sessionsummary.Hooks(f(g(h())))`.
+func (c *SessionSummaryClient) Use(hooks ...Hook) {
+	c.hooks.SessionSummary = append(c.hooks.SessionSummary, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `sessionsummary.Intercept(f(g(h())))`.
+func (c *SessionSummaryClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SessionSummary = append(c.inters.SessionSummary, interceptors...)
+}
+
+// Create returns a builder for creating a SessionSummary entity.
+func (c *SessionSummaryClient) Create() *SessionSummaryCreate {
+	mutation := newSessionSummaryMutation(c.config, OpCreate)
+	return &SessionSummaryCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SessionSummary entities.
+func (c *SessionSummaryClient) CreateBulk(builders ...*SessionSummaryCreate) *SessionSummaryCreateBulk {
+	return &SessionSummaryCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SessionSummaryClient) MapCreateBulk(slice any, setFunc func(*SessionSummaryCreate, int)) *SessionSummaryCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SessionSummaryCreateBulk{err: fmt.Errorf("calling to SessionSummaryClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SessionSummaryCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SessionSummaryCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SessionSummary.
+func (c *SessionSummaryClient) Update() *SessionSummaryUpdate {
+	mutation := newSessionSummaryMutation(c.config, OpUpdate)
+	return &SessionSummaryUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SessionSummaryClient) UpdateOne(_m *SessionSummary) *SessionSummaryUpdateOne {
+	mutation := newSessionSummaryMutation(c.config, OpUpdateOne, withSessionSummary(_m))
+	return &SessionSummaryUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SessionSummaryClient) UpdateOneID(id string) *SessionSummaryUpdateOne {
+	mutation := newSessionSummaryMutation(c.config, OpUpdateOne, withSessionSummaryID(id))
+	return &SessionSummaryUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SessionSummary.
+func (c *SessionSummaryClient) Delete() *SessionSummaryDelete {
+	mutation := newSessionSummaryMutation(c.config, OpDelete)
+	return &SessionSummaryDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SessionSummaryClient) DeleteOne(_m *SessionSummary) *SessionSummaryDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SessionSummaryClient) DeleteOneID(id string) *SessionSummaryDeleteOne {
+	builder := c.Delete().Where(sessionsummary.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SessionSummaryDeleteOne{builder}
+}
+
+// Query returns a query builder for SessionSummary.
+func (c *SessionSummaryClient) Query() *SessionSummaryQuery {
+	return &SessionSummaryQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSessionSummary},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SessionSummary entity by its id.
+func (c *SessionSummaryClient) Get(ctx context.Context, id string) (*SessionSummary, error) {
+	return c.Query().Where(sessionsummary.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SessionSummaryClient) GetX(ctx context.Context, id string) *SessionSummary {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *SessionSummaryClient) Hooks() []Hook {
+	return c.hooks.SessionSummary
+}
+
+// Interceptors returns the client interceptors.
+func (c *SessionSummaryClient) Interceptors() []Interceptor {
+	return c.inters.SessionSummary
+}
+
+func (c *SessionSummaryClient) mutate(ctx context.Context, m *SessionSummaryMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SessionSummaryCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SessionSummaryUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SessionSummaryUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SessionSummaryDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SessionSummary mutation op: %q", m.Op())
+	}
+}
+
 // ShellClient is a client for the Shell schema.
 type ShellClient struct {
 	config
@@ -4078,14 +4219,14 @@ type (
 		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogProgressNote,
 		BacklogStatusEvent, BacklogStuckState, ClassificationAnalytics, ClaudeMetadata,
 		ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource,
-		PipelineMode, Project, ReviewVerdict, Session, SessionGoal, Shell,
-		SourceSyncEvent, Tag, Workflow, Worktree []ent.Hook
+		PipelineMode, Project, ReviewVerdict, Session, SessionGoal, SessionSummary,
+		Shell, SourceSyncEvent, Tag, Workflow, Worktree []ent.Hook
 	}
 	inters struct {
 		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogProgressNote,
 		BacklogStatusEvent, BacklogStuckState, ClassificationAnalytics, ClaudeMetadata,
 		ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource,
-		PipelineMode, Project, ReviewVerdict, Session, SessionGoal, Shell,
-		SourceSyncEvent, Tag, Workflow, Worktree []ent.Interceptor
+		PipelineMode, Project, ReviewVerdict, Session, SessionGoal, SessionSummary,
+		Shell, SourceSyncEvent, Tag, Workflow, Worktree []ent.Interceptor
 	}
 )

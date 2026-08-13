@@ -20,6 +20,7 @@ func TestCreateSession_PathGuard_AliasNameBypassesPathRequired(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	req := connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:     "test",
