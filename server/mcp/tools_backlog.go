@@ -82,9 +82,10 @@ func validateUUID(id string) error {
 // --- Error codes ---
 
 const (
-	ErrPermissionDenied = "PERMISSION_DENIED"
-	ErrItemNotFound     = "ITEM_NOT_FOUND"
-	ErrFeatureDisabled  = "FEATURE_DISABLED"
+	ErrPermissionDenied       = "PERMISSION_DENIED"
+	ErrItemNotFound           = "ITEM_NOT_FOUND"
+	ErrFeatureDisabled        = "FEATURE_DISABLED"
+	ErrEventStreamUnavailable = "EVENT_STREAM_UNAVAILABLE"
 )
 
 // featureDisabledResult returns a FEATURE_DISABLED error result if enabledCheck
@@ -313,7 +314,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
-		fmt.Fprintf(&sb, "4. Do NOT end your session after request_review. Wait a bit, then call get_backlog_item again — once a verdict lands it appears under \"Latest Review Verdict\" above. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again. Track how many times you've called request_review in this session (count your own calls in this conversation) — after %d cycles without a PASS, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
+		fmt.Fprintf(&sb, "4. Do NOT end your session after request_review. Call wait_for_backlog_event(item_id, event_type=\"verdict_recorded\") instead of polling — it blocks until the verdict lands (or times out) and returns the outcome directly, or returns immediately if a verdict is already recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again. Track how many times you've called request_review in this session (count your own calls in this conversation) — after %d cycles without a PASS, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
 		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
@@ -357,6 +358,239 @@ func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID s
 		}
 	}
 	return latest
+}
+
+// --- wait_for_backlog_event ---
+
+// Event-type filter values for wait_for_backlog_event — the single source of
+// truth referenced by backlogEventKindFilterValue's switch,
+// currentStateWaitResult's filter comparisons, the handler's default
+// eventTypeFilter assignment, and the mcpgo.Enum(...) tool registration.
+const (
+	eventTypeAny             = "any"
+	eventTypeVerdictRecorded = "verdict_recorded"
+	eventTypeStatusChanged   = "status_changed"
+	eventTypeItemArchived    = "item_archived"
+	eventTypeItemRemoved     = "item_removed"
+	eventTypeItemUpdated     = "item_updated"
+	eventTypeSessionAttached = "session_attached"
+)
+
+// WaitForBacklogEventResult is the response for wait_for_backlog_event.
+type WaitForBacklogEventResult struct {
+	MCPResult
+	EventReceived    bool     `json:"event_received"`
+	FromCurrentState bool     `json:"from_current_state,omitempty"`
+	EventKind        string   `json:"event_kind,omitempty"`
+	ItemID           string   `json:"item_id"`
+	Status           string   `json:"status,omitempty"`
+	OldStatus        string   `json:"old_status,omitempty"`
+	NewStatus        string   `json:"new_status,omitempty"`
+	VerdictOutcome   string   `json:"verdict_outcome,omitempty"`
+	VerdictSummary   string   `json:"verdict_summary,omitempty"`
+	UpdatedFields    []string `json:"updated_fields,omitempty"`
+	RemovedReason    string   `json:"removed_reason,omitempty"`
+	IsTerminal       bool     `json:"is_terminal,omitempty"`
+}
+
+// backlogEventKindFilterValue maps a BacklogChangeKind to the event_type
+// filter string wait_for_backlog_event's callers pass/receive.
+func backlogEventKindFilterValue(kind events.BacklogChangeKind) string {
+	switch kind {
+	case events.BacklogChangeVerdictRecorded:
+		return eventTypeVerdictRecorded
+	case events.BacklogChangeStatusTransition:
+		return eventTypeStatusChanged
+	case events.BacklogChangeItemArchived:
+		return eventTypeItemArchived
+	case events.BacklogChangeItemRemoved:
+		return eventTypeItemRemoved
+	case events.BacklogChangeSessionAttached:
+		return eventTypeSessionAttached
+	case events.BacklogChangeItemUpdated, events.BacklogChangeTriageProgressUpdated:
+		return eventTypeItemUpdated
+	default:
+		return string(kind)
+	}
+}
+
+// buildMatchedWaitResult builds the tool result for a live event received
+// off the EventBus subscription channel.
+func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPayload) WaitForBacklogEventResult {
+	res := WaitForBacklogEventResult{
+		MCPResult:     MCPResult{Success: true},
+		EventReceived: true,
+		EventKind:     backlogEventKindFilterValue(payload.Kind),
+		ItemID:        itemID,
+	}
+	if payload.Item != nil {
+		res.Status = payload.Item.Status
+		status := session.BacklogStatus(payload.Item.Status)
+		if status == session.BacklogStatusDone || status == session.BacklogStatusArchived {
+			res.IsTerminal = true
+		}
+	}
+	switch payload.Kind {
+	case events.BacklogChangeStatusTransition:
+		res.OldStatus = payload.OldStatus
+		res.NewStatus = payload.NewStatus
+	case events.BacklogChangeVerdictRecorded:
+		if payload.Verdict != nil {
+			res.VerdictOutcome = string(payload.Verdict.OverallOutcome)
+			res.VerdictSummary = payload.Verdict.Summary
+		}
+	case events.BacklogChangeItemUpdated, events.BacklogChangeTriageProgressUpdated:
+		res.UpdatedFields = payload.UpdatedFields
+	case events.BacklogChangeItemArchived:
+		res.IsTerminal = true
+	case events.BacklogChangeItemRemoved:
+		res.IsTerminal = true
+		res.RemovedReason = payload.RemovedReason
+	}
+	return res
+}
+
+// currentStateWaitResult implements the "already satisfied" precheck: if the
+// item's current state already satisfies what eventTypeFilter is waiting
+// for, return a result now instead of blocking for a full timeout on state
+// that's already true. Only defined for filters where "already true" has an
+// unambiguous answer from a single state read (no prior state to diff
+// against for status_changed/item_removed). Returns nil when nothing
+// pre-satisfies.
+func currentStateWaitResult(item *session.BacklogItemData, verdict *session.ReviewVerdictSummary, eventTypeFilter string) *WaitForBacklogEventResult {
+	status := session.BacklogStatus(item.Status)
+	terminal := status == session.BacklogStatusDone || status == session.BacklogStatusArchived
+
+	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) && verdict != nil {
+		return &WaitForBacklogEventResult{
+			MCPResult:        MCPResult{Success: true},
+			EventReceived:    true,
+			FromCurrentState: true,
+			EventKind:        eventTypeVerdictRecorded,
+			ItemID:           item.ID,
+			Status:           item.Status,
+			VerdictOutcome:   verdict.OverallOutcome,
+			VerdictSummary:   verdict.Summary,
+			IsTerminal:       terminal,
+		}
+	}
+	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeItemArchived) && status == session.BacklogStatusArchived {
+		return &WaitForBacklogEventResult{
+			MCPResult:        MCPResult{Success: true},
+			EventReceived:    true,
+			FromCurrentState: true,
+			EventKind:        eventTypeItemArchived,
+			ItemID:           item.ID,
+			Status:           item.Status,
+			IsTerminal:       true,
+		}
+	}
+	return nil
+}
+
+// testAfterWaitSubscribeHook, when non-nil, is invoked immediately after
+// h.eventBus.Subscribe(ctx) inside waitForBacklogEvent, before the
+// current-state precheck read. Production code never sets this — it exists
+// solely so tests can deterministically land a Publish() call inside the
+// subscribe→precheck race window, mirroring
+// backlog_service_events.go's testAfterSubscribeHook (same rationale: this
+// race depends on non-deterministic goroutine scheduling without a seam).
+var testAfterWaitSubscribeHook func()
+
+// waitForBacklogEvent blocks until a matching backlog item event fires (or
+// the current state already satisfies eventTypeFilter, or timeout_seconds
+// elapses). Replaces the ScheduleWakeup + get_backlog_item polling loop
+// sessions previously had to use to wait on a review verdict or status
+// change — see docs/registry N/A, project_plans/backlog-event-subscribe.
+func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	args := req.GetArguments()
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), "Provide a valid UUID (e.g. from list_backlog_items or get_backlog_item)."), nil
+	}
+
+	eventTypeFilter := eventTypeAny
+	if v, ok := args["event_type"].(string); ok && v != "" {
+		eventTypeFilter = v
+	}
+
+	timeoutSecs := 30
+	if v, ok := args["timeout_seconds"].(float64); ok && v > 0 {
+		timeoutSecs = int(v)
+		if timeoutSecs > 60 {
+			timeoutSecs = 60
+		}
+	}
+
+	if h.eventBus == nil {
+		log.WarningLog.Printf("[mcp:wait_for_backlog_event] eventBus is nil (stdio fallback path) item=%s", itemID)
+		return errResult(ErrEventStreamUnavailable, "backlog event stream is not available on this connection", "This session's MCP call is on the stdio fallback path (daemon unreachable). Fall back to get_backlog_item polling until the daemon is reachable again."), nil
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSecs)*time.Second)
+	defer cancel()
+
+	eventCh, subID := h.eventBus.Subscribe(waitCtx)
+	defer h.eventBus.Unsubscribe(subID)
+
+	if testAfterWaitSubscribeHook != nil {
+		testAfterWaitSubscribeHook()
+	}
+
+	item, err := h.storage.GetBacklogItem(waitCtx, itemID)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
+	}
+	verdict := latestReviewVerdict(waitCtx, h.storage, itemID)
+	if res := currentStateWaitResult(item, verdict, eventTypeFilter); res != nil {
+		return okResult(*res), nil
+	}
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			return okResult(WaitForBacklogEventResult{
+				MCPResult: MCPResult{Success: true, Error: &MCPError{
+					Code:    "WAIT_TIMEOUT",
+					Message: fmt.Sprintf("no new %s event on item %s within %d seconds — call ScheduleWakeup for a longer interval before checking again, or call wait_for_backlog_event again only if you intend to keep this session blocked", eventTypeFilter, itemID, timeoutSecs),
+				}},
+				EventReceived: false,
+				ItemID:        itemID,
+			}), nil
+		case evt, ok := <-eventCh:
+			if !ok {
+				return okResult(WaitForBacklogEventResult{
+					MCPResult: MCPResult{Success: true, Error: &MCPError{
+						Code:    "WAIT_TIMEOUT",
+						Message: "backlog event stream closed while waiting",
+					}},
+					EventReceived: false,
+					ItemID:        itemID,
+				}), nil
+			}
+			if evt.Type != events.EventBacklogItemChanged || evt.BacklogItemPayload == nil {
+				continue
+			}
+			payload := evt.BacklogItemPayload
+			if payload.Item == nil || payload.Item.ID != itemID {
+				continue
+			}
+			kind := backlogEventKindFilterValue(payload.Kind)
+			if eventTypeFilter != eventTypeAny && kind != eventTypeFilter {
+				continue
+			}
+			return okResult(buildMatchedWaitResult(itemID, payload)), nil
+		}
+	}
 }
 
 // --- report_progress ---
@@ -2023,5 +2257,27 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.submitTriageResult,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("wait_for_backlog_event",
+			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false with a message naming the next move (a longer ScheduleWakeup interval, or one more bounded wait) — this is an expected outcome, not an error. Use this instead of a ScheduleWakeup + get_backlog_item polling loop when waiting on a specific item's outcome, e.g. after request_review."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("event_type",
+				mcpgo.Description("Only return when an event of this kind fires (default any). verdict_recorded is the usual choice after request_review — it also returns immediately if a verdict is already recorded. any returns immediately if a verdict already exists or the item is already archived. status_changed/item_removed never return immediately (no 'already true' answer for those)."),
+				mcpgo.Enum(eventTypeAny, eventTypeVerdictRecorded, eventTypeStatusChanged, eventTypeItemArchived, eventTypeItemRemoved),
+				mcpgo.DefaultString(eventTypeAny),
+			),
+			mcpgo.WithNumber("timeout_seconds",
+				mcpgo.Description("How long to wait in seconds (default 30, max 60)"),
+				mcpgo.DefaultNumber(30),
+				mcpgo.Min(1),
+				mcpgo.Max(60),
+			),
+		),
+		h.waitForBacklogEvent,
 	)
 }
