@@ -2637,6 +2637,76 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
 }
 
+// TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_LinkedPRAlreadyMerged
+// is a regression test for the direct in_progress->done review-gate bypass:
+// reconcileBouncingItems used to call the raw storage-layer
+// TransitionBacklogItemStatus straight from item.Status (which can be
+// in_progress) to done, skipping both validTransitions (in_progress->done
+// isn't a legal edge) and TransitionGuard's ErrVerdictRequired gate entirely,
+// because that raw layer has no knowledge of either. This asserts the item
+// instead picks up a genuine PASS verdict along the way and lands on done via
+// the legal in_progress->review->done edge sequence.
+func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_LinkedPRAlreadyMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with merged PR, verdict gate check",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 174
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/174"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-verdict-gate", "")
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	// Confirm there is no PASS verdict yet — the item genuinely never passed
+	// review before reconcileBouncingItems runs.
+	outcomeBefore, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, ReviewVerdictPass, outcomeBefore, "item must not already have a PASS verdict before the fix runs")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-verdict-gate")
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status)
+
+	outcomeAfter, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ReviewVerdictPass, outcomeAfter,
+		"reaching done via reconcileBouncingItems must record a genuine PASS verdict, not bypass the verdict gate entirely")
+
+	// Now that a PASS verdict is on record, the guarded front-door path's own
+	// gate (TransitionGuard) would have allowed this exact transition —
+	// closing the loop on the bypass this test guards against.
+	guardInput := BacklogItemTransitionInput{
+		Status:         domain.BacklogStatusReview,
+		OverallOutcome: outcomeAfter,
+	}
+	assert.NoError(t, domain.TransitionGuard(guardInput, domain.BacklogStatusDone))
+}
+
 // TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge
 // is a regression test for one of the sibling "silent status-transition
 // failure" instances found by the silenttransition lint analyzer (same shape
