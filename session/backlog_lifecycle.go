@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -1405,6 +1407,41 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	return strings.TrimSpace(string(out))
 }
 
+// transitionBouncingItemToDone moves an item reconcileBouncingItems has
+// externally verified as converged (its PR merged, or its commit shipped to
+// main) to done. It does this via the state machine's own legal edges —
+// recording a genuine PASS verdict via recordTerminalReviewVerdict (documenting
+// the external verification as the justification), then in_progress->review
+// (only if the item isn't already at review) followed by review->done —
+// rather than calling the raw storage-layer TransitionBacklogItemStatus
+// directly from item.Status straight to done. That direct hop is not even a
+// legal edge in validTransitions when item.Status is in_progress, and more
+// importantly it bypasses TransitionGuard's ErrVerdictRequired gate entirely,
+// since the raw storage layer has no knowledge of WorkflowEngine/TransitionGuard
+// (see session/domain/backlog.go's validTransitions and TransitionGuard, and
+// the guarded RPC path in server/services/backlog_service_lifecycle.go that
+// this internal caller was bypassing).
+func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Context, item BacklogItemData, verdictSummary string) error {
+	if _, err := recordTerminalReviewVerdict(l.storage, item.ID, item.AcceptanceCriteria, "bounce-reconcile-"+uuid.New().String(), ReviewVerdictPass, verdictSummary); err != nil {
+		return fmt.Errorf("record PASS verdict: %w", err)
+	}
+
+	status := item.Status
+	if status == string(BacklogStatusInProgress) {
+		precondition := &BacklogItemPrecondition{ExpectedStatus: status}
+		if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, precondition, TriggeredBySystem); err != nil {
+			return fmt.Errorf("in_progress->review: %w", err)
+		}
+		status = string(BacklogStatusReview)
+	}
+
+	precondition := &BacklogItemPrecondition{ExpectedStatus: status}
+	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); err != nil {
+		return fmt.Errorf("review->done: %w", err)
+	}
+	return nil
+}
+
 // reconcileBouncingItems flags items that have crossed in_progress->review
 // >= bounceThreshold times within bounceLookback with no recorded PASS
 // verdict — a non-converging rework cycle that never hits the rework cap
@@ -1456,8 +1493,8 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
 					continue
 				}
-				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
-				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
+				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: PR #%d for this item is confirmed merged on GitHub, so the item's rework cycle is treated as converged rather than bouncing.", item.PrNumber)
+				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition item=%s: %v", item.ID, transErr)
 					// The PR is already confirmed merged — the item is left
 					// bouncing between in_progress/review with nothing else
@@ -1480,8 +1517,8 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			// checked, never an arbitrary one, so an unrelated commit merged to
 			// main elsewhere can't produce a false positive.
 			if sha, shipped := l.mostRecentWorkCommitShippedToMain(ctx, item.ID, item.RepoPath); shipped {
-				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
-				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
+				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, bounceMainBranch)
+				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) item=%s: %v", item.ID, transErr)
 					// The commit is already confirmed shipped to main — same
 					// silent-stranding risk as the merged-PR branch above.

@@ -1,12 +1,16 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestBuildSubmittableInput_UsesCarriageReturnNotNewline is a regression test
@@ -114,8 +118,11 @@ func TestBuildLaunchCommand_NonClaudeProgramUnmodified(t *testing.T) {
 		AllowedTools: "read,write",
 	}
 	got := inst.buildLaunchCommand("")
-	if got != "aider" {
-		t.Errorf("non-claude program should be returned unmodified, got %q", got)
+	// Shell-quoted (not the raw "aider") since launcher presets pre-mortem P1: the base
+	// program token must be shell-quoted like any other preset-authored content. Quoting a
+	// metacharacter-free token is a shell no-op — 'aider' and aider behave identically.
+	if got != "'aider'" {
+		t.Errorf("non-claude program should be shell-quoted and otherwise unmodified, got %q", got)
 	}
 }
 
@@ -186,8 +193,8 @@ func TestBuildLaunchCommand_should_AppendYoloFlag_When_AutoApproveTrueAndAgentSu
 func TestBuildLaunchCommand_should_NotAppendFlag_When_AutoApproveTrueButAgentUnsupported(t *testing.T) {
 	inst := &Instance{Program: "codex", AutoApprove: true}
 	got := inst.buildLaunchCommand("")
-	if got != "codex" {
-		t.Errorf("buildLaunchCommand() = %q, want unchanged %q", got, "codex")
+	if got != "'codex'" {
+		t.Errorf("buildLaunchCommand() = %q, want unchanged (aside from shell-quoting) %q", got, "'codex'")
 	}
 }
 
@@ -340,7 +347,7 @@ func TestBuildLaunchCommand_PlainProgramIgnoresClaudeFlags(t *testing.T) {
 		Prompt:             "do the thing",
 	}
 	got := inst.buildLaunchCommand("some-conv-id")
-	if got != "aider" {
+	if got != "'aider'" {
 		t.Errorf("plain program should not receive any claude flags, got %q", got)
 	}
 }
@@ -361,6 +368,83 @@ func TestBuildLaunchCommand_CLIFlagsAreShellQuoted(t *testing.T) {
 	// Each token must be present in its quoted form.
 	if !strings.Contains(got, shellQuote("--foo")) {
 		t.Errorf("--foo not found quoted in: %s", got)
+	}
+}
+
+// TestBuildLaunchCommand_should_PreserveMultiWordProgramExecution_When_ProgramHasNoMetacharacters
+// is a regression guard for the pre-mortem P1 fix (shell-quoting plainProgram's base token):
+// quoting the ENTIRE program string as one unit (as originally proposed in
+// implementation/plan.md Task 2.2.1a) would turn "sleep 300" into a single, nonexistent binary
+// literally named "sleep 300" -- verified empirically via `sh -c "env X=1 'sleep 300'"` failing
+// with "No such file or directory". Per-token quoting must instead produce two independently
+// quoted tokens that a shell still word-splits into program + arg, exactly as it did before this
+// feature existed.
+func TestBuildLaunchCommand_should_PreserveMultiWordProgramExecution_When_ProgramHasNoMetacharacters(t *testing.T) {
+	inst := &Instance{Program: "sleep 300"}
+	got := inst.buildLaunchCommand("")
+	want := shellQuote("sleep") + " " + shellQuote("300")
+	if got != want {
+		t.Errorf("buildLaunchCommand() = %q, want %q (two independently quoted tokens, not one quoted string)", got, want)
+	}
+}
+
+// TestBuildLaunchCommand_should_PreventCommandInjection_When_ProgramContainsShellMetacharacters
+// is the pre-mortem P1 regression test: a launcher preset's argv[0] is hand-authored,
+// shareable-dotfiles content that (unlike AvailablePrograms/AliasConfig.Program) has never had
+// to be safe against embedded shell metacharacters before. A malicious or careless preset with
+// argv: ["true; touch /tmp/pwned"] must not let the semicolon terminate the command and inject a
+// second one.
+func TestBuildLaunchCommand_should_PreventCommandInjection_When_ProgramContainsShellMetacharacters(t *testing.T) {
+	inst := &Instance{Program: "true; touch /tmp/pwned"}
+	got := inst.buildLaunchCommand("")
+	if strings.Contains(got, "; touch") {
+		t.Fatalf("semicolon survived unquoted, injection possible: %q", got)
+	}
+	// Confirmed by actually running it: the shell must fail to find a command named
+	// literally "true;" and must never invoke touch as a second command.
+	tmpFile := filepath.Join(t.TempDir(), "pwned")
+	cmd := strings.ReplaceAll(got, "/tmp/pwned", tmpFile)
+	_ = safeexec.CommandContext(context.Background(), "sh", "-c", cmd).Run() //nolint:errcheck // failure (command not found) is the expected, safe outcome
+	if _, err := os.Stat(tmpFile); err == nil {
+		t.Fatalf("injection succeeded: %s was created by a smuggled second command", tmpFile)
+	}
+}
+
+// TestBuildLaunchCommand_should_QuoteEachExtraArgAsOneToken_When_ElementContainsSpacesAndShellMetacharacters
+// covers Story 2.2.1's remote-exec case: a multi-word ExtraArgs element (e.g. an ssh remote
+// command fragment) must survive as a single shell-quoted unit, not be re-split into several argv
+// positions.
+func TestBuildLaunchCommand_should_QuoteEachExtraArgAsOneToken_When_ElementContainsSpacesAndShellMetacharacters(t *testing.T) {
+	inst := &Instance{Program: "ssh", ExtraArgs: []string{"-t", "host", "cd ~/repo && exec claude"}}
+	got := inst.buildLaunchCommand("")
+	want := strings.Join([]string{
+		shellQuote("ssh"), shellQuote("-t"), shellQuote("host"), shellQuote("cd ~/repo && exec claude"),
+	}, " ")
+	if got != want {
+		t.Errorf("buildLaunchCommand() = %q, want %q", got, want)
+	}
+}
+
+// TestBuildLaunchCommand_should_ProduceByteIdenticalCommand_When_ExtraArgsIsNil is the
+// backward-compatibility guard: sessions created before this feature (or any non-preset flow)
+// never set ExtraArgs, and must see no trailing space or empty-quote artifact.
+func TestBuildLaunchCommand_should_ProduceByteIdenticalCommand_When_ExtraArgsIsNil(t *testing.T) {
+	inst := &Instance{Program: "claude", CLIFlags: "--verbose"}
+	got := inst.buildLaunchCommand("")
+	want := "claude " + shellQuote("--verbose")
+	if got != want {
+		t.Errorf("buildLaunchCommand() = %q, want %q", got, want)
+	}
+}
+
+// TestBuildLaunchCommand_should_AppendExtraArgsAfterCLIFlags_When_BothArePresent covers Story
+// 2.2.1's ordering AC: ExtraArgs (from a selected preset) must come after CLIFlags-derived flags.
+func TestBuildLaunchCommand_should_AppendExtraArgsAfterCLIFlags_When_BothArePresent(t *testing.T) {
+	inst := &Instance{Program: "claude", CLIFlags: "--verbose", ExtraArgs: []string{"--model", "gpt-5"}}
+	got := inst.buildLaunchCommand("")
+	want := "claude " + strings.Join([]string{shellQuote("--verbose"), shellQuote("--model"), shellQuote("gpt-5")}, " ")
+	if got != want {
+		t.Errorf("buildLaunchCommand() = %q, want %q", got, want)
 	}
 }
 

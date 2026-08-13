@@ -319,6 +319,21 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Priority:    16,
 			},
 		},
+		Compacting: []dtypes.StatusPattern{
+			{
+				Name: "compacting_conversation",
+				// INFERRED, not verified against a live Claude Code capture — see Story 1.1.1
+				// in project_plans/context-compaction-detection/implementation/plan.md for
+				// provenance and the required follow-up verification item. Requires
+				// "Compacting" capitalized at/near line start (optionally after a spinner
+				// glyph) so this does NOT match the unrelated "NN% until auto-compact"
+				// approaching-threshold indicator (lowercase "compact", mid-line) — see
+				// claude_active.txt:5, claude_thinking_verb.txt:5, claude_asterism_active.txt:5.
+				Pattern:     `(?im)^[ \t]*[·✢✳✶✻✽●*✦⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]?[ \t]*Compacting\b`,
+				Description: "Claude is compacting conversation history to free up context space",
+				Priority:    26,
+			},
+		},
 		WaitingForAgent: []dtypes.StatusPattern{
 			{
 				Name: "waiting_for_background_agent",

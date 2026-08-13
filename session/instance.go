@@ -325,6 +325,10 @@ type Instance struct {
 	EnvVars map[string]string `json:"env_vars,omitempty"`
 	// CLIFlags are additional CLI flags appended to the program launch command.
 	CLIFlags string `json:"cli_flags,omitempty"`
+	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
+	// CLIFlags at launch time. Populated by a selected launcher preset's argv[1:]; see
+	// buildLaunchCommand in instance_tmux.go for the shell-quoting boundary.
+	ExtraArgs []string `json:"extra_args,omitempty"`
 
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
@@ -588,6 +592,9 @@ type InstanceOptions struct {
 	EnvVars map[string]string
 	// CLIFlags are additional CLI flags appended to the program launch command.
 	CLIFlags string
+	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
+	// CLIFlags at launch time.
+	ExtraArgs []string
 }
 
 // ResolveSessionPath expands a leading "~" to the current user's home directory
@@ -692,6 +699,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CreateIfMissing: opts.CreateIfMissing,
 		EnvVars:         opts.EnvVars,
 		CLIFlags:        opts.CLIFlags,
+		ExtraArgs:       opts.ExtraArgs,
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice

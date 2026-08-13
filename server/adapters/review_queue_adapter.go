@@ -13,6 +13,8 @@ func subStatusFromItem(item *session.ReviewItem) sessionv1.SubStatus {
 	switch item.ClaudeStatus {
 	case detection.StatusWaitingForAgent:
 		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
+	case detection.StatusCompacting:
+		return sessionv1.SubStatus_SUB_STATUS_COMPACTING
 	case detection.StatusProcessing, detection.StatusExecuting:
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
 	case detection.StatusNeedsApproval:

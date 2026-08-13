@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
@@ -30,6 +31,10 @@ const (
 	StatusExecuting       // Actively executing commands (shows "esc to interrupt")
 	StatusSuccess         // Task completed successfully
 	StatusWaitingForAgent // Waiting for one or more background agents to finish
+	// StatusCompacting is set when Claude is actively summarizing/compacting older
+	// conversation history (distinct from the "N% until auto-compact"
+	// approaching-threshold indicator, which is StatusExecuting).
+	StatusCompacting
 )
 
 // StatusPattern represents a regex pattern for detecting a specific status.
@@ -50,6 +55,10 @@ type StatusDetector struct {
 	patternSet atomic.Pointer[PatternSet]
 	sink       DetectionEventSink
 	normalizer PTYNormalizer
+
+	// compactingCanaryLogged guards the TEMPORARY compacting-regex drift canary (see
+	// compactingCanary) so it fires at most once per detector/session, not once per scan.
+	compactingCanaryLogged atomic.Bool
 }
 
 // NewStatusDetector creates a new status detector with default patterns.
@@ -249,7 +258,47 @@ const StatusDetectionTailBytes = 4096
 // rawPTY must be the original PTY bytes before collapseCarriageReturns is applied.
 func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string, int) {
 	ps := sd.patternSet.Load()
-	return ps.MatchLines(text, rawPTY)
+	status, name, desc := ps.MatchLines(text, rawPTY)
+	sd.compactingCanary(status, text)
+	return status, name, desc
+}
+
+// compactingCanary is a TEMPORARY bake-in canary (see project_plans/context-compaction-
+// detection/implementation/plan.md, Task 1.1.1c): the compacting_conversation pattern
+// (binaries/claude.go) was grounded in an INFERRED guess, not a verified live capture.
+// Until the follow-up backlog item confirms the regex against real Claude Code output,
+// log a line mentioning "compact" that did NOT classify as StatusCompacting, so a
+// near-miss regex surfaces during real usage instead of via a silent production gap.
+// Remove this method (and its call site above and the compactingCanaryLogged field)
+// once that follow-up item closes.
+//
+// Mirrors ratelimit.Detector.maybeLogUndetectedWording's two safeguards: fires at most
+// once per detector via compactingCanaryLogged (this is called once per scrollback line
+// per poll via detectFromLines, so an unguarded version would log continuously for as
+// long as an unmatched line sits in the tail), and never logs the raw matched text —
+// terminal output routinely contains secrets, so only the byte offset is logged.
+//
+// The pre-existing "N% until auto-compact" approaching-threshold indicator (present in
+// claude_active.txt, claude_thinking_verb.txt, claude_asterism_active.txt) also contains
+// "compact" and is EXPECTED to classify as StatusExecuting, not StatusCompacting — it is
+// excluded here, or the canary would fire on every near-limit session instead of only on
+// a genuine near-miss.
+func (sd *StatusDetector) compactingCanary(status DetectedStatus, text string) {
+	if status == StatusCompacting || sd.compactingCanaryLogged.Load() {
+		return
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "until auto-compact") {
+		return
+	}
+	idx := strings.Index(lower, "compact")
+	if idx == -1 {
+		return
+	}
+	if !sd.compactingCanaryLogged.CompareAndSwap(false, true) {
+		return
+	}
+	log.Debug("detection: line mentions 'compact' but did not classify as StatusCompacting — possible regex near-miss", "byte_offset", idx, "text_len", len(text))
 }
 
 // appendDetectionEvent records the outcome of a detection call to the ring buffer.
@@ -269,7 +318,7 @@ func (sd *StatusDetector) RecentEvents(n int) []DetectionEvent {
 }
 
 // Detect analyzes the provided PTY output and returns the detected status.
-// Patterns are checked in priority order: Error > TestsFailing > Success > NeedsApproval > InputRequired > Active > Processing > Idle > Ready.
+// Patterns are checked in priority order: Error > TestsFailing > NeedsApproval > InputRequired > WaitingForAgent > Success > Compacting > Active > Processing > Idle > Ready.
 // Returns StatusUnknown if no patterns match.
 func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 	text := sd.normalizer.Normalize(string(output))
@@ -340,6 +389,8 @@ func (s DetectedStatus) String() string {
 		return "Success"
 	case StatusWaitingForAgent:
 		return "Waiting for Agent"
+	case StatusCompacting:
+		return "Compacting"
 	case StatusUnknown:
 		return "Unknown"
 	}
@@ -389,6 +440,8 @@ func (sd *StatusDetector) GetPatternNames(status DetectedStatus) []string {
 		patterns = p.Success
 	case StatusWaitingForAgent:
 		patterns = p.WaitingForAgent
+	case StatusCompacting:
+		patterns = p.Compacting
 	case StatusUnknown:
 		return nil
 	}
@@ -519,7 +572,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 		// earlier (higher) lines. Success/Processing/Idle on earlier lines are stale.
 		if bestStatus == StatusExecuting {
 			switch s {
-			case StatusWaitingForAgent, StatusError, StatusNeedsApproval, StatusInputRequired:
+			case StatusWaitingForAgent, StatusError, StatusNeedsApproval, StatusInputRequired, StatusCompacting:
 				return s, desc, count
 			case StatusUnknown, StatusReady, StatusProcessing, StatusIdle, StatusSuccess, StatusTestsFailing, StatusExecuting:
 				// Lower-urgency statuses when we already have Executing — skip

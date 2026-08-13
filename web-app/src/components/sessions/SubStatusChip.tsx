@@ -12,6 +12,7 @@ import {
   chipReady,
   chipSuccess,
   chipWaitingForAgent,
+  chipCompacting,
   spinner,
 } from "./SubStatusChip.css";
 
@@ -166,6 +167,18 @@ export function SubStatusChip({ subStatus, subagentCount }: SubStatusChipProps) 
           title="Task completed successfully"
         >
           ✓ Done
+        </span>
+      );
+
+    case SubStatus.COMPACTING:
+      return (
+        <span
+          className={chipCompacting}
+          role="status"
+          aria-label="Compacting context"
+          title="Claude is summarizing older conversation history to free up context space"
+        >
+          ⟳ Compacting context
         </span>
       );
 

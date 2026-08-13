@@ -159,6 +159,52 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	}
 }
 
+// TestToProtoSubStatus_CoversAllDetectedStatusValues is a mandatory (not optional)
+// table-driven guard, added during Phase 4 pre-mortem repair (P1 #2): it iterates every
+// named detection.DetectedStatus value that has a defined SubStatus mapping and asserts
+// BOTH toProtoSubStatusFromInfo (instance_adapter.go, the live session list/watch RPC
+// path) and subStatusFromItem (review_queue_adapter.go) return a non-UNSPECIFIED value.
+// This is the actual RPC-facing pair — neither is exhaustive-lint-enforced (server/
+// adapters is excluded per .golangci.yml) — so this test is what catches one switch
+// being updated while the other is silently missed, a discrepancy that otherwise looks
+// like a frontend bug (backend detects the status; the browser never shows the chip).
+func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
+	statuses := []detection.DetectedStatus{
+		detection.StatusReady,
+		detection.StatusProcessing,
+		detection.StatusExecuting,
+		detection.StatusNeedsApproval,
+		detection.StatusInputRequired,
+		detection.StatusError,
+		detection.StatusTestsFailing,
+		detection.StatusIdle,
+		detection.StatusSuccess,
+		detection.StatusWaitingForAgent,
+		detection.StatusCompacting,
+	}
+
+	for _, status := range statuses {
+		t.Run(status.String(), func(t *testing.T) {
+			info := session.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: status}
+			gotInstance := toProtoSubStatusFromInfo(session.Active, 0, info)
+			if gotInstance == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+				t.Errorf("toProtoSubStatusFromInfo(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
+			}
+
+			item := &session.ReviewItem{ClaudeStatus: status}
+			gotReviewQueue := subStatusFromItem(item)
+			if gotReviewQueue == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+				t.Errorf("subStatusFromItem(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
+			}
+
+			if gotInstance != gotReviewQueue {
+				t.Errorf("toProtoSubStatusFromInfo(%s) = %v but subStatusFromItem(%s) = %v — the two adapters must agree",
+					status, gotInstance, status, gotReviewQueue)
+			}
+		})
+	}
+}
+
 // ─── U-GO-36: TestInstanceToProto_omitsGoalSummaryWhenNil ─────────────────────
 
 func TestStatusToProto_AllStates(t *testing.T) {
