@@ -75,6 +75,17 @@ describe("SubStatusChip", () => {
     expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Task complete");
   });
 
+  it("renders Compacting Context chip for SubStatus.COMPACTING", () => {
+    renderChip(SubStatus.COMPACTING);
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-label", "Compacting context");
+    expect(status).toHaveAttribute(
+      "title",
+      "Claude is summarizing older conversation history to free up context space"
+    );
+    expect(screen.getByText(/Compacting context/)).toBeInTheDocument();
+  });
+
   it("renders nothing for UNSPECIFIED", () => {
     const { container } = renderChip(SubStatus.UNSPECIFIED);
     expect(container).toBeEmptyDOMElement();

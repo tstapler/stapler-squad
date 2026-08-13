@@ -54,6 +54,10 @@ type BacklogItem struct {
 	QueuedAutonomous bool `json:"queued_autonomous,omitempty"`
 	// PlanArtifactsPath holds the value of the "plan_artifacts_path" field.
 	PlanArtifactsPath string `json:"plan_artifacts_path,omitempty"`
+	// Free-text reason from the most recent RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage completion, and on backward transition to idea/refining. See project_plans/plan-approval-ux/decisions/ADR-001.
+	PlanRejectionReason string `json:"plan_rejection_reason,omitempty"`
+	// PlanRejectedAt holds the value of the "plan_rejected_at" field.
+	PlanRejectedAt *time.Time `json:"plan_rejected_at,omitempty"`
 	// JSON set of field names modified by the user
 	UserModifiedFields string `json:"user_modified_fields,omitempty"`
 	// Notes holds the value of the "notes" field.
@@ -187,9 +191,9 @@ func (*BacklogItem) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount, backlogitem.FieldReworkCapOverride:
 			values[i] = new(sql.NullInt64)
-		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldCategory, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldExternalURL, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
+		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldCategory, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldPlanRejectionReason, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldExternalURL, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
 			values[i] = new(sql.NullString)
-		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldPrFeedbackAddressedAt, backlogitem.FieldGithubSyncedIssueUpdatedAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
+		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldPlanRejectedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldPrFeedbackAddressedAt, backlogitem.FieldGithubSyncedIssueUpdatedAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
 		case backlogitem.FieldID:
 			values[i] = new(uuid.UUID)
@@ -319,6 +323,19 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field plan_artifacts_path", values[i])
 			} else if value.Valid {
 				_m.PlanArtifactsPath = value.String
+			}
+		case backlogitem.FieldPlanRejectionReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field plan_rejection_reason", values[i])
+			} else if value.Valid {
+				_m.PlanRejectionReason = value.String
+			}
+		case backlogitem.FieldPlanRejectedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field plan_rejected_at", values[i])
+			} else if value.Valid {
+				_m.PlanRejectedAt = new(time.Time)
+				*_m.PlanRejectedAt = value.Time
 			}
 		case backlogitem.FieldUserModifiedFields:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -575,6 +592,14 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("plan_artifacts_path=")
 	builder.WriteString(_m.PlanArtifactsPath)
+	builder.WriteString(", ")
+	builder.WriteString("plan_rejection_reason=")
+	builder.WriteString(_m.PlanRejectionReason)
+	builder.WriteString(", ")
+	if v := _m.PlanRejectedAt; v != nil {
+		builder.WriteString("plan_rejected_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("user_modified_fields=")
 	builder.WriteString(_m.UserModifiedFields)

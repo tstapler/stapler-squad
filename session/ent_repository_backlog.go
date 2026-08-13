@@ -190,6 +190,8 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		QueuedAt:                     item.QueuedAt,
 		QueuedAutonomous:             item.QueuedAutonomous,
 		PlanArtifactsPath:            item.PlanArtifactsPath,
+		PlanRejectionReason:          item.PlanRejectionReason,
+		PlanRejectedAt:               item.PlanRejectedAt,
 		Notes:                        item.Notes,
 		ExternalID:                   item.ExternalID,
 		ExternalURL:                  item.ExternalURL,
@@ -297,6 +299,8 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillableQueuedAt(data.QueuedAt).
 		SetQueuedAutonomous(data.QueuedAutonomous).
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
+		SetNillablePlanRejectionReason(&data.PlanRejectionReason).
+		SetNillablePlanRejectedAt(data.PlanRejectedAt).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
 		SetNillableExternalURL(&data.ExternalURL).
@@ -664,6 +668,14 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.PlanArtifactsPath != nil {
 		u.SetPlanArtifactsPath(*update.PlanArtifactsPath)
 	}
+	if update.PlanRejectionReason != nil {
+		u.SetPlanRejectionReason(*update.PlanRejectionReason)
+	}
+	if update.ClearPlanRejectedAt {
+		u.ClearPlanRejectedAt()
+	} else if update.PlanRejectedAt != nil {
+		u.SetPlanRejectedAt(*update.PlanRejectedAt)
+	}
 	if update.PrURL != nil {
 		u.SetPrURL(*update.PrURL)
 	}
@@ -785,6 +797,12 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.PlanArtifactsPath != nil {
 		fields = append(fields, "planArtifactsPath")
+	}
+	if update.PlanRejectionReason != nil {
+		fields = append(fields, "planRejectionReason")
+	}
+	if update.PlanRejectedAt != nil || update.ClearPlanRejectedAt {
+		fields = append(fields, "planRejectedAt")
 	}
 	if update.PrURL != nil {
 		fields = append(fields, "prUrl")

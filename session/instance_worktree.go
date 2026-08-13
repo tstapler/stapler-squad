@@ -134,6 +134,9 @@ func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}
+	if err := RepairCorruptedGitRepo(resolvedRepo); err != nil {
+		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
+	}
 	branchName := BacklogBranchPrefix + branchSuffix
 	var wt *git.GitWorktree
 	if baseSHA, fetchErr := git.ResolveOriginBranchSHA(resolvedRepo, backlogWorktreeMainBranch); fetchErr == nil {

@@ -116,6 +116,8 @@ func (info InstanceStatusInfo) GetStatusIcon() string {
 		return "⌨" // Waiting for input
 	case detection.StatusWaitingForAgent:
 		return "⏳" // Waiting for background agent
+	case detection.StatusCompacting:
+		return "⟳" // Compacting context
 	case detection.StatusError:
 		return "✖" // Error
 	default:
@@ -160,6 +162,8 @@ func (info InstanceStatusInfo) GetStatusDescription() string {
 		desc = "Completed"
 	case detection.StatusWaitingForAgent:
 		desc = "Waiting for Agent"
+	case detection.StatusCompacting:
+		desc = "Compacting"
 	case detection.StatusTestsFailing:
 		desc = "Tests Failing"
 	case detection.StatusError:

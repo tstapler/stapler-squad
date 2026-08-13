@@ -159,6 +159,12 @@ message BacklogItem {
   // a manual status override may choose from. The frontend must render this
   // list verbatim rather than re-encoding the transition graph client-side.
   repeated string allowed_transitions = 32;
+  // plan_rejection_reason is the free-text reason from the most recent
+  // RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage
+  // completion, and on backward transition to idea/refining. Empty means
+  // "no outstanding rejection".
+  string plan_rejection_reason = 33;
+  google.protobuf.Timestamp plan_rejected_at = 34;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -466,6 +472,19 @@ message ApprovePlanRequest {
 }
 
 message ApprovePlanResponse {
+  BacklogItem item = 1;
+}
+
+message RejectPlanRequest {
+  string item_id = 1;
+  // reason is required free-text feedback explaining what should change,
+  // mirroring TriggerTriageRequest.feedback's refinement-input pattern.
+  // RejectPlan does not itself trigger regeneration — see
+  // project_plans/plan-approval-ux/decisions/ADR-002.
+  string reason = 2;
+}
+
+message RejectPlanResponse {
   BacklogItem item = 1;
 }
 
@@ -805,6 +824,11 @@ service BacklogService {
 
   // ApprovePlan marks the planning artifacts for an item as approved.
   rpc ApprovePlan(ApprovePlanRequest) returns (ApprovePlanResponse) {}
+
+  // RejectPlan records a rejection reason for an item's current plan
+  // artifacts and clears any existing approval. Does not itself trigger
+  // regeneration — see project_plans/plan-approval-ux/decisions/ADR-002.
+  rpc RejectPlan(RejectPlanRequest) returns (RejectPlanResponse) {}
 
   // SuggestNextItem recommends the highest-priority actionable backlog item.
   rpc SuggestNextItem(SuggestNextItemRequest) returns (SuggestNextItemResponse) {}
