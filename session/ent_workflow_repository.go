@@ -55,6 +55,30 @@ func (r *EntWorkflowRepository) Create(ctx context.Context, w WorkflowCreateInpu
 	if w.ArchiveAfterHours != nil {
 		c.SetArchiveAfterHours(*w.ArchiveAfterHours)
 	}
+	if w.TriggerType != "" {
+		c.SetTriggerType(w.TriggerType)
+	}
+	if w.GitHubRepo != "" {
+		c.SetGithubRepo(w.GitHubRepo)
+	}
+	if w.GitHubBranch != "" {
+		c.SetGithubBranch(w.GitHubBranch)
+	}
+	if w.WebhookSlug != "" {
+		c.SetWebhookSlug(w.WebhookSlug)
+	}
+	if w.WebhookSecretEncrypted != "" {
+		c.SetWebhookSecretEncrypted(w.WebhookSecretEncrypted)
+	}
+	if w.EventFilter != "" {
+		c.SetEventFilter(w.EventFilter)
+	}
+	if w.LabelFilter != "" {
+		c.SetLabelFilter(w.LabelFilter)
+	}
+	if w.PromptTemplate != "" {
+		c.SetPromptTemplate(w.PromptTemplate)
+	}
 
 	wf, err := c.Save(ctx)
 	if err != nil {
@@ -105,6 +129,42 @@ func (r *EntWorkflowRepository) Update(ctx context.Context, id uuid.UUID, w Work
 	}
 	if w.ArchiveAfterHours != nil {
 		u.SetArchiveAfterHours(*w.ArchiveAfterHours)
+	}
+	if w.TriggerType != nil {
+		u.SetTriggerType(*w.TriggerType)
+	}
+	if w.GitHubRepo != nil {
+		u.SetGithubRepo(*w.GitHubRepo)
+	}
+	if w.GitHubBranch != nil {
+		u.SetGithubBranch(*w.GitHubBranch)
+	}
+	if w.WebhookSlug != nil {
+		// webhook_slug is .Optional().Unique() but not .Nillable() (see
+		// session/ent/schema/workflow.go), so an empty string is a real column
+		// value, not NULL — two workflows both cleared to "" would collide on
+		// the unique index. ClearWebhookSlug leaves the column NULL instead,
+		// mirroring Create's `if w.WebhookSlug != ""` guard above.
+		if *w.WebhookSlug == "" {
+			u.ClearWebhookSlug()
+		} else {
+			u.SetWebhookSlug(*w.WebhookSlug)
+		}
+	}
+	if w.WebhookSecretEncrypted != nil {
+		u.SetWebhookSecretEncrypted(*w.WebhookSecretEncrypted)
+	}
+	if w.EventFilter != nil {
+		u.SetEventFilter(*w.EventFilter)
+	}
+	if w.LabelFilter != nil {
+		u.SetLabelFilter(*w.LabelFilter)
+	}
+	if w.PromptTemplate != nil {
+		u.SetPromptTemplate(*w.PromptTemplate)
+	}
+	if w.LastFiredAt != nil {
+		u.SetLastFiredAt(*w.LastFiredAt)
 	}
 
 	wf, err := u.Save(ctx)
@@ -158,6 +218,20 @@ func (r *EntWorkflowRepository) GetBySlug(ctx context.Context, slug string) (*en
 	return wf, nil
 }
 
+// GetByWebhookSlug retrieves a workflow by its webhook_slug.
+func (r *EntWorkflowRepository) GetByWebhookSlug(ctx context.Context, slug string) (*ent.Workflow, error) {
+	wf, err := r.client.Workflow.Query().
+		Where(workflow.WebhookSlug(slug)).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: workflow with webhook_slug %q", ErrNotFound, slug)
+		}
+		return nil, fmt.Errorf("get workflow by webhook_slug %q: %w", slug, err)
+	}
+	return wf, nil
+}
+
 // ListAll returns all workflows sorted ascending by created_at.
 // A safety cap of 1000 is applied to prevent runaway queries.
 func (r *EntWorkflowRepository) ListAll(ctx context.Context) ([]*ent.Workflow, error) {
@@ -178,6 +252,19 @@ func (r *EntWorkflowRepository) ListEnabled(ctx context.Context) ([]*ent.Workflo
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list enabled workflows: %w", err)
+	}
+	return wfs, nil
+}
+
+// ListByTriggerType returns all workflows with the given trigger_type, regardless of
+// cron_enabled (see interface doc comment for why enabled/repo/branch filtering is
+// left to the caller).
+func (r *EntWorkflowRepository) ListByTriggerType(ctx context.Context, triggerType string) ([]*ent.Workflow, error) {
+	wfs, err := r.client.Workflow.Query().
+		Where(workflow.TriggerType(triggerType)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list workflows by trigger_type %q: %w", triggerType, err)
 	}
 	return wfs, nil
 }

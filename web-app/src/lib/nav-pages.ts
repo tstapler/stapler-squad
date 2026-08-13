@@ -60,6 +60,7 @@ export const NAV_PAGES: NavPage[] = [
   // Secondary — hamburger / More-sheet only
   { href: routes.insights, label: "Insights", icon: BarChart2, headerNav: false, group: "insights" },
   { href: routes.workflows, label: "Workflows", icon: Zap,             headerNav: false, group: "automation" },
+  { href: routes.triggers, label: "Triggers", icon: Zap,          headerNav: false, featureFlag: "webhook_triggers", group: "automation" },
   { href: routes.rules,   label: "Rules",   icon: BookOpen,          headerNav: false, group: "automation" },
   { href: routes.history, label: "History", icon: History,           headerNav: false, group: "insights" },
   { href: routes.logs,    label: "Logs",    icon: ScrollText,  headerNav: false, group: "settings" },
