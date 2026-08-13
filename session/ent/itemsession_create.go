@@ -80,6 +80,20 @@ func (_c *ItemSessionCreate) SetNillableEndReason(v *string) *ItemSessionCreate 
 	return _c
 }
 
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (_c *ItemSessionCreate) SetFailureCapturePath(v string) *ItemSessionCreate {
+	_c.mutation.SetFailureCapturePath(v)
+	return _c
+}
+
+// SetNillableFailureCapturePath sets the "failure_capture_path" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableFailureCapturePath(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetFailureCapturePath(*v)
+	}
+	return _c
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (_c *ItemSessionCreate) SetAcSnapshot(v string) *ItemSessionCreate {
 	_c.mutation.SetAcSnapshot(v)
@@ -359,6 +373,10 @@ func (_c *ItemSessionCreate) defaults() {
 		v := itemsession.DefaultEndReason
 		_c.mutation.SetEndReason(v)
 	}
+	if _, ok := _c.mutation.FailureCapturePath(); !ok {
+		v := itemsession.DefaultFailureCapturePath
+		_c.mutation.SetFailureCapturePath(v)
+	}
 	if _, ok := _c.mutation.PipelineModeSnapshot(); !ok {
 		v := itemsession.DefaultPipelineModeSnapshot
 		_c.mutation.SetPipelineModeSnapshot(v)
@@ -467,6 +485,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.EndReason(); ok {
 		_spec.SetField(itemsession.FieldEndReason, field.TypeString, value)
 		_node.EndReason = value
+	}
+	if value, ok := _c.mutation.FailureCapturePath(); ok {
+		_spec.SetField(itemsession.FieldFailureCapturePath, field.TypeString, value)
+		_node.FailureCapturePath = value
 	}
 	if value, ok := _c.mutation.AcSnapshot(); ok {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)
@@ -684,6 +706,24 @@ func (u *ItemSessionUpsert) UpdateEndReason() *ItemSessionUpsert {
 // ClearEndReason clears the value of the "end_reason" field.
 func (u *ItemSessionUpsert) ClearEndReason() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldEndReason)
+	return u
+}
+
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (u *ItemSessionUpsert) SetFailureCapturePath(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldFailureCapturePath, v)
+	return u
+}
+
+// UpdateFailureCapturePath sets the "failure_capture_path" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateFailureCapturePath() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldFailureCapturePath)
+	return u
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (u *ItemSessionUpsert) ClearFailureCapturePath() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldFailureCapturePath)
 	return u
 }
 
@@ -1054,6 +1094,27 @@ func (u *ItemSessionUpsertOne) UpdateEndReason() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearEndReason() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEndReason()
+	})
+}
+
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (u *ItemSessionUpsertOne) SetFailureCapturePath(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetFailureCapturePath(v)
+	})
+}
+
+// UpdateFailureCapturePath sets the "failure_capture_path" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateFailureCapturePath() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateFailureCapturePath()
+	})
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (u *ItemSessionUpsertOne) ClearFailureCapturePath() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearFailureCapturePath()
 	})
 }
 
@@ -1629,6 +1690,27 @@ func (u *ItemSessionUpsertBulk) UpdateEndReason() *ItemSessionUpsertBulk {
 func (u *ItemSessionUpsertBulk) ClearEndReason() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEndReason()
+	})
+}
+
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (u *ItemSessionUpsertBulk) SetFailureCapturePath(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetFailureCapturePath(v)
+	})
+}
+
+// UpdateFailureCapturePath sets the "failure_capture_path" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateFailureCapturePath() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateFailureCapturePath()
+	})
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (u *ItemSessionUpsertBulk) ClearFailureCapturePath() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearFailureCapturePath()
 	})
 }
 

@@ -100,6 +100,28 @@ func TestIsBouncing_should_returnFalse_When_TwoCyclesOrHasPass(t *testing.T) {
 	assert.False(t, isBouncing(3, true), "a recorded PASS must not flag even at/above threshold")
 }
 
+func TestIsMultiReasonEscalated_should_returnTrue_When_CountAtOrAboveThreshold(t *testing.T) {
+	assert.True(t, isMultiReasonEscalated(2), "exactly at threshold must flag")
+	assert.True(t, isMultiReasonEscalated(3), "above threshold must flag")
+}
+
+func TestIsMultiReasonEscalated_should_returnFalse_When_CountBelowThreshold(t *testing.T) {
+	assert.False(t, isMultiReasonEscalated(1), "below threshold must not flag")
+	assert.False(t, isMultiReasonEscalated(0), "zero must not flag")
+}
+
+func TestMultiReasonEscalationNotifyReady_should_returnTrue_When_DwellElapsed(t *testing.T) {
+	now := time.Now()
+	assert.True(t, multiReasonEscalationNotifyReady(now.Add(-61*time.Second), now))
+	assert.True(t, multiReasonEscalationNotifyReady(now.Add(-60*time.Second), now), "exactly 60s must flag (>=)")
+}
+
+func TestMultiReasonEscalationNotifyReady_should_returnFalse_When_WithinDwell(t *testing.T) {
+	now := time.Now()
+	assert.False(t, multiReasonEscalationNotifyReady(now.Add(-30*time.Second), now), "30s must not flag")
+	assert.False(t, multiReasonEscalationNotifyReady(now, now), "0s must not flag")
+}
+
 func TestIsRepeatedFailure_should_returnTrue_When_LastTwoVerdictsIdentical(t *testing.T) {
 	recent := []ReviewVerdictSummary{
 		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},

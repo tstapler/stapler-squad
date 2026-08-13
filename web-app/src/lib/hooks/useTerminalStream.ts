@@ -49,6 +49,8 @@ interface UseTerminalStreamOptions {
   initialCols?: number; // Initial terminal columns (prevents size mismatch on first load)
   initialRows?: number; // Initial terminal rows (prevents size mismatch on first load)
   isExternal?: boolean; // Whether this is an external session (uses /ws/external endpoint)
+  /** Called with the number of buffered-but-undelivered messages dropped when a MessageQueue is torn down (superseded connect() or disconnect()). */
+  onInputDropped?: (count: number) => void;
   /**
    * True when this terminal is the one currently selected/visible to the user
    * (drives fast connect-timeout). Only affects the NEXT_PUBLIC_RECONNECT_V2-gated
@@ -94,6 +96,7 @@ export function useTerminalStream({
   autoConnect = true,
   initialCols,
   initialRows,
+  onInputDropped,
   foreground = false,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
@@ -136,6 +139,11 @@ export function useTerminalStream({
   const connectRef = useRef<(overrideCols?: number, overrideRows?: number) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
   const scrollbackDecoderRef = useRef(new TextDecoder());
+  // Task 2.2.1 — Connection-generation fence (mirrors usePathCompletions.ts's
+  // generationRef idiom). Bumped once per connect() call; a message-processing
+  // loop whose captured generation no longer matches the current value treats
+  // itself as superseded and stops mutating shared state.
+  const connectionGenerationRef = useRef(0);
 
   const clientRef = useRef(createClient(
     SessionService,
@@ -232,6 +240,11 @@ export function useTerminalStream({
     shouldReconnectRef.current = true;
     terminalBackoffRef.current.reset();
 
+    // Task 2.2.1 — bump the connection generation immediately so this call's
+    // message-processing loop (started below) can identify itself as "the
+    // current attempt" and detect being superseded by a later connect().
+    const myGeneration = ++connectionGenerationRef.current;
+
     let targetCols = overrideCols ?? initialCols;
     let targetRows = overrideRows ?? initialRows;
 
@@ -248,6 +261,21 @@ export function useTerminalStream({
     setTerminalState('CONNECTING');
 
     try {
+      // Task 2.2.2 — unconditionally tear down whatever generation this call
+      // is about to replace, regardless of connection state. This removes the
+      // previous isConnectedRef-gated skip (the root of the double-live-
+      // connection risk documented in architecture.md §1) by making connect()
+      // itself always close/abort what it's about to replace.
+      if (messageQueueRef.current) {
+        const dropped = messageQueueRef.current.close();
+        if (dropped > 0) {
+          onInputDropped?.(dropped);
+        }
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
       abortControllerRef.current = new AbortController();
       const attemptController = abortControllerRef.current;
       firstMessageRef.current = true;
@@ -305,6 +333,15 @@ export function useTerminalStream({
       (async () => {
         try {
           for await (const msg of stream) {
+            // Task 2.2.3 — a superseded generation's loop must not mutate
+            // shared state (or, transitively, deliver buffered input to the
+            // wrong connection). Mirrors usePathCompletions.ts's
+            // `if (generation !== generationRef.current) return;` guard.
+            if (myGeneration !== connectionGenerationRef.current) {
+              console.warn(`[useTerminalStream] Discarding message from superseded connection generation ${myGeneration} (current: ${connectionGenerationRef.current})`);
+              break;
+            }
+
             if (firstMessageRef.current) {
               clearConnectTimeout();
               isConnectingRef.current = false;
@@ -399,52 +436,64 @@ export function useTerminalStream({
             }
           }
         } catch (err) {
-          const wsCode = getWsCloseCode(err);
-          if (wsCode !== null && !isRetriableCloseCode(wsCode)) {
-            shouldReconnectRef.current = false;
-            isHardFailedRef.current = true;
-            setIsHardFailed(true);
-            console.warn(`[reconnect] stream=terminal non-retriable ws-close-code=${wsCode}, giving up`);
-          }
-          // A connect-timeout abort is our own deliberate fast-retry optimization, not
-          // a real failure — don't surface it via onError/setError, or callers that
-          // count onError calls toward a user-visible "connection failed" UI (e.g.
-          // TerminalOutput.tsx's connectionAttempts banner) would show churn/false
-          // "Terminal unavailable" states for what's meant to be an invisible retry.
-          // The internal backoff/reconnect scheduling below is unaffected either way.
-          if (!connectTimeoutAbortedRef.current) {
-            handleError(err);
-          }
-        } finally {
-          isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
-          isConnectingRef.current = false;
-          setIsConnected(false);
-          setTerminalState('DISCONNECTED');
-          // Reset decoders so stale {stream:true} buffered state from a server-closed
-          // connection does not corrupt the next connect() call.
-          textDecoderRef.current = new TextDecoder();
-          scrollbackDecoderRef.current = new TextDecoder();
-          clearConnectTimeout();
-          if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
-              && shouldReconnectRef.current
-              && !isDisconnectingRef.current) {
-            if (terminalBackoffRef.current.attempt >= 5) {
+          // Task 2.2.3 — a superseded generation's error/teardown must not
+          // stomp the newer generation's state (shared backoff/hard-fail
+          // refs included — a stale, aborted generation's close should not
+          // affect the currently-live generation's reconnect fate).
+          if (myGeneration === connectionGenerationRef.current) {
+            const wsCode = getWsCloseCode(err);
+            if (wsCode !== null && !isRetriableCloseCode(wsCode)) {
               shouldReconnectRef.current = false;
               isHardFailedRef.current = true;
               setIsHardFailed(true);
-            } else {
-              const delay = terminalBackoffRef.current.next();
-              console.info(`[reconnect] stream=terminal trigger=close attempt=${terminalBackoffRef.current.attempt} delay=${delay}ms`);
-              if (reconnectTimerRef.current) {
-                clearTimeout(reconnectTimerRef.current);
-                reconnectTimerRef.current = null;
-              }
-              reconnectTimerRef.current = setTimeout(() => {
-                reconnectTimerRef.current = null;
-                if (shouldReconnectRef.current && !isDisconnectingRef.current) {
-                  connectRef.current?.();
+              console.warn(`[reconnect] stream=terminal non-retriable ws-close-code=${wsCode}, giving up`);
+            }
+            // A connect-timeout abort is our own deliberate fast-retry optimization, not
+            // a real failure — don't surface it via onError/setError, or callers that
+            // count onError calls toward a user-visible "connection failed" UI (e.g.
+            // TerminalOutput.tsx's connectionAttempts banner) would show churn/false
+            // "Terminal unavailable" states for what's meant to be an invisible retry.
+            // The internal backoff/reconnect scheduling below is unaffected either way.
+            if (!connectTimeoutAbortedRef.current) {
+              handleError(err);
+            }
+          }
+        } finally {
+          if (myGeneration === connectionGenerationRef.current) {
+            isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
+            isConnectingRef.current = false;
+            setIsConnected(false);
+            setTerminalState('DISCONNECTED');
+            // Reset decoders so stale {stream:true} buffered state from a server-closed
+            // connection does not corrupt the next connect() call.
+            textDecoderRef.current = new TextDecoder();
+            scrollbackDecoderRef.current = new TextDecoder();
+            // Task 2.2.3 — guarded by the same myGeneration check as the rest of this
+            // block: an already-superseded generation's teardown must not clear the
+            // CURRENT generation's pending connect-timeout timer (connectTimeoutRef is
+            // shared across the hook's lifetime, not per-generation).
+            clearConnectTimeout();
+            if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
+                && shouldReconnectRef.current
+                && !isDisconnectingRef.current) {
+              if (terminalBackoffRef.current.attempt >= 5) {
+                shouldReconnectRef.current = false;
+                isHardFailedRef.current = true;
+                setIsHardFailed(true);
+              } else {
+                const delay = terminalBackoffRef.current.next();
+                console.info(`[reconnect] stream=terminal trigger=close attempt=${terminalBackoffRef.current.attempt} delay=${delay}ms`);
+                if (reconnectTimerRef.current) {
+                  clearTimeout(reconnectTimerRef.current);
+                  reconnectTimerRef.current = null;
                 }
-              }, delay);
+                reconnectTimerRef.current = setTimeout(() => {
+                  reconnectTimerRef.current = null;
+                  if (shouldReconnectRef.current && !isDisconnectingRef.current) {
+                    connectRef.current?.();
+                  }
+                }, delay);
+              }
             }
           }
         }
@@ -459,7 +508,7 @@ export function useTerminalStream({
       setIsConnected(false);
     }
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      flowControl, metrics, handleError, initialCols, initialRows, clearConnectTimeout]);
+      flowControl, metrics, handleError, initialCols, initialRows, onInputDropped, clearConnectTimeout]);
 
   // Keep connectRef in sync so visibility/online listeners always call the current closure
   connectRef.current = connect;
@@ -485,15 +534,24 @@ export function useTerminalStream({
       return;
     }
     isDisconnectingRef.current = true;
+    // Captured so the delayed callback below can tell whether a newer connect()
+    // has since taken over before it mutates shared abortControllerRef/isConnected
+    // state — otherwise a stale disconnect() racing a fresh connect() can abort
+    // or clobber the newer generation's connection (see connection-generation
+    // guard on the read side in connect(), Story 2.2).
+    const myGeneration = connectionGenerationRef.current;
 
     if (messageQueueRef.current) {
-      messageQueueRef.current.close();
+      const dropped = messageQueueRef.current.close();
+      if (dropped > 0) {
+        onInputDropped?.(dropped);
+      }
       messageQueueRef.current = null;
     }
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        if (abortControllerRef.current) {
+        if (myGeneration === connectionGenerationRef.current && abortControllerRef.current) {
           console.debug("[useTerminalStream] Timeout waiting for graceful close, forcing abort");
           abortControllerRef.current.abort();
           abortControllerRef.current = null;
@@ -508,11 +566,13 @@ export function useTerminalStream({
       }
     });
 
-    setIsConnected(false);
+    if (myGeneration === connectionGenerationRef.current) {
+      setIsConnected(false);
+    }
     isDisconnectingRef.current = false;
     textDecoderRef.current = new TextDecoder();
     scrollbackDecoderRef.current = new TextDecoder();
-  }, [getIsResyncingRef, clearConnectTimeout]);
+  }, [getIsResyncingRef, onInputDropped, clearConnectTimeout]);
 
   // ---- Auto-connect / cleanup ----
   useEffect(() => {

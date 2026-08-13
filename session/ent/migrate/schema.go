@@ -125,6 +125,8 @@ var (
 		{Name: "queued_at", Type: field.TypeTime, Nullable: true},
 		{Name: "queued_autonomous", Type: field.TypeBool, Default: false},
 		{Name: "plan_artifacts_path", Type: field.TypeString, Nullable: true},
+		{Name: "plan_rejection_reason", Type: field.TypeString, Nullable: true},
+		{Name: "plan_rejected_at", Type: field.TypeTime, Nullable: true},
 		{Name: "user_modified_fields", Type: field.TypeString, Nullable: true},
 		{Name: "notes", Type: field.TypeString, Nullable: true},
 		{Name: "external_id", Type: field.TypeString, Nullable: true},
@@ -155,7 +157,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_items_item_sources_backlog_items",
-				Columns:    []*schema.Column{BacklogItemsColumns[38]},
+				Columns:    []*schema.Column{BacklogItemsColumns[40]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -169,7 +171,7 @@ var (
 			{
 				Name:    "backlogitem_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[37]},
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[39]},
 			},
 			{
 				Name:    "backlogitem_status_queued_at",
@@ -179,7 +181,7 @@ var (
 			{
 				Name:    "backlogitem_external_id",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[20]},
+				Columns: []*schema.Column{BacklogItemsColumns[22]},
 			},
 			{
 				Name:    "backlogitem_status",
@@ -509,6 +511,7 @@ var (
 		{Name: "started_at", Type: field.TypeTime, Nullable: true},
 		{Name: "ended_at", Type: field.TypeTime, Nullable: true},
 		{Name: "end_reason", Type: field.TypeString, Nullable: true, Default: ""},
+		{Name: "failure_capture_path", Type: field.TypeString, Nullable: true, Default: ""},
 		{Name: "ac_snapshot", Type: field.TypeString, Nullable: true},
 		{Name: "pipeline_mode_snapshot", Type: field.TypeString, Default: ""},
 		{Name: "pipeline_mode_snapshot_hash", Type: field.TypeString, Default: ""},
@@ -533,7 +536,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "item_sessions_backlog_items_item_sessions",
-				Columns:    []*schema.Column{ItemSessionsColumns[20]},
+				Columns:    []*schema.Column{ItemSessionsColumns[21]},
 				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -547,7 +550,7 @@ var (
 			{
 				Name:    "itemsession_created_at_backlog_item_item_sessions",
 				Unique:  false,
-				Columns: []*schema.Column{ItemSessionsColumns[18], ItemSessionsColumns[20]},
+				Columns: []*schema.Column{ItemSessionsColumns[19], ItemSessionsColumns[21]},
 			},
 		},
 	}

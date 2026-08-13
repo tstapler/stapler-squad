@@ -428,6 +428,81 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 		"the item must stay in pr_pending — where ReconcilePRPending can still see and fix it — not silently reach done")
 }
 
+// TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict
+// is the RPC-layer regression test for AC5: a review→ready (and pr_pending→ready)
+// transition blocked by TransitionGuard's PASS-verdict-without-override guard must
+// map to connect.CodeFailedPrecondition — a business-rule gate the caller can react
+// to (e.g. by supplying override_reason) — not connect.CodeInvalidArgument, which
+// would incorrectly signal a malformed request.
+func TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict(t *testing.T) {
+	for _, from := range []session.BacklogStatus{session.BacklogStatusReview, session.BacklogStatusPRPending} {
+		t.Run(string(from), func(t *testing.T) {
+			svc := newBacklogService(t)
+			storage := svc.storage
+
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title:  "item with a passing review verdict",
+				Status: string(from),
+			})
+			require.NoError(t, err)
+
+			_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: "review-session-pass-verdict",
+				SessionRole: session.SessionRoleReview,
+			}, session.ReviewVerdictData{
+				OverallOutcome: session.ReviewVerdictPass,
+			})
+			require.NoError(t, err)
+
+			_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+				ItemId:       item.ID,
+				TargetStatus: string(session.BacklogStatusReady),
+			}))
+			require.Error(t, err, "a PASS-verdict item must not reach ready without an override_reason")
+			assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err),
+				"a business-rule guard failure must map to FailedPrecondition, not InvalidArgument")
+
+			fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(from), fetched.Status, "the blocked transition must not change the item's status")
+		})
+	}
+}
+
+// TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict.
+// AC2 (RPC-layer): the same transition succeeds once override_reason is supplied.
+func TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideReason(t *testing.T) {
+	svc := newBacklogService(t)
+	storage := svc.storage
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with a passing review verdict and an override",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-pass-verdict-override",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictPass,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:         item.ID,
+		TargetStatus:   string(session.BacklogStatusReady),
+		OverrideReason: "manually reviewed, shipping without the automated gate",
+	}))
+	require.NoError(t, err, "override_reason must let a PASS-verdict item proceed to ready")
+
+	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+}
+
 // TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleBaseSeed
 // is the direct regression test for the 2026-07-21 false-done bug found via the
 // archived-items audit: ItemSession.LastCommitSha is only ever seeded once at

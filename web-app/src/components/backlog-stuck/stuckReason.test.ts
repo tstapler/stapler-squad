@@ -116,6 +116,32 @@ describe("stuckReason", () => {
     });
   });
 
+  // backlog-bounce-escalation Story 2.1.3: the two synthetic escalation
+  // reasons must render with real labels/classes rather than falling back to
+  // the UNSPECIFIED placeholder — mirrors the ReworkBlockedStale pattern
+  // above.
+  describe("getStuckReasonLabel_should_returnDistinctLabel_When_MultipleReasons", () => {
+    it("returns a real label/class, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.MULTIPLE_REASONS)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.MULTIPLE_REASONS)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+    });
+  });
+
+  describe("getStuckReasonLabel_should_returnDistinctLabel_When_BounceCapExhausted", () => {
+    it("returns a real label/class, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.BOUNCE_CAP_EXHAUSTED)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.BOUNCE_CAP_EXHAUSTED)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+    });
+  });
+
   describe("isPrStatusUnknown", () => {
     it("is false for non pr_ready_unmerged reasons regardless of staleness", () => {
       const stale = timestampFromDate(new Date(Date.now() - 60 * 60 * 1000));

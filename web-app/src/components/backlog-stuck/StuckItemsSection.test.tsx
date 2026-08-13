@@ -242,6 +242,94 @@ describe("StuckItemsSection", () => {
     });
   });
 
+  // backlog-bounce-escalation Story 2.1.3b: GROUP_ORDER omission-class
+  // regression guard (see the file's own doc comment above GROUP_ORDER) for
+  // the two new escalation reasons specifically.
+  describe("StuckItemsSection_should_renderMultipleReasonsGroup_When_ItemEscalated", () => {
+    it("renders the multiple_reasons group with a card for the escalated item", () => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ reason: StuckReason.MULTIPLE_REASONS, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+      expect(screen.getByTestId(`stuck-group-${StuckReason.MULTIPLE_REASONS}`)).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { level: 3, name: "Multiple reasons stuck (1)" })
+      ).toBeInTheDocument();
+    });
+  });
+
+  // backlog-bounce-escalation Story 2.1.3c / pre-mortem.md Failure #3: an
+  // item's own multiple_reasons escalation row must not inflate its "other
+  // reasons" badge — the badge should reflect only the genuinely independent
+  // reasons (bouncing, push_failed), not the escalation row summarizing them.
+  describe("StuckItemsSection_should_ExcludeEscalationReasonFromOtherReasonsCount_When_ItemHasMultipleReasonsRow", () => {
+    it('shows "+1" (not "+2") on the bouncing card when the item also has push_failed and multiple_reasons rows', () => {
+      const shared = "e5ca1a70-0000-0000-0000-000000000000";
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ itemId: shared, reason: StuckReason.BOUNCING, prNumber: 0, prUrl: "" }),
+            makeItem({ itemId: shared, reason: StuckReason.PUSH_FAILED, prNumber: 0, prUrl: "" }),
+            makeItem({ itemId: shared, reason: StuckReason.MULTIPLE_REASONS, prNumber: 0, prUrl: "" }),
+          ],
+        })
+      );
+      render(<StuckItemsSection />);
+      const badges = screen.getAllByTestId("stuck-item-other-reasons-badge");
+      const bouncingCard = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.BOUNCING));
+      expect(bouncingCard).toBeDefined();
+      const bouncingBadge = bouncingCard!.querySelector('[data-testid="stuck-item-other-reasons-badge"]');
+      expect(bouncingBadge).not.toBeNull();
+      expect(bouncingBadge!.textContent).toMatch(/also stuck for 1 other reason/);
+      // Sanity: there are badges on both the bouncing and push_failed cards
+      // (the multiple_reasons card itself summarizes both, so it also gets a
+      // badge — only the count on the non-escalation cards is under test here).
+      expect(badges.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  // backlog-bounce-escalation Story 2.1.4: de-escalation reuses the existing
+  // justResolved ghost-card mechanism, but with copy that doesn't claim the
+  // whole item resolved — only this card (the multiple_reasons escalation
+  // row) is going away; the item remains open under its other reason(s).
+  describe("StuckItemsSection_should_ShowDeescalationBanner_When_MultipleReasonsRowResolvesButItemRemainsOpen", () => {
+    it("shows a de-escalation-flavored resolved banner instead of the card silently vanishing", () => {
+      const shared = "de5ca1a7-0000-0000-0000-000000000000";
+      const bouncingItem = makeItem({ itemId: shared, reason: StuckReason.BOUNCING, prNumber: 0, prUrl: "" });
+      const escalationItem = makeItem({
+        itemId: shared,
+        reason: StuckReason.MULTIPLE_REASONS,
+        prNumber: 0,
+        prUrl: "",
+      });
+
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({ items: [bouncingItem, escalationItem] })
+      );
+      const { rerender } = render(<StuckItemsSection />);
+
+      const escalationCard = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.MULTIPLE_REASONS));
+      expect(escalationCard).toBeDefined();
+      fireEvent.click(escalationCard!);
+
+      // Next poll: the multiple_reasons row has resolved, but bouncing is still open.
+      mockUseStuckBacklogItems.mockReturnValue(baseHookReturn({ items: [bouncingItem] }));
+      rerender(<StuckItemsSection />);
+
+      const banner = screen.getByTestId("stuck-item-resolved-banner");
+      expect(banner.textContent).toMatch(/No longer critical/);
+      expect(banner.textContent).toMatch(/down to 1 open reason/);
+      expect(banner.textContent).toMatch(/still open elsewhere in the list/);
+      expect(banner.textContent).not.toMatch(/removed from this list shortly\./);
+    });
+  });
+
   describe("StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap", () => {
     it("hides the reset-parked button when no item has hit the attempt cap", () => {
       mockUseStuckBacklogItems.mockReturnValue(

@@ -48,6 +48,8 @@ export interface TriageReviewPanelWriteProps extends TriageReviewPanelBaseProps 
   onSkip: () => void;
   /** Called when the user submits feedback to refine this triage result. */
   onRefine?: (feedback: string) => Promise<void>;
+  /** Called with a composed "Q:.../A:..." feedback string when the operator answers a specific triage question inline. */
+  onAnswerQuestion?: (feedback: string) => Promise<void>;
 }
 
 export type TriageReviewPanelProps = TriageReviewPanelReadOnlyProps | TriageReviewPanelWriteProps;
@@ -69,6 +71,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
   const onUndoApply = isReadOnlyProps(props) ? undefined : props.onUndoApply;
   const onSkip = isReadOnlyProps(props) ? undefined : props.onSkip;
   const onRefine = isReadOnlyProps(props) ? undefined : props.onRefine;
+  const onAnswerQuestion = isReadOnlyProps(props) ? undefined : props.onAnswerQuestion;
   // readOnly panels ignore the interactive dismissed flag entirely — it's
   // keyed by item.id, which a readOnly historical-record render (Story
   // 4.1.2) shares with the live interactive panel for the same item, so
@@ -236,6 +239,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
               <TriageDiffSection
                 currentCriteria={item.acCriteria}
                 suggestedSuggestions={triageResult.suggestions}
+                onAnswerQuestion={onAnswerQuestion}
               />
             </div>
           </>

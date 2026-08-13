@@ -41,6 +41,7 @@ session/ent/*/
 /web-app/.env.local
 /server/web/dist/
 /.playwright-mcp
+/tools/ci-gates/node_modules/
 
 # worktrees
 worktrees/

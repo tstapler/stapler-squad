@@ -151,6 +151,74 @@ func TestTransitionGuard_ReviewToDone_RequiresPassOrOverride(t *testing.T) {
 	}
 }
 
+// AC0: TestTransitionGuard_ReviewToReady_BlocksWithPassVerdictAndNoOverride checks that a
+// PASS verdict blocks the review->ready backward edge unless override_reason is set.
+func TestTransitionGuard_ReviewToReady_BlocksWithPassVerdictAndNoOverride(t *testing.T) {
+	item := BacklogItemTransitionInput{
+		Status:         BacklogStatusReview,
+		OverallOutcome: ReviewOutcomePass,
+	}
+	if err := TransitionGuard(item, BacklogStatusReady); err != ErrVerdictClearRequiredForReady {
+		t.Errorf("TransitionGuard review->ready PASS/no override = %v; want ErrVerdictClearRequiredForReady", err)
+	}
+}
+
+// AC1: TestTransitionGuard_PRPendingToReady_BlocksWithPassVerdictAndNoOverride checks the
+// same guard applies to the pr_pending->ready backward edge.
+func TestTransitionGuard_PRPendingToReady_BlocksWithPassVerdictAndNoOverride(t *testing.T) {
+	item := BacklogItemTransitionInput{
+		Status:         BacklogStatusPRPending,
+		OverallOutcome: ReviewOutcomePass,
+	}
+	if err := TransitionGuard(item, BacklogStatusReady); err != ErrVerdictClearRequiredForReady {
+		t.Errorf("TransitionGuard pr_pending->ready PASS/no override = %v; want ErrVerdictClearRequiredForReady", err)
+	}
+}
+
+// AC2: TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithOverrideReason checks that
+// override_reason clears the guard for both backward edges even with a PASS verdict.
+func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithOverrideReason(t *testing.T) {
+	for _, from := range []BacklogStatus{BacklogStatusReview, BacklogStatusPRPending} {
+		item := BacklogItemTransitionInput{
+			Status:         from,
+			OverallOutcome: ReviewOutcomePass,
+			OverrideReason: "re-triaging, PR needs rework",
+		}
+		if err := TransitionGuard(item, BacklogStatusReady); err != nil {
+			t.Errorf("TransitionGuard %s->ready PASS+override = %v; want nil", from, err)
+		}
+	}
+}
+
+// AC3: TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithoutPassVerdict checks that
+// the guard doesn't fire when there's no PASS verdict, override_reason or not.
+func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithoutPassVerdict(t *testing.T) {
+	for _, from := range []BacklogStatus{BacklogStatusReview, BacklogStatusPRPending} {
+		for _, outcome := range []ReviewOutcome{"", ReviewOutcomeFail, ReviewOutcomePartial, ReviewOutcomeUnverifiable} {
+			item := BacklogItemTransitionInput{
+				Status:         from,
+				OverallOutcome: outcome,
+			}
+			if err := TransitionGuard(item, BacklogStatusReady); err != nil {
+				t.Errorf("TransitionGuard %s->ready outcome=%q = %v; want nil", from, outcome, err)
+			}
+		}
+	}
+}
+
+// AC4: TestTransitionGuard_DoneToReady_UnaffectedByVerdictClearGuard is a regression check
+// confirming the new review/pr_pending->ready guard doesn't leak onto the unrelated
+// done->ready backward edge, even with a PASS verdict and no override.
+func TestTransitionGuard_DoneToReady_UnaffectedByVerdictClearGuard(t *testing.T) {
+	item := BacklogItemTransitionInput{
+		Status:         BacklogStatusDone,
+		OverallOutcome: ReviewOutcomePass,
+	}
+	if err := TransitionGuard(item, BacklogStatusReady); err != nil {
+		t.Errorf("TransitionGuard done->ready PASS/no override = %v; want nil (guard scoped to review/pr_pending only)", err)
+	}
+}
+
 // UT-006: TestTransitionGuard_InProgressToReview_AlwaysAllowed checks that no guard fires.
 func TestTransitionGuard_InProgressToReview_AlwaysAllowed(t *testing.T) {
 	item := BacklogItemTransitionInput{

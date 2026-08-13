@@ -187,27 +187,27 @@ func init() {
 	// backlogitem.DefaultQueuedAutonomous holds the default value on creation for the queued_autonomous field.
 	backlogitem.DefaultQueuedAutonomous = backlogitemDescQueuedAutonomous.Default.(bool)
 	// backlogitemDescPrNumber is the schema descriptor for pr_number field.
-	backlogitemDescPrNumber := backlogitemFields[26].Descriptor()
+	backlogitemDescPrNumber := backlogitemFields[28].Descriptor()
 	// backlogitem.DefaultPrNumber holds the default value on creation for the pr_number field.
 	backlogitem.DefaultPrNumber = backlogitemDescPrNumber.Default.(int)
 	// backlogitemDescShippedApprovedCount is the schema descriptor for shipped_approved_count field.
-	backlogitemDescShippedApprovedCount := backlogitemFields[28].Descriptor()
+	backlogitemDescShippedApprovedCount := backlogitemFields[30].Descriptor()
 	// backlogitem.DefaultShippedApprovedCount holds the default value on creation for the shipped_approved_count field.
 	backlogitem.DefaultShippedApprovedCount = backlogitemDescShippedApprovedCount.Default.(int)
 	// backlogitemDescShippedChangesReqCount is the schema descriptor for shipped_changes_req_count field.
-	backlogitemDescShippedChangesReqCount := backlogitemFields[29].Descriptor()
+	backlogitemDescShippedChangesReqCount := backlogitemFields[31].Descriptor()
 	// backlogitem.DefaultShippedChangesReqCount holds the default value on creation for the shipped_changes_req_count field.
 	backlogitem.DefaultShippedChangesReqCount = backlogitemDescShippedChangesReqCount.Default.(int)
 	// backlogitemDescShippedSnapshotCaptureFailed is the schema descriptor for shipped_snapshot_capture_failed field.
-	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[34].Descriptor()
+	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[36].Descriptor()
 	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
 	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[36].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[38].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[37].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[39].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -372,28 +372,32 @@ func init() {
 	itemsessionDescEndReason := itemsessionFields[5].Descriptor()
 	// itemsession.DefaultEndReason holds the default value on creation for the end_reason field.
 	itemsession.DefaultEndReason = itemsessionDescEndReason.Default.(string)
+	// itemsessionDescFailureCapturePath is the schema descriptor for failure_capture_path field.
+	itemsessionDescFailureCapturePath := itemsessionFields[6].Descriptor()
+	// itemsession.DefaultFailureCapturePath holds the default value on creation for the failure_capture_path field.
+	itemsession.DefaultFailureCapturePath = itemsessionDescFailureCapturePath.Default.(string)
 	// itemsessionDescPipelineModeSnapshot is the schema descriptor for pipeline_mode_snapshot field.
-	itemsessionDescPipelineModeSnapshot := itemsessionFields[7].Descriptor()
+	itemsessionDescPipelineModeSnapshot := itemsessionFields[8].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshot holds the default value on creation for the pipeline_mode_snapshot field.
 	itemsession.DefaultPipelineModeSnapshot = itemsessionDescPipelineModeSnapshot.Default.(string)
 	// itemsessionDescPipelineModeSnapshotHash is the schema descriptor for pipeline_mode_snapshot_hash field.
-	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[8].Descriptor()
+	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[9].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshotHash holds the default value on creation for the pipeline_mode_snapshot_hash field.
 	itemsession.DefaultPipelineModeSnapshotHash = itemsessionDescPipelineModeSnapshotHash.Default.(string)
 	// itemsessionDescBaseCommitSha is the schema descriptor for base_commit_sha field.
-	itemsessionDescBaseCommitSha := itemsessionFields[11].Descriptor()
+	itemsessionDescBaseCommitSha := itemsessionFields[12].Descriptor()
 	// itemsession.DefaultBaseCommitSha holds the default value on creation for the base_commit_sha field.
 	itemsession.DefaultBaseCommitSha = itemsessionDescBaseCommitSha.Default.(string)
 	// itemsessionDescCommitCountSinceSpawn is the schema descriptor for commit_count_since_spawn field.
-	itemsessionDescCommitCountSinceSpawn := itemsessionFields[15].Descriptor()
+	itemsessionDescCommitCountSinceSpawn := itemsessionFields[16].Descriptor()
 	// itemsession.DefaultCommitCountSinceSpawn holds the default value on creation for the commit_count_since_spawn field.
 	itemsession.DefaultCommitCountSinceSpawn = itemsessionDescCommitCountSinceSpawn.Default.(int)
 	// itemsessionDescCreatedAt is the schema descriptor for created_at field.
-	itemsessionDescCreatedAt := itemsessionFields[18].Descriptor()
+	itemsessionDescCreatedAt := itemsessionFields[19].Descriptor()
 	// itemsession.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsession.DefaultCreatedAt = itemsessionDescCreatedAt.Default.(func() time.Time)
 	// itemsessionDescEstimatedCostUsd is the schema descriptor for estimated_cost_usd field.
-	itemsessionDescEstimatedCostUsd := itemsessionFields[19].Descriptor()
+	itemsessionDescEstimatedCostUsd := itemsessionFields[20].Descriptor()
 	// itemsession.DefaultEstimatedCostUsd holds the default value on creation for the estimated_cost_usd field.
 	itemsession.DefaultEstimatedCostUsd = itemsessionDescEstimatedCostUsd.Default.(float64)
 	// itemsessionDescID is the schema descriptor for id field.

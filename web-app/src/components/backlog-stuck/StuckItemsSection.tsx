@@ -36,6 +36,8 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.REWORK_CAP,
   StuckReason.AUTONOMOUS_STUCK,
   StuckReason.BOUNCING,
+  StuckReason.MULTIPLE_REASONS,
+  StuckReason.BOUNCE_CAP_EXHAUSTED,
   StuckReason.PUSH_FAILED,
   StuckReason.SPAWN_FAILED,
   StuckReason.PR_PENDING_NO_PR,
@@ -49,6 +51,16 @@ function itemKey(item: Pick<StuckBacklogItem, "itemId" | "reason">): string {
   return `${item.itemId}::${item.reason}`;
 }
 
+// multiple_reasons / bounce_cap_exhausted are synthetic aggregate rows over an
+// item's *other* stuck reasons, not independent reasons themselves — they
+// must be excluded from "other reasons" counting/labeling, mirroring the
+// backend's own self-exclusion in reconcileMultiReasonEscalation. Without
+// this, an item with 2 real reasons plus its own multiple_reasons escalation
+// row would show "+2 other reasons" instead of "+1" (plan.md Task 2.1.1c).
+function isEscalationReason(reason: StuckReason): boolean {
+  return reason === StuckReason.MULTIPLE_REASONS || reason === StuckReason.BOUNCE_CAP_EXHAUSTED;
+}
+
 function firstDetectedMs(item: StuckBacklogItem): number {
   const ts = item.firstDetectedAt;
   if (!ts) return 0;
@@ -58,6 +70,8 @@ function firstDetectedMs(item: StuckBacklogItem): number {
 interface ResolvedGhost {
   item: StuckBacklogItem;
   message: string;
+  /** Overrides StuckItem's default "It will be removed from this list shortly." trailing copy — used for de-escalation, where only this card (not the whole item) is going away. */
+  trailingMessage?: string;
 }
 
 /**
@@ -91,9 +105,18 @@ export function StuckItemsSection() {
 
   // Surface 12: an item that resolves while its card is expanded gets a brief
   // "was just resolved" confirmation instead of being yanked out immediately.
+  //
+  // Task 2.1.4a: `itemKey` is per-(itemId, reason), so a `multiple_reasons`
+  // row de-escalating (resolving while the item itself remains open under
+  // other reasons) is *already* caught by this same "row disappeared while
+  // expanded" comparison below — each reason is its own list entry. The only
+  // extension needed is distinguishing that case (item still present under
+  // another reason) from true full-item resolution, so the copy doesn't
+  // falsely claim the whole item is going away.
   useEffect(() => {
     const prevItems = prevItemsRef.current;
     const nextKeys = new Set(items.map(itemKey));
+    const nextItemIds = new Set(items.map((i) => i.itemId));
     const newlyMissingExpanded = prevItems.filter(
       (p) => expandedKeys.has(itemKey(p)) && !nextKeys.has(itemKey(p))
     );
@@ -104,11 +127,35 @@ export function StuckItemsSection() {
         for (const item of newlyMissingExpanded) {
           const key = itemKey(item);
           if (next.has(key)) continue;
-          const message =
-            item.reason === StuckReason.PR_READY_UNMERGED && item.prNumber > 0
-              ? `PR #${item.prNumber} was merged.`
-              : "This item was just resolved.";
-          next.set(key, { item, message });
+
+          // Only MULTIPLE_REASONS gets de-escalation copy, not
+          // BOUNCE_CAP_EXHAUSTED — intentional, not an oversight:
+          // bounce_cap_exhausted can only ever coexist with an open bouncing
+          // row (backend invariant, see reconcileBouncingItems' paired
+          // resolve), so it never resolves independently while the item
+          // still has open non-escalation reasons. If that invariant ever
+          // changes, this condition needs the same OR as isEscalationReason.
+          const isDeescalation =
+            item.reason === StuckReason.MULTIPLE_REASONS && nextItemIds.has(item.itemId);
+
+          let message: string;
+          let trailingMessage: string | undefined;
+          if (isDeescalation) {
+            const remainingReasons = items.filter(
+              (i) => i.itemId === item.itemId && !isEscalationReason(i.reason)
+            ).length;
+            message = `No longer critical — down to ${remainingReasons} open reason${
+              remainingReasons !== 1 ? "s" : ""
+            }.`;
+            trailingMessage =
+              "This card will be removed shortly; the item itself is still open elsewhere in the list.";
+          } else {
+            message =
+              item.reason === StuckReason.PR_READY_UNMERGED && item.prNumber > 0
+                ? `PR #${item.prNumber} was merged.`
+                : "This item was just resolved.";
+          }
+          next.set(key, { item, message, trailingMessage });
 
           const timer = setTimeout(() => {
             setResolvedGhosts((p) => {
@@ -203,14 +250,31 @@ export function StuckItemsSection() {
   // Visible items: the filtered set actually rendered. Cross-reference badges
   // are computed from this set so they auto-suppress once a filter narrows an
   // item to a single visible card.
-  const visibleItems = useMemo(
-    () => (filter === "all" ? items : items.filter((i) => i.reason === filter)),
-    [items, filter]
-  );
+  //
+  // A row that just resolved (tracked in resolvedGhosts) has, by definition,
+  // already disappeared from `items` — grouping/rendering purely off `items`
+  // would make its ghost/confirmation card (justResolved banner) never
+  // actually appear, since it wouldn't be in any group to render at all. Keep
+  // it visible for its fade-out window by re-including it here (deduped
+  // against `items`, and still respecting the active filter) until its ghost
+  // timer clears it from resolvedGhosts.
+  const visibleItems = useMemo(() => {
+    const base = filter === "all" ? items : items.filter((i) => i.reason === filter);
+    if (resolvedGhosts.size === 0) return base;
+    const baseKeys = new Set(base.map(itemKey));
+    const ghostOnlyItems = Array.from(resolvedGhosts.values())
+      .map((g) => g.item)
+      .filter((item) => !baseKeys.has(itemKey(item)) && (filter === "all" || item.reason === filter));
+    return ghostOnlyItems.length > 0 ? [...base, ...ghostOnlyItems] : base;
+  }, [items, filter, resolvedGhosts]);
 
+  // Counts only non-escalation reasons per item — the two escalation reasons
+  // are aggregate summaries of the other rows, not additional "other reasons"
+  // in their own right (see isEscalationReason's doc comment).
   const itemIdCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of visibleItems) {
+      if (isEscalationReason(item.reason)) continue;
       counts.set(item.itemId, (counts.get(item.itemId) ?? 0) + 1);
     }
     return counts;
@@ -219,7 +283,9 @@ export function StuckItemsSection() {
   const otherReasonLabelsFor = useCallback(
     (item: StuckBacklogItem): string[] =>
       visibleItems
-        .filter((i) => i.itemId === item.itemId && i.reason !== item.reason)
+        .filter(
+          (i) => i.itemId === item.itemId && i.reason !== item.reason && !isEscalationReason(i.reason)
+        )
         .map((i) => getStuckReasonLabel(i.reason)),
     [visibleItems]
   );
@@ -328,7 +394,12 @@ export function StuckItemsSection() {
               <div className={styles.itemList}>
                 {groupItems.map((item) => {
                   const key = itemKey(item);
-                  const otherCount = (itemIdCounts.get(item.itemId) ?? 1) - 1;
+                  // Escalation-reason cards (multiple_reasons/bounce_cap_exhausted) aren't
+                  // themselves counted in itemIdCounts (see isEscalationReason), so they don't
+                  // subtract 1 for "self" the way an ordinary reason card does.
+                  const otherCount = isEscalationReason(item.reason)
+                    ? itemIdCounts.get(item.itemId) ?? 0
+                    : (itemIdCounts.get(item.itemId) ?? 1) - 1;
                   const ghost = resolvedGhosts.get(key);
                   return (
                     <StuckItem
@@ -340,6 +411,7 @@ export function StuckItemsSection() {
                       otherReasonLabels={otherReasonLabelsFor(item)}
                       justResolved={ghost !== undefined}
                       resolvedMessage={ghost?.message}
+                      resolvedTrailingMessage={ghost?.trailingMessage}
                       onSnooze={snooze}
                       onReworkCapOverride={handleReworkCapOverride}
                       onTriggerRemediationNow={triggerRemediationNow}

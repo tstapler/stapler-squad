@@ -61,10 +61,8 @@ site.
   Verification is deferred to a human running the affected tests on macOS
   post-merge — tracked as its own task (see `implementation/plan.md` Story
   for AC6).
-- **The `interpreter` field is a private escape hatch, not a public API**:
-  it is unexported and reachable only through `fake_runner.go`'s test
-  constructors, so it cannot leak into production wiring by accident without
-  a deliberate, reviewable code change to `runner.go` itself.
+- **The `interpreter` field boundary is convention-based**:
+  `fake_runner.go` is an exported test-helper file; constructor boundaries are enforced by naming conventions and code review rather than compiler-enforced build-tag isolation.
 
 ## Alternatives rejected
 
