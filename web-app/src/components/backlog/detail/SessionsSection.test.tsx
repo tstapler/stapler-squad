@@ -459,4 +459,29 @@ describe("SessionsSection steer control (Story 2.2.2, ADR-002)", () => {
     // Composer remains open on failure — not closed optimistically.
     expect(screen.getByTestId("session-steer-input-work-live-6")).toBeInTheDocument();
   });
+
+  it("SessionsSection_should_NotLeakDraftAcrossSessions_When_SwitchingSteerTargetWithoutSending", () => {
+    // Regression test for PR #457 code review finding: steerDraft was a
+    // single component-level string, not keyed per-session, so an unsent
+    // draft typed for session A survived into session B's composer when the
+    // operator switched Steer targets without sending — risking A's message
+    // being sent to session B instead.
+    const sessionA = makeSession({ sessionId: "work-live-a", role: "work" });
+    const sessionB = makeSession({ sessionId: "work-live-b", role: "work" });
+    renderSteerSection([sessionA, sessionB]);
+
+    // Open session A's composer and type a partial, unsent message.
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-a"));
+    const inputA = screen.getByTestId("session-steer-input-work-live-a");
+    fireEvent.change(inputA, { target: { value: "A's still-unsent message" } });
+
+    // Switch to session B's composer without sending A's message.
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-b"));
+
+    // A's composer is closed; B's composer must open empty, not pre-filled
+    // with A's draft.
+    expect(screen.queryByTestId("session-steer-input-work-live-a")).not.toBeInTheDocument();
+    const inputB = screen.getByTestId("session-steer-input-work-live-b");
+    expect(inputB).toHaveValue("");
+  });
 });

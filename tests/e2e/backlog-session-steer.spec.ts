@@ -268,10 +268,18 @@ test.describe("backlog-session-steer", () => {
       // span and BacklogItemDetail's action toast render this same text with
       // role="alert" — assert the composer's specifically (scoped to the
       // steer form).
+      // role="alert" computes its accessible name only from aria-label /
+      // aria-labelledby per the ARIA spec (alert is "Name from: author",
+      // not "Name from: contents") — the composer's steerError <span
+      // role="alert"> has no aria-label, so getByRole("alert", { name })
+      // can never match its text. Filter on text content instead, same as
+      // the ARIA-role + hasText pattern used for the "Steering message
+      // sent." toast alert above.
       await expect(
         page
-          .locator(`#session-steer-composer-${fakeSessionId}`)
-          .locator('[role="alert"]', { hasText: "session is not accepting input" })
+          .getByTestId(`session-steer-composer-${fakeSessionId}`)
+          .getByRole("alert")
+          .filter({ hasText: "session is not accepting input" })
       ).toBeVisible();
       await expect(input).toBeVisible();
       await expect(input).toHaveValue("this must not be lost");
@@ -342,7 +350,7 @@ test.describe("backlog-session-steer", () => {
       expect(box!.height).toBeGreaterThanOrEqual(44);
 
       await toggle.click();
-      const composer = page.locator(`#session-steer-composer-${fakeSessionId}`);
+      const composer = page.getByTestId(`session-steer-composer-${fakeSessionId}`);
       await expect(composer).toBeVisible();
       const flexDirection = await composer.evaluate((el) => getComputedStyle(el).flexDirection);
       expect(flexDirection).toBe("column");

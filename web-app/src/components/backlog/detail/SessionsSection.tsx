@@ -71,8 +71,16 @@ export function SessionsSection({
   // openIndex/draft/toggleRefs shape (Gap 1's same inline-disclosure
   // pattern) — keyed by sessionId rather than array index since sessions
   // aren't positionally stable across a "show more" expansion.
+  //
+  // steerDrafts is keyed per-sessionId (Record<string, string>), not a
+  // single shared string — matching TriageDiffSection's answerDrafts
+  // (Record<number, string>) for the same "multiple independent inline
+  // forms" problem. A single shared draft let an unsent draft typed for
+  // session A survive into session B's composer when the operator switched
+  // Steer targets without sending, risking the draft being sent to the
+  // wrong session (code review finding, PR #457).
   const [openSteerFor, setOpenSteerFor] = useState<string | null>(null);
-  const [steerDraft, setSteerDraft] = useState("");
+  const [steerDrafts, setSteerDrafts] = useState<Record<string, string>>({});
   const [steerError, setSteerError] = useState<string | null>(null);
   const steerToggleRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const steerInputRef = useRef<HTMLInputElement | null>(null);
@@ -83,16 +91,26 @@ export function SessionsSection({
     }
   }, [openSteerFor]);
 
+  const clearSteerDraft = (sessionId: string) => {
+    setSteerDrafts((prev) => {
+      if (!(sessionId in prev)) return prev;
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+  };
+
   const handleSteerCancel = () => {
-    const toggle = openSteerFor ? steerToggleRefs.current[openSteerFor] : null;
+    const sessionId = openSteerFor;
+    const toggle = sessionId ? steerToggleRefs.current[sessionId] : null;
     setOpenSteerFor(null);
-    setSteerDraft("");
+    if (sessionId) clearSteerDraft(sessionId);
     setSteerError(null);
     toggle?.focus();
   };
 
   const handleSteerSubmit = async (s: LinkedSession) => {
-    const message = steerDraft.trim();
+    const message = (steerDrafts[s.sessionId] ?? "").trim();
     if (!message) return;
     // Belt-and-suspenders re-check (pre-mortem failure #2, P2): the Send
     // button's disabled state already re-derives isSteerable(s) live on
@@ -105,7 +123,7 @@ export function SessionsSection({
     setSteerError(null);
     try {
       await onSteerSession(s, message);
-      setSteerDraft("");
+      clearSteerDraft(s.sessionId);
       setOpenSteerFor(null);
       steerToggleRefs.current[s.sessionId]?.focus();
     } catch (err) {
@@ -267,6 +285,7 @@ export function SessionsSection({
                   {!isSynthetic && openSteerFor === s.sessionId && (
                     <div
                       id={`session-steer-composer-${s.sessionId}`}
+                      data-testid={`session-steer-composer-${s.sessionId}`}
                       className={sectionStyles.steerComposer}
                       role="form"
                       aria-label={`Steer session ${s.sessionId}`}
@@ -275,8 +294,10 @@ export function SessionsSection({
                         ref={steerInputRef}
                         type="text"
                         className={sectionStyles.steerInput}
-                        value={steerDraft}
-                        onChange={(e) => setSteerDraft(e.target.value)}
+                        value={steerDrafts[s.sessionId] ?? ""}
+                        onChange={(e) =>
+                          setSteerDrafts((prev) => ({ ...prev, [s.sessionId]: e.target.value }))
+                        }
                         onKeyDown={(e) => {
                           if (e.key === "Enter") void handleSteerSubmit(s);
                           if (e.key === "Escape") handleSteerCancel();
@@ -294,7 +315,11 @@ export function SessionsSection({
                         // composer was opened — a session that ends while the
                         // composer is open must disable Send without requiring
                         // close/reopen (pre-mortem failure #2, P2).
-                        disabled={steeringSessionId === s.sessionId || !steerDraft.trim() || !isSteerable(s)}
+                        disabled={
+                          steeringSessionId === s.sessionId ||
+                          !(steerDrafts[s.sessionId] ?? "").trim() ||
+                          !isSteerable(s)
+                        }
                         aria-busy={steeringSessionId === s.sessionId}
                         data-testid={`session-steer-submit-${s.sessionId}`}
                       >
