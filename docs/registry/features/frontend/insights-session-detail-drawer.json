@@ -1,0 +1,17 @@
+{
+  "id": "insights-session-detail-drawer",
+  "type": "frontend",
+  "component": "SessionDetailDrawer",
+  "path": "web-app/src/app/insights/SessionDetailDrawer.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "SessionDetailDrawer > SessionDetailDrawer_should_fetchTurnTimelineOnce_When_drawerOpensForSession > calls useSessionTurnTimeline with the session's conversationId exactly once per render",
+    "SessionDetailDrawer > SessionDetailDrawer_should_fetchTurnTimelineOnce_When_drawerOpensForSession > renders the Per-Turn Breakdown table when turns are present",
+    "SessionDetailDrawer > SessionDetailDrawer_should_showExactEmptyStateCopy_When_noTurnData",
+    "SessionDetailDrawer > SessionDetailDrawer_should_renderHighestTokenTurnFirst_When_turnsVarySize",
+    "turnTimelineUtils > sortTurnsByTokensDesc_should_orderTurnsByTotalTokensDescending_When_turnsVarySize",
+    "turnTimelineUtils > isOutlierTurn_should_returnTrue_When_totalExceedsThreshold"
+  ],
+  "lastModified": "2026-08-02T00:00:00.000Z"
+}

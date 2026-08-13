@@ -1,0 +1,22 @@
+{
+  "id": "unfinished-work",
+  "type": "frontend",
+  "component": "UnfinishedTab",
+  "path": "web-app/src/app/unfinished/page.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "unfinished-work > page loads with title and filter controls",
+    "unfinished-work > shows empty state when no worktrees found",
+    "unfinished-work > filter chips toggle between All Uncommitted Ahead Behind",
+    "unfinished-work > Refresh button triggers a scan RPC",
+    "unfinished-work > item card expands to show detail panel on click",
+    "unfinished-work > Open Session button navigates to home with worktree prefill params",
+    "unfinished-work > Reattach Session button navigates to session detail",
+    "unfinished-work > Commit & Push button opens commit modal",
+    "unfinished-work > Dismiss button calls DismissWorktree RPC",
+    "unfinished-work > scan completed event updates last-scanned timestamp",
+    "unfinished-work > nav badge links to unfinished page"
+  ],
+  "lastModified": "2026-04-28T00:00:00Z"
+}

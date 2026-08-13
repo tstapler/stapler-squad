@@ -1,0 +1,14 @@
+{
+  "id": "onboarding-hook-install",
+  "type": "frontend",
+  "description": "Onboarding step that offers to install the global Claude Code hooks — rule enforcement (PreToolUse ssq-hooks check) and notifications (Notification/Stop ssq-hook-handler) — via the GetHookStatus/InstallHooks RPCs",
+  "component": "OnboardingModal",
+  "filePath": "web-app/src/components/onboarding/OnboardingModal.tsx",
+  "tested": true,
+  "testIds": [
+    "OnboardingModal_should_fetchHookStatus_When_reachingHooksStep",
+    "OnboardingModal_should_callInstallHooksWithBothToggles_When_installClicked",
+    "OnboardingModal_should_disableRulesToggle_When_binaryUnavailable"
+  ],
+  "lastModified": "2026-06-23T00:00:00Z"
+}

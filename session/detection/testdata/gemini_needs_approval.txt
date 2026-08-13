@@ -1,0 +1,9 @@
+Action Required                                                    2 of 2
+
+? Shell sed -i '/^tools:/d' /home/tstapler/dotfiles/.claude/agents/*.md [current working directory /home/tstapler/dotfiles]
+
+sed -i '/^tools:/d' /home/tstapler/dotfiles/.claude/agents/*.md
+Allow execution of: 'sed'?
+
+● 1. Allow once
+  2. No, suggest changes (esc)

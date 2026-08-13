@@ -1,0 +1,525 @@
+package session
+
+// instance_claude.go contains Claude session management methods for Instance:
+// history file detection, UUID extraction, and conversation reattachment.
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
+)
+
+// staleResumePattern is the prefix Claude CLI emits when --resume is used with a
+// conversation ID that no longer exists in Claude's backend.
+const staleResumePattern = "No conversation found with session ID"
+
+// isStaleResumeExit returns true when the PTY exit tail contains the Claude CLI error
+// that indicates a stale or expired --resume argument.  ANSI escape sequences are
+// stripped before the check so colour output does not prevent matching.
+func isStaleResumeExit(exitContent []byte) bool {
+	if len(exitContent) == 0 {
+		return false
+	}
+	return bytes.Contains(stripANSISimple(exitContent), []byte(staleResumePattern))
+}
+
+// stripANSISimple removes ANSI CSI/OSC/single-char escape sequences so that
+// pattern matching works regardless of terminal colour output.  It is intentionally
+// minimal — only the forms emitted by common terminal programs are handled.
+func stripANSISimple(b []byte) []byte {
+	out := make([]byte, 0, len(b))
+	i := 0
+	for i < len(b) {
+		if b[i] != 0x1b {
+			out = append(out, b[i])
+			i++
+			continue
+		}
+		if i+1 >= len(b) {
+			break
+		}
+		switch b[i+1] {
+		case '[': // CSI: ESC [ <params> <final>
+			i += 2
+			for i < len(b) && b[i] >= 0x20 && b[i] <= 0x3f {
+				i++
+			}
+			if i < len(b) && b[i] >= 0x40 && b[i] <= 0x7e {
+				i++
+			}
+		case ']': // OSC: ESC ] ... ST or BEL
+			i += 2
+			for i < len(b) {
+				if b[i] == 0x07 {
+					i++
+					break
+				}
+				if b[i] == 0x1b && i+1 < len(b) && b[i+1] == '\\' {
+					i += 2
+					break
+				}
+				i++
+			}
+		default: // ESC + single char
+			i += 2
+		}
+	}
+	return out
+}
+
+// recoverFromStaleResume clears the stale conversation UUID and restarts the session
+// fresh (without --resume) so it does not loop forever on the same bad UUID.
+// Safe to call from a goroutine; uses startMu to serialise concurrent calls.
+func (i *Instance) recoverFromStaleResume() {
+	log.Info("stale --resume uuid detected, clearing and restarting fresh", "session", i.Title)
+	log.ForSession(i.Title).Info("stale --resume uuid detected, clearing conversation state and restarting fresh")
+
+	// Remove the UUID so the next Start does not inject --resume.
+	i.ClearConversationState()
+
+	// Reset state machine so Start(false) can proceed from Stopped.
+	i.RecoverFromStopped()
+
+	if err := i.Start(false); err != nil {
+		log.Error("stale-resume auto-recovery failed", "session", i.Title, "err", err)
+		log.ForSession(i.Title).Error("stale-resume auto-recovery failed", "err", err)
+		return
+	}
+
+	log.Info("auto-recovered from stale --resume uuid", "session", i.Title)
+	log.ForSession(i.Title).Info("auto-recovered from stale --resume uuid, session restarted fresh")
+}
+
+// handleClaudeSessionReattachment attempts to re-attach to stored Claude Code session.
+func (i *Instance) handleClaudeSessionReattachment() error {
+	if i.claudeSession == nil {
+		log.Info("no claude code session data stored", "session", i.Title)
+		return nil
+	}
+
+	// Check if auto-reattachment is enabled
+	if !i.claudeSession.Settings.AutoReattach {
+		log.Info("auto-reattachment disabled", "session", i.Title)
+		return nil
+	}
+
+	// Check if session is too old (based on timeout settings)
+	timeoutMinutes := i.claudeSession.Settings.SessionTimeoutMinutes
+	if timeoutMinutes > 0 {
+		timeout := time.Duration(timeoutMinutes) * time.Minute
+		if time.Since(i.claudeSession.LastAttached) > timeout {
+			log.Info("claude code session has timed out, skipping re-attachment", "session", i.Title, "elapsed", time.Since(i.claudeSession.LastAttached))
+			return nil
+		}
+	}
+
+	// Initialize Claude session manager
+	sessionManager := NewClaudeSessionManager()
+
+	// Try to find and attach to the stored session
+	if i.claudeSession.ConversationUUID != "" {
+		log.Info("attempting to re-attach to claude code session", "session", i.Title, "uuid", i.claudeSession.ConversationUUID)
+
+		// Verify the session still exists
+		session, err := sessionManager.GetSessionByID(i.claudeSession.ConversationUUID)
+		if err != nil {
+			if i.claudeSession.Settings.CreateNewOnMissing {
+				log.Info("stored claude session not found, will create new session", "session", i.Title)
+				return i.createNewClaudeSession()
+			}
+			return fmt.Errorf("stored Claude session '%s' not found: %w", i.claudeSession.ConversationUUID, err)
+		}
+
+		// Attempt to attach to the existing session
+		if err := sessionManager.AttachToSession(session.ID); err != nil {
+			return fmt.Errorf("failed to attach to Claude session '%s': %w", session.ID, err)
+		}
+
+		// Update last attached timestamp
+		i.claudeSession.LastAttached = time.Now()
+		log.Info("successfully re-attached to claude code session", "session_id", session.ID)
+	} else {
+		// No specific session ID stored, try to find matching sessions by project
+		if i.gitManager.HasWorktree() {
+			return i.findAndAttachToProjectSession(sessionManager)
+		}
+	}
+
+	return nil
+}
+
+// createNewClaudeSession creates a new Claude Code session for this instance.
+func (i *Instance) createNewClaudeSession() error {
+	log.Info("creating new claude code session", "session", i.Title)
+
+	// TODO: Implement actual Claude Code session creation
+	// This would typically involve:
+	// 1. Launching Claude Code with the project directory
+	// 2. Waiting for session initialization
+	// 3. Capturing the new session ID
+
+	// For now, create placeholder session data
+	// sessionManager := NewClaudeSessionManager() // TODO: Use this when implementing actual Claude session creation
+
+	// Generate a placeholder session ID (in practice, this would come from Claude Code)
+	newSessionID := fmt.Sprintf("session_%s_%d", i.Title, time.Now().Unix())
+
+	newSession := ClaudeSession{
+		ID:             newSessionID,
+		ConversationID: "",
+		ProjectName:    i.Title,
+		LastActive:     time.Now(),
+		WorkingDir:     i.GetWorkingDirectory(),
+		IsActive:       true,
+	}
+
+	// Update the instance's Claude session data
+	i.claudeSession = &ClaudeSessionData{
+		ConversationUUID: newSession.ID,
+		SquadSessionID:   newSession.ConversationID,
+		ProjectName:      newSession.ProjectName,
+		LastAttached:     time.Now(),
+		Settings:         i.claudeSession.Settings, // Preserve existing settings
+		Metadata: map[string]string{
+			"working_dir": newSession.WorkingDir,
+			"created_at":  time.Now().Format(time.RFC3339),
+		},
+	}
+
+	log.Info("created new claude code session", "session_id", newSessionID, "session", i.Title)
+
+	return nil
+}
+
+// findAndAttachToProjectSession finds Claude sessions matching this instance's project.
+func (i *Instance) findAndAttachToProjectSession(sessionManager *ClaudeSessionManager) error {
+	projectPath := i.GetWorkingDirectory()
+	if projectPath == "" {
+		return fmt.Errorf("no working directory available for project matching")
+	}
+
+	// Find sessions that match this project
+	matchingSessions, err := sessionManager.FindSessionByProject(projectPath)
+	if err != nil {
+		return fmt.Errorf("failed to find matching Claude sessions: %w", err)
+	}
+
+	if len(matchingSessions) == 0 {
+		if i.claudeSession.Settings.CreateNewOnMissing {
+			log.Info("no matching claude sessions found for project, creating new session", "path", projectPath)
+			return i.createNewClaudeSession()
+		}
+		return fmt.Errorf("no matching Claude sessions found for project '%s'", projectPath)
+	}
+
+	// Use the most recently active session
+	var selectedSession ClaudeSession
+	for _, session := range matchingSessions {
+		if selectedSession.ID == "" || session.LastActive.After(selectedSession.LastActive) {
+			selectedSession = session
+		}
+	}
+
+	// Attach to the selected session
+	if err := sessionManager.AttachToSession(selectedSession.ID); err != nil {
+		return fmt.Errorf("failed to attach to Claude session '%s': %w", selectedSession.ID, err)
+	}
+
+	// Update the instance's Claude session data
+	if i.claudeSession == nil {
+		i.claudeSession = &ClaudeSessionData{}
+	}
+	i.claudeSession.ConversationUUID = selectedSession.ID
+	i.claudeSession.SquadSessionID = selectedSession.ConversationID
+	i.claudeSession.ProjectName = selectedSession.ProjectName
+	i.claudeSession.LastAttached = time.Now()
+	if i.claudeSession.Metadata == nil {
+		i.claudeSession.Metadata = make(map[string]string)
+	}
+	i.claudeSession.Metadata["working_dir"] = selectedSession.WorkingDir
+
+	log.Info("successfully attached to claude code session for project", "session_id", selectedSession.ID, "path", projectPath)
+
+	return nil
+}
+
+// GetClaudeSession returns the Claude session data for this instance.
+// Thread-safe: acquires stateMutex read lock.
+func (i *Instance) GetClaudeSession() *ClaudeSessionData {
+	i.claudeSessionMu.RLock()
+	defer i.claudeSessionMu.RUnlock()
+	return i.claudeSession
+}
+
+// SetClaudeSession sets the Claude session data for this instance.
+// Thread-safe: acquires stateMutex write lock.
+func (i *Instance) SetClaudeSession(sessionData *ClaudeSessionData) {
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
+	i.claudeSession = sessionData
+}
+
+// HasClaudeSession returns true if this instance has Claude session data.
+// Thread-safe: acquires stateMutex read lock.
+func (i *Instance) HasClaudeSession() bool {
+	i.claudeSessionMu.RLock()
+	defer i.claudeSessionMu.RUnlock()
+	return i.claudeSession != nil && i.claudeSession.ConversationUUID != ""
+}
+
+// ClearConversationState removes the stored Claude conversation UUID and history
+// file path so that the next Resume starts a fresh conversation rather than
+// attempting --resume with a potentially stale or path-mismatched UUID.
+func (i *Instance) ClearConversationState() {
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
+	// claudeSessionMu protects claudeSession from concurrent SetHistoryInfo-style
+	// writers, but HistoryFilePath and buildSnapshot's read of every mutable
+	// field also need to be ordered against legacy setters (MarkViewed & co.)
+	// that mutate fields directly under i.mu.Lock() from outside the actor.
+	// Take i.mu too (nested inside claudeSessionMu, the only lock order used
+	// anywhere for these two locks) around the writes AND the buildSnapshot
+	// call, not just the read — see runActor's doc comment in actor.go.
+	i.mu.Lock()
+	if i.claudeSession != nil {
+		i.claudeSession.ConversationUUID = ""
+	}
+	i.HistoryFilePath = ""
+	i.conversationClearedAt = time.Now()
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
+}
+
+// tryExtractConversationUUID attempts to detect the Claude conversation UUID.
+// It first tries inspecting the open files of the live tmux pane process (via
+// HistoryFileDetector.Detect); if that is unavailable (tmux dead, e.g. a cold
+// restore), it falls back to DetectByPath, which scans
+// ~/.claude/projects/<encoded-path>/ for the newest conversation JSONL without
+// requiring a live process. The DetectByPath fallback is the expected path on
+// cold restore — it is not a degraded case despite the fast path being tried
+// first.
+//
+// Does not require or assume any caller-held lock: it takes claudeSessionMu
+// itself around every read/write of claudeSession, HistoryFilePath, and
+// conversationClearedAt. The initial early-return check below is the one
+// exception — it is an unlocked read, a pre-existing, out-of-scope exposure
+// on the real lock-free call sites (SwitchWorkspace, and the two cold-restore
+// call sites in instance.go) that this fix does not claim to have closed.
+func (i *Instance) tryExtractConversationUUID() {
+	// Skip if we already have a conversation UUID.
+	if i.claudeSession != nil && i.claudeSession.ConversationUUID != "" {
+		return
+	}
+
+	detector := i.historyDetector
+	if detector == nil {
+		detector = NewHistoryFileDetectorWithRealInspector()
+	}
+	var info *HistoryFileInfo
+
+	// Fast path: inspect open files of the live tmux pane process.
+	if i.pm().IsAlive() {
+		pid, err := i.pm().GetPanePID()
+		if err != nil {
+			log.Debug("tryextractconversationuuid: could not get pane pid", "session", i.Title, "err", err)
+		} else {
+			info, err = detector.Detect(pid)
+			if err != nil {
+				log.Warn("tryextractconversationuuid: detect error", "session", i.Title, "pid", pid, "err", err)
+			}
+		}
+	}
+
+	// Fallback: scan the project directory by path (works after reboot / tmux kill).
+	// Use the effective root dir (worktree path for worktree sessions) so we look in
+	// the right ~/.claude/projects/ subdirectory, not the base repository path.
+	if info == nil {
+		effectivePath := i.GetEffectiveRootDir()
+		if effectivePath == "" {
+			return
+		}
+		var err error
+		info, err = detector.DetectByPath(effectivePath)
+		if err != nil {
+			log.Warn("tryextractconversationuuid: path-based detect error", "session", i.Title, "err", err)
+		}
+		if info != nil {
+			i.claudeSessionMu.RLock()
+			clearedAt := i.conversationClearedAt
+			i.claudeSessionMu.RUnlock()
+			if !clearedAt.IsZero() && !info.ModTime.After(clearedAt) {
+				log.Debug("tryextractconversationuuid: found jsonl predates last explicit clear, skipping recovery",
+					"session", i.Title, "path", info.HistoryFilePath, "clearedAt", clearedAt)
+				info = nil
+			}
+		}
+		if info != nil {
+			log.Info("tryextractconversationuuid: found conversation via path fallback", "session", i.Title)
+		}
+	}
+
+	if info == nil {
+		log.Debug("tryextractconversationuuid: no jsonl file found", "session", i.Title)
+		return
+	}
+
+	// See SetHistoryInfo's comment: nest i.mu inside claudeSessionMu, around the
+	// writes AND the buildSnapshot call, so this is ordered against legacy
+	// direct-lock setters and the actor's buildSnapshot read, and the cached
+	// snapshot reflects the recovered UUID immediately rather than staying
+	// stale until an unrelated mutation rebuilds it.
+	i.claudeSessionMu.Lock()
+	i.mu.Lock()
+	if i.claudeSession == nil {
+		i.claudeSession = &ClaudeSessionData{}
+	}
+	i.claudeSession.ConversationUUID = info.ConversationUUID
+	i.HistoryFilePath = info.HistoryFilePath
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.claudeSessionMu.Unlock()
+	i.snapshot.Store(snap)
+	log.ForSession(i.Title).Info("uuid assigned via tryextractconversationuuid", "uuid", info.ConversationUUID, "path", info.HistoryFilePath)
+}
+
+// GetConversationUUID returns the Claude conversation UUID, or "" if not linked.
+// Thread-safe: acquires stateMutex read lock.
+func (i *Instance) GetConversationUUID() string {
+	i.claudeSessionMu.RLock()
+	defer i.claudeSessionMu.RUnlock()
+	if i.claudeSession == nil {
+		return ""
+	}
+	return i.claudeSession.ConversationUUID
+}
+
+// GetClaudeConversationUUID returns the stored Claude conversation UUID, empty if none.
+// Thread-safe: acquires stateMutex read lock.
+func (i *Instance) GetClaudeConversationUUID() string {
+	i.claudeSessionMu.RLock()
+	defer i.claudeSessionMu.RUnlock()
+	if i.claudeSession == nil {
+		return ""
+	}
+	return i.claudeSession.ConversationUUID
+}
+
+// RunWithResume spawns a new claude subprocess using --resume <uuid> and -p <message>,
+// waits for completion, and returns the result text. Updates ConversationUUID on success.
+func (i *Instance) RunWithResume(ctx context.Context, message string) (string, error) {
+	uuid := i.GetClaudeConversationUUID()
+	if uuid == "" {
+		return "", fmt.Errorf("no conversation UUID: session has no stored session_id")
+	}
+
+	// Extract binary path from Program field (may include flags — take first word).
+	claudePath := i.Program
+	if claudePath == "" {
+		claudePath = "claude"
+	}
+	if idx := strings.IndexByte(claudePath, ' '); idx >= 0 {
+		claudePath = claudePath[:idx]
+	}
+
+	cmd := safeexec.CommandContext(ctx, claudePath, "-p", "--resume", uuid, "--output-format", "json", message)
+	cmd.Dir = i.GetEffectiveRootDir()
+
+	out, runErr := cmd.Output()
+	output := string(out)
+
+	result := parseJSONField(output, "result")
+
+	// Update UUID in case it changed (fires save callback).
+	if newUUID := parseClaudeSessionID(output); newUUID != "" && newUUID != uuid {
+		i.SetClaudeConversationUUID(newUUID)
+	}
+
+	if runErr != nil {
+		if result != "" {
+			return result, nil
+		}
+		return "", fmt.Errorf("claude subprocess error: %w", runErr)
+	}
+	return result, nil
+}
+
+// SetClaudeConversationUUID stores the Claude conversation UUID so it is used
+// in subsequent --resume flags. Fires the claudeSessionIDSavedCallback if set.
+// No-op (including callback) if uuid is unchanged.
+func (i *Instance) SetClaudeConversationUUID(uuid string) {
+	i.claudeSessionMu.Lock()
+	if i.claudeSession == nil {
+		i.claudeSession = &ClaudeSessionData{}
+	}
+	if i.claudeSession.ConversationUUID == uuid {
+		i.claudeSessionMu.Unlock()
+		return // no change, skip callback
+	}
+	i.claudeSession.ConversationUUID = uuid
+	cb := i.claudeSessionIDSavedCallback
+	i.claudeSessionMu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+// SetClaudeSessionIDSavedCallback registers a callback that fires when
+// SetClaudeConversationUUID is called. Used by the service layer to trigger
+// a storage save when the session_id is discovered.
+func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
+	i.claudeSessionIDSavedCallback = fn
+}
+
+// SetHistoryInfo updates the conversation UUID and history file path.
+// Thread-safe: acquires stateMutex write lock.
+// No-op if the UUID is already set to the same value.
+// Fires the same claudeSessionIDSavedCallback as SetClaudeConversationUUID
+// when the UUID actually changes, so a HistoryLinker-detected UUID is
+// persisted to durable storage immediately rather than waiting on the next
+// incidental full SaveInstances sweep (hibernation sweeper, health check) —
+// a tmux pane killed before that sweep runs would otherwise resume with no
+// conversation UUID to pass to --resume.
+func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
+	i.claudeSessionMu.Lock()
+
+	currentUUID := ""
+	if i.claudeSession != nil {
+		currentUUID = i.claudeSession.ConversationUUID
+	}
+	if currentUUID == conversationUUID && i.HistoryFilePath == historyFilePath {
+		i.claudeSessionMu.Unlock()
+		return
+	}
+	uuidChanged := currentUUID != conversationUUID
+
+	// See ClearConversationState's comment: nest i.mu inside claudeSessionMu,
+	// around the writes AND the buildSnapshot call, so this is ordered against
+	// legacy direct-lock setters (MarkViewed & co.) that mutate fields under
+	// i.mu.Lock() from outside the actor.
+	i.mu.Lock()
+	if i.claudeSession == nil {
+		i.claudeSession = &ClaudeSessionData{}
+	}
+	i.claudeSession.ConversationUUID = conversationUUID
+	i.HistoryFilePath = historyFilePath
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
+
+	cb := i.claudeSessionIDSavedCallback
+	i.claudeSessionMu.Unlock()
+
+	if uuidChanged && cb != nil {
+		cb()
+	}
+
+	log.ForSession(i.Title).Info("conversation uuid set", "uuid", conversationUUID, "history", historyFilePath)
+}

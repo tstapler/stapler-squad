@@ -1,0 +1,128 @@
+name: Publish Demo GIFs
+
+# Runs after PRs merge to main. Records demo flows and commits the resulting
+# GIFs to docs/demos/ so they stay current in the default branch.
+# paths-ignore prevents this from re-triggering on its own [skip ci] commit.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish-demos:
+    name: Record and Publish Demo GIFs
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate protos and build web UI
+        uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build binary
+        run: go build -o stapler-squad .
+
+      - name: Install Playwright dependencies
+        run: |
+          cd tests/e2e
+          npm install
+          npx playwright install chromium --with-deps
+
+      - name: Record demo flows
+        env:
+          RECORD_FEATURES: 'true'
+          TEST_SERVER_URL: http://localhost:8543
+        run: |
+          DEMO_DIR=$(mktemp -d)
+          go run ./tests/demo/seed "$DEMO_DIR" 6
+          echo "Seeded demo data into $DEMO_DIR"
+
+          STAPLER_SQUAD_USE_CONTROL_MODE=false \
+            ./stapler-squad --tmux-keep-server --test-mode --test-dir "$DEMO_DIR" &
+          SERVER_PID=$!
+
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8543/ > /dev/null 2>&1; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          cd tests/e2e
+          npx playwright test --reporter=list || true
+
+          kill $SERVER_PID 2>/dev/null || true
+          rm -rf "$DEMO_DIR"
+
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Convert videos to GIFs
+        id: convert-gifs
+        run: |
+          mkdir -p /tmp/demo-gifs
+          NAMES=""
+          WEBMS=$(
+            find tests/e2e/test-results/demo-Demo-Flow-chromium \
+              -maxdepth 1 -name "video.webm" 2>/dev/null | head -1
+            find tests/e2e/test-results -maxdepth 2 -name "video.webm" 2>/dev/null \
+              | grep -iv "terminal-flickering\|terminal-stress\|stress-test\|-retry[0-9]" \
+              | grep -v "demo-Demo-Flow"
+          )
+          for webm in $WEBMS; do
+            dir=$(basename "$(dirname "$webm")")
+            name=$(echo "$dir" | sed 's/-chromium$//;s/-firefox$//;s/-webkit$//')
+            gif="/tmp/demo-gifs/${name}.gif"
+            duration=$(ffprobe -v quiet -show_entries format=duration \
+              -of default=noprint_wrappers=1:nokey=1 "$webm" 2>/dev/null)
+            if [ -z "$duration" ] || awk "BEGIN{exit !(${duration:-0} < 1.0)}"; then
+              echo "Skipping $webm (too short: ${duration:-unknown}s)"
+              continue
+            fi
+            palette=$(mktemp --suffix=.png)
+            echo "Converting $webm -> $gif"
+            if ffmpeg -y -i "$webm" -vf "fps=8,scale=960:-2,palettegen=max_colors=128" -t 30 "$palette" 2>&1 \
+               && ffmpeg -y -i "$webm" -i "$palette" \
+                 -lavfi "fps=8,scale=960:-2[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=3" \
+                 -loop 0 -t 30 "$gif" 2>&1; then
+              NAMES="${NAMES}${name},"
+              echo "Created $gif ($(du -h "$gif" | cut -f1))"
+            else
+              echo "Warning: ffmpeg conversion failed for $webm"
+            fi
+            rm -f "$palette"
+          done
+          echo "names=${NAMES%,}" >> $GITHUB_OUTPUT
+          if [ -z "$NAMES" ]; then
+            echo "::warning::No GIFs were produced — WebM artifacts are still available"
+          fi
+
+      - name: Commit GIFs to docs/demos
+        if: steps.convert-gifs.outputs.names != ''
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          mkdir -p docs/demos
+          cp /tmp/demo-gifs/*.gif docs/demos/
+          git add docs/demos/
+          git diff --cached --quiet && echo "No GIF changes to commit" && exit 0
+          git commit -m "chore(demos): update E2E feature GIFs [skip ci]"
+          for i in 1 2 3; do git pull --rebase --autostash && git push && break || sleep 5; done

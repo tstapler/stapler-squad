@@ -1,0 +1,13 @@
+{
+  "id": "session-create-one-off",
+  "type": "frontend",
+  "component": "OmnibarCreationPanel",
+  "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+  "tested": true,
+  "testIds": [
+    "one-off session creation > creation panel stays visible while typing session name",
+    "one-off session creation > hides path input when one-off is selected",
+    "one-off session creation > creates session with one_off flag"
+  ],
+  "lastModified": "2026-05-01T00:00:00Z"
+}

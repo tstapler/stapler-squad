@@ -1,0 +1,20 @@
+{
+  "id": "backlog-item-form",
+  "type": "frontend",
+  "component": "BacklogItemForm",
+  "path": "web-app/src/components/backlog/BacklogItemForm.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "BacklogItemForm — Repository Path help",
+    "BacklogItemForm — checkbox help text",
+    "BacklogItemForm — cloning busy state",
+    "BacklogItemForm — auto-create-pr toggle",
+    "BacklogItemForm — description write/preview",
+    "BacklogItemForm — image attachment upload",
+    "e2e:backlog-rich-text-preview",
+    "e2e:backlog-rich-text-upload",
+    "e2e:backlog-rich-text-mobile-fallback"
+  ],
+  "lastModified": "2026-07-18T00:00:00Z"
+}

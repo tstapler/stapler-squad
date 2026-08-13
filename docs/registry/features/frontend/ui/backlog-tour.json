@@ -1,0 +1,16 @@
+{
+  "id": "backlog-tour",
+  "type": "frontend",
+  "component": "BacklogTourModal",
+  "path": "web-app/src/components/backlog/BacklogTourModal.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "BacklogTourModal — visibility",
+    "BacklogTourModal — navigation",
+    "BacklogTourModal — dismissal",
+    "e2e:backlog-tour-first-visit",
+    "e2e:backlog-tour-reopen-button"
+  ],
+  "lastModified": "2026-07-01T00:00:00Z"
+}

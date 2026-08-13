@@ -1,0 +1,16 @@
+{
+  "id": "backlog:transition-status",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "TransitionBacklogItemStatus",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideReasonSet",
+    "TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet",
+    "TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverrideRaces"
+  ],
+  "lastModified": "2026-08-04T00:00:00-07:00"
+}

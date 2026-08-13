@@ -1,0 +1,24 @@
+{
+  "id": "backlog:watch",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "WatchBacklogItems",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_events.go",
+  "tested": true,
+  "testIds": [
+    "TestWatchBacklogItems_should_sendSnapshotEventsForAllItems_When_AfterSeqIsZero",
+    "TestWatchBacklogItems_should_replayBufferedEventsInSeqOrder_When_AfterSeqIsGreaterThanZero",
+    "TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_When_PublishedBetweenSubscribeAndEventsSince",
+    "TestWatchBacklogItems_should_forwardLiveEvent_When_PublishedWhileStreamIsLive",
+    "TestWatchBacklogItems_should_excludeNonMatchingItems_When_StatusFilterAppliedToSnapshot",
+    "TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNoItems",
+    "TestWatchBacklogItems_should_excludeNonMatchingItems_When_CategoryFilterAppliedToSnapshot",
+    "TestWatchBacklogItems_should_onlyForwardMatchingLiveEvents_When_StatusFilterIsSet",
+    "TestWatchBacklogItems_should_returnUnimplemented_When_EventBusIsNil",
+    "TestWatchBacklogItems_should_unsubscribeAndReturn_When_ContextIsCanceled",
+    "TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_KindVaries"
+  ],
+  "lastModified": "2026-07-21T22:16:21.653131367-07:00"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "backlog:update-source",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "UpdateItemSource",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled",
+    "TestUpdateItemSource_ReturnsErrorForUnknownSourceId"
+  ],
+  "lastModified": "2026-08-03T00:00:00-07:00"
+}

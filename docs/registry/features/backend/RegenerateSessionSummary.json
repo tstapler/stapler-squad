@@ -1,0 +1,18 @@
+{
+  "id": "RegenerateSessionSummary",
+  "type": "backend",
+  "service": "SessionSummaryService",
+  "method": "RegenerateSessionSummary",
+  "protoFile": "proto/session/v1/session_summary.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_summary_service.go",
+  "tested": true,
+  "testIds": [
+    "TestRegenerateSessionSummary_should_ReturnNotFound_When_NoRowAndNoLiveInstance",
+    "TestRegenerateSessionSummary_should_NotTriggerSecondPipeline_When_AlreadyGenerating",
+    "TestRegenerateSessionSummary_should_RefreshDiffAndGoalFromLiveInstance_When_LiveInstancePresent",
+    "TestRegenerateSessionSummary_should_FallBackToPersistedFieldsWithNilGoal_When_NoLiveInstance",
+    "TestRegenerateSessionSummary_should_DispatchWithBackgroundContext_When_RequestContextIsCancelledImmediately"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}

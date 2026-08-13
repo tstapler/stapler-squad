@@ -1,0 +1,64 @@
+name: GoReleaser Check
+
+# Validates .goreleaser.yaml on every change to it. This is deliberately
+# separate from release.yml (which only runs `goreleaser release` on a
+# tag push) — without this, a broken config is invisible until the next
+# tag is pushed, and a failure there produces no release assets and no
+# Homebrew formula update, with nothing else surfacing the failure.
+#
+# `goreleaser check` is schema/semantic validation only (no compilation),
+# so this runs in seconds and doesn't need the Go toolchain, web build,
+# or protobuf generation that the full release build requires.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.goreleaser.yaml'
+      - '.github/workflows/goreleaser-check.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.goreleaser.yaml'
+      - '.github/workflows/goreleaser-check.yml'
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: goreleaser check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          install-only: true
+
+      - name: Run GoReleaser check
+        run: |
+          # `goreleaser check` exits non-zero for both genuine config errors
+          # (e.g. a build-id collision) and known, already-accepted
+          # deprecation warnings (this repo still uses the classic `brews`
+          # publisher; migrating to `homebrew_casks` changes end-user
+          # install behavior and needs its own careful, tested PR — not a
+          # blind syntax swap here). Distinguish the two by output: a
+          # genuinely broken config reports "configuration is invalid",
+          # while a valid-but-deprecated one reports "configuration is
+          # valid, but uses deprecated properties". Only fail on the former,
+          # so this check remains a real regression guard instead of being
+          # permanently red on accepted debt (or silently disabled).
+          set -o pipefail
+          OUTPUT=$(goreleaser check 2>&1) && STATUS=0 || STATUS=$?
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "configuration is invalid"; then
+            echo "::error::.goreleaser.yaml is invalid — see output above"
+            exit 1
+          fi
+          if [ "$STATUS" -ne 0 ] && ! echo "$OUTPUT" | grep -q "valid, but uses deprecated properties"; then
+            echo "::error::goreleaser check failed for an unrecognized reason — see output above"
+            exit 1
+          fi
+          echo "goreleaser check passed (deprecation warnings, if any, are pre-existing and tracked separately)"

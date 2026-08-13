@@ -1,0 +1,1746 @@
+package session
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
+	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
+	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
+	"github.com/tstapler/stapler-squad/session/ent/claudesession"
+	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/project"
+	"github.com/tstapler/stapler-squad/session/ent/session"
+	entshell "github.com/tstapler/stapler-squad/session/ent/shell"
+	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/worktree"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	_ "github.com/mattn/go-sqlite3" // SQLite driver
+)
+
+// EntRepository implements the Repository interface using Ent ORM as the storage backend.
+// It provides type-safe database operations with automatic schema migrations.
+type EntRepository struct {
+	client        *ent.Client
+	dbPath        string
+	migrationMode bool // When true, enables dual-write mode for migration
+
+	// itemChangePublisher is nil-safe — every hooked backlog mutation method
+	// nil-checks before calling it (publish is best-effort and never blocks
+	// or fails the underlying mutation). Wired via SetItemChangePublisher,
+	// typically by Storage.SetItemChangePublisher's forwarding call in
+	// server/dependencies.go.
+	itemChangePublisher ItemChangePublisher
+}
+
+// NewEntRepository creates a new Ent repository with the given options.
+// The database will be initialized with the schema if it doesn't exist.
+func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
+	repo := &EntRepository{
+		dbPath:        "~/.stapler-squad/sessions.db", // Default path
+		migrationMode: false,
+	}
+
+	// Apply options
+	for _, opt := range opts {
+		if err := opt(repo); err != nil {
+			return nil, fmt.Errorf("failed to apply option: %w", err)
+		}
+	}
+
+	// Expand home directory in path if needed
+	expandedPath := repo.dbPath
+	if len(expandedPath) >= 2 && expandedPath[:2] == "~/" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get home directory: %w", err)
+		}
+		expandedPath = filepath.Join(homeDir, expandedPath[2:])
+	}
+
+	// Create parent directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create database directory: %w", err)
+	}
+
+	// Open database connection with WAL mode for better concurrency
+	dbPath := expandedPath + "?_journal_mode=WAL&_timeout=5000&_fk=1"
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	// SQLite supports only one writer at a time; serialise all access through a
+	// single connection to eliminate "database is locked" contention.
+	// WAL mode still allows concurrent reads via the same connection pool.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(time.Hour)
+
+	// Create Ent client with the existing database connection
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := ent.NewClient(ent.Driver(drv))
+
+	// Run automatic schema migration
+	if err := client.Schema.Create(context.Background()); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to create schema: %w", err)
+	}
+
+	// Run status integer remap migration (idempotent).
+	// Old iota: Running=0, Ready=1, Loading=2, Paused=3, NeedsApproval=4, Creating=5, Stopped=6
+	// New iota: Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
+	// Values 0–6 on disk (old) must be remapped to the new scheme.
+	// Only run if the database has any legacy-range status values (>4 indicates old Stopped=6).
+	if err := runStatusRemap(db); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to remap status values: %w", err)
+	}
+
+	repo.client = client
+
+	// Normalize any pre-existing BacklogItem.updated_at rows from Local to
+	// UTC (idempotent) — see backlog_item_updated_at_utc_migration.go for
+	// why this is required, not just cosmetic: mixed Local/UTC-formatted
+	// TEXT rows sort incorrectly and spuriously fail CAS preconditions
+	// built from a protobuf Timestamp (always UTC) until each row is
+	// touched once.
+	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
+	}
+
+	// Populate github_pr_url for pre-existing sessions that have a known PR
+	// number/owner/repo but were created before CreateSession started
+	// building the URL itself (idempotent) — see
+	// github_pr_url_backfill.go.
+	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
+	}
+
+	return repo, nil
+}
+
+// NewEntRepositoryFromClient wraps a pre-existing *ent.Client in an EntRepository.
+// The caller is responsible for running schema migration on the client beforehand.
+// Use this when you need to share an already-opened client across subsystems
+// (e.g. injecting a test client or reusing an existing connection).
+func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
+	return &EntRepository{client: client}
+}
+
+// GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)
+// can operate on entities not managed by the Repository interface.
+func (r *EntRepository) GetEntClient() *ent.Client {
+	return r.client
+}
+
+// Create inserts a new session into the database
+func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
+	// Start transaction
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Create main session
+	sessionCreate := tx.Session.Create().
+		SetTitle(data.Title).
+		SetNillableUUID(nilIfEmpty(data.UUID)).
+		SetPath(data.Path).
+		SetStatus(int(data.Status)).
+		SetCreatedAt(data.CreatedAt).
+		SetUpdatedAt(data.UpdatedAt).
+		SetAutoYes(data.AutoYes).
+		SetAutoApprove(data.AutoApprove).
+		SetAutonomousMode(data.AutonomousMode).
+		SetProgram(data.Program).
+		SetIsExpanded(data.IsExpanded)
+
+	// Set optional fields
+	if data.WorkingDir != "" {
+		sessionCreate.SetWorkingDir(data.WorkingDir)
+	}
+	if data.Branch != "" {
+		sessionCreate.SetBranch(data.Branch)
+	}
+	if data.Height > 0 {
+		sessionCreate.SetHeight(data.Height)
+	}
+	if data.Width > 0 {
+		sessionCreate.SetWidth(data.Width)
+	}
+	if data.Prompt != "" {
+		sessionCreate.SetPrompt(data.Prompt)
+	}
+	if data.ExistingWorktree != "" {
+		sessionCreate.SetExistingWorktree(data.ExistingWorktree)
+	}
+	if data.Category != "" {
+		sessionCreate.SetCategory(data.Category)
+	}
+	if data.Note != "" {
+		sessionCreate.SetNote(data.Note)
+	}
+	if data.SessionType != "" {
+		sessionCreate.SetSessionType(string(data.SessionType))
+	}
+	if data.TmuxPrefix != "" {
+		sessionCreate.SetTmuxPrefix(data.TmuxPrefix)
+	}
+	if !data.LastTerminalUpdate.IsZero() {
+		sessionCreate.SetLastTerminalUpdate(data.LastTerminalUpdate)
+	}
+	if !data.LastMeaningfulOutput.IsZero() {
+		sessionCreate.SetLastMeaningfulOutput(data.LastMeaningfulOutput)
+	}
+	if data.LastOutputSignature != "" {
+		sessionCreate.SetLastOutputSignature(data.LastOutputSignature)
+	}
+	if !data.LastAddedToQueue.IsZero() {
+		sessionCreate.SetLastAddedToQueue(data.LastAddedToQueue)
+	}
+	if !data.LastViewed.IsZero() {
+		sessionCreate.SetLastViewed(data.LastViewed)
+	}
+	if !data.LastAcknowledged.IsZero() {
+		sessionCreate.SetLastAcknowledged(data.LastAcknowledged)
+	}
+	if data.MCPServerURL != "" {
+		sessionCreate.SetMcpServerURL(data.MCPServerURL)
+	}
+	if data.InitialPrompt != "" {
+		sessionCreate.SetInitialPrompt(data.InitialPrompt)
+	}
+	if data.OneShot {
+		sessionCreate.SetOneShot(data.OneShot)
+	}
+	if data.Hidden {
+		sessionCreate.SetHidden(data.Hidden)
+	}
+	if data.GitHubPRURL != "" {
+		sessionCreate.SetGithubPrURL(data.GitHubPRURL)
+	}
+	if data.GitHubPRNumber > 0 {
+		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubOwner != "" {
+		sessionCreate.SetGithubOwner(data.GitHubOwner)
+	}
+	if data.GitHubRepo != "" {
+		sessionCreate.SetGithubRepo(data.GitHubRepo)
+	}
+	if data.ArchivedAt != nil {
+		sessionCreate.SetArchivedAt(*data.ArchivedAt)
+	}
+
+	// Link project if specified (look up by name)
+	if data.ProjectID != "" {
+		proj, err := tx.Project.Query().Where(project.Name(data.ProjectID)).Only(ctx)
+		if err == nil {
+			sessionCreate.SetProjectID(proj.ID)
+		}
+		// If project not found, silently continue (session created without project link)
+	}
+
+	sess, err := sessionCreate.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+
+	// Create worktree if present
+	if data.Worktree.RepoPath != "" {
+		if _, err := tx.Worktree.Create().
+			SetSessionID(sess.ID).
+			SetRepoPath(data.Worktree.RepoPath).
+			SetWorktreePath(data.Worktree.WorktreePath).
+			SetSessionName(data.Worktree.SessionName).
+			SetBranchName(data.Worktree.BranchName).
+			SetBaseCommitSha(data.Worktree.BaseCommitSHA).
+			Save(ctx); err != nil {
+			return fmt.Errorf("failed to create worktree: %w", err)
+		}
+	}
+
+	// Create diff stats
+	diffCreate := tx.DiffStats.Create().
+		SetSessionID(sess.ID).
+		SetAdded(data.DiffStats.Added).
+		SetRemoved(data.DiffStats.Removed)
+
+	if data.DiffStats.Content != "" {
+		diffCreate.SetContent(data.DiffStats.Content)
+	}
+
+	if _, err := diffCreate.Save(ctx); err != nil {
+		return fmt.Errorf("failed to create diff stats: %w", err)
+	}
+
+	// Create/associate tags — collect all IDs then one bulk AddTagIDs.
+	if len(data.Tags) > 0 {
+		tagIDs := make([]int, 0, len(data.Tags))
+		for _, tagName := range data.Tags {
+			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
+			if err != nil {
+				if ent.IsNotFound(err) {
+					t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
+					if err != nil {
+						return fmt.Errorf("failed to create tag %s: %w", tagName, err)
+					}
+				} else {
+					return fmt.Errorf("failed to query tag %s: %w", tagName, err)
+				}
+			}
+			tagIDs = append(tagIDs, t.ID)
+		}
+		if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
+			return fmt.Errorf("failed to associate tags: %w", err)
+		}
+	}
+
+	// Create Claude session if present
+	if data.ClaudeSession.ConversationUUID != "" {
+		claudeCreate := tx.ClaudeSession.Create().
+			SetSessionID(sess.ID).
+			SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
+			SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
+			SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
+			SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
+			SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
+
+		if data.ClaudeSession.SquadSessionID != "" {
+			claudeCreate.SetConversationID(data.ClaudeSession.SquadSessionID)
+		}
+		if data.ClaudeSession.ProjectName != "" {
+			claudeCreate.SetProjectName(data.ClaudeSession.ProjectName)
+		}
+		if !data.ClaudeSession.LastAttached.IsZero() {
+			claudeCreate.SetLastAttached(data.ClaudeSession.LastAttached)
+		}
+		if data.ClaudeSession.Settings.PreferredSessionName != "" {
+			claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
+		}
+
+		claudeSess, err := claudeCreate.Save(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to create claude session: %w", err)
+		}
+
+		// Create Claude metadata entries
+		for key, value := range data.ClaudeSession.Metadata {
+			if _, err := tx.ClaudeMetadata.Create().
+				SetClaudeSessionID(claudeSess.ID).
+				SetKey(key).
+				SetValue(value).
+				Save(ctx); err != nil {
+				return fmt.Errorf("failed to create claude metadata %s: %w", key, err)
+			}
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// Update modifies an existing session in the database
+func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
+	// Start transaction
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Find session by title
+	sess, err := tx.Session.Query().Where(session.Title(data.Title)).Only(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to find session: %w", err)
+	}
+
+	// Update main session fields
+	sessionUpdate := tx.Session.UpdateOne(sess).
+		SetNillableUUID(nilIfEmpty(data.UUID)).
+		SetPath(data.Path).
+		SetStatus(int(data.Status)).
+		SetUpdatedAt(data.UpdatedAt).
+		SetAutoYes(data.AutoYes).
+		SetAutoApprove(data.AutoApprove).
+		SetAutonomousMode(data.AutonomousMode).
+		SetProgram(data.Program).
+		SetIsExpanded(data.IsExpanded)
+
+	// Update optional fields
+	if data.WorkingDir != "" {
+		sessionUpdate.SetWorkingDir(data.WorkingDir)
+	}
+	if data.Branch != "" {
+		sessionUpdate.SetBranch(data.Branch)
+	}
+	if data.Height > 0 {
+		sessionUpdate.SetHeight(data.Height)
+	}
+	if data.Width > 0 {
+		sessionUpdate.SetWidth(data.Width)
+	}
+	if data.Prompt != "" {
+		sessionUpdate.SetPrompt(data.Prompt)
+	}
+	if data.ExistingWorktree != "" {
+		sessionUpdate.SetExistingWorktree(data.ExistingWorktree)
+	}
+	if data.Category != "" {
+		sessionUpdate.SetCategory(data.Category)
+	}
+	// Note is set unconditionally, unlike sibling optional string fields: an empty note is a
+	// meaningful, intentionally-reachable state ("cleared"), not an "unset" sentinel, so the
+	// guarded-update convention would silently prevent a user from ever clearing it.
+	sessionUpdate.SetNote(data.Note)
+	if data.SessionType != "" {
+		sessionUpdate.SetSessionType(string(data.SessionType))
+	}
+	if data.TmuxPrefix != "" {
+		sessionUpdate.SetTmuxPrefix(data.TmuxPrefix)
+	}
+	if !data.LastTerminalUpdate.IsZero() {
+		sessionUpdate.SetLastTerminalUpdate(data.LastTerminalUpdate)
+	}
+	if !data.LastMeaningfulOutput.IsZero() {
+		sessionUpdate.SetLastMeaningfulOutput(data.LastMeaningfulOutput)
+	}
+	if data.LastOutputSignature != "" {
+		sessionUpdate.SetLastOutputSignature(data.LastOutputSignature)
+	}
+	if !data.LastAddedToQueue.IsZero() {
+		sessionUpdate.SetLastAddedToQueue(data.LastAddedToQueue)
+	}
+	if !data.LastViewed.IsZero() {
+		sessionUpdate.SetLastViewed(data.LastViewed)
+	}
+	if !data.LastAcknowledged.IsZero() {
+		sessionUpdate.SetLastAcknowledged(data.LastAcknowledged)
+	}
+	if !data.LastUserResponse.IsZero() {
+		sessionUpdate.SetLastUserResponse(data.LastUserResponse)
+	}
+	if !data.ProcessingGraceUntil.IsZero() {
+		sessionUpdate.SetProcessingGraceUntil(data.ProcessingGraceUntil)
+	} else {
+		sessionUpdate.ClearProcessingGraceUntil()
+	}
+	if !data.LastPromptDetected.IsZero() {
+		sessionUpdate.SetLastPromptDetected(data.LastPromptDetected)
+	}
+	if data.LastPromptSignature != "" {
+		sessionUpdate.SetLastPromptSignature(data.LastPromptSignature)
+	}
+	if data.MCPServerURL != "" {
+		sessionUpdate.SetMcpServerURL(data.MCPServerURL)
+	}
+	if data.InitialPrompt != "" {
+		sessionUpdate.SetInitialPrompt(data.InitialPrompt)
+	}
+	if data.PauseReason != "" {
+		sessionUpdate.SetPauseReason(data.PauseReason)
+	} else {
+		sessionUpdate.ClearPauseReason()
+	}
+	if data.ExitReason != "" {
+		sessionUpdate.SetExitReason(data.ExitReason)
+	} else {
+		sessionUpdate.ClearExitReason()
+	}
+	sessionUpdate.SetOneShot(data.OneShot)
+	sessionUpdate.SetHidden(data.Hidden)
+	if data.WorkflowID != "" {
+		sessionUpdate.SetWorkflowID(data.WorkflowID)
+	} else {
+		sessionUpdate.ClearWorkflowID()
+	}
+	if data.ArchivedAt != nil {
+		sessionUpdate.SetArchivedAt(*data.ArchivedAt)
+	} else {
+		sessionUpdate.ClearArchivedAt()
+	}
+	if data.GitHubPRURL != "" {
+		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
+	}
+	if data.GitHubPRNumber > 0 {
+		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubOwner != "" {
+		sessionUpdate.SetGithubOwner(data.GitHubOwner)
+	}
+	if data.GitHubRepo != "" {
+		sessionUpdate.SetGithubRepo(data.GitHubRepo)
+	}
+
+	// Update project link (look up by name or clear if empty)
+	if data.ProjectID != "" {
+		proj, err := tx.Project.Query().Where(project.Name(data.ProjectID)).Only(ctx)
+		if err == nil {
+			sessionUpdate.SetProjectID(proj.ID)
+		}
+	} else {
+		sessionUpdate.ClearProject()
+	}
+
+	if err := sessionUpdate.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to update session: %w", err)
+	}
+
+	// Update or create worktree
+	if data.Worktree.RepoPath != "" {
+		existingWorktree, err := tx.Worktree.Query().Where(worktree.HasSessionWith(session.ID(sess.ID))).Only(ctx)
+		if err != nil {
+			if ent.IsNotFound(err) {
+				// Create new worktree
+				if _, err := tx.Worktree.Create().
+					SetSessionID(sess.ID).
+					SetRepoPath(data.Worktree.RepoPath).
+					SetWorktreePath(data.Worktree.WorktreePath).
+					SetSessionName(data.Worktree.SessionName).
+					SetBranchName(data.Worktree.BranchName).
+					SetBaseCommitSha(data.Worktree.BaseCommitSHA).
+					Save(ctx); err != nil {
+					return fmt.Errorf("failed to create worktree: %w", err)
+				}
+			} else {
+				return fmt.Errorf("failed to query worktree: %w", err)
+			}
+		} else {
+			// Update existing worktree
+			if err := tx.Worktree.UpdateOne(existingWorktree).
+				SetRepoPath(data.Worktree.RepoPath).
+				SetWorktreePath(data.Worktree.WorktreePath).
+				SetSessionName(data.Worktree.SessionName).
+				SetBranchName(data.Worktree.BranchName).
+				SetBaseCommitSha(data.Worktree.BaseCommitSHA).
+				Exec(ctx); err != nil {
+				return fmt.Errorf("failed to update worktree: %w", err)
+			}
+		}
+	}
+
+	// Upsert diff stats — single INSERT … ON CONFLICT DO UPDATE, no prior SELECT needed.
+	diffCreate := tx.DiffStats.Create().
+		SetSessionID(sess.ID).
+		SetAdded(data.DiffStats.Added).
+		SetRemoved(data.DiffStats.Removed)
+	if data.DiffStats.Content != "" {
+		diffCreate = diffCreate.SetContent(data.DiffStats.Content)
+	}
+	upsertDiff := diffCreate.
+		OnConflictColumns(diffstats.SessionColumn).
+		UpdateAdded().
+		UpdateRemoved()
+	if data.DiffStats.Content != "" {
+		upsertDiff = upsertDiff.UpdateContent()
+	}
+	if err := upsertDiff.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to upsert diff stats: %w", err)
+	}
+
+	// Update tags - clear existing and add new ones
+	if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
+		return fmt.Errorf("failed to clear tags: %w", err)
+	}
+
+	if len(data.Tags) > 0 {
+		tagIDs := make([]int, 0, len(data.Tags))
+		for _, tagName := range data.Tags {
+			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
+			if err != nil {
+				if ent.IsNotFound(err) {
+					t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
+					if err != nil {
+						return fmt.Errorf("failed to create tag %s: %w", tagName, err)
+					}
+				} else {
+					return fmt.Errorf("failed to query tag %s: %w", tagName, err)
+				}
+			}
+			tagIDs = append(tagIDs, t.ID)
+		}
+		if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
+			return fmt.Errorf("failed to associate tags: %w", err)
+		}
+	}
+
+	// Update Claude session if present
+	if data.ClaudeSession.ConversationUUID != "" {
+		var claudeSessionID int // set by either the create or update branch below
+
+		existingClaude, err := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
+		if err != nil {
+			if ent.IsNotFound(err) {
+				// Create new Claude session
+				claudeCreate := tx.ClaudeSession.Create().
+					SetSessionID(sess.ID).
+					SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
+					SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
+					SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
+					SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
+					SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
+
+				if data.ClaudeSession.SquadSessionID != "" {
+					claudeCreate.SetConversationID(data.ClaudeSession.SquadSessionID)
+				}
+				if data.ClaudeSession.ProjectName != "" {
+					claudeCreate.SetProjectName(data.ClaudeSession.ProjectName)
+				}
+				if !data.ClaudeSession.LastAttached.IsZero() {
+					claudeCreate.SetLastAttached(data.ClaudeSession.LastAttached)
+				}
+				if data.ClaudeSession.Settings.PreferredSessionName != "" {
+					claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
+				}
+
+				newClaude, err := claudeCreate.Save(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to create claude session: %w", err)
+				}
+				claudeSessionID = newClaude.ID
+			} else {
+				return fmt.Errorf("failed to query claude session: %w", err)
+			}
+		} else {
+			// Update existing Claude session
+			claudeUpdate := tx.ClaudeSession.UpdateOne(existingClaude).
+				SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
+				SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
+				SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
+				SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
+				SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
+
+			if data.ClaudeSession.SquadSessionID != "" {
+				claudeUpdate.SetConversationID(data.ClaudeSession.SquadSessionID)
+			}
+			if data.ClaudeSession.ProjectName != "" {
+				claudeUpdate.SetProjectName(data.ClaudeSession.ProjectName)
+			}
+			if !data.ClaudeSession.LastAttached.IsZero() {
+				claudeUpdate.SetLastAttached(data.ClaudeSession.LastAttached)
+			}
+			if data.ClaudeSession.Settings.PreferredSessionName != "" {
+				claudeUpdate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
+			}
+
+			if err := claudeUpdate.Exec(ctx); err != nil {
+				return fmt.Errorf("failed to update claude session: %w", err)
+			}
+
+			// Update Claude metadata - clear existing and add new ones
+			if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.ID(existingClaude.ID))).Exec(ctx); err != nil {
+				return fmt.Errorf("failed to clear claude metadata: %w", err)
+			}
+			claudeSessionID = existingClaude.ID
+		}
+
+		// Add metadata entries using the already-known Claude session ID.
+		// (pre-fix: this loop re-queried the same ClaudeSession row N times)
+		for key, value := range data.ClaudeSession.Metadata {
+			if _, err := tx.ClaudeMetadata.Create().
+				SetClaudeSessionID(claudeSessionID).
+				SetKey(key).
+				SetValue(value).
+				Save(ctx); err != nil {
+				return fmt.Errorf("failed to create claude metadata %s: %w", key, err)
+			}
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// Delete removes a session from the database by title
+func (r *EntRepository) Delete(ctx context.Context, title string) error {
+	// Start transaction for atomic deletion
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Find session by title
+	sess, err := tx.Session.Query().Where(session.Title(title)).Only(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to find session: %w", err)
+	}
+
+	// Delete related entities first (manual cascade)
+
+	// Delete worktree if exists
+	if _, err := tx.Worktree.Delete().Where(worktree.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete worktree: %w", err)
+	}
+
+	// Delete diff stats if exists
+	if _, err := tx.DiffStats.Delete().Where(diffstats.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete diff stats: %w", err)
+	}
+
+	// Delete claude session and its metadata if exists
+	// Delete all claude metadata associated with claude sessions for this session
+	if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.HasSessionWith(session.ID(sess.ID)))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete claude metadata: %w", err)
+	}
+	// Delete all claude sessions for this session
+	if _, err := tx.ClaudeSession.Delete().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete claude sessions: %w", err)
+	}
+
+	// Clear tag associations (many-to-many)
+	if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
+		return fmt.Errorf("failed to clear tags: %w", err)
+	}
+
+	// Finally delete the session
+	if err := tx.Session.DeleteOne(sess).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete session: %w", err)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// GetClaudeConversationUUIDBySessionUUID returns the Claude conversation UUID
+// for the session whose title (tmux session name) matches sessionUUID.
+// Returns "" if the session has no associated ClaudeSession.
+func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, sessionUUID string) (string, error) {
+	sess, err := r.client.Session.Query().
+		Where(session.Title(sessionUUID)).
+		WithClaudeSession().
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("GetClaudeConversationUUIDBySessionUUID: %w", err)
+	}
+	if sess.Edges.ClaudeSession == nil {
+		return "", nil
+	}
+	return sess.Edges.ClaudeSession.ClaudeSessionID, nil
+}
+
+// Get retrieves a single session by title
+func (r *EntRepository) Get(ctx context.Context, title string) (*InstanceData, error) {
+	// Find session with all relationships eagerly loaded
+	sess, err := r.client.Session.Query().
+		Where(session.Title(title)).
+		WithWorktree().
+		WithDiffStats().
+		WithTags().
+		WithProject().
+		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
+			q.WithMetadata()
+		}).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("session not found: %s", title)
+		}
+		return nil, fmt.Errorf("failed to query session: %w", err)
+	}
+
+	// Convert to InstanceData
+	return r.sessionToInstanceData(sess), nil
+}
+
+// List retrieves all sessions from the database
+func (r *EntRepository) List(ctx context.Context) ([]InstanceData, error) {
+	// Query all sessions with relationships
+	sessions, err := r.client.Session.Query().
+		WithWorktree().
+		WithTags().
+		WithProject().
+		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
+			q.WithMetadata()
+		}).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions: %w", err)
+	}
+
+	// Convert to InstanceData
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+
+	return result, nil
+}
+
+// ListByStatus retrieves sessions filtered by status
+func (r *EntRepository) ListByStatus(ctx context.Context, status Status) ([]InstanceData, error) {
+	// Query sessions by status with relationships
+	sessions, err := r.client.Session.Query().
+		Where(session.Status(int(status))).
+		WithWorktree().
+		WithTags().
+		WithProject().
+		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
+			q.WithMetadata()
+		}).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions by status: %w", err)
+	}
+
+	// Convert to InstanceData
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+
+	return result, nil
+}
+
+// ListByTag retrieves sessions that have a specific tag
+func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]InstanceData, error) {
+	// Query sessions that have the specified tag
+	sessions, err := r.client.Session.Query().
+		Where(session.HasTagsWith(tag.Name(tagName))).
+		WithWorktree().
+		WithTags().
+		WithProject().
+		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
+			q.WithMetadata()
+		}).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions by tag: %w", err)
+	}
+
+	// Convert to InstanceData
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+
+	return result, nil
+}
+
+// UpdateGitHubPRNumber persists a discovered PR number for a session.
+// Called by PRStatusPoller when it auto-discovers a PR for a branch-based session.
+func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, prNumber int) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetGithubPrNumber(prNumber).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update github_pr_number: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateSessionArtifacts persists the JSON-encoded artifact blob for a session.
+// Wrapped in a transaction for correctness under concurrent writes (M-6 fix).
+// The per-title mutex in ArtifactExtractor (C-1) serializes calls at the application
+// layer; the transaction is belt-and-suspenders for correctness.
+func (r *EntRepository) UpdateSessionArtifacts(ctx context.Context, title string, blob string) error {
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("UpdateSessionArtifacts: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	n, err := tx.Session.Update().
+		Where(session.Title(title)).
+		SetSessionArtifacts(blob).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update session_artifacts: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return tx.Commit()
+}
+
+// GetSessionArtifacts loads the raw JSON artifact blob for a session.
+// Returns ("", nil) if the session exists but has no artifacts stored yet.
+func (r *EntRepository) GetSessionArtifacts(ctx context.Context, title string) (string, error) {
+	sess, err := r.client.Session.Query().
+		Where(session.Title(title)).
+		Select(session.FieldSessionArtifacts).
+		Only(ctx)
+	if err != nil {
+		return "", fmt.Errorf("GetSessionArtifacts: %w", err)
+	}
+	return sess.SessionArtifacts, nil
+}
+
+// GetAllSessionArtifacts returns a map of title → raw artifacts JSON for all sessions
+// that have a non-empty session_artifacts column. Single query replaces N per-session
+// queries in LoadInstances (M-4 fix).
+func (r *EntRepository) GetAllSessionArtifacts(ctx context.Context) (map[string]string, error) {
+	rows, err := r.client.Session.Query().
+		Where(session.SessionArtifactsNEQ("")).
+		Select(session.FieldTitle, session.FieldSessionArtifacts).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("GetAllSessionArtifacts: %w", err)
+	}
+	result := make(map[string]string, len(rows))
+	for _, row := range rows {
+		result[row.Title] = row.SessionArtifacts
+	}
+	return result, nil
+}
+
+// UpdateReviewQueueState efficiently updates only the review-queue interaction fields
+// for a session, avoiding the full read-modify-write cycle of updateFieldInRepo.
+func (r *EntRepository) UpdateReviewQueueState(ctx context.Context, title string, lastUserResponse, processingGraceUntil, lastPromptDetected time.Time, lastPromptSignature string) error {
+	update := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetUpdatedAt(time.Now())
+
+	if !lastUserResponse.IsZero() {
+		update.SetLastUserResponse(lastUserResponse)
+	}
+	if !processingGraceUntil.IsZero() {
+		update.SetProcessingGraceUntil(processingGraceUntil)
+	} else {
+		update.ClearProcessingGraceUntil()
+	}
+	if !lastPromptDetected.IsZero() {
+		update.SetLastPromptDetected(lastPromptDetected)
+	}
+	if lastPromptSignature != "" {
+		update.SetLastPromptSignature(lastPromptSignature)
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update review queue state: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateTimestamps efficiently updates only timestamp fields for a session
+func (r *EntRepository) UpdateTimestamps(ctx context.Context, title string, lastTerminalUpdate, lastMeaningfulOutput time.Time, lastOutputSignature string) error {
+	// Direct UPDATE without prior SELECT — mirrors the pattern used by UpdateLastAddedToQueue.
+	// This method is called on every terminal output event; avoiding the SELECT halves the
+	// SQL round-trips on this hot path.
+	update := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetUpdatedAt(time.Now())
+
+	if !lastTerminalUpdate.IsZero() {
+		update.SetLastTerminalUpdate(lastTerminalUpdate)
+	}
+	if !lastMeaningfulOutput.IsZero() {
+		update.SetLastMeaningfulOutput(lastMeaningfulOutput)
+	}
+	if lastOutputSignature != "" {
+		update.SetLastOutputSignature(lastOutputSignature)
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update timestamps: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateLastAddedToQueue sets only the last_added_to_queue field for a session,
+// issuing a single UPDATE WHERE title=? without a prior SELECT.
+func (r *EntRepository) UpdateLastAddedToQueue(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetLastAddedToQueue(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update last_added_to_queue: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateLastAcknowledged sets only the last_acknowledged field for a session,
+// issuing a single UPDATE WHERE title=? without a prior SELECT.
+func (r *EntRepository) UpdateLastAcknowledged(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetLastAcknowledged(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update last_acknowledged: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateLastViewed sets only the last_viewed field for a session,
+// issuing a single UPDATE WHERE title=? without a prior SELECT.
+func (r *EntRepository) UpdateLastViewed(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetLastViewed(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update last_viewed: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateSessionMetadata efficiently updates only title/category/note/working_dir fields
+// for a session, issuing a single UPDATE WHERE title=? without a prior SELECT and without
+// the worktree/diffstats/tags/claude_session writes the full Update method performs —
+// mirrors UpdateLastViewed's shape. currentTitle must be the row's title from BEFORE any
+// rename already applied to the caller's in-memory Instance in this same request: Update
+// looks the row up by data.Title (the post-rename value), which misses the still-old-titled
+// DB row and falls into Update's Create fallback, orphaning it under the new title. Using
+// currentTitle as the WHERE key avoids that. Category/WorkingDir are only set when non-nil
+// AND non-empty, matching Update's existing guarded (`data.Category != ""`) semantics;
+// Note is set whenever non-nil (including ""), since an empty note is a meaningful cleared
+// state, not "unset" — same asymmetry as Update's unconditional SetNote(data.Note).
+func (r *EntRepository) UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error {
+	update := r.client.Session.Update().
+		Where(session.Title(currentTitle)).
+		SetUpdatedAt(time.Now())
+
+	if newTitle != nil && *newTitle != "" {
+		update.SetTitle(*newTitle)
+	}
+	if category != nil && *category != "" {
+		update.SetCategory(*category)
+	}
+	if note != nil {
+		update.SetNote(*note)
+	}
+	if workingDir != nil && *workingDir != "" {
+		update.SetWorkingDir(*workingDir)
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update session metadata: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", currentTitle)
+	}
+	return nil
+}
+
+// Close performs cleanup and releases resources
+func (r *EntRepository) Close() error {
+	if r.client != nil {
+		return r.client.Close()
+	}
+	return nil
+}
+
+// nilIfEmpty returns nil if s is empty, otherwise a pointer to s.
+// Used to pass optional string fields to Ent's SetNillable* builders.
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// nilIfEmptyJSON returns nil if j is empty, otherwise a *string containing the JSON.
+// Used at the ent boundary where AcceptanceCriteria is stored as a plain string.
+func nilIfEmptyJSON(j AcCriteriaJSON) *string {
+	if j == "" {
+		return nil
+	}
+	s := string(j)
+	return &s
+}
+
+// sessionToInstanceData converts an Ent Session entity to InstanceData
+func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
+	data := &InstanceData{
+		Title:               sess.Title,
+		UUID:                sess.UUID,
+		Path:                sess.Path,
+		WorkingDir:          sess.WorkingDir,
+		Branch:              sess.Branch,
+		Status:              Status(sess.Status),
+		Height:              sess.Height,
+		Width:               sess.Width,
+		CreatedAt:           sess.CreatedAt,
+		UpdatedAt:           sess.UpdatedAt,
+		AutoYes:             sess.AutoYes,
+		AutoApprove:         sess.AutoApprove,
+		AutonomousMode:      sess.AutonomousMode,
+		Prompt:              sess.Prompt,
+		InitialPrompt:       sess.InitialPrompt,
+		Program:             sess.Program,
+		ExistingWorktree:    sess.ExistingWorktree,
+		Category:            sess.Category,
+		Note:                sess.Note,
+		IsExpanded:          sess.IsExpanded,
+		TmuxPrefix:          sess.TmuxPrefix,
+		LastOutputSignature: sess.LastOutputSignature,
+		MCPServerURL:        sess.McpServerURL,
+		OneShot:             sess.OneShot,
+		Hidden:              sess.Hidden,
+	}
+
+	// Set optional time fields
+	if sess.LastTerminalUpdate != nil {
+		data.LastTerminalUpdate = *sess.LastTerminalUpdate
+	}
+	if sess.LastMeaningfulOutput != nil {
+		data.LastMeaningfulOutput = *sess.LastMeaningfulOutput
+	}
+	if sess.LastAddedToQueue != nil {
+		data.LastAddedToQueue = *sess.LastAddedToQueue
+	}
+	if sess.LastViewed != nil {
+		data.LastViewed = *sess.LastViewed
+	}
+	if sess.LastAcknowledged != nil {
+		data.LastAcknowledged = *sess.LastAcknowledged
+	}
+	if sess.LastUserResponse != nil {
+		data.LastUserResponse = *sess.LastUserResponse
+	}
+	if sess.ProcessingGraceUntil != nil {
+		data.ProcessingGraceUntil = *sess.ProcessingGraceUntil
+	}
+	if sess.LastPromptDetected != nil {
+		data.LastPromptDetected = *sess.LastPromptDetected
+	}
+	data.LastPromptSignature = sess.LastPromptSignature
+	data.PauseReason = sess.PauseReason
+	data.ExitReason = sess.ExitReason
+	data.WorkflowID = sess.WorkflowID
+	data.ArchivedAt = sess.ArchivedAt
+	data.GitHubPRURL = sess.GithubPrURL
+	data.GitHubPRNumber = sess.GithubPrNumber
+	data.GitHubOwner = sess.GithubOwner
+	data.GitHubRepo = sess.GithubRepo
+
+	// Set session type
+	if sess.SessionType != "" {
+		data.SessionType = SessionType(sess.SessionType)
+	}
+
+	// Convert worktree if present
+	if sess.Edges.Worktree != nil {
+		data.Worktree = GitWorktreeData{
+			RepoPath:      sess.Edges.Worktree.RepoPath,
+			WorktreePath:  sess.Edges.Worktree.WorktreePath,
+			SessionName:   sess.Edges.Worktree.SessionName,
+			BranchName:    sess.Edges.Worktree.BranchName,
+			BaseCommitSHA: sess.Edges.Worktree.BaseCommitSha,
+		}
+	}
+
+	// Convert diff stats if present
+	if sess.Edges.DiffStats != nil {
+		data.DiffStats = DiffStatsData{
+			Added:   sess.Edges.DiffStats.Added,
+			Removed: sess.Edges.DiffStats.Removed,
+			Content: sess.Edges.DiffStats.Content,
+		}
+	}
+
+	// Convert tags
+	if len(sess.Edges.Tags) > 0 {
+		data.Tags = make([]string, len(sess.Edges.Tags))
+		for i, t := range sess.Edges.Tags {
+			data.Tags[i] = t.Name
+		}
+	}
+
+	// Populate project ID from project edge (stored as name for string compatibility)
+	if sess.Edges.Project != nil {
+		data.ProjectID = sess.Edges.Project.Name
+	}
+
+	// Convert Claude session if present
+	if sess.Edges.ClaudeSession != nil {
+		cs := sess.Edges.ClaudeSession
+		data.ClaudeSession = ClaudeSessionData{
+			ConversationUUID: cs.ClaudeSessionID,
+			SquadSessionID:   cs.ConversationID,
+			ProjectName:      cs.ProjectName,
+			Settings: ClaudeSettings{
+				AutoReattach:          cs.AutoReattach,
+				PreferredSessionName:  cs.PreferredSessionName,
+				CreateNewOnMissing:    cs.CreateNewOnMissing,
+				ShowSessionSelector:   cs.ShowSessionSelector,
+				SessionTimeoutMinutes: cs.SessionTimeoutMinutes,
+			},
+		}
+
+		// Set optional time field
+		if cs.LastAttached != nil {
+			data.ClaudeSession.LastAttached = *cs.LastAttached
+		}
+
+		// Convert metadata
+		if len(cs.Edges.Metadata) > 0 {
+			data.ClaudeSession.Metadata = make(map[string]string)
+			for _, m := range cs.Edges.Metadata {
+				data.ClaudeSession.Metadata[m.Key] = m.Value
+			}
+		}
+	}
+
+	return data
+}
+
+// --- New Session-based Repository methods ---
+// These are stub implementations pending full Session-domain migration (Story 2.5).
+
+// GetSession retrieves a session using the new Session domain model.
+// Stub: not yet implemented; use InstanceData-based methods instead.
+func (r *EntRepository) GetSession(ctx context.Context, title string, opts ContextOptions) (*Session, error) {
+	return nil, fmt.Errorf("GetSession not yet implemented for EntRepository")
+}
+
+// ListSessions retrieves all sessions using the new Session domain model.
+// Stub: not yet implemented; use InstanceData-based methods instead.
+func (r *EntRepository) ListSessions(ctx context.Context, opts ContextOptions) ([]*Session, error) {
+	return nil, fmt.Errorf("ListSessions not yet implemented for EntRepository")
+}
+
+// CreateSession creates a new session from the Session domain model.
+// Stub: not yet implemented; use InstanceData-based methods instead.
+func (r *EntRepository) CreateSession(ctx context.Context, session *Session) error {
+	return fmt.Errorf("CreateSession not yet implemented for EntRepository")
+}
+
+// UpdateSession updates an existing session using the Session domain model.
+// Stub: not yet implemented; use InstanceData-based methods instead.
+func (r *EntRepository) UpdateSession(ctx context.Context, session *Session) error {
+	return fmt.Errorf("UpdateSession not yet implemented for EntRepository")
+}
+
+// GetWithOptions retrieves a single session with selective child data loading.
+// EntRepository: Delegates to Get with full loading.
+func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options LoadOptions) (*InstanceData, error) {
+	return r.Get(ctx, title)
+}
+
+// ListWithOptions retrieves all sessions with selective child data loading.
+// EntRepository: Delegates to List with full loading.
+func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
+	return r.List(ctx)
+}
+
+// ListByStatusWithOptions retrieves sessions filtered by status with selective loading.
+// EntRepository: Delegates to ListByStatus with full loading.
+func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status Status, options LoadOptions) ([]InstanceData, error) {
+	return r.ListByStatus(ctx, status)
+}
+
+// ListByTagWithOptions retrieves sessions with a specific tag with selective loading.
+// EntRepository: Delegates to ListByTag with full loading.
+func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tag string, options LoadOptions) ([]InstanceData, error) {
+	return r.ListByTag(ctx, tag)
+}
+
+// --- Permissions & Analytics --------------------------------------------------
+
+func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error) {
+	rules, err := r.client.ApprovalRule.Query().
+		Order(ent.Asc(approvalrule.FieldPriority)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]ApprovalRuleData, len(rules))
+	for i, rule := range rules {
+		result[i] = ApprovalRuleData{
+			ID:             rule.RuleID,
+			Name:           rule.Name,
+			ToolName:       rule.ToolName,
+			ToolPattern:    rule.ToolPattern,
+			ToolCategory:   rule.ToolCategory,
+			CommandPattern: rule.CommandPattern,
+			FilePattern:    rule.FilePattern,
+			Decision:       rule.Decision,
+			RiskLevel:      rule.RiskLevel,
+			Reason:         rule.Reason,
+			Alternative:    rule.Alternative,
+			Priority:       rule.Priority,
+			Enabled:        rule.Enabled,
+			Source:         rule.Source,
+			CreatedAt:      rule.CreatedAt,
+			UpdatedAt:      rule.UpdatedAt,
+
+			Programs:              rule.Programs,
+			Subcommands:           rule.Subcommands,
+			BlockedSubcommands:    rule.BlockedSubcommands,
+			RequiredFlags:         rule.RequiredFlags,
+			ForbiddenFlags:        rule.ForbiddenFlags,
+			RequiredFlagPrefixes:  rule.RequiredFlagPrefixes,
+			PythonModes:           rule.PythonModes,
+			SafePythonImportsOnly: rule.SafePythonImportsOnly,
+			RequireCIPassing:      rule.RequireCiPassing,
+		}
+	}
+	return result, nil
+}
+
+func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) error {
+	programs := data.Programs
+	if programs == nil {
+		programs = []string{}
+	}
+	subcommands := data.Subcommands
+	if subcommands == nil {
+		subcommands = []string{}
+	}
+	blockedSubcommands := data.BlockedSubcommands
+	if blockedSubcommands == nil {
+		blockedSubcommands = []string{}
+	}
+	requiredFlags := data.RequiredFlags
+	if requiredFlags == nil {
+		requiredFlags = []string{}
+	}
+	forbiddenFlags := data.ForbiddenFlags
+	if forbiddenFlags == nil {
+		forbiddenFlags = []string{}
+	}
+	requiredFlagPrefixes := data.RequiredFlagPrefixes
+	if requiredFlagPrefixes == nil {
+		requiredFlagPrefixes = []string{}
+	}
+	pythonModes := data.PythonModes
+	if pythonModes == nil {
+		pythonModes = []string{}
+	}
+	return r.client.ApprovalRule.Create().
+		SetRuleID(data.ID).
+		SetName(data.Name).
+		SetToolName(data.ToolName).
+		SetToolPattern(data.ToolPattern).
+		SetToolCategory(data.ToolCategory).
+		SetCommandPattern(data.CommandPattern).
+		SetFilePattern(data.FilePattern).
+		SetDecision(data.Decision).
+		SetRiskLevel(data.RiskLevel).
+		SetReason(data.Reason).
+		SetAlternative(data.Alternative).
+		SetPriority(data.Priority).
+		SetEnabled(data.Enabled).
+		SetSource(data.Source).
+		SetPrograms(programs).
+		SetSubcommands(subcommands).
+		SetBlockedSubcommands(blockedSubcommands).
+		SetRequiredFlags(requiredFlags).
+		SetForbiddenFlags(forbiddenFlags).
+		SetRequiredFlagPrefixes(requiredFlagPrefixes).
+		SetPythonModes(pythonModes).
+		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
+		SetRequireCiPassing(data.RequireCIPassing).
+		OnConflictColumns(approvalrule.FieldRuleID).
+		UpdateNewValues().
+		Exec(ctx)
+}
+
+func (r *EntRepository) DeleteRule(ctx context.Context, id string) error {
+	_, err := r.client.ApprovalRule.Delete().
+		Where(approvalrule.RuleID(id)).
+		Exec(ctx)
+	return err
+}
+
+func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
+	return r.client.ClassificationAnalytics.Create().
+		SetAnalyticsID(data.ID).
+		SetSessionID(data.SessionID).
+		SetToolName(data.ToolName).
+		SetCommandPreview(data.CommandPreview).
+		SetCwd(data.Cwd).
+		SetDecision(data.Decision).
+		SetRiskLevel(data.RiskLevel).
+		SetRuleID(data.RuleID).
+		SetRuleName(data.RuleName).
+		SetReason(data.Reason).
+		SetAlternative(data.Alternative).
+		SetDurationMs(data.DurationMs).
+		SetApprovalID(data.ApprovalID).
+		SetCommandProgram(data.CommandProgram).
+		SetCommandCategory(data.CommandCategory).
+		SetCommandSubcategory(data.CommandSubcategory).
+		SetPythonImports(data.PythonImports).
+		SetCreatedAt(data.CreatedAt).
+		Exec(ctx)
+}
+
+func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {
+	query := r.client.ClassificationAnalytics.Query().
+		Order(ent.Desc(classificationanalytics.FieldCreatedAt))
+
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+
+	entries, err := query.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return convertAnalyticsEntries(entries), nil
+}
+
+// convertAnalyticsEntry maps a single ent row to the domain model.
+func convertAnalyticsEntry(e *ent.ClassificationAnalytics) AnalyticsData {
+	return AnalyticsData{
+		ID:                 e.AnalyticsID,
+		SessionID:          e.SessionID,
+		ToolName:           e.ToolName,
+		CommandPreview:     e.CommandPreview,
+		Cwd:                e.Cwd,
+		Decision:           e.Decision,
+		RiskLevel:          e.RiskLevel,
+		RuleID:             e.RuleID,
+		RuleName:           e.RuleName,
+		Reason:             e.Reason,
+		Alternative:        e.Alternative,
+		DurationMs:         e.DurationMs,
+		ApprovalID:         e.ApprovalID,
+		CommandProgram:     e.CommandProgram,
+		CommandCategory:    e.CommandCategory,
+		CommandSubcategory: e.CommandSubcategory,
+		PythonImports:      e.PythonImports,
+		CreatedAt:          e.CreatedAt,
+	}
+}
+
+// convertAnalyticsEntries maps a slice of ent rows to the domain model.
+func convertAnalyticsEntries(es []*ent.ClassificationAnalytics) []AnalyticsData {
+	out := make([]AnalyticsData, len(es))
+	for i, e := range es {
+		out[i] = convertAnalyticsEntry(e)
+	}
+	return out
+}
+
+func (r *EntRepository) ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]AnalyticsData, error) {
+	query := r.client.ClassificationAnalytics.Query().
+		Where(classificationanalytics.CreatedAtGTE(since)).
+		Order(ent.Desc(classificationanalytics.FieldCreatedAt))
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	entries, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list analytics since %s: %w", since.Format(time.RFC3339), err)
+	}
+	return convertAnalyticsEntries(entries), nil
+}
+
+func (r *EntRepository) ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]AnalyticsData, error) {
+	query := r.client.ClassificationAnalytics.Query().
+		Where(
+			classificationanalytics.CommandProgramEQ(program),
+			classificationanalytics.CreatedAtGTE(since),
+		).
+		Order(ent.Desc(classificationanalytics.FieldCreatedAt))
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	entries, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list analytics by program %q since %s: %w", program, since.Format(time.RFC3339), err)
+	}
+	return convertAnalyticsEntries(entries), nil
+}
+
+func (r *EntRepository) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error) {
+	type breakdownRow struct {
+		CommandSubcategory string `json:"command_subcategory"`
+		Decision           string `json:"decision"`
+		Count              int    `json:"count"`
+	}
+	var rows []breakdownRow
+	// Exclude rows where command_subcategory IS NULL to avoid sql.ScanSlice
+	// errors when scanning nullable columns into a plain string field.
+	err := r.client.ClassificationAnalytics.Query().
+		Where(
+			classificationanalytics.CommandProgramEQ(program),
+			classificationanalytics.CreatedAtGTE(since),
+			classificationanalytics.CommandSubcategoryNotNil(),
+		).
+		GroupBy(
+			classificationanalytics.FieldCommandSubcategory,
+			classificationanalytics.FieldDecision,
+		).
+		Aggregate(ent.Count()).
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("subcommand breakdown for %q: %w", program, err)
+	}
+	result := make([]SubcommandDecisionCount, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, SubcommandDecisionCount{
+			Subcommand: row.CommandSubcategory,
+			Decision:   row.Decision,
+			Count:      row.Count,
+		})
+	}
+	return result, nil
+}
+
+func (r *EntRepository) ListRecentCommandsByProgram(ctx context.Context, program, subcommand string, since time.Time, n int) ([]string, error) {
+	predicates := []predicate.ClassificationAnalytics{
+		classificationanalytics.CommandProgramEQ(program),
+		classificationanalytics.CreatedAtGTE(since),
+		classificationanalytics.CommandPreviewNotNil(),
+	}
+	if subcommand != "" {
+		predicates = append(predicates, classificationanalytics.CommandSubcategoryEQ(subcommand))
+	}
+	entries, err := r.client.ClassificationAnalytics.Query().
+		Where(predicates...).
+		Order(ent.Desc(classificationanalytics.FieldCreatedAt)).
+		Limit(n).
+		Select(classificationanalytics.FieldCommandPreview).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("recent commands for %q/%q: %w", program, subcommand, err)
+	}
+	previews := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.CommandPreview != "" {
+			previews = append(previews, e.CommandPreview)
+		}
+	}
+	return previews, nil
+}
+
+func (r *EntRepository) GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]AnalyticsData, error) {
+	predicates := []predicate.ClassificationAnalytics{
+		classificationanalytics.CommandProgramEQ(program),
+		classificationanalytics.CreatedAtGTE(since),
+	}
+	if subcommand != "" {
+		predicates = append(predicates, classificationanalytics.CommandSubcategoryEQ(subcommand))
+	}
+	entries, err := r.client.ClassificationAnalytics.Query().
+		Where(predicates...).
+		Order(ent.Asc(classificationanalytics.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("subcommand trend for %q/%q: %w", program, subcommand, err)
+	}
+	return convertAnalyticsEntries(entries), nil
+}
+
+// --- Project CRUD ---
+
+func projectToData(p *ent.Project) ProjectData {
+	return ProjectData{
+		ID:          p.Name, // Name is the string external ID
+		Name:        p.Name,
+		Description: p.Description,
+		CreatedAt:   p.CreatedAt,
+		UpdatedAt:   p.UpdatedAt,
+	}
+}
+
+// CreateProject inserts a new project.
+func (r *EntRepository) CreateProject(ctx context.Context, data ProjectData) (*ProjectData, error) {
+	c := r.client.Project.Create().
+		SetName(data.Name).
+		SetCreatedAt(data.CreatedAt).
+		SetUpdatedAt(data.UpdatedAt)
+	if data.Description != "" {
+		c.SetDescription(data.Description)
+	}
+	p, err := c.Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create project: %w", err)
+	}
+	result := projectToData(p)
+	return &result, nil
+}
+
+// ListProjects returns all projects.
+func (r *EntRepository) ListProjects(ctx context.Context) ([]ProjectData, error) {
+	projects, err := r.client.Project.Query().All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list projects: %w", err)
+	}
+	result := make([]ProjectData, len(projects))
+	for i, p := range projects {
+		result[i] = projectToData(p)
+	}
+	return result, nil
+}
+
+// UpdateProject modifies an existing project.
+func (r *EntRepository) UpdateProject(ctx context.Context, data ProjectData) (*ProjectData, error) {
+	p, err := r.client.Project.Query().Where(project.Name(data.Name)).Only(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find project '%s': %w", data.Name, err)
+	}
+	u := r.client.Project.UpdateOne(p).SetUpdatedAt(data.UpdatedAt)
+	if data.Description != "" {
+		u.SetDescription(data.Description)
+	}
+	updated, err := u.Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update project: %w", err)
+	}
+	result := projectToData(updated)
+	return &result, nil
+}
+
+// DeleteProject removes a project; sessions are unassigned (FK cleared) atomically.
+func (r *EntRepository) DeleteProject(ctx context.Context, name string) error {
+	tx, err := r.client.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	p, err := tx.Project.Query().Where(project.Name(name)).Only(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to find project '%s': %w", name, err)
+	}
+
+	// Clear the project FK on all sessions that belong to this project before deleting.
+	if err = tx.Session.Update().
+		Where(session.HasProjectWith(project.Name(name))).
+		ClearProject().
+		Exec(ctx); err != nil {
+		return fmt.Errorf("failed to unassign sessions from project '%s': %w", name, err)
+	}
+
+	if err = tx.Project.DeleteOne(p).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete project '%s': %w", name, err)
+	}
+
+	return tx.Commit()
+}
+
+// AssignSessionsToProject links sessions (by title) to a project (by name).
+func (r *EntRepository) AssignSessionsToProject(ctx context.Context, projectName string, sessionTitles []string) error {
+	proj, err := r.client.Project.Query().Where(project.Name(projectName)).Only(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to find project '%s': %w", projectName, err)
+	}
+	for _, title := range sessionTitles {
+		sess, err := r.client.Session.Query().Where(session.Title(title)).Only(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to find session '%s': %w", title, err)
+		}
+		if err := r.client.Session.UpdateOne(sess).SetProjectID(proj.ID).Exec(ctx); err != nil {
+			return fmt.Errorf("failed to assign session '%s' to project '%s': %w", title, projectName, err)
+		}
+	}
+	return nil
+}
+
+// ---- Shell repository methods ----
+
+// CreateShell persists a new Shell entity for the given session title.
+func (r *EntRepository) CreateShell(ctx context.Context, sessionTitle string, data ShellData) (*ent.Shell, error) {
+	sess, err := r.client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("CreateShell: session '%s' not found: %w", sessionTitle, err)
+	}
+	sh, err := r.client.Shell.Create().
+		SetID(data.ID).
+		SetName(data.Name).
+		SetCommand(data.Command).
+		SetNillableWorkingDir(nilIfEmpty(data.WorkingDir)).
+		SetTmuxSessionName(data.TmuxSessionName).
+		SetStatus(string(ShellStatusRunning)).
+		SetOrderIndex(data.OrderIndex).
+		SetSessionID(sess.ID).
+		Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("CreateShell: %w", err)
+	}
+	return sh, nil
+}
+
+// ListShells returns all shells for the given session title, ordered by order_index.
+func (r *EntRepository) ListShells(ctx context.Context, sessionTitle string) ([]*ent.Shell, error) {
+	sess, err := r.client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ListShells: session '%s' not found: %w", sessionTitle, err)
+	}
+	shells, err := r.client.Shell.Query().
+		Where(entshell.HasSessionWith(session.ID(sess.ID))).
+		Order(ent.Asc(entshell.FieldOrderIndex)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ListShells: %w", err)
+	}
+	return shells, nil
+}
+
+// UpdateShellStatus updates the status (and optionally exit code + stopped_at) for a shell.
+func (r *EntRepository) UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error {
+	upd := r.client.Shell.UpdateOneID(shellID).SetStatus(status)
+	if exitCode != nil {
+		upd = upd.SetExitCode(*exitCode)
+	}
+	if status != string(ShellStatusRunning) {
+		upd = upd.SetStoppedAt(time.Now())
+	}
+	if err := upd.Exec(ctx); err != nil {
+		return fmt.Errorf("UpdateShellStatus: %w", err)
+	}
+	return nil
+}
+
+// DeleteShell removes a Shell entity by ID.
+func (r *EntRepository) DeleteShell(ctx context.Context, shellID string) error {
+	if err := r.client.Shell.DeleteOneID(shellID).Exec(ctx); err != nil {
+		return fmt.Errorf("DeleteShell: %w", err)
+	}
+	return nil
+}

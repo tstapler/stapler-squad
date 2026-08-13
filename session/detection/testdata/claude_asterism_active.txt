@@ -1,0 +1,5 @@
+✻ Perambulating... (1h 5m 37s · ↑ 5.4k tokens)
+ └ Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+
+> ▌
+esc to interrupt 10% until auto-compact

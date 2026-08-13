@@ -1,0 +1,13 @@
+{
+  "id": "browser:proxy",
+  "type": "backend",
+  "service": "HTTPHandler",
+  "method": "GET /api/sessions/{id}/vnc",
+  "httpMethod": "GET",
+  "httpPath": "/api/sessions/{id}/vnc",
+  "markerFound": true,
+  "handlerFile": "server/services/vnc_proxy_handler.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-17T16:40:58.394565822-07:00"
+}

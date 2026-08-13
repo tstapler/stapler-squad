@@ -1,0 +1,18 @@
+{
+  "id": "backlog-item-detail-diagnostic-panel",
+  "type": "frontend",
+  "component": "SessionDiagnosticPanel",
+  "path": "web-app/src/components/backlog/detail/SessionDiagnosticPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "routes to TriageReviewPanel readOnly, not GateVerdictBox, when triageResult is populated",
+    "routes to GateVerdictBox readOnly when reviewVerdict is populated and triageResult is absent",
+    "routes a manual-review-* session to BlockedNotice with the identical treatment as blocked_guardrail",
+    "routes a review-blocked-* session to BlockedNotice too",
+    "uses role=status for the one-line summary and never role=log",
+    "never renders nothing for malformed/partial headless_diagnostic data",
+    "backlog item detail redesign > reveals the synthetic session row's TriageReviewPanel readOnly summary when expanded"
+  ],
+  "lastModified": "2026-07-21T00:00:00Z"
+}
