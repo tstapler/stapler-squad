@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"testing"
 	"time"
@@ -241,4 +242,90 @@ func TestGetClaudeHistoryMessages_RejectsAnchorIndexCombinedWithTail(t *testing.
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+// --- resolveConversationUUID fallback ----------------------------------------
+
+// TestGetClaudeHistoryMessages_ResolvesTmuxUUID_When_DirectLookupMisses
+// verifies the fix for the dominant `/errors/` cluster: backlog/tmux code
+// looks up history by a tmux session UUID, but history.jsonl entries are
+// keyed by the Claude conversation UUID. GetClaudeHistoryMessages must fall
+// back to the injected resolveConversationUUID function when the direct
+// hist.GetByID(tmuxUUID) lookup fails, and must use the *resolved* ID for the
+// follow-up conversation-file read.
+func TestGetClaudeHistoryMessages_ResolvesTmuxUUID_When_DirectLookupMisses(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	seedClaudeHome(t, map[string]testConvSession{
+		"claude-conv-uuid": {project: "/repo", messages: []testConvMsg{
+			{role: "user", content: "hello", time: base},
+			{role: "assistant", content: "hi there", time: base.Add(time.Minute)},
+		}},
+	})
+	svc := setupSearchService()
+
+	const tmuxUUID = "tmux-session-uuid"
+	svc.SetResolveConversationUUID(func(_ context.Context, id string) (string, error) {
+		if id == tmuxUUID {
+			return "claude-conv-uuid", nil
+		}
+		return "", nil
+	})
+
+	resp, err := svc.GetClaudeHistoryMessages(t.Context(), connect.NewRequest(&sessionv1.GetClaudeHistoryMessagesRequest{
+		Id: tmuxUUID,
+	}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Messages, 2)
+	assert.Equal(t, "hello", resp.Msg.Messages[0].Content)
+}
+
+// TestGetClaudeHistoryDetail_ResolvesTmuxUUID_When_DirectLookupMisses covers
+// the same fallback for GetClaudeHistoryDetail.
+func TestGetClaudeHistoryDetail_ResolvesTmuxUUID_When_DirectLookupMisses(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	seedClaudeHome(t, map[string]testConvSession{
+		"claude-conv-uuid": {project: "/repo", messages: []testConvMsg{
+			{role: "user", content: "hello", time: base},
+		}},
+	})
+	svc := setupSearchService()
+
+	const tmuxUUID = "tmux-session-uuid"
+	svc.SetResolveConversationUUID(func(_ context.Context, id string) (string, error) {
+		if id == tmuxUUID {
+			return "claude-conv-uuid", nil
+		}
+		return "", nil
+	})
+
+	resp, err := svc.GetClaudeHistoryDetail(t.Context(), connect.NewRequest(&sessionv1.GetClaudeHistoryDetailRequest{
+		Id: tmuxUUID,
+	}))
+
+	require.NoError(t, err)
+	assert.Equal(t, "claude-conv-uuid", resp.Msg.Entry.Id)
+}
+
+// TestGetClaudeHistoryMessages_NotFound_When_ResolverAlsoMisses verifies that
+// an unresolvable ID still returns the original CodeNotFound error rather
+// than masking it or panicking, when a resolver is wired but returns nothing
+// useful.
+func TestGetClaudeHistoryMessages_NotFound_When_ResolverAlsoMisses(t *testing.T) {
+	seedClaudeHome(t, map[string]testConvSession{
+		"s1": {project: "/repo", messages: []testConvMsg{{role: "user", content: "hello", time: time.Now()}}},
+	})
+	svc := setupSearchService()
+	svc.SetResolveConversationUUID(func(_ context.Context, _ string) (string, error) {
+		return "", nil
+	})
+
+	_, err := svc.GetClaudeHistoryMessages(t.Context(), connect.NewRequest(&sessionv1.GetClaudeHistoryMessagesRequest{
+		Id: "unknown-uuid",
+	}))
+
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
 }
