@@ -678,20 +678,26 @@ func (t *TmuxSession) decodeControlModeOutput(encoded []byte) []byte {
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
-// RLock is safe: UnsubscribeFromControlModeUpdates holds WLock when closing channels,
-// so RLock and WLock are mutually exclusive — no send-on-closed-channel is possible.
+// Takes the full write lock (not RLock) because a slow subscriber is closed and removed
+// from t.controlModeSubscribers here rather than having its update dropped: dropping any
+// byte of this stream corrupts ANSI/cursor state for terminal consumers, since this is the
+// stream actually rendered in the browser (mirrors NativeProcessManager.fanOut's
+// close-and-remove pattern in session/native_process_manager.go).
 func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
-	t.controlModeSubMu.RLock()
-	defer t.controlModeSubMu.RUnlock()
+	t.controlModeSubMu.Lock()
+	defer t.controlModeSubMu.Unlock()
 
 	for subscriberID, ch := range t.controlModeSubscribers {
 		select {
 		case ch <- data:
 			// Successfully sent
 		default:
-			// Channel full - subscriber can't keep up
-			// Don't block other subscribers, just log
-			log.Warn("control mode subscriber channel full, dropping update", "subscriber", subscriberID, "session", t.sanitizedName)
+			// Channel full - subscriber can't keep up. Close and remove it rather than
+			// dropping this chunk, so the consumer sees end-of-stream instead of a
+			// silently corrupted terminal.
+			close(ch)
+			delete(t.controlModeSubscribers, subscriberID)
+			log.Warn("control mode subscriber channel full, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
 		}
 	}
 }

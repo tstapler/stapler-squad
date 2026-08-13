@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import type { BacklogItem, TriageResult, TriageTask, AcCriterion } from "@/lib/hooks/useBacklogService";
 import { TriageDiffSection } from "./TriageDiffSection";
 import { TriageErrorBanner } from "./TriageErrorBanner";
+import { TriageRelatedWorkSection } from "./TriageRelatedWorkSection";
 import * as styles from "./TriageReviewPanel.css";
 
 const DISMISSED_KEY = (id: string) => `triage-panel-dismissed-${id}`;
@@ -222,6 +223,13 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
           <p className={styles.sectionLabel}>Summary</p>
           <p className={styles.summaryText}>{triageResult.summary}</p>
         </div>
+
+        {!readOnly && (
+          <>
+            <hr className={styles.divider} aria-hidden="true" />
+            <TriageRelatedWorkSection itemTitle={item.title} repoPath={item.repoPath} />
+          </>
+        )}
 
         {hasSuggestions && (
           <>

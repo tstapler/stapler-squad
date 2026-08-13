@@ -10,6 +10,16 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { TriageReviewPanel } from "./TriageReviewPanel";
 import type { BacklogItem, TriageResult, AcCriterion } from "@/lib/hooks/useBacklogService";
 
+// TriageRelatedWorkSection makes a real ConnectRPC call on mount; this suite
+// only cares about whether the section is present/absent, not its internal
+// search behavior (covered by TriageRelatedWorkSection.test.tsx), so it's
+// stubbed out to avoid unmocked network calls and act() noise.
+jest.mock("./TriageRelatedWorkSection", () => ({
+  TriageRelatedWorkSection: ({ itemTitle }: { itemTitle: string }) => (
+    <div data-testid="triage-related-work-section-mock">{itemTitle}</div>
+  ),
+}));
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -77,6 +87,19 @@ describe("TriageReviewPanel_renders_diff_when_suggestions_present", () => {
     expect(screen.getByTestId("triage-review-panel")).toBeInTheDocument();
     expect(screen.getByText(TRIAGE_RESULT_WITH_SUGGESTIONS.summary)).toBeInTheDocument();
     expect(screen.getByTestId("triage-apply-button")).toBeInTheDocument();
+  });
+
+  it("renders TriageRelatedWorkSection with the item's title when not readOnly", () => {
+    render(
+      <TriageReviewPanel
+        item={makeItem({ title: "Add dark mode toggle" })}
+        triageResult={TRIAGE_RESULT_WITH_SUGGESTIONS}
+        onApply={jest.fn()}
+        onSkip={jest.fn()}
+      />
+    );
+
+    expect(screen.getByTestId("triage-related-work-section-mock")).toHaveTextContent("Add dark mode toggle");
   });
 
   it("renders suggested AC criteria text in the diff section", () => {
@@ -386,6 +409,14 @@ describe("TriageReviewPanel_should_HideApplySkipRefineButtonsAndShowSummarySugge
     expect(screen.queryByTestId("triage-skip-button")).not.toBeInTheDocument();
     expect(screen.queryByTestId("triage-refine-toggle-button")).not.toBeInTheDocument();
     expect(screen.queryByTestId("triage-dismiss-button")).not.toBeInTheDocument();
+  });
+
+  it("omits TriageRelatedWorkSection entirely when readOnly is true", () => {
+    render(
+      <TriageReviewPanel item={makeItem()} triageResult={TRIAGE_RESULT_WITH_SUGGESTIONS} readOnly />
+    );
+
+    expect(screen.queryByTestId("triage-related-work-section-mock")).not.toBeInTheDocument();
   });
 
   it("ignores a pre-existing localStorage dismissal for the same item.id — a historical record is never dismissible", () => {

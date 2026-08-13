@@ -1,0 +1,12 @@
+{
+  "checks": [
+    {
+      "name": "go-primitive-obsession",
+      "command": "kibitzer check primitive-obsession {file}",
+      "severity": "advisory",
+      "scope": ["**/*.go"],
+      "triggers": ["PostToolUse", "batch"],
+      "message": "Same-typed parameter pile — see .claude/rules/primitive-obsession-checklist.md"
+    }
+  ]
+}

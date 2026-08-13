@@ -1038,3 +1038,15 @@ func (c *Config) SetFeatureFlag(name string, value bool) error {
 	c.FeatureFlags[name] = value
 	return SaveConfig(c)
 }
+
+// ImportSessionEnabled reports whether the import-external-session feature
+// (Phase 1: ssq-mux single-session import) is enabled. Unlike GetFeatureFlag,
+// this is a plain environment variable rather than a persisted config flag —
+// the feature involves signaling live, unmanaged processes (SIGSTOP/SIGCONT)
+// outside Stapler Squad's own supervision, so it defaults to a deliberate,
+// explicit opt-in per deployment/session rather than a UI-toggleable
+// persisted setting. Re-read on every call (not cached) so it can be flipped
+// without a server restart, matching the re-read behavior of GetFeatureFlag.
+func ImportSessionEnabled() bool {
+	return os.Getenv("STAPLER_SQUAD_ENABLE_SESSION_IMPORT") == "true"
+}

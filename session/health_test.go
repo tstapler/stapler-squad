@@ -293,6 +293,92 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 	}
 }
 
+// TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDespiteGracePeriod
+// pins AC0/AC1: a session created AFTER the health checker started (never
+// "previously alive" from this process's perspective) must not get the
+// restart-race grace period, even though wall-clock time since startedAt is
+// still well within restartGracePeriod. This is the one-off-bash-session e2e
+// scenario: a session created seconds ago whose process exits normally must
+// reach Stopped promptly, not sit through a silent kill+respawn cycle.
+func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDespiteGracePeriod(t *testing.T) {
+	checker := NewSessionHealthChecker(nil)
+	checker.startedAt = time.Now() // fresh checker, well within restartGracePeriod
+
+	inner := &mockTmuxManager{
+		hasSessionReturn: true,
+		isAliveReturn:    true,
+		paneExitCode:     0,
+		paneExitSignal:   "",
+		paneExitDead:     true,
+	}
+	mock := &deadPaneMock{mockTmuxManager: inner}
+	inst := &Instance{
+		Title:     "fresh-session-test",
+		Status:    Active,
+		CreatedAt: time.Now(), // created after (>=) checker.startedAt
+	}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	checker.checkSingleSession(inst) // first failure: below threshold
+	result := checker.checkSingleSession(inst)
+
+	if !result.RecoveryAttempted {
+		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
+	}
+	if mock.startCalls != 0 {
+		t.Errorf("expected no auto-respawn for a never-previously-alive session, got %d Start() calls", mock.startCalls)
+	}
+	snap := inst.Snapshot()
+	if snap.Status != Stopped {
+		t.Errorf("expected Status=Stopped immediately (no grace period for a fresh session), got %s", snap.Status)
+	}
+}
+
+// TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGracePeriod
+// is the regression guard for the original d46c0998d intent: a session that
+// existed BEFORE the health checker started (i.e. survived a process restart)
+// must still get the silent kill+respawn treatment within restartGracePeriod,
+// since a dead-pane detection here is plausibly a restart-race artifact rather
+// than a genuine crash.
+func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGracePeriod(t *testing.T) {
+	checker := NewSessionHealthChecker(nil)
+	checker.startedAt = time.Now() // fresh checker (simulating a just-restarted process)
+
+	inner := &mockTmuxManager{
+		hasSessionReturn: true,
+		isAliveReturn:    true,
+		paneExitCode:     137,
+		paneExitSignal:   "SIGKILL",
+		paneExitDead:     true,
+	}
+	mock := &deadPaneMock{mockTmuxManager: inner}
+	inst := &Instance{
+		Title:     "pre-existing-session-test",
+		Status:    Active,
+		CreatedAt: time.Now().Add(-1 * time.Hour), // created well before the checker started
+	}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	checker.checkSingleSession(inst) // first failure: below threshold
+	result := checker.checkSingleSession(inst)
+
+	if !result.RecoveryAttempted {
+		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
+	}
+	if mock.startCalls == 0 {
+		t.Error("expected the pre-existing session to be respawned (grace period protection), got 0 Start() calls")
+	}
+	if mock.closeCalls == 0 {
+		t.Error("expected the stale dead-pane session to be killed before respawn")
+	}
+	snap := inst.Snapshot()
+	if snap.Status == Crashed || snap.Status == Stopped {
+		t.Errorf("expected no user-visible status transition during the grace period, got %s", snap.Status)
+	}
+}
+
 // --- checkInstances multi-socket regression tests ---
 //
 // CheckAllSessions previously derived a single socket from the first instance that

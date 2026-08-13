@@ -700,6 +700,7 @@ var (
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "auto_yes", Type: field.TypeBool, Default: false},
+		{Name: "auto_approve", Type: field.TypeBool, Default: false},
 		{Name: "autonomous_mode", Type: field.TypeBool, Default: false},
 		{Name: "prompt", Type: field.TypeString, Nullable: true},
 		{Name: "program", Type: field.TypeString},
@@ -742,7 +743,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sessions_projects_sessions",
-				Columns:    []*schema.Column{SessionsColumns[44]},
+				Columns:    []*schema.Column{SessionsColumns[45]},
 				RefColumns: []*schema.Column{ProjectsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -761,17 +762,17 @@ var (
 			{
 				Name:    "session_category",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[16]},
+				Columns: []*schema.Column{SessionsColumns[17]},
 			},
 			{
 				Name:    "session_last_meaningful_output",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[21]},
+				Columns: []*schema.Column{SessionsColumns[22]},
 			},
 			{
 				Name:    "session_last_acknowledged",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[25]},
+				Columns: []*schema.Column{SessionsColumns[26]},
 			},
 			{
 				Name:    "session_created_at",
@@ -781,12 +782,12 @@ var (
 			{
 				Name:    "session_workflow_id",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[36]},
+				Columns: []*schema.Column{SessionsColumns[37]},
 			},
 			{
 				Name:    "session_archived_at",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[37]},
+				Columns: []*schema.Column{SessionsColumns[38]},
 			},
 		},
 	}

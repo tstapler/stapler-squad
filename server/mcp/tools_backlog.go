@@ -36,13 +36,37 @@ func sessionUUIDFromContext(ctx context.Context) (string, bool) {
 	return v, ok && v != ""
 }
 
-// callerSessionUUID returns the session UUID from context, or an MCP error if absent.
+// callerSessionUUID returns the session UUID from context, or an MCP error if
+// absent. Use this for tools whose write actually depends on the caller's
+// session identity — e.g. verifying the calling session is linked to a
+// backlog item with a specific role (report_duplicate, request_review,
+// submit_review_verdict, report_progress, report_pr_created,
+// submit_triage_result). Hard-failing here is correct: those tools have no
+// meaningful behavior without a real session to check against.
 func callerSessionUUID(ctx context.Context) (string, error) {
 	uuid, ok := sessionUUIDFromContext(ctx)
 	if !ok {
 		return "", fmt.Errorf("STAPLER_SESSION_UUID not set — this tool must be called from a session spawned by Stapler Squad")
 	}
 	return uuid, nil
+}
+
+// callerSessionUUIDForAudit returns the session UUID from context, or the
+// sentinel "manual" if absent — never an error. Use this for tools that only
+// reference the caller's session for an audit-trail log line and have no
+// session-scoped invariant to enforce (create_backlog_item,
+// import_github_issue: CreateBacklogItem takes no session parameter and
+// creates no session/item link). Unlike callerSessionUUID, a manual/external
+// MCP client (e.g. `claude mcp add` from a plain terminal, with no
+// STAPLER_SESSION_UUID set) is a legitimate caller for these tools and must
+// not be rejected just because there's no session identity to log.
+const manualCallerSentinel = "manual"
+
+func callerSessionUUIDForAudit(ctx context.Context) string {
+	if uuid, ok := sessionUUIDFromContext(ctx); ok {
+		return uuid
+	}
+	return manualCallerSentinel
 }
 
 // uuidRe validates UUID format (8-4-4-4-12 hex with dashes).
@@ -462,13 +486,19 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// Belt-and-suspenders layer 1: reject if the worktree has uncommitted changes.
 	// The reviewer reads the committed diff; uncommitted work would be invisible and
 	// the review verdict would be inaccurate. Agent must commit before requesting review.
+	// GetWorktreeDirtyPaths alone answers both "is it dirty" and "which paths" — no
+	// need for a separate IsWorktreeDirty call first. A pathsErr here (rare — the
+	// worktree was already resolved above) fails open rather than blocking the RPC,
+	// matching this belt-and-suspenders check's pre-existing fail-open behavior; it's
+	// still logged so a silent failure to reject a genuinely dirty worktree is visible.
 	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
-		if dirty, dirtyErr := session.IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
-			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s", callerUUID, itemID)
-			return errResult(ErrInvalidArgument,
-				"request_review rejected: the worktree has uncommitted changes. "+
-					"Run `git add -A && git commit -m 'description of changes'` to commit your work, then call request_review again.",
-				""), nil
+		paths, pathsErr := session.GetWorktreeDirtyPaths(wt.WorktreePath)
+		if pathsErr != nil {
+			log.WarningLog.Printf("[mcp:request_review] GetWorktreeDirtyPaths failed for session=%s worktree=%s: %v", callerUUID, wt.WorktreePath, pathsErr)
+		}
+		if pathsErr == nil && len(paths) > 0 {
+			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s paths=%v", callerUUID, itemID, paths)
+			return errResult(ErrInvalidArgument, formatDirtyPathsRejectionMessage(paths), ""), nil
 		}
 	}
 
@@ -560,6 +590,31 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Review requested for item %s. The item has been moved to review status.", itemID,
 	)), nil
+}
+
+// maxRejectionMessagePaths caps how many dirty paths formatDirtyPathsRejectionMessage
+// lists explicitly, so a large diff doesn't produce an unbounded message.
+const maxRejectionMessagePaths = 10
+
+// formatDirtyPathsRejectionMessage builds request_review's uncommitted-changes
+// rejection text from the specific dirty paths, instead of a blanket "git add -A"
+// instruction, so the agent knows exactly what to commit.
+func formatDirtyPathsRejectionMessage(paths []string) string {
+	if len(paths) == 0 {
+		return "request_review rejected: the worktree has uncommitted changes. " +
+			"Run `git status` in the worktree, commit your work, then call request_review again."
+	}
+	shown := paths
+	var suffix string
+	if len(paths) > maxRejectionMessagePaths {
+		shown = paths[:maxRejectionMessagePaths]
+		suffix = fmt.Sprintf(" ...and %d more", len(paths)-maxRejectionMessagePaths)
+	}
+	return fmt.Sprintf(
+		"request_review rejected: the worktree has uncommitted changes: %s%s. "+
+			"Commit these specific paths (e.g. `git add <path> && git commit -m 'description of changes'`), then call request_review again.",
+		strings.Join(shown, ", "), suffix,
+	)
 }
 
 // itemSessionsFor lists ItemSessions for itemID via the overridable
@@ -678,6 +733,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		OverallOutcome: overallOutcome,
 		PerCriterion:   string(perCriterionJSON),
 		Summary:        summary,
+		DiffHash:       h.storage.ComputeCurrentDiffHash(ctx, itemID),
 	}
 
 	if saveErr := h.storage.SaveReviewVerdict(ctx, itemSession.ID, verdictData); saveErr != nil {
@@ -1132,10 +1188,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
 	}
-	callerUUID, err := callerSessionUUID(ctx)
-	if err != nil {
-		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
-	}
+	callerUUID := callerSessionUUIDForAudit(ctx)
 
 	args := req.GetArguments()
 
@@ -1216,10 +1269,7 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
 	}
-	callerUUID, err := callerSessionUUID(ctx)
-	if err != nil {
-		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
-	}
+	callerUUID := callerSessionUUIDForAudit(ctx)
 
 	args := req.GetArguments()
 	issueURL, ok := args["issue_url"].(string)

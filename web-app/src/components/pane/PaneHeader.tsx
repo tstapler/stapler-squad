@@ -72,6 +72,7 @@ export function PaneHeader({
               onRunOneShot={(id) => cockpit.onRunOneShot(id)}
               onSetRateLimitEnabled={(id, enabled) => cockpit.onSetRateLimitEnabled(id, enabled)}
               onToggleAutonomousMode={(id, enabled) => cockpit.onToggleAutonomousMode(id, enabled)}
+              onToggleAutoApprove={(id, enabled) => cockpit.onToggleAutoApprove(id, enabled)}
               onSteerAutonomousSession={(id, msg) => cockpit.onSteerAutonomousSession(id, msg)}
               onClearConversationState={(id) => cockpit.onClearConversationState(id)}
               onUpdateTags={(id, tags) => cockpit.onUpdateTags(id, tags)}

@@ -22,7 +22,9 @@
     "TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys",
     "TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_ReturnsFailedPrecondition",
     "TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController",
-    "tests/e2e/backlog-session-steer.spec.ts"
+    "tests/e2e/backlog-session-steer.spec.ts",
+    "TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload",
+    "TestUpdateSession_should_RejectAutoApprove_When_ProgramUnsupported"
   ],
   "lastModified": "2026-08-12T00:00:00Z"
 }

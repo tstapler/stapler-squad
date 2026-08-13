@@ -276,10 +276,22 @@ These verify non-behavioral artifacts: fixture files, doc comments, and TODO ann
 
 **ST-03: `installOpenCode()` in `cmd/ssq-hooks/main.go` has proxy rationale comment**
 
-- Method: Read `cmd/ssq-hooks/main.go`; locate `func installOpenCode()`. Assert that the preceding block comment contains the string `"file_edited"` and `"session_completed"` (naming the two hook types confirmed by research), and contains `"no PreToolUse"` or equivalent phrasing.
-- This can be verified by `grep` in CI or as part of code review; it is listed here as a structural requirement so reviewers know to look for it.
+- **CORRECTED 2026-08-11 (was falsely marked PASS below — see Readiness Gate Criterion 1):** No
+  such comment exists. `grep -n 'file_edited\|session_completed\|no PreToolUse' cmd/ssq-hooks/main.go`
+  returns zero hits; `installOpenCode()` (`cmd/ssq-hooks/main.go:1052`) has no comment block above
+  it at all. This test was never actually run/verified when the original PASS was recorded — the
+  discrepancy was caught during the 2026-08-11 re-verification of R4 (see
+  `research/features.md`'s R4 addendum).
+- Original method (never executed): Read `cmd/ssq-hooks/main.go`; locate `func installOpenCode()`. Assert that the preceding block comment contains the string `"file_edited"` and `"session_completed"` (naming the two hook types confirmed by research), and contains `"no PreToolUse"` or equivalent phrasing.
+- **Not remediated by adding the comment now**: the 2026-08-11 re-verification found the "no
+  PreToolUse" premise itself is incomplete — a real PreToolUse-equivalent (`tool.execute.before`,
+  the plugin API) does exist — so writing a comment asserting "no PreToolUse hook exists" would
+  now be documenting something false. Correcting this doc's status is the right fix, not adding
+  the originally-specified comment. Actually wiring `installOpenCode()` to the plugin API is
+  scoped as a separate follow-on backlog item, not this one.
 - Requirements: R4
 - Plan ref: E7.S1.T1
+- Status: **FAIL** (as originally specified) — see correction above
 
 ---
 
@@ -316,12 +328,16 @@ Fix the opencode config error and run `opencode run "say hello"` to confirm one-
 | R1 | UT-01, UT-02, UT-03 | PASS |
 | R2 | IT-01 through IT-06 | PASS |
 | R3 | UT-05–UT-12, ST-01, ST-02 | PASS |
-| R4 | ST-03, IT-07 | PASS |
+| R4 | ST-03, IT-07 | **PARTIAL** — ST-03 FAIL (corrected 2026-08-11, see ST-03 above), IT-07 PASS |
 | R5 | UT-13–UT-18 | PASS |
 | R6 | UT-01, UT-04 | PASS |
 | R7 | All UT-01–UT-18 | PASS |
 
-**Result: PASS (7/7)**
+**Result: PASS (6/7)** — **CORRECTED 2026-08-11**: originally recorded as 7/7 PASS, but ST-03 was
+never actually verified (see ST-03 above); R4 is PARTIAL, not PASS. This does not reopen R1–R3/
+R5–R7, which were independently checked and hold. Remediation (wiring `installOpenCode()` to the
+now-confirmed plugin API) is scoped as a separate follow-on backlog item, not a reason to revert
+this project's original ship decision.
 
 ### Criterion 2: Plan has clear acceptance criteria for every task
 

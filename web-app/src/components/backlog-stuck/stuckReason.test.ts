@@ -21,6 +21,7 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.REWORK_BLOCKED_STALE,
   StuckReason.PR_NEEDS_FIX,
   StuckReason.RESPAWN_BLOCKED_ACTIVE,
+  StuckReason.LIKELY_FLAKY,
 ];
 
 describe("stuckReason", () => {
@@ -67,6 +68,18 @@ describe("stuckReason", () => {
       expect(getStuckReasonClass(StuckReason.RESPAWN_BLOCKED_ACTIVE)).not.toBe(
         getStuckReasonClass(StuckReason.UNSPECIFIED)
       );
+    });
+
+    it("gives likely_flaky a real label, class, and icon, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.LIKELY_FLAKY)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.LIKELY_FLAKY)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonIcon(StuckReason.LIKELY_FLAKY).length).toBeGreaterThan(0);
+      // Copy must read as a hint to verify, not a confident verdict (validation.md).
+      expect(getStuckReasonLabel(StuckReason.LIKELY_FLAKY)).toMatch(/possibly|verify/i);
     });
 
     it("falls back to the UNSPECIFIED label/class for an out-of-range value", () => {

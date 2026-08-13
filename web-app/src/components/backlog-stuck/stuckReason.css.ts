@@ -140,6 +140,15 @@ export const chipRespawnBlockedActive = style([
   },
 ]);
 
+export const chipLikelyFlaky = style([
+  chip,
+  {
+    background: vars.color.warningBg,
+    color: vars.color.warningText,
+    border: `1px solid ${vars.color.warning}`,
+  },
+]);
+
 export const chipUnknown = style([
   chip,
   {

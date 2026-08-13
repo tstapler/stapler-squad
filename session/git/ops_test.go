@@ -470,3 +470,113 @@ func TestFileStatsBetween_ShouldOmitBinaryFiles_WhenBinaryContentChanges(t *test
 	require.Len(t, stats, 1, "the binary file must be omitted, leaving only notes.txt: got %+v", stats)
 	assert.Equal(t, "notes.txt", stats[0].Path)
 }
+
+// TestDiffHashBetween_ShouldReturnSameHash_WhenSameCommitRangeHashedTwice verifies the
+// core property IsFlakyVerdictFlipFlop depends on: hashing the identical base..head
+// range twice must be fully deterministic.
+func TestDiffHashBetween_ShouldReturnSameHash_WhenSameCommitRangeHashedTwice(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("a\nb\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "add foo.go")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	h1, err := DiffHashBetween(work, baseSHA, headSHA)
+	require.NoError(t, err)
+	h2, err := DiffHashBetween(work, baseSHA, headSHA)
+	require.NoError(t, err)
+	assert.Equal(t, h1, h2, "the same commit range must hash identically every time")
+	assert.NotEmpty(t, h1)
+}
+
+// TestDiffHashBetween_ShouldReturnDifferentHash_WhenDiffContentDiffers verifies the
+// converse: a genuinely different diff must not collide.
+func TestDiffHashBetween_ShouldReturnDifferentHash_WhenDiffContentDiffers(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("a\nb\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "add foo.go")
+	headSHA1 := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("a\nb\nc\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "extend foo.go")
+	headSHA2 := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	h1, err := DiffHashBetween(work, baseSHA, headSHA1)
+	require.NoError(t, err)
+	h2, err := DiffHashBetween(work, baseSHA, headSHA2)
+	require.NoError(t, err)
+	assert.NotEqual(t, h1, h2, "a different diff must not hash the same")
+}
+
+// TestDiffHashBetween_ShouldReturnStableHash_WhenBaseEqualsHead verifies the no-op
+// range (nothing changed) still returns a valid, non-error hash rather than a
+// distinguishable-from-real-hashes empty string.
+func TestDiffHashBetween_ShouldReturnStableHash_WhenBaseEqualsHead(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	hash, err := DiffHashBetween(work, sha, sha)
+	require.NoError(t, err)
+	assert.NotEmpty(t, hash)
+}
+
+// TestDiffHashBetween_ShouldReturnDifferentHash_WhenSameLineCountsButDifferentContent
+// guards the exact false-collision shape a counts-only hash (path+status+
+// addition-count+deletion-count) would miss: two attempts that both replace
+// exactly one line of the same file (same +1/-1 shape) but with genuinely
+// different replacement text must not hash the same.
+func TestDiffHashBetween_ShouldReturnDifferentHash_WhenSameLineCountsButDifferentContent(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("line1\nline2\nline3\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "add foo.go")
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("line1\nCHANGED_A\nline3\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "attempt 1: replace line2 with CHANGED_A")
+	headSHA1 := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	runGit(t, work, "reset", "--hard", baseSHA)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("line1\nCHANGED_B\nline3\n"), 0o644))
+	runGit(t, work, "add", "foo.go")
+	runGit(t, work, "commit", "-m", "attempt 2: replace line2 with CHANGED_B")
+	headSHA2 := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	// Sanity check: both attempts really do produce the identical +1/-1 shape
+	// a counts-only hash would have collapsed to the same tuple.
+	stats1, err := FileStatsBetween(work, baseSHA, headSHA1)
+	require.NoError(t, err)
+	stats2, err := FileStatsBetween(work, baseSHA, headSHA2)
+	require.NoError(t, err)
+	require.Equal(t, stats1, stats2, "test setup must produce identical FileStat shape for this regression test to be meaningful")
+
+	h1, err := DiffHashBetween(work, baseSHA, headSHA1)
+	require.NoError(t, err)
+	h2, err := DiffHashBetween(work, baseSHA, headSHA2)
+	require.NoError(t, err)
+	assert.NotEqual(t, h1, h2, "two genuinely different edits with the identical addition/deletion counts must not collide")
+}
+
+// TestDiffHashBetween_ShouldReturnError_WhenBaseSHADoesNotExistInRepo mirrors
+// FileStatsBetween's identical error-propagation test — DiffHashBetween is a thin
+// wrapper and must not swallow the underlying resolution error.
+func TestDiffHashBetween_ShouldReturnError_WhenBaseSHADoesNotExistInRepo(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	hash, err := DiffHashBetween(work, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", headSHA)
+	require.Error(t, err)
+	assert.Empty(t, hash)
+}

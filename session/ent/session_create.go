@@ -160,6 +160,20 @@ func (_c *SessionCreate) SetNillableAutoYes(v *bool) *SessionCreate {
 	return _c
 }
 
+// SetAutoApprove sets the "auto_approve" field.
+func (_c *SessionCreate) SetAutoApprove(v bool) *SessionCreate {
+	_c.mutation.SetAutoApprove(v)
+	return _c
+}
+
+// SetNillableAutoApprove sets the "auto_approve" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableAutoApprove(v *bool) *SessionCreate {
+	if v != nil {
+		_c.SetAutoApprove(*v)
+	}
+	return _c
+}
+
 // SetAutonomousMode sets the "autonomous_mode" field.
 func (_c *SessionCreate) SetAutonomousMode(v bool) *SessionCreate {
 	_c.mutation.SetAutonomousMode(v)
@@ -772,6 +786,10 @@ func (_c *SessionCreate) defaults() {
 		v := session.DefaultAutoYes
 		_c.mutation.SetAutoYes(v)
 	}
+	if _, ok := _c.mutation.AutoApprove(); !ok {
+		v := session.DefaultAutoApprove
+		_c.mutation.SetAutoApprove(v)
+	}
 	if _, ok := _c.mutation.AutonomousMode(); !ok {
 		v := session.DefaultAutonomousMode
 		_c.mutation.SetAutonomousMode(v)
@@ -831,6 +849,9 @@ func (_c *SessionCreate) check() error {
 	}
 	if _, ok := _c.mutation.AutoYes(); !ok {
 		return &ValidationError{Name: "auto_yes", err: errors.New(`ent: missing required field "Session.auto_yes"`)}
+	}
+	if _, ok := _c.mutation.AutoApprove(); !ok {
+		return &ValidationError{Name: "auto_approve", err: errors.New(`ent: missing required field "Session.auto_approve"`)}
 	}
 	if _, ok := _c.mutation.AutonomousMode(); !ok {
 		return &ValidationError{Name: "autonomous_mode", err: errors.New(`ent: missing required field "Session.autonomous_mode"`)}
@@ -927,6 +948,10 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AutoYes(); ok {
 		_spec.SetField(session.FieldAutoYes, field.TypeBool, value)
 		_node.AutoYes = value
+	}
+	if value, ok := _c.mutation.AutoApprove(); ok {
+		_spec.SetField(session.FieldAutoApprove, field.TypeBool, value)
+		_node.AutoApprove = value
 	}
 	if value, ok := _c.mutation.AutonomousMode(); ok {
 		_spec.SetField(session.FieldAutonomousMode, field.TypeBool, value)
@@ -1386,6 +1411,18 @@ func (u *SessionUpsert) SetAutoYes(v bool) *SessionUpsert {
 // UpdateAutoYes sets the "auto_yes" field to the value that was provided on create.
 func (u *SessionUpsert) UpdateAutoYes() *SessionUpsert {
 	u.SetExcluded(session.FieldAutoYes)
+	return u
+}
+
+// SetAutoApprove sets the "auto_approve" field.
+func (u *SessionUpsert) SetAutoApprove(v bool) *SessionUpsert {
+	u.Set(session.FieldAutoApprove, v)
+	return u
+}
+
+// UpdateAutoApprove sets the "auto_approve" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateAutoApprove() *SessionUpsert {
+	u.SetExcluded(session.FieldAutoApprove)
 	return u
 }
 
@@ -2179,6 +2216,20 @@ func (u *SessionUpsertOne) SetAutoYes(v bool) *SessionUpsertOne {
 func (u *SessionUpsertOne) UpdateAutoYes() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.UpdateAutoYes()
+	})
+}
+
+// SetAutoApprove sets the "auto_approve" field.
+func (u *SessionUpsertOne) SetAutoApprove(v bool) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetAutoApprove(v)
+	})
+}
+
+// UpdateAutoApprove sets the "auto_approve" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateAutoApprove() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateAutoApprove()
 	})
 }
 
@@ -3230,6 +3281,20 @@ func (u *SessionUpsertBulk) SetAutoYes(v bool) *SessionUpsertBulk {
 func (u *SessionUpsertBulk) UpdateAutoYes() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.UpdateAutoYes()
+	})
+}
+
+// SetAutoApprove sets the "auto_approve" field.
+func (u *SessionUpsertBulk) SetAutoApprove(v bool) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetAutoApprove(v)
+	})
+}
+
+// UpdateAutoApprove sets the "auto_approve" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateAutoApprove() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateAutoApprove()
 	})
 }
 

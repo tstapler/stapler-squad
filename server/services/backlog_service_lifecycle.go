@@ -1009,6 +1009,7 @@ func (s *BacklogService) OverrideVerdict(
 	if verdictErr := s.storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        fmt.Sprintf("Manual override: %s", req.Msg.OverrideReason),
+		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, itemID),
 		OverrideBy:     "user",
 		OverrideReason: req.Msg.OverrideReason,
 		OverrideAt:     &now,
@@ -1128,6 +1129,7 @@ func (s *BacklogService) SubmitManualReview(
 		OverallOutcome: overall,
 		PerCriterion:   string(perCriterionJSON),
 		Summary:        req.Msg.Summary,
+		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, req.Msg.ItemId),
 		OverrideBy:     "user",
 		OverrideReason: "manual review",
 		OverrideAt:     &now,

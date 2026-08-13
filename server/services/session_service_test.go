@@ -1850,6 +1850,44 @@ func TestCreateSession_TitleAlreadyExists(t *testing.T) {
 	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
 }
 
+// TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked
+// is the Story 1.2.0a regression test: it proves CreateSession's handler no
+// longer contains its own inline path-existence check but instead delegates
+// construction to session.CreateManagedInstance. It does this by observing
+// CreateManagedInstance's specific sentinel-error contract (session.ErrPathNotExist,
+// wrapped and mapped to connect.CodeNotFound) surface unchanged through the
+// handler for a Directory-mode session whose path does not exist and
+// CreateIfMissing is unset -- behavior that only holds if the handler is
+// calling into the extracted domain function rather than duplicating (or
+// dropping) the check itself.
+func TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	tmpDir := t.TempDir()
+	missingPath := tmpDir + "/does-not-exist"
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "delegation-regression",
+		Path:        missingPath,
+		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code(),
+		"CreateSession must surface session.CreateManagedInstance's ErrPathNotExist as CodeNotFound, proving the handler delegates rather than duplicating path-existence logic")
+
+	// No instance should have been persisted -- CreateManagedInstance must
+	// fail before any Storage.AddInstance call.
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	for _, d := range data {
+		assert.NotEqual(t, "delegation-regression", d.Title, "no instance should be persisted when path resolution fails")
+	}
+}
+
 // --------------------------------------------------------------------------
 // DeleteSession + CancelSession ordering (F10)
 // --------------------------------------------------------------------------
