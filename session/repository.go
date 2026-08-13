@@ -47,6 +47,21 @@ type PRReassignmentGuard struct {
 	NewPRAuthorVerified bool
 }
 
+// ErrDependencyCycle is returned by AddBacklogItemDependency when the new
+// blocker->blocked edge would create a cycle in the dependency graph.
+var ErrDependencyCycle = errors.New("backlog item dependency would create a cycle")
+
+// BacklogItemDependencyEdge names a blocker/blocked pair explicitly so the
+// two bare ID strings can't be silently swapped at a call site — see
+// .claude/rules/primitive-obsession-checklist.md.
+type BacklogItemDependencyEdge struct {
+	// BlockerID is the item that must reach a resolved status (done or
+	// archived) before BlockedID is eligible for dequeue/start.
+	BlockerID string
+	// BlockedID is the dependent item, gated until BlockerID resolves.
+	BlockedID string
+}
+
 // Repository defines the interface for session persistence operations.
 // This abstraction allows multiple storage backends (SQLite, JSON, etc.)
 // while maintaining a consistent API for session management.
@@ -218,6 +233,20 @@ type Repository interface {
 	// Unlike ListBacklogItems it omits Description/plan fields and eagerly loads
 	// ItemSessions (with ReviewVerdict) without over-fetching status events.
 	ListBacklogItemSummaries(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemSummary, error)
+	// AddBacklogItemDependency records that edge.BlockedID may not be
+	// dequeued/started until edge.BlockerID reaches a resolved status
+	// (done). Upserts against the unique (blocker_id, blocked_id) index —
+	// adding an existing pair is a no-op. Returns an error if the new edge
+	// would create a cycle.
+	AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error
+	// UnresolvedBlockerItemIDs returns the subset of itemIDs that have at
+	// least one BacklogItemDependency whose blocker has not reached done.
+	// Batched by blocked_id so callers (DequeueNextQueuedItems,
+	// transitionWithGuard) avoid an N+1 per-candidate query.
+	UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error)
+	// UnresolvedBlockerIDs returns the specific blocker item IDs still
+	// unresolved for a single blocked item, for stuck-reason messaging.
+	UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error)
 
 	// --- ItemSource ---
 

@@ -339,7 +339,7 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 // .git/worktrees/ administrative metadata at once, each for a distinct branch/worktree path.
 // Unlike TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate (which calls the
 // unlocked setupNewWorktree() directly to exercise same-branch self-heal logic), this test calls
-// the public, now-lock-wrapped Setup() to verify withRepoWorktreeLock actually prevents the
+// the public, now-lock-wrapped Setup() to verify WithRepoWorktreeLock actually prevents the
 // metadata race rather than merely tolerating one branch-create collision.
 func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo(t *testing.T) {
 	repoDir := setupTestRepo(t)

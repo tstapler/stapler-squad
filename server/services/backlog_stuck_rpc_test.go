@@ -489,6 +489,13 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// item's normal reopen/park flow already proceeds unaffected by this row
 	// (see notifyLikelyFlaky's doc comment in backlog_service_triage.go).
 	domain.StuckReasonLikelyFlaky: true,
+	// StuckReasonBlockedByDependency: purely informational — there is no
+	// "retry now" action because dequeue eligibility is derived automatically
+	// from the blocker's status (DequeueNextQueuedItems re-checks it on every
+	// pass; see criterion 3 in project_plans/backlog-item-dependencies). Once
+	// the blocking item reaches its resolved state, this reason simply stops
+	// firing on the next reconcile tick — nothing to trigger manually.
+	domain.StuckReasonBlockedByDependency: true,
 	// StuckReasonMultipleReasons and StuckReasonBounceCapExhausted
 	// (backlog-bounce-escalation, Epic 1.1) are synthetic, aggregate signals
 	// derived from other open stuck reasons/the remediation-attempt cap, not

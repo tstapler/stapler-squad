@@ -205,6 +205,7 @@ var (
 	ErrPlanArtifactsRequired        = domain.ErrPlanArtifactsRequired
 	ErrVerdictRequired              = domain.ErrVerdictRequired
 	ErrCodeNotOnMain                = domain.ErrCodeNotOnMain
+	ErrUnresolvedBlockers           = domain.ErrUnresolvedBlockers
 	ErrVerdictClearRequiredForReady = domain.ErrVerdictClearRequiredForReady
 )
 

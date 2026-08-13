@@ -149,6 +149,15 @@ export const chipLikelyFlaky = style([
   },
 ]);
 
+export const chipBlockedByDependency = style([
+  chip,
+  {
+    background: vars.color.warningBg,
+    color: vars.color.warningText,
+    border: `1px solid ${vars.color.warning}`,
+  },
+]);
+
 // Escalation chip (multiple_reasons / bounce_cap_exhausted) — deliberately its
 // own independent style(), not a `chipXxx` variant reused from an existing
 // reason, and using the `critical` token trio (unused by every other chip in

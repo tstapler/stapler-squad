@@ -272,6 +272,38 @@ func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, c
 	}
 }
 
+// notifyBlockedByDependency writes a durable StuckReasonBlockedByDependency row
+// (session/domain/backlog.go) when DequeueNextQueuedItems finds an item still
+// has unresolved blockers (AC3) — purely informational, like notifyLikelyFlaky,
+// so the item detail view can render a BlockerChip instead of leaving the
+// operator to guess why a queued/ready item never gets claimed. A MarkStuck/
+// MarkStuckNotified failure is only logged, matching every other MarkStuck call
+// site's own convention.
+func (s *BacklogService) notifyBlockedByDependency(ctx context.Context, itemID string, currentStatus session.BacklogStatus) {
+	if s.storage == nil {
+		return
+	}
+	blockerIDs, err := s.storage.UnresolvedBlockerIDs(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("[notifyBlockedByDependency] UnresolvedBlockerIDs item=%s: %v", itemID, err)
+		return
+	}
+	if len(blockerIDs) == 0 {
+		// Blockers resolved between the batched check and here — nothing to report.
+		return
+	}
+
+	message := fmt.Sprintf("blocked by unresolved dependency: %s", strings.Join(blockerIDs, ", "))
+	applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBlockedByDependency, currentStatus, message)
+	if err != nil {
+		log.WarningLog.Printf("[notifyBlockedByDependency] MarkStuck item=%s: %v", itemID, err)
+	} else if applied {
+		if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBlockedByDependency); notifyErr != nil {
+			log.WarningLog.Printf("[notifyBlockedByDependency] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		}
+	}
+}
+
 // notifySpawnAndRollbackFailed publishes an operator-facing notification and durable
 // BacklogStuckState row (StuckReasonSpawnFailed) when AutoReopenAfterFailedReview's
 // SpawnSessionFromItem call fails AND the subsequent scoped rollback to "review" also
@@ -646,22 +678,41 @@ func (s *BacklogService) SpawnSessionFromItem(
 // site outside the generic RPC handler should route through this helper so a
 // future call site can't reintroduce the same bug class.
 //
+// hasUnresolvedBlockers is a per-item convenience wrapper around
+// storage.UnresolvedBlockerItemIDs for call sites transitioning a single item
+// (queueBacklogItem, TransitionBacklogItemStatus). DequeueNextQueuedItems
+// instead batches this lookup across all candidates up front to avoid an N+1
+// query per dequeue sweep — see its own call to UnresolvedBlockerItemIDs.
+func (s *BacklogService) hasUnresolvedBlockers(ctx context.Context, itemID string) (bool, error) {
+	unresolved, err := s.storage.UnresolvedBlockerItemIDs(ctx, []string{itemID})
+	if err != nil {
+		return false, err
+	}
+	return unresolved[itemID], nil
+}
+
 // Returns the same errors storage.TransitionBacklogItemStatus returns
 // (ErrPreconditionFailed, etc.) on success of the guard checks, or the raw
 // domain sentinel error (ErrPlanRequired, ErrACRequired, ...) if a guard
 // fails — un-wrapped in connect terms so each call site keeps doing its own
 // connect.NewError translation, matching this file's existing style.
-func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string) (*session.BacklogItemData, error) {
+//
+// hasUnresolvedBlockers is supplied by the caller rather than computed here
+// so DequeueNextQueuedItems can batch the underlying query once across all
+// candidates instead of once per claim (see its own call to
+// storage.UnresolvedBlockerItemIDs before the claim loop).
+func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
 	from := session.BacklogStatus(item.Status)
 	if !s.engine.CanTransition(from, to) {
 		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
 	}
 	guardInput := session.BacklogItemTransitionInput{
-		Status:            from,
-		AcCriteria:        item.AcceptanceCriteria,
-		PlanApproved:      item.PlanApproved,
-		SkipPlanning:      item.SkipPlanning,
-		PlanArtifactsPath: item.PlanArtifactsPath,
+		Status:                from,
+		AcCriteria:            item.AcceptanceCriteria,
+		PlanApproved:          item.PlanApproved,
+		SkipPlanning:          item.SkipPlanning,
+		PlanArtifactsPath:     item.PlanArtifactsPath,
+		HasUnresolvedBlockers: hasUnresolvedBlockers,
 	}
 	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
 		return nil, guardErr
@@ -688,7 +739,9 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.Bac
 		triggeredBy = session.TriggeredBySystem
 	}
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "WIP cap hit"}
-	updated, err := s.transitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy)
+	// Blocker guard only applies to the queued/ready -> in_progress transition, so
+	// queueing (-> Queued) always passes false rather than querying.
+	updated, err := s.transitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy, false)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("item status changed concurrently — retry the spawn: %w", err))
@@ -769,6 +822,17 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return effectiveQueueTime(candidates[i]).Before(effectiveQueueTime(candidates[j]))
 	})
 
+	candidateIDs := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		candidateIDs = append(candidateIDs, item.ID)
+	}
+	// Batched once across all candidates (not per-claim) to avoid an N+1 query in
+	// this loop — see transitionWithGuard's doc comment.
+	unresolvedBlockers, err := s.storage.UnresolvedBlockerItemIDs(ctx, candidateIDs)
+	if err != nil {
+		return fmt.Errorf("check unresolved blockers: %w", err)
+	}
+
 	spawned := 0
 	for _, item := range candidates {
 		if spawned >= freeSlots {
@@ -778,12 +842,20 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		claimed, claimErr := s.transitionWithGuard(ctx, &item,
 			session.BacklogStatusInProgress,
 			&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
-			session.TriggeredBySystem)
+			session.TriggeredBySystem,
+			unresolvedBlockers[item.ID])
 		if claimErr != nil {
 			switch {
 			case errors.Is(claimErr, session.ErrPreconditionFailed):
 				// Expected under concurrent claims (another process's dequeue
 				// sweep, or a manual un-queue) — not worth logging.
+			case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+				// Expected steady state: item is legitimately blocked and will be
+				// retried on a later sweep once its blocker reaches done — not a
+				// bug, so not worth a warning-level log every sweep. Still surface
+				// it durably (AC3) so the item detail view can render a BlockerChip
+				// instead of leaving the operator to guess why it's stalled.
+				s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
 			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
 				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
 				// now that SpawnSessionFromItem's planning gate runs before the

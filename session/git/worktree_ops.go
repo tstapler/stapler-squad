@@ -35,9 +35,23 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 // add/reuse dispatch is serialized per-repoPath (across goroutines and OS
 // processes) because git worktree add mutates shared .git/worktrees/
 // administrative metadata that is not safe under concurrent access -- see
-// withRepoWorktreeLock.
+// WithRepoWorktreeLock.
 func (g *GitWorktree) Setup() error {
-	return withRepoWorktreeLock(g.repoPath, g.setupLocked)
+	return WithRepoWorktreeLock(g.repoPath, g.setupLocked)
+}
+
+// SetupLocked runs the same setup logic as Setup but assumes the caller already holds
+// repoPath's worktree lock (via WithRepoWorktreeLock) -- e.g. because the caller needs to run
+// other repoPath-mutating work (like a corrupted-repo repair/re-clone) in the very same
+// critical section, immediately before the worktree add. Calling this without already
+// holding the lock defeats the cross-process guarantee Setup() normally provides. See
+// session.CreateBacklogWorktree for the motivating caller and the race this closes: without
+// it, one process's unlocked repo repair (os.RemoveAll + re-clone) could delete/recreate
+// repoPath's working tree while a concurrent process was mid-way through the locked
+// `git worktree add` for the same repoPath, plausibly surfacing as git's generic
+// "fatal: failed to resolve HEAD as a valid ref".
+func (g *GitWorktree) SetupLocked() error {
+	return g.setupLocked()
 }
 
 func (g *GitWorktree) setupLocked() error {
@@ -341,7 +355,7 @@ func (g *GitWorktree) Cleanup() error {
 // it prunes and removes shared .git/worktrees/ administrative metadata, the same resource
 // Setup's branch-check + add dispatch touches.
 func (g *GitWorktree) Remove() error {
-	return withRepoWorktreeLock(g.repoPath, g.removeLocked)
+	return WithRepoWorktreeLock(g.repoPath, g.removeLocked)
 }
 
 func (g *GitWorktree) removeLocked() error {
@@ -515,7 +529,7 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 // Prune removes all working tree administrative files and directories. Serialized
 // per-repoPath like Setup/Remove — it rewrites the same shared .git/worktrees/ metadata.
 func (g *GitWorktree) Prune() error {
-	return withRepoWorktreeLock(g.repoPath, func() error {
+	return WithRepoWorktreeLock(g.repoPath, func() error {
 		if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
 			return fmt.Errorf("failed to prune worktrees: %w", err)
 		}
