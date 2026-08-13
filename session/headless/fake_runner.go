@@ -144,8 +144,8 @@ func (f *FakeRunner) ArgsContainSequence(n int, seq ...string) bool {
 
 // NewShellWrappedProcessRunnerForTesting constructs a ProcessRunner that execs
 // scriptPath through "sh" instead of forking/exec'ing scriptPath directly.
-// Use this instead of NewProcessRunnerForTesting when the test writes its own
-// fake-claude shell script to a freshly-created temp file: direct exec-by-path
+// Use this whenever a test writes its own fake-claude shell script to a
+// freshly-created temp file: direct exec-by-path
 // of a just-written, just-chmod'd script can be refused by OS-level exec
 // restrictions (Gatekeeper, TCC, or third-party endpoint security software) on
 // some platforms, even though the exec bit and shebang line are both correct.
