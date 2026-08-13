@@ -1154,6 +1154,16 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.ReconcilePRPending(ctx, er)
 	})
 
+	// Resolve-only counterpart to notifyBlockedByDependency
+	// (server/services/backlog_service_triage.go), which marks
+	// StuckReasonBlockedByDependency but has no periodic tick of its own to
+	// notice when the blocker reaches a resolved status — that only happens
+	// on the next DequeueNextQueuedItems sweep, which won't re-run for an
+	// item that's already been skipped once this tick.
+	l.runStuckDetector("blocked_by_dependency", &okNames, &panickedNames, func() {
+		l.reconcileBlockedByDependencyResolution(ctx, er)
+	})
+
 	// Safety net for the backlog work-item queue: dequeues queued items whose
 	// exit-hook trigger was missed (server restart mid-transition, panic in the
 	// hook's own goroutine) or whose slot was freed by the concurrency limit

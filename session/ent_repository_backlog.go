@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -398,6 +401,187 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 		return "", "", "", fmt.Errorf("failed to query latest completed work session for item %s: %w", itemID, err)
 	}
 	return item.RepoPath, ws.BaseCommitSha, ws.LastCommitSha, nil
+}
+
+// AddBacklogItemDependency records that edge.BlockedID may not be
+// dequeued/started until edge.BlockerID reaches a resolved status — see
+// UnresolvedBlockerItemIDs for what counts as resolved (done or archived).
+// Adding an already-existing pair is a no-op (upsert against the unique
+// (blocker_id, blocked_id) index). Returns ErrDependencyCycle if the new
+// edge would create a cycle, including the degenerate self-dependency case
+// (BlockerID == BlockedID).
+func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+	blockerID, err := uuid.Parse(edge.BlockerID)
+	if err != nil {
+		return fmt.Errorf("%w: invalid blocker id %q: %v", ErrNotFound, edge.BlockerID, err)
+	}
+	blockedID, err := uuid.Parse(edge.BlockedID)
+	if err != nil {
+		return fmt.Errorf("%w: invalid blocked id %q: %v", ErrNotFound, edge.BlockedID, err)
+	}
+	if blockerID == blockedID {
+		return ErrDependencyCycle
+	}
+
+	// The existence check, cycle check, and insert must all observe the same
+	// consistent snapshot of the dependency graph and commit atomically —
+	// otherwise two concurrent calls adding opposite-direction edges can each
+	// pass the cycle check before either commits, together closing a cycle
+	// the check was supposed to prevent (TOCTOU race). Run everything inside
+	// one transaction, following the pattern established by MarkStuck above.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("add backlog item dependency: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	existingIDs, err := tx.BacklogItem.Query().
+		Where(backlogitem.IDIn(blockerID, blockedID)).
+		IDs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to verify backlog items exist for dependency %s -> %s: %w", edge.BlockerID, edge.BlockedID, err)
+	}
+	found := make(map[uuid.UUID]bool, len(existingIDs))
+	for _, id := range existingIDs {
+		found[id] = true
+	}
+	if !found[blockerID] {
+		return fmt.Errorf("%w: blocker item %s does not exist", ErrNotFound, edge.BlockerID)
+	}
+	if !found[blockedID] {
+		return fmt.Errorf("%w: blocked item %s does not exist", ErrNotFound, edge.BlockedID)
+	}
+
+	wouldCycle, err := dependencyReachable(ctx, tx.BacklogItemDependency, blockedID, blockerID)
+	if err != nil {
+		return fmt.Errorf("failed to check backlog item dependency cycle: %w", err)
+	}
+	if wouldCycle {
+		return ErrDependencyCycle
+	}
+
+	err = tx.BacklogItemDependency.Create().
+		SetBlockerID(blockerID).
+		SetBlockedID(blockedID).
+		OnConflictColumns(backlogitemdependency.FieldBlockerID, backlogitemdependency.FieldBlockedID).
+		DoNothing().
+		Exec(ctx)
+	// On SQLite, DO NOTHING on a conflicting row leaves the RETURNING clause
+	// with no row to return, which the driver surfaces as sql.ErrNoRows
+	// rather than a constraint error — treat it the same as the no-op it is.
+	if err != nil && !ent.IsConstraintError(err) && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to add backlog item dependency %s -> %s: %w", edge.BlockerID, edge.BlockedID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("add backlog item dependency: commit: %w", err)
+	}
+	return nil
+}
+
+// dependencyReachable reports whether target is reachable from start by
+// following existing blocker->blocked edges forward (a breadth-first
+// traversal of "what does this item block, transitively"). Used to detect
+// whether adding a new blocker->blocked edge would close a cycle: the new
+// edge closes a cycle exactly when blocked (start) can already reach blocker
+// (target) through existing edges. Takes the BacklogItemDependency client
+// explicitly (rather than reading r.client) so callers can pass a
+// transaction's client and have the traversal observe that transaction's
+// consistent snapshot instead of racing concurrent commits.
+func dependencyReachable(ctx context.Context, client *ent.BacklogItemDependencyClient, start, target uuid.UUID) (bool, error) {
+	visited := map[uuid.UUID]bool{start: true}
+	frontier := []uuid.UUID{start}
+	for len(frontier) > 0 {
+		rows, err := client.Query().
+			Where(backlogitemdependency.BlockerIDIn(frontier...)).
+			All(ctx)
+		if err != nil {
+			return false, err
+		}
+		var next []uuid.UUID
+		for _, row := range rows {
+			if row.BlockedID == target {
+				return true, nil
+			}
+			if !visited[row.BlockedID] {
+				visited[row.BlockedID] = true
+				next = append(next, row.BlockedID)
+			}
+		}
+		frontier = next
+	}
+	return false, nil
+}
+
+// UnresolvedBlockerItemIDs returns, for the given candidate itemIDs, the
+// subset that have at least one dependency edge whose blocker has not yet
+// reached a resolved status. A blocker counts as resolved once it reaches
+// BacklogStatusDone (shipped) or BacklogStatusArchived (won't ship) — an
+// archived blocker is never coming back to "done", so treating it as still
+// blocking would permanently strand its dependent. Batches the check into a
+// single query (rather than one per candidate) to avoid N+1 queries in
+// dequeue paths.
+func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool)
+	if len(itemIDs) == 0 {
+		return result, nil
+	}
+
+	parsedByString := make(map[uuid.UUID]string, len(itemIDs))
+	parsedIDs := make([]uuid.UUID, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		}
+		parsedByString[parsed] = id
+		parsedIDs = append(parsedIDs, parsed)
+	}
+
+	rows, err := r.client.BacklogItemDependency.Query().
+		Where(
+			backlogitemdependency.BlockedIDIn(parsedIDs...),
+			backlogitemdependency.HasBlockerWith(
+				backlogitem.StatusNotIn(string(BacklogStatusDone), string(BacklogStatusArchived)),
+			),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query unresolved backlog item dependencies: %w", err)
+	}
+	for _, row := range rows {
+		result[parsedByString[row.BlockedID]] = true
+	}
+	return result, nil
+}
+
+// UnresolvedBlockerIDs returns the blocker item IDs still unresolved for a
+// single blocked item, for building a human-readable stuck-reason message.
+// Unlike UnresolvedBlockerItemIDs (batched presence check across many
+// candidates), this returns which specific items are doing the blocking.
+func (r *EntRepository) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
+	parsed, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	rows, err := r.client.BacklogItemDependency.Query().
+		Where(
+			backlogitemdependency.BlockedIDEQ(parsed),
+			backlogitemdependency.HasBlockerWith(
+				backlogitem.StatusNotIn(string(BacklogStatusDone), string(BacklogStatusArchived)),
+			),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query unresolved backlog item dependencies: %w", err)
+	}
+
+	blockerIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		blockerIDs = append(blockerIDs, row.BlockerID.String())
+	}
+	return blockerIDs, nil
 }
 
 // excludedTerminalStatuses returns the statuses filter.ExcludeDone/ExcludeArchived

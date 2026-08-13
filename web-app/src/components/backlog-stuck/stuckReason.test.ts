@@ -22,6 +22,7 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.PR_NEEDS_FIX,
   StuckReason.RESPAWN_BLOCKED_ACTIVE,
   StuckReason.LIKELY_FLAKY,
+  StuckReason.BLOCKED_BY_DEPENDENCY,
 ];
 
 describe("stuckReason", () => {

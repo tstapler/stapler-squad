@@ -212,6 +212,51 @@ func (l *BacklogLifecycleListener) reconcileReworkBlockedStaleResolution(ctx con
 	}
 }
 
+// reconcileBlockedByDependencyResolution is the resolve-only counterpart to
+// notifyBlockedByDependency (server/services/backlog_service_triage.go),
+// which marks StuckReasonBlockedByDependency but only runs from inside
+// DequeueNextQueuedItems's claim-error path — an item that's already been
+// skipped once this sweep won't be re-examined until the next sweep, and if
+// nothing else ever queues past it, the stuck row would otherwise sit open
+// forever even after every blocker reaches done/archived (AC2). Mirrors
+// reconcileReworkBlockedStaleResolution's shape (FindOpenStuckStates ->
+// filter-by-reason -> re-check -> resolveStuckLogged), but re-checks the
+// blocking condition directly via UnresolvedBlockerItemIDs rather than
+// delegating to an external resolver, since dependency resolution is pure
+// storage state with no session liveness to consult. Best-effort:
+// query failures are logged, never returned — one item's failure must not
+// skip the rest.
+func (l *BacklogLifecycleListener) reconcileBlockedByDependencyResolution(ctx context.Context, er *EntRepository) {
+	open, openErr := er.FindOpenStuckStates(ctx)
+	if openErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileBlockedByDependencyResolution FindOpenStuckStates error: %v", openErr)
+		return
+	}
+
+	itemIDs := make([]string, 0, len(open))
+	for _, row := range open {
+		if row.Reason == domain.StuckReasonBlockedByDependency {
+			itemIDs = append(itemIDs, row.ItemID)
+		}
+	}
+	if len(itemIDs) == 0 {
+		return
+	}
+
+	stillBlocked, err := er.UnresolvedBlockerItemIDs(ctx, itemIDs)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileBlockedByDependencyResolution UnresolvedBlockerItemIDs error: %v", err)
+		return
+	}
+
+	for _, itemID := range itemIDs {
+		if stillBlocked[itemID] {
+			continue
+		}
+		l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonBlockedByDependency, "reconcileBlockedByDependencyResolution")
+	}
+}
+
 // remediateStaleWorkWithBackoffGate dispatches StaleWorkRemediator.
 // RemediateStaleWorkSession through the shared remediation backoff gate
 // (Storage.RemediationDue, session/backlog_remediation.go) — the

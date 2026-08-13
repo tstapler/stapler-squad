@@ -160,6 +160,18 @@ const (
 	// comments in session/stuck_decisions.go); the UI should present this as a
 	// hint to verify, not a confident verdict.
 	StuckReasonLikelyFlaky StuckReason = "likely_flaky"
+	// StuckReasonBlockedByDependency: DequeueNextQueuedItems' dependency gate
+	// (UnresolvedBlockerItemIDs) skipped this item because at least one of its
+	// blocker items (session/ent/schema/backlog_item_dependency.go) has not yet
+	// reached a resolved status (done or archived — see
+	// project_plans/backlog-item-dependencies/decisions/ADR-001-dangling-
+	// blocker-resolution.md). Purely detection/visibility: mirrors
+	// StuckReasonPlanNotApproved's precedent of surfacing an indefinite,
+	// by-design dequeue skip so it's visible on /unfinished and in the item
+	// detail view (BlockerChip) instead of only a per-tick log line. Resolved
+	// the next time UnresolvedBlockerItemIDs finds no unresolved blocker left
+	// for this item.
+	StuckReasonBlockedByDependency StuckReason = "blocked_by_dependency"
 	// StuckReasonMultipleReasons: a synthetic, aggregate reason marking an
 	// item that has multiReasonThreshold or more *other*, non-escalation
 	// stuck reasons open simultaneously (session/stuck_decisions.go's
@@ -203,6 +215,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonPRNeedsFix,
 	StuckReasonRespawnBlockedActive,
 	StuckReasonLikelyFlaky,
+	StuckReasonBlockedByDependency,
 	StuckReasonMultipleReasons,
 	StuckReasonBounceCapExhausted,
 }
@@ -214,7 +227,8 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
-		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonMultipleReasons, StuckReasonBounceCapExhausted:
+		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
+		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted:
 		return true
 	}
 	return false
@@ -477,6 +491,7 @@ var (
 	ErrPlanArtifactsRequired        = errors.New("plan artifacts path is required when planning is not skipped")
 	ErrVerdictRequired              = errors.New("PASS verdict or manual override required before marking done")
 	ErrCodeNotOnMain                = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
+	ErrUnresolvedBlockers           = errors.New("item has one or more blockers that have not reached done")
 	ErrVerdictClearRequiredForReady = errors.New("item has a recorded PASS verdict; provide override_reason to send it back to ready anyway")
 )
 
@@ -496,6 +511,13 @@ type BacklogItemTransitionInput struct {
 	// still has PrURL set, so it was never proof the code shipped. The
 	// review→done guard uses this to block premature done transitions.
 	HasUnshippedCode bool
+	// HasUnresolvedBlockers is true when this item has at least one
+	// BacklogItemDependency where the blocker has not reached done. The
+	// ready/queued->in_progress guard uses this to keep a gated item from
+	// being dequeued/started ahead of its blocker. Callers populate this via
+	// a batched query (see DequeueNextQueuedItems) rather than a per-item
+	// lookup.
+	HasUnresolvedBlockers bool
 }
 
 // TransitionGuard validates business rules before a status transition.
@@ -515,6 +537,9 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 
 	case from == BacklogStatusReady && to == BacklogStatusInProgress,
 		from == BacklogStatusQueued && to == BacklogStatusInProgress:
+		if item.HasUnresolvedBlockers {
+			return ErrUnresolvedBlockers
+		}
 		if !item.PlanApproved && !item.SkipPlanning {
 			return ErrPlanRequired
 		}

@@ -1137,3 +1137,106 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 	assert.Equal(t, string(session.BacklogStatusReview), final.StatusEvents[0].FromStatus)
 	assert.Equal(t, string(session.BacklogStatusInProgress), final.StatusEvents[0].ToStatus)
 }
+
+// ─── AddBacklogItemDependency RPC handler ──────────────────────────────────────
+
+// TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle is
+// the RPC-level success path: given two real items and no cycle, the handler
+// must persist the dependency and return the reloaded (blocked) item.
+func TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle(t *testing.T) {
+	svc := newBacklogService(t)
+
+	blocker, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "blocker item",
+	}))
+	require.NoError(t, err)
+	blocked, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "blocked item",
+	}))
+	require.NoError(t, err)
+
+	resp, err := svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: blocker.Msg.Item.Id,
+		BlockedItemId: blocked.Msg.Item.Id,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Item)
+	assert.Equal(t, blocked.Msg.Item.Id, resp.Msg.Item.Id)
+}
+
+// TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependency
+// covers the handler's translation of session.ErrDependencyCycle (self-edges
+// included) into connect.CodeInvalidArgument.
+func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependency(t *testing.T) {
+	svc := newBacklogService(t)
+
+	item, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "solo item",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: item.Msg.Item.Id,
+		BlockedItemId: item.Msg.Item.Id,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldCloseCycle
+// covers the handler's translation of a would-close-a-cycle error (distinct
+// from the self-dependency case above) into connect.CodeInvalidArgument.
+func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldCloseCycle(t *testing.T) {
+	svc := newBacklogService(t)
+
+	a, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{Title: "a"}))
+	require.NoError(t, err)
+	b, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{Title: "b"}))
+	require.NoError(t, err)
+
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: a.Msg.Item.Id,
+		BlockedItemId: b.Msg.Item.Id,
+	}))
+	require.NoError(t, err)
+
+	// The reverse edge would close a two-node cycle.
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: b.Msg.Item.Id,
+		BlockedItemId: a.Msg.Item.Id,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing
+// covers the handler's translation of session.ErrNotFound into
+// connect.CodeNotFound for a blocker id that does not exist.
+func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing(t *testing.T) {
+	svc := newBacklogService(t)
+
+	blocked, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "blocked item",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: "00000000-0000-0000-0000-000000000000",
+		BlockedItemId: blocked.Msg.Item.Id,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+// TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired
+// covers the handler's storage-nil guard.
+func TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired(t *testing.T) {
+	svc := newBacklogServiceNilStorage()
+
+	_, err := svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: "some-blocker",
+		BlockedItemId: "some-blocked",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+}
