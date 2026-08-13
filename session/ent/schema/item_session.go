@@ -34,6 +34,10 @@ func (ItemSession) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("Set only alongside ended_at for a headless (triage/review) call: classifyHeadlessCallError's bucket (\"shutdown\", \"timeout\", \"process_error\", \"claude_not_found\", \"other\") or \"\" for a successful end / not yet classified. Lets orphan-recovery sweeps distinguish a call killed by our own graceful shutdown (retry immediately, no penalty) from a call that actually failed on its own merits (apply the normal backoff)."),
+		field.String("failure_capture_path").
+			Optional().
+			Default("").
+			Comment("Absolute path to a durable file (see session.WriteHeadlessFailureCapture, under ~/.stapler-squad/headless-failures/) holding the size-capped raw stdout of a headless triage/review call that errored or whose result failed to parse. Set alongside end_reason on a call error, or on a successful call whose output was unparseable JSON. Exists because the log preview previously logged on parse failure is truncated to ~200 chars and the log file itself rotates out within a few hours — this file survives both, so diagnosing a failure doesn't require racing log rotation."),
 		field.String("ac_snapshot").
 			Optional().
 			Comment("JSON []AcCriterion at spawn time"),
