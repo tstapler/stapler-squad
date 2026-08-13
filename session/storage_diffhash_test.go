@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // runGitForDiffHashTest and setupDiffHashTestRepo are self-contained test fixtures
@@ -19,7 +20,7 @@ import (
 // clone/branch fixtures ops_test.go uses.
 func runGitForDiffHashTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v failed: %s", args, out)
