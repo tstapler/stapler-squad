@@ -1,0 +1,68 @@
+# Research: PR/Issue Comment Noise Reduction — Feature Landscape (Agent 2)
+
+## 1. Inventory of comment-posting code paths and skill instructions
+
+### Backend (Go) — exhaustive
+Grep for every call site of the two posting primitives plus the issue-comment helper across the whole repo (`server/services/`, `session/`) found exactly three call sites total:
+
+| Call site | Path | Trigger | Classification |
+|---|---|---|---|
+| `forwardSyncCloseComment` | `server/services/backlog_github_forward_sync.go:32,152` | Backend-owned, fires when a linked backlog item is marked done and the sync closes the GitHub issue | **Explicitly out of scope** per requirements doc — has its own "no silent automated action" convention already |
+| `GitHubService.PostPRComment` → `session.Instance.PostComment` → `github.PostPRComment` | `server/services/github_service.go:136`, `session/pr_tracking.go:71-89`, `github/client.go:623` | RPC (`PostPRCommentRequest`), also wired into `web-app/src/lib/features/features/pr.ts` (frontend feature registry) | **Generic primitive** — no fixed content, caller decides. Confirmed this is human/UI-triggerable (feature-registry file exists for it), not an autonomous decision point itself. |
+| `GitHubIssuesPlugin.PostIssueComment` | `session/backlog_plugin_github.go:378-405` | Only called by `forwardSyncCloseComment` (comment at line 266 says "CloseIssue/PostIssueComment are only ever invoked once a source is already ...") | Same as above — the *only* caller is the out-of-scope close-comment flow |
+
+**No other Go code path posts a PR or issue comment.** In particular:
+- `session/backlog_plugin_github_prs.go` (the plugin that polls open PRs and reads CI check-run conclusions via `githubCheckRun{Conclusion string}` at line 48, populated from `GET .../check-runs` at line 188) **only reads**, never writes, check runs or statuses.
+- No code path anywhere in the repo calls a check-run *creation* endpoint (`Checks.Create` or equivalent) — grep for `Checks.Create|checkrun|CheckRun{` outside tests returned nothing beyond the read-only struct above. This confirms the requirements doc's framing precisely.
+
+**Conclusion:** the backend itself is not the noise source. All actual comment *content and cadence* is produced by agent sessions running skills via `gh pr comment` / `gh issue comment` (Bash) or by calling the generic `PostPRComment` RPC — i.e., the audit has to be of skill definitions, not Go code.
+
+### Skill definitions (global, under `~/dotfiles/.claude/skills/`, not this repo's `.claude/`)
+The three skills named in the requirements resolve to:
+- `github:pr-ship` → `~/dotfiles/.claude/skills/github/skills/pr-ship/SKILL.md`
+- `github:pr-refine` → `~/dotfiles/.claude/skills/github/skills/pr-refine/SKILL.md`
+- `code:review` → `~/dotfiles/.claude/skills/code-review/SKILL.md`
+- Plus `github-pr` (general PR ops) → `~/dotfiles/.claude/skills/github-pr/SKILL.md`
+- Plus `github-address-pr-comments` → `~/dotfiles/.claude/skills/github-address-pr-comments/SKILL.md` (invoked by `pr-ship`'s Gate 3)
+
+Grepped all five for `gh pr comment`, `gh issue comment`, "post a comment", "leave a comment":
+
+- **`pr-ship`**: Zero literal instructions to post a *new* standalone comment. Its "PR review comments" gate (Gate 3) delegates to `github-address-pr-comments`, whose job is exclusively **replying to existing threads** (`pr-threads.py reply --comment-id ... --body ...`, line 35/322) — i.e. responding to a human/bot reviewer's comment, not originating new status noise. Its own progress/state tracking is written to a local file (`/tmp/pr-ship-{repo}-{branch}-{PR}.md`), not a GitHub comment — this skill is already aligned with "don't post status to GitHub," at least for its own loop state. **Classification: (a) genuine signal** for the reply path; **not a noise source today**.
+- **`pr-refine`**: no comment-posting instructions found.
+- **`code:review`** (`code-review/SKILL.md`), `requesting-code-review.md`, `receiving-code-review.md`: no comment-posting instructions — this skill's output is presented in-session (chat/findings), not posted to GitHub directly by the skill itself.
+- **`github-pr`**: only covers `gh pr create`, `gh pr edit`, `gh pr review --approve/--request-changes` (i.e., formal PR reviews, not standalone issue-style comments). `gh pr review` is arguably genuine signal (it's a review verdict) but is a different GitHub object (PullRequestReview) than a plain comment.
+- **`github-address-pr-comments`**: replies only, scoped to existing threads — genuine signal by construction (a human already opened the thread).
+
+**Gap identified**: none of the five skills grepped instruct posting a *new*, un-prompted status/progress comment. That means the "noise" described in the requirements' Problem Statement is likely coming from **backlog-driven autonomous shepherding** behavior not captured in a skill file (i.e., ad hoc prompts/session behavior at runtime, or a skill outside this search — `backlog-feature-improvement` and other backlog-related skills reference `mcp__stapler-squad__report_progress` / `request_review` / `submit_review_verdict` MCP tools, none of which have a Go-side GitHub-comment side effect per the backend audit above). **This is a scope note for the plan phase**: the actual noise source may be *prompted* behavior (an agent session choosing, on its own initiative, to narrate progress via `gh pr comment` in Bash) rather than any skill *instructing* it to. If so, the fix is a written convention + a lint/guard, not a code change to a fixed call site — which matches the requirements' own framing ("this is as much behavioral/policy work... as new-capability work").
+
+## 2. Industry prior art
+
+| Bot | Comment strategy | Check/status strategy | Edit-in-place? |
+|---|---|---|---|
+| **Renovate** | Dependency Dashboard = a single persistent **issue** (not PR comment) listing all pending/rate-limited/errored updates; body is rewritten wholesale on each run, not appended | Per-PR update runs rely on the platform's native PR status checks for CI pass/fail (Renovate itself doesn't create synthetic checks for "is this update safe") | **Yes** — the Dashboard issue is edited in place, never re-posted. On platforms without dynamic-checkbox markdown support (e.g., Bitbucket) they fall back to comment-based commands, an explicit admission that "one edited artifact" is the preferred pattern and comments are the degraded fallback. |
+| **Dependabot** | Comments used sparingly — mainly for rebase-conflict notices, compatibility-score explanations, or when it can't complete an update; routine "update succeeded" is a PR itself, not a comment | Relies entirely on the repo's existing CI status checks; does not synthesize its own | N/A (few comments to begin with) |
+| **Danger (Danger.js/Swift)** | Canonical "sticky comment" pattern: exactly one bot comment per PR, edited (via message ID tracking) on every CI run rather than appended — this is the direct prior art for the requirements' open question ("single PR bot comment edited in place à la Danger/Renovate") | Danger's own pass/fail is commonly surfaced as a **status check**, with the comment reserved for the human-readable detail (violations, warnings, markdown tables) | **Yes**, this is Danger's whole design point |
+| **GitHub Actions (native)** | No comments by default; failures show only as red X status checks unless a workflow step explicitly posts one | Native Check Runs API — Actions jobs create real check runs automatically because the Actions runner authenticates as a **GitHub App-equivalent installation token**, not a PAT | N/A |
+
+**Pattern that generalizes**: every mature bot in this space treats "one edited object, not a comment stream" as the default for anything recurring (dashboard issue, sticky comment, status check), and reserves genuinely *new* comments for one-off, human-actionable events (a conflict, a manual decision needed, an explanation of something checks can't express). This maps directly onto the desired outcome in the requirements doc.
+
+## 3. Edge cases and failure modes for the design
+
+**Auth is the load-bearing edge case, and it blocks the literal ask.** Confirmed via `github/http_client.go:32-37` (`getGHToken` — precedence `GITHUB_TOKEN` env → `GH_TOKEN` env → OS keychain) and `github/cli_import.go:71` (`gh auth token --hostname`): this repo authenticates to GitHub **exclusively via personal access tokens** (classic PAT, `gh` CLI OAuth token, or keychain-stored PAT) — never a GitHub App installation token. Per current GitHub platform behavior (verified via web search, GitHub community discussion #129512): **the Checks API (`Checks.Create`, i.e. real GitHub Check Runs) is only usable by GitHub Apps — fine-grained PATs cannot be granted `checks:write`, and this was an intentional platform decision, not a temporary gap.** This means:
+- The requirements' "set a check run" cannot be implemented as literally stated without onboarding a GitHub App (real infra/credential work, not a small addition to `github/client.go`).
+- The PAT-compatible equivalent is the older **Commit Status API** (`POST /repos/{owner}/{repo}/statuses/{sha}`, `repo:status` scope) — it renders in the same PR "checks" combined-status UI users already look at, and is reachable with the existing token setup, following the same raw-`http.Client` pattern already used for `PostIssueComment` and the check-run *read* path in `backlog_plugin_github_prs.go`. **This is the concrete technical recommendation the plan phase needs**: target Commit Statuses, not Check Runs, unless/until a GitHub App is introduced.
+- If check/status creation fails (rate limit, missing scope, revoked token) — no existing fallback-to-comment code exists to model this on. Design question for the plan: fail loudly (log + surface in the app, since a silently-dropped status is invisible to the user and defeats the entire point of this ticket) vs. silent fallback to a comment (which reintroduces the exact noise this ticket is trying to eliminate, so should probably be rejected as an option, or clearly rate-limited/deduplicated if adopted).
+- **Race condition**: if a status is keyed by `(owner, repo, sha, context)`, GitHub's own semantics already make repeated `POST` calls idempotent-by-context (each POST creates a new status but the UI shows only the latest per context) — this substantially reduces (though doesn't eliminate at the app level) the "two sessions racing to update the same status" risk, unlike a mutable single-comment-edit pattern where a race could clobber content. Danger/Renovate's sticky-comment approach, by contrast, requires the caller to track a comment ID and does have a real last-write-wins race if two processes edit concurrently — worth naming explicitly since the requirements' open question raises exactly this "edited in place" pattern for comments.
+- **Issues, not PRs**: GitHub Issues have no check-run or commit-status concept at all (statuses/checks attach to a commit SHA, which only PRs have). The `forwardSyncCloseComment` path (issue-only) is explicitly out of scope, but any *other* future issue-facing automation this ticket's convention might apply to has no non-comment channel available — the "prefer check runs" policy is a PR-only tool, and the written convention should say so explicitly rather than let it be silently assumed to generalize.
+
+## 4. Unstated user needs
+
+- **Audit trail / searchability**: comments are the only channel with GitHub's built-in search, notification-email delivery, and permanent chronological visibility in the PR timeline. Collapsing routine status into a status/check loses all three — a user who wants to know "what did the bot try at 3pm" after the fact has no comment to search for once superseded. If an audit trail matters, the convention should specify where it lives instead (a durable per-PR log the app already tracks, e.g. state stapler-squad persists internally, or a single edited comment a la Danger rather than a check with no history) — a bare commit status has **no history of prior values**, only the current state, which is a real information loss versus today's comment stream.
+- **Notification behavior**: comments trigger GitHub notification emails/webhooks; check runs generally do not notify watchers the same way (they show as a UI dot/badge). If a user currently relies on getting pinged by email when a bot updates PR status, moving that to a check silently removes the notification unless something else replaces it (e.g., stapler-squad's own web UI badge/notification system) — this should be validated as an explicit non-regression, not assumed.
+- **"Glanceability" acceptance criterion (#4 in requirements)**: this is achievable with the existing GitHub PR page (checks section + comment count are already both visible natively) — no new UI is strictly required on GitHub's side; the design lift is entirely in *what stapler-squad's automation posts*, not in surfacing it. Worth flagging so the plan doesn't scope in unnecessary UI work.
+
+## Sources
+- [Missing `Checks` permission in personal access token — GitHub community discussion #129512](https://github.com/orgs/community/discussions/129512)
+- [Permissions required for fine-grained personal access tokens — GitHub Docs](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
+- [Dependency Dashboard — Renovate Docs](https://docs.renovatebot.com/key-concepts/dashboard/)
+- [Better checks support for Bitbucket platform in Dependency Dashboard — renovatebot/renovate discussion #29086](https://github.com/renovatebot/renovate/discussions/29086)
