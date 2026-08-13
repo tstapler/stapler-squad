@@ -69,27 +69,20 @@ jobs:
       - name: Install web dependencies
         run: cd web-app && pnpm install --frozen-lockfile
 
-      # Cache the buf binary so most runs skip the network entirely.
+      # See .github/actions/prepare/action.yml's "Cache buf binary" step for
+      # why this caches the whole tool-cache "buf" dir rather than a specific
+      # .../<version>/<arch> subpath.
       - name: Cache buf binary
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/buf-bin
+          path: ${{ runner.tool_cache }}/buf
           key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
 
-      # See .github/actions/prepare/action.yml's "Set up buf" step for why
-      # this installs the raw binary with a retry wrapper instead of using
-      # bufbuild/buf-setup-action directly.
       - name: Set up buf
-        run: |
-          mkdir -p "$RUNNER_TEMP/buf-bin"
-          if [ ! -x "$RUNNER_TEMP/buf-bin/buf" ]; then
-            scripts/retry-with-backoff.sh -n 5 -s 10 -- \
-              curl -sSL -o "$RUNNER_TEMP/buf-bin/buf" \
-              "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-$(uname -s)-$(uname -m)"
-            chmod +x "$RUNNER_TEMP/buf-bin/buf"
-          fi
-          echo "$RUNNER_TEMP/buf-bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/buf-bin/buf" --version
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
 
       - name: Generate protobuf code
         run: buf generate
