@@ -20,6 +20,7 @@ type PatternSet struct {
 	activeRegexes          []*regexp.Regexp
 	successRegexes         []*regexp.Regexp
 	waitingForAgentRegexes []*regexp.Regexp
+	compactingRegexes      []*regexp.Regexp
 }
 
 // NewPatternSet compiles all patterns in p. Returns an error if any regex is invalid.
@@ -49,6 +50,7 @@ func (ps *PatternSet) compile() error {
 		{"active", ps.patterns.Active, &ps.activeRegexes},
 		{"success", ps.patterns.Success, &ps.successRegexes},
 		{"waiting_for_agent", ps.patterns.WaitingForAgent, &ps.waitingForAgentRegexes},
+		{"compacting", ps.patterns.Compacting, &ps.compactingRegexes},
 	}
 	for _, g := range groups {
 		compiled := make([]*regexp.Regexp, len(g.patterns))
@@ -107,6 +109,16 @@ func (ps *PatternSet) MatchLines(text string, rawPTY []byte) (DetectedStatus, st
 	for i, regex := range ps.successRegexes {
 		if regex.MatchString(text) {
 			return StatusSuccess, ps.patterns.Success[i].Name, ps.patterns.Success[i].Description
+		}
+	}
+	// Compacting — checked BEFORE Active so a "Compacting conversation" line is not
+	// swallowed by esc_to_interrupt or claude_thinking_verb (both would otherwise
+	// classify it as generic Active/Executing — see claude.go's compacting_conversation
+	// pattern comment for the exact regex overlap this avoids). WARNING: reordering
+	// this loop to after Active/Processing makes StatusCompacting unreachable.
+	for i, regex := range ps.compactingRegexes {
+		if regex.MatchString(text) {
+			return StatusCompacting, ps.patterns.Compacting[i].Name, ps.patterns.Compacting[i].Description
 		}
 	}
 	// Active

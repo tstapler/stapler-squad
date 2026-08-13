@@ -184,20 +184,9 @@ func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
 // Callers MUST hold id.mu for write — this method mutates id.lastActivity.
 func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 	switch status {
-	case StatusExecuting:
-		// Actively executing commands - update activity timestamp
-		id.lastActivity = id.timeNow()
-		id.lastActivityNs.Store(id.lastActivity.UnixNano())
-		return IdleStateActive
-
-	case StatusProcessing:
-		// Processing but not showing active indicators - still consider active
-		id.lastActivity = id.timeNow()
-		id.lastActivityNs.Store(id.lastActivity.UnixNano())
-		return IdleStateActive
-
-	case StatusWaitingForAgent:
-		// Waiting for a background agent — still actively working, update activity timestamp
+	case StatusExecuting, StatusProcessing, StatusWaitingForAgent, StatusCompacting:
+		// Actively executing/processing, waiting for a background agent, or compacting
+		// — all still count as active work, so update the activity timestamp.
 		id.lastActivity = id.timeNow()
 		id.lastActivityNs.Store(id.lastActivity.UnixNano())
 		return IdleStateActive
