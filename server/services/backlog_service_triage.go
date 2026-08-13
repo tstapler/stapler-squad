@@ -926,13 +926,24 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// worktree creation fails for any other reason — e.g. a bare clone, a detached
 	// HEAD, or disk quota hit).
 	// Files must be written to the session path BEFORE spawning.
-	// worktreeMu guards concurrent spawns from interleaving writes to the same path.
+	// worktreeMu guards concurrent spawns from interleaving writes to the same path. It
+	// also has to cover resolveSessionPath's check-then-create window: two concurrent
+	// spawns for the same backlog item compute the identical deterministic branch name
+	// (backlogWorkBranchSlug) and can otherwise both pass CreateBacklogWorktree's
+	// branch-existence check before either creates the branch, and the loser hits a
+	// "branch already exists" failure (session/git/worktree_ops.go's setupNewWorktree
+	// self-heals that specific error, but serializing here closes the race at the
+	// source instead of just recovering from it after the fact).
+	s.worktreeMu.Lock()
 	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
 	if resolveErr != nil {
+		s.worktreeMu.Unlock()
 		return nil, resolveErr
 	}
 
-	if wErr := s.writeSessionFiles(item, priorSessions, worktreePath); wErr != nil {
+	wErr := s.writeSessionFilesLocked(item, priorSessions, worktreePath)
+	s.worktreeMu.Unlock()
+	if wErr != nil {
 		return nil, wErr
 	}
 
@@ -1529,11 +1540,11 @@ func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree
 	return resolvedRepo, false, nil
 }
 
-// writeSessionFiles writes the backlog slash-command files and context file to the session
-// directory. The write is serialized under worktreeMu to prevent concurrent write races.
-func (s *BacklogService) writeSessionFiles(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
-	s.worktreeMu.Lock()
-	defer s.worktreeMu.Unlock()
+// writeSessionFilesLocked writes the backlog slash-command files and context file to the
+// session directory. Callers must hold s.worktreeMu — see spawnSessionAfterGates, which
+// locks it around this call and the preceding resolveSessionPath to close the
+// check-then-create worktree race described there.
+func (s *BacklogService) writeSessionFilesLocked(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
 	if wErr := session.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 	}

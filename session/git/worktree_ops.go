@@ -107,8 +107,11 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 
 	// Create a new worktree from the existing branch
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", g.worktreePath, g.branchName); err != nil {
-		// Check if the error is because the branch is already checked out elsewhere
-		if strings.Contains(err.Error(), "already checked out") {
+		// Check if the error is because the branch is already checked out elsewhere.
+		// Git's message for this varies by version: older git says "already checked
+		// out", current git (verified 2.50.1) says "already used by worktree at
+		// '<path>'" — match both so the fallback below fires regardless of version.
+		if strings.Contains(err.Error(), "already checked out") || strings.Contains(err.Error(), "already used by worktree") {
 			// Try to find and connect to the existing worktree
 			log.Info("branch is already checked out, attempting to locate existing worktree", "branch", g.branchName)
 
@@ -294,6 +297,16 @@ func (g *GitWorktree) setupNewWorktree() error {
 	// Otherwise, we'll inherit uncommitted changes from the previous worktree.
 	// This way, we can start the worktree with a clean slate.
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
+		// Two concurrent spawns for the same backlog item compute the identical
+		// deterministic branch name (see backlogWorkBranchSlug) and can both pass the
+		// branchRefExists check above before either creates the branch — the loser hits
+		// this exact "already exists" error, leaving a branch with no worktree. Rather
+		// than hard-failing, self-heal by falling back to setupFromExistingBranch, the
+		// same reuse path that would already handle a retry of this same call.
+		if strings.Contains(err.Error(), "already exists") {
+			log.Info("branch already exists (lost a concurrent create race), reusing it for worktree", "branch", g.branchName)
+			return g.setupFromExistingBranch()
+		}
 		return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
 	}
 
