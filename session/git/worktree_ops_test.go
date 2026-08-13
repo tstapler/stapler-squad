@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-git/go-git/v5"
@@ -273,4 +274,60 @@ func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) 
 	out, statErr := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", branchName).CombinedOutput()
 	require.NoError(t, statErr)
 	assert.True(t, strings.Contains(string(out), branchName), "branch must still exist after reuse")
+}
+
+// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate is the regression
+// test for the self-heal fallback in setupNewWorktree's "worktree add -b" error handling.
+// Unlike TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists — which pre-creates the
+// branch before calling setupNewWorktree, so branchRefExists is already true at the
+// function's own upfront check and setupFromExistingBranch is reached via that early path —
+// this test starts with the branch absent for both callers and races two real
+// setupNewWorktree calls against the identical branch name, the same shape as two concurrent
+// backlog spawns for the same item computing the same deterministic branchWorkSlug. Both
+// callers' upfront branchRefExists checks can observe "false" before either has created the
+// branch; the loser's "git worktree add -b" fails with "a branch named '<branch>' already
+// exists", triggering setupNewWorktree's fallback into setupFromExistingBranch — which then
+// hits its own second race window: by the time it runs, the winner has often already checked
+// out the branch into its worktree, so setupFromExistingBranch's own "worktree add <path>
+// <branch>" (no -b) fails too, with git 2.50.1's "'<branch>' is already used by worktree at
+// '<path>'" (older git instead says "already checked out") — which setupFromExistingBranch
+// must also recognize to find and reuse the winner's worktree rather than hard-failing. This
+// test exercises both layers together. Which of the two callers wins vs. loses is inherently
+// nondeterministic (real git subprocess timing), so this test does not assert on which one
+// self-healed — only on the invariant the fix guarantees: neither concurrent caller may
+// hard-fail.
+func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/concurrent-race-fixture"
+
+	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "test-race-1", branchName)
+	require.NoError(t, err)
+	wt2, _, err := NewGitWorktreeWithBranch(repoDir, "test-race-2", branchName)
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		errs[0] = wt1.setupNewWorktree()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		errs[1] = wt2.setupNewWorktree()
+	}()
+	close(start)
+	wg.Wait()
+
+	require.NoError(t, errs[0], "first concurrent setup must not hard-fail on a lost branch-create race")
+	require.NoError(t, errs[1], "second concurrent setup must not hard-fail on a lost branch-create race")
+	defer func() { _ = wt1.Cleanup() }()
+	defer func() { _ = wt2.Cleanup() }()
+
+	out, statErr := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", branchName).CombinedOutput()
+	require.NoError(t, statErr)
+	assert.True(t, strings.Contains(string(out), branchName), "branch must exist once the race resolves")
 }
