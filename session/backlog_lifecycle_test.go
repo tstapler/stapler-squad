@@ -2267,12 +2267,16 @@ func (f *fakeOneShotShipRunner) RunOneShotForSession(ctx context.Context, sessio
 	return f.prURL, f.err
 }
 
-// fakeNotifierCall records a single Notify invocation's title and message body, so
-// tests can assert on interpolated message content (e.g. that a verdict/outcome
-// actually reached the message), not just which notification fired.
+// fakeNotifierCall records a single Notify invocation's title, message body,
+// and notification type/priority, so tests can assert on interpolated
+// message content (e.g. that a verdict/outcome actually reached the
+// message) and on differentiated ERROR/URGENT vs WARNING/HIGH severity, not
+// just which notification fired.
 type fakeNotifierCall struct {
-	Title   string
-	Message string
+	Title            string
+	Message          string
+	NotificationType int32
+	Priority         int32
 }
 
 // fakeNotifier is a test double implementing Notifier, recording every call.
@@ -2281,7 +2285,7 @@ type fakeNotifier struct {
 }
 
 func (f *fakeNotifier) Notify(itemID, title, message string, notificationType, priority int32) {
-	f.calls = append(f.calls, fakeNotifierCall{Title: title, Message: message})
+	f.calls = append(f.calls, fakeNotifierCall{Title: title, Message: message, NotificationType: notificationType, Priority: priority})
 }
 
 // titles returns just the Title of every recorded call, in order — for tests (the
@@ -3667,6 +3671,156 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 
 	assert.Equal(t, []string{"Review session ended without a verdict"}, notifier.titles(),
 		"must not notify a second time for the same dead session once the bouncing gate is blocking (BUG-046)")
+}
+
+// TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
+// verifies Signal 2 (plan.md Epic 1.3): the tick that pushes the "bouncing"
+// row's remediation_attempts to MaxRemediationAttempts (justParked==true)
+// must mark a durable bounce_cap_exhausted row and fire a differentiated
+// ERROR/URGENT notification, not just the pre-existing generic park notice.
+func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bounce cap exhausted test item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	require.True(t, applied)
+	// Seed one attempt short of the cap, eligible immediately (nil next_remediation_at).
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, MaxRemediationAttempts-1, nil)
+	require.NoError(t, err)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, hasCapRowYet := findOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	require.False(t, hasCapRowYet, "must not have a bounce_cap_exhausted row before the cap is actually crossed")
+
+	listener := NewBacklogLifecycleListener(storage)
+	reopener := newFakeAutoReopenSpawner()
+	listener.SetAutoReopener(reopener)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, BacklogStatusInProgress)
+
+	select {
+	case <-reopener.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+	}
+
+	open, err = er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	require.True(t, ok, "crossing the cap while bouncing is still open must mark a durable bounce_cap_exhausted row")
+	assert.NotNil(t, row.NotifiedAt, "the differentiated notify fires immediately (not dwell-gated), so the row must already be marked notified")
+
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, int32(7), notifier.calls[0].NotificationType, "must use NOTIFICATION_TYPE_ERROR, not the generic WARNING")
+	assert.Equal(t, int32(4), notifier.calls[0].Priority, "must use NOTIFICATION_PRIORITY_URGENT, not the generic HIGH")
+}
+
+// TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetParked
+// is the negative case: an attempt that brings remediation_attempts to
+// MaxRemediationAttempts-1 (still below the cap) must not mark a
+// bounce_cap_exhausted row or fire the differentiated notify.
+func TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetParked(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bounce not yet parked test item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "2 cycles")
+	require.NoError(t, err)
+	require.True(t, applied)
+	// Two attempts short of the cap: this call's attempt lands at
+	// MaxRemediationAttempts-1, which is still not the cap.
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, MaxRemediationAttempts-2, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	reopener := newFakeAutoReopenSpawner()
+	listener.SetAutoReopener(reopener)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, BacklogStatusInProgress)
+
+	select {
+	case <-reopener.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, hasCapRow := findOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	assert.False(t, hasCapRow, "must not mark bounce_cap_exhausted before remediation_attempts actually reaches the cap")
+	assert.Empty(t, notifier.calls, "must not fire the differentiated cap-exhausted notify before justParked")
+}
+
+// TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounceCapExhausted
+// is a regression test for the itemStatus-passthrough pitfall named in
+// plan.md Story 1.3.1: handleReviewSessionExited's item is in "review"
+// status at both of its call sites, never "in_progress". If
+// autoReopenWithBackoffGate's MarkStuck call used a hardcoded
+// BacklogStatusInProgress instead of the caller-supplied itemStatus,
+// MarkStuck's expectedStatus precondition would silently no-op
+// (applied=false) for every such item and no bounce_cap_exhausted row would
+// ever appear.
+func TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounceCapExhausted(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bounce cap exhausted, review-status item",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "3 cycles")
+	require.NoError(t, err)
+	require.True(t, applied)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, MaxRemediationAttempts-1, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	reopener := newFakeAutoReopenSpawner()
+	listener.SetAutoReopener(reopener)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	// Pass the item's REAL current status (review), exactly as
+	// handleReviewSessionExited does via BacklogStatus(item.Status) — not a
+	// hardcoded BacklogStatusInProgress.
+	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, BacklogStatusReview)
+
+	select {
+	case <-reopener.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	require.True(t, ok, "MarkStuck's expectedStatus precondition must match the item's real (review) status, not a hardcoded in_progress — otherwise this row would silently never appear")
+	assert.Equal(t, BacklogStatusReview, row.ItemStatus)
 }
 
 // TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleReviewSessionExited

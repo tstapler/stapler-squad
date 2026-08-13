@@ -60,6 +60,23 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 	}
 }
 
+// TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonMultipleReasons
+// verifies the new synthetic aggregate reason (backlog-bounce-escalation,
+// Epic 1.1) maps to its dedicated proto enum value rather than falling
+// through to STUCK_REASON_UNSPECIFIED.
+func TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonMultipleReasons(t *testing.T) {
+	got := toProtoStuckReason(domain.StuckReasonMultipleReasons)
+	assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS, got)
+}
+
+// TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCapExhausted
+// verifies the inverse mapping for the new synthetic aggregate reason
+// (backlog-bounce-escalation, Epic 1.1) recovers the correct domain constant.
+func TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCapExhausted(t *testing.T) {
+	got := fromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED)
+	assert.Equal(t, domain.StuckReasonBounceCapExhausted, got)
+}
+
 // seedOpenStuckRow creates a backlog item and inserts an open BacklogStuckState
 // row directly via the ent client (bypassing MarkStuck/its status precondition,
 // since these RPC-level tests only need a row to exist, not the reconciler's
@@ -472,6 +489,15 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// item's normal reopen/park flow already proceeds unaffected by this row
 	// (see notifyLikelyFlaky's doc comment in backlog_service_triage.go).
 	domain.StuckReasonLikelyFlaky: true,
+	// StuckReasonMultipleReasons and StuckReasonBounceCapExhausted
+	// (backlog-bounce-escalation, Epic 1.1) are synthetic, aggregate signals
+	// derived from other open stuck reasons/the remediation-attempt cap, not
+	// independently actionable conditions — there is no "retry now" action
+	// that makes sense for an aggregate row, so both are deliberately
+	// notify + durably mark + resolve-when-the-underlying-condition-clears
+	// only, same shape as StuckReasonReworkBlockedStale above.
+	domain.StuckReasonMultipleReasons:    true,
+	domain.StuckReasonBounceCapExhausted: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

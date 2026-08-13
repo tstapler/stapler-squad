@@ -1125,6 +1125,10 @@ enum StuckReason {
   // pass/fail signal. Purely informational — never gates the reopen/park
   // decision; present as a hint to verify, not a confident verdict.
   STUCK_REASON_LIKELY_FLAKY = 15;
+  // STUCK_REASON_MULTIPLE_REASONS: see domain.StuckReasonMultipleReasons — synthetic aggregate signal for multiple simultaneous stuck reasons.
+  STUCK_REASON_MULTIPLE_REASONS = 16;
+  // STUCK_REASON_BOUNCE_CAP_EXHAUSTED: see domain.StuckReasonBounceCapExhausted — synthetic aggregate signal for a bouncing item that exhausted its remediation cap.
+  STUCK_REASON_BOUNCE_CAP_EXHAUSTED = 17;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

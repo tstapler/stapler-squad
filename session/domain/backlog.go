@@ -160,6 +160,30 @@ const (
 	// comments in session/stuck_decisions.go); the UI should present this as a
 	// hint to verify, not a confident verdict.
 	StuckReasonLikelyFlaky StuckReason = "likely_flaky"
+	// StuckReasonMultipleReasons: a synthetic, aggregate reason marking an
+	// item that has multiReasonThreshold or more *other*, non-escalation
+	// stuck reasons open simultaneously (session/stuck_decisions.go's
+	// isMultiReasonEscalated). Set/resolved by reconcileMultiReasonEscalation
+	// (session/backlog_lifecycle_stuck.go) as the count of open non-escalation
+	// reasons crosses the threshold in either direction. Deliberately excludes
+	// itself and StuckReasonBounceCapExhausted from its own count (ADR-001)
+	// to avoid a self-reinforcing escalation loop. Unlike every other
+	// StuckReason, this one carries no independent remediation action of its
+	// own — it exists purely as an operator-visible severity signal that an
+	// item is stuck for multiple simultaneous reasons, not a single narrow
+	// one.
+	StuckReasonMultipleReasons StuckReason = "multiple_reasons"
+	// StuckReasonBounceCapExhausted: a synthetic, aggregate reason marking an
+	// item whose bouncing remediation gate hit MaxRemediationAttempts while
+	// StuckReasonBouncing itself is still open (autoReopenWithBackoffGate,
+	// session/backlog_lifecycle.go). Signals that automated remediation has
+	// given up retrying and the item now needs human intervention. Resolved
+	// by reconcileBouncingItems once StuckReasonBouncing itself resolves, or
+	// by the selfHealStuck backstop once the item's status leaves
+	// in_progress/review entirely. Like StuckReasonMultipleReasons, this is a
+	// meta/aggregate signal with no independent remediation action of its
+	// own.
+	StuckReasonBounceCapExhausted StuckReason = "bounce_cap_exhausted"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -179,6 +203,8 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonPRNeedsFix,
 	StuckReasonRespawnBlockedActive,
 	StuckReasonLikelyFlaky,
+	StuckReasonMultipleReasons,
+	StuckReasonBounceCapExhausted,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -188,7 +214,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
-		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky:
+		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonMultipleReasons, StuckReasonBounceCapExhausted:
 		return true
 	}
 	return false
