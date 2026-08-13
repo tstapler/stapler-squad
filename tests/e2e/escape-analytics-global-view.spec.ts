@@ -247,13 +247,9 @@ test.describe("escape-analytics-global-view", () => {
 
     await analytics.activateTab("all_sessions");
 
-    await expect(analytics.getPanel("all_sessions").getByTestId("mangle-rate-value")).toBeVisible();
-    await expect(analytics.getPanel("all_sessions").getByTestId("mangle-counts")).toContainText(
-      "60"
-    );
-    await expect(analytics.getPanel("all_sessions").getByTestId("mangle-counts")).toContainText(
-      "600"
-    );
+    await expect(analytics.getAggregateMangleRateValue()).toBeVisible();
+    await expect(analytics.getAggregateMangleCounts()).toContainText("60");
+    await expect(analytics.getAggregateMangleCounts()).toContainText("600");
   });
 
   test("EscapeAnalyticsGlobalView_should_ShowTopContributor_When_OneSessionExceedsThreshold", async ({

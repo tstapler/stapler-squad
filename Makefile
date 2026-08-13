@@ -457,7 +457,6 @@ test-coverage: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with coverage rep
 	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -cover ./... -coverprofile=coverage.out
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
-	@which open >/dev/null 2>&1 && open coverage.html || true
 
 coverage-func: ensure-tools proto-gen ## Show function-level coverage sorted by % (all non-100% functions)
 	@go test -short -coverprofile=coverage.out -covermode=atomic ./... 2>/dev/null

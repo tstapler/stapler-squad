@@ -1937,6 +1937,28 @@ func TestCreateBacklogItem_should_ReturnError_When_PriorityOutOfRange(t *testing
 	require.False(t, m["success"].(bool), "create_backlog_item must reject an out-of-range priority")
 }
 
+// TestCreateBacklogItem_should_Succeed_When_NoSessionUUID is the regression
+// test for the bug where a manually-registered MCP client (e.g. `claude mcp
+// add` from a plain terminal with no STAPLER_SESSION_UUID set) got a hard
+// PERMISSION_DENIED from create_backlog_item even though the tool's write
+// path (storage.CreateBacklogItem) takes no session parameter and creates no
+// session/item link — the session UUID was only ever used for the audit-trail
+// log line, so there was no real invariant to protect by rejecting the call.
+func TestCreateBacklogItem_should_Succeed_When_NoSessionUUID(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := context.Background() // No session UUID injected — simulates a manual MCP client.
+
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title": "Filed from a manual MCP client",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Filed from a manual MCP client")
+}
+
 // TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds verifies
 // the happy path against a stubbed GitHub API — title/body land on the new
 // item and Notes records the source issue URL, mirroring
@@ -1979,6 +2001,39 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 	assert.Equal(t, "bug: something is broken", fetched.Title)
 	assert.Equal(t, "Steps to reproduce...", fetched.Description)
 	assert.Contains(t, fetched.Notes, "https://github.com/tstapler/stapler-squad/issues/316")
+}
+
+// TestImportGitHubIssue_should_Succeed_When_NoSessionUUID mirrors
+// TestCreateBacklogItem_should_Succeed_When_NoSessionUUID's regression
+// coverage for import_github_issue: it has the same "session UUID used only
+// for the audit log" shape, so a manual MCP client must not be rejected.
+func TestImportGitHubIssue_should_Succeed_When_NoSessionUUID(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"number": 318, "title": "filed via manual mcp client", "body": "...",
+			"html_url": "https://github.com/tstapler/stapler-squad/issues/318",
+			"user": {"login": "tstapler"}, "state": "open"
+		}`))
+	}))
+	defer srv.Close()
+	prevBaseURL := githubpkg.GhBaseURL
+	githubpkg.GhBaseURL = srv.URL + "/"
+	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := context.Background() // No session UUID injected — simulates a manual MCP client.
+
+	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
+		"issue_url": "https://github.com/tstapler/stapler-squad/issues/318",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "filed via manual mcp client")
 }
 
 // TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet
@@ -4326,6 +4381,82 @@ func verdictsArg(outcome string) []interface{} {
 			"evidence":        "clear evidence from the diff",
 		},
 	}
+}
+
+// setupReviewSessionWithCompletedWorkSession is setupReviewSession plus a
+// real on-disk git repo (item.RepoPath) and a completed work-role
+// ItemSession with a valid Base/LastCommitSha range — the fixture shape
+// Storage.ComputeCurrentDiffHash needs to actually resolve a hash, rather
+// than best-effort-returning "".
+func setupReviewSessionWithCompletedWorkSession(t *testing.T, storage *session.Storage) (itemID, sessionUUID, repoPath string) {
+	t.Helper()
+	ctx := context.Background()
+
+	repoPath = initGitRepo(t)
+	baseSHA := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+	writeFile(t, repoPath, "foo.go", "package foo\n")
+	runGit(t, repoPath, "add", "foo.go")
+	runGit(t, repoPath, "commit", "-m", "work session change")
+	headSHA := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Review me",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	ws, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.SetItemSessionBaseCommit(ctx, ws.ID, baseSHA))
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, ws.ID, headSHA, "work session change", time.Now(), 1))
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, ws.ID, time.Now()))
+
+	sessUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	return item.ID, sessUUID, repoPath
+}
+
+// TestSubmitReviewVerdict_should_persistDiffHash_When_CompletedWorkSessionExists
+// is the write-site regression test for Story 3.2.1: submit_review_verdict
+// (the MCP tool the interactive review agent actually calls) must stamp
+// DiffHash on the saved verdict via Storage.ComputeCurrentDiffHash, not
+// leave it empty. Without this test, a typo'd itemID/ctx or an accidentally
+// dropped field at this specific call site would compile and pass every
+// other test while silently making IsFlakyVerdictFlipFlop permanently see
+// an empty hash (never a match) for every verdict submitted through this
+// path — the review agent's own submission path, the one most commonly
+// exercised in production.
+func TestSubmitReviewVerdict_should_persistDiffHash_When_CompletedWorkSessionExists(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID, _ := setupReviewSessionWithCompletedWorkSession(t, storage)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":  itemID,
+		"summary":  "Looks good.",
+		"verdicts": verdictsArg("PASS"),
+	})
+
+	_, err := handler.submitReviewVerdict(ctx, req)
+	require.NoError(t, err)
+
+	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, itemID, 1)
+	require.NoError(t, err)
+	require.Len(t, recent, 1)
+	assert.NotEmpty(t, recent[0].DiffHash, "submit_review_verdict must stamp DiffHash via ComputeCurrentDiffHash, not leave it empty")
 }
 
 // TestSubmitReviewVerdict_should_InvokeAutoReopener_When_OutcomeIsFail is

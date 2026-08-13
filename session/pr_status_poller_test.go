@@ -47,3 +47,20 @@ func TestApplyPRUpdate_FiresOnUpdated_WhenCheckConclusionChangesWithoutPriorityC
 		t.Fatalf("expected onUpdated NOT to fire when neither priority nor conclusion changed, fired=%d", fired)
 	}
 }
+
+// TestPRStatusPoller_ETagCache_ReturnsSharedNonNilInstance is the regression
+// test for ADR-022's original intent: WorktreePRPoller must reuse
+// PRStatusPoller's *github.ETagCache (via this getter) rather than each
+// poller constructing its own, which would double GitHub API call volume for
+// repos both pollers hit.
+func TestPRStatusPoller_ETagCache_ReturnsSharedNonNilInstance(t *testing.T) {
+	poller := NewPRStatusPoller(nil)
+
+	cache := poller.ETagCache()
+	if cache == nil {
+		t.Fatal("ETagCache() = nil, want a non-nil *github.ETagCache")
+	}
+	if poller.ETagCache() != cache {
+		t.Error("ETagCache() returned a different instance on a repeated call, want the same shared instance every time")
+	}
+}

@@ -35,8 +35,27 @@ export class EscapeAnalyticsGlobalViewPage {
     return this.page.locator(`#tabpanel-${mode}`);
   }
 
+  /**
+   * Excludes Next.js's built-in `#__next-route-announcer__`, which also carries
+   * `role="alert"` for screen-reader route-change announcements.
+   */
   getErrorBanner(): Locator {
-    return this.page.getByRole("alert");
+    return this.page.locator('[role="alert"]:not(#__next-route-announcer__)');
+  }
+
+  /**
+   * The fleet-wide aggregate `MangleRateIndicator` renders before the per-session
+   * breakdown table's row instances, which share the same `data-testid` (the
+   * component is reused as-is; only this view combines multiple instances on one
+   * tab) — `.first()` selects the aggregate one.
+   */
+  getAggregateMangleRateValue(): Locator {
+    return this.getPanel("all_sessions").getByTestId("mangle-rate-value").first();
+  }
+
+  /** Same duplicate-testid rationale as {@link getAggregateMangleRateValue}. */
+  getAggregateMangleCounts(): Locator {
+    return this.getPanel("all_sessions").getByTestId("mangle-counts").first();
   }
 
   getBreakdownTable(): Locator {

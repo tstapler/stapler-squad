@@ -55,6 +55,7 @@ import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
+import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
 import * as styles from "./TerminalOutput.css";
 
 interface TerminalOutputProps {
@@ -248,7 +249,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, [keyboardStorageKey]);
 
   // Mobile detection — use shared ViewportProvider hook for consistency
-  const { isMobile } = useViewport();
+  const { isMobile, hasFinePointer } = useViewport();
+
+  // User-overridable detection for a real mouse+keyboard attached to a phone/tablet —
+  // see Settings > Appearance > Terminal Input Mode.
+  const { inputModeOverride } = useInputModeOverride();
+  const compactToolbar =
+    inputModeOverride === 'desktop' ||
+    (inputModeOverride === 'auto' && isMobile && hasFinePointer);
 
   // Toolbar collapsed/expanded state — persisted in localStorage; collapsed by default
   const [toolbarExpanded, setToolbarExpanded] = useState(() => {
@@ -261,6 +269,25 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   });
   const [mobileOverflowOpen, setMobileOverflowOpen] = useState(false);
+
+  // The first time a mouse+physical keyboard is detected on this mobile session,
+  // collapse the toolbar and hide the on-screen keyboard row by default so they
+  // don't eat screen space — but only if the user hasn't already made an explicit
+  // choice for either. Runs once per session mount; manual toggles afterward are
+  // fully respected.
+  const appliedCompactDefaultsRef = useRef(false);
+  useEffect(() => {
+    if (!compactToolbar || appliedCompactDefaultsRef.current) return;
+    appliedCompactDefaultsRef.current = true;
+    setToolbarExpanded(false);
+    try {
+      if (localStorage.getItem(keyboardStorageKey) === null) {
+        setIsKeyboardVisible(false);
+      }
+    } catch {
+      // localStorage unavailable — leave the on-screen keyboard row visible
+    }
+  }, [compactToolbar, keyboardStorageKey]);
 
   // Dev tools panel — persisted in localStorage; collapsed by default
   const [devGroupOpen, setDevGroupOpen] = useState(() => {
@@ -1439,6 +1466,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               🔄 Reconnect
             </button>
           )}
+          {/* Resize — always visible (minimized default); heavily used per analytics */}
+          <button
+            className={styles.toolbarButton}
+            onClick={() => {
+              track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
+              handleManualResize();
+            }}
+            aria-label="Resize terminal to fit container"
+            title="Resize terminal to fit container"
+          >
+            ↔️ Resize
+          </button>
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
               {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
@@ -1511,18 +1550,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach files"}
               >
                 {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
-              </button>
-              {/* Resize — always visible, needed to re-fit terminal after layout changes */}
-              <button
-                className={styles.toolbarButton}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
-                  handleManualResize();
-                }}
-                aria-label="Resize terminal to fit container"
-                title="Resize terminal to fit container"
-              >
-                ↔️ Resize
               </button>
               {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
               <button
