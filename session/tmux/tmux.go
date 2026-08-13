@@ -196,6 +196,20 @@ const (
 	existsCacheDefaultTTL       = 5 * time.Second // registry fast-path is push-based; this is only the subprocess fallback
 	sessionCreateTimeoutDefault = 10 * time.Second
 	sessionPollInitialDelay     = 5 * time.Millisecond
+	// sessionPollMaxDelay bounds the poll loop's exponential backoff below.
+	// Previously capped at 50ms, which -- once ramped up after ~4 doublings
+	// (~75ms) -- spawns a real `tmux list-sessions` subprocess (via
+	// DoesSessionExistNoCache) roughly every 50ms for the rest of the
+	// sessionCreateTimeout window: up to ~600 subprocess forks over a 30s
+	// CI-widened timeout. Each of those is itself gated CPU/scheduling work
+	// competing with the very tmux-server fork/exec it's waiting on, on the
+	// same CPU-starved runner diagnosed as this loop's root timeout cause
+	// (see sessionCreateTimeout's doc comment) -- i.e. the poll loop was
+	// worsening the exact contention it exists to tolerate. 250ms cuts the
+	// worst-case spawn count roughly 5x while staying invisible in the
+	// common case, where the session is already visible within the first
+	// few (5/10/20/40/80/160ms) low-delay iterations.
+	sessionPollMaxDelay = 250 * time.Millisecond
 )
 
 // sessionCreateTimeout is sessionCreateTimeoutDefault unless overridden via
@@ -1193,8 +1207,8 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 				return fmt.Errorf("timed out waiting for tmux session %s: %v", t.sanitizedName, err)
 			default:
 				time.Sleep(sleepDuration)
-				// Exponential backoff up to 50ms max
-				if sleepDuration < 50*time.Millisecond {
+				// Exponential backoff up to sessionPollMaxDelay.
+				if sleepDuration < sessionPollMaxDelay {
 					sleepDuration *= 2
 				}
 			}
