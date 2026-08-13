@@ -232,6 +232,9 @@ async function main(): Promise<void> {
   if (screenshots.length === 0) {
     console.log('Usage: analyze.ts <screenshot.png> [--pr <number>] [--feature <id>] [--output <dir>]');
     console.log('No screenshots provided - exiting with success');
+    if (process.env.GITHUB_OUTPUT) {
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, 'findings_count=0\n');
+    }
     process.exit(0);
   }
 
@@ -265,6 +268,11 @@ async function main(): Promise<void> {
     findings.forEach((f, i) => {
       console.log(`${i + 1}. [${f.severity.toUpperCase()}] ${f.finding}`);
     });
+  }
+
+  // Machine-readable count for CI gating; no-op when run outside GitHub Actions.
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `findings_count=${findings.length}\n`);
   }
 }
 
