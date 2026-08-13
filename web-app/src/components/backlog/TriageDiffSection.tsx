@@ -1,4 +1,5 @@
 "use client";
+// +feature: backlog-triage-question-answer
 
 import { useEffect, useRef, useState } from "react";
 import type { AcCriterion, TriageSuggestion } from "@/lib/hooks/useBacklogService";
