@@ -713,6 +713,12 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 		return fmt.Errorf("failed to clear tags: %w", err)
 	}
 
+	// Delete shells (sibling tmux sessions) — Shell.session edge is Required(),
+	// so leaving any rows here trips a FOREIGN KEY constraint on session delete.
+	if _, err := tx.Shell.Delete().Where(entshell.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete shells: %w", err)
+	}
+
 	// Finally delete the session
 	if err := tx.Session.DeleteOne(sess).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
