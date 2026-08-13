@@ -119,9 +119,13 @@ type BacklogItemEdges struct {
 	ProgressNotes []*BacklogProgressNote `json:"progress_notes,omitempty"`
 	// Source holds the value of the source edge.
 	Source *ItemSource `json:"source,omitempty"`
+	// BlockingDependencies holds the value of the blocking_dependencies edge.
+	BlockingDependencies []*BacklogItemDependency `json:"blocking_dependencies,omitempty"`
+	// BlockedByDependencies holds the value of the blocked_by_dependencies edge.
+	BlockedByDependencies []*BacklogItemDependency `json:"blocked_by_dependencies,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [6]bool
+	loadedTypes [8]bool
 }
 
 // ItemSessionsOrErr returns the ItemSessions value or an error if the edge
@@ -178,6 +182,24 @@ func (e BacklogItemEdges) SourceOrErr() (*ItemSource, error) {
 		return nil, &NotFoundError{label: itemsource.Label}
 	}
 	return nil, &NotLoadedError{edge: "source"}
+}
+
+// BlockingDependenciesOrErr returns the BlockingDependencies value or an error if the edge
+// was not loaded in eager-loading.
+func (e BacklogItemEdges) BlockingDependenciesOrErr() ([]*BacklogItemDependency, error) {
+	if e.loadedTypes[6] {
+		return e.BlockingDependencies, nil
+	}
+	return nil, &NotLoadedError{edge: "blocking_dependencies"}
+}
+
+// BlockedByDependenciesOrErr returns the BlockedByDependencies value or an error if the edge
+// was not loaded in eager-loading.
+func (e BacklogItemEdges) BlockedByDependenciesOrErr() ([]*BacklogItemDependency, error) {
+	if e.loadedTypes[7] {
+		return e.BlockedByDependencies, nil
+	}
+	return nil, &NotLoadedError{edge: "blocked_by_dependencies"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -513,6 +535,16 @@ func (_m *BacklogItem) QueryProgressNotes() *BacklogProgressNoteQuery {
 // QuerySource queries the "source" edge of the BacklogItem entity.
 func (_m *BacklogItem) QuerySource() *ItemSourceQuery {
 	return NewBacklogItemClient(_m.config).QuerySource(_m)
+}
+
+// QueryBlockingDependencies queries the "blocking_dependencies" edge of the BacklogItem entity.
+func (_m *BacklogItem) QueryBlockingDependencies() *BacklogItemDependencyQuery {
+	return NewBacklogItemClient(_m.config).QueryBlockingDependencies(_m)
+}
+
+// QueryBlockedByDependencies queries the "blocked_by_dependencies" edge of the BacklogItem entity.
+func (_m *BacklogItem) QueryBlockedByDependencies() *BacklogItemDependencyQuery {
+	return NewBacklogItemClient(_m.config).QueryBlockedByDependencies(_m)
 }
 
 // Update returns a builder for updating this BacklogItem.

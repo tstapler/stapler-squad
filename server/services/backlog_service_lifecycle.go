@@ -508,6 +508,44 @@ func (s *BacklogService) DeleteBacklogItem(
 	return connect.NewResponse(&sessionv1.DeleteBacklogItemResponse{}), nil
 }
 
+// --- AddBacklogItemDependency ---
+
+// AddBacklogItemDependency marks BlockedItemId as depending on (blocked by)
+// BlockerItemId, so DequeueNextQueuedItems skips it until the blocker
+// resolves (reaches done or archived status, or is deleted).
+// +api: backlog:add-item-dependency
+func (s *BacklogService) AddBacklogItemDependency(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AddBacklogItemDependencyRequest],
+) (*connect.Response[sessionv1.AddBacklogItemDependencyResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	edge := session.BacklogItemDependencyEdge{
+		BlockerID: req.Msg.BlockerItemId,
+		BlockedID: req.Msg.BlockedItemId,
+	}
+	if err := s.storage.AddBacklogItemDependency(ctx, edge); err != nil {
+		if errors.Is(err, session.ErrDependencyCycle) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("dependency would create a cycle: %w", err))
+		}
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add backlog item dependency: %w", err))
+	}
+
+	updated, err := s.storage.GetBacklogItem(ctx, req.Msg.BlockedItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after adding dependency: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{
+		Item: backlogItemToProto(updated, s.buildCostLookup()),
+	}), nil
+}
+
 // --- TransitionBacklogItemStatus ---
 
 // resolveLatestWorkCommit returns the true current tip commit of the work
@@ -646,23 +684,33 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		hasUnshippedCode = !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "TransitionBacklogItemStatus")
 	}
 
+	var hasUnresolvedBlockers bool
+	if to == session.BacklogStatusInProgress {
+		hasUnresolvedBlockers, err = s.hasUnresolvedBlockers(ctx, req.Msg.ItemId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check unresolved blockers: %w", err))
+		}
+	}
+
 	// Run transition guard for business rules.
 	guardInput := session.BacklogItemTransitionInput{
-		Status:            from,
-		AcCriteria:        item.AcceptanceCriteria,
-		PlanApproved:      item.PlanApproved,
-		SkipPlanning:      item.SkipPlanning,
-		PlanArtifactsPath: item.PlanArtifactsPath,
-		OverallOutcome:    overallOutcome,
-		OverrideReason:    req.Msg.OverrideReason,
-		HasUnshippedCode:  hasUnshippedCode,
+		Status:                from,
+		AcCriteria:            item.AcceptanceCriteria,
+		PlanApproved:          item.PlanApproved,
+		SkipPlanning:          item.SkipPlanning,
+		PlanArtifactsPath:     item.PlanArtifactsPath,
+		OverallOutcome:        overallOutcome,
+		OverrideReason:        req.Msg.OverrideReason,
+		HasUnshippedCode:      hasUnshippedCode,
+		HasUnresolvedBlockers: hasUnresolvedBlockers,
 	}
 	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
 		if errors.Is(guardErr, session.ErrACRequired) ||
 			errors.Is(guardErr, session.ErrPlanRequired) ||
 			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
 			errors.Is(guardErr, session.ErrVerdictRequired) ||
-			errors.Is(guardErr, session.ErrCodeNotOnMain) {
+			errors.Is(guardErr, session.ErrCodeNotOnMain) ||
+			errors.Is(guardErr, session.ErrUnresolvedBlockers) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
 		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, guardErr)

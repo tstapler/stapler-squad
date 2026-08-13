@@ -190,6 +190,45 @@ var (
 			},
 		},
 	}
+	// BacklogItemDependenciesColumns holds the columns for the "backlog_item_dependencies" table.
+	BacklogItemDependenciesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "blocker_id", Type: field.TypeUUID},
+		{Name: "blocked_id", Type: field.TypeUUID},
+	}
+	// BacklogItemDependenciesTable holds the schema information for the "backlog_item_dependencies" table.
+	BacklogItemDependenciesTable = &schema.Table{
+		Name:       "backlog_item_dependencies",
+		Columns:    BacklogItemDependenciesColumns,
+		PrimaryKey: []*schema.Column{BacklogItemDependenciesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "backlog_item_dependencies_backlog_items_blocking_dependencies",
+				Columns:    []*schema.Column{BacklogItemDependenciesColumns[2]},
+				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "backlog_item_dependencies_backlog_items_blocked_by_dependencies",
+				Columns:    []*schema.Column{BacklogItemDependenciesColumns[3]},
+				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "backlogitemdependency_blocker_id_blocked_id",
+				Unique:  true,
+				Columns: []*schema.Column{BacklogItemDependenciesColumns[2], BacklogItemDependenciesColumns[3]},
+			},
+			{
+				Name:    "backlogitemdependency_blocked_id",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemDependenciesColumns[3]},
+			},
+		},
+	}
 	// BacklogProgressNotesColumns holds the columns for the "backlog_progress_notes" table.
 	BacklogProgressNotesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1082,6 +1121,7 @@ var (
 		AnalyticsEventsTable,
 		ApprovalRulesTable,
 		BacklogItemsTable,
+		BacklogItemDependenciesTable,
 		BacklogProgressNotesTable,
 		BacklogStatusEventsTable,
 		BacklogStuckStatesTable,
@@ -1111,6 +1151,8 @@ var (
 
 func init() {
 	BacklogItemsTable.ForeignKeys[0].RefTable = ItemSourcesTable
+	BacklogItemDependenciesTable.ForeignKeys[0].RefTable = BacklogItemsTable
+	BacklogItemDependenciesTable.ForeignKeys[1].RefTable = BacklogItemsTable
 	BacklogProgressNotesTable.ForeignKeys[0].RefTable = BacklogItemsTable
 	BacklogStatusEventsTable.ForeignKeys[0].RefTable = BacklogItemsTable
 	BacklogStuckStatesTable.ForeignKeys[0].RefTable = BacklogItemsTable

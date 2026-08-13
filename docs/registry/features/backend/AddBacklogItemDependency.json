@@ -1,0 +1,11 @@
+{
+  "id": "AddBacklogItemDependency",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "AddBacklogItemDependency",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-08-13T00:07:54.125730877-07:00"
+}

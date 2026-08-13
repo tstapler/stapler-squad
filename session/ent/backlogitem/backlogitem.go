@@ -105,6 +105,10 @@ const (
 	EdgeProgressNotes = "progress_notes"
 	// EdgeSource holds the string denoting the source edge name in mutations.
 	EdgeSource = "source"
+	// EdgeBlockingDependencies holds the string denoting the blocking_dependencies edge name in mutations.
+	EdgeBlockingDependencies = "blocking_dependencies"
+	// EdgeBlockedByDependencies holds the string denoting the blocked_by_dependencies edge name in mutations.
+	EdgeBlockedByDependencies = "blocked_by_dependencies"
 	// Table holds the table name of the backlogitem in the database.
 	Table = "backlog_items"
 	// ItemSessionsTable is the table that holds the item_sessions relation/edge.
@@ -147,6 +151,20 @@ const (
 	SourceInverseTable = "item_sources"
 	// SourceColumn is the table column denoting the source relation/edge.
 	SourceColumn = "item_source_backlog_items"
+	// BlockingDependenciesTable is the table that holds the blocking_dependencies relation/edge.
+	BlockingDependenciesTable = "backlog_item_dependencies"
+	// BlockingDependenciesInverseTable is the table name for the BacklogItemDependency entity.
+	// It exists in this package in order to avoid circular dependency with the "backlogitemdependency" package.
+	BlockingDependenciesInverseTable = "backlog_item_dependencies"
+	// BlockingDependenciesColumn is the table column denoting the blocking_dependencies relation/edge.
+	BlockingDependenciesColumn = "blocker_id"
+	// BlockedByDependenciesTable is the table that holds the blocked_by_dependencies relation/edge.
+	BlockedByDependenciesTable = "backlog_item_dependencies"
+	// BlockedByDependenciesInverseTable is the table name for the BacklogItemDependency entity.
+	// It exists in this package in order to avoid circular dependency with the "backlogitemdependency" package.
+	BlockedByDependenciesInverseTable = "backlog_item_dependencies"
+	// BlockedByDependenciesColumn is the table column denoting the blocked_by_dependencies relation/edge.
+	BlockedByDependenciesColumn = "blocked_id"
 )
 
 // Columns holds all SQL columns for backlogitem fields.
@@ -537,6 +555,34 @@ func BySourceField(field string, opts ...sql.OrderTermOption) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newSourceStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByBlockingDependenciesCount orders the results by blocking_dependencies count.
+func ByBlockingDependenciesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newBlockingDependenciesStep(), opts...)
+	}
+}
+
+// ByBlockingDependencies orders the results by blocking_dependencies terms.
+func ByBlockingDependencies(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newBlockingDependenciesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByBlockedByDependenciesCount orders the results by blocked_by_dependencies count.
+func ByBlockedByDependenciesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newBlockedByDependenciesStep(), opts...)
+	}
+}
+
+// ByBlockedByDependencies orders the results by blocked_by_dependencies terms.
+func ByBlockedByDependencies(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newBlockedByDependenciesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newItemSessionsStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -577,5 +623,19 @@ func newSourceStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(SourceInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, SourceTable, SourceColumn),
+	)
+}
+func newBlockingDependenciesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(BlockingDependenciesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, BlockingDependenciesTable, BlockingDependenciesColumn),
+	)
+}
+func newBlockedByDependenciesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(BlockedByDependenciesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, BlockedByDependenciesTable, BlockedByDependenciesColumn),
 	)
 }

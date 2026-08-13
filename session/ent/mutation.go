@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -52,6 +53,7 @@ const (
 	TypeAnalyticsEvent          = "AnalyticsEvent"
 	TypeApprovalRule            = "ApprovalRule"
 	TypeBacklogItem             = "BacklogItem"
+	TypeBacklogItemDependency   = "BacklogItemDependency"
 	TypeBacklogProgressNote     = "BacklogProgressNote"
 	TypeBacklogStatusEvent      = "BacklogStatusEvent"
 	TypeBacklogStuckState       = "BacklogStuckState"
@@ -3102,6 +3104,12 @@ type BacklogItemMutation struct {
 	clearedprogress_notes           bool
 	source                          *uuid.UUID
 	clearedsource                   bool
+	blocking_dependencies           map[uuid.UUID]struct{}
+	removedblocking_dependencies    map[uuid.UUID]struct{}
+	clearedblocking_dependencies    bool
+	blocked_by_dependencies         map[uuid.UUID]struct{}
+	removedblocked_by_dependencies  map[uuid.UUID]struct{}
+	clearedblocked_by_dependencies  bool
 	done                            bool
 	oldValue                        func(context.Context) (*BacklogItem, error)
 	predicates                      []predicate.BacklogItem
@@ -5382,6 +5390,114 @@ func (m *BacklogItemMutation) ResetSource() {
 	m.clearedsource = false
 }
 
+// AddBlockingDependencyIDs adds the "blocking_dependencies" edge to the BacklogItemDependency entity by ids.
+func (m *BacklogItemMutation) AddBlockingDependencyIDs(ids ...uuid.UUID) {
+	if m.blocking_dependencies == nil {
+		m.blocking_dependencies = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.blocking_dependencies[ids[i]] = struct{}{}
+	}
+}
+
+// ClearBlockingDependencies clears the "blocking_dependencies" edge to the BacklogItemDependency entity.
+func (m *BacklogItemMutation) ClearBlockingDependencies() {
+	m.clearedblocking_dependencies = true
+}
+
+// BlockingDependenciesCleared reports if the "blocking_dependencies" edge to the BacklogItemDependency entity was cleared.
+func (m *BacklogItemMutation) BlockingDependenciesCleared() bool {
+	return m.clearedblocking_dependencies
+}
+
+// RemoveBlockingDependencyIDs removes the "blocking_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (m *BacklogItemMutation) RemoveBlockingDependencyIDs(ids ...uuid.UUID) {
+	if m.removedblocking_dependencies == nil {
+		m.removedblocking_dependencies = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.blocking_dependencies, ids[i])
+		m.removedblocking_dependencies[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedBlockingDependencies returns the removed IDs of the "blocking_dependencies" edge to the BacklogItemDependency entity.
+func (m *BacklogItemMutation) RemovedBlockingDependenciesIDs() (ids []uuid.UUID) {
+	for id := range m.removedblocking_dependencies {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// BlockingDependenciesIDs returns the "blocking_dependencies" edge IDs in the mutation.
+func (m *BacklogItemMutation) BlockingDependenciesIDs() (ids []uuid.UUID) {
+	for id := range m.blocking_dependencies {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetBlockingDependencies resets all changes to the "blocking_dependencies" edge.
+func (m *BacklogItemMutation) ResetBlockingDependencies() {
+	m.blocking_dependencies = nil
+	m.clearedblocking_dependencies = false
+	m.removedblocking_dependencies = nil
+}
+
+// AddBlockedByDependencyIDs adds the "blocked_by_dependencies" edge to the BacklogItemDependency entity by ids.
+func (m *BacklogItemMutation) AddBlockedByDependencyIDs(ids ...uuid.UUID) {
+	if m.blocked_by_dependencies == nil {
+		m.blocked_by_dependencies = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.blocked_by_dependencies[ids[i]] = struct{}{}
+	}
+}
+
+// ClearBlockedByDependencies clears the "blocked_by_dependencies" edge to the BacklogItemDependency entity.
+func (m *BacklogItemMutation) ClearBlockedByDependencies() {
+	m.clearedblocked_by_dependencies = true
+}
+
+// BlockedByDependenciesCleared reports if the "blocked_by_dependencies" edge to the BacklogItemDependency entity was cleared.
+func (m *BacklogItemMutation) BlockedByDependenciesCleared() bool {
+	return m.clearedblocked_by_dependencies
+}
+
+// RemoveBlockedByDependencyIDs removes the "blocked_by_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (m *BacklogItemMutation) RemoveBlockedByDependencyIDs(ids ...uuid.UUID) {
+	if m.removedblocked_by_dependencies == nil {
+		m.removedblocked_by_dependencies = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.blocked_by_dependencies, ids[i])
+		m.removedblocked_by_dependencies[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedBlockedByDependencies returns the removed IDs of the "blocked_by_dependencies" edge to the BacklogItemDependency entity.
+func (m *BacklogItemMutation) RemovedBlockedByDependenciesIDs() (ids []uuid.UUID) {
+	for id := range m.removedblocked_by_dependencies {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// BlockedByDependenciesIDs returns the "blocked_by_dependencies" edge IDs in the mutation.
+func (m *BacklogItemMutation) BlockedByDependenciesIDs() (ids []uuid.UUID) {
+	for id := range m.blocked_by_dependencies {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetBlockedByDependencies resets all changes to the "blocked_by_dependencies" edge.
+func (m *BacklogItemMutation) ResetBlockedByDependencies() {
+	m.blocked_by_dependencies = nil
+	m.clearedblocked_by_dependencies = false
+	m.removedblocked_by_dependencies = nil
+}
+
 // Where appends a list predicates to the BacklogItemMutation builder.
 func (m *BacklogItemMutation) Where(ps ...predicate.BacklogItem) {
 	m.predicates = append(m.predicates, ps...)
@@ -6383,7 +6499,7 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *BacklogItemMutation) AddedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 8)
 	if m.item_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -6401,6 +6517,12 @@ func (m *BacklogItemMutation) AddedEdges() []string {
 	}
 	if m.source != nil {
 		edges = append(edges, backlogitem.EdgeSource)
+	}
+	if m.blocking_dependencies != nil {
+		edges = append(edges, backlogitem.EdgeBlockingDependencies)
+	}
+	if m.blocked_by_dependencies != nil {
+		edges = append(edges, backlogitem.EdgeBlockedByDependencies)
 	}
 	return edges
 }
@@ -6443,13 +6565,25 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 		if id := m.source; id != nil {
 			return []ent.Value{*id}
 		}
+	case backlogitem.EdgeBlockingDependencies:
+		ids := make([]ent.Value, 0, len(m.blocking_dependencies))
+		for id := range m.blocking_dependencies {
+			ids = append(ids, id)
+		}
+		return ids
+	case backlogitem.EdgeBlockedByDependencies:
+		ids := make([]ent.Value, 0, len(m.blocked_by_dependencies))
+		for id := range m.blocked_by_dependencies {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *BacklogItemMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 8)
 	if m.removeditem_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -6464,6 +6598,12 @@ func (m *BacklogItemMutation) RemovedEdges() []string {
 	}
 	if m.removedprogress_notes != nil {
 		edges = append(edges, backlogitem.EdgeProgressNotes)
+	}
+	if m.removedblocking_dependencies != nil {
+		edges = append(edges, backlogitem.EdgeBlockingDependencies)
+	}
+	if m.removedblocked_by_dependencies != nil {
+		edges = append(edges, backlogitem.EdgeBlockedByDependencies)
 	}
 	return edges
 }
@@ -6502,13 +6642,25 @@ func (m *BacklogItemMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeBlockingDependencies:
+		ids := make([]ent.Value, 0, len(m.removedblocking_dependencies))
+		for id := range m.removedblocking_dependencies {
+			ids = append(ids, id)
+		}
+		return ids
+	case backlogitem.EdgeBlockedByDependencies:
+		ids := make([]ent.Value, 0, len(m.removedblocked_by_dependencies))
+		for id := range m.removedblocked_by_dependencies {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *BacklogItemMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 8)
 	if m.cleareditem_sessions {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -6526,6 +6678,12 @@ func (m *BacklogItemMutation) ClearedEdges() []string {
 	}
 	if m.clearedsource {
 		edges = append(edges, backlogitem.EdgeSource)
+	}
+	if m.clearedblocking_dependencies {
+		edges = append(edges, backlogitem.EdgeBlockingDependencies)
+	}
+	if m.clearedblocked_by_dependencies {
+		edges = append(edges, backlogitem.EdgeBlockedByDependencies)
 	}
 	return edges
 }
@@ -6546,6 +6704,10 @@ func (m *BacklogItemMutation) EdgeCleared(name string) bool {
 		return m.clearedprogress_notes
 	case backlogitem.EdgeSource:
 		return m.clearedsource
+	case backlogitem.EdgeBlockingDependencies:
+		return m.clearedblocking_dependencies
+	case backlogitem.EdgeBlockedByDependencies:
+		return m.clearedblocked_by_dependencies
 	}
 	return false
 }
@@ -6583,8 +6745,554 @@ func (m *BacklogItemMutation) ResetEdge(name string) error {
 	case backlogitem.EdgeSource:
 		m.ResetSource()
 		return nil
+	case backlogitem.EdgeBlockingDependencies:
+		m.ResetBlockingDependencies()
+		return nil
+	case backlogitem.EdgeBlockedByDependencies:
+		m.ResetBlockedByDependencies()
+		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem edge %s", name)
+}
+
+// BacklogItemDependencyMutation represents an operation that mutates the BacklogItemDependency nodes in the graph.
+type BacklogItemDependencyMutation struct {
+	config
+	op             Op
+	typ            string
+	id             *uuid.UUID
+	created_at     *time.Time
+	clearedFields  map[string]struct{}
+	blocker        *uuid.UUID
+	clearedblocker bool
+	blocked        *uuid.UUID
+	clearedblocked bool
+	done           bool
+	oldValue       func(context.Context) (*BacklogItemDependency, error)
+	predicates     []predicate.BacklogItemDependency
+}
+
+var _ ent.Mutation = (*BacklogItemDependencyMutation)(nil)
+
+// backlogitemdependencyOption allows management of the mutation configuration using functional options.
+type backlogitemdependencyOption func(*BacklogItemDependencyMutation)
+
+// newBacklogItemDependencyMutation creates new mutation for the BacklogItemDependency entity.
+func newBacklogItemDependencyMutation(c config, op Op, opts ...backlogitemdependencyOption) *BacklogItemDependencyMutation {
+	m := &BacklogItemDependencyMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeBacklogItemDependency,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withBacklogItemDependencyID sets the ID field of the mutation.
+func withBacklogItemDependencyID(id uuid.UUID) backlogitemdependencyOption {
+	return func(m *BacklogItemDependencyMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *BacklogItemDependency
+		)
+		m.oldValue = func(ctx context.Context) (*BacklogItemDependency, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().BacklogItemDependency.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withBacklogItemDependency sets the old BacklogItemDependency of the mutation.
+func withBacklogItemDependency(node *BacklogItemDependency) backlogitemdependencyOption {
+	return func(m *BacklogItemDependencyMutation) {
+		m.oldValue = func(context.Context) (*BacklogItemDependency, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m BacklogItemDependencyMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m BacklogItemDependencyMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of BacklogItemDependency entities.
+func (m *BacklogItemDependencyMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *BacklogItemDependencyMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *BacklogItemDependencyMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().BacklogItemDependency.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetBlockerID sets the "blocker_id" field.
+func (m *BacklogItemDependencyMutation) SetBlockerID(u uuid.UUID) {
+	m.blocker = &u
+}
+
+// BlockerID returns the value of the "blocker_id" field in the mutation.
+func (m *BacklogItemDependencyMutation) BlockerID() (r uuid.UUID, exists bool) {
+	v := m.blocker
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBlockerID returns the old "blocker_id" field's value of the BacklogItemDependency entity.
+// If the BacklogItemDependency object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemDependencyMutation) OldBlockerID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBlockerID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBlockerID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBlockerID: %w", err)
+	}
+	return oldValue.BlockerID, nil
+}
+
+// ResetBlockerID resets all changes to the "blocker_id" field.
+func (m *BacklogItemDependencyMutation) ResetBlockerID() {
+	m.blocker = nil
+}
+
+// SetBlockedID sets the "blocked_id" field.
+func (m *BacklogItemDependencyMutation) SetBlockedID(u uuid.UUID) {
+	m.blocked = &u
+}
+
+// BlockedID returns the value of the "blocked_id" field in the mutation.
+func (m *BacklogItemDependencyMutation) BlockedID() (r uuid.UUID, exists bool) {
+	v := m.blocked
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBlockedID returns the old "blocked_id" field's value of the BacklogItemDependency entity.
+// If the BacklogItemDependency object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemDependencyMutation) OldBlockedID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBlockedID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBlockedID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBlockedID: %w", err)
+	}
+	return oldValue.BlockedID, nil
+}
+
+// ResetBlockedID resets all changes to the "blocked_id" field.
+func (m *BacklogItemDependencyMutation) ResetBlockedID() {
+	m.blocked = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *BacklogItemDependencyMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *BacklogItemDependencyMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the BacklogItemDependency entity.
+// If the BacklogItemDependency object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemDependencyMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *BacklogItemDependencyMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// ClearBlocker clears the "blocker" edge to the BacklogItem entity.
+func (m *BacklogItemDependencyMutation) ClearBlocker() {
+	m.clearedblocker = true
+	m.clearedFields[backlogitemdependency.FieldBlockerID] = struct{}{}
+}
+
+// BlockerCleared reports if the "blocker" edge to the BacklogItem entity was cleared.
+func (m *BacklogItemDependencyMutation) BlockerCleared() bool {
+	return m.clearedblocker
+}
+
+// BlockerIDs returns the "blocker" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// BlockerID instead. It exists only for internal usage by the builders.
+func (m *BacklogItemDependencyMutation) BlockerIDs() (ids []uuid.UUID) {
+	if id := m.blocker; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetBlocker resets all changes to the "blocker" edge.
+func (m *BacklogItemDependencyMutation) ResetBlocker() {
+	m.blocker = nil
+	m.clearedblocker = false
+}
+
+// ClearBlocked clears the "blocked" edge to the BacklogItem entity.
+func (m *BacklogItemDependencyMutation) ClearBlocked() {
+	m.clearedblocked = true
+	m.clearedFields[backlogitemdependency.FieldBlockedID] = struct{}{}
+}
+
+// BlockedCleared reports if the "blocked" edge to the BacklogItem entity was cleared.
+func (m *BacklogItemDependencyMutation) BlockedCleared() bool {
+	return m.clearedblocked
+}
+
+// BlockedIDs returns the "blocked" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// BlockedID instead. It exists only for internal usage by the builders.
+func (m *BacklogItemDependencyMutation) BlockedIDs() (ids []uuid.UUID) {
+	if id := m.blocked; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetBlocked resets all changes to the "blocked" edge.
+func (m *BacklogItemDependencyMutation) ResetBlocked() {
+	m.blocked = nil
+	m.clearedblocked = false
+}
+
+// Where appends a list predicates to the BacklogItemDependencyMutation builder.
+func (m *BacklogItemDependencyMutation) Where(ps ...predicate.BacklogItemDependency) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the BacklogItemDependencyMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *BacklogItemDependencyMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.BacklogItemDependency, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *BacklogItemDependencyMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *BacklogItemDependencyMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (BacklogItemDependency).
+func (m *BacklogItemDependencyMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *BacklogItemDependencyMutation) Fields() []string {
+	fields := make([]string, 0, 3)
+	if m.blocker != nil {
+		fields = append(fields, backlogitemdependency.FieldBlockerID)
+	}
+	if m.blocked != nil {
+		fields = append(fields, backlogitemdependency.FieldBlockedID)
+	}
+	if m.created_at != nil {
+		fields = append(fields, backlogitemdependency.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *BacklogItemDependencyMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case backlogitemdependency.FieldBlockerID:
+		return m.BlockerID()
+	case backlogitemdependency.FieldBlockedID:
+		return m.BlockedID()
+	case backlogitemdependency.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *BacklogItemDependencyMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case backlogitemdependency.FieldBlockerID:
+		return m.OldBlockerID(ctx)
+	case backlogitemdependency.FieldBlockedID:
+		return m.OldBlockedID(ctx)
+	case backlogitemdependency.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown BacklogItemDependency field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogItemDependencyMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case backlogitemdependency.FieldBlockerID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBlockerID(v)
+		return nil
+	case backlogitemdependency.FieldBlockedID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBlockedID(v)
+		return nil
+	case backlogitemdependency.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogItemDependency field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *BacklogItemDependencyMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *BacklogItemDependencyMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogItemDependencyMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown BacklogItemDependency numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *BacklogItemDependencyMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *BacklogItemDependencyMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *BacklogItemDependencyMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown BacklogItemDependency nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *BacklogItemDependencyMutation) ResetField(name string) error {
+	switch name {
+	case backlogitemdependency.FieldBlockerID:
+		m.ResetBlockerID()
+		return nil
+	case backlogitemdependency.FieldBlockedID:
+		m.ResetBlockedID()
+		return nil
+	case backlogitemdependency.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogItemDependency field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *BacklogItemDependencyMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.blocker != nil {
+		edges = append(edges, backlogitemdependency.EdgeBlocker)
+	}
+	if m.blocked != nil {
+		edges = append(edges, backlogitemdependency.EdgeBlocked)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *BacklogItemDependencyMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case backlogitemdependency.EdgeBlocker:
+		if id := m.blocker; id != nil {
+			return []ent.Value{*id}
+		}
+	case backlogitemdependency.EdgeBlocked:
+		if id := m.blocked; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *BacklogItemDependencyMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *BacklogItemDependencyMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *BacklogItemDependencyMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedblocker {
+		edges = append(edges, backlogitemdependency.EdgeBlocker)
+	}
+	if m.clearedblocked {
+		edges = append(edges, backlogitemdependency.EdgeBlocked)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *BacklogItemDependencyMutation) EdgeCleared(name string) bool {
+	switch name {
+	case backlogitemdependency.EdgeBlocker:
+		return m.clearedblocker
+	case backlogitemdependency.EdgeBlocked:
+		return m.clearedblocked
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *BacklogItemDependencyMutation) ClearEdge(name string) error {
+	switch name {
+	case backlogitemdependency.EdgeBlocker:
+		m.ClearBlocker()
+		return nil
+	case backlogitemdependency.EdgeBlocked:
+		m.ClearBlocked()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogItemDependency unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *BacklogItemDependencyMutation) ResetEdge(name string) error {
+	switch name {
+	case backlogitemdependency.EdgeBlocker:
+		m.ResetBlocker()
+		return nil
+	case backlogitemdependency.EdgeBlocked:
+		m.ResetBlocked()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogItemDependency edge %s", name)
 }
 
 // BacklogProgressNoteMutation represents an operation that mutates the BacklogProgressNote nodes in the graph.

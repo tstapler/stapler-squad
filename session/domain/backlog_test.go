@@ -27,13 +27,13 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain15Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain16Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch.
-func TestAllStuckReasons_should_contain15Entries_When_Enumerated(t *testing.T) {
-	if len(AllStuckReasons) != 15 {
-		t.Errorf("len(AllStuckReasons) = %d, want 15", len(AllStuckReasons))
+func TestAllStuckReasons_should_contain16Entries_When_Enumerated(t *testing.T) {
+	if len(AllStuckReasons) != 16 {
+		t.Errorf("len(AllStuckReasons) = %d, want 16", len(AllStuckReasons))
 	}
 }
 

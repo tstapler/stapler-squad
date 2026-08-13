@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -216,6 +217,16 @@ func init() {
 	backlogitemDescID := backlogitemFields[0].Descriptor()
 	// backlogitem.DefaultID holds the default value on creation for the id field.
 	backlogitem.DefaultID = backlogitemDescID.Default.(func() uuid.UUID)
+	backlogitemdependencyFields := schema.BacklogItemDependency{}.Fields()
+	_ = backlogitemdependencyFields
+	// backlogitemdependencyDescCreatedAt is the schema descriptor for created_at field.
+	backlogitemdependencyDescCreatedAt := backlogitemdependencyFields[3].Descriptor()
+	// backlogitemdependency.DefaultCreatedAt holds the default value on creation for the created_at field.
+	backlogitemdependency.DefaultCreatedAt = backlogitemdependencyDescCreatedAt.Default.(func() time.Time)
+	// backlogitemdependencyDescID is the schema descriptor for id field.
+	backlogitemdependencyDescID := backlogitemdependencyFields[0].Descriptor()
+	// backlogitemdependency.DefaultID holds the default value on creation for the id field.
+	backlogitemdependency.DefaultID = backlogitemdependencyDescID.Default.(func() uuid.UUID)
 	backlogprogressnoteFields := schema.BacklogProgressNote{}.Fields()
 	_ = backlogprogressnoteFields
 	// backlogprogressnoteDescCriterionIndex is the schema descriptor for criterion_index field.

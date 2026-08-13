@@ -413,6 +413,18 @@ message DeleteBacklogItemRequest {
 
 message DeleteBacklogItemResponse {}
 
+message AddBacklogItemDependencyRequest {
+  // Item that must reach a resolved status (done or archived) before
+  // blocked_item_id becomes eligible for dequeue/start.
+  string blocker_item_id = 1;
+  // Dependent item, gated until blocker_item_id resolves.
+  string blocked_item_id = 2;
+}
+
+message AddBacklogItemDependencyResponse {
+  BacklogItem item = 1;
+}
+
 message TransitionBacklogItemStatusRequest {
   string item_id = 1;
   string target_status = 2;
@@ -942,6 +954,13 @@ service BacklogService {
   // already exhausted its attempt budget — use ResetStuckRemediation first.
   rpc TriggerRemediationNow(TriggerRemediationNowRequest) returns (TriggerRemediationNowResponse) {}
 
+  // AddBacklogItemDependency marks blocked_item_id as depending on
+  // (blocked by) blocker_item_id. The dependent item is excluded from
+  // DequeueNextQueuedItems until the blocker resolves (reaches done or
+  // archived status, or is deleted). Rejects self-dependency and any edge
+  // that would close a dependency cycle.
+  rpc AddBacklogItemDependency(AddBacklogItemDependencyRequest) returns (AddBacklogItemDependencyResponse) {}
+
   // WatchBacklogItems streams real-time backlog item events (status changes,
   // verdicts, session attachments, updates, archival, removal).
   // Server-streaming RPC for live backlog updates without polling.
@@ -1114,6 +1133,11 @@ enum StuckReason {
   // pass/fail signal. Purely informational — never gates the reopen/park
   // decision; present as a hint to verify, not a confident verdict.
   STUCK_REASON_LIKELY_FLAKY = 15;
+  // STUCK_REASON_BLOCKED_BY_DEPENDENCY: see domain.StuckReasonBlockedByDependency
+  // (session/domain/backlog.go) — DequeueNextQueuedItems' dependency gate
+  // skipped this item because at least one of its blocker items has not yet
+  // reached a resolved status (done or archived).
+  STUCK_REASON_BLOCKED_BY_DEPENDENCY = 16;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

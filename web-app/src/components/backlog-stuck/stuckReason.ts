@@ -29,6 +29,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.PR_NEEDS_FIX]: "PR needs attention",
   [StuckReason.RESPAWN_BLOCKED_ACTIVE]: "Auto-respawn skipped — session active",
   [StuckReason.LIKELY_FLAKY]: "Possibly flaky — verify before assuming",
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: "Waiting on blocker item",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -49,6 +50,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.PR_NEEDS_FIX]: "🟡",
   [StuckReason.RESPAWN_BLOCKED_ACTIVE]: "🟡",
   [StuckReason.LIKELY_FLAKY]: "🟡",
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: "🟠",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -69,6 +71,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.PR_NEEDS_FIX]: styles.chipPrNeedsFix,
   [StuckReason.RESPAWN_BLOCKED_ACTIVE]: styles.chipRespawnBlockedActive,
   [StuckReason.LIKELY_FLAKY]: styles.chipLikelyFlaky,
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: styles.chipBlockedByDependency,
 };
 
 /** Derived (not stored) reason label/class for a stale GitHub-status check (design/ux.md Surface 8). */

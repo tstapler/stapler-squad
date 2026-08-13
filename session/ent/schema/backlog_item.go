@@ -168,6 +168,10 @@ func (BacklogItem) Edges() []ent.Edge {
 		edge.From("source", ItemSource.Type).
 			Ref("backlog_items").
 			Unique(),
+		edge.To("blocking_dependencies", BacklogItemDependency.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("blocked_by_dependencies", BacklogItemDependency.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }
 

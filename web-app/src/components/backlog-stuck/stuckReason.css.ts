@@ -149,6 +149,15 @@ export const chipLikelyFlaky = style([
   },
 ]);
 
+export const chipBlockedByDependency = style([
+  chip,
+  {
+    background: vars.color.warningBg,
+    color: vars.color.warningText,
+    border: `1px solid ${vars.color.warning}`,
+  },
+]);
+
 export const chipUnknown = style([
   chip,
   {

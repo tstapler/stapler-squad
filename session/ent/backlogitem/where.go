@@ -2354,6 +2354,52 @@ func HasSourceWith(preds ...predicate.ItemSource) predicate.BacklogItem {
 	})
 }
 
+// HasBlockingDependencies applies the HasEdge predicate on the "blocking_dependencies" edge.
+func HasBlockingDependencies() predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, BlockingDependenciesTable, BlockingDependenciesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasBlockingDependenciesWith applies the HasEdge predicate on the "blocking_dependencies" edge with a given conditions (other predicates).
+func HasBlockingDependenciesWith(preds ...predicate.BacklogItemDependency) predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := newBlockingDependenciesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasBlockedByDependencies applies the HasEdge predicate on the "blocked_by_dependencies" edge.
+func HasBlockedByDependencies() predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, BlockedByDependenciesTable, BlockedByDependenciesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasBlockedByDependenciesWith applies the HasEdge predicate on the "blocked_by_dependencies" edge with a given conditions (other predicates).
+func HasBlockedByDependenciesWith(preds ...predicate.BacklogItemDependency) predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := newBlockedByDependenciesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.BacklogItem) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.AndPredicates(predicates...))

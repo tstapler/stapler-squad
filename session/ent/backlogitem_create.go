@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -668,6 +669,36 @@ func (_c *BacklogItemCreate) SetSource(v *ItemSource) *BacklogItemCreate {
 	return _c.SetSourceID(v.ID)
 }
 
+// AddBlockingDependencyIDs adds the "blocking_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (_c *BacklogItemCreate) AddBlockingDependencyIDs(ids ...uuid.UUID) *BacklogItemCreate {
+	_c.mutation.AddBlockingDependencyIDs(ids...)
+	return _c
+}
+
+// AddBlockingDependencies adds the "blocking_dependencies" edges to the BacklogItemDependency entity.
+func (_c *BacklogItemCreate) AddBlockingDependencies(v ...*BacklogItemDependency) *BacklogItemCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddBlockingDependencyIDs(ids...)
+}
+
+// AddBlockedByDependencyIDs adds the "blocked_by_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (_c *BacklogItemCreate) AddBlockedByDependencyIDs(ids ...uuid.UUID) *BacklogItemCreate {
+	_c.mutation.AddBlockedByDependencyIDs(ids...)
+	return _c
+}
+
+// AddBlockedByDependencies adds the "blocked_by_dependencies" edges to the BacklogItemDependency entity.
+func (_c *BacklogItemCreate) AddBlockedByDependencies(v ...*BacklogItemDependency) *BacklogItemCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddBlockedByDependencyIDs(ids...)
+}
+
 // Mutation returns the BacklogItemMutation object of the builder.
 func (_c *BacklogItemCreate) Mutation() *BacklogItemMutation {
 	return _c.mutation
@@ -1111,6 +1142,38 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.item_source_backlog_items = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.BlockingDependenciesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockingDependenciesTable,
+			Columns: []string{backlogitem.BlockingDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.BlockedByDependenciesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockedByDependenciesTable,
+			Columns: []string{backlogitem.BlockedByDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec

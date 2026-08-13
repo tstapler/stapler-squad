@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -100,6 +101,7 @@ func checkColumn(t, c string) error {
 			analyticsevent.Table:          analyticsevent.ValidColumn,
 			approvalrule.Table:            approvalrule.ValidColumn,
 			backlogitem.Table:             backlogitem.ValidColumn,
+			backlogitemdependency.Table:   backlogitemdependency.ValidColumn,
 			backlogprogressnote.Table:     backlogprogressnote.ValidColumn,
 			backlogstatusevent.Table:      backlogstatusevent.ValidColumn,
 			backlogstuckstate.Table:       backlogstuckstate.ValidColumn,

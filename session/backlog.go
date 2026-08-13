@@ -205,6 +205,7 @@ var (
 	ErrPlanArtifactsRequired = domain.ErrPlanArtifactsRequired
 	ErrVerdictRequired       = domain.ErrVerdictRequired
 	ErrCodeNotOnMain         = domain.ErrCodeNotOnMain
+	ErrUnresolvedBlockers    = domain.ErrUnresolvedBlockers
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
