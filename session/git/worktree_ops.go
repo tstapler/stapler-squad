@@ -31,8 +31,16 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 	}
 }
 
-// Setup creates a new worktree for the session
+// Setup creates a new worktree for the session. The entire branch-check +
+// add/reuse dispatch is serialized per-repoPath (across goroutines and OS
+// processes) because git worktree add mutates shared .git/worktrees/
+// administrative metadata that is not safe under concurrent access -- see
+// withRepoWorktreeLock.
 func (g *GitWorktree) Setup() error {
+	return withRepoWorktreeLock(g.repoPath, g.setupLocked)
+}
+
+func (g *GitWorktree) setupLocked() error {
 	// Ensure worktrees directory exists early (can be done in parallel with branch check)
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
@@ -329,8 +337,14 @@ func (g *GitWorktree) Cleanup() error {
 	return g.Prune()
 }
 
-// Remove removes the worktree but keeps the branch
+// Remove removes the worktree but keeps the branch. Serialized per-repoPath like Setup —
+// it prunes and removes shared .git/worktrees/ administrative metadata, the same resource
+// Setup's branch-check + add dispatch touches.
 func (g *GitWorktree) Remove() error {
+	return withRepoWorktreeLock(g.repoPath, g.removeLocked)
+}
+
+func (g *GitWorktree) removeLocked() error {
 	log.Info("starting worktree removal", "path", g.worktreePath)
 
 	// First, prune any stale worktree references
@@ -498,12 +512,15 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 	return nil
 }
 
-// Prune removes all working tree administrative files and directories
+// Prune removes all working tree administrative files and directories. Serialized
+// per-repoPath like Setup/Remove — it rewrites the same shared .git/worktrees/ metadata.
 func (g *GitWorktree) Prune() error {
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
-		return fmt.Errorf("failed to prune worktrees: %w", err)
-	}
-	return nil
+	return withRepoWorktreeLock(g.repoPath, func() error {
+		if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
+			return fmt.Errorf("failed to prune worktrees: %w", err)
+		}
+		return nil
+	})
 }
 
 // CleanupWorktrees removes all worktree directories under the configured worktrees dir.
