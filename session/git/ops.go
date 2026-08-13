@@ -468,6 +468,17 @@ func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
 	}
 	digests := make([]fileDigest, 0, len(patch.FilePatches()))
 	for _, fp := range patch.FilePatches() {
+		chunks := fp.Chunks()
+		if len(chunks) == 0 {
+			// Binary file (or submodule ref update) — no line-level diff to
+			// report; see FileStatsBetween's doc comment. Also covers symlink
+			// changes: go-git's Files() returns (nil, nil) for non-regular-file
+			// tree entries regardless of add/modify/delete, which would
+			// otherwise panic below on the assumption that at most one side is
+			// nil.
+			continue
+		}
+
 		from, to := fp.Files()
 		path := ""
 		status := ""
@@ -485,7 +496,7 @@ func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
 		var b strings.Builder
 		b.WriteString(status)
 		b.WriteByte('\n')
-		for _, chunk := range fp.Chunks() {
+		for _, chunk := range chunks {
 			fmt.Fprintf(&b, "%d:%s\n", chunk.Type(), chunk.Content())
 		}
 		digests = append(digests, fileDigest{path: path, content: b.String()})
