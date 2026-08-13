@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -106,6 +107,34 @@ func TestEntRepository_Delete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify deletion
+	_, err = repo.Get(ctx, session.Title)
+	assert.Error(t, err)
+}
+
+func TestEntRepository_Delete_WithShells(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("delete-with-shells-test")
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	_, err = repo.CreateShell(ctx, session.Title, ShellData{
+		ID:              uuid.NewString(),
+		Name:            "shell-1",
+		Command:         "bash",
+		TmuxSessionName: "delete-with-shells-test-shell-1",
+		OrderIndex:      0,
+	})
+	require.NoError(t, err)
+
+	// Delete session — must not fail with a FOREIGN KEY constraint error even
+	// though a Shell row (Shell.session edge is Required()) still references it.
+	err = repo.Delete(ctx, session.Title)
+	require.NoError(t, err)
+
 	_, err = repo.Get(ctx, session.Title)
 	assert.Error(t, err)
 }
