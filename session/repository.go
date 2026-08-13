@@ -346,6 +346,7 @@ type ItemSessionSummary struct {
 	StartedAt             *time.Time
 	EndedAt               *time.Time
 	EndReason             string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
+	FailureCapturePath    string // absolute path to a durable raw-output capture; see ItemSession.failure_capture_path schema comment
 	LastCommitAt          *time.Time
 	LastFileTouchAt       *time.Time
 	LastProgressAt        *time.Time

@@ -89,6 +89,20 @@ export interface LinkedSession {
    * current PipelineMode.contentHash to detect content drift.
    */
   pipelineModeSnapshotHash?: string;
+  /**
+   * Set alongside endedAt for a headless (triage/review) call: a coarse
+   * failure bucket ("shutdown", "timeout", "process_error", "claude_not_found",
+   * "other"), or "" for a successful end. See classifyHeadlessCallError
+   * (server/services/backlog_service_triage.go) for the bucketing logic.
+   */
+  endReason?: string;
+  /**
+   * Absolute (server-local) path to a durable capture of the raw LLM output
+   * for a headless triage/review call that errored or failed to parse — see
+   * session.WriteHeadlessFailureCapture. "" when the call succeeded and
+   * parsed cleanly, or nothing was captured.
+   */
+  failureCapturePath?: string;
 }
 
 export interface BacklogItem {
@@ -332,6 +346,8 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     worktreePath: s.worktreePath || undefined,
     pipelineModeSnapshot: s.pipelineModeSnapshot ?? "",
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
+    endReason: s.endReason || undefined,
+    failureCapturePath: s.failureCapturePath || undefined,
   };
 
   // Map review verdict if present

@@ -119,6 +119,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		StartedAt:                is.StartedAt,
 		EndedAt:                  is.EndedAt,
 		EndReason:                is.EndReason,
+		FailureCapturePath:       is.FailureCapturePath,
 		LastCommitAt:             is.LastCommitAt,
 		LastFileTouchAt:          is.LastFileTouchAt,
 		LastProgressAt:           is.LastProgressAt,

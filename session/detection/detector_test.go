@@ -142,6 +142,61 @@ func TestStatusDetector_DetectWaitingForAgent_NegativeCases(t *testing.T) {
 	}
 }
 
+// TestStatusDetector_DetectCompacting verifies that the compaction-in-progress fixture
+// classifies as StatusCompacting.
+//
+// NOTE: fixture is INFERRED, not verified against a live Claude Code capture — see
+// project_plans/context-compaction-detection/implementation/plan.md Story 1.1.1. A
+// follow-up backlog item tracks live-capture verification; a temporary canary log
+// (detector.go's compactingCanary) flags any unmatched "compact" line in the interim.
+func TestStatusDetector_DetectCompacting(t *testing.T) {
+	sd := NewStatusDetector()
+
+	data, err := os.ReadFile(filepath.Join("testdata", "claude_compacting.txt"))
+	if err != nil {
+		t.Fatalf("failed to read fixture: %v", err)
+	}
+
+	status, desc := sd.DetectWithContext(data)
+	if status != StatusCompacting {
+		t.Errorf("DetectWithContext(claude_compacting.txt) status = %v, want StatusCompacting", status)
+	}
+	wantDesc := "Claude is compacting conversation history to free up context space"
+	if desc != wantDesc {
+		t.Errorf("DetectWithContext(claude_compacting.txt) desc = %q, want %q", desc, wantDesc)
+	}
+}
+
+// TestStatusDetector_DetectActive_NotCompacting_ApproachingThresholdFixtures is the AC7
+// negative-case regression guard: the three pre-existing "N% until auto-compact"
+// approaching-threshold fixtures must keep returning their pre-change expected status
+// and must NOT be classified as StatusCompacting, which is reserved for the distinct
+// in-progress compaction line.
+func TestStatusDetector_DetectActive_NotCompacting_ApproachingThresholdFixtures(t *testing.T) {
+	sd := NewStatusDetector()
+
+	fixtures := []string{
+		"claude_active.txt",
+		"claude_thinking_verb.txt",
+		"claude_asterism_active.txt",
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("testdata", fixture))
+			if err != nil {
+				t.Fatalf("failed to read fixture: %v", err)
+			}
+			status := sd.Detect(data)
+			if status != StatusExecuting {
+				t.Errorf("Detect(%s) = %v, want StatusExecuting (unchanged)", fixture, status)
+			}
+			if status == StatusCompacting {
+				t.Errorf("Detect(%s) = StatusCompacting; the approaching-threshold indicator must not match the compacting pattern", fixture)
+			}
+		})
+	}
+}
+
 func TestStatusDetector_DetectFromLines_WaitingForAgent(t *testing.T) {
 	sd := NewStatusDetector()
 	// Stale success in scrollback, current waiting line at top — waiting wins
@@ -555,6 +610,17 @@ func TestStatusDetector_GetPatternNames(t *testing.T) {
 	}
 	if len(waitingNames) > 0 && waitingNames[0] != "waiting_for_background_agent" {
 		t.Errorf("GetPatternNames(StatusWaitingForAgent)[0] = %q, want %q", waitingNames[0], "waiting_for_background_agent")
+	}
+
+	compactingNames := sd.GetPatternNames(StatusCompacting)
+	if len(compactingNames) != 1 || compactingNames[0] != "compacting_conversation" {
+		t.Errorf("GetPatternNames(StatusCompacting) = %v, want [\"compacting_conversation\"]", compactingNames)
+	}
+}
+
+func TestStatusCompacting_StatusString_should_returnCompacting(t *testing.T) {
+	if got := StatusCompacting.String(); got != "Compacting" {
+		t.Errorf("StatusCompacting.String() = %q, want %q", got, "Compacting")
 	}
 }
 

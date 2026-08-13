@@ -1184,6 +1184,17 @@ func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id strin
 	return er.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
 }
 
+// UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
+// capture file for a headless triage/review call that errored or produced
+// unparseable output. See EntRepository.UpdateItemSessionFailureCapture.
+func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string, path string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionFailureCapture(ctx, id, path)
+}
+
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 // Returns ErrNotFound if no matching record exists.
 func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {

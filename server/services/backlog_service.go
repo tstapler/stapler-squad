@@ -501,6 +501,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		EndReason:                is.EndReason,
+		FailureCapturePath:       is.FailureCapturePath,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)

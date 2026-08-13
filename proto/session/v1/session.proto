@@ -247,6 +247,10 @@ service SessionService {
   // GetSessionDefaults returns the full session defaults configuration (global, profiles, directory rules).
   rpc GetSessionDefaults(GetSessionDefaultsRequest) returns (GetSessionDefaultsResponse) {}
 
+  // GetLauncherPresets returns the hand-authored launcher presets from
+  // ~/.stapler-squad/launcher-presets.json, freshly read and validated on every call.
+  rpc GetLauncherPresets(GetLauncherPresetsRequest) returns (GetLauncherPresetsResponse) {}
+
   // ResolveDefaults merges all default layers for a given working directory and optional profile.
   // Returns the resolved values plus source metadata for per-field badges in the UI.
   rpc ResolveDefaults(ResolveDefaultsRequest) returns (ResolveDefaultsResponse) {}
@@ -616,6 +620,12 @@ message CreateSessionRequest {
   // Defaults to false; never implicitly set true. Rejected server-side if the
   // resolved program isn't a supported agent (see AutoApproveSupported).
   bool auto_approve = 29;
+
+  // extra_args are additional positional argv elements appended verbatim (each independently
+  // shell-quoted, never whitespace-split) after any defaults-resolved cli_flags. Populated by
+  // a selected launcher preset's argv[1:]; safe for elements containing spaces or shell
+  // metacharacters (e.g. a remote-exec fragment like "cd ~/repo && exec claude").
+  repeated string extra_args = 30;
 }
 
 message CreateSessionResponse {
@@ -1986,6 +1996,28 @@ message DeleteAliasRequest {
 }
 
 message DeleteAliasResponse {}
+
+// LauncherPresetProto represents one hand-authored launcher preset loaded from
+// ~/.stapler-squad/launcher-presets.json.
+message LauncherPresetProto {
+  string id = 1;
+  string label = 2;
+  repeated string argv = 3;
+  // program is presentation-only (UI label/PATH-check hint); the backend never uses it —
+  // the actual launched program is always argv[0].
+  string program = 4;
+  string default_path = 5;
+}
+
+message GetLauncherPresetsRequest {}
+
+message GetLauncherPresetsResponse {
+  repeated LauncherPresetProto presets = 1;
+  // load_error is non-empty when the presets file exists but failed validation (malformed
+  // JSON, duplicate id, empty argv, unsupported version). presets is empty in that case.
+  // Empty load_error + empty presets means "no file / no presets configured", not an error.
+  string load_error = 2;
+}
 
 message ListWorktreesRequest {
   // Absolute path to the git repository root. Supports ~ expansion.

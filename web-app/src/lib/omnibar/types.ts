@@ -19,6 +19,8 @@ export enum InputType {
   Alias = "alias",
   AliasNotFound = "alias_not_found",
   AliasBrowse = "alias_browse",
+  Preset = "preset",
+  PresetNotFound = "preset_not_found",
 }
 
 export interface InputTypeInfo {
@@ -102,6 +104,16 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
     label: "Alias Browse",
     icon: "@",
     description: "Browse or filter aliases",
+  },
+  [InputType.Preset]: {
+    label: "Preset",
+    icon: "🚀",
+    description: "Launcher preset",
+  },
+  [InputType.PresetNotFound]: {
+    label: "Preset Not Found",
+    icon: "🚀",
+    description: "No preset with that id",
   },
 };
 
