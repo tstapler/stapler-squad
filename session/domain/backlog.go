@@ -446,11 +446,12 @@ func ValidTransitions() map[BacklogStatus]map[BacklogStatus]bool {
 
 // Sentinel errors for transition guards.
 var (
-	ErrACRequired            = errors.New("acceptance criteria required before marking ready")
-	ErrPlanRequired          = errors.New("plan must be approved or skip_planning must be true before spawning work session")
-	ErrPlanArtifactsRequired = errors.New("plan artifacts path is required when planning is not skipped")
-	ErrVerdictRequired       = errors.New("PASS verdict or manual override required before marking done")
-	ErrCodeNotOnMain         = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
+	ErrACRequired                   = errors.New("acceptance criteria required before marking ready")
+	ErrPlanRequired                 = errors.New("plan must be approved or skip_planning must be true before spawning work session")
+	ErrPlanArtifactsRequired        = errors.New("plan artifacts path is required when planning is not skipped")
+	ErrVerdictRequired              = errors.New("PASS verdict or manual override required before marking done")
+	ErrCodeNotOnMain                = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
+	ErrVerdictClearRequiredForReady = errors.New("item has a recorded PASS verdict; provide override_reason to send it back to ready anyway")
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
@@ -500,6 +501,21 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		criteria, err := ParseAcCriteria(item.AcCriteria)
 		if err != nil || len(criteria) == 0 {
 			return ErrACRequired
+		}
+		return nil
+
+	case (from == BacklogStatusReview || from == BacklogStatusPRPending) && to == BacklogStatusReady:
+		// Backward "re-spawn without re-triaging" edge. Without this guard, an
+		// item that already has a recorded PASS verdict can be sent back to
+		// ready and get permanently stuck: report_pr_created only accepts
+		// review/pr_pending, so the item can never complete that RPC again
+		// without a status transition first. Scoped to review/pr_pending only —
+		// must not affect the unrelated done->ready backward edge.
+		if item.OverrideReason != "" {
+			return nil
+		}
+		if item.OverallOutcome == ReviewOutcomePass {
+			return ErrVerdictClearRequiredForReady
 		}
 		return nil
 

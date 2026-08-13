@@ -627,7 +627,8 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}
 
 	// Load the most recent ReviewVerdict for this item so TransitionGuard can
-	// evaluate the review→done guard (ErrVerdictRequired).
+	// evaluate the review→done guard (ErrVerdictRequired) and the
+	// review/pr_pending→ready guard (ErrVerdictClearRequiredForReady).
 	overallOutcome, verdictErr := s.storage.GetMostRecentReviewVerdictForItem(ctx, req.Msg.ItemId)
 	if verdictErr != nil {
 		log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to load review verdict for item %s: %v", req.Msg.ItemId, verdictErr)
@@ -662,7 +663,8 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 			errors.Is(guardErr, session.ErrPlanRequired) ||
 			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
 			errors.Is(guardErr, session.ErrVerdictRequired) ||
-			errors.Is(guardErr, session.ErrCodeNotOnMain) {
+			errors.Is(guardErr, session.ErrCodeNotOnMain) ||
+			errors.Is(guardErr, session.ErrVerdictClearRequiredForReady) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
 		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, guardErr)

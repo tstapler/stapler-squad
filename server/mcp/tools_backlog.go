@@ -108,6 +108,16 @@ var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
 	session.BacklogStatusPRPending:  true,
 }
 
+// reportPRCreatedAllowedSourceStatuses is the whitelist of source statuses
+// report_pr_created may act on. Consulted before any PR verification or
+// storage write so a structurally ineligible status (e.g. ready, idea, done)
+// gets a specific rejection instead of falling through to the generic
+// CAS-race message.
+var reportPRCreatedAllowedSourceStatuses = map[session.BacklogStatus]bool{
+	session.BacklogStatusReview:    true,
+	session.BacklogStatusPRPending: true,
+}
+
 // validateSelfResolveSource is the single chokepoint both request_review and
 // report_duplicate call to obtain a validated source status. Downstream code
 // must use only its returned session.BacklogStatus for a transition's
@@ -1213,6 +1223,18 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
+	}
+
+	// AC6: reject a structurally ineligible status with a message naming the
+	// item's actual status, before any PR verification or storage write is
+	// attempted — without this, an item in e.g. ready/idea/done would fall
+	// through to SetBacklogItemPRAndTransition's ErrPreconditionFailed and
+	// surface as the generic "item state changed since your last read..."
+	// CAS-race message below, indistinguishable from a genuine concurrent
+	// write race (AC7's message, which this check must not alter).
+	if !reportPRCreatedAllowedSourceStatuses[session.BacklogStatus(item.Status)] {
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"item %s is at status %q — report_pr_created is only allowed from status 'review' or 'pr_pending'", itemID, item.Status), ""), nil
 	}
 
 	// Idempotency: already pr_pending with this exact PR number is a no-op success.
