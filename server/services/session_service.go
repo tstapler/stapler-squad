@@ -2036,27 +2036,54 @@ func (s *SessionService) UpdateSession(
 		updatedFields = append(updatedFields, "auto_approve")
 	}
 
-	// Handle steering: inject a message into an active autonomous session.
+	// Handle steering: inject a message into an active session. Autonomous
+	// sessions keep the existing ClaudeController command-queue path (ADR-001);
+	// non-autonomous, Instance-backed sessions fall back to the same PTY send
+	// primitive the MCP steer_session tool already uses (tools_terminal.go's
+	// SendKeys fallback branch) so browser-originated steering reaches ordinary
+	// backlog work/review sessions too, not just autonomous ones.
 	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
-		if !instance.AutonomousMode {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("steer_message can only be sent to sessions with autonomous_mode enabled"))
+		if len(*req.Msg.SteerMessage) > session.MaxSteerMessageLength {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("steer_message exceeds maximum length of %d bytes", session.MaxSteerMessageLength))
 		}
-		controller := instance.GetController()
-		if controller != nil {
-			if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
-				log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
-			} else {
-				log.Info("[UpdateSession] steering message sent", "session", instance.Title)
-				s.eventBus.Publish(events.NewNotificationEvent(
-					instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
-					int32(10), // NotificationType_INFO
-					int32(2),  // NotificationPriority_MEDIUM
-					"Steering input sent",
-					fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
-					nil,
-				))
+		if instance.AutonomousMode {
+			// Unchanged: autonomous sessions keep the ClaudeController command-queue path.
+			controller := instance.GetController()
+			if controller != nil {
+				if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
+					log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
+				} else {
+					s.notifySteerSent(instance, *req.Msg.SteerMessage)
+				}
 			}
+		} else {
+			// New: non-autonomous, Instance-backed sessions get the same PTY send
+			// primitive the MCP steer_session tool already falls back to. Unlike the
+			// autonomous branch, a send failure IS returned to the caller so the UI
+			// can surface it (research/ux.md's Gap 2 error-state table).
+			//
+			// SendKeys is bounded with a timeout, mirroring terminal_service.go's
+			// WriteToSession — a browser click against a wedged/dead session must not
+			// hang this RPC handler goroutine forever.
+			text := session.BuildSubmittableInput(*req.Msg.SteerMessage, true)
+			errCh := make(chan error, 1)
+			go func() { errCh <- instance.SendKeys(text) }()
+
+			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			select {
+			case err := <-errCh:
+				if err != nil {
+					return nil, connect.NewError(connect.CodeFailedPrecondition,
+						fmt.Errorf("failed to steer session %q: %w", instance.Title, err))
+				}
+			case <-timeoutCtx.Done():
+				return nil, connect.NewError(connect.CodeDeadlineExceeded,
+					fmt.Errorf("timed out steering session %q", instance.Title))
+			}
+			s.notifySteerSent(instance, *req.Msg.SteerMessage)
 		}
 	}
 
@@ -2116,6 +2143,21 @@ func (s *SessionService) UpdateSession(
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
+}
+
+// notifySteerSent logs and publishes the "steering input sent" notification
+// shared by both the autonomous and non-autonomous steer branches in
+// UpdateSession.
+func (s *SessionService) notifySteerSent(instance *session.Instance, steerMessage string) {
+	log.Info("[UpdateSession] steering message sent", "session", instance.Title)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
+		int32(10), // NotificationType_INFO
+		int32(2),  // NotificationPriority_MEDIUM
+		"Steering input sent",
+		fmt.Sprintf("%s: %s", instance.Title, steerMessage),
+		nil,
+	))
 }
 
 // HibernateSession checkpoints the session state, kills the AI process, and

@@ -260,6 +260,34 @@ func (_c *BacklogItemCreate) SetNillablePlanArtifactsPath(v *string) *BacklogIte
 	return _c
 }
 
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (_c *BacklogItemCreate) SetPlanRejectionReason(v string) *BacklogItemCreate {
+	_c.mutation.SetPlanRejectionReason(v)
+	return _c
+}
+
+// SetNillablePlanRejectionReason sets the "plan_rejection_reason" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillablePlanRejectionReason(v *string) *BacklogItemCreate {
+	if v != nil {
+		_c.SetPlanRejectionReason(*v)
+	}
+	return _c
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (_c *BacklogItemCreate) SetPlanRejectedAt(v time.Time) *BacklogItemCreate {
+	_c.mutation.SetPlanRejectedAt(v)
+	return _c
+}
+
+// SetNillablePlanRejectedAt sets the "plan_rejected_at" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillablePlanRejectedAt(v *time.Time) *BacklogItemCreate {
+	if v != nil {
+		_c.SetPlanRejectedAt(*v)
+	}
+	return _c
+}
+
 // SetUserModifiedFields sets the "user_modified_fields" field.
 func (_c *BacklogItemCreate) SetUserModifiedFields(v string) *BacklogItemCreate {
 	_c.mutation.SetUserModifiedFields(v)
@@ -900,6 +928,14 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 		_spec.SetField(backlogitem.FieldPlanArtifactsPath, field.TypeString, value)
 		_node.PlanArtifactsPath = value
 	}
+	if value, ok := _c.mutation.PlanRejectionReason(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectionReason, field.TypeString, value)
+		_node.PlanRejectionReason = value
+	}
+	if value, ok := _c.mutation.PlanRejectedAt(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectedAt, field.TypeTime, value)
+		_node.PlanRejectedAt = &value
+	}
 	if value, ok := _c.mutation.UserModifiedFields(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedFields, field.TypeString, value)
 		_node.UserModifiedFields = value
@@ -1372,6 +1408,42 @@ func (u *BacklogItemUpsert) UpdatePlanArtifactsPath() *BacklogItemUpsert {
 // ClearPlanArtifactsPath clears the value of the "plan_artifacts_path" field.
 func (u *BacklogItemUpsert) ClearPlanArtifactsPath() *BacklogItemUpsert {
 	u.SetNull(backlogitem.FieldPlanArtifactsPath)
+	return u
+}
+
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (u *BacklogItemUpsert) SetPlanRejectionReason(v string) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldPlanRejectionReason, v)
+	return u
+}
+
+// UpdatePlanRejectionReason sets the "plan_rejection_reason" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdatePlanRejectionReason() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldPlanRejectionReason)
+	return u
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (u *BacklogItemUpsert) ClearPlanRejectionReason() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldPlanRejectionReason)
+	return u
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (u *BacklogItemUpsert) SetPlanRejectedAt(v time.Time) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldPlanRejectedAt, v)
+	return u
+}
+
+// UpdatePlanRejectedAt sets the "plan_rejected_at" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdatePlanRejectedAt() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldPlanRejectedAt)
+	return u
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (u *BacklogItemUpsert) ClearPlanRejectedAt() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldPlanRejectedAt)
 	return u
 }
 
@@ -2070,6 +2142,48 @@ func (u *BacklogItemUpsertOne) UpdatePlanArtifactsPath() *BacklogItemUpsertOne {
 func (u *BacklogItemUpsertOne) ClearPlanArtifactsPath() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPlanArtifactsPath()
+	})
+}
+
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (u *BacklogItemUpsertOne) SetPlanRejectionReason(v string) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPlanRejectionReason(v)
+	})
+}
+
+// UpdatePlanRejectionReason sets the "plan_rejection_reason" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdatePlanRejectionReason() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePlanRejectionReason()
+	})
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (u *BacklogItemUpsertOne) ClearPlanRejectionReason() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPlanRejectionReason()
+	})
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (u *BacklogItemUpsertOne) SetPlanRejectedAt(v time.Time) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPlanRejectedAt(v)
+	})
+}
+
+// UpdatePlanRejectedAt sets the "plan_rejected_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdatePlanRejectedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePlanRejectedAt()
+	})
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (u *BacklogItemUpsertOne) ClearPlanRejectedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPlanRejectedAt()
 	})
 }
 
@@ -2995,6 +3109,48 @@ func (u *BacklogItemUpsertBulk) UpdatePlanArtifactsPath() *BacklogItemUpsertBulk
 func (u *BacklogItemUpsertBulk) ClearPlanArtifactsPath() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPlanArtifactsPath()
+	})
+}
+
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (u *BacklogItemUpsertBulk) SetPlanRejectionReason(v string) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPlanRejectionReason(v)
+	})
+}
+
+// UpdatePlanRejectionReason sets the "plan_rejection_reason" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdatePlanRejectionReason() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePlanRejectionReason()
+	})
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (u *BacklogItemUpsertBulk) ClearPlanRejectionReason() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPlanRejectionReason()
+	})
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (u *BacklogItemUpsertBulk) SetPlanRejectedAt(v time.Time) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPlanRejectedAt(v)
+	})
+}
+
+// UpdatePlanRejectedAt sets the "plan_rejected_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdatePlanRejectedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePlanRejectedAt()
+	})
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (u *BacklogItemUpsertBulk) ClearPlanRejectedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPlanRejectedAt()
 	})
 }
 

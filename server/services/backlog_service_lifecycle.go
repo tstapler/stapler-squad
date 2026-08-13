@@ -724,9 +724,12 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	if to == session.BacklogStatusIdea || to == session.BacklogStatusRefining {
 		planApproved := false
 		planArtifactsPath := ""
+		rejectionReason := ""
 		if upd, resetErr := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, session.BacklogItemUpdate{
-			PlanApproved:      &planApproved,
-			PlanArtifactsPath: &planArtifactsPath,
+			PlanApproved:        &planApproved,
+			PlanArtifactsPath:   &planArtifactsPath,
+			PlanRejectionReason: &rejectionReason,
+			ClearPlanRejectedAt: true,
 		}, nil); resetErr != nil {
 			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to reset planning state for item %s: %v", req.Msg.ItemId, resetErr)
 		} else {
@@ -770,9 +773,12 @@ func (s *BacklogService) ApprovePlan(
 
 	now := time.Now()
 	approved := true
+	clearedReason := ""
 	update := session.BacklogItemUpdate{
-		PlanApproved:   &approved,
-		PlanApprovedAt: &now,
+		PlanApproved:        &approved,
+		PlanApprovedAt:      &now,
+		PlanRejectionReason: &clearedReason,
+		ClearPlanRejectedAt: true,
 	}
 
 	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, nil)
@@ -781,6 +787,69 @@ func (s *BacklogService) ApprovePlan(
 	}
 
 	return connect.NewResponse(&sessionv1.ApprovePlanResponse{
+		Item: backlogItemToProto(updated, s.buildCostLookup()),
+	}), nil
+}
+
+// --- RejectPlan ---
+
+// maxRejectReasonLength caps the free-text rejection reason. No RPC in this
+// server currently enforces a request-size cap (see grep for WithReadMaxBytes
+// across server/ — a known, pre-existing, repo-wide gap), but this is a new
+// mutating write path, so it gets an explicit cap rather than waiting on that
+// broader fix. Matches session.MaxNoteLength/MaxSteerMessageLength's value; a
+// local constant is used here since reject-reason isn't the same domain
+// concept as either of those and doesn't warrant coupling to them.
+const maxRejectReasonLength = 10000
+
+// RejectPlan records a rejection reason for the item's current plan
+// artifacts and clears any existing approval. Does not itself trigger
+// regeneration — see project_plans/plan-approval-ux/decisions/ADR-002.
+// +api: backlog:reject-plan
+func (s *BacklogService) RejectPlan(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RejectPlanRequest],
+) (*connect.Response[sessionv1.RejectPlanResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	reason := strings.TrimSpace(req.Msg.Reason)
+	if reason == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("reason is required"))
+	}
+	if len(reason) > maxRejectReasonLength {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("reason exceeds maximum length of %d bytes", maxRejectReasonLength))
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+
+	if item.PlanArtifactsPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
+	}
+
+	now := time.Now()
+	approvalReset := false
+	update := session.BacklogItemUpdate{
+		PlanRejectionReason: &reason,
+		PlanRejectedAt:      &now,
+		PlanApproved:        &approvalReset,
+	}
+
+	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, nil)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reject plan: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.RejectPlanResponse{
 		Item: backlogItemToProto(updated, s.buildCostLookup()),
 	}), nil
 }
