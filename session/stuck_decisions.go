@@ -43,6 +43,24 @@ const bounceLookback = 24 * time.Hour
 // as an independent constant since this package cannot import server/services.
 const bounceMainBranch = "main"
 
+// multiReasonThreshold is the minimum count of simultaneously open
+// *non-escalation* stuck reasons on one item before it is escalated to
+// domain.StuckReasonMultipleReasons. Fixed per plan.md's Pattern Decisions
+// table (requirements.md's own live-data-informed default: "≥2 would have
+// caught both" of this project's motivating live cases) — not a tunable
+// scoring rubric.
+const multiReasonThreshold = 2
+
+// multiReasonNotifyDwell is how long domain.StuckReasonMultipleReasons' row
+// must have been open (FirstDetectedAt) before its notification fires, so a
+// single-tick threshold crossing doesn't notify immediately — the same
+// one-reconcile-tick-width debounce shape as prReadyThreshold/
+// abandonedReviewGrace, sized to the reconcile ticker's period. Independent
+// constant, NOT read from server/dependencies.go's ticker constant: the
+// session package cannot import server, matching bounceMainBranch's existing
+// precedent for duplicating a cross-package constant.
+const multiReasonNotifyDwell = 60 * time.Second
+
 // stuckPRReady reports whether a pr_ready_unmerged condition first observed
 // at firstDetected has held long enough (> prReadyThreshold) as of now to be
 // notification-worthy. Exact-threshold and under-threshold both return false
@@ -70,6 +88,23 @@ func staleWork(lastProgress, now time.Time) bool {
 // non-converging "bouncing" cycle (>= bounceThreshold and !hasPass).
 func isBouncing(cycleCount int, hasPass bool) bool {
 	return cycleCount >= bounceThreshold && !hasPass
+}
+
+// isMultiReasonEscalated reports whether openNonEscalationCount — the number
+// of simultaneously open, non-escalation stuck reasons on one item — meets or
+// exceeds multiReasonThreshold, i.e. the item should carry an open
+// domain.StuckReasonMultipleReasons row.
+func isMultiReasonEscalated(openNonEscalationCount int) bool {
+	return openNonEscalationCount >= multiReasonThreshold
+}
+
+// multiReasonEscalationNotifyReady reports whether a
+// domain.StuckReasonMultipleReasons row first observed at firstDetected has
+// held long enough (>= multiReasonNotifyDwell) as of now to be
+// notification-worthy — mirrors stuckPRReady/abandonedReview's "don't notify
+// on the very tick that created the row" shape.
+func multiReasonEscalationNotifyReady(firstDetected, now time.Time) bool {
+	return now.Sub(firstDetected) >= multiReasonNotifyDwell
 }
 
 // IsRepeatedFailure reports whether the two most recent review verdicts (most
