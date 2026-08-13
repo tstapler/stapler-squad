@@ -156,6 +156,24 @@ func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(
 	assert.Equal(t, resolved, path)
 }
 
+// TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit
+// guards the empty-repo case: a git repo with zero commits has no HEAD for a
+// worktree to branch from, but findGitRepoRoot (session/git/util.go, called by
+// both GitWorktree constructors before Setup runs) auto-creates an initial
+// commit for exactly this situation, so CreateBacklogWorktree succeeds instead
+// of hitting setupNewWorktree's "brand new repository" error. resolveSessionPath
+// must therefore return a real worktree, not fall back to directory mode.
+func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoForTest(t, repoPath) // git-initialized, but zero commits
+
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+
+	require.NoError(t, err)
+	assert.True(t, useWorktree)
+	assert.NotEqual(t, repoPath, path)
+}
+
 // --- Story 3.2.1: recentWorkSessionFileLists (feeds IsTestOnlyReworkCycle) ---
 
 // TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges
