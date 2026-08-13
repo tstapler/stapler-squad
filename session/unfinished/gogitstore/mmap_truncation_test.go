@@ -125,13 +125,26 @@ func TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection(t *testing
 	out, err := cmd.CombinedOutput()
 
 	if err != nil {
-		if matched, detail := isExpectedFaultSignal(out); matched {
+		matched, detail := isExpectedFaultSignal(out)
+		if matched {
 			t.Logf("subprocess crashed with a Go runtime-confirmed %s (expected — this IS the point of the test)", detail)
 			return
-		} else {
-			t.Logf("subprocess did not exit cleanly (expected but signal not confirmed as SIGBUS/SIGSEGV: %s): err=%v\noutput:\n%s", detail, err, out)
-			return
 		}
+		// Deliberately still passes (does not t.Fatalf) even when the signal
+		// isn't confirmed: unlike clusters 1+2, this is not an untested
+		// hypothesis — the crash signature was verified reachable and stable
+		// on this machine across every GOTRACEBACK mode (see
+		// isExpectedFaultSignal's doc comment), so an unconfirmed case here
+		// is far more likely to be a genuinely different, non-reproducing
+		// subprocess condition than a missed real crash. Per
+		// research/pitfalls.md §2-3, turning this into a t.Fatalf would add a
+		// brand-new failure mode to an inherently platform/kernel-dependent
+		// subprocess test with no live evidence such a case is reachable —
+		// exactly the risk AC5 ("no regression from current passing state")
+		// guards against. isExpectedFaultSignal's returned detail still makes
+		// an unconfirmed case loud in the log, not silent.
+		t.Logf("subprocess did not exit cleanly (expected but signal not confirmed as SIGBUS/SIGSEGV: %s): err=%v\noutput:\n%s", detail, err, out)
+		return
 	}
 	t.Logf("subprocess exited cleanly; full output:\n%s", out)
 	if bytes.Contains(out, []byte("ORDINARY_RECOVER_CAUGHT_IT")) || bytes.Contains(out, []byte("NO_FAULT_OCCURRED")) {

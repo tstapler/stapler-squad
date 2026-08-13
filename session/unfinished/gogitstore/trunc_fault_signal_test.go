@@ -2,7 +2,6 @@ package gogitstore
 
 import (
 	"bytes"
-	"os/exec"
 	"testing"
 )
 
@@ -56,11 +55,7 @@ func TestIsExpectedFaultSignal_should_ReturnTrueAndSegfault_When_OutputContainsG
 }
 
 func TestIsExpectedFaultSignal_should_ReturnFalse_When_OutputHasNoFaultSignature(t *testing.T) {
-	err := exec.Command("sh", "-c", "exit 1").Run()
-	if err == nil {
-		t.Fatal("expected non-nil error from `sh -c exit 1`")
-	}
-	matched, detail := isExpectedFaultSignal([]byte("some unrelated output, err=" + err.Error()))
+	matched, detail := isExpectedFaultSignal([]byte("some unrelated output, exit status 1"))
 	if matched {
 		t.Fatalf("isExpectedFaultSignal(unrelated output) = (%v, %q), want matched=false", matched, detail)
 	}
