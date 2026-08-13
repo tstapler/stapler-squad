@@ -55,6 +55,8 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_PR_NEEDS_FIX
 	case domain.StuckReasonRespawnBlockedActive:
 		return sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE
+	case domain.StuckReasonLikelyFlaky:
+		return sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -94,6 +96,8 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonPRNeedsFix
 	case sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE:
 		return domain.StuckReasonRespawnBlockedActive
+	case sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY:
+		return domain.StuckReasonLikelyFlaky
 	default:
 		return ""
 	}

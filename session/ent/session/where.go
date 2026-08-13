@@ -110,6 +110,11 @@ func AutoYes(v bool) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldAutoYes, v))
 }
 
+// AutoApprove applies equality check predicate on the "auto_approve" field. It's identical to AutoApproveEQ.
+func AutoApprove(v bool) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldAutoApprove, v))
+}
+
 // AutonomousMode applies equality check predicate on the "autonomous_mode" field. It's identical to AutonomousModeEQ.
 func AutonomousMode(v bool) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldAutonomousMode, v))
@@ -853,6 +858,16 @@ func AutoYesEQ(v bool) predicate.Session {
 // AutoYesNEQ applies the NEQ predicate on the "auto_yes" field.
 func AutoYesNEQ(v bool) predicate.Session {
 	return predicate.Session(sql.FieldNEQ(FieldAutoYes, v))
+}
+
+// AutoApproveEQ applies the EQ predicate on the "auto_approve" field.
+func AutoApproveEQ(v bool) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldAutoApprove, v))
+}
+
+// AutoApproveNEQ applies the NEQ predicate on the "auto_approve" field.
+func AutoApproveNEQ(v bool) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldAutoApprove, v))
 }
 
 // AutonomousModeEQ applies the EQ predicate on the "autonomous_mode" field.

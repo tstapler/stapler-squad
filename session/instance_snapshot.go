@@ -90,6 +90,7 @@ type InstanceSnapshot struct {
 	Height           int
 	Width            int
 	AutoYes          bool
+	AutoApprove      bool
 	IsExpanded       bool
 	Prompt           string
 	InitialPrompt    string
@@ -158,6 +159,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Height:           i.Height,
 		Width:            i.Width,
 		AutoYes:          i.AutoYes,
+		AutoApprove:      i.AutoApprove,
 		IsExpanded:       i.IsExpanded,
 		Prompt:           i.Prompt,
 		InitialPrompt:    i.InitialPrompt,

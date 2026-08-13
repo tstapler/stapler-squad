@@ -148,6 +148,18 @@ const (
 	// pr_pending, review). Resolved the next time the guarding function runs
 	// past its active-session check (the block has cleared).
 	StuckReasonRespawnBlockedActive StuckReason = "respawn_blocked_active"
+	// StuckReasonLikelyFlaky: session.IsFlakyVerdictFlipFlop or
+	// session.IsTestOnlyReworkCycle matched on this item's recent review
+	// history — behavioral evidence (not a keyword match on title/description;
+	// see project_plans/backlog-bounce-escalation/decisions/ADR-002) that the
+	// review outcome may be non-deterministic rather than a real pass/fail
+	// signal. Purely informational: set alongside AutoReopenAfterFailedReview's
+	// existing reopen/park decision, never gating it — a misfiring heuristic
+	// here cannot newly stall an item that would otherwise proceed. Both
+	// predicates carry documented false-positive sources (see their doc
+	// comments in session/stuck_decisions.go); the UI should present this as a
+	// hint to verify, not a confident verdict.
+	StuckReasonLikelyFlaky StuckReason = "likely_flaky"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -166,6 +178,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonReworkBlockedStale,
 	StuckReasonPRNeedsFix,
 	StuckReasonRespawnBlockedActive,
+	StuckReasonLikelyFlaky,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -175,7 +188,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
-		StuckReasonRespawnBlockedActive:
+		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky:
 		return true
 	}
 	return false
