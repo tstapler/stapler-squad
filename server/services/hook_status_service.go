@@ -7,12 +7,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/internal/claudehooks"
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// installHooksSubprocessTimeout bounds each `ssq-hooks install <target>`
+// subprocess spawned by InstallHooks. These are quick, local file-writing
+// operations (editing settings.json files) with no network I/O, so a
+// generous but bounded timeout prevents a hung subprocess from blocking the
+// RPC indefinitely.
+const installHooksSubprocessTimeout = 15 * time.Second
 
 // resolveSsqHooksBin returns the path to the ssq-hooks binary and whether it exists.
 // Preference: ~/.local/bin/ssq-hooks (where `make install` puts it), then $PATH.
@@ -134,7 +143,7 @@ func (s *SessionService) GetHookStatus(
 // A requested hook whose binary is unavailable is reported in messages with a
 // manual fallback rather than failing the whole call.
 func (s *SessionService) InstallHooks(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.InstallHooksRequest],
 ) (*connect.Response[sessionv1.InstallHooksResponse], error) {
 	settingsPath, err := claudehooks.DefaultGlobalSettingsPath()
@@ -158,8 +167,11 @@ func (s *SessionService) InstallHooks(
 
 	if req.Msg.InstallAgyRules {
 		if bin, ok := resolveSsqHooksBin(); ok {
-			cmd := exec.Command(bin, "install", "agy")
-			if output, err := cmd.CombinedOutput(); err != nil {
+			installCtx, cancel := context.WithTimeout(ctx, installHooksSubprocessTimeout)
+			defer cancel()
+			cmd := safeexec.CommandContext(installCtx, bin, "install", "agy")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("install agy hook: %w (%s)", err, strings.TrimSpace(string(output))))
 			}
 			log.Info("[InstallHooks] installed Antigravity CLI rules hook", "bin", bin)
@@ -171,8 +183,11 @@ func (s *SessionService) InstallHooks(
 
 	if req.Msg.InstallGeminiRules {
 		if bin, ok := resolveSsqHooksBin(); ok {
-			cmd := exec.Command(bin, "install", "gemini")
-			if output, err := cmd.CombinedOutput(); err != nil {
+			installCtx, cancel := context.WithTimeout(ctx, installHooksSubprocessTimeout)
+			defer cancel()
+			cmd := safeexec.CommandContext(installCtx, bin, "install", "gemini")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("install gemini hook: %w (%s)", err, strings.TrimSpace(string(output))))
 			}
 			log.Info("[InstallHooks] installed Gemini CLI rules hook", "bin", bin)
