@@ -34,6 +34,28 @@ func FetchBranch(repoPath, branchName string) error {
 	return nil
 }
 
+// ResolveOriginBranchSHA fetches mainBranch from origin into repoPath and returns the
+// resulting origin/mainBranch tip commit SHA. Unlike a bare `rev-parse HEAD` against
+// repoPath's own checkout, this always fetches first, so the returned SHA reflects
+// origin's true current tip rather than whatever repoPath happened to have checked
+// out last — the gap that let a new backlog work session's worktree branch from a
+// days-stale local checkout instead of the real main tip (see setupNewWorktree's
+// "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
+func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
+	if err := FetchBranch(repoPath, mainBranch); err != nil {
+		return "", fmt.Errorf("failed to fetch %s: %w", mainBranch, err)
+	}
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	ref, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", mainBranch), true)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve origin/%s: %w", mainBranch, err)
+	}
+	return ref.Hash().String(), nil
+}
+
 // IsCommitOnMain reports whether sha has actually landed on mainBranch — either the
 // local branch (a commit merged directly to main without ever going through a PR) or
 // origin's copy (a PR merged remotely on GitHub that hasn't been pulled locally yet).
