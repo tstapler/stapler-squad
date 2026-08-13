@@ -489,6 +489,15 @@ func TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst(t *testing.T) {
 		// ponytail: skipped in CI — git gc --aggressive under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
 		t.Skip("skipped in CI — see PR #162")
 	}
+	if testing.Short() {
+		// The fixture builds 5 worktrees x 250 commits (~2500 sequential git
+		// subprocess calls total) plus a git gc --aggressive per worktree —
+		// this alone can exceed Go's 10-minute default test timeout under
+		// load, independent of the CI-specific corruption this file already
+		// guards against above. See session/unfinished/gogitstore/soak_test.go
+		// for the established -short convention in this package.
+		t.Skip("skipped under -short: too slow for make test/quick-check")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
@@ -750,6 +759,9 @@ func TestConcurrentReadsAcrossWorktrees_NoDataRace(t *testing.T) {
 	if os.Getenv("CI") != "" {
 		// ponytail: skipped in CI — git gc --aggressive under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
 		t.Skip("skipped in CI — see PR #162")
+	}
+	if testing.Short() {
+		t.Skip("skipped under -short: too slow for make test/quick-check")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")

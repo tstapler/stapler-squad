@@ -153,6 +153,9 @@ func TestMmapIndex_HeapAllocation_LowerThanCopyBased(t *testing.T) {
 		// ponytail: skipped in CI — git gc --aggressive under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
 		t.Skip("skipped in CI — see PR #162")
 	}
+	if testing.Short() {
+		t.Skip("skipped under -short: too slow for make test/quick-check")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
