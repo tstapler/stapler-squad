@@ -1,0 +1,24 @@
+{
+  "id": "backlog-triage-question-answer",
+  "type": "frontend",
+  "description": "Per-question inline answer form in the Triage Questions section, composing feedback for the existing re-triage path (Epic 1, AC1/AC2)",
+  "component": "TriageDiffSection",
+  "path": "web-app/src/components/backlog/TriageDiffSection.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "TriageDiffSection_question_answer_toggle > opens the answer form with aria-expanded=true and closes it again",
+    "TriageDiffSection_question_answer_toggle > renders nothing extra when onAnswerQuestion is absent (read-only historical mode)",
+    "TriageDiffSection_question_answer_submit > disables Submit until the answer textarea is non-empty",
+    "TriageDiffSection_question_answer_submit > calls onAnswerQuestion with the exact composed Q:/A: string",
+    "TriageDiffSection_question_answer_submit > renders '✓ Answered' after a successful submit",
+    "TriageDiffSection_question_answer_submit > surfaces an inline error and keeps the answer when onAnswerQuestion rejects",
+    "TriageDiffSection_question_answer_submit > retries the submit with the same draft when Retry is clicked after a failure",
+    "TriageDiffSection_question_answer_submit > dismisses the form (discarding the draft) when the error's dismiss button is clicked",
+    "TriageDiffSection_question_answer_submit > returns focus to the toggle button after Cancel",
+    "TriageDiffSection_question_answer_submit > cancels the open form on Escape the same way Cancel does",
+    "BacklogItemDetail — Epic 1.1: triage question answer wiring > calls triggerTriage with the composed Q:/A: feedback when a question is answered",
+    "tests/e2e/triage-question-answer.spec.ts"
+  ],
+  "lastModified": "2026-08-13T01:00:00Z"
+}

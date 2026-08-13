@@ -250,3 +250,44 @@ func TestBuildWorkspacePeersBlock_capsAtMaxPeers(t *testing.T) {
 	}
 	assert.Contains(t, block, "10 more")
 }
+
+func TestBuildWorkspacePeersBlock_livePeersSortBeforeGoneUnderCap(t *testing.T) {
+	// 6 gone peers followed by 1 live peer: a raw-order cap would drop the live peer
+	// entirely. It must survive the cap since live/stuck peers sort before gone ones.
+	var peers []WorkspacePeer
+	for i := 0; i < 6; i++ {
+		peers = append(peers, WorkspacePeer{Title: fmt.Sprintf("gone-%d", i), InstanceLive: false})
+	}
+	peers = append(peers, WorkspacePeer{Title: "live-peer", InstanceLive: true})
+
+	block := BuildWorkspacePeersBlock(peers)
+	assert.Contains(t, block, "live-peer")
+	assert.Contains(t, block, "2 more")
+}
+
+func TestBuildWorkspacePeersBlock_stuckPeersSortBeforeGoneUnderCap(t *testing.T) {
+	// Same as the live-peer case above, but for the "stuck" lifecycle (live with a stale
+	// goal) — the sort predicate groups both "active" and "stuck" ahead of "gone", so this
+	// exercises the branch the live-only case above can't reach.
+	var peers []WorkspacePeer
+	for i := 0; i < 6; i++ {
+		peers = append(peers, WorkspacePeer{Title: fmt.Sprintf("gone-%d", i), InstanceLive: false})
+	}
+	peers = append(peers, WorkspacePeer{Title: "stuck-peer", InstanceLive: true, StaleGoal: true})
+
+	block := BuildWorkspacePeersBlock(peers)
+	assert.Contains(t, block, "stuck-peer (stuck)")
+	assert.Contains(t, block, "2 more")
+}
+
+func TestBuildWorkspacePeersBlock_blankBranchOmitsDanglingField(t *testing.T) {
+	peers := []WorkspacePeer{
+		{Title: "gone-peer", Branch: "", InstanceLive: false},
+		{Title: "live-peer", Branch: "", InstanceLive: true},
+	}
+	block := BuildWorkspacePeersBlock(peers)
+	assert.NotContains(t, block, "(, gone)")
+	assert.NotContains(t, block, "(, active)")
+	assert.Contains(t, block, "gone-peer (gone)")
+	assert.Contains(t, block, "live-peer (active)")
+}

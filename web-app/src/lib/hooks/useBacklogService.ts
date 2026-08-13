@@ -107,6 +107,17 @@ export interface BacklogItem {
   autoCreatePR: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
+  /**
+   * Free-text reason from the most recent RejectPlan call. Cleared on
+   * ApprovePlan, on the next TriggerTriage completion (fresh or
+   * feedback-driven), and on any backward transition to idea/refining.
+   * Undefined/"" means "no outstanding rejection" — see
+   * derivePlanReviewStatus (web-app/src/lib/backlog/planReviewStatus.ts)
+   * and project_plans/plan-approval-ux/decisions/ADR-001.
+   */
+  planRejectionReason?: string;
+  /** Timestamp of the most recent RejectPlan call, paired with planRejectionReason above. */
+  planRejectedAt?: string;
   acCriteria: AcCriterion[];
   linkedSessions: LinkedSession[];
   notes?: string;
@@ -470,6 +481,10 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     autoCreatePR: p.autoCreatePr,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
+    planRejectionReason: p.planRejectionReason || undefined,
+    // timestampDate, not a hand-rolled `Number(seconds) * 1000` — see the
+    // createdAt/updatedAt comment above for why.
+    planRejectedAt: p.planRejectedAt ? timestampDate(p.planRejectedAt).toISOString() : undefined,
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
     linkedSessions,
     notes: p.notes || undefined,
@@ -589,6 +604,13 @@ interface UseBacklogServiceReturn {
   triggerTriage: (id: string, feedback?: string) => Promise<{ itemSessionId: string } | null>;
   cancelTriage: (id: string) => Promise<boolean>;
   approvePlan: (id: string) => Promise<BacklogItem | null>;
+  /**
+   * Persists a rejection reason only — does not itself trigger regeneration.
+   * See project_plans/plan-approval-ux/decisions/ADR-002: the frontend
+   * closes the "feedback should be actionable" gap with a separate, explicit
+   * "Regenerate Plan with This Feedback" button that calls triggerTriage.
+   */
+  rejectPlan: (id: string, reason: string) => Promise<BacklogItem | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
   triggerReReview: (id: string) => Promise<boolean>;
   /** Self-service "Ship PR" action — runs the one-shot PR-creation prompt for an item in review with no PR yet. */
@@ -854,6 +876,18 @@ export function useBacklogService(): UseBacklogServiceReturn {
     }
   }, []);
 
+  const rejectPlan = useCallback(async (id: string, reason: string): Promise<BacklogItem | null> => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.rejectPlan({ itemId: id, reason });
+      return resp.item ? mapBacklogItem(resp.item) : null;
+    } catch (err) {
+      console.error("[useBacklogService] rejectPlan:", err);
+      setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
   const overrideVerdict = useCallback(
     async (id: string, overrideReason: string, toStatus?: string): Promise<boolean> => {
       if (!clientRef.current) return false;
@@ -1113,6 +1147,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       triggerTriage,
       cancelTriage,
       approvePlan,
+      rejectPlan,
       overrideVerdict,
       triggerReReview,
       triggerShipPR,

@@ -264,8 +264,11 @@ func (rqm *ReactiveQueueManager) signalActivity() {
 func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *session.Instance, _ detection.DetectedStatus) {
 	rqm.signalActivity()
 	go func() {
+		// baseContext(), not rqm.ctx directly: a controller can report a status
+		// change before Start() has run (e.g. constructed directly in a test
+		// fixture), and rqm.ctx.Done() on a nil rqm.ctx panics.
 		select {
-		case <-rqm.ctx.Done():
+		case <-rqm.baseContext().Done():
 			return
 		default:
 		}

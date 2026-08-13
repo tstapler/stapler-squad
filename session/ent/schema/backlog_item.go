@@ -66,6 +66,12 @@ func (BacklogItem) Fields() []ent.Field {
 			Comment("Preserves the Autonomous flag from the spawn request that got queued, so dequeue replays it faithfully."),
 		field.String("plan_artifacts_path").
 			Optional(),
+		field.String("plan_rejection_reason").
+			Optional().
+			Comment("Free-text reason from the most recent RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage completion, and on backward transition to idea/refining. See project_plans/plan-approval-ux/decisions/ADR-001."),
+		field.Time("plan_rejected_at").
+			Optional().
+			Nillable(),
 		field.String("user_modified_fields").
 			Optional().
 			Comment("JSON set of field names modified by the user"),

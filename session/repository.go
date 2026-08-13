@@ -18,6 +18,35 @@ var ErrNotFound = errors.New("not found")
 // ErrConflict is returned when an operation would violate a uniqueness constraint.
 var ErrConflict = errors.New("conflict")
 
+// ErrPRReassignmentNotAllowed is returned by SetBacklogItemPRAndTransition
+// when a caller attempts to reassign an already-pr_pending item's tracked
+// PR to a different PR number without a valid PRReassignmentGuard.
+var ErrPRReassignmentNotAllowed = errors.New("PR reassignment not allowed")
+
+// PRReassignmentGuard carries the caller-verified preconditions required
+// before SetBacklogItemPRAndTransition (session/storage.go) will accept a
+// reassignment — a call where the observed item is already pr_pending with
+// a DIFFERENT PR number than the one being recorded now. This function
+// itself never calls GitHub; a caller supplies this guard to attest it
+// already did that verification. A caller with no way to produce a valid
+// guard (e.g. the manual-override RPC in
+// server/services/backlog_service_lifecycle.go, which by design never
+// calls GitHub) passes nil and gets a clear rejection instead of silently
+// reassigning an unverified PR.
+type PRReassignmentGuard struct {
+	// OverrideReason must be non-empty — the caller's own already-validated
+	// reason for the reassignment.
+	OverrideReason string
+	// CurrentPRMerged must reflect the caller's verified state of the
+	// CURRENTLY tracked PR. true hard-blocks the reassignment
+	// unconditionally — a merged PR's association must never be silently
+	// swapped, even with OverrideReason set.
+	CurrentPRMerged bool
+	// NewPRAuthorVerified must be true only when the caller has verified the
+	// new PR's GitHub author matches the caller's own verified identity.
+	NewPRAuthorVerified bool
+}
+
 // Repository defines the interface for session persistence operations.
 // This abstraction allows multiple storage backends (SQLite, JSON, etc.)
 // while maintaining a consistent API for session management.
@@ -81,6 +110,15 @@ type Repository interface {
 	// UpdateLastViewed sets only the last_viewed field for a session.
 	// Issues a single UPDATE WHERE title=? without a prior SELECT.
 	UpdateLastViewed(ctx context.Context, title string, t time.Time) error
+
+	// UpdateSessionMetadata efficiently updates only title/category/note/working_dir
+	// fields for a session, issuing a single UPDATE WHERE title=? without a prior SELECT
+	// and without touching worktree/diffstats/tags/claude_session rows (unlike Update).
+	// currentTitle must be the row's title from before any rename applied in this same
+	// call — see the EntRepository implementation for why. A nil field pointer leaves
+	// that field untouched; Note is written whenever non-nil (including "") since an
+	// empty note is a meaningful cleared state, not "unset".
+	UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error
 
 	// Close performs cleanup and releases resources
 	Close() error
@@ -270,6 +308,7 @@ type ReviewVerdictSummary struct {
 	OverallOutcome string
 	PerCriterion   string // JSON []CriterionVerdict
 	Summary        string
+	DiffHash       string
 	DiffTokenCount int
 	DiffTruncated  bool
 	OverrideBy     string
@@ -403,6 +442,12 @@ type BacklogItemData struct {
 	PlanApproved      bool
 	PlanApprovedAt    *time.Time
 	PlanArtifactsPath string
+	// PlanRejectionReason is the free-text reason from the most recent
+	// RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage
+	// completion, and on backward transition to idea/refining. See
+	// project_plans/plan-approval-ux/decisions/ADR-001.
+	PlanRejectionReason string
+	PlanRejectedAt      *time.Time
 	// QueuedAt is set when a fresh spawn hit the concurrency cap and the item
 	// was transitioned to "queued" instead of rejected. Nil unless Status ==
 	// BacklogStatusQueued (or the item was previously queued). Drives FIFO
@@ -590,6 +635,17 @@ type BacklogItemUpdate struct {
 	PlanApproved      *bool
 	PlanApprovedAt    *time.Time
 	PlanArtifactsPath *string
+	// PlanRejectionReason and PlanRejectedAt follow the same partial-update-
+	// presence convention: nil means "leave untouched", a non-nil pointer
+	// explicitly sets it. Since a plain pointer can't distinguish "leave
+	// untouched" from "clear it back to nil", use ClearPlanRejectedAt to
+	// explicitly clear the timestamp back to nil (e.g. alongside resetting
+	// PlanRejectionReason back to "" on approval/re-triage) — see
+	// PrFeedbackAddressedAt/ClearPrFeedbackAddressedAt below for the same
+	// pattern.
+	PlanRejectionReason *string
+	PlanRejectedAt      *time.Time
+	ClearPlanRejectedAt bool
 	// QueuedAt and QueuedAutonomous follow the same partial-update-presence
 	// convention as PlanApprovedAt: nil means "leave untouched".
 	QueuedAt         *time.Time

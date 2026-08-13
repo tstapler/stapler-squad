@@ -42,7 +42,7 @@ export class GitHubEnterpriseURLDetector implements Detector {
           type: InputType.GitHubPR,
           confidence: 1.0,
           parsedValue: trimmed,
-          suggestedName: `pr-${prNumber}-${repo}`,
+          suggestedName: `${owner}-${repo}-pr-${prNumber}`,
           gitHubRef,
         };
       }
@@ -61,7 +61,7 @@ export class GitHubEnterpriseURLDetector implements Detector {
           type: InputType.GitHubBranch,
           confidence: 1.0,
           parsedValue: trimmed,
-          suggestedName: `${repo}-${branch.replace(/\//g, "-")}`,
+          suggestedName: `${owner}-${repo}-${branch.replace(/\//g, "-")}`,
           branch,
           gitHubRef,
         };

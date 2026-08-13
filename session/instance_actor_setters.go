@@ -371,6 +371,30 @@ func (i *Instance) SetCategory(category string) {
 	})
 }
 
+// ---- Note -----------------------------------------------------------------------
+
+func setNoteLocked(s *instanceState, note string) {
+	s.inst.mu.Lock()
+	s.inst.Note = note
+	// Bump UpdatedAt so the frontend's upsertSession no-op dedup (sessionsSlice.ts,
+	// keyed on unchanged updatedAt) doesn't silently drop this update — without it,
+	// a note saved on a session whose UpdatedAt hadn't otherwise moved (e.g. a
+	// freshly created, still-idle session) would return success from the RPC but
+	// never appear in the UI until some other field bumped UpdatedAt first.
+	s.inst.UpdatedAt = time.Now()
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetNote sets the session's free-form markdown note.
+func (i *Instance) SetNote(note string) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setNoteLocked(s, note)
+		return nil
+	})
+}
+
 // ---- WorkingDir -----------------------------------------------------------------
 
 func setWorkingDirLocked(s *instanceState, dir string) {
@@ -405,4 +429,64 @@ func (i *Instance) SetPauseReason(reason string) {
 		setPauseReasonLocked(s, reason)
 		return nil
 	})
+}
+
+// ---- ExitReason -------------------------------------------------------------
+
+func setExitReasonLocked(s *instanceState, reason string) {
+	s.inst.mu.Lock()
+	s.inst.ExitReason = reason
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetExitReason sets (or, passed "", clears) the reason this session's pane crashed.
+func (i *Instance) SetExitReason(reason string) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setExitReasonLocked(s, reason)
+		return nil
+	})
+}
+
+// ---- AutoApprove ------------------------------------------------------------------
+
+func setAutoApproveLocked(s *instanceState, v bool) {
+	s.inst.mu.Lock()
+	s.inst.AutoApprove = v
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetAutoApprove sets the AutoApprove flag and, if the session is currently Active,
+// restarts it so the flag takes effect immediately (the flag is baked into the launch
+// command at spawn time, like Program -- not re-checked live, unlike AutonomousMode).
+// persist is called before the restart so a crash between setting and restarting doesn't
+// lose the change; the field mutation and persist survive even if the subsequent restart
+// fails (matching SwitchProgram's documented ordering).
+//
+// The full set->persist->restart sequence runs under restartTriggerMu, the same lock
+// SwitchProgram holds for its own restart sequence, so a program switch and an
+// auto-approve toggle firing near-simultaneously on the same instance serialize instead
+// of both observing Status == Active and double-restarting the tmux session.
+func (i *Instance) SetAutoApprove(v bool, persist func() error) error {
+	i.restartTriggerMu.Lock()
+	defer i.restartTriggerMu.Unlock()
+
+	if err := i.sendSyncErr(func(s *instanceState) error {
+		setAutoApproveLocked(s, v)
+		return nil
+	}); err != nil {
+		return err
+	}
+	if persist != nil {
+		if err := persist(); err != nil {
+			return err
+		}
+	}
+	if i.Status == Active {
+		return i.Restart(true)
+	}
+	return nil
 }

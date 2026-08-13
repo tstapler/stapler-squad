@@ -12,6 +12,7 @@ import type { ThemeName } from "@/lib/contexts/ThemeContext";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { usePathHistory } from "@/lib/hooks/usePathHistory";
 import { useWorktreeSuggestions } from "@/lib/hooks/useWorktreeSuggestions";
+import { useDestinationPathPreview } from "@/lib/hooks/useDestinationPathPreview";
 import { useSessionSearch, type SessionSearchResult } from "@/lib/hooks/useSessionSearch";
 import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
@@ -32,7 +33,7 @@ import {
   detectionInfo, detectionBadge, unknown,
   shortcuts, shortcut, shortcutKey, completionError as completionErrorClass,
   pathIndicator, pathIndicatorValid, pathIndicatorInvalid, pathIndicatorLoading,
-  createButton,
+  createButton, error as errorClass,
 } from "./Omnibar.css";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
@@ -82,6 +83,9 @@ export interface OmnibarFormState {
   // except one_off) rather than a session type of its own — see OmnibarCreationPanel's
   // "Autonomous mode" checkbox.
   autonomousMode: boolean;
+  // Auto-approve (yolo mode): injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely. Independent of autoYes — see OmnibarCreationPanel's checkbox comment.
+  autoApprove: boolean;
 }
 
 const INITIAL_FORM_STATE: OmnibarFormState = {
@@ -101,6 +105,7 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   createIfMissing: false,
   firstPrompt: "",
   autonomousMode: false,
+  autoApprove: false,
 };
 
 // Consolidated UI state
@@ -135,6 +140,9 @@ export interface OmnibarSessionData {
   createIfMissing?: boolean;
   // Autonomous mode: run without human permission prompts (LLM approves tool calls).
   autonomousMode?: boolean;
+  // Auto-approve (yolo mode): injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely. Independent of autoYes.
+  autoApprove?: boolean;
   // Permission mode passed to Claude Code (e.g. "auto" for autonomous sessions).
   permissionMode?: string;
   aliasName?: string;
@@ -214,7 +222,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
   // Convenience aliases for existing code
   // Destructure only fields needed for validation/submission logic in Omnibar.tsx
-  const { sessionName, program, category, autoYes, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType, createIfMissing } = formState;
+  const { sessionName, program, category, autoYes, autoApprove, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType, createIfMissing } = formState;
   const { showAdvanced } = uiState;
   const { dropdownIndex, dropdownDismissed, resultHighlightIndex, atSuggestIndex } = uiState;
   // Used in detection auto-fill effects
@@ -308,6 +316,39 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       : "";
   const { worktrees, isLoading: isWorktreesLoading, error: worktreesError } = useWorktreeSuggestions(repoPathForWorktrees, {
     enabled: sessionType === "existing_worktree" && !!repoPathForWorktrees,
+  });
+
+  // Destination path preview: github_url mode previews the exact clone destination for a
+  // detected GitHub URL/PR/shorthand; new_worktree mode previews the deterministic prefix
+  // of where the worktree will be created (the real path also gets a random suffix at
+  // creation time — see PreviewWorktreePath's doc comment).
+  const isGitHubUrlDetection =
+    detection?.type === InputType.GitHubPR ||
+    detection?.type === InputType.GitHubBranch ||
+    detection?.type === InputType.GitHubRepo ||
+    detection?.type === InputType.GitHubShorthand;
+
+  const destinationPreviewParams = useMemo(() => {
+    if (isGitHubUrlDetection && detection?.parsedValue) {
+      return { mode: "github_url" as const, input: detection.parsedValue };
+    }
+    if (sessionType === "new_worktree" && repoPathForWorktrees && sessionName.trim()) {
+      return {
+        mode: "new_worktree" as const,
+        input: "",
+        repoPath: repoPathForWorktrees,
+        sessionName: useTitleAsBranch ? sessionName : branch || sessionName,
+      };
+    }
+    return null;
+  }, [isGitHubUrlDetection, detection?.parsedValue, sessionType, repoPathForWorktrees, sessionName, useTitleAsBranch, branch]);
+
+  const {
+    path: destinationPreviewPath,
+    isExact: destinationPreviewIsExact,
+    isLoading: isDestinationPreviewLoading,
+  } = useDestinationPathPreview(destinationPreviewParams, {
+    enabled: destinationPreviewParams !== null,
   });
 
   // Convert live OS entries to CompletionEntry for type-safe downstream use.
@@ -577,6 +618,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     // SessionSearch) with no keystroke left to trigger a re-run.
   }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName, aliases, workflows]);
 
+  // Clear a stale submission error whenever the input value itself changes —
+  // keyed on `input` alone (not the detection-debounce effect's deps, which
+  // also include aliases/workflows) so an unrelated async refetch can't wipe
+  // a just-shown error. Covers every setInput() call site (typing, recent
+  // shell command chips, alias/at-command completion, clone session), not
+  // just the <input>'s own onChange.
+  useEffect(() => {
+    setError(null);
+  }, [input]);
+
   // Focus input when opened
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -592,6 +643,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setFormState(INITIAL_FORM_STATE);
       setUIState({ showAdvanced: false, dropdownIndex: -1, dropdownDismissed: false, resultHighlightIndex: -1, atSuggestIndex: -1 });
       setError(null);
+      // Defense-in-depth: handleSubmit's own finally blocks already reset this on
+      // success/failure, but this instance never unmounts across open/close cycles, so
+      // also clear it here in case onClose() didn't synchronously flip isOpen after a
+      // submission (the original bug this guards against — see Omnibar.submitReset.test.tsx).
+      setIsSubmitting(false);
       lastSuggestedNameRef.current = "";
       prevDetectionTypeRef.current = null;
       dispatchMode({ kind: "reset_to_discovery" });
@@ -1012,6 +1068,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         sessionType: shellDir ? "directory" : "one_off",
         createIfMissing: Boolean(shellDir),
         autoYes: false,
+        autoApprove: false,
       };
       setIsSubmitting(true);
       setError(null);
@@ -1021,6 +1078,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
+      } finally {
         setIsSubmitting(false);
       }
       return;
@@ -1050,6 +1108,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         path: "",
         program: program || "",
         autoYes,
+        autoApprove,
         aliasName: String(aliasName),
         branch: aliasFinalBranch || undefined,
         extraCliFlags: extraFlags !== undefined ? String(extraFlags) : undefined,
@@ -1065,6 +1124,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create session");
+      } finally {
         setIsSubmitting(false);
       }
       return;
@@ -1098,6 +1158,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           category: category.trim() || undefined,
           prompt: finalPrompt,
           autoYes,
+          autoApprove,
           sessionType: newProjectSessionType,
           isNewProject: true,
           initialPrompt: firstPromptText,
@@ -1116,6 +1177,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           category: category.trim() || undefined,
           prompt: finalPrompt,
           autoYes,
+          autoApprove,
           sessionType,
           existingWorktree: isOneOff ? undefined : (existingWorktree.trim() || undefined),
           workingDir: isOneOff ? undefined : (workingDir.trim() || undefined),
@@ -1178,6 +1240,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     program,
     category,
     autoYes,
+    autoApprove,
     existingWorktree,
     workingDir,
     parentDir,
@@ -1191,6 +1254,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     onClose,
     onRunWorkflow,
     formState.firstPrompt,
+    formState.autonomousMode,
     router,
     setTheme,
   ]);
@@ -1363,6 +1427,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 <span>{shellCommand ? `Run "${shellCommand}"` : "Open terminal"}</span>
                 {shellDir ? <span> in {shellDir}</span> : null}
               </div>
+              {error && (
+                <div
+                  className={errorClass}
+                  role="alert"
+                  aria-live="assertive"
+                  data-testid="spawn-shell-error"
+                >
+                  {error}
+                </div>
+              )}
               {!shellCommand && !shellDir && recentCommands.length > 0 && (
                 <div data-testid="spawn-shell-recent-commands">
                   {recentCommands.map((cmd) => (
@@ -1469,6 +1543,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             uploadBaseUrl={uploadBaseUrl}
             onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
             pathDoesNotExist={pathDoesNotExist}
+            destinationPreviewPath={destinationPreviewPath}
+            destinationPreviewIsExact={destinationPreviewIsExact}
+            isDestinationPreviewLoading={isDestinationPreviewLoading}
             namePrefix={
               detection?.type === InputType.Alias
                 ? ((detection.metadata as AliasMetadata | undefined)?.alias?.namePrefix ?? "")

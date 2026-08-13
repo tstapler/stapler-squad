@@ -207,6 +207,63 @@ func TestCreateWorkflow_MissingCommand(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
+// TestCreateWorkflow_MalformedModel verifies a whitespace-bearing model value is
+// rejected at save time rather than silently accepted to fail later at fire time.
+func TestCreateWorkflow_MalformedModel(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	req := connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "bad-model",
+		Name:            "Bad Model",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		Model:           "family: sonnet",
+	})
+	_, err := svc.CreateWorkflow(ctx, req)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestCreateWorkflow_ValidFamilyModel verifies a namespaced family alias is accepted.
+func TestCreateWorkflow_ValidFamilyModel(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	req := connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "family-model",
+		Name:            "Family Model",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		Model:           "family:sonnet",
+	})
+	resp, err := svc.CreateWorkflow(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, "family:sonnet", resp.Msg.Workflow.Model)
+}
+
+// TestUpdateWorkflow_MalformedModel verifies UpdateWorkflow applies the same
+// save-time model validation as CreateWorkflow.
+func TestUpdateWorkflow_MalformedModel(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "update-bad-model",
+		Name:            "Original",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id:    createResp.Msg.Workflow.Id,
+		Model: proto.String("claude-sonnet-4-6; rm -rf /"),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
 // TestSessionService_DelegatesListWorkflows verifies the delegation from SessionService.
 func TestSessionService_DelegatesListWorkflows(t *testing.T) {
 	sessSvc, workflowSvc := createTestWorkflowService(t)

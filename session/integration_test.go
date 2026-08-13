@@ -317,9 +317,16 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		}
 	}()
 
-	// Get worktree paths
+	// Get worktree paths. Both instances used SessionTypeNewWorktree above, so a
+	// nil worktree here would itself be the bug under test — fail loudly instead
+	// of the nil-pointer panic this exact unguarded pattern produced elsewhere
+	// (see BenchmarkSessionRestorePerformance's fix, a directory-mode session
+	// with no worktree at all).
 	worktree1, _ := instance1.GetGitWorktree()
 	worktree2, _ := instance2.GetGitWorktree()
+	if worktree1 == nil || worktree2 == nil {
+		t.Fatalf("expected both instances to have a git worktree (SessionTypeNewWorktree): worktree1=%v worktree2=%v", worktree1, worktree2)
+	}
 	path1 := worktree1.GetWorktreePath()
 	path2 := worktree2.GetWorktreePath()
 
@@ -410,8 +417,13 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 		}
 	}()
 
-	// Get worktree and create some changes
+	// Get worktree and create some changes. SessionTypeNewWorktree above means a
+	// nil worktree here would itself be the bug under test — fail loudly instead
+	// of an unguarded nil-pointer dereference.
 	gitWorktree, _ := instance.GetGitWorktree()
+	if gitWorktree == nil {
+		t.Fatal("expected instance to have a git worktree (SessionTypeNewWorktree)")
+	}
 	worktreePath := gitWorktree.GetWorktreePath()
 
 	// Create a file with changes
@@ -806,9 +818,13 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		// Simulate kill and restore
-		gitWorktree, _ := instance.GetGitWorktree()
-		worktreePath := gitWorktree.GetWorktreePath()
+		// Simulate kill and restore. This is a directory session (no git
+		// worktree), so gitManager.GetWorktreePath() returns "" — fall back
+		// to tempRepo like the production resume path does (instance.go).
+		worktreePath := instance.gitManager.GetWorktreePath()
+		if worktreePath == "" {
+			worktreePath = tempRepo
+		}
 
 		// Kill the original session
 		_ = instance.Kill()

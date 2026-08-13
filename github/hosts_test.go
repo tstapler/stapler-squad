@@ -20,3 +20,50 @@ func TestNormalizeHost_Lowercases(t *testing.T) {
 		}
 	}
 }
+
+// TestGraphQLURLForHost is the regression test for the CI hang this fixes:
+// graphQLURLForHost used to ignore EnterpriseBaseURLOverride entirely, so a
+// test that pointed the override at an httptest.Server (mirroring
+// RestBaseURLForHost's test seam) still had its GraphQL calls fall through
+// to the real enterprise host.
+func TestGraphQLURLForHost(t *testing.T) {
+	const host = "github.example.test"
+
+	tests := []struct {
+		name     string
+		override string // "" = no override set
+		want     string
+	}{
+		{
+			name: "no_override_falls_back_to_real_host",
+			want: "https://github.example.test/api/graphql",
+		},
+		{
+			name:     "honors_enterprise_override",
+			override: "http://127.0.0.1:9",
+			want:     "http://127.0.0.1:9/api/graphql",
+		},
+		{
+			// Guards against a double slash when the override is stored with a
+			// trailing slash, which is how tests set it
+			// (EnterpriseBaseURLOverride[host] = ts.URL + "/") to match
+			// RestBaseURLForHost's existing convention.
+			name:     "override_trailing_slash_handled_like_rest",
+			override: "http://127.0.0.1:9/",
+			want:     "http://127.0.0.1:9/api/graphql",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.override != "" {
+				EnterpriseBaseURLOverride[host] = tt.override
+				defer delete(EnterpriseBaseURLOverride, host)
+			}
+
+			if got := graphQLURLForHost(host); got != tt.want {
+				t.Errorf("graphQLURLForHost(%q) = %q, want %q", host, got, tt.want)
+			}
+		})
+	}
+}

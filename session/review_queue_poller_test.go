@@ -922,6 +922,64 @@ func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffect
 	}
 }
 
+// TestReviewQueuePoller_ReconcileSessions_CrashedButTmuxAlive_RevivesToActive is the
+// regression test for the Crashed defensive-symmetry case mirroring the existing
+// Hibernated-but-alive handling: a Crashed session normally has no live tmux session
+// (MarkCrashed kills it before setting the status), but if one is found alive anyway
+// (e.g. an external `tmux new-session` reused the same name), reconcileSessions must
+// bring it back in sync rather than leaving it stuck showing the Crashed banner over
+// a live pane.
+func TestReviewQueuePoller_ReconcileSessions_CrashedButTmuxAlive_RevivesToActive(t *testing.T) {
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	poller.SetInstances([]*Instance{instCrashed})
+
+	querier.setLiveSessions("", "session-crashed")
+
+	poller.reconcileSessions()
+
+	if instCrashed.Status != Active {
+		t.Errorf("crashed instance found alive in tmux: got status %v, want Active (revived)", instCrashed.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_CrashedAndTmuxGone_StaysUntouched verifies the
+// expected steady state: a Crashed session with no live tmux session (the normal case,
+// since MarkCrashed already killed it) is left alone -- not silently resurrected.
+func TestReviewQueuePoller_ReconcileSessions_CrashedAndTmuxGone_StaysUntouched(t *testing.T) {
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	poller.SetInstances([]*Instance{instCrashed})
+
+	querier.setLiveSessions("") // nothing alive
+
+	poller.reconcileSessions()
+
+	if instCrashed.Status != Crashed {
+		t.Errorf("crashed instance with no live tmux session: got status %v, want Crashed (untouched)", instCrashed.Status)
+	}
+}
+
+// TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed pins shouldSkipSession's Crashed
+// exclusion: a Crashed session must not be checked for review-queue attention reasons --
+// it already surfaces via its own distinct status/banner, and MarkCrashed already killed
+// its tmux session, so there is no live pane content to inspect.
+func TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed(t *testing.T) {
+	poller := newSimpleTestPoller()
+	inst := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	inst.started.Store(true)
+
+	if !poller.shouldSkipSession(inst) {
+		t.Error("expected shouldSkipSession(Crashed instance) to be true")
+	}
+}
+
 // stubApprovalMetadataProvider is a minimal ApprovalMetadataProvider for tests. It records
 // each key it was queried with so tests can assert lookup order.
 type stubApprovalMetadataProvider struct {
@@ -966,6 +1024,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 				ToolName:           "Bash",
 				EscalationReason:   "No matching rule; escalated for manual review.",
 				EscalationCategory: "no-match",
+				RiskLevel:          "medium",
 			}},
 		},
 	}
@@ -986,6 +1045,153 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 	}
 	if got := item.Metadata["escalation_reason_category"]; got != "no-match" {
 		t.Errorf("escalation_reason_category = %q, want %q", got, "no-match")
+	}
+	if got := item.Metadata["risk_level"]; got != "medium" {
+		t.Errorf("risk_level = %q, want %q", got, "medium")
+	}
+}
+
+// TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataHasClassifiedRisk
+// and TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadataRiskLevelEmpty
+// cover plan.md Task 2.2.2: item.Metadata["risk_level"] is set only when the underlying
+// ApprovalMetadata.RiskLevel is non-empty -- an absent key (not an empty-string value) is the
+// frontend's "not recorded" signal, mirroring the existing escalation_reason guard pattern.
+func TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataHasClassifiedRisk(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{Title: "session-risk-set", UUID: "session-risk-set-uuid", Status: Running}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.UUID: {{ApprovalID: "approval-risk-set", RiskLevel: "critical"}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if got := item.Metadata["risk_level"]; got != "critical" {
+		t.Errorf("risk_level = %q, want %q", got, "critical")
+	}
+}
+
+func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadataRiskLevelEmpty(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{Title: "session-risk-empty", UUID: "session-risk-empty-uuid", Status: Running}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.UUID: {{ApprovalID: "approval-risk-empty", RiskLevel: ""}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if _, ok := item.Metadata["risk_level"]; ok {
+		t.Errorf("risk_level key must be absent (not empty-string) when RiskLevel is not recorded, got %q", item.Metadata["risk_level"])
+	}
+}
+
+// TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrentApprovalsAtMixedRisk
+// covers GAP-004 (docs/bugs/open/review-queue-gaps.md): when a session has multiple concurrent
+// pending approvals, the queue must surface the most dangerous one, not just the first.
+func TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrentApprovalsAtMixedRisk(t *testing.T) {
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "a-medium", RiskLevel: "medium"},
+		{ApprovalID: "b-critical", RiskLevel: "critical"},
+		{ApprovalID: "c-low", RiskLevel: "low"},
+	}
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "b-critical" {
+		t.Errorf("highestRiskApproval() = %q, want %q", got.ApprovalID, "b-critical")
+	}
+}
+
+// TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShareTopRisk covers
+// the tiebreak rule: ties keep the earliest (first-inserted) approval.
+func TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShareTopRisk(t *testing.T) {
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "first-high"},
+		{ApprovalID: "second-high"},
+	}
+	approvals[0].RiskLevel = "high"
+	approvals[1].RiskLevel = "high"
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "first-high" {
+		t.Errorf("highestRiskApproval() = %q, want %q (tie must keep the earliest)", got.ApprovalID, "first-high")
+	}
+}
+
+// TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium covers the
+// fail-safe rank: "" (not recorded) must rank alongside "high", never sort below "medium".
+func TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium(t *testing.T) {
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "medium-item", RiskLevel: "medium"},
+		{ApprovalID: "unrecorded-item", RiskLevel: ""},
+	}
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "unrecorded-item" {
+		t.Errorf("highestRiskApproval() = %q, want %q (unrecorded must outrank medium)", got.ApprovalID, "unrecorded-item")
+	}
+}
+
+// TestRiskLevelRank_MatchesTypeScriptMirror pins the exact rank values so a one-sided edit
+// to either this map or web-app/src/lib/sessions/riskLevel.ts's RISK_LEVEL_RANK fails loudly
+// here instead of silently desyncing default sort order between the Go-side GAP-004
+// tie-break and the frontend's default severity sort (sdd:6-verify Layer 2 finding,
+// review-queue-severity). If this test ever needs to change, the TS mirror must change too.
+func TestRiskLevelRank_MatchesTypeScriptMirror(t *testing.T) {
+	want := map[string]int{
+		"critical": 4,
+		"high":     3,
+		"":         3,
+		"medium":   2,
+		"low":      1,
+	}
+	for level, wantRank := range want {
+		if got := riskLevelRank(level); got != wantRank {
+			t.Errorf("riskLevelRank(%q) = %d, want %d", level, got, wantRank)
+		}
+	}
+	if len(riskLevelRankTable) != len(want) {
+		t.Errorf("riskLevelRankTable has %d entries, want %d — update this test's `want` map and riskLevel.ts's RISK_LEVEL_RANK together", len(riskLevelRankTable), len(want))
+	}
+}
+
+// TestRiskLevelRank_should_FallBackToUnrecordedRank_When_ValueIsUnrecognized covers a PR
+// review finding (github.com/tstapler/stapler-squad/pull/411): a plain map lookup returns
+// Go's zero value (0) for a key absent from riskLevelRankTable, which would rank a future/
+// unrecognized RiskLevel string *below* "low" (rank 1) — the opposite of the fail-safe intent
+// applied everywhere else. riskLevelRank() must fall back to the unrecorded rank instead.
+func TestRiskLevelRank_should_FallBackToUnrecordedRank_When_ValueIsUnrecognized(t *testing.T) {
+	if got, want := riskLevelRank("some-future-risk-level"), riskLevelRank(""); got != want {
+		t.Errorf("riskLevelRank(unrecognized) = %d, want %d (the unrecorded/fail-safe rank)", got, want)
 	}
 }
 

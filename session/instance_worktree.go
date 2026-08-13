@@ -97,15 +97,51 @@ func EnsureDirectorySessionPath(path string) error {
 	}
 }
 
+// BacklogBranchPrefix is the git branch prefix every backlog work session's
+// branch is created under — the one place this literal is defined. Anything
+// that needs to independently predict or recreate a backlog work session's
+// branch name (e.g. server/services/backlog_service_triage.go's
+// retitleTriageWorktreeToFinalBranch, which renames a triage worktree onto the
+// exact branch a later real spawn will look for) must reference this constant
+// rather than hardcoding "backlog/" — see that function's doc comment for the
+// bug this once caused when the two sides used independently-duplicated logic.
+const BacklogBranchPrefix = "backlog/"
+
+// backlogWorktreeMainBranch is the branch CreateBacklogWorktree fetches and branches
+// new backlog work off of — mirrors backlog_service_triage.go's prFixMainBranch
+// constant, which makes the same "main" assumption for the same class of automated,
+// no-attached-human backlog git operations.
+const backlogWorktreeMainBranch = "main"
+
 // CreateBacklogWorktree creates a git worktree for a backlog work session.
-// It creates a branch named "backlog/<branchSuffix>" and returns the on-disk worktree path.
-// The caller is responsible for writing files to the path before spawning the session.
+// It creates a branch named BacklogBranchPrefix+branchSuffix and returns the
+// on-disk worktree path. The caller is responsible for writing files to the
+// path before spawning the session.
+//
+// A brand-new branch is based on origin/main's freshly-fetched tip, not repoPath's
+// ambient HEAD (git.NewGitWorktreeWithBranch's default, correct for an interactive
+// "branch off my current checkout" ad-hoc worktree, but wrong here: a queue-driven
+// backlog spawn has no human on a particular branch, and repoPath's own checkout can
+// sit unfetched for days). A stale ambient HEAD as the recorded base_commit_sha meant
+// every commit that later landed on main between that stale point and whatever this
+// session's HEAD later resolved to got misattributed to the session as its own work
+// (surfaced as inflated/wrong commit_count_since_spawn — see resolveLatestWorkCommit's
+// doc comment for the sibling bug this was found alongside). Falls back to the old
+// ambient-HEAD behavior if origin can't be reached, so a spawn never hard-fails just
+// because a fetch did.
 func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 	resolvedRepo, err := ResolveSessionPath(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}
-	wt, _, err := git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, "backlog/"+branchSuffix)
+	branchName := BacklogBranchPrefix + branchSuffix
+	var wt *git.GitWorktree
+	if baseSHA, fetchErr := git.ResolveOriginBranchSHA(resolvedRepo, backlogWorktreeMainBranch); fetchErr == nil {
+		wt, _, err = git.NewGitWorktreeFromCommitSHA(resolvedRepo, branchSuffix, branchName, baseSHA)
+	} else {
+		log.Warn("failed to resolve origin main tip, falling back to ambient HEAD", "repoPath", resolvedRepo, "branch", backlogWorktreeMainBranch, "error", fetchErr)
+		wt, _, err = git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, branchName)
+	}
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}

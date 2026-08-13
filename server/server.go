@@ -133,6 +133,11 @@ func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	return srv
 }
 
+// sessionHealthCheckInterval is how often SessionHealthChecker polls for dead
+// tmux panes and stale sessions. With failureThreshold (session/health.go) at 2
+// consecutive misses, a dead pane surfaces within ~2x this interval.
+const sessionHealthCheckInterval = 15 * time.Second
+
 // wireDepsIntoServer wires pre-built ServerDependencies into srv: starts background
 // components, registers shutdown hooks, and mounts all ConnectRPC/HTTP handlers.
 // serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
@@ -144,6 +149,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	deps.PRStatusPoller.Start(serverCtx)
 	log.Info("PRStatusPoller started")
+
+	// Start SessionHealthChecker: polls for dead tmux panes (remain-on-exit
+	// placeholders left after the wrapped program exits) and stale
+	// started-but-tmux-missing instances, marking dead panes Crashed/Stopped so
+	// the UI can surface a banner instead of raw pane text. Previously this
+	// checker was constructed only in tests and never actually started in
+	// production -- see session/health.go.
+	if deps.Storage != nil {
+		healthChecker := session.NewSessionHealthChecker(deps.Storage)
+		healthCheckerStop := make(chan struct{})
+		go func() {
+			<-serverCtx.Done()
+			close(healthCheckerStop)
+		}()
+		go healthChecker.ScheduledHealthCheck(sessionHealthCheckInterval, healthCheckerStop)
+		log.Info("SessionHealthChecker started", "interval", sessionHealthCheckInterval)
+	}
 
 	// Start HistoryLinker: detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
@@ -446,6 +468,40 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.RegisterConnectHandler(hlAPIPath, http.StripPrefix("/api", hlHandler))
 		log.Info("Registered HeadlessService handler", "path", hlAPIPath)
 	}
+
+	// Register ImportService handler (import-external-session, Phase 1).
+	// Gated behind STAPLER_SQUAD_ENABLE_SESSION_IMPORT: only the three
+	// mutating RPCs (CommitImportExternalSession, ConfirmKillExternalSession,
+	// CancelPendingKill) return CodeUnimplemented when the flag is off, per
+	// Story 1.3.2 / plan.md Task 0. PreviewImportExternalSession is
+	// read-only (no persistence, no signaling) and must always be reachable
+	// regardless of flag state, so it is deliberately excluded from the
+	// gated method list -- gating the whole handler (as
+	// NewFeatureFlagInterceptor would) incorrectly blocks Preview too. Uses
+	// CodeUnimplemented rather than the CodeNotFound used by the
+	// config-persisted "backlog" flag, since this is an unshipped/opt-in
+	// capability rather than a togglable UI feature.
+	suspendedStore, err := session.NewSuspendedProcessStore()
+	if err != nil {
+		log.Error("failed to create suspended process store, import-external-session disabled", "error", err)
+	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
+		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
+	}
+	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
+	importOpts := append(
+		ConnectOptions(deps.ErrorRegistry),
+		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
+			"session_import",
+			func() bool { return config.ImportSessionEnabled() },
+			"CommitImportExternalSession",
+			"ConfirmKillExternalSession",
+			"CancelPendingKill",
+		)),
+	)
+	importPath, importHandler := sessionv1connect.NewImportServiceHandler(importSvc, importOpts...)
+	importAPIPath := "/api" + importPath
+	srv.RegisterConnectHandler(importAPIPath, http.StripPrefix("/api", importHandler))
+	log.Info("Registered ImportService handler", "path", importAPIPath)
 
 	// Wire external session support into the unified WebSocket handler
 	wsHandler.SetExternalSessionSupport(deps.ExternalDiscovery)

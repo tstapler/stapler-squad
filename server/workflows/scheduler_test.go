@@ -3,8 +3,11 @@ package workflows
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -577,4 +580,78 @@ func TestMostRecentCronOccurrence_FindsOccurrence_AcrossALargeGap(t *testing.T) 
 	occ, found := mostRecentCronOccurrence(schedule, notBefore, now)
 	require.True(t, found)
 	assert.Equal(t, time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC), occ)
+}
+
+// --- FireNow integration (model resolution wiring) ---
+//
+// Reuses fakeSessionService/newTestScheduler defined above rather than
+// redeclaring them — this block was originally a separate scheduler_test.go
+// added independently on main; merged here to resolve the add/add conflict.
+
+func TestFireNow_FamilyAlias_ExpectResolvedToConcreteModelInProgram(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "sonnet-family-wf", Name: "sonnet-family-wf",
+		Command: "echo hi", TargetDirectory: "/tmp", Model: "family:sonnet",
+	})
+	require.NoError(t, err)
+
+	_, err = sched.FireNow(context.Background(), wf, "")
+	require.NoError(t, err)
+	require.NotNil(t, fakeSess.lastReq)
+	assert.Equal(t, "claude --model "+DefaultModelFamilies()["sonnet"], fakeSess.lastReq.Program)
+}
+
+func TestFireNow_ExistingLiteralModelID_ExpectUnchangedProgramString(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "literal-model-wf", Name: "literal-model-wf",
+		Command: "echo hi", TargetDirectory: "/tmp", Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+
+	_, err = sched.FireNow(context.Background(), wf, "")
+	require.NoError(t, err)
+	require.NotNil(t, fakeSess.lastReq)
+	assert.Equal(t, "claude --model claude-sonnet-4-6", fakeSess.lastReq.Program)
+}
+
+func TestFireNow_UnknownFamilyAlias_ExpectErrorAndNoSessionCreated(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "unknown-family-wf", Name: "unknown-family-wf",
+		Command: "echo hi", TargetDirectory: "/tmp", Model: "family:retired-name",
+	})
+	require.NoError(t, err)
+
+	_, err = sched.FireNow(context.Background(), wf, "")
+	require.Error(t, err)
+	assert.Nil(t, fakeSess.lastReq, "no session should be created when model resolution fails")
+}
+
+func TestFireNow_OverrideFile_ExpectNewLatestPickedUpWithoutCodeChange(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+	path := filepath.Join(t.TempDir(), "overrides.json")
+	overrideBytes, err := json.Marshal(map[string]string{"sonnet": "claude-sonnet-9999-override"})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, overrideBytes, 0o600))
+
+	families, err := LoadModelFamilyOverride(path)
+	require.NoError(t, err)
+	sched.SetModelFamilies(families)
+
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "sonnet-override-wf", Name: "sonnet-override-wf",
+		Command: "echo hi", TargetDirectory: "/tmp", Model: "family:sonnet",
+	})
+	require.NoError(t, err)
+
+	_, err = sched.FireNow(context.Background(), wf, "")
+	require.NoError(t, err)
+	require.NotNil(t, fakeSess.lastReq)
+	assert.Equal(t, "claude --model claude-sonnet-9999-override", fakeSess.lastReq.Program)
 }

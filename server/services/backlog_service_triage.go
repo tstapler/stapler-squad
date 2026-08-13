@@ -33,9 +33,10 @@ import (
 // (many tests construct a BacklogService without one). Used by SpawnSessionFromItem
 // (Epic 1.5, Story 1.5.5) to build the prompt handed to inst.Prompt / AutonomousDriver.
 //
-// Appends a one-time "other active sessions in this workspace" nudge (AC5) when peers
-// exist — best-effort: detection/lookup failures are logged and swallowed rather than
-// blocking session creation, since this is a convenience nudge, not required context.
+// Appends a one-time "other active sessions in this workspace" nudge, when the
+// workspacePeersNudgeFlagName feature flag is enabled and peers exist — best-effort:
+// detection/lookup failures are logged and swallowed rather than blocking session creation,
+// since this is a convenience nudge, not required context.
 func (s *BacklogService) initialPromptFor(ctx context.Context, item *session.BacklogItemData, priorSessions []session.ItemSessionSummary) string {
 	var prompt string
 	if s.pipelineEngine == nil {
@@ -47,11 +48,12 @@ func (s *BacklogService) initialPromptFor(ctx context.Context, item *session.Bac
 }
 
 // workspacePeersBlockFor returns the rendered workspace-peers nudge for repoPath, or ""
-// on any detection/lookup failure or when repoPath is empty. Delegates to
+// when the workspacePeersNudgeFlagName feature flag is off (default), on any
+// detection/lookup failure, or when repoPath is empty. Delegates to
 // session.WorkspacePeersBlockForPath, shared with SessionService.CreateSession so the two
 // callers can't drift on how the nudge is built.
 func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return session.WorkspacePeersBlockForPath(ctx, s.storage, repoPath)
+	return workspacePeersBlockFor(ctx, s.storage, repoPath)
 }
 
 // triagePromptFor returns s.pipelineEngine.TriagePromptFor(...) when pipelineEngine is
@@ -108,6 +110,46 @@ func recentReviewHadVerdict(sessions []session.ItemSessionSummary, n int) []bool
 			continue
 		}
 		out = append(out, sessions[i].ReviewVerdict != nil)
+	}
+	return out
+}
+
+// recentWorkSessionFileLists returns up to n changed-file lists (most recent
+// first), one per completed (EndedAt != nil) work-role ItemSession in
+// sessions — computed lazily via go-git tree comparison of each session's
+// BaseCommitSha/LastCommitSha (git.FileStatsBetween; no git subshell, see
+// .claude/rules/prefer-go-git-over-subshells.md). sessions must be ordered
+// oldest-first, as Storage.ListItemSessions returns (mirrors
+// recentReviewHadVerdict's contract above). Feeds
+// session.IsTestOnlyReworkCycle.
+//
+// Only completed sessions are considered — reading a still-in-progress
+// session's commit range risks racing an in-flight write to the same
+// worktree (see validation.md's async-race edge case). A session with a
+// git-diff error, or missing SHAs, still occupies a rework-cycle slot with
+// an empty file list rather than being skipped outright: IsTestOnlyReworkCycle
+// treats an empty list as "no signal, don't guess" for that attempt, which is
+// the correct behavior for an attempt whose file data genuinely couldn't be
+// computed — silently skipping it instead would let the cycle compare across
+// a gap it never actually observed.
+func recentWorkSessionFileLists(repoPath string, sessions []session.ItemSessionSummary, n int) [][]string {
+	out := make([][]string, 0, n)
+	for i := len(sessions) - 1; i >= 0 && len(out) < n; i-- {
+		is := sessions[i]
+		if is.Role != session.SessionRoleWork || is.EndedAt == nil {
+			continue
+		}
+		var files []string
+		if is.BaseCommitSha != "" && is.LastCommitSha != "" {
+			if stats, err := git.FileStatsBetween(repoPath, is.BaseCommitSha, is.LastCommitSha); err != nil {
+				log.WarningLog.Printf("[recentWorkSessionFileLists] session=%s FileStatsBetween: %v", is.ID, err)
+			} else {
+				for _, fs := range stats {
+					files = append(files, fs.Path)
+				}
+			}
+		}
+		out = append(out, files)
 	}
 	return out
 }
@@ -185,6 +227,49 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 		fmt.Sprintf("%s — the last two attempts failed the same way, so auto-rework stopped instead of retrying. Left for manual review.", itemTitle),
 		map[string]string{"item_id": itemID},
 	))
+}
+
+// notifyLikelyFlaky writes a durable, purely-informational StuckReasonLikelyFlaky
+// row (session/domain/backlog.go) when session.IsFlakyVerdictFlipFlop or
+// session.IsTestOnlyReworkCycle matches this item's recent review history —
+// behavioral evidence the review outcome may be non-deterministic rather than a
+// real pass/fail signal (see plan.md's option (c): a UI/stuck-state hint, not a
+// gate). Unlike notifyRepeatedFailure/notifyReworkCapHit, this never stops the
+// caller and publishes no operator-facing notification — it's evaluated as a
+// side observation alongside whatever AutoReopenAfterFailedReview decides next,
+// specifically so a misfiring heuristic can never newly stall an item that would
+// otherwise proceed. A MarkStuck/MarkStuckNotified failure is only logged,
+// matching every other MarkStuck call site's own convention.
+func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, currentStatus session.BacklogStatus, recentVerdicts []session.ReviewVerdictSummary, sessions []session.ItemSessionSummary, repoPath string) {
+	if s.storage == nil {
+		return
+	}
+	flip := session.IsFlakyVerdictFlipFlop(recentVerdicts)
+	testOnly := false
+	if repoPath != "" {
+		testOnly = session.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, session.TestOnlyReworkMinAttempts))
+	}
+	if !flip && !testOnly {
+		return
+	}
+
+	reason := "the last two review verdicts landed on different outcomes for what looks like the identical diff"
+	switch {
+	case testOnly && flip:
+		reason = "the last two review verdicts flip-flopped on an identical diff, and rework has been touching only test files"
+	case testOnly:
+		reason = "the last two rework attempts touched only test files — possibly chasing a flaky test rather than fixing the underlying code"
+	}
+
+	applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonLikelyFlaky, currentStatus,
+		fmt.Sprintf("possibly flaky — verify before assuming: %s.", reason))
+	if err != nil {
+		log.WarningLog.Printf("[notifyLikelyFlaky] MarkStuck item=%s: %v", itemID, err)
+	} else if applied {
+		if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonLikelyFlaky); notifyErr != nil {
+			log.WarningLog.Printf("[notifyLikelyFlaky] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		}
+	}
 }
 
 // notifySpawnAndRollbackFailed publishes an operator-facing notification and durable
@@ -386,6 +471,69 @@ func triageShortTitle(sessions []session.ItemSessionSummary, itemTitle string) s
 		parts = parts[:4]
 	}
 	return strings.Join(parts, "-")
+}
+
+// backlogWorkBranchSlug is the single source of truth for the deterministic
+// worktree/branch slug a backlog item's work session uses, given its repo path
+// and a short title identifying it (the triage-suggested title, or
+// triageShortTitle's item.Title-derived fallback). session.CreateBacklogWorktree
+// (session/instance_worktree.go) prefixes this with "backlog/" to get the real
+// git branch.
+//
+// This function exists because the formula was previously duplicated —
+// spawnSessionAfterGates computed it inline for a real spawn, and
+// retitleTriageWorktreeToFinalBranch (below) independently recomputed it ahead
+// of time so the triage worktree could be renamed onto the same branch before
+// spawn ever runs. The two silently drifted once already (see
+// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession,
+// which failed against that duplicated version — a fresh worktree was created
+// from main instead of reusing triage's). Every caller that needs this slug
+// MUST go through this function, not reimplement the formula.
+func backlogWorkBranchSlug(repoPath, title string) string {
+	repoName := slugify(filepath.Base(repoPath))
+	return slugify(repoName + "-" + title)
+}
+
+// retitleTriageWorktreeToFinalBranch moves wt's branch from its provisional
+// "triage-<item-id>" name onto the exact "backlog/<repo>-<title>" branch
+// spawnSessionAfterGates will independently compute and look for once this item
+// reaches a real work session (via backlogWorkBranchSlug — see its doc comment
+// for why both sides must share that one function); title comes from
+// triageShortTitle, which picks up this exact title from the triage result
+// this goroutine is about to persist. So the eventual work session reuses this
+// same worktree, and its already-committed planning docs, instead of starting
+// fresh from main.
+//
+// Best-effort: any failure (including the target branch already being checked
+// out elsewhere — a stale leftover from an earlier run, most likely) just
+// leaves wt on its provisional branch, logged but non-fatal. The committed docs
+// are never lost either way, only not picked up automatically —
+// spawnSessionAfterGates falls back to creating its own worktree off main, same
+// as if this had never run.
+func retitleTriageWorktreeToFinalBranch(itemID, repoPath, title string, wt *git.GitWorktree) {
+	if title == "" {
+		return
+	}
+	finalBranch := session.BacklogBranchPrefix + backlogWorkBranchSlug(repoPath, title)
+
+	if renameErr := wt.RenameBranch(finalBranch); renameErr != nil {
+		log.WarningLog.Printf("[TriggerTriage] failed to rename triage worktree branch for item=%s to %q: %v", itemID, finalBranch, renameErr)
+	}
+}
+
+// cleanupProvisionalTriageWorktree removes a triage worktree that was created
+// for this run but never reached the commit+rename step (LLM call failed,
+// result parsing failed) — otherwise it's an orphaned triage-<itemID>
+// worktree/branch that nothing ever reuses or removes. Once
+// retitleTriageWorktreeToFinalBranch has run, the worktree is promoted for
+// reuse and must not be cleaned up here.
+func cleanupProvisionalTriageWorktree(itemID string, wt *git.GitWorktree) {
+	if wt == nil {
+		return
+	}
+	if cleanupErr := wt.Cleanup(); cleanupErr != nil {
+		log.WarningLog.Printf("[TriggerTriage] failed to clean up provisional triage worktree for item=%s: %v", itemID, cleanupErr)
+	}
 }
 
 func (s *BacklogService) SpawnSessionFromItem(
@@ -761,21 +909,25 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 9. Generate session title.
 	// On reopen, append a revision number (r2, r3…) based on how many work sessions
 	// already exist so the session list shows distinct, human-readable names.
-	repoName := slugify(filepath.Base(item.RepoPath))
-	baseTitle := repoName + "-" + triageShortTitle(priorSessions, item.Title)
+	shortTitle := triageShortTitle(priorSessions, item.Title)
+	baseTitle := slugify(filepath.Base(item.RepoPath)) + "-" + shortTitle
 	title := buildRevisionTitle(baseTitle, isReopen, priorSessions)
 
-	// 10. Create a dedicated git worktree for this work session. The branch slug is
-	// derived from baseTitle (NOT title) so rework/reopen iterations reuse the same
-	// "backlog/<item>" branch instead of minting a new one per -rN revision — the
-	// worktree setup path already detects and reuses an existing branch (see
-	// git.GitWorktree.Setup), so this just needs a stable slug across reopens.
+	// 10. Create a dedicated git worktree for this work session. The branch slug
+	// comes from backlogWorkBranchSlug(item.RepoPath, shortTitle) — the same
+	// single formula TriggerTriage's retitleTriageWorktreeToFinalBranch
+	// independently computes ahead of time (see its doc comment for why both
+	// sides must share it) — so rework/reopen iterations reuse the same
+	// "backlog/<item>" branch instead of minting a new one per -rN revision, and
+	// so a triage worktree already committed on that branch gets reused here
+	// instead of a fresh one from main. The worktree setup path already detects
+	// and reuses an existing branch (see git.GitWorktree.Setup).
 	// Falls back to a plain directory session if the repo is not git-managed (or
 	// worktree creation fails for any other reason — e.g. a bare clone, a detached
 	// HEAD, or disk quota hit).
 	// Files must be written to the session path BEFORE spawning.
 	// worktreeMu guards concurrent spawns from interleaving writes to the same path.
-	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, slugify(baseTitle))
+	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
 	if resolveErr != nil {
 		return nil, resolveErr
 	}
@@ -1463,6 +1615,15 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// fast-looping infrastructure fault (e.g. a broken worktree diff) can't spend
 	// the whole cap in minutes.
 	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, 2)
+
+	// Story 3.2.1: purely informational — evaluated unconditionally, on every
+	// call, regardless of whether a circuit breaker below trips and returns
+	// early. Never gates the reopen/park decision itself (see
+	// StuckReasonLikelyFlaky's doc comment); a likely_flaky row can and often
+	// will co-occur with e.g. a bouncing row on the same underlying evidence
+	// (see plan.md's correlated-signal note).
+	s.notifyLikelyFlaky(ctx, itemID, session.BacklogStatus(item.Status), recentVerdicts, sessions, item.RepoPath)
+
 	if verdictErr != nil {
 		log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s GetRecentReviewVerdictSummaries: %v", itemID, verdictErr)
 	} else if session.IsRepeatedFailure(recentVerdicts) {
@@ -2326,6 +2487,32 @@ func (s *BacklogService) TriggerTriage(
 		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, triageCallBudget)
 		defer cancel()
 
+		// Run triage in a dedicated worktree, not itemRepoPath directly. SDD-mode
+		// triage prompts (session/pipeline_mode_seed.go's sddTriagePromptTemplate)
+		// deliberately write project_plans/<name>/ relative to CWD rather than to
+		// artifactAbsPath above — by design, so those docs land in the target repo
+		// and travel with the eventual PR (see that file's design-rationale
+		// comment). But itemRepoPath is routinely a shared or actively-used
+		// checkout (an app-managed mirror other sessions touch, or — for items
+		// created interactively with repo_path defaulted to the calling session's
+		// own cwd — a developer's live working directory), so writing uncommitted
+		// planning docs directly into it pollutes whatever else is happening
+		// there. A worktree gives the research phase the same real repo content
+		// (git worktrees share history/objects with the main checkout) while
+		// isolating the writes; falls back to itemRepoPath directly if worktree
+		// creation fails (e.g. itemRepoPath isn't a git repo at all — some items
+		// legitimately target a plain directory).
+		triageWorkDir := itemRepoPath
+		var triageWorktree *git.GitWorktree
+		if wt, _, wtErr := git.NewGitWorktree(itemRepoPath, "triage-"+itemID); wtErr != nil {
+			log.WarningLog.Printf("[TriggerTriage] failed to create isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, wtErr)
+		} else if setupErr := wt.Setup(); setupErr != nil {
+			log.WarningLog.Printf("[TriggerTriage] failed to set up isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, setupErr)
+		} else {
+			triageWorktree = wt
+			triageWorkDir = wt.GetWorktreePath()
+		}
+
 		callStart := time.Now()
 		raw, _, callErr := s.headlessPool.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
@@ -2344,7 +2531,7 @@ func (s *BacklogService) TriggerTriage(
 			// earlier), not a permission-mode gap. Do not add bypassPermissions here
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
-			headless.CallOptions{WorkDir: itemRepoPath},
+			headless.CallOptions{WorkDir: triageWorkDir},
 		)
 
 		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful
@@ -2371,6 +2558,7 @@ func (s *BacklogService) TriggerTriage(
 			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s: %v",
 				itemID, callElapsed.Round(time.Second), errType, callErr)
 			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
+			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
 
@@ -2379,10 +2567,25 @@ func (s *BacklogService) TriggerTriage(
 			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d: %v",
 				itemID, callElapsed.Round(time.Second), len(raw), parseErr)
 			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
 		result.Iteration = iteration
 		result.Feedback = feedback
+
+		// Commit whatever the triage prompt wrote (project_plans/<name>/ for SDD
+		// mode; nothing for default mode, which writes to artifactAbsPath instead
+		// — CommitChanges no-ops when the worktree isn't dirty) so the docs
+		// survive past this goroutine instead of sitting uncommitted indefinitely
+		// (the exact gap .claude/rules/sdd-planning-artifacts-commit.md already
+		// names). Only when triageWorktree is non-nil — the itemRepoPath fallback
+		// path must never auto-commit into a repo this code didn't create.
+		if triageWorktree != nil {
+			if commitErr := triageWorktree.CommitChanges(fmt.Sprintf("chore(sdd): planning artifacts for %s", result.Title)); commitErr != nil {
+				log.WarningLog.Printf("[TriggerTriage] failed to commit triage artifacts item=%s worktree=%s: %v", itemID, triageWorkDir, commitErr)
+			}
+			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, result.Title, triageWorktree)
+		}
 
 		payloadJSON, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
@@ -2401,8 +2604,28 @@ func (s *BacklogService) TriggerTriage(
 			persistFailures = append(persistFailures, "saving the triage result")
 		}
 
+		// SDD mode writes plan.md under project_plans/<name>/implementation/, not
+		// flat under artifactAbsPath like the default pipeline's prompt does —
+		// readPlanFile (session/backlog_review.go) only ever looks for
+		// <PlanArtifactsPath>/plan.md, so this must point at the implementation/
+		// subdirectory in triageWorkDir, or review/context-building silently
+		// finds no plan content for every SDD-mode item (true even before this
+		// change, since artifactAbsPath never held SDD's output). Keyed off
+		// triageWorkDir, not triageWorktree != nil: the fallback path (worktree
+		// setup failed) still runs SDD triage directly in itemRepoPath — via
+		// triageWorkDir == itemRepoPath — and still needs pap to find it there.
 		pap := artifactAbsPath
-		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
+		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
+			pap = filepath.Join(triageWorkDir, "project_plans", result.Title, "implementation")
+		}
+		approvalReset := false
+		clearedReason := ""
+		update := session.BacklogItemUpdate{
+			PlanArtifactsPath:   &pap,
+			PlanApproved:        &approvalReset,
+			PlanRejectionReason: &clearedReason,
+			ClearPlanRejectedAt: true,
+		}
 		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
@@ -2422,6 +2645,21 @@ func (s *BacklogService) TriggerTriage(
 			s.notifyTriagePersistFailure(cleanupCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
 
+		// Close out the ItemSession and release triageInFlight together, right here —
+		// not after the optional auto-spawn below. The item's status already flipped to
+		// Ready above, so a caller polling on status (or a human clicking "retry") can
+		// legitimately re-trigger triage now; leaving triageInFlight held through
+		// auto-spawn's own I/O (SpawnSessionFromItem creates a worktree, etc.) only
+		// stretched a window where a well-timed retry got a spurious AlreadyExists —
+		// exactly what made TestTriggerTriage_RefineWithFeedback flaky in CI. ended_at
+		// and triageInFlight are updated in the same spot deliberately: both are inputs
+		// to the orphan-liveness check (IsTriageLive / tombstoneOrphanTriageSessions
+		// above), so moving one without the other would let a concurrent reconciliation
+		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
+		// simply between here and its final log line.
+		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+		s.triageInFlight.Delete(itemID)
+
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
 		// auto-spawn. Autonomous: true bypasses the planning-approval gate the same way
 		// AutoReopenForPRFix's spawn already does — a human never gets to review the plan
@@ -2438,7 +2676,6 @@ func (s *BacklogService) TriggerTriage(
 			}
 		}
 
-		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 		log.InfoLog.Printf("[TriggerTriage] headless triage complete item=%s elapsed=%s suggestions=%d tasks=%d",
 			itemID, callElapsed.Round(time.Second), len(result.Suggestions), len(result.Tasks))
 	}()
@@ -2787,6 +3024,7 @@ Do not modify the code. Only write the review verdict.
 			OverallOutcome: overall,
 			PerCriterion:   string(perCriterionJSON),
 			Summary:        reviewSummary,
+			DiffHash:       s.storage.ComputeCurrentDiffHash(cleanupCtx, item.ID),
 		})
 		if createErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review verdict: %w", createErr))

@@ -20,7 +20,9 @@ import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { useAppSelector } from "@/lib/store";
+import { store } from "@/lib/store/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
+import { selectSessionsError } from "@/lib/store/sessionsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -42,6 +44,8 @@ import { PullRequestSection } from "./detail/PullRequestSection";
 import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
+import { PlanVerdictBox } from "./PlanVerdictBox";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
@@ -86,6 +90,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     cancelTriage,
     spawnSessionFromItem,
     approvePlan,
+    rejectPlan,
     overrideVerdict,
     triggerReReview,
     triggerShipPR,
@@ -96,7 +101,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     listPipelineModes,
     lastError,
   } = useBacklogService();
-  const { deleteSession } = useSessionService();
+  const { deleteSession, updateSession } = useSessionService();
   const { showActionToast } = useNotifications();
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +110,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [steeringSessionId, setSteeringSessionId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<"id" | "link" | null>(null);
 
   // Epic 3.4 "what ran" surface: the currently-fetched mode list, used only
@@ -113,6 +119,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // degrades every session's "Pipeline" group to the unrecognized-mode
   // fallback rather than blocking the rest of the item detail view.
   const [pipelineModes, setPipelineModes] = useState<PipelineMode[]>([]);
+
+  // Mirrors `item` on every render (assignment during render, not in an
+  // effect, so it's always current by the time an in-flight load() resolves)
+  // — lets load() compare a freshly-fetched result against whatever is
+  // currently displayed without needing `item` in its own dependency array.
+  const itemRef = useRef<BacklogItem | null>(null);
+  itemRef.current = item;
+
+  // Monotonic guard against out-of-order load() resolution (pitfall #4):
+  // each call captures its own sequence number, and only the response
+  // matching the most-recently-issued call is applied.
+  const loadSeqRef = useRef(0);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -227,6 +245,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setBufferedItem(mapped);
       return;
     }
+    // Guard against a stale live-store entry stomping more-current state
+    // (pitfall #2's other half, alongside load()'s matching guard below):
+    // backlogItemsSlice's own upsertItem guard only protects the 2nd+ write
+    // for a given item id — the *first* live event this component observes
+    // for an item (e.g. a "created" event delivered, after a connection
+    // delay, later than a separately-issued load()/GetBacklogItem fetch
+    // already completed) has no `existing` entry to compare against there,
+    // so it's accepted into the store unconditionally and would otherwise
+    // unconditionally overwrite this component's already-fresher `item`.
+    const current = itemRef.current;
+    const currentMs = current?.updatedAt ? new Date(current.updatedAt).getTime() : 0;
+    const mappedMs = mapped.updatedAt ? new Date(mapped.updatedAt).getTime() : 0;
+    if (current && mappedMs < currentMs) return;
     setItem(mapped);
     setNotesValue(mapped.notes ?? "");
     // editMode is read from the closure at the time this effect actually
@@ -396,16 +427,29 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   };
 
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const result = await getBacklogItem(itemId);
-      if (!mountedRef.current) return;
+      // Drop this response if it's not the most recently issued load() call
+      // (pitfall #4 — resolution order isn't guaranteed to match call order)
+      // or the component has since unmounted.
+      if (!mountedRef.current || seq !== loadSeqRef.current) return;
       if (!result) {
         setError("Item not found.");
       } else {
-        setItem(result);
-        setNotesValue(result.notes ?? "");
+        // Guard against stomping a fresher live-watch/optimistic update with
+        // an older fetched result (pitfall #2) — `>=` is intentional: a
+        // same-millisecond result from the user's own just-triggered
+        // mutation must still apply, only a strictly *older* one is dropped.
+        const current = itemRef.current;
+        const currentMs = current?.updatedAt ? new Date(current.updatedAt).getTime() : 0;
+        const resultMs = result.updatedAt ? new Date(result.updatedAt).getTime() : 0;
+        if (!current || resultMs >= currentMs) {
+          setItem(result);
+          setNotesValue(result.notes ?? "");
+        }
       }
     } catch (e) {
       if (mountedRef.current) setError(e instanceof Error ? e.message : "Failed to load item.");
@@ -450,6 +494,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       }
     },
     [item, cancelTriage, track, deleteSession, showActionToast, load]
+  );
+
+  // Epic 2.2 (Story 2.2.2, ADR-002): steers a live work/review session via
+  // the same widened UpdateSession RPC/hook the general session list's own
+  // Steer dialog uses (AC7). Mirrors handleDeleteSession's shape.
+  // updateSession() itself swallows RPC errors and returns null rather than
+  // throwing (it dispatches the real failure message to the shared
+  // session-service redux error slice instead — see useSessionService.ts's
+  // updateSession) — so failure is re-thrown here, letting SessionsSection's
+  // inline composer (which awaits onSteerSession) catch it, keep itself
+  // open, and surface the error instead of closing optimistically. Read the
+  // real message via store.getState() rather than a memoized selector value
+  // (e.g. useAppSelector) — updateSession's dispatch happens synchronously
+  // before it resolves, but a selector captured in this callback's closure
+  // would still reflect the pre-call render and lag one render behind.
+  const handleSteerSession = useCallback(
+    async (s: LinkedSession, message: string) => {
+      const toastKey = `${s.sessionId}:steer`;
+      setSteeringSessionId(s.sessionId);
+      try {
+        const result = await updateSession(s.sessionId, { steerMessage: message });
+        if (!result) {
+          throw new Error(selectSessionsError(store.getState()) ?? "Failed to steer session.");
+        }
+        showActionToast("Steering message sent.", "success", toastKey);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to steer session.";
+        showActionToast(msg, "error", toastKey);
+        throw err instanceof Error ? err : new Error(msg);
+      } finally {
+        setSteeringSessionId(null);
+      }
+    },
+    [updateSession, showActionToast]
   );
 
   // Epic 3.4: fetch the current mode list once, for resolving each linked
@@ -754,6 +832,35 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     },
     [item, triggerTriage, load]
   );
+
+  // Story 4.3.1: RejectPlan only persists state (ADR-002) — it does not
+  // itself trigger regeneration. handleRegeneratePlanWithFeedback is the
+  // separate, explicit follow-up action PlanVerdictBox renders once an item
+  // is in the changes_requested state.
+  const handleRejectPlan = useCallback(
+    async (reason: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:reject_plan`;
+      setActionLoading("reject_plan");
+      try {
+        await rejectPlan(item.id, reason);
+        showActionToast("Revisions requested.", "success", toastKey);
+        await load();
+      } catch (e) {
+        showActionToast(e instanceof Error ? e.message : "Reject failed.", "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, rejectPlan, load, showActionToast]
+  );
+
+  const handleRegeneratePlanWithFeedback = useCallback(async () => {
+    if (!item?.planRejectionReason) return;
+    await triggerTriage(item.id, item.planRejectionReason);
+    await load();
+  }, [item, triggerTriage, load]);
 
   const handleApplyTriageSuggestions = useCallback(
     async (preApplyCriteria: AcCriterion[]) => {
@@ -1199,8 +1306,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 triageResult={item.triageResult}
                 onApply={handleApplyTriageSuggestions}
                 onUndoApply={handleUndoTriageSuggestions}
-                onSkip={() => { void load(); }}
+                // Dismissing the panel is a purely client-local state change
+                // (localStorage + local React state, no server mutation) —
+                // nothing to refresh (pitfall #3). A load() here was a
+                // needless, unguarded race source that could stomp
+                // more-current live-store state with a redundant read.
+                onSkip={() => {}}
                 onRefine={handleRefineTriage}
+                onAnswerQuestion={handleRefineTriage}
               />
             </div>
           )}
@@ -1271,6 +1384,28 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           </h3>
           <AcCriteriaList criteria={item.acCriteria} />
         </div>
+
+        {/* Plan Review (Story 4.3.1): rendered immediately before Actions,
+            NOT after PlanArtifactsSection's plan-artifacts display as
+            plan.md originally described — Story 3.1.3's later refactor
+            (see the CollapsibleGroup comment below) already pulled
+            ActionsSection out ahead of the collapsible group so it stays
+            reachable without expanding anything; PlanVerdictBox follows the
+            same always-visible convention and sits right above it, so
+            Approve (in ActionsSection) and Request Changes (here) are both
+            reachable without navigating away (AC3). */}
+        {(item.status === "ready" ||
+          item.status === "queued" ||
+          derivePlanReviewStatus(item) !== "no_plan") && (
+          <PlanVerdictBox
+            status={derivePlanReviewStatus(item)}
+            rejectionReason={item.planRejectionReason}
+            readOnly={terminalState !== null}
+            actionPending={actionLoading === "reject_plan"}
+            onReject={handleRejectPlan}
+            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
+          />
+        )}
 
         {/* Actions */}
         <ActionsSection
@@ -1365,6 +1500,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             deletingSessionId={deletingSessionId}
             defaultExpanded={sessionsExpanded}
             onDeleteSession={handleDeleteSession}
+            onSteerSession={handleSteerSession}
+            steeringSessionId={steeringSessionId}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />

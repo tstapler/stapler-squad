@@ -295,6 +295,74 @@ func TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow(t *testing.T) {
 	assert.Empty(t, fetched.Labels)
 }
 
+// TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible
+// is the migration/backward-compatibility test flagged as an explicit gap by
+// project_plans/backlog-operator-feedback-loop's Epic 3 implementer (see
+// validation.md's Migration row) — the ent equivalent of
+// TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFields
+// above, applied to the two nullable columns RejectPlan added
+// (plan_rejection_reason, plan_rejected_at). ent's auto-migration
+// (createTestEntRepository -> client.Schema.Create) is additive/optional-field
+// with no down-migration to execute, so "backward compatible" is verified as
+// "a pre-existing-shaped row (one that never wrote these two fields) reads
+// back at its zero value, not a null-pointer panic" — plus a regression
+// check that the pre-existing ApprovePlan/RejectPlan round trip is
+// unaffected by the additive columns.
+func TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Assertion 1: a row shaped like one created before plan_rejection_reason/
+	// plan_rejected_at existed (created via the raw ent client, setting
+	// neither field, exactly like TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow's
+	// pre-existing-row precedent above) reads back PlanRejectionReason == ""
+	// and PlanRejectedAt == nil — ent's zero-value handling, not a panic.
+	preExisting, err := repo.client.BacklogItem.Create().
+		SetTitle("item created before plan-rejection fields existed").
+		Save(ctx)
+	require.NoError(t, err)
+
+	fetchedPre, err := repo.GetBacklogItem(ctx, preExisting.ID.String())
+	require.NoError(t, err)
+	assert.Equal(t, "", fetchedPre.PlanRejectionReason)
+	assert.Nil(t, fetchedPre.PlanRejectedAt)
+
+	// Assertion 2: the same pre-existing row accepts a plan-rejection write
+	// (the shape RejectPlan itself performs) without disturbing fields that
+	// existed before this migration.
+	preUpdateStatus := fetchedPre.Status
+	preUpdateTitle := fetchedPre.Title
+	reason := "Please also handle the mobile navigation case."
+	rejectedAt := time.Now().UTC().Truncate(time.Second)
+	_, err = repo.UpdateBacklogItem(ctx, preExisting.ID.String(), BacklogItemUpdate{
+		PlanRejectionReason: &reason,
+		PlanRejectedAt:      &rejectedAt,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterUpdate, err := repo.GetBacklogItem(ctx, preExisting.ID.String())
+	require.NoError(t, err)
+	assert.Equal(t, reason, fetchedAfterUpdate.PlanRejectionReason)
+	require.NotNil(t, fetchedAfterUpdate.PlanRejectedAt)
+	assert.True(t, rejectedAt.Equal(*fetchedAfterUpdate.PlanRejectedAt))
+	assert.Equal(t, preUpdateStatus, fetchedAfterUpdate.Status, "existing Status must be unchanged by the additive-field update")
+	assert.Equal(t, preUpdateTitle, fetchedAfterUpdate.Title, "existing Title must be unchanged by the additive-field update")
+
+	// Assertion 3: a brand-new item created with neither field explicitly set
+	// persists successfully with no NOT NULL constraint violation, confirming
+	// both columns are genuinely optional end-to-end through the generated
+	// client (fresh schema creation via createTestEntRepository already
+	// exercises the auto-migration path itself).
+	fresh, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "brand-new item, no plan-rejection fields set",
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, fresh.ID)
+	assert.Equal(t, "", fresh.PlanRejectionReason)
+	assert.Nil(t, fresh.PlanRejectedAt)
+}
+
 // TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip mirrors
 // TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip (Epic 0.6,
 // Story 0.6.1): create an item, assert GitHubSyncedIssueUpdatedAt is nil,

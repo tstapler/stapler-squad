@@ -209,6 +209,9 @@ func (s *WorkflowService) CreateWorkflow(
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid cron expression: %w", err))
 		}
 	}
+	if err := workflows.ValidateModel(req.Msg.Model); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 
 	// Trigger-type validation (Task 1.1.1e): resolve trigger_type (defaulting for
 	// backward-compat cron-only clients that never send it) and reject any request
@@ -319,6 +322,11 @@ func (s *WorkflowService) UpdateWorkflow(
 	if req.Msg.CronExpression != nil && *req.Msg.CronExpression != "" {
 		if err := workflows.ValidateCronExpression(*req.Msg.CronExpression); err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid cron expression: %w", err))
+		}
+	}
+	if req.Msg.Model != nil {
+		if err := workflows.ValidateModel(*req.Msg.Model); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
 	}
 

@@ -672,35 +672,39 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                 item.ID,
-		Title:              item.Title,
-		Description:        item.Description,
-		Priority:           int32(item.Priority),
-		Status:             item.Status,
-		RepoPath:           item.RepoPath,
-		SkipReviewGate:     item.SkipReviewGate,
-		SkipPlanning:       item.SkipPlanning,
-		AutoSpawnSession:   item.AutoSpawnSession,
-		AutoCreatePr:       item.AutoCreatePR,
-		PipelineMode:       &item.PipelineMode,
-		Category:           &item.Category,
-		PlanApproved:       item.PlanApproved,
-		PlanArtifactsPath:  item.PlanArtifactsPath,
-		Notes:              item.Notes,
-		ExternalId:         item.ExternalID,
-		Labels:             item.Labels,
-		SourceId:           item.SourceID,
-		PrUrl:              item.PrURL,
-		PrNumber:           int32(item.PrNumber),
-		CreatedAt:          timestamppb.New(item.CreatedAt),
-		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		Id:                  item.ID,
+		Title:               item.Title,
+		Description:         item.Description,
+		Priority:            int32(item.Priority),
+		Status:              item.Status,
+		RepoPath:            item.RepoPath,
+		SkipReviewGate:      item.SkipReviewGate,
+		SkipPlanning:        item.SkipPlanning,
+		AutoSpawnSession:    item.AutoSpawnSession,
+		AutoCreatePr:        item.AutoCreatePR,
+		PipelineMode:        &item.PipelineMode,
+		Category:            &item.Category,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
+		Notes:               item.Notes,
+		ExternalId:          item.ExternalID,
+		Labels:              item.Labels,
+		SourceId:            item.SourceID,
+		PrUrl:               item.PrURL,
+		PrNumber:            int32(item.PrNumber),
+		CreatedAt:           timestamppb.New(item.CreatedAt),
+		UpdatedAt:           timestamppb.New(item.UpdatedAt),
+		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
+	}
+	if item.PlanRejectedAt != nil {
+		p.PlanRejectedAt = timestamppb.New(*item.PlanRejectedAt)
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)

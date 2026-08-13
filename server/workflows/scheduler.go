@@ -73,6 +73,11 @@ type Scheduler struct {
 	// rateLimiter enforces a per-Workflow fire rate (Epic 2.4.2). nil (the default)
 	// disables rate limiting. Wired via SetRateLimiter.
 	rateLimiter triggerRateLimiterGate
+
+	// modelFamilies maps a family alias (e.g. "sonnet") to the concrete model ID
+	// it currently resolves to. Defaults to DefaultModelFamilies(); overridden via
+	// SetModelFamilies (see LoadModelFamilyOverride).
+	modelFamilies map[string]string
 }
 
 // NewScheduler creates a new WorkflowScheduler.
@@ -83,10 +88,11 @@ func NewScheduler(repo session.WorkflowRepository, sessionSvc SessionServiceInte
 				cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
 			)),
 		),
-		repo:       repo,
-		sessionSvc: sessionSvc,
-		eventBus:   eventBus,
-		entryMap:   make(map[string]cron.EntryID),
+		repo:          repo,
+		sessionSvc:    sessionSvc,
+		eventBus:      eventBus,
+		entryMap:      make(map[string]cron.EntryID),
+		modelFamilies: DefaultModelFamilies(),
 	}
 }
 
@@ -134,6 +140,16 @@ func (s *Scheduler) recordFireEvent(ctx context.Context, wf *ent.Workflow, outco
 		log.Warn("[WorkflowScheduler] failed to record trigger fire event",
 			"slug", slug, "outcome", outcome, "err", err)
 	}
+}
+
+// SetModelFamilies replaces the family alias → concrete model ID map used to
+// resolve a workflow's Model field at fire time. Wired at startup from
+// LoadModelFamilyOverride when an override file is present (see
+// server/dependencies.go); falls back to DefaultModelFamilies() otherwise.
+func (s *Scheduler) SetModelFamilies(families map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.modelFamilies = families
 }
 
 // Start loads all enabled workflows and begins cron processing.
@@ -346,12 +362,24 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, renderedP
 
 	sessionType := sessionTypeToProto(session.SessionType(wf.SessionType))
 
+	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID.
+	// Fails closed: an unknown/retired alias aborts the fire rather than
+	// passing the broken "family:xxx" string through to the CLI.
+	s.mu.Lock()
+	families := s.modelFamilies
+	s.mu.Unlock()
+	resolvedModel, modelErr := ResolveModel(families, wf.Model)
+	if modelErr != nil {
+		log.Error("[WorkflowScheduler] FireNow: model resolution failed", "slug", wf.Slug, "model", wf.Model, "err", modelErr)
+		return "", fmt.Errorf("resolve model for workflow %q: %w", wf.Slug, modelErr)
+	}
+
 	// Append --model flag when a model is specified and the program is claude (or defaulting to claude).
 	program := wf.AgentType
-	if wf.Model != "" {
+	if resolvedModel != "" {
 		isClaudeProgram := program == "" || program == "claude"
 		if isClaudeProgram {
-			program = "claude --model " + wf.Model
+			program = "claude --model " + resolvedModel
 		}
 	}
 

@@ -325,6 +325,71 @@ type CapacityConfig struct {
 	ProviderPriority []ProviderPriority `json:"provider_priority,omitempty"`
 }
 
+// QuotaConfig holds configuration for the account-wide Claude Code session-quota
+// gate that pauses/resumes backlog automation (see BacklogController) based on
+// an inferred quota-headroom signal, plus a foreground-session dispatch throttle.
+type QuotaConfig struct {
+	// Enabled gates the entire feature. When false, the gate is a no-op and
+	// BacklogController's toggle behaves exactly as it does today. Default: false.
+	Enabled bool `json:"enabled,omitempty"`
+	// PauseBelowHeadroomPct is the soft/proactive threshold: backlog is paused
+	// once estimated headroom drops below this percentage. Default: 20.0.
+	PauseBelowHeadroomPct float64 `json:"pause_below_headroom_pct,omitempty"`
+	// ResumeMarginPct is added to PauseBelowHeadroomPct to form the resume
+	// threshold, avoiding flapping right at the pause line. Default: 15.0.
+	ResumeMarginPct float64 `json:"resume_margin_pct,omitempty"`
+	// ConsecutiveTicksToPause is how many consecutive below-threshold reconcile
+	// ticks are required before the soft signal pauses backlog. Default: 2.
+	ConsecutiveTicksToPause int `json:"consecutive_ticks_to_pause,omitempty"`
+	// ConsecutiveTicksToResume is how many consecutive above-threshold reconcile
+	// ticks are required before the soft signal resumes backlog. Default: 3.
+	ConsecutiveTicksToResume int `json:"consecutive_ticks_to_resume,omitempty"`
+	// AssumedWindowTokenBudget is the operator-supplied assumed token budget for
+	// the trailing 5h window. Anthropic publishes no real budget, so this must be
+	// calibrated manually; 0 (the default) disables the soft/percentage signal
+	// entirely, leaving only the hard/reactive rate-limit override active.
+	AssumedWindowTokenBudget int64 `json:"assumed_window_token_budget,omitempty"`
+	// RateLimitWindowMinutes is how long a detected rate-limit event keeps the
+	// hard/reactive override active. Default: 30.
+	RateLimitWindowMinutes int `json:"rate_limit_window_minutes,omitempty"`
+	// ManualOverrideGraceMinutes is how long after a detected manual override the
+	// notification cooldown is bypassed for the next auto-transition. Default: 10.
+	ManualOverrideGraceMinutes int `json:"manual_override_grace_minutes,omitempty"`
+	// ForegroundThrottleDelaySeconds is how long the foreground-session dispatch
+	// throttle stays active after the most recently observed foreground activity.
+	// Default: 300.
+	ForegroundThrottleDelaySeconds int `json:"foreground_throttle_delay_seconds,omitempty"`
+}
+
+// QuotaConfigOrDefault returns a QuotaConfig with standard defaults applied to zero fields.
+func (c QuotaConfig) QuotaConfigOrDefault() QuotaConfig {
+	out := c
+	// Enabled intentionally stays false by default — this feature ships opt-in.
+	if out.PauseBelowHeadroomPct <= 0 {
+		out.PauseBelowHeadroomPct = 20.0
+	}
+	if out.ResumeMarginPct <= 0 {
+		out.ResumeMarginPct = 15.0
+	}
+	if out.ConsecutiveTicksToPause <= 0 {
+		out.ConsecutiveTicksToPause = 2
+	}
+	if out.ConsecutiveTicksToResume <= 0 {
+		out.ConsecutiveTicksToResume = 3
+	}
+	// AssumedWindowTokenBudget intentionally stays 0 by default — no safe guess exists.
+	if out.RateLimitWindowMinutes <= 0 {
+		out.RateLimitWindowMinutes = 30
+	}
+	if out.ManualOverrideGraceMinutes <= 0 {
+		out.ManualOverrideGraceMinutes = 10
+	}
+	if out.ForegroundThrottleDelaySeconds <= 0 {
+		out.ForegroundThrottleDelaySeconds = 300
+	}
+	return out
+}
+
 // CapacityConfigOrDefault returns a CapacityConfig with standard defaults applied to zero fields.
 func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	out := c
