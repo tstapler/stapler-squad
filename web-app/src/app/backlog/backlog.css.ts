@@ -161,6 +161,25 @@ export const groupBySelect = style({
   cursor: "pointer",
 });
 
+export const resetViewButton = style({
+  display: "inline-flex",
+  alignItems: "center",
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  background: "transparent",
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.medium,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  transition: "background 0.1s ease",
+  ":hover": {
+    background: vars.color.hoverBackground,
+    borderColor: vars.color.borderStrong,
+  },
+});
+
 export const filterChipGroup = style({
   display: "flex",
   gap: vars.space["1"],
