@@ -315,6 +315,27 @@ func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id
 	return nil
 }
 
+// UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
+// capture file (session.WriteHeadlessFailureCapture) for a headless triage/review
+// call that errored or produced unparseable output — see the failure_capture_path
+// schema comment. Set independently of UpdateItemSessionEndedWithReason (a separate,
+// orthogonal column) so a caller that already wrote the capture file to disk can
+// record its path without re-specifying ended_at/end_reason.
+func (r *EntRepository) UpdateItemSessionFailureCapture(ctx context.Context, id string, path string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		SetFailureCapturePath(path).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to set failure_capture_path on item session %s: %w", id, err)
+	}
+	return nil
+}
+
 // SetItemSessionBaseCommit records the worktree's pre-work HEAD SHA for the
 // item session, so the review gate can diff base..HEAD across every commit the
 // agent makes rather than just HEAD~1..HEAD.

@@ -145,6 +145,10 @@ var (
 		{Name: "shipped_file_stats", Type: field.TypeString, Nullable: true},
 		{Name: "shipped_snapshot_capture_failed", Type: field.TypeBool, Nullable: true, Default: false},
 		{Name: "rework_cap_override", Type: field.TypeInt, Nullable: true},
+		{Name: "next_workflow_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "chain_fired", Type: field.TypeBool, Default: false},
+		{Name: "chained_at", Type: field.TypeTime, Nullable: true},
+		{Name: "triggered_by_chain_depth", Type: field.TypeInt, Default: 0},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "item_source_backlog_items", Type: field.TypeUUID, Nullable: true},
@@ -157,7 +161,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_items_item_sources_backlog_items",
-				Columns:    []*schema.Column{BacklogItemsColumns[40]},
+				Columns:    []*schema.Column{BacklogItemsColumns[44]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -171,7 +175,7 @@ var (
 			{
 				Name:    "backlogitem_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[39]},
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[43]},
 			},
 			{
 				Name:    "backlogitem_status_queued_at",
@@ -187,6 +191,11 @@ var (
 				Name:    "backlogitem_status",
 				Unique:  false,
 				Columns: []*schema.Column{BacklogItemsColumns[5]},
+			},
+			{
+				Name:    "backlogitem_status_chain_fired",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[39]},
 			},
 		},
 	}
@@ -550,6 +559,7 @@ var (
 		{Name: "started_at", Type: field.TypeTime, Nullable: true},
 		{Name: "ended_at", Type: field.TypeTime, Nullable: true},
 		{Name: "end_reason", Type: field.TypeString, Nullable: true, Default: ""},
+		{Name: "failure_capture_path", Type: field.TypeString, Nullable: true, Default: ""},
 		{Name: "ac_snapshot", Type: field.TypeString, Nullable: true},
 		{Name: "pipeline_mode_snapshot", Type: field.TypeString, Default: ""},
 		{Name: "pipeline_mode_snapshot_hash", Type: field.TypeString, Default: ""},
@@ -574,7 +584,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "item_sessions_backlog_items_item_sessions",
-				Columns:    []*schema.Column{ItemSessionsColumns[20]},
+				Columns:    []*schema.Column{ItemSessionsColumns[21]},
 				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -588,7 +598,7 @@ var (
 			{
 				Name:    "itemsession_created_at_backlog_item_item_sessions",
 				Unique:  false,
-				Columns: []*schema.Column{ItemSessionsColumns[18], ItemSessionsColumns[20]},
+				Columns: []*schema.Column{ItemSessionsColumns[19], ItemSessionsColumns[21]},
 			},
 		},
 	}
@@ -1000,6 +1010,39 @@ var (
 			},
 		},
 	}
+	// TriggerFireEventsColumns holds the columns for the "trigger_fire_events" table.
+	TriggerFireEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "workflow_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "outcome", Type: field.TypeString},
+		{Name: "delivery_id", Type: field.TypeString, Nullable: true},
+		{Name: "session_id", Type: field.TypeString, Nullable: true},
+		{Name: "error_message", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// TriggerFireEventsTable holds the schema information for the "trigger_fire_events" table.
+	TriggerFireEventsTable = &schema.Table{
+		Name:       "trigger_fire_events",
+		Columns:    TriggerFireEventsColumns,
+		PrimaryKey: []*schema.Column{TriggerFireEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "triggerfireevent_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TriggerFireEventsColumns[6]},
+			},
+			{
+				Name:    "triggerfireevent_workflow_id_delivery_id",
+				Unique:  true,
+				Columns: []*schema.Column{TriggerFireEventsColumns[1], TriggerFireEventsColumns[3]},
+			},
+			{
+				Name:    "triggerfireevent_workflow_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TriggerFireEventsColumns[1], TriggerFireEventsColumns[6]},
+			},
+		},
+	}
 	// WorkflowsColumns holds the columns for the "workflows" table.
 	WorkflowsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1018,6 +1061,15 @@ var (
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "keep_sessions", Type: field.TypeInt, Nullable: true, Default: 0},
 		{Name: "archive_after_hours", Type: field.TypeInt, Nullable: true, Default: 0},
+		{Name: "trigger_type", Type: field.TypeString, Nullable: true, Default: "manual"},
+		{Name: "github_repo", Type: field.TypeString, Nullable: true},
+		{Name: "github_branch", Type: field.TypeString, Nullable: true},
+		{Name: "webhook_slug", Type: field.TypeString, Unique: true, Nullable: true},
+		{Name: "webhook_secret_encrypted", Type: field.TypeString, Nullable: true},
+		{Name: "event_filter", Type: field.TypeString, Nullable: true},
+		{Name: "label_filter", Type: field.TypeString, Nullable: true},
+		{Name: "prompt_template", Type: field.TypeString, Nullable: true},
+		{Name: "last_fired_at", Type: field.TypeTime, Nullable: true},
 	}
 	// WorkflowsTable holds the schema information for the "workflows" table.
 	WorkflowsTable = &schema.Table{
@@ -1039,6 +1091,16 @@ var (
 				Name:    "workflow_created_at",
 				Unique:  false,
 				Columns: []*schema.Column{WorkflowsColumns[12]},
+			},
+			{
+				Name:    "workflow_webhook_slug",
+				Unique:  false,
+				Columns: []*schema.Column{WorkflowsColumns[19]},
+			},
+			{
+				Name:    "workflow_trigger_type",
+				Unique:  false,
+				Columns: []*schema.Column{WorkflowsColumns[16]},
 			},
 		},
 	}
@@ -1142,6 +1204,7 @@ var (
 		ShellsTable,
 		SourceSyncEventsTable,
 		TagsTable,
+		TriggerFireEventsTable,
 		WorkflowsTable,
 		WorktreesTable,
 		BacklogItemSessionsTable,

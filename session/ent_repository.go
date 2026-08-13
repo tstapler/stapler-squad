@@ -39,6 +39,23 @@ type EntRepository struct {
 	// typically by Storage.SetItemChangePublisher's forwarding call in
 	// server/dependencies.go.
 	itemChangePublisher ItemChangePublisher
+
+	// callbackDispatcher is nil-safe — dispatchCallback nil-checks before calling
+	// it (dispatch is best-effort and never blocks or fails the underlying
+	// mutation). Wired via SetCallbackDispatcher, typically by
+	// Storage.SetCallbackDispatcher's forwarding call in server/dependencies.go.
+	// Used by TransitionBacklogItemStatus (on_session_complete, webhook-triggers
+	// Phase 5) and by BacklogLifecycleListener.reconcileStaleWorkSessions
+	// (on_session_stale), which is handed this *EntRepository directly.
+	callbackDispatcher CallbackDispatcher
+
+	// chainFirer is nil-safe — dispatchChainFire nil-checks before calling it
+	// (dispatch is best-effort and never blocks or fails the underlying
+	// mutation). Wired via SetChainFirer, typically by Storage.WireChainFirer's
+	// forwarding call in server/dependencies.go. Used by
+	// TransitionBacklogItemStatus to fire the pipeline-chain continuation
+	// (webhook-triggers Phase 6, AC5/AC9) once a "done" transition commits.
+	chainFirer *ChainFirer
 }
 
 // NewEntRepository creates a new Ent repository with the given options.
@@ -711,6 +728,12 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 	// Clear tag associations (many-to-many)
 	if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
 		return fmt.Errorf("failed to clear tags: %w", err)
+	}
+
+	// Delete shells (sibling tmux sessions) — Shell.session edge is Required(),
+	// so leaving any rows here trips a FOREIGN KEY constraint on session delete.
+	if _, err := tx.Shell.Delete().Where(entshell.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete shells: %w", err)
 	}
 
 	// Finally delete the session

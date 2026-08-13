@@ -227,7 +227,7 @@ func (d *DefaultStatusDeterminer) Determine(
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Task completed successfully")
 				log.Debug("task complete (no controller)", "session", inst.Title)
-			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent:
+			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent, detection.StatusCompacting:
 				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 			}
 		}

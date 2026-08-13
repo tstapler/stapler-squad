@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { createClient } from "@connectrpc/connect";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import type { VCSStatus } from "@/gen/session/v1/types_pb";
@@ -64,9 +64,13 @@ export function useVcsStatus(
   const [loading, setLoading] = useState(!hit);
   const [error, setError] = useState<string | null>(hit?.error ?? null);
 
+  // Set once GetVCSStatus reports the session no longer exists, so the
+  // polling interval below stops calling a deleted session forever.
+  const stoppedRef = useRef(false);
+
   const fetchVcs = useCallback(
     async (skipCache = false) => {
-      if (!sessionId) {
+      if (!sessionId || stoppedRef.current) {
         setLoading(false);
         return;
       }
@@ -92,6 +96,13 @@ export function useVcsStatus(
         setData(entry.data);
         setError(entry.error);
       } catch (err) {
+        if (err instanceof ConnectError && err.code === Code.NotFound) {
+          stoppedRef.current = true;
+          vcsCache.delete(sessionId);
+          setError(err.message);
+          setData(null);
+          return;
+        }
         setError(err instanceof Error ? err.message : "Failed to load VCS status");
       } finally {
         setLoading(false);
@@ -101,8 +112,13 @@ export function useVcsStatus(
   );
 
   useEffect(() => {
+    stoppedRef.current = false;
     fetchVcs();
     const interval = setInterval(() => {
+      if (stoppedRef.current) {
+        clearInterval(interval);
+        return;
+      }
       if (!document.hidden) fetchVcs();
     }, pollIntervalMs);
     return () => clearInterval(interval);

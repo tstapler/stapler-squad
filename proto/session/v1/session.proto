@@ -247,6 +247,10 @@ service SessionService {
   // GetSessionDefaults returns the full session defaults configuration (global, profiles, directory rules).
   rpc GetSessionDefaults(GetSessionDefaultsRequest) returns (GetSessionDefaultsResponse) {}
 
+  // GetLauncherPresets returns the hand-authored launcher presets from
+  // ~/.stapler-squad/launcher-presets.json, freshly read and validated on every call.
+  rpc GetLauncherPresets(GetLauncherPresetsRequest) returns (GetLauncherPresetsResponse) {}
+
   // ResolveDefaults merges all default layers for a given working directory and optional profile.
   // Returns the resolved values plus source metadata for per-field badges in the UI.
   rpc ResolveDefaults(ResolveDefaultsRequest) returns (ResolveDefaultsResponse) {}
@@ -270,6 +274,17 @@ service SessionService {
 
   // DeleteDirectoryRule removes a directory rule by path.
   rpc DeleteDirectoryRule(DeleteDirectoryRuleRequest) returns (DeleteDirectoryRuleResponse) {}
+
+  // Callback Config RPCs (webhook-triggers Phase 5, FR7)
+
+  // GetCallbackConfig returns whether each of the three outbound-callback URLs is
+  // configured. The URLs themselves are never returned (see CallbackConfigProto).
+  rpc GetCallbackConfig(GetCallbackConfigRequest) returns (GetCallbackConfigResponse) {}
+
+  // UpdateCallbackConfig sets one or more outbound-callback URLs. Each provided URL is
+  // SSRF-validated (ValidateCallbackURL) before being persisted; an unset field leaves
+  // that URL unchanged.
+  rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
@@ -389,6 +404,12 @@ service SessionService {
 
   // RunWorkflow immediately fires a workflow (outside of cron schedule).
   rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
+
+  // ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
+  // rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
+  // the Phase 7 TriggersPanel UI so existing cron-workflow users can observe
+  // fired_failed rejections from the Epic 1.3 admission-gate fix (pre-mortem P1 #3).
+  rpc ListTriggerFireEvents(ListTriggerFireEventsRequest) returns (ListTriggerFireEventsResponse) {}
 
   // GetDetectionEvents returns recent status-detection events for a session.
   // Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
@@ -586,12 +607,25 @@ message CreateSessionRequest {
   // Path and profile are resolved from the alias config; path from req is used as override if non-empty.
   string alias_name = 27;
 
+  // triggered_by_chain_depth is the pipeline-chain hop count (webhook-triggers Epic 6.3):
+  // set by ChainFirer/Scheduler.FireTriggerChained when this session is a chained fire from
+  // a completed BacklogItem's next_workflow_id, one greater than the completing item's own
+  // TriggeredByChainDepth. 0 for every non-chained session (the default). Attribution only —
+  // not read back by CreateSession itself.
+  int32 triggered_by_chain_depth = 28;
+
   // auto_approve injects a per-agent CLI flag that skips permission/approval
   // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
   // Independent of auto_yes — see auto_yes's own comment for the distinction.
   // Defaults to false; never implicitly set true. Rejected server-side if the
   // resolved program isn't a supported agent (see AutoApproveSupported).
-  bool auto_approve = 28;
+  bool auto_approve = 29;
+
+  // extra_args are additional positional argv elements appended verbatim (each independently
+  // shell-quoted, never whitespace-split) after any defaults-resolved cli_flags. Populated by
+  // a selected launcher preset's argv[1:]; safe for elements containing spaces or shell
+  // metacharacters (e.g. a remote-exec fragment like "cd ~/repo && exec claude").
+  repeated string extra_args = 30;
 }
 
 message CreateSessionResponse {
@@ -1857,6 +1891,36 @@ message UpdateGlobalDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
 }
 
+// Callback Config (webhook-triggers Phase 5, FR7)
+//
+// CallbackConfigProto reports booleans only — the raw URL is never echoed back on any
+// read path, matching the masked-boolean-not-value convention used across this project's
+// other secret-bearing config (see Workflow.webhook_secret_encrypted's doc comment above,
+// which is never round-tripped in plaintext by CreateWorkflow/UpdateWorkflow either).
+
+message CallbackConfigProto {
+  bool on_session_complete_configured = 1;
+  bool on_session_stale_configured = 2;
+  bool on_queue_item_created_configured = 3;
+}
+
+message GetCallbackConfigRequest {}
+
+message GetCallbackConfigResponse {
+  CallbackConfigProto config = 1;
+}
+
+message UpdateCallbackConfigRequest {
+  // Unset means "leave unchanged"; empty string "" means "clear/disable".
+  optional string on_session_complete_url = 1;
+  optional string on_session_stale_url = 2;
+  optional string on_queue_item_created_url = 3;
+}
+
+message UpdateCallbackConfigResponse {
+  CallbackConfigProto config = 1;
+}
+
 // UpsertProfile
 
 message UpsertProfileRequest {
@@ -1932,6 +1996,28 @@ message DeleteAliasRequest {
 }
 
 message DeleteAliasResponse {}
+
+// LauncherPresetProto represents one hand-authored launcher preset loaded from
+// ~/.stapler-squad/launcher-presets.json.
+message LauncherPresetProto {
+  string id = 1;
+  string label = 2;
+  repeated string argv = 3;
+  // program is presentation-only (UI label/PATH-check hint); the backend never uses it —
+  // the actual launched program is always argv[0].
+  string program = 4;
+  string default_path = 5;
+}
+
+message GetLauncherPresetsRequest {}
+
+message GetLauncherPresetsResponse {
+  repeated LauncherPresetProto presets = 1;
+  // load_error is non-empty when the presets file exists but failed validation (malformed
+  // JSON, duplicate id, empty argv, unsupported version). presets is empty in that case.
+  // Empty load_error + empty presets means "no file / no presets configured", not an error.
+  string load_error = 2;
+}
 
 message ListWorktreesRequest {
   // Absolute path to the git repository root. Supports ~ expansion.
@@ -2555,6 +2641,21 @@ message WorkflowProto {
   optional int32 keep_sessions = 15;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 16;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1). trigger_type discriminates
+  // which activation mechanism fires this row: "cron" | "github_push" | "webhook" |
+  // "manual". Never populated with the webhook secret — that is write-only and never
+  // round-tripped in plaintext by any RPC (see webhook_secret_encrypted's doc comment
+  // on Workflow's storage layer).
+  string trigger_type = 17;
+  string github_repo = 18;
+  string github_branch = 19;
+  string webhook_slug = 20;
+  string event_filter = 21;
+  string label_filter = 22;
+  string prompt_template = 23;
+  // Last time this trigger successfully fired a session. Unset if never fired.
+  optional google.protobuf.Timestamp last_fired_at = 24;
 }
 
 message CreateWorkflowRequest {
@@ -2573,6 +2674,26 @@ message CreateWorkflowRequest {
   optional int32 keep_sessions = 12;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 13;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1). trigger_type discriminates
+  // which activation mechanism fires this row: "cron" | "github_push" | "webhook" |
+  // "manual" (defaults to "manual", or "cron" when cron_enabled is set and
+  // trigger_type is left unspecified, for backward compatibility with existing
+  // cron-only clients). Populated fields must match the declared trigger_type — e.g.
+  // webhook_slug requires trigger_type="webhook" — or the request is rejected with
+  // CodeInvalidArgument (Task 1.1.1e).
+  string trigger_type = 14;
+  string github_repo = 15;
+  string github_branch = 16;
+  string webhook_slug = 17;
+  string event_filter = 18;
+  string label_filter = 19;
+  string prompt_template = 20;
+  // Write-only plaintext webhook/HMAC shared secret (Phase 7 follow-up to Epic 1.1).
+  // "" means "no secret configured" — the trigger's inbound HMAC verification will
+  // reject every delivery until one is set. Never echoed back by any RPC, matching
+  // WorkflowProto.trigger_type's doc comment on webhook_secret_encrypted above.
+  string webhook_secret = 21;
 }
 
 message CreateWorkflowResponse {
@@ -2596,6 +2717,24 @@ message UpdateWorkflowRequest {
   optional int32 keep_sessions = 12;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 13;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1) — see CreateWorkflowRequest's
+  // doc comment for the trigger_type-vs-populated-fields validation contract, applied
+  // here against the *effective* (existing-row-merged-with-request) values.
+  optional string trigger_type = 14;
+  optional string github_repo = 15;
+  optional string github_branch = 16;
+  optional string webhook_slug = 17;
+  optional string event_filter = 18;
+  optional string label_filter = 19;
+  optional string prompt_template = 20;
+  // Write-only plaintext webhook/HMAC shared secret. Not `optional` — there is no
+  // "unset" vs "empty" distinction: an empty/omitted value always means "leave the
+  // stored secret unchanged" (never clears it implicitly, matching the "omit means
+  // unchanged" convention UpdateCallbackConfig's masked URLs use for their own
+  // never-cleared-implicitly fields). Only a non-empty value rotates the stored
+  // secret. See CreateWorkflowRequest.webhook_secret's doc comment.
+  string webhook_secret = 21;
 }
 
 message UpdateWorkflowResponse {
@@ -2644,6 +2783,30 @@ message ListSlashCommandsResponse {
 
 message RunWorkflowResponse {
   string session_id = 1;
+}
+
+// TriggerFireEventProto is the wire representation of a single trigger evaluation
+// attempt (fired/no-match/rejected) — the durable audit trail behind
+// ListTriggerFireEvents (webhook-triggers Epic 1.2).
+message TriggerFireEventProto {
+  string id = 1;
+  string workflow_id = 2;
+  // "fired_success" | "fired_failed" | "no_match" | "rejected"
+  string outcome = 3;
+  string delivery_id = 4;
+  string session_id = 5;
+  string error_message = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListTriggerFireEventsRequest {
+  string workflow_id = 1;
+  // Max events to return, newest first; 0 means server default (100).
+  int32 limit = 2;
+}
+
+message ListTriggerFireEventsResponse {
+  repeated TriggerFireEventProto events = 1;
 }
 
 // DetectionEventProto is the wire representation of a single status-detection event.

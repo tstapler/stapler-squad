@@ -306,6 +306,20 @@ func (s *BacklogService) autoSpawnReadyItemsEnabled() bool {
 	return s.cfg.AutoSpawnReadyItemsOrDefault()
 }
 
+// Admit reports whether a new trigger-fired session may be created right now, per the
+// same MaxConcurrentBacklogWorkItems WIP cap SpawnSessionFromItem's own gate enforces
+// (backlog_service_triage.go). Implements server/workflows.AdmissionGate — wired into
+// Scheduler at construction (server/dependencies.go) so Scheduler.FireNow/FireTrigger
+// can no longer bypass this cap (webhook-triggers Epic 1.3, closing the collateral
+// debt the 2026-07-12 OOM incident's WIP limit was meant to prevent everywhere).
+func (s *BacklogService) Admit(ctx context.Context) (bool, error) {
+	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
+	if err != nil {
+		return false, fmt.Errorf("count live work sessions: %w", err)
+	}
+	return liveCount < s.maxConcurrentBacklogWorkItems(), nil
+}
+
 // SetEventBus wires in the event bus used to publish operator-facing notifications.
 func (s *BacklogService) SetEventBus(b *events.EventBus) {
 	s.eventBus = b
@@ -487,6 +501,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		EndReason:                is.EndReason,
+		FailureCapturePath:       is.FailureCapturePath,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)

@@ -81,6 +81,11 @@ func EndReason(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldEndReason, v))
 }
 
+// FailureCapturePath applies equality check predicate on the "failure_capture_path" field. It's identical to FailureCapturePathEQ.
+func FailureCapturePath(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldFailureCapturePath, v))
+}
+
 // AcSnapshot applies equality check predicate on the "ac_snapshot" field. It's identical to AcSnapshotEQ.
 func AcSnapshot(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldAcSnapshot, v))
@@ -454,6 +459,81 @@ func EndReasonEqualFold(v string) predicate.ItemSession {
 // EndReasonContainsFold applies the ContainsFold predicate on the "end_reason" field.
 func EndReasonContainsFold(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldContainsFold(FieldEndReason, v))
+}
+
+// FailureCapturePathEQ applies the EQ predicate on the "failure_capture_path" field.
+func FailureCapturePathEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathNEQ applies the NEQ predicate on the "failure_capture_path" field.
+func FailureCapturePathNEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNEQ(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathIn applies the In predicate on the "failure_capture_path" field.
+func FailureCapturePathIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIn(FieldFailureCapturePath, vs...))
+}
+
+// FailureCapturePathNotIn applies the NotIn predicate on the "failure_capture_path" field.
+func FailureCapturePathNotIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotIn(FieldFailureCapturePath, vs...))
+}
+
+// FailureCapturePathGT applies the GT predicate on the "failure_capture_path" field.
+func FailureCapturePathGT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGT(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathGTE applies the GTE predicate on the "failure_capture_path" field.
+func FailureCapturePathGTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGTE(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathLT applies the LT predicate on the "failure_capture_path" field.
+func FailureCapturePathLT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLT(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathLTE applies the LTE predicate on the "failure_capture_path" field.
+func FailureCapturePathLTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLTE(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathContains applies the Contains predicate on the "failure_capture_path" field.
+func FailureCapturePathContains(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContains(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathHasPrefix applies the HasPrefix predicate on the "failure_capture_path" field.
+func FailureCapturePathHasPrefix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasPrefix(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathHasSuffix applies the HasSuffix predicate on the "failure_capture_path" field.
+func FailureCapturePathHasSuffix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasSuffix(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathIsNil applies the IsNil predicate on the "failure_capture_path" field.
+func FailureCapturePathIsNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIsNull(FieldFailureCapturePath))
+}
+
+// FailureCapturePathNotNil applies the NotNil predicate on the "failure_capture_path" field.
+func FailureCapturePathNotNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotNull(FieldFailureCapturePath))
+}
+
+// FailureCapturePathEqualFold applies the EqualFold predicate on the "failure_capture_path" field.
+func FailureCapturePathEqualFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEqualFold(FieldFailureCapturePath, v))
+}
+
+// FailureCapturePathContainsFold applies the ContainsFold predicate on the "failure_capture_path" field.
+func FailureCapturePathContainsFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContainsFold(FieldFailureCapturePath, v))
 }
 
 // AcSnapshotEQ applies the EQ predicate on the "ac_snapshot" field.

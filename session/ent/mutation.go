@@ -37,6 +37,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
 	"github.com/tstapler/stapler-squad/session/ent/workflow"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -74,6 +75,7 @@ const (
 	TypeShell                   = "Shell"
 	TypeSourceSyncEvent         = "SourceSyncEvent"
 	TypeTag                     = "Tag"
+	TypeTriggerFireEvent        = "TriggerFireEvent"
 	TypeWorkflow                = "Workflow"
 	TypeWorktree                = "Worktree"
 )
@@ -3084,6 +3086,11 @@ type BacklogItemMutation struct {
 	shipped_snapshot_capture_failed *bool
 	rework_cap_override             *int
 	addrework_cap_override          *int
+	next_workflow_id                *uuid.UUID
+	chain_fired                     *bool
+	chained_at                      *time.Time
+	triggered_by_chain_depth        *int
+	addtriggered_by_chain_depth     *int
 	created_at                      *time.Time
 	updated_at                      *time.Time
 	clearedFields                   map[string]struct{}
@@ -5009,6 +5016,196 @@ func (m *BacklogItemMutation) ResetReworkCapOverride() {
 	delete(m.clearedFields, backlogitem.FieldReworkCapOverride)
 }
 
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (m *BacklogItemMutation) SetNextWorkflowID(u uuid.UUID) {
+	m.next_workflow_id = &u
+}
+
+// NextWorkflowID returns the value of the "next_workflow_id" field in the mutation.
+func (m *BacklogItemMutation) NextWorkflowID() (r uuid.UUID, exists bool) {
+	v := m.next_workflow_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNextWorkflowID returns the old "next_workflow_id" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldNextWorkflowID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNextWorkflowID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNextWorkflowID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNextWorkflowID: %w", err)
+	}
+	return oldValue.NextWorkflowID, nil
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (m *BacklogItemMutation) ClearNextWorkflowID() {
+	m.next_workflow_id = nil
+	m.clearedFields[backlogitem.FieldNextWorkflowID] = struct{}{}
+}
+
+// NextWorkflowIDCleared returns if the "next_workflow_id" field was cleared in this mutation.
+func (m *BacklogItemMutation) NextWorkflowIDCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldNextWorkflowID]
+	return ok
+}
+
+// ResetNextWorkflowID resets all changes to the "next_workflow_id" field.
+func (m *BacklogItemMutation) ResetNextWorkflowID() {
+	m.next_workflow_id = nil
+	delete(m.clearedFields, backlogitem.FieldNextWorkflowID)
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (m *BacklogItemMutation) SetChainFired(b bool) {
+	m.chain_fired = &b
+}
+
+// ChainFired returns the value of the "chain_fired" field in the mutation.
+func (m *BacklogItemMutation) ChainFired() (r bool, exists bool) {
+	v := m.chain_fired
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldChainFired returns the old "chain_fired" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldChainFired(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldChainFired is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldChainFired requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldChainFired: %w", err)
+	}
+	return oldValue.ChainFired, nil
+}
+
+// ResetChainFired resets all changes to the "chain_fired" field.
+func (m *BacklogItemMutation) ResetChainFired() {
+	m.chain_fired = nil
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (m *BacklogItemMutation) SetChainedAt(t time.Time) {
+	m.chained_at = &t
+}
+
+// ChainedAt returns the value of the "chained_at" field in the mutation.
+func (m *BacklogItemMutation) ChainedAt() (r time.Time, exists bool) {
+	v := m.chained_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldChainedAt returns the old "chained_at" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldChainedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldChainedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldChainedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldChainedAt: %w", err)
+	}
+	return oldValue.ChainedAt, nil
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (m *BacklogItemMutation) ClearChainedAt() {
+	m.chained_at = nil
+	m.clearedFields[backlogitem.FieldChainedAt] = struct{}{}
+}
+
+// ChainedAtCleared returns if the "chained_at" field was cleared in this mutation.
+func (m *BacklogItemMutation) ChainedAtCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldChainedAt]
+	return ok
+}
+
+// ResetChainedAt resets all changes to the "chained_at" field.
+func (m *BacklogItemMutation) ResetChainedAt() {
+	m.chained_at = nil
+	delete(m.clearedFields, backlogitem.FieldChainedAt)
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (m *BacklogItemMutation) SetTriggeredByChainDepth(i int) {
+	m.triggered_by_chain_depth = &i
+	m.addtriggered_by_chain_depth = nil
+}
+
+// TriggeredByChainDepth returns the value of the "triggered_by_chain_depth" field in the mutation.
+func (m *BacklogItemMutation) TriggeredByChainDepth() (r int, exists bool) {
+	v := m.triggered_by_chain_depth
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriggeredByChainDepth returns the old "triggered_by_chain_depth" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldTriggeredByChainDepth(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriggeredByChainDepth is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriggeredByChainDepth requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriggeredByChainDepth: %w", err)
+	}
+	return oldValue.TriggeredByChainDepth, nil
+}
+
+// AddTriggeredByChainDepth adds i to the "triggered_by_chain_depth" field.
+func (m *BacklogItemMutation) AddTriggeredByChainDepth(i int) {
+	if m.addtriggered_by_chain_depth != nil {
+		*m.addtriggered_by_chain_depth += i
+	} else {
+		m.addtriggered_by_chain_depth = &i
+	}
+}
+
+// AddedTriggeredByChainDepth returns the value that was added to the "triggered_by_chain_depth" field in this mutation.
+func (m *BacklogItemMutation) AddedTriggeredByChainDepth() (r int, exists bool) {
+	v := m.addtriggered_by_chain_depth
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetTriggeredByChainDepth resets all changes to the "triggered_by_chain_depth" field.
+func (m *BacklogItemMutation) ResetTriggeredByChainDepth() {
+	m.triggered_by_chain_depth = nil
+	m.addtriggered_by_chain_depth = nil
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *BacklogItemMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -5532,7 +5729,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 39)
+	fields := make([]string, 0, 43)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -5644,6 +5841,18 @@ func (m *BacklogItemMutation) Fields() []string {
 	if m.rework_cap_override != nil {
 		fields = append(fields, backlogitem.FieldReworkCapOverride)
 	}
+	if m.next_workflow_id != nil {
+		fields = append(fields, backlogitem.FieldNextWorkflowID)
+	}
+	if m.chain_fired != nil {
+		fields = append(fields, backlogitem.FieldChainFired)
+	}
+	if m.chained_at != nil {
+		fields = append(fields, backlogitem.FieldChainedAt)
+	}
+	if m.triggered_by_chain_depth != nil {
+		fields = append(fields, backlogitem.FieldTriggeredByChainDepth)
+	}
 	if m.created_at != nil {
 		fields = append(fields, backlogitem.FieldCreatedAt)
 	}
@@ -5732,6 +5941,14 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.ShippedSnapshotCaptureFailed()
 	case backlogitem.FieldReworkCapOverride:
 		return m.ReworkCapOverride()
+	case backlogitem.FieldNextWorkflowID:
+		return m.NextWorkflowID()
+	case backlogitem.FieldChainFired:
+		return m.ChainFired()
+	case backlogitem.FieldChainedAt:
+		return m.ChainedAt()
+	case backlogitem.FieldTriggeredByChainDepth:
+		return m.TriggeredByChainDepth()
 	case backlogitem.FieldCreatedAt:
 		return m.CreatedAt()
 	case backlogitem.FieldUpdatedAt:
@@ -5819,6 +6036,14 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldShippedSnapshotCaptureFailed(ctx)
 	case backlogitem.FieldReworkCapOverride:
 		return m.OldReworkCapOverride(ctx)
+	case backlogitem.FieldNextWorkflowID:
+		return m.OldNextWorkflowID(ctx)
+	case backlogitem.FieldChainFired:
+		return m.OldChainFired(ctx)
+	case backlogitem.FieldChainedAt:
+		return m.OldChainedAt(ctx)
+	case backlogitem.FieldTriggeredByChainDepth:
+		return m.OldTriggeredByChainDepth(ctx)
 	case backlogitem.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case backlogitem.FieldUpdatedAt:
@@ -6091,6 +6316,34 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetReworkCapOverride(v)
 		return nil
+	case backlogitem.FieldNextWorkflowID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNextWorkflowID(v)
+		return nil
+	case backlogitem.FieldChainFired:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetChainFired(v)
+		return nil
+	case backlogitem.FieldChainedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetChainedAt(v)
+		return nil
+	case backlogitem.FieldTriggeredByChainDepth:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriggeredByChainDepth(v)
+		return nil
 	case backlogitem.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -6128,6 +6381,9 @@ func (m *BacklogItemMutation) AddedFields() []string {
 	if m.addrework_cap_override != nil {
 		fields = append(fields, backlogitem.FieldReworkCapOverride)
 	}
+	if m.addtriggered_by_chain_depth != nil {
+		fields = append(fields, backlogitem.FieldTriggeredByChainDepth)
+	}
 	return fields
 }
 
@@ -6146,6 +6402,8 @@ func (m *BacklogItemMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedShippedChangesReqCount()
 	case backlogitem.FieldReworkCapOverride:
 		return m.AddedReworkCapOverride()
+	case backlogitem.FieldTriggeredByChainDepth:
+		return m.AddedTriggeredByChainDepth()
 	}
 	return nil, false
 }
@@ -6189,6 +6447,13 @@ func (m *BacklogItemMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddReworkCapOverride(v)
+		return nil
+	case backlogitem.FieldTriggeredByChainDepth:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTriggeredByChainDepth(v)
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem numeric field %s", name)
@@ -6275,6 +6540,12 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(backlogitem.FieldReworkCapOverride) {
 		fields = append(fields, backlogitem.FieldReworkCapOverride)
+	}
+	if m.FieldCleared(backlogitem.FieldNextWorkflowID) {
+		fields = append(fields, backlogitem.FieldNextWorkflowID)
+	}
+	if m.FieldCleared(backlogitem.FieldChainedAt) {
+		fields = append(fields, backlogitem.FieldChainedAt)
 	}
 	return fields
 }
@@ -6367,6 +6638,12 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 		return nil
 	case backlogitem.FieldReworkCapOverride:
 		m.ClearReworkCapOverride()
+		return nil
+	case backlogitem.FieldNextWorkflowID:
+		m.ClearNextWorkflowID()
+		return nil
+	case backlogitem.FieldChainedAt:
+		m.ClearChainedAt()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem nullable field %s", name)
@@ -6486,6 +6763,18 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldReworkCapOverride:
 		m.ResetReworkCapOverride()
+		return nil
+	case backlogitem.FieldNextWorkflowID:
+		m.ResetNextWorkflowID()
+		return nil
+	case backlogitem.FieldChainFired:
+		m.ResetChainFired()
+		return nil
+	case backlogitem.FieldChainedAt:
+		m.ResetChainedAt()
+		return nil
+	case backlogitem.FieldTriggeredByChainDepth:
+		m.ResetTriggeredByChainDepth()
 		return nil
 	case backlogitem.FieldCreatedAt:
 		m.ResetCreatedAt()
@@ -15224,6 +15513,7 @@ type ItemSessionMutation struct {
 	started_at                  *time.Time
 	ended_at                    *time.Time
 	end_reason                  *string
+	failure_capture_path        *string
 	ac_snapshot                 *string
 	pipeline_mode_snapshot      *string
 	pipeline_mode_snapshot_hash *string
@@ -15571,6 +15861,55 @@ func (m *ItemSessionMutation) EndReasonCleared() bool {
 func (m *ItemSessionMutation) ResetEndReason() {
 	m.end_reason = nil
 	delete(m.clearedFields, itemsession.FieldEndReason)
+}
+
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (m *ItemSessionMutation) SetFailureCapturePath(s string) {
+	m.failure_capture_path = &s
+}
+
+// FailureCapturePath returns the value of the "failure_capture_path" field in the mutation.
+func (m *ItemSessionMutation) FailureCapturePath() (r string, exists bool) {
+	v := m.failure_capture_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFailureCapturePath returns the old "failure_capture_path" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldFailureCapturePath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFailureCapturePath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFailureCapturePath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFailureCapturePath: %w", err)
+	}
+	return oldValue.FailureCapturePath, nil
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (m *ItemSessionMutation) ClearFailureCapturePath() {
+	m.failure_capture_path = nil
+	m.clearedFields[itemsession.FieldFailureCapturePath] = struct{}{}
+}
+
+// FailureCapturePathCleared returns if the "failure_capture_path" field was cleared in this mutation.
+func (m *ItemSessionMutation) FailureCapturePathCleared() bool {
+	_, ok := m.clearedFields[itemsession.FieldFailureCapturePath]
+	return ok
+}
+
+// ResetFailureCapturePath resets all changes to the "failure_capture_path" field.
+func (m *ItemSessionMutation) ResetFailureCapturePath() {
+	m.failure_capture_path = nil
+	delete(m.clearedFields, itemsession.FieldFailureCapturePath)
 }
 
 // SetAcSnapshot sets the "ac_snapshot" field.
@@ -16360,7 +16699,7 @@ func (m *ItemSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSessionMutation) Fields() []string {
-	fields := make([]string, 0, 19)
+	fields := make([]string, 0, 20)
 	if m.session_uuid != nil {
 		fields = append(fields, itemsession.FieldSessionUUID)
 	}
@@ -16375,6 +16714,9 @@ func (m *ItemSessionMutation) Fields() []string {
 	}
 	if m.end_reason != nil {
 		fields = append(fields, itemsession.FieldEndReason)
+	}
+	if m.failure_capture_path != nil {
+		fields = append(fields, itemsession.FieldFailureCapturePath)
 	}
 	if m.ac_snapshot != nil {
 		fields = append(fields, itemsession.FieldAcSnapshot)
@@ -16436,6 +16778,8 @@ func (m *ItemSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.EndedAt()
 	case itemsession.FieldEndReason:
 		return m.EndReason()
+	case itemsession.FieldFailureCapturePath:
+		return m.FailureCapturePath()
 	case itemsession.FieldAcSnapshot:
 		return m.AcSnapshot()
 	case itemsession.FieldPipelineModeSnapshot:
@@ -16483,6 +16827,8 @@ func (m *ItemSessionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldEndedAt(ctx)
 	case itemsession.FieldEndReason:
 		return m.OldEndReason(ctx)
+	case itemsession.FieldFailureCapturePath:
+		return m.OldFailureCapturePath(ctx)
 	case itemsession.FieldAcSnapshot:
 		return m.OldAcSnapshot(ctx)
 	case itemsession.FieldPipelineModeSnapshot:
@@ -16554,6 +16900,13 @@ func (m *ItemSessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetEndReason(v)
+		return nil
+	case itemsession.FieldFailureCapturePath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFailureCapturePath(v)
 		return nil
 	case itemsession.FieldAcSnapshot:
 		v, ok := value.(string)
@@ -16719,6 +17072,9 @@ func (m *ItemSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsession.FieldEndReason) {
 		fields = append(fields, itemsession.FieldEndReason)
 	}
+	if m.FieldCleared(itemsession.FieldFailureCapturePath) {
+		fields = append(fields, itemsession.FieldFailureCapturePath)
+	}
 	if m.FieldCleared(itemsession.FieldAcSnapshot) {
 		fields = append(fields, itemsession.FieldAcSnapshot)
 	}
@@ -16772,6 +17128,9 @@ func (m *ItemSessionMutation) ClearField(name string) error {
 	case itemsession.FieldEndReason:
 		m.ClearEndReason()
 		return nil
+	case itemsession.FieldFailureCapturePath:
+		m.ClearFailureCapturePath()
+		return nil
 	case itemsession.FieldAcSnapshot:
 		m.ClearAcSnapshot()
 		return nil
@@ -16824,6 +17183,9 @@ func (m *ItemSessionMutation) ResetField(name string) error {
 		return nil
 	case itemsession.FieldEndReason:
 		m.ResetEndReason()
+		return nil
+	case itemsession.FieldFailureCapturePath:
+		m.ResetFailureCapturePath()
 		return nil
 	case itemsession.FieldAcSnapshot:
 		m.ResetAcSnapshot()
@@ -30230,33 +30592,723 @@ func (m *TagMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown Tag edge %s", name)
 }
 
+// TriggerFireEventMutation represents an operation that mutates the TriggerFireEvent nodes in the graph.
+type TriggerFireEventMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *uuid.UUID
+	workflow_id   *uuid.UUID
+	outcome       *string
+	delivery_id   *string
+	session_id    *string
+	error_message *string
+	created_at    *time.Time
+	clearedFields map[string]struct{}
+	done          bool
+	oldValue      func(context.Context) (*TriggerFireEvent, error)
+	predicates    []predicate.TriggerFireEvent
+}
+
+var _ ent.Mutation = (*TriggerFireEventMutation)(nil)
+
+// triggerfireeventOption allows management of the mutation configuration using functional options.
+type triggerfireeventOption func(*TriggerFireEventMutation)
+
+// newTriggerFireEventMutation creates new mutation for the TriggerFireEvent entity.
+func newTriggerFireEventMutation(c config, op Op, opts ...triggerfireeventOption) *TriggerFireEventMutation {
+	m := &TriggerFireEventMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeTriggerFireEvent,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withTriggerFireEventID sets the ID field of the mutation.
+func withTriggerFireEventID(id uuid.UUID) triggerfireeventOption {
+	return func(m *TriggerFireEventMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *TriggerFireEvent
+		)
+		m.oldValue = func(ctx context.Context) (*TriggerFireEvent, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().TriggerFireEvent.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withTriggerFireEvent sets the old TriggerFireEvent of the mutation.
+func withTriggerFireEvent(node *TriggerFireEvent) triggerfireeventOption {
+	return func(m *TriggerFireEventMutation) {
+		m.oldValue = func(context.Context) (*TriggerFireEvent, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m TriggerFireEventMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m TriggerFireEventMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of TriggerFireEvent entities.
+func (m *TriggerFireEventMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *TriggerFireEventMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *TriggerFireEventMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().TriggerFireEvent.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetWorkflowID sets the "workflow_id" field.
+func (m *TriggerFireEventMutation) SetWorkflowID(u uuid.UUID) {
+	m.workflow_id = &u
+}
+
+// WorkflowID returns the value of the "workflow_id" field in the mutation.
+func (m *TriggerFireEventMutation) WorkflowID() (r uuid.UUID, exists bool) {
+	v := m.workflow_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWorkflowID returns the old "workflow_id" field's value of the TriggerFireEvent entity.
+// If the TriggerFireEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TriggerFireEventMutation) OldWorkflowID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWorkflowID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWorkflowID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWorkflowID: %w", err)
+	}
+	return oldValue.WorkflowID, nil
+}
+
+// ClearWorkflowID clears the value of the "workflow_id" field.
+func (m *TriggerFireEventMutation) ClearWorkflowID() {
+	m.workflow_id = nil
+	m.clearedFields[triggerfireevent.FieldWorkflowID] = struct{}{}
+}
+
+// WorkflowIDCleared returns if the "workflow_id" field was cleared in this mutation.
+func (m *TriggerFireEventMutation) WorkflowIDCleared() bool {
+	_, ok := m.clearedFields[triggerfireevent.FieldWorkflowID]
+	return ok
+}
+
+// ResetWorkflowID resets all changes to the "workflow_id" field.
+func (m *TriggerFireEventMutation) ResetWorkflowID() {
+	m.workflow_id = nil
+	delete(m.clearedFields, triggerfireevent.FieldWorkflowID)
+}
+
+// SetOutcome sets the "outcome" field.
+func (m *TriggerFireEventMutation) SetOutcome(s string) {
+	m.outcome = &s
+}
+
+// Outcome returns the value of the "outcome" field in the mutation.
+func (m *TriggerFireEventMutation) Outcome() (r string, exists bool) {
+	v := m.outcome
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOutcome returns the old "outcome" field's value of the TriggerFireEvent entity.
+// If the TriggerFireEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TriggerFireEventMutation) OldOutcome(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOutcome is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOutcome requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOutcome: %w", err)
+	}
+	return oldValue.Outcome, nil
+}
+
+// ResetOutcome resets all changes to the "outcome" field.
+func (m *TriggerFireEventMutation) ResetOutcome() {
+	m.outcome = nil
+}
+
+// SetDeliveryID sets the "delivery_id" field.
+func (m *TriggerFireEventMutation) SetDeliveryID(s string) {
+	m.delivery_id = &s
+}
+
+// DeliveryID returns the value of the "delivery_id" field in the mutation.
+func (m *TriggerFireEventMutation) DeliveryID() (r string, exists bool) {
+	v := m.delivery_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeliveryID returns the old "delivery_id" field's value of the TriggerFireEvent entity.
+// If the TriggerFireEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TriggerFireEventMutation) OldDeliveryID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeliveryID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeliveryID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeliveryID: %w", err)
+	}
+	return oldValue.DeliveryID, nil
+}
+
+// ClearDeliveryID clears the value of the "delivery_id" field.
+func (m *TriggerFireEventMutation) ClearDeliveryID() {
+	m.delivery_id = nil
+	m.clearedFields[triggerfireevent.FieldDeliveryID] = struct{}{}
+}
+
+// DeliveryIDCleared returns if the "delivery_id" field was cleared in this mutation.
+func (m *TriggerFireEventMutation) DeliveryIDCleared() bool {
+	_, ok := m.clearedFields[triggerfireevent.FieldDeliveryID]
+	return ok
+}
+
+// ResetDeliveryID resets all changes to the "delivery_id" field.
+func (m *TriggerFireEventMutation) ResetDeliveryID() {
+	m.delivery_id = nil
+	delete(m.clearedFields, triggerfireevent.FieldDeliveryID)
+}
+
+// SetSessionID sets the "session_id" field.
+func (m *TriggerFireEventMutation) SetSessionID(s string) {
+	m.session_id = &s
+}
+
+// SessionID returns the value of the "session_id" field in the mutation.
+func (m *TriggerFireEventMutation) SessionID() (r string, exists bool) {
+	v := m.session_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionID returns the old "session_id" field's value of the TriggerFireEvent entity.
+// If the TriggerFireEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TriggerFireEventMutation) OldSessionID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionID: %w", err)
+	}
+	return oldValue.SessionID, nil
+}
+
+// ClearSessionID clears the value of the "session_id" field.
+func (m *TriggerFireEventMutation) ClearSessionID() {
+	m.session_id = nil
+	m.clearedFields[triggerfireevent.FieldSessionID] = struct{}{}
+}
+
+// SessionIDCleared returns if the "session_id" field was cleared in this mutation.
+func (m *TriggerFireEventMutation) SessionIDCleared() bool {
+	_, ok := m.clearedFields[triggerfireevent.FieldSessionID]
+	return ok
+}
+
+// ResetSessionID resets all changes to the "session_id" field.
+func (m *TriggerFireEventMutation) ResetSessionID() {
+	m.session_id = nil
+	delete(m.clearedFields, triggerfireevent.FieldSessionID)
+}
+
+// SetErrorMessage sets the "error_message" field.
+func (m *TriggerFireEventMutation) SetErrorMessage(s string) {
+	m.error_message = &s
+}
+
+// ErrorMessage returns the value of the "error_message" field in the mutation.
+func (m *TriggerFireEventMutation) ErrorMessage() (r string, exists bool) {
+	v := m.error_message
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorMessage returns the old "error_message" field's value of the TriggerFireEvent entity.
+// If the TriggerFireEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TriggerFireEventMutation) OldErrorMessage(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorMessage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorMessage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorMessage: %w", err)
+	}
+	return oldValue.ErrorMessage, nil
+}
+
+// ClearErrorMessage clears the value of the "error_message" field.
+func (m *TriggerFireEventMutation) ClearErrorMessage() {
+	m.error_message = nil
+	m.clearedFields[triggerfireevent.FieldErrorMessage] = struct{}{}
+}
+
+// ErrorMessageCleared returns if the "error_message" field was cleared in this mutation.
+func (m *TriggerFireEventMutation) ErrorMessageCleared() bool {
+	_, ok := m.clearedFields[triggerfireevent.FieldErrorMessage]
+	return ok
+}
+
+// ResetErrorMessage resets all changes to the "error_message" field.
+func (m *TriggerFireEventMutation) ResetErrorMessage() {
+	m.error_message = nil
+	delete(m.clearedFields, triggerfireevent.FieldErrorMessage)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *TriggerFireEventMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *TriggerFireEventMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the TriggerFireEvent entity.
+// If the TriggerFireEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TriggerFireEventMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *TriggerFireEventMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// Where appends a list predicates to the TriggerFireEventMutation builder.
+func (m *TriggerFireEventMutation) Where(ps ...predicate.TriggerFireEvent) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the TriggerFireEventMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *TriggerFireEventMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.TriggerFireEvent, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *TriggerFireEventMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *TriggerFireEventMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (TriggerFireEvent).
+func (m *TriggerFireEventMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *TriggerFireEventMutation) Fields() []string {
+	fields := make([]string, 0, 6)
+	if m.workflow_id != nil {
+		fields = append(fields, triggerfireevent.FieldWorkflowID)
+	}
+	if m.outcome != nil {
+		fields = append(fields, triggerfireevent.FieldOutcome)
+	}
+	if m.delivery_id != nil {
+		fields = append(fields, triggerfireevent.FieldDeliveryID)
+	}
+	if m.session_id != nil {
+		fields = append(fields, triggerfireevent.FieldSessionID)
+	}
+	if m.error_message != nil {
+		fields = append(fields, triggerfireevent.FieldErrorMessage)
+	}
+	if m.created_at != nil {
+		fields = append(fields, triggerfireevent.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *TriggerFireEventMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case triggerfireevent.FieldWorkflowID:
+		return m.WorkflowID()
+	case triggerfireevent.FieldOutcome:
+		return m.Outcome()
+	case triggerfireevent.FieldDeliveryID:
+		return m.DeliveryID()
+	case triggerfireevent.FieldSessionID:
+		return m.SessionID()
+	case triggerfireevent.FieldErrorMessage:
+		return m.ErrorMessage()
+	case triggerfireevent.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *TriggerFireEventMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case triggerfireevent.FieldWorkflowID:
+		return m.OldWorkflowID(ctx)
+	case triggerfireevent.FieldOutcome:
+		return m.OldOutcome(ctx)
+	case triggerfireevent.FieldDeliveryID:
+		return m.OldDeliveryID(ctx)
+	case triggerfireevent.FieldSessionID:
+		return m.OldSessionID(ctx)
+	case triggerfireevent.FieldErrorMessage:
+		return m.OldErrorMessage(ctx)
+	case triggerfireevent.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown TriggerFireEvent field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TriggerFireEventMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case triggerfireevent.FieldWorkflowID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWorkflowID(v)
+		return nil
+	case triggerfireevent.FieldOutcome:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOutcome(v)
+		return nil
+	case triggerfireevent.FieldDeliveryID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeliveryID(v)
+		return nil
+	case triggerfireevent.FieldSessionID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionID(v)
+		return nil
+	case triggerfireevent.FieldErrorMessage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorMessage(v)
+		return nil
+	case triggerfireevent.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TriggerFireEvent field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *TriggerFireEventMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *TriggerFireEventMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TriggerFireEventMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown TriggerFireEvent numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *TriggerFireEventMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(triggerfireevent.FieldWorkflowID) {
+		fields = append(fields, triggerfireevent.FieldWorkflowID)
+	}
+	if m.FieldCleared(triggerfireevent.FieldDeliveryID) {
+		fields = append(fields, triggerfireevent.FieldDeliveryID)
+	}
+	if m.FieldCleared(triggerfireevent.FieldSessionID) {
+		fields = append(fields, triggerfireevent.FieldSessionID)
+	}
+	if m.FieldCleared(triggerfireevent.FieldErrorMessage) {
+		fields = append(fields, triggerfireevent.FieldErrorMessage)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *TriggerFireEventMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *TriggerFireEventMutation) ClearField(name string) error {
+	switch name {
+	case triggerfireevent.FieldWorkflowID:
+		m.ClearWorkflowID()
+		return nil
+	case triggerfireevent.FieldDeliveryID:
+		m.ClearDeliveryID()
+		return nil
+	case triggerfireevent.FieldSessionID:
+		m.ClearSessionID()
+		return nil
+	case triggerfireevent.FieldErrorMessage:
+		m.ClearErrorMessage()
+		return nil
+	}
+	return fmt.Errorf("unknown TriggerFireEvent nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *TriggerFireEventMutation) ResetField(name string) error {
+	switch name {
+	case triggerfireevent.FieldWorkflowID:
+		m.ResetWorkflowID()
+		return nil
+	case triggerfireevent.FieldOutcome:
+		m.ResetOutcome()
+		return nil
+	case triggerfireevent.FieldDeliveryID:
+		m.ResetDeliveryID()
+		return nil
+	case triggerfireevent.FieldSessionID:
+		m.ResetSessionID()
+		return nil
+	case triggerfireevent.FieldErrorMessage:
+		m.ResetErrorMessage()
+		return nil
+	case triggerfireevent.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown TriggerFireEvent field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *TriggerFireEventMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *TriggerFireEventMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *TriggerFireEventMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *TriggerFireEventMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *TriggerFireEventMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *TriggerFireEventMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *TriggerFireEventMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown TriggerFireEvent unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *TriggerFireEventMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown TriggerFireEvent edge %s", name)
+}
+
 // WorkflowMutation represents an operation that mutates the Workflow nodes in the graph.
 type WorkflowMutation struct {
 	config
-	op                     Op
-	typ                    string
-	id                     *uuid.UUID
-	slug                   *string
-	name                   *string
-	description            *string
-	command                *string
-	target_directory       *string
-	input_template         *string
-	session_type           *string
-	model                  *string
-	agent_type             *string
-	cron_expression        *string
-	cron_enabled           *bool
-	created_at             *time.Time
-	updated_at             *time.Time
-	keep_sessions          *int
-	addkeep_sessions       *int
-	archive_after_hours    *int
-	addarchive_after_hours *int
-	clearedFields          map[string]struct{}
-	done                   bool
-	oldValue               func(context.Context) (*Workflow, error)
-	predicates             []predicate.Workflow
+	op                       Op
+	typ                      string
+	id                       *uuid.UUID
+	slug                     *string
+	name                     *string
+	description              *string
+	command                  *string
+	target_directory         *string
+	input_template           *string
+	session_type             *string
+	model                    *string
+	agent_type               *string
+	cron_expression          *string
+	cron_enabled             *bool
+	created_at               *time.Time
+	updated_at               *time.Time
+	keep_sessions            *int
+	addkeep_sessions         *int
+	archive_after_hours      *int
+	addarchive_after_hours   *int
+	trigger_type             *string
+	github_repo              *string
+	github_branch            *string
+	webhook_slug             *string
+	webhook_secret_encrypted *string
+	event_filter             *string
+	label_filter             *string
+	prompt_template          *string
+	last_fired_at            *time.Time
+	clearedFields            map[string]struct{}
+	done                     bool
+	oldValue                 func(context.Context) (*Workflow, error)
+	predicates               []predicate.Workflow
 }
 
 var _ ent.Mutation = (*WorkflowMutation)(nil)
@@ -31062,6 +32114,447 @@ func (m *WorkflowMutation) ResetArchiveAfterHours() {
 	delete(m.clearedFields, workflow.FieldArchiveAfterHours)
 }
 
+// SetTriggerType sets the "trigger_type" field.
+func (m *WorkflowMutation) SetTriggerType(s string) {
+	m.trigger_type = &s
+}
+
+// TriggerType returns the value of the "trigger_type" field in the mutation.
+func (m *WorkflowMutation) TriggerType() (r string, exists bool) {
+	v := m.trigger_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriggerType returns the old "trigger_type" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldTriggerType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriggerType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriggerType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriggerType: %w", err)
+	}
+	return oldValue.TriggerType, nil
+}
+
+// ClearTriggerType clears the value of the "trigger_type" field.
+func (m *WorkflowMutation) ClearTriggerType() {
+	m.trigger_type = nil
+	m.clearedFields[workflow.FieldTriggerType] = struct{}{}
+}
+
+// TriggerTypeCleared returns if the "trigger_type" field was cleared in this mutation.
+func (m *WorkflowMutation) TriggerTypeCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldTriggerType]
+	return ok
+}
+
+// ResetTriggerType resets all changes to the "trigger_type" field.
+func (m *WorkflowMutation) ResetTriggerType() {
+	m.trigger_type = nil
+	delete(m.clearedFields, workflow.FieldTriggerType)
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (m *WorkflowMutation) SetGithubRepo(s string) {
+	m.github_repo = &s
+}
+
+// GithubRepo returns the value of the "github_repo" field in the mutation.
+func (m *WorkflowMutation) GithubRepo() (r string, exists bool) {
+	v := m.github_repo
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGithubRepo returns the old "github_repo" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldGithubRepo(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGithubRepo is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGithubRepo requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGithubRepo: %w", err)
+	}
+	return oldValue.GithubRepo, nil
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (m *WorkflowMutation) ClearGithubRepo() {
+	m.github_repo = nil
+	m.clearedFields[workflow.FieldGithubRepo] = struct{}{}
+}
+
+// GithubRepoCleared returns if the "github_repo" field was cleared in this mutation.
+func (m *WorkflowMutation) GithubRepoCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldGithubRepo]
+	return ok
+}
+
+// ResetGithubRepo resets all changes to the "github_repo" field.
+func (m *WorkflowMutation) ResetGithubRepo() {
+	m.github_repo = nil
+	delete(m.clearedFields, workflow.FieldGithubRepo)
+}
+
+// SetGithubBranch sets the "github_branch" field.
+func (m *WorkflowMutation) SetGithubBranch(s string) {
+	m.github_branch = &s
+}
+
+// GithubBranch returns the value of the "github_branch" field in the mutation.
+func (m *WorkflowMutation) GithubBranch() (r string, exists bool) {
+	v := m.github_branch
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGithubBranch returns the old "github_branch" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldGithubBranch(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGithubBranch is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGithubBranch requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGithubBranch: %w", err)
+	}
+	return oldValue.GithubBranch, nil
+}
+
+// ClearGithubBranch clears the value of the "github_branch" field.
+func (m *WorkflowMutation) ClearGithubBranch() {
+	m.github_branch = nil
+	m.clearedFields[workflow.FieldGithubBranch] = struct{}{}
+}
+
+// GithubBranchCleared returns if the "github_branch" field was cleared in this mutation.
+func (m *WorkflowMutation) GithubBranchCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldGithubBranch]
+	return ok
+}
+
+// ResetGithubBranch resets all changes to the "github_branch" field.
+func (m *WorkflowMutation) ResetGithubBranch() {
+	m.github_branch = nil
+	delete(m.clearedFields, workflow.FieldGithubBranch)
+}
+
+// SetWebhookSlug sets the "webhook_slug" field.
+func (m *WorkflowMutation) SetWebhookSlug(s string) {
+	m.webhook_slug = &s
+}
+
+// WebhookSlug returns the value of the "webhook_slug" field in the mutation.
+func (m *WorkflowMutation) WebhookSlug() (r string, exists bool) {
+	v := m.webhook_slug
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWebhookSlug returns the old "webhook_slug" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldWebhookSlug(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWebhookSlug is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWebhookSlug requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWebhookSlug: %w", err)
+	}
+	return oldValue.WebhookSlug, nil
+}
+
+// ClearWebhookSlug clears the value of the "webhook_slug" field.
+func (m *WorkflowMutation) ClearWebhookSlug() {
+	m.webhook_slug = nil
+	m.clearedFields[workflow.FieldWebhookSlug] = struct{}{}
+}
+
+// WebhookSlugCleared returns if the "webhook_slug" field was cleared in this mutation.
+func (m *WorkflowMutation) WebhookSlugCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldWebhookSlug]
+	return ok
+}
+
+// ResetWebhookSlug resets all changes to the "webhook_slug" field.
+func (m *WorkflowMutation) ResetWebhookSlug() {
+	m.webhook_slug = nil
+	delete(m.clearedFields, workflow.FieldWebhookSlug)
+}
+
+// SetWebhookSecretEncrypted sets the "webhook_secret_encrypted" field.
+func (m *WorkflowMutation) SetWebhookSecretEncrypted(s string) {
+	m.webhook_secret_encrypted = &s
+}
+
+// WebhookSecretEncrypted returns the value of the "webhook_secret_encrypted" field in the mutation.
+func (m *WorkflowMutation) WebhookSecretEncrypted() (r string, exists bool) {
+	v := m.webhook_secret_encrypted
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWebhookSecretEncrypted returns the old "webhook_secret_encrypted" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldWebhookSecretEncrypted(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWebhookSecretEncrypted is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWebhookSecretEncrypted requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWebhookSecretEncrypted: %w", err)
+	}
+	return oldValue.WebhookSecretEncrypted, nil
+}
+
+// ClearWebhookSecretEncrypted clears the value of the "webhook_secret_encrypted" field.
+func (m *WorkflowMutation) ClearWebhookSecretEncrypted() {
+	m.webhook_secret_encrypted = nil
+	m.clearedFields[workflow.FieldWebhookSecretEncrypted] = struct{}{}
+}
+
+// WebhookSecretEncryptedCleared returns if the "webhook_secret_encrypted" field was cleared in this mutation.
+func (m *WorkflowMutation) WebhookSecretEncryptedCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldWebhookSecretEncrypted]
+	return ok
+}
+
+// ResetWebhookSecretEncrypted resets all changes to the "webhook_secret_encrypted" field.
+func (m *WorkflowMutation) ResetWebhookSecretEncrypted() {
+	m.webhook_secret_encrypted = nil
+	delete(m.clearedFields, workflow.FieldWebhookSecretEncrypted)
+}
+
+// SetEventFilter sets the "event_filter" field.
+func (m *WorkflowMutation) SetEventFilter(s string) {
+	m.event_filter = &s
+}
+
+// EventFilter returns the value of the "event_filter" field in the mutation.
+func (m *WorkflowMutation) EventFilter() (r string, exists bool) {
+	v := m.event_filter
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEventFilter returns the old "event_filter" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldEventFilter(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEventFilter is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEventFilter requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEventFilter: %w", err)
+	}
+	return oldValue.EventFilter, nil
+}
+
+// ClearEventFilter clears the value of the "event_filter" field.
+func (m *WorkflowMutation) ClearEventFilter() {
+	m.event_filter = nil
+	m.clearedFields[workflow.FieldEventFilter] = struct{}{}
+}
+
+// EventFilterCleared returns if the "event_filter" field was cleared in this mutation.
+func (m *WorkflowMutation) EventFilterCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldEventFilter]
+	return ok
+}
+
+// ResetEventFilter resets all changes to the "event_filter" field.
+func (m *WorkflowMutation) ResetEventFilter() {
+	m.event_filter = nil
+	delete(m.clearedFields, workflow.FieldEventFilter)
+}
+
+// SetLabelFilter sets the "label_filter" field.
+func (m *WorkflowMutation) SetLabelFilter(s string) {
+	m.label_filter = &s
+}
+
+// LabelFilter returns the value of the "label_filter" field in the mutation.
+func (m *WorkflowMutation) LabelFilter() (r string, exists bool) {
+	v := m.label_filter
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLabelFilter returns the old "label_filter" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldLabelFilter(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLabelFilter is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLabelFilter requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLabelFilter: %w", err)
+	}
+	return oldValue.LabelFilter, nil
+}
+
+// ClearLabelFilter clears the value of the "label_filter" field.
+func (m *WorkflowMutation) ClearLabelFilter() {
+	m.label_filter = nil
+	m.clearedFields[workflow.FieldLabelFilter] = struct{}{}
+}
+
+// LabelFilterCleared returns if the "label_filter" field was cleared in this mutation.
+func (m *WorkflowMutation) LabelFilterCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldLabelFilter]
+	return ok
+}
+
+// ResetLabelFilter resets all changes to the "label_filter" field.
+func (m *WorkflowMutation) ResetLabelFilter() {
+	m.label_filter = nil
+	delete(m.clearedFields, workflow.FieldLabelFilter)
+}
+
+// SetPromptTemplate sets the "prompt_template" field.
+func (m *WorkflowMutation) SetPromptTemplate(s string) {
+	m.prompt_template = &s
+}
+
+// PromptTemplate returns the value of the "prompt_template" field in the mutation.
+func (m *WorkflowMutation) PromptTemplate() (r string, exists bool) {
+	v := m.prompt_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPromptTemplate returns the old "prompt_template" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldPromptTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPromptTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPromptTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPromptTemplate: %w", err)
+	}
+	return oldValue.PromptTemplate, nil
+}
+
+// ClearPromptTemplate clears the value of the "prompt_template" field.
+func (m *WorkflowMutation) ClearPromptTemplate() {
+	m.prompt_template = nil
+	m.clearedFields[workflow.FieldPromptTemplate] = struct{}{}
+}
+
+// PromptTemplateCleared returns if the "prompt_template" field was cleared in this mutation.
+func (m *WorkflowMutation) PromptTemplateCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldPromptTemplate]
+	return ok
+}
+
+// ResetPromptTemplate resets all changes to the "prompt_template" field.
+func (m *WorkflowMutation) ResetPromptTemplate() {
+	m.prompt_template = nil
+	delete(m.clearedFields, workflow.FieldPromptTemplate)
+}
+
+// SetLastFiredAt sets the "last_fired_at" field.
+func (m *WorkflowMutation) SetLastFiredAt(t time.Time) {
+	m.last_fired_at = &t
+}
+
+// LastFiredAt returns the value of the "last_fired_at" field in the mutation.
+func (m *WorkflowMutation) LastFiredAt() (r time.Time, exists bool) {
+	v := m.last_fired_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastFiredAt returns the old "last_fired_at" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldLastFiredAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastFiredAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastFiredAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastFiredAt: %w", err)
+	}
+	return oldValue.LastFiredAt, nil
+}
+
+// ClearLastFiredAt clears the value of the "last_fired_at" field.
+func (m *WorkflowMutation) ClearLastFiredAt() {
+	m.last_fired_at = nil
+	m.clearedFields[workflow.FieldLastFiredAt] = struct{}{}
+}
+
+// LastFiredAtCleared returns if the "last_fired_at" field was cleared in this mutation.
+func (m *WorkflowMutation) LastFiredAtCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldLastFiredAt]
+	return ok
+}
+
+// ResetLastFiredAt resets all changes to the "last_fired_at" field.
+func (m *WorkflowMutation) ResetLastFiredAt() {
+	m.last_fired_at = nil
+	delete(m.clearedFields, workflow.FieldLastFiredAt)
+}
+
 // Where appends a list predicates to the WorkflowMutation builder.
 func (m *WorkflowMutation) Where(ps ...predicate.Workflow) {
 	m.predicates = append(m.predicates, ps...)
@@ -31096,7 +32589,7 @@ func (m *WorkflowMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *WorkflowMutation) Fields() []string {
-	fields := make([]string, 0, 15)
+	fields := make([]string, 0, 24)
 	if m.slug != nil {
 		fields = append(fields, workflow.FieldSlug)
 	}
@@ -31142,6 +32635,33 @@ func (m *WorkflowMutation) Fields() []string {
 	if m.archive_after_hours != nil {
 		fields = append(fields, workflow.FieldArchiveAfterHours)
 	}
+	if m.trigger_type != nil {
+		fields = append(fields, workflow.FieldTriggerType)
+	}
+	if m.github_repo != nil {
+		fields = append(fields, workflow.FieldGithubRepo)
+	}
+	if m.github_branch != nil {
+		fields = append(fields, workflow.FieldGithubBranch)
+	}
+	if m.webhook_slug != nil {
+		fields = append(fields, workflow.FieldWebhookSlug)
+	}
+	if m.webhook_secret_encrypted != nil {
+		fields = append(fields, workflow.FieldWebhookSecretEncrypted)
+	}
+	if m.event_filter != nil {
+		fields = append(fields, workflow.FieldEventFilter)
+	}
+	if m.label_filter != nil {
+		fields = append(fields, workflow.FieldLabelFilter)
+	}
+	if m.prompt_template != nil {
+		fields = append(fields, workflow.FieldPromptTemplate)
+	}
+	if m.last_fired_at != nil {
+		fields = append(fields, workflow.FieldLastFiredAt)
+	}
 	return fields
 }
 
@@ -31180,6 +32700,24 @@ func (m *WorkflowMutation) Field(name string) (ent.Value, bool) {
 		return m.KeepSessions()
 	case workflow.FieldArchiveAfterHours:
 		return m.ArchiveAfterHours()
+	case workflow.FieldTriggerType:
+		return m.TriggerType()
+	case workflow.FieldGithubRepo:
+		return m.GithubRepo()
+	case workflow.FieldGithubBranch:
+		return m.GithubBranch()
+	case workflow.FieldWebhookSlug:
+		return m.WebhookSlug()
+	case workflow.FieldWebhookSecretEncrypted:
+		return m.WebhookSecretEncrypted()
+	case workflow.FieldEventFilter:
+		return m.EventFilter()
+	case workflow.FieldLabelFilter:
+		return m.LabelFilter()
+	case workflow.FieldPromptTemplate:
+		return m.PromptTemplate()
+	case workflow.FieldLastFiredAt:
+		return m.LastFiredAt()
 	}
 	return nil, false
 }
@@ -31219,6 +32757,24 @@ func (m *WorkflowMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldKeepSessions(ctx)
 	case workflow.FieldArchiveAfterHours:
 		return m.OldArchiveAfterHours(ctx)
+	case workflow.FieldTriggerType:
+		return m.OldTriggerType(ctx)
+	case workflow.FieldGithubRepo:
+		return m.OldGithubRepo(ctx)
+	case workflow.FieldGithubBranch:
+		return m.OldGithubBranch(ctx)
+	case workflow.FieldWebhookSlug:
+		return m.OldWebhookSlug(ctx)
+	case workflow.FieldWebhookSecretEncrypted:
+		return m.OldWebhookSecretEncrypted(ctx)
+	case workflow.FieldEventFilter:
+		return m.OldEventFilter(ctx)
+	case workflow.FieldLabelFilter:
+		return m.OldLabelFilter(ctx)
+	case workflow.FieldPromptTemplate:
+		return m.OldPromptTemplate(ctx)
+	case workflow.FieldLastFiredAt:
+		return m.OldLastFiredAt(ctx)
 	}
 	return nil, fmt.Errorf("unknown Workflow field %s", name)
 }
@@ -31333,6 +32889,69 @@ func (m *WorkflowMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetArchiveAfterHours(v)
 		return nil
+	case workflow.FieldTriggerType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriggerType(v)
+		return nil
+	case workflow.FieldGithubRepo:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGithubRepo(v)
+		return nil
+	case workflow.FieldGithubBranch:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGithubBranch(v)
+		return nil
+	case workflow.FieldWebhookSlug:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWebhookSlug(v)
+		return nil
+	case workflow.FieldWebhookSecretEncrypted:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWebhookSecretEncrypted(v)
+		return nil
+	case workflow.FieldEventFilter:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEventFilter(v)
+		return nil
+	case workflow.FieldLabelFilter:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLabelFilter(v)
+		return nil
+	case workflow.FieldPromptTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPromptTemplate(v)
+		return nil
+	case workflow.FieldLastFiredAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastFiredAt(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Workflow field %s", name)
 }
@@ -31417,6 +33036,33 @@ func (m *WorkflowMutation) ClearedFields() []string {
 	if m.FieldCleared(workflow.FieldArchiveAfterHours) {
 		fields = append(fields, workflow.FieldArchiveAfterHours)
 	}
+	if m.FieldCleared(workflow.FieldTriggerType) {
+		fields = append(fields, workflow.FieldTriggerType)
+	}
+	if m.FieldCleared(workflow.FieldGithubRepo) {
+		fields = append(fields, workflow.FieldGithubRepo)
+	}
+	if m.FieldCleared(workflow.FieldGithubBranch) {
+		fields = append(fields, workflow.FieldGithubBranch)
+	}
+	if m.FieldCleared(workflow.FieldWebhookSlug) {
+		fields = append(fields, workflow.FieldWebhookSlug)
+	}
+	if m.FieldCleared(workflow.FieldWebhookSecretEncrypted) {
+		fields = append(fields, workflow.FieldWebhookSecretEncrypted)
+	}
+	if m.FieldCleared(workflow.FieldEventFilter) {
+		fields = append(fields, workflow.FieldEventFilter)
+	}
+	if m.FieldCleared(workflow.FieldLabelFilter) {
+		fields = append(fields, workflow.FieldLabelFilter)
+	}
+	if m.FieldCleared(workflow.FieldPromptTemplate) {
+		fields = append(fields, workflow.FieldPromptTemplate)
+	}
+	if m.FieldCleared(workflow.FieldLastFiredAt) {
+		fields = append(fields, workflow.FieldLastFiredAt)
+	}
 	return fields
 }
 
@@ -31457,6 +33103,33 @@ func (m *WorkflowMutation) ClearField(name string) error {
 		return nil
 	case workflow.FieldArchiveAfterHours:
 		m.ClearArchiveAfterHours()
+		return nil
+	case workflow.FieldTriggerType:
+		m.ClearTriggerType()
+		return nil
+	case workflow.FieldGithubRepo:
+		m.ClearGithubRepo()
+		return nil
+	case workflow.FieldGithubBranch:
+		m.ClearGithubBranch()
+		return nil
+	case workflow.FieldWebhookSlug:
+		m.ClearWebhookSlug()
+		return nil
+	case workflow.FieldWebhookSecretEncrypted:
+		m.ClearWebhookSecretEncrypted()
+		return nil
+	case workflow.FieldEventFilter:
+		m.ClearEventFilter()
+		return nil
+	case workflow.FieldLabelFilter:
+		m.ClearLabelFilter()
+		return nil
+	case workflow.FieldPromptTemplate:
+		m.ClearPromptTemplate()
+		return nil
+	case workflow.FieldLastFiredAt:
+		m.ClearLastFiredAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Workflow nullable field %s", name)
@@ -31510,6 +33183,33 @@ func (m *WorkflowMutation) ResetField(name string) error {
 		return nil
 	case workflow.FieldArchiveAfterHours:
 		m.ResetArchiveAfterHours()
+		return nil
+	case workflow.FieldTriggerType:
+		m.ResetTriggerType()
+		return nil
+	case workflow.FieldGithubRepo:
+		m.ResetGithubRepo()
+		return nil
+	case workflow.FieldGithubBranch:
+		m.ResetGithubBranch()
+		return nil
+	case workflow.FieldWebhookSlug:
+		m.ResetWebhookSlug()
+		return nil
+	case workflow.FieldWebhookSecretEncrypted:
+		m.ResetWebhookSecretEncrypted()
+		return nil
+	case workflow.FieldEventFilter:
+		m.ResetEventFilter()
+		return nil
+	case workflow.FieldLabelFilter:
+		m.ResetLabelFilter()
+		return nil
+	case workflow.FieldPromptTemplate:
+		m.ResetPromptTemplate()
+		return nil
+	case workflow.FieldLastFiredAt:
+		m.ResetLastFiredAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Workflow field %s", name)

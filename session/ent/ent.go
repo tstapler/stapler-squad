@@ -36,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
 	"github.com/tstapler/stapler-squad/session/ent/workflow"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -122,6 +123,7 @@ func checkColumn(t, c string) error {
 			shell.Table:                   shell.ValidColumn,
 			sourcesyncevent.Table:         sourcesyncevent.ValidColumn,
 			tag.Table:                     tag.ValidColumn,
+			triggerfireevent.Table:        triggerfireevent.ValidColumn,
 			workflow.Table:                workflow.ValidColumn,
 			worktree.Table:                worktree.ValidColumn,
 		})

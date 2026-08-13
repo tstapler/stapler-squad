@@ -94,6 +94,14 @@ type BacklogItem struct {
 	ShippedSnapshotCaptureFailed bool `json:"shipped_snapshot_capture_failed,omitempty"`
 	// Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value.
 	ReworkCapOverride *int `json:"rework_cap_override,omitempty"`
+	// webhook-triggers pipeline chaining (FR10/AC5): the Workflow to fire when this item reaches BacklogStatusDone. Set at chain-configuration time, not computed reactively at completion.
+	NextWorkflowID *uuid.UUID `json:"next_workflow_id,omitempty"`
+	// webhook-triggers pipeline chaining: true once the NextWorkflowID chain-fire has been attempted to a terminal outcome (fired, depth-capped, or expired) — never retried again once true. Crash-consistency marker: TriggerChainReconciler scans for status=done AND next_workflow_id != nil AND chain_fired=false.
+	ChainFired bool `json:"chain_fired,omitempty"`
+	// webhook-triggers pipeline chaining: set atomically with the terminal status transition (same UPDATE as the done transition) when NextWorkflowID is already configured — the eligibility timestamp TriggerChainReconciler's maxChainWaitDuration ceiling measures age against, independent of whether/when the fire itself later succeeds.
+	ChainedAt *time.Time `json:"chained_at,omitempty"`
+	// webhook-triggers pipeline chaining (Epic 6.3): how many chain hops produced this item, propagated session->session and hard-capped at maxChainDepth as a runaway-loop backstop independent of the WIP-limit gate.
+	TriggeredByChainDepth int `json:"triggered_by_chain_depth,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -207,15 +215,17 @@ func (*BacklogItem) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case backlogitem.FieldNextWorkflowID:
+			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
 		case backlogitem.FieldLabels:
 			values[i] = new([]byte)
-		case backlogitem.FieldSkipReviewGate, backlogitem.FieldSkipPlanning, backlogitem.FieldAutoSpawnSession, backlogitem.FieldAutoCreatePr, backlogitem.FieldPlanApproved, backlogitem.FieldQueuedAutonomous, backlogitem.FieldShippedSnapshotCaptureFailed:
+		case backlogitem.FieldSkipReviewGate, backlogitem.FieldSkipPlanning, backlogitem.FieldAutoSpawnSession, backlogitem.FieldAutoCreatePr, backlogitem.FieldPlanApproved, backlogitem.FieldQueuedAutonomous, backlogitem.FieldShippedSnapshotCaptureFailed, backlogitem.FieldChainFired:
 			values[i] = new(sql.NullBool)
-		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount, backlogitem.FieldReworkCapOverride:
+		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount, backlogitem.FieldReworkCapOverride, backlogitem.FieldTriggeredByChainDepth:
 			values[i] = new(sql.NullInt64)
 		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldCategory, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldPlanRejectionReason, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldExternalURL, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
 			values[i] = new(sql.NullString)
-		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldPlanRejectedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldPrFeedbackAddressedAt, backlogitem.FieldGithubSyncedIssueUpdatedAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
+		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldPlanRejectedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldPrFeedbackAddressedAt, backlogitem.FieldGithubSyncedIssueUpdatedAt, backlogitem.FieldChainedAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
 		case backlogitem.FieldID:
 			values[i] = new(uuid.UUID)
@@ -475,6 +485,32 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 				_m.ReworkCapOverride = new(int)
 				*_m.ReworkCapOverride = int(value.Int64)
 			}
+		case backlogitem.FieldNextWorkflowID:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field next_workflow_id", values[i])
+			} else if value.Valid {
+				_m.NextWorkflowID = new(uuid.UUID)
+				*_m.NextWorkflowID = *value.S.(*uuid.UUID)
+			}
+		case backlogitem.FieldChainFired:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field chain_fired", values[i])
+			} else if value.Valid {
+				_m.ChainFired = value.Bool
+			}
+		case backlogitem.FieldChainedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field chained_at", values[i])
+			} else if value.Valid {
+				_m.ChainedAt = new(time.Time)
+				*_m.ChainedAt = value.Time
+			}
+		case backlogitem.FieldTriggeredByChainDepth:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field triggered_by_chain_depth", values[i])
+			} else if value.Valid {
+				_m.TriggeredByChainDepth = int(value.Int64)
+			}
 		case backlogitem.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -698,6 +734,22 @@ func (_m *BacklogItem) String() string {
 		builder.WriteString("rework_cap_override=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
+	builder.WriteString(", ")
+	if v := _m.NextWorkflowID; v != nil {
+		builder.WriteString("next_workflow_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("chain_fired=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ChainFired))
+	builder.WriteString(", ")
+	if v := _m.ChainedAt; v != nil {
+		builder.WriteString("chained_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("triggered_by_chain_depth=")
+	builder.WriteString(fmt.Sprintf("%v", _m.TriggeredByChainDepth))
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

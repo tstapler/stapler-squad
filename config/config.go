@@ -344,6 +344,10 @@ type Config struct {
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
 	SessionRetention SessionRetentionConfig `json:"session_retention,omitempty"`
+	// Callbacks holds the global singleton outbound-callback URLs (webhook-triggers
+	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
+	// queue-item-created lifecycle events.
+	Callbacks CallbackConfig `json:"callbacks,omitempty"`
 
 	// Escape analytics configuration
 
@@ -546,6 +550,18 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 		return "", fmt.Errorf("cannot expand home dir: %w", err)
 	}
 	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
+}
+
+// HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
+// headless (triage/review claude -p) failure captures — see
+// session.WriteHeadlessFailureCapture. Always defaults to
+// "~/.stapler-squad/headless-failures".
+func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "headless-failures"), nil
 }
 
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.

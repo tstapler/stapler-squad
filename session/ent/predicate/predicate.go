@@ -78,6 +78,9 @@ type SourceSyncEvent func(*sql.Selector)
 // Tag is the predicate function for tag builders.
 type Tag func(*sql.Selector)
 
+// TriggerFireEvent is the predicate function for triggerfireevent builders.
+type TriggerFireEvent func(*sql.Selector)
+
 // Workflow is the predicate function for workflow builders.
 type Workflow func(*sql.Selector)
 

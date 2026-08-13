@@ -60,6 +60,8 @@ type Tx struct {
 	SourceSyncEvent *SourceSyncEventClient
 	// Tag is the client for interacting with the Tag builders.
 	Tag *TagClient
+	// TriggerFireEvent is the client for interacting with the TriggerFireEvent builders.
+	TriggerFireEvent *TriggerFireEventClient
 	// Workflow is the client for interacting with the Workflow builders.
 	Workflow *WorkflowClient
 	// Worktree is the client for interacting with the Worktree builders.
@@ -219,6 +221,7 @@ func (tx *Tx) init() {
 	tx.Shell = NewShellClient(tx.config)
 	tx.SourceSyncEvent = NewSourceSyncEventClient(tx.config)
 	tx.Tag = NewTagClient(tx.config)
+	tx.TriggerFireEvent = NewTriggerFireEventClient(tx.config)
 	tx.Workflow = NewWorkflowClient(tx.config)
 	tx.Worktree = NewWorktreeClient(tx.config)
 }

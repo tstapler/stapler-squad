@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { createClient } from "@connectrpc/connect";
+import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import { VCSStatus } from "@/gen/session/v1/types_pb";
@@ -52,6 +52,10 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
   const [diffLoading, setDiffLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
+  // Set once GetVCSStatus reports the session no longer exists, so the 60s
+  // fallback interval below stops calling a deleted session forever.
+  const stoppedRef = useRef(false);
+
   // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const getClient = useCallback(() => {
@@ -62,6 +66,10 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
   }, []);
 
   const fetchStatus = useCallback(async () => {
+    if (stoppedRef.current) {
+      setStatusLoading(false);
+      return;
+    }
     try {
       const response = await getClient().getVCSStatus({ id: sessionId });
       if (response.error) {
@@ -72,6 +80,12 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
         setError(null);
       }
     } catch (err) {
+      if (err instanceof ConnectError && err.code === Code.NotFound) {
+        stoppedRef.current = true;
+        setError(err);
+        setStatus(null);
+        return;
+      }
       setError(err instanceof Error ? err : new Error("Failed to load VCS status"));
     } finally {
       setStatusLoading(false);
@@ -79,6 +93,10 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
   }, [sessionId, getClient]);
 
   const fetchDiff = useCallback(async () => {
+    if (stoppedRef.current) {
+      setDiffLoading(false);
+      return;
+    }
     setDiffLoading(true);
     try {
       const response = await getClient().getSessionDiff({ id: sessionId });
@@ -92,6 +110,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
         setDiff(null);
       }
     } catch (err) {
+      if (err instanceof ConnectError && err.code === Code.NotFound) {
+        stoppedRef.current = true;
+      }
       // Diff errors are non-fatal — status error is the primary signal.
       console.error("useSessionVcs: failed to load diff:", err);
     } finally {
@@ -119,9 +140,14 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
   // Event-driven is the primary trigger; the 60s fallback catches git commits
   // that happen mid-session without changing the session's status field.
   useEffect(() => {
+    stoppedRef.current = false;
     setStatusLoading(true);
     fetchStatus();
     const fallback = setInterval(() => {
+      if (stoppedRef.current) {
+        clearInterval(fallback);
+        return;
+      }
       if (!document.hidden) fetchStatus();
     }, 60_000);
     return () => clearInterval(fallback);

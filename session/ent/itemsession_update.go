@@ -119,6 +119,26 @@ func (_u *ItemSessionUpdate) ClearEndReason() *ItemSessionUpdate {
 	return _u
 }
 
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (_u *ItemSessionUpdate) SetFailureCapturePath(v string) *ItemSessionUpdate {
+	_u.mutation.SetFailureCapturePath(v)
+	return _u
+}
+
+// SetNillableFailureCapturePath sets the "failure_capture_path" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillableFailureCapturePath(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetFailureCapturePath(*v)
+	}
+	return _u
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (_u *ItemSessionUpdate) ClearFailureCapturePath() *ItemSessionUpdate {
+	_u.mutation.ClearFailureCapturePath()
+	return _u
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (_u *ItemSessionUpdate) SetAcSnapshot(v string) *ItemSessionUpdate {
 	_u.mutation.SetAcSnapshot(v)
@@ -493,6 +513,12 @@ func (_u *ItemSessionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.EndReasonCleared() {
 		_spec.ClearField(itemsession.FieldEndReason, field.TypeString)
 	}
+	if value, ok := _u.mutation.FailureCapturePath(); ok {
+		_spec.SetField(itemsession.FieldFailureCapturePath, field.TypeString, value)
+	}
+	if _u.mutation.FailureCapturePathCleared() {
+		_spec.ClearField(itemsession.FieldFailureCapturePath, field.TypeString)
+	}
 	if value, ok := _u.mutation.AcSnapshot(); ok {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)
 	}
@@ -731,6 +757,26 @@ func (_u *ItemSessionUpdateOne) SetNillableEndReason(v *string) *ItemSessionUpda
 // ClearEndReason clears the value of the "end_reason" field.
 func (_u *ItemSessionUpdateOne) ClearEndReason() *ItemSessionUpdateOne {
 	_u.mutation.ClearEndReason()
+	return _u
+}
+
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (_u *ItemSessionUpdateOne) SetFailureCapturePath(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetFailureCapturePath(v)
+	return _u
+}
+
+// SetNillableFailureCapturePath sets the "failure_capture_path" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillableFailureCapturePath(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetFailureCapturePath(*v)
+	}
+	return _u
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (_u *ItemSessionUpdateOne) ClearFailureCapturePath() *ItemSessionUpdateOne {
+	_u.mutation.ClearFailureCapturePath()
 	return _u
 }
 
@@ -1137,6 +1183,12 @@ func (_u *ItemSessionUpdateOne) sqlSave(ctx context.Context) (_node *ItemSession
 	}
 	if _u.mutation.EndReasonCleared() {
 		_spec.ClearField(itemsession.FieldEndReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.FailureCapturePath(); ok {
+		_spec.SetField(itemsession.FieldFailureCapturePath, field.TypeString, value)
+	}
+	if _u.mutation.FailureCapturePathCleared() {
+		_spec.ClearField(itemsession.FieldFailureCapturePath, field.TypeString)
 	}
 	if value, ok := _u.mutation.AcSnapshot(); ok {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)

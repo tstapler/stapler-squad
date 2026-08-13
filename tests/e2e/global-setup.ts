@@ -16,6 +16,12 @@ async function globalSetup(config: FullConfig) {
     // inherited by Playwright worker processes (spawned after global-setup).
     process.env.TEST_SERVER_URL = getGlobalTestServer().getBaseUrl();
     console.log(`Test server URL exported: ${process.env.TEST_SERVER_URL}`);
+    // Propagate the isolated test data directory the same way, so specs that need to seed a
+    // config file (e.g. launcher-presets.json) directly on disk — rather than through an RPC —
+    // know where to write it. getGlobalTestServer() itself is a live singleton scoped to this
+    // global-setup process and is NOT reachable from worker processes.
+    process.env.TEST_SERVER_TESTDIR = getGlobalTestServer().getTestDir();
+    console.log(`Test server data dir exported: ${process.env.TEST_SERVER_TESTDIR}`);
 
     // Rewrite storageState fixture files with the actual server origin so
     // Playwright applies localStorage to the correct origin regardless of

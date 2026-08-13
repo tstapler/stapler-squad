@@ -94,6 +94,7 @@ function itemFixture(overrides: Record<string, unknown>) {
 
 describe("BacklogPage filtered-list exit transition (Epic 6.3)", () => {
   beforeEach(() => {
+    localStorage.clear();
     jest.useFakeTimers();
   });
 

@@ -998,13 +998,24 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// worktree creation fails for any other reason — e.g. a bare clone, a detached
 	// HEAD, or disk quota hit).
 	// Files must be written to the session path BEFORE spawning.
-	// worktreeMu guards concurrent spawns from interleaving writes to the same path.
+	// worktreeMu guards concurrent spawns from interleaving writes to the same path. It
+	// also has to cover resolveSessionPath's check-then-create window: two concurrent
+	// spawns for the same backlog item compute the identical deterministic branch name
+	// (backlogWorkBranchSlug) and can otherwise both pass CreateBacklogWorktree's
+	// branch-existence check before either creates the branch, and the loser hits a
+	// "branch already exists" failure (session/git/worktree_ops.go's setupNewWorktree
+	// self-heals that specific error, but serializing here closes the race at the
+	// source instead of just recovering from it after the fact).
+	s.worktreeMu.Lock()
 	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
 	if resolveErr != nil {
+		s.worktreeMu.Unlock()
 		return nil, resolveErr
 	}
 
-	if wErr := s.writeSessionFiles(item, priorSessions, worktreePath); wErr != nil {
+	wErr := s.writeSessionFilesLocked(item, priorSessions, worktreePath)
+	s.worktreeMu.Unlock()
+	if wErr != nil {
 		return nil, wErr
 	}
 
@@ -1601,11 +1612,11 @@ func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree
 	return resolvedRepo, false, nil
 }
 
-// writeSessionFiles writes the backlog slash-command files and context file to the session
-// directory. The write is serialized under worktreeMu to prevent concurrent write races.
-func (s *BacklogService) writeSessionFiles(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
-	s.worktreeMu.Lock()
-	defer s.worktreeMu.Unlock()
+// writeSessionFilesLocked writes the backlog slash-command files and context file to the
+// session directory. Callers must hold s.worktreeMu — see spawnSessionAfterGates, which
+// locks it around this call and the preceding resolveSessionPath to close the
+// check-then-create worktree race described there.
+func (s *BacklogService) writeSessionFilesLocked(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
 	if wErr := session.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 	}
@@ -2299,17 +2310,21 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // investigation) can answer "how often does each failure mode happen" from log history alone,
 // without re-deriving it by hand from raw error text and process timing.
 //
-//   - "timeout": ctx deadline exceeded, or elapsed is within 5s of the 30m TriggerTriage
-//     budget (covers a hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
+//   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
+//     hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
 //   - "shutdown": server shutdown context cancelled mid-call, not a call failure.
 //   - "process_error": the claude subprocess ran and exited non-zero (bad prompt, LLM
 //     refusal, usage error) — see headless.ErrLLMError/ErrUsageError/ErrInterrupted.
 //   - "claude_not_found": the claude binary itself is missing from PATH — an environment
 //     problem, not a per-call one.
 //   - "other": anything else (e.g. a storage/DB error surfaced through the same path).
-func classifyHeadlessCallError(err error, elapsed time.Duration) string {
+//
+// budget is the caller's own call timeout (e.g. triageCallBudget for TriggerTriage,
+// callTimeout for TriggerReReview) — the same classifier is shared across both headless
+// call sites, so it takes budget as a parameter rather than hardcoding one.
+func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string {
 	switch {
-	case errors.Is(err, context.DeadlineExceeded), triageCallBudget-elapsed < 5*time.Second:
+	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "shutdown"
@@ -2320,6 +2335,33 @@ func classifyHeadlessCallError(err error, elapsed time.Duration) string {
 	default:
 		return "other"
 	}
+}
+
+// captureHeadlessFailure best-effort writes raw (the accumulated stdout of a
+// headless triage/review call that errored or failed to parse) to a durable
+// file under s.cfg.HeadlessFailureCaptureDirOrDefault() and returns its
+// absolute path, or "" if there was nothing to capture or the write failed.
+// Deliberately swallow-and-log rather than propagate: a failure to persist
+// diagnostic data about a failure must never mask or block handling of the
+// original failure itself. See session.WriteHeadlessFailureCapture's doc
+// comment for why this exists (log rotation + the ~200-byte preview
+// previously logged on parse failure are not enough to diagnose a failed
+// call after the fact).
+func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string {
+	if raw == "" {
+		return ""
+	}
+	dir, dirErr := s.cfg.HeadlessFailureCaptureDirOrDefault()
+	if dirErr != nil {
+		log.WarningLog.Printf("[captureHeadlessFailure] resolve capture dir: %v", dirErr)
+		return ""
+	}
+	path, writeErr := session.WriteHeadlessFailureCapture(dir, sessionUUID, raw, session.DefaultHeadlessFailureCaptureMaxBytes)
+	if writeErr != nil {
+		log.WarningLog.Printf("[captureHeadlessFailure] write capture file session=%s: %v", sessionUUID, writeErr)
+		return ""
+	}
+	return path
 }
 
 // MaybeTriggerTriage is the single "should this newly created item get
@@ -2626,19 +2668,27 @@ func (s *BacklogService) TriggerTriage(
 			// the 2026-07-24 stuck-triage incident. errType classifies the error
 			// into a few high-signal buckets so a grep over historical logs can
 			// answer "how often do we hit each failure mode" without parsing %v text.
-			errType := classifyHeadlessCallError(callErr, callElapsed)
-			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s: %v",
-				itemID, callElapsed.Round(time.Second), errType, callErr)
+			errType := classifyHeadlessCallError(callErr, callElapsed, triageCallBudget)
+			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
+			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s capture=%s: %v",
+				itemID, callElapsed.Round(time.Second), errType, capturePath, callErr)
 			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
+			if capturePath != "" {
+				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
+			}
 			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
 
 		result, parseErr := session.ParseHeadlessTriageResult(raw)
 		if parseErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d: %v",
-				itemID, callElapsed.Round(time.Second), len(raw), parseErr)
+			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
+			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d capture=%s: %v",
+				itemID, callElapsed.Round(time.Second), len(raw), capturePath, parseErr)
 			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			if capturePath != "" {
+				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
+			}
 			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
@@ -3064,6 +3114,30 @@ Do not modify the code. Only write the review verdict.
 					ItemSession: itemSessionToProto(is, s.buildCostLookup()),
 				}), nil
 			}
+			// Persist a best-effort audit record of the failed call before returning the
+			// RPC error: unlike TriggerTriage, no ItemSession exists yet for this attempt
+			// at this point (one is normally only created alongside the verdict below), so
+			// without this the failure would be visible only in the ephemeral log line —
+			// exactly the gap captureHeadlessFailure exists to close. Never blocks or
+			// changes the returned error: every step here is best-effort/log-and-continue.
+			errType := classifyHeadlessCallError(callErr, time.Since(callStart), callTimeout)
+			capturePath := s.captureHeadlessFailure(headlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
+			log.ErrorLog.Printf("[TriggerReReview] headless re-review call failed item=%s errType=%s capture=%s: %v", item.ID, errType, capturePath, callErr)
+			failCleanupCtx, failCleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if failIS, failCreateErr := s.storage.CreateItemSession(failCleanupCtx, session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: headlessReReviewUUIDPrefix + uuid.New().String(),
+				SessionRole: session.SessionRoleReview,
+				AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
+			}); failCreateErr != nil {
+				log.WarningLog.Printf("[TriggerReReview] failed to record audit ItemSession for failed call item=%s: %v", item.ID, failCreateErr)
+			} else {
+				_ = s.storage.UpdateItemSessionEndedWithReason(failCleanupCtx, failIS.ID, time.Now(), errType)
+				if capturePath != "" {
+					_ = s.storage.UpdateItemSessionFailureCapture(failCleanupCtx, failIS.ID, capturePath)
+				}
+			}
+			failCleanupCancel()
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("headless re-review call failed: %w", callErr))
 		}
 

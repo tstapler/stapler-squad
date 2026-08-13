@@ -23,6 +23,7 @@ func TestAttentionReasonFromDetected(t *testing.T) {
 		{detection.StatusProcessing, ""},
 		{detection.StatusReady, ""},
 		{detection.StatusUnknown, ""},
+		{detection.StatusCompacting, ""},
 	}
 
 	for _, tt := range tests {

@@ -200,12 +200,13 @@ var validTransitions = domain.ValidTransitions()
 
 // Sentinel errors for transition guards.
 var (
-	ErrACRequired            = domain.ErrACRequired
-	ErrPlanRequired          = domain.ErrPlanRequired
-	ErrPlanArtifactsRequired = domain.ErrPlanArtifactsRequired
-	ErrVerdictRequired       = domain.ErrVerdictRequired
-	ErrCodeNotOnMain         = domain.ErrCodeNotOnMain
-	ErrUnresolvedBlockers    = domain.ErrUnresolvedBlockers
+	ErrACRequired                   = domain.ErrACRequired
+	ErrPlanRequired                 = domain.ErrPlanRequired
+	ErrPlanArtifactsRequired        = domain.ErrPlanArtifactsRequired
+	ErrVerdictRequired              = domain.ErrVerdictRequired
+	ErrCodeNotOnMain                = domain.ErrCodeNotOnMain
+	ErrUnresolvedBlockers           = domain.ErrUnresolvedBlockers
+	ErrVerdictClearRequiredForReady = domain.ErrVerdictClearRequiredForReady
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.

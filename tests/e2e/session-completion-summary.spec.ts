@@ -50,8 +50,8 @@ test.describe("session-completion-summary", () => {
       const detail = new SessionDetailPage(page);
 
       // Pre-seed the first-visit onboarding dialog as dismissed so it doesn't
-      // intercept clicks later in the flow (same pattern as session-notes.spec.ts,
-      // ci-status-badge.spec.ts).
+      // intercept clicks later in the flow (same pattern as
+      // ci-status-badge.spec.ts and session-notes.spec.ts).
       await page.addInitScript(() => {
         localStorage.setItem("stapler-squad:onboarded", "true");
       });
@@ -77,7 +77,7 @@ test.describe("session-completion-summary", () => {
       // expanded, the footer can exceed the viewport unless .modal scrolls
       // (Omnibar.css.ts). Assert the submit button is actually within the
       // viewport bounds after scrolling, not just DOM-attached/"visible". ---
-      const submitButton = page.getByTestId("omnibar-footer-submit");
+      const submitButton = sessionsPage.createSessionSubmitButton;
       await submitButton.scrollIntoViewIfNeeded();
       const viewport = page.viewportSize();
       await expect(async () => {

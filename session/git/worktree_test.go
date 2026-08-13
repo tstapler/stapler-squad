@@ -53,6 +53,37 @@ func TestPreviewWorktreePath_DoesNotCreateRepoWhenPathIsMissing(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "PreviewWorktreePath must not create %s", missingPath)
 }
 
+// TestNewGitWorktreeWithBranch_ErrorsWhenRepoPathIsMissing guards against
+// findGitRepoRoot's removed create-if-missing fallback: a repoPath that doesn't exist
+// (e.g. transiently deleted mid-repair while backlog automation retries worktree
+// creation) must produce an error, never a silently fabricated disconnected repo with
+// a fake placeholder commit.
+func TestNewGitWorktreeWithBranch_ErrorsWhenRepoPathIsMissing(t *testing.T) {
+	parent := t.TempDir()
+	missingPath := filepath.Join(parent, "does-not-exist-yet")
+
+	_, _, err := NewGitWorktreeWithBranch(missingPath, "some-session", "")
+	assert.Error(t, err)
+
+	_, statErr := os.Stat(missingPath)
+	assert.True(t, os.IsNotExist(statErr), "NewGitWorktreeWithBranch must not create %s", missingPath)
+}
+
+// TestNewGitWorktreeFromCommitSHA_ErrorsWhenRepoPathIsMissing is the
+// NewGitWorktreeFromCommitSHA counterpart to
+// TestNewGitWorktreeWithBranch_ErrorsWhenRepoPathIsMissing — both constructors call
+// findGitRepoRoot internally and must reject a missing repoPath rather than fabricate one.
+func TestNewGitWorktreeFromCommitSHA_ErrorsWhenRepoPathIsMissing(t *testing.T) {
+	parent := t.TempDir()
+	missingPath := filepath.Join(parent, "does-not-exist-yet")
+
+	_, _, err := NewGitWorktreeFromCommitSHA(missingPath, "some-session", "main", "deadbeef")
+	assert.Error(t, err)
+
+	_, statErr := os.Stat(missingPath)
+	assert.True(t, os.IsNotExist(statErr), "NewGitWorktreeFromCommitSHA must not create %s", missingPath)
+}
+
 // TestPreviewWorktreePath_SanitizesSessionNameConsistently verifies the preview applies
 // the same sanitization NewGitWorktreeWithBranchAndExecutor uses, so the prefix shown to
 // the user matches what actual creation would produce.

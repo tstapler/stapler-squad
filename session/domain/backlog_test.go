@@ -30,13 +30,13 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain16Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain18Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch.
-func TestAllStuckReasons_should_contain16Entries_When_Enumerated(t *testing.T) {
-	if len(AllStuckReasons) != 16 {
-		t.Errorf("len(AllStuckReasons) = %d, want 16", len(AllStuckReasons))
+func TestAllStuckReasons_should_contain18Entries_When_Enumerated(t *testing.T) {
+	if len(AllStuckReasons) != 18 {
+		t.Errorf("len(AllStuckReasons) = %d, want 18", len(AllStuckReasons))
 	}
 }
 
@@ -66,6 +66,24 @@ func TestStuckReasonLikelyFlaky_should_beValid_When_Checked(t *testing.T) {
 func TestStuckReasonRespawnBlockedActive_should_beValid_When_Checked(t *testing.T) {
 	if !StuckReasonRespawnBlockedActive.IsValid() {
 		t.Errorf("StuckReasonRespawnBlockedActive.IsValid() = false, want true")
+	}
+}
+
+// TestStuckReasonMultipleReasons_should_beValid_When_Checked confirms the new
+// synthetic, aggregate reason (backlog-bounce-escalation, Epic 1.1) round-trips
+// through IsValid exactly like the other established reasons.
+func TestStuckReasonMultipleReasons_should_beValid_When_Checked(t *testing.T) {
+	if !StuckReasonMultipleReasons.IsValid() {
+		t.Errorf("StuckReasonMultipleReasons.IsValid() = false, want true")
+	}
+}
+
+// TestStuckReasonBounceCapExhausted_should_beValid_When_Checked confirms the
+// new synthetic, aggregate reason (backlog-bounce-escalation, Epic 1.1)
+// round-trips through IsValid exactly like the other established reasons.
+func TestStuckReasonBounceCapExhausted_should_beValid_When_Checked(t *testing.T) {
+	if !StuckReasonBounceCapExhausted.IsValid() {
+		t.Errorf("StuckReasonBounceCapExhausted.IsValid() = false, want true")
 	}
 }
 
