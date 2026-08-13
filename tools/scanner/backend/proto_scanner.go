@@ -186,6 +186,8 @@ var methodToID = map[string]string{
 	"SearchGitHubRepos": "SearchGitHubRepos",
 	"ListGitHubIssues":  "ListGitHubIssues",
 	"ImportGitHubIssue": "ImportGitHubIssue",
+	// Launcher presets RPCs
+	"GetLauncherPresets": "launcher_presets:get",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",

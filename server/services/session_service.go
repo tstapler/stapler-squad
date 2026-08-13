@@ -131,6 +131,9 @@ type SessionService struct {
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
 
+	// launcherPresetsSvc handles the GetLauncherPresets RPC.
+	launcherPresetsSvc *LauncherPresetsService
+
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
 
@@ -387,30 +390,31 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
-		storage:           storage,
-		concStorage:       concStorage,
-		eventBus:          eventBus,
-		reviewQueueSvc:    reviewQueueSvc,
-		searchSvc:         NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
-		githubSvc:         NewGitHubService(concStorage),
-		workspaceSvc:      workspaceSvc,
-		configSvc:         NewConfigService(),
-		notificationSvc:   notificationSvc,
-		approvalSvc:       approvalSvc,
-		utilitySvc:        utilitySvc,
-		rulesSvc:          rulesSvc,
-		approvalStore:     approvalStore,
-		databaseSvc:       NewDatabaseService(),
-		fileSvc:           NewFileService(workspaceSvc),
-		pathCompletionSvc: NewPathCompletionService(),
-		slashCommandSvc:   NewSlashCommandService(),
-		defaultsSvc:       NewDefaultsService(),
-		projectSvc:        NewProjectService(concStorage),
-		checkpointSvc:     NewCheckpointService(storage, eventBus),
-		featureFlagSvc:    NewFeatureFlagService(),
-		terminalSvc:       NewTerminalService(),
-		promptStore:       newPromptStore(),
-		capacityMonitor:   capacityMonitor,
+		storage:            storage,
+		concStorage:        concStorage,
+		eventBus:           eventBus,
+		reviewQueueSvc:     reviewQueueSvc,
+		searchSvc:          NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		githubSvc:          NewGitHubService(concStorage),
+		workspaceSvc:       workspaceSvc,
+		configSvc:          NewConfigService(),
+		notificationSvc:    notificationSvc,
+		approvalSvc:        approvalSvc,
+		utilitySvc:         utilitySvc,
+		rulesSvc:           rulesSvc,
+		approvalStore:      approvalStore,
+		databaseSvc:        NewDatabaseService(),
+		fileSvc:            NewFileService(workspaceSvc),
+		pathCompletionSvc:  NewPathCompletionService(),
+		slashCommandSvc:    NewSlashCommandService(),
+		defaultsSvc:        NewDefaultsService(),
+		launcherPresetsSvc: NewLauncherPresetsService(),
+		projectSvc:         NewProjectService(concStorage),
+		checkpointSvc:      NewCheckpointService(storage, eventBus),
+		featureFlagSvc:     NewFeatureFlagService(),
+		terminalSvc:        NewTerminalService(),
+		promptStore:        newPromptStore(),
+		capacityMonitor:    capacityMonitor,
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
@@ -1573,6 +1577,11 @@ func (s *SessionService) CreateSession(
 		WorkflowID:       req.Msg.WorkflowId,
 		EnvVars:          instanceEnvVars,
 		CLIFlags:         instanceCLIFlags,
+		// ExtraArgs is a direct passthrough of req.Msg.ExtraArgs — unlike CLIFlags, it has no
+		// defaults-resolution concept to merge with. It composes with instanceCLIFlags at
+		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
+		// an intentional, tested ordering (see TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
+		ExtraArgs: req.Msg.ExtraArgs,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -3673,6 +3682,11 @@ func (s *SessionService) GetFileContent(
 // GetSessionDefaults returns the full session defaults configuration.
 func (s *SessionService) GetSessionDefaults(ctx context.Context, req *connect.Request[sessionv1.GetSessionDefaultsRequest]) (*connect.Response[sessionv1.GetSessionDefaultsResponse], error) {
 	return s.defaultsSvc.GetSessionDefaults(ctx, req)
+}
+
+// GetLauncherPresets returns the hand-authored launcher presets, freshly read on every call.
+func (s *SessionService) GetLauncherPresets(ctx context.Context, req *connect.Request[sessionv1.GetLauncherPresetsRequest]) (*connect.Response[sessionv1.GetLauncherPresetsResponse], error) {
+	return s.launcherPresetsSvc.GetLauncherPresets(ctx, req)
 }
 
 // ResolveDefaults merges all default layers for the given working directory and profile.
