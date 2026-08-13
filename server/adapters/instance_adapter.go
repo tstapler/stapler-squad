@@ -177,6 +177,12 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		protoSession.DetectedContext = statusInfo.StatusContext
 	}
 
+	// SubagentCount (field 75): count of background agents/shells/monitors from the
+	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
+	// already 0 by construction when the controller is inactive or status isn't
+	// WaitingForAgent, so a guard here would be a no-op.
+	protoSession.SubagentCount = int32(statusInfo.SubagentCount)
+
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
 

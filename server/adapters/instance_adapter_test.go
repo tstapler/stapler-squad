@@ -67,6 +67,22 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 	}
 }
 
+// TestInstanceToProto_SubagentCount_DefaultZero verifies that a fresh instance with no
+// registered status manager/controller (the common case: Active status but nothing
+// wired up yet) maps to SubagentCount=0 rather than leaving the proto field unset in a
+// way that would panic or read garbage — statusInfo is the zero-value InstanceStatusInfo
+// in that path (see the "set unconditionally" comment on the SubagentCount assignment).
+func TestInstanceToProto_SubagentCount_DefaultZero(t *testing.T) {
+	inst := &session.Instance{}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.SubagentCount != 0 {
+		t.Errorf("SubagentCount = %d, want 0 for an instance with no status manager", proto.SubagentCount)
+	}
+}
+
 func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
 	inst := &session.Instance{} // no controller → state is None
 	proto := InstanceToProto(inst, nil)

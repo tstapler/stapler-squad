@@ -341,7 +341,7 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				// "✻ Waiting for N dynamic workflow(s) to finish" lines.
 				// ✻ (U+273B), ◉ (U+25C9), and ✦ (U+2726, primary spinner) are all used
 				// as the turn-marker bullet.
-				Pattern:     `[✻◉✦]\s+Waiting for \d+ (?:background agent|dynamic workflow)`,
+				Pattern:     `[✻◉✦]\s+Waiting for (\d+) (?:background agent|dynamic workflow)`,
 				Description: "Claude is waiting for one or more background agents or dynamic workflows to finish",
 				Priority:    27,
 			},
@@ -353,7 +353,7 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				// verb-duration marker — the session is not done yet.
 				// Also matches bare "N shell(s) running" / "N shells still running" variants
 				// found in the Claude Code bottom status bar.
-				Pattern:     `\d+\s+shells?\s+(?:still\s+)?running`,
+				Pattern:     `(\d+)\s+shells?\s+(?:still\s+)?running`,
 				Description: "Background shell processes still running — session not yet idle",
 				Priority:    27,
 			},
@@ -363,7 +363,7 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				// lines that appear when Claude finishes a turn but background monitors (e.g.
 				// CI run watchers) are still active. Requires "still" to avoid false positives
 				// on generic "N monitors running" output from display tools, Prometheus, etc.
-				Pattern:     `\d+\s+monitors?\s+still\s+running`,
+				Pattern:     `(\d+)\s+monitors?\s+still\s+running`,
 				Description: "Background monitors still running — session not yet idle",
 				Priority:    27,
 			},

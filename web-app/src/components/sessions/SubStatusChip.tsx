@@ -18,6 +18,7 @@ import {
 
 interface SubStatusChipProps {
   subStatus: SubStatus;
+  subagentCount?: number;
 }
 
 /**
@@ -28,21 +29,37 @@ interface SubStatusChipProps {
  * those states are intentionally suppressed in the list view as low-signal noise.
  * Direct callers (e.g. detail headers) may still render IDLE/READY chips.
  */
-export function SubStatusChip({ subStatus }: SubStatusChipProps) {
+export function SubStatusChip({ subStatus, subagentCount }: SubStatusChipProps) {
   // Guard against undefined subStatus (e.g. when session proto field is not set)
   if (subStatus === undefined || subStatus === null) return null;
   switch (subStatus) {
-    case SubStatus.WAITING_FOR_AGENT:
+    case SubStatus.WAITING_FOR_AGENT: {
+      // Only trust a finite, positive count — undefined/0/negative/NaN all fall back to
+      // the plain unnumbered chip text.
+      const hasCount =
+        typeof subagentCount === "number" &&
+        Number.isFinite(subagentCount) &&
+        subagentCount > 0;
+      const isSingular = hasCount && subagentCount === 1;
       return (
         <span
           className={chipWaitingForAgent}
           role="status"
           aria-label="Waiting for agents"
-          title="Claude is waiting for background agents to finish"
+          title={
+            // The count comes from three distinct WaitingForAgent sources (background
+            // agents, shells still running, monitors still running) collapsed into one
+            // int — "task" is deliberately source-neutral rather than "agent", which
+            // would be wrong when the match was actually a shell/monitor count.
+            hasCount
+              ? `Claude is waiting for ${subagentCount} background task${isSingular ? "" : "s"} to finish`
+              : "Claude is waiting for background agents to finish"
+          }
         >
-          ⏳ Waiting for Agents
+          ⏳ Waiting for {hasCount ? `${subagentCount} ${isSingular ? "Task" : "Tasks"}` : "Agents"}
         </span>
       );
+    }
 
     case SubStatus.PROCESSING:
       return (
