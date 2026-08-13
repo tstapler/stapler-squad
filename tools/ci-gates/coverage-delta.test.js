@@ -2,7 +2,13 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { isActionable, previousCoveragePct, gateAction, findExisting, buildMarker } = require('./coverage-delta.js');
+const {
+  isActionable,
+  previousCoveragePct,
+  parseCoveragePct,
+  findExisting,
+  buildMarker,
+} = require('./coverage-delta.js');
 
 test('isActionable_should_ReturnTrue_When_CurrentCoveragePctDiffersFromPrevious', () => {
   const existingBody = '<!-- feature-coverage:pct=42.0 --> ## 📊 Feature E2E Coverage\n\nFeature E2E coverage: 21/50 tested (42.0%)';
@@ -12,9 +18,6 @@ test('isActionable_should_ReturnTrue_When_CurrentCoveragePctDiffersFromPrevious'
 test('isActionable_should_ReturnFalse_When_CoverageUnchanged_And_NoDeleteRequested', () => {
   const existingBody = '<!-- feature-coverage:pct=42.0 --> ## 📊 Feature E2E Coverage\n\nFeature E2E coverage: 21/50 tested (42.0%)';
   assert.equal(isActionable({ existingBody, currentPct: 42.0 }), false);
-  // Unchanged coverage is never a "delete" — the gate has only post/noop, no
-  // delete branch at all, unlike the other 3 workflows.
-  assert.equal(gateAction(false), 'noop');
 });
 
 test('isActionable_should_ReturnTrue_When_NoExistingComment', () => {
@@ -30,6 +33,23 @@ test('previousCoveragePct_should_ReturnNull_When_CommentTemplateGainsASecondPerc
   // discovered live if the marker itself is ever malformed.
   const malformed = '<!-- feature-coverage --> ## Coverage\n\nBackend (55%) / Frontend (38%) tested';
   assert.equal(previousCoveragePct(malformed), null);
+});
+
+test('isActionable_should_ReturnTrue_When_MarkerIsMalformedOrMissing_SafeFallback', () => {
+  // Plan Task 3.1.1e's explicit end-to-end case: a malformed/missing marker
+  // must fall back to "post", not silently swallow the comparison.
+  const malformed = '<!-- feature-coverage --> ## Coverage\n\nBackend (55%) / Frontend (38%) tested';
+  assert.equal(isActionable({ existingBody: malformed, currentPct: 55 }), true);
+});
+
+test('parseCoveragePct_should_ExtractPercentage_When_SummaryLineWellFormed', () => {
+  assert.equal(parseCoveragePct('Feature E2E coverage: 21/50 tested (42%)'), 42);
+});
+
+test('parseCoveragePct_should_ReturnNull_When_SummaryLineHasNoPercentage', () => {
+  assert.equal(parseCoveragePct('Feature E2E coverage: N/A'), null);
+  assert.equal(parseCoveragePct(''), null);
+  assert.equal(parseCoveragePct(undefined), null);
 });
 
 test('previousCoveragePct_should_ReturnValue_When_MarkerPresent', () => {

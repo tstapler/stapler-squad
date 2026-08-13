@@ -35,22 +35,21 @@ function hasGoTier1Regression(benchstatOutput, thresholdPct) {
   });
 }
 
+function crossesThreshold(pctNums, threshold, direction) {
+  return pctNums.some((pct) => {
+    if (typeof pct !== 'number' || isNaN(pct)) return false;
+    return direction === 'down' ? pct <= threshold : pct >= threshold;
+  });
+}
+
 function hasThroughputRegression(pctNums, thresholdPct) {
   const threshold = thresholdPct === undefined ? THROUGHPUT_HALVED_PCT : thresholdPct;
-  return pctNums.some((pct) => typeof pct === 'number' && !isNaN(pct) && pct <= threshold);
+  return crossesThreshold(pctNums, threshold, 'down');
 }
 
 function hasLatencyRegression(pctNums, thresholdPct) {
   const threshold = thresholdPct === undefined ? LATENCY_DOUBLED_PCT : thresholdPct;
-  return pctNums.some((pct) => typeof pct === 'number' && !isNaN(pct) && pct >= threshold);
-}
-
-// Decision for the sticky-comment CRUD step: post/update while regressing,
-// delete a stale comment once it clears, otherwise leave things alone.
-function gateAction(hasRegression, hasExistingComment) {
-  if (hasRegression) return 'post';
-  if (hasExistingComment) return 'delete';
-  return 'noop';
+  return crossesThreshold(pctNums, threshold, 'up');
 }
 
 module.exports = {
@@ -60,5 +59,4 @@ module.exports = {
   hasGoTier1Regression,
   hasThroughputRegression,
   hasLatencyRegression,
-  gateAction,
 };

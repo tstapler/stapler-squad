@@ -232,7 +232,7 @@ jobs:
           echo "$OUTPUT"
           SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")
           echo "summary=${SUMMARY}" >> $GITHUB_OUTPUT
-          PCT=$(echo "$OUTPUT" | grep -oE '\([0-9.]+%\)' | tr -d '()%' | head -1)
+          PCT=$(SUMMARY="$SUMMARY" node -e "console.log(require('../ci-gates/coverage-delta.js').parseCoveragePct(process.env.SUMMARY) ?? '')")
           echo "pct=${PCT:-}" >> $GITHUB_OUTPUT
         continue-on-error: true
 

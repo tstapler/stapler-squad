@@ -6,7 +6,6 @@ const {
   hasGoTier1Regression,
   hasThroughputRegression,
   hasLatencyRegression,
-  gateAction,
 } = require('./benchmark-regression.js');
 
 // Literal output captured from a real `benchstat old.txt new.txt` run
@@ -83,17 +82,4 @@ test('hasLatencyRegression_should_ReturnTrue_When_LatencyPctNumIsAtOrAbove100', 
 
 test('hasLatencyRegression_should_ReturnFalse_When_LatencyPctNumIsBelow100Threshold', () => {
   assert.equal(hasLatencyRegression([99, -10, 50]), false);
-});
-
-test('gateAction_should_ReturnDelete_When_PriorRegressionClearedOnCurrentRun', () => {
-  assert.equal(gateAction(false, true), 'delete');
-});
-
-test('gateAction_should_ReturnNoop_When_NoExistingCommentAndNoRegression', () => {
-  assert.equal(gateAction(false, false), 'noop');
-});
-
-test('gateAction_should_ReturnPost_When_RegressionDetected', () => {
-  assert.equal(gateAction(true, false), 'post');
-  assert.equal(gateAction(true, true), 'post');
 });

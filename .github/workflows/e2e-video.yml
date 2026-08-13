@@ -14,9 +14,10 @@ on:
 permissions:
   pull-requests: write
 
-# Guards the delete-on-clean comment mutation against out-of-order runs, same
-# shape as ux-analysis.yml — single-job-of-consequence, pull_request-only
-# workflow, so cancelling a superseded run is safe.
+# Guards the delete-on-clean comment mutation against out-of-order runs. This
+# cancels the whole run (video recording included), not just the comment
+# step — safe here because a superseded PR run's videos are stale too, same
+# reasoning ux-analysis.yml uses for its single-job workflow.
 concurrency:
   group: e2e-video-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -251,6 +252,10 @@ jobs:
     needs: [detect-feature-changes, e2e-video]
     if: always() && github.event_name == 'pull_request' && needs.detect-feature-changes.outputs.record_features == 'true'
     steps:
+      # Required so the comment step below can require('./tools/ci-gates/video-anomaly.js') —
+      # this job has no other step that would populate the checkout.
+      - uses: actions/checkout@v4
+
       - name: Post PR comment with artifact links
         continue-on-error: true # advisory comment; never fail the job if posting is denied
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7

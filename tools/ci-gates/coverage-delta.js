@@ -23,8 +23,8 @@ function previousCoveragePct(existingBody) {
 }
 
 // An unchanged coverage number is the steady state, not a resolved problem
-// the way a cleared regression is — never actionable, and (see gateAction)
-// never deleted either, unlike the other 3 workflows' gates.
+// the way a cleared regression is — never actionable, and never deleted
+// either, unlike the other 3 workflows' gates (see build.yml's comment step).
 function isActionable({ existingBody, currentPct }) {
   if (!existingBody) return true;
   const prev = previousCoveragePct(existingBody);
@@ -33,8 +33,14 @@ function isActionable({ existingBody, currentPct }) {
   return currentPct !== prev;
 }
 
-function gateAction(actionable) {
-  return actionable ? 'post' : 'noop';
+// Parses the percentage out of feature-coverage.ts's own summary line, e.g.
+// "Feature E2E coverage: 21/50 tested (42%)". Kept alongside previousCoveragePct
+// since both parse a percentage out of loosely-structured text — this one
+// from the tool's stdout, that one from a prior sticky-comment body.
+function parseCoveragePct(summaryLine) {
+  if (!summaryLine) return null;
+  const m = summaryLine.match(/\(([\d.]+)%\)/);
+  return m ? parseFloat(m[1]) : null;
 }
 
 module.exports = {
@@ -42,6 +48,6 @@ module.exports = {
   buildMarker,
   findExisting,
   previousCoveragePct,
+  parseCoveragePct,
   isActionable,
-  gateAction,
 };
