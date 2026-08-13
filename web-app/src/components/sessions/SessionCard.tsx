@@ -13,6 +13,7 @@ import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
+import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -28,6 +29,49 @@ export function hasPendingProgramChange(session: Pick<Session, "status" | "progr
     !session.launchCommand.startsWith(session.program)
   );
 }
+
+// A secondary info-row value is redundant with the primary title when it is
+// the exact same text (surrounding whitespace aside) — repeating it below the
+// title adds visual noise with no new information. Deliberately NOT
+// case-insensitive (a user who capitalizes a branch/title differently likely
+// meant it) and NOT substring/basename-aware here — callers that need
+// basename comparison (Path/Working Dir/Cloned To) pre-normalize via
+// `basenameOf` before calling this.
+export function isRedundantWithTitle(value: string | undefined | null, title: string): boolean {
+  if (!value) return false;
+  return value.trim() === title.trim();
+}
+
+// Last "/"-separated segment of a trimmed path string. Mirrors the
+// `p.split("/").pop() || p` idiom already used in SessionsTable.tsx,
+// page.tsx, RecentFilesSection.tsx, and useAvailablePrograms.ts (not
+// `path.basename` — no Node `path` polyfill in this "use client" component).
+export function basenameOf(pathValue: string): string {
+  const trimmed = pathValue.trim();
+  return trimmed.split("/").pop() || trimmed;
+}
+
+// Path-shaped info rows (Path, Working Dir, Cloned To) compare the value's
+// basename against the title, unlike Branch/Goal which compare raw text —
+// wrapping that in its own named function keeps the two comparison shapes
+// structurally distinct instead of relying on callers to remember which rows
+// need basenameOf() and which don't.
+function isPathRedundantWithTitle(pathValue: string, title: string): boolean {
+  return isRedundantWithTitle(basenameOf(pathValue), title);
+}
+
+const AUTO_APPROVE_FLAG_LITERALS = ["--dangerously-skip-permissions", "--yes-always"];
+
+// Mirrors hasPendingProgramChange's shape: true when the persisted autoApprove value
+// disagrees with whether a known yolo flag is actually present in the last-launched
+// command (i.e. the toggle changed but the process hasn't restarted with it yet).
+export function hasPendingAutoApproveChange(session: Pick<Session, "status" | "autoApprove" | "launchCommand">): boolean {
+  const isPausedOrStopped = session.status === SessionStatus.PAUSED || session.status === SessionStatus.STOPPED;
+  if (!isPausedOrStopped || !session.launchCommand) return false;
+  const flagPresent = AUTO_APPROVE_FLAG_LITERALS.some((f) => session.launchCommand.includes(f));
+  return session.autoApprove !== flagPresent;
+}
+
 import {
   card,
   cardDeleting,
@@ -88,6 +132,8 @@ import {
   taskFraction,
   autonomousBadge,
   workflowBadge,
+  autoApproveBadge,
+  autoApprovePendingBadge,
   noteBadge,
   creationSpinner,
 } from "./SessionCard.css";
@@ -115,6 +161,7 @@ interface SessionCardProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernate?: () => void;
@@ -146,6 +193,7 @@ function SessionCardInner({
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
   onHibernate,
@@ -176,6 +224,21 @@ function SessionCardInner({
   const isCreating = session.status === SessionStatus.CREATING;
   const isPaused = session.status === SessionStatus.PAUSED;
   const pendingProgramChange = hasPendingProgramChange(session);
+  const pendingAutoApproveChange = hasPendingAutoApproveChange(session);
+  // Gated on AutoApproveSupported-equivalent so the badge can never claim a session is
+  // unguarded when the agent doesn't actually support the injected flag (AC4 / pre-mortem
+  // #4) -- e.g. autoApprove=true persisted for a since-unsupported program.
+  const autoApproveFlagInjectable = session.autoApprove && isAutoApproveSupported(session.program);
+  // AC11, explicit product decision (scoped out, not a silent gap): backlog automation's
+  // headless review sessions (session/backlog_review.go, PermissionMode:
+  // PermissionModeBypassPermissions) and any auto_yes-driven preset also bypass prompts,
+  // without ever setting auto_approve -- but Session.permission_mode is not currently
+  // exposed on the proto message (only Instance.PermissionMode, server-side), so badging
+  // that population would require new proto+adapter plumbing beyond this feature's scope
+  // (plan.md deliberately does not touch session/backlog_review.go). Deferred as a named
+  // follow-up rather than silently missed; the badge's contract for now is strictly
+  // "auto_approve is true and the agent actually supports the injected flag."
+  const showAutoApproveBadge = !pendingAutoApproveChange && autoApproveFlagInjectable;
   const trimmedNote = session.note?.trim();
   const noteTooltip = trimmedNote ? truncateGoal(trimmedNote, 120) : undefined;
   const { html: snapshotHtml, isEmpty: snapshotIsEmpty, loading: snapshotLoadingState, error: snapshotErrorMsg } =
@@ -621,6 +684,39 @@ function SessionCardInner({
                 Stuck
               </span>
             )}
+            {showAutoApproveBadge && (
+              // Direct-disable-on-click only for a non-Active session: SetAutoApprove
+              // restarts an Active session unconditionally on disable too (AC6), so an
+              // Active session's badge is deliberately non-interactive here -- disabling
+              // it goes through the overflow menu's confirm dialog (restart notice),
+              // not a silent one-click badge action that would restart the session with
+              // no warning.
+              onToggleAutoApprove && session.status !== SessionStatus.ACTIVE ? (
+                <button
+                  className={autoApproveBadge}
+                  title="Skipping all permission prompts — click to disable"
+                  aria-label="Auto-approve enabled — this session skips permission prompts; click to disable"
+                  data-testid="badge-auto-approve"
+                  onClick={(e) => { e.stopPropagation(); onToggleAutoApprove(session.id, false); }}
+                >
+                  ⚡ Auto
+                </button>
+              ) : (
+                <span
+                  className={autoApproveBadge}
+                  role="img"
+                  title={
+                    session.status === SessionStatus.ACTIVE
+                      ? "Skipping all permission prompts — use the ⋯ menu to disable (restarts the session)"
+                      : "Skipping all permission prompts"
+                  }
+                  aria-label="Auto-approve enabled: this session skips permission prompts"
+                  data-testid="badge-auto-approve"
+                >
+                  ⚡ Auto
+                </span>
+              )
+            )}
             {session.workflowId && (
               <span
                 className={workflowBadge}
@@ -630,6 +726,17 @@ function SessionCardInner({
                 data-testid="workflow-badge"
               >
                 <span aria-hidden="true">⚙</span> {session.workflowName || "Workflow"}
+              </span>
+            )}
+            {pendingAutoApproveChange && (
+              <span
+                className={autoApprovePendingBadge}
+                role="img"
+                data-testid="badge-pending-auto-approve"
+                title="Auto-approve setting changed since this session last launched — takes effect on resume/restart"
+                aria-label="Auto-approve change pending: takes effect on resume or restart"
+              >
+                <span aria-hidden="true">⏳</span> Auto-approve pending
               </span>
             )}
             {pendingProgramChange && (
@@ -722,19 +829,21 @@ function SessionCardInner({
             <span className={label}>Program:</span>
             <span className={value}>{session.program}</span>
           </div>
-          {session.branch && (
+          {session.branch && !isRedundantWithTitle(session.branch, session.title) && (
             <div className={infoRow}>
               <span className={label}>Branch:</span>
               <span className={value}>{session.branch}</span>
             </div>
           )}
-          <div className={infoRow}>
-            <span className={label}>Path:</span>
-            <span className={value} title={session.path}>
-              {session.path}
-            </span>
-          </div>
-          {session.workingDir && (
+          {session.path && !isPathRedundantWithTitle(session.path, session.title) && (
+            <div className={infoRow}>
+              <span className={label}>Path:</span>
+              <span className={value} title={session.path}>
+                {session.path}
+              </span>
+            </div>
+          )}
+          {session.workingDir && !isPathRedundantWithTitle(session.workingDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Working Dir:</span>
               <span className={value}>{session.workingDir}</span>
@@ -774,7 +883,7 @@ function SessionCardInner({
               </span>
             </div>
           )}
-          {session.clonedRepoPath && (
+          {session.clonedRepoPath && !isPathRedundantWithTitle(session.clonedRepoPath, session.title) && (
             <div className={infoRow}>
               <span className={label}>Cloned To:</span>
               <span className={value} title={session.clonedRepoPath}>
@@ -782,7 +891,7 @@ function SessionCardInner({
               </span>
             </div>
           )}
-          {session.goal?.goalText && (
+          {session.goal?.goalText && !isRedundantWithTitle(session.goal.goalText, session.title) && (
             <div className={infoRow}>
               <span className={label}>Goal</span>
               <span className={value}>
@@ -896,6 +1005,7 @@ function SessionCardInner({
           onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onToggleAutoApprove={onToggleAutoApprove}
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}

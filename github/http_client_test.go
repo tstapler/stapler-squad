@@ -2,7 +2,10 @@ package github
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -136,4 +139,39 @@ func TestGetGHTokenForAccount(t *testing.T) {
 			t.Errorf("getGHTokenForAccount() = %q, want empty string", got)
 		}
 	})
+}
+
+// TestGhHTTPClient_UpdatesDefaultRateLimiter verifies ghHTTPClient's Transport
+// (rateLimitTransport) feeds every response through DefaultRateLimiter.Update,
+// so IsLimited() reflects real rate-limit state instead of always returning
+// false (github/rate_limit.go's Update had zero callers before this wiring).
+func TestGhHTTPClient_UpdatesDefaultRateLimiter(t *testing.T) {
+	orig := DefaultRateLimiter
+	DefaultRateLimiter = &RateLimiter{}
+	t.Cleanup(func() { DefaultRateLimiter = orig })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("ghHTTPClient.Do: %v", err)
+	}
+	resp.Body.Close()
+
+	limited, until := DefaultRateLimiter.IsLimited()
+	if !limited {
+		t.Fatal("DefaultRateLimiter.IsLimited() = false, want true after a 429 Retry-After response through ghHTTPClient")
+	}
+	if until.Before(time.Now()) {
+		t.Errorf("IsLimited() resume time %v is not in the future", until)
+	}
 }

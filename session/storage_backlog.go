@@ -991,9 +991,9 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 
 // GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for the
 // given BacklogItem UUID, most recent first. Reuses the existing
-// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome and
-// Summary are populated, since that's all callers (IsRepeatedFailure in
-// stuck_decisions.go) need.
+// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome,
+// Summary, and DiffHash are populated, since that's all callers
+// (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck_decisions.go) need.
 func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
 	parsedItemID, err := uuid.Parse(itemID)
 	if err != nil {
@@ -1022,6 +1022,7 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 			ID:             is.Edges.ReviewVerdict.ID.String(),
 			OverallOutcome: is.Edges.ReviewVerdict.OverallOutcome,
 			Summary:        is.Edges.ReviewVerdict.Summary,
+			DiffHash:       is.Edges.ReviewVerdict.DiffHash,
 		})
 	}
 	return result, nil

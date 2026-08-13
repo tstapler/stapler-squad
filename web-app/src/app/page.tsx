@@ -286,6 +286,15 @@ function HomeContent() {
     }
   }, [updateSession, track]);
 
+  const handleToggleAutoApprove = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
+    track({ name: "session_auto_approve_updated", category: "user_action" });
+    try {
+      await updateSession(sessionId, { autoApprove: enabled });
+    } catch (err) {
+      console.error("[page] toggleAutoApprove failed:", err);
+    }
+  }, [updateSession, track]);
+
   const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
     track({ name: "session_autonomous_steer", category: "user_action" });
     await updateSession(sessionId, { steerMessage: message });
@@ -430,6 +439,7 @@ function HomeContent() {
     onRunOneShot: handleRunOneShot,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
     onToggleAutonomousMode: handleToggleAutonomousMode,
+    onToggleAutoApprove: handleToggleAutoApprove,
     onSteerAutonomousSession: handleSteerAutonomousSession,
     onClearConversationState: clearConversationState,
     onListSessions: listSessions,
@@ -438,7 +448,7 @@ function HomeContent() {
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
     restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
     listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
-    handleToggleAutonomousMode, handleSteerAutonomousSession, clearConversationState, listSessions,
+    handleToggleAutonomousMode, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
   return (

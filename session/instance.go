@@ -110,6 +110,14 @@ type LifecycleListener interface {
 // kept in sync by comment, not by shared constant.
 const MaxNoteLength = 10000
 
+// MaxSteerMessageLength is the maximum length, in bytes, of a steer_message sent
+// via UpdateSession. No RPC in this server currently enforces a request-size cap
+// (see grep for WithReadMaxBytes across server/ — a known, pre-existing, repo-wide
+// gap), but steer_message is a new/widened free-text entry point that now reaches
+// ordinary work/review sessions, not just autonomous ones, so it gets an explicit
+// cap here rather than waiting on that broader fix. Matches MaxNoteLength's value.
+const MaxSteerMessageLength = 10000
+
 // Instance is a running instance of claude code.
 type Instance struct {
 	// ID is the stable, immutable identifier for this instance.
@@ -141,6 +149,11 @@ type Instance struct {
 	UpdatedAt time.Time
 	// AutoYes is true if the instance should automatically press enter when prompted.
 	AutoYes bool
+	// AutoApprove is true if the launch command should get a per-agent CLI flag
+	// that skips permission/approval prompts entirely (e.g.
+	// --dangerously-skip-permissions for Claude). Independent of AutoYes (see
+	// its doc comment above) -- resolved via yoloFlagFor in instance_tmux.go.
+	AutoApprove bool
 	// Prompt is passed as a CLI argument to the program at process-spawn time (buildClaudeCommand),
 	// so it only takes effect on a truly fresh spawn (claudeSessionID == "", no --resume) or OneShot.
 	// Use for content that must exist before the process's first turn, e.g. backlog task context.
@@ -319,7 +332,15 @@ type Instance struct {
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
-	// claudeSessionMu protects claudeSession and claudeSessionIDSavedCallback.
+	// conversationClearedAt records when ClearConversationState() last ran, so
+	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
+	// predating an explicit "start fresh" request. In-memory only — does not
+	// survive a process restart (see ADR-001, Consequences). Guarded by
+	// claudeSessionMu, not i.mu.
+	conversationClearedAt time.Time
+
+	// claudeSessionMu protects claudeSession, conversationClearedAt, and
+	// claudeSessionIDSavedCallback.
 	// Separate from mu to avoid holding the instance write lock during persistence I/O.
 	claudeSessionMu sync.RWMutex
 
@@ -404,10 +425,14 @@ type Instance struct {
 	recentRestartTimes []time.Time
 	restartMu          deadlock.Mutex
 
-	// programSwitchMu serializes SwitchProgram calls so a manual program-switch
-	// request and an automatic capacity-monitor fallback can't race on the same
-	// instance and double-restart or double-port history.
-	programSwitchMu deadlock.Mutex
+	// restartTriggerMu serializes every setter that can trigger a restart on an
+	// Active instance (SwitchProgram, SetAutoApprove) so a manual program-switch
+	// request, an automatic capacity-monitor fallback, and a post-creation
+	// auto-approve toggle can't race on the same instance and double-restart or
+	// double-port history. Originally programSwitchMu (SwitchProgram-only);
+	// renamed and widened to cover SetAutoApprove, which restarts on the same
+	// Active-session-change trigger but was not previously serialized against it.
+	restartTriggerMu deadlock.Mutex
 
 	// lifecycleListeners receives EventStarted / EventExited notifications.
 	lifecycleListeners   []LifecycleListener
@@ -485,6 +510,8 @@ type InstanceOptions struct {
 	Program string
 	// If AutoYes is true, automatically accept prompts
 	AutoYes bool
+	// AutoApprove mirrors Instance.AutoApprove — see its doc comment.
+	AutoApprove bool
 	// Prompt is passed as a CLI argument at process-spawn time — only takes effect on a fresh
 	// spawn or OneShot. See InitialPrompt for the tmux-typed alternative; the two are independent
 	// and may both be set (see Instance.Prompt/Instance.InitialPrompt for the full explanation).
@@ -625,6 +652,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CreatedAt:        t,
 		UpdatedAt:        t,
 		AutoYes:          opts.AutoYes,
+		AutoApprove:      opts.AutoApprove,
 		Prompt:           opts.Prompt,
 		InitialPrompt:    opts.InitialPrompt,
 		ExistingWorktree: opts.ExistingWorktree,
@@ -825,13 +853,23 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		}
 		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
 		log.ForSession(i.Title).Info("session exited unexpectedly", "reason", reason)
-		i.send(func(s *instanceState) {
+		// Blocks (sendSyncErr, not send) so the Active->Stopped transition has
+		// landed -- and its snapshot republished -- before EventExited fires below.
+		// This callback runs on the tmux control-mode reader goroutine, never on
+		// the actor's own goroutine, so blocking here cannot deadlock against the
+		// actor. Without this, sessionExitedPublisher (server/services/session_service.go)
+		// could publish the SessionUpdated event while the transition is still
+		// in-flight, racing GetStatus()/Snapshot() reads on the delivery path.
+		if err := i.sendSyncErr(func(s *instanceState) error {
 			if s.inst.Status == Active {
 				if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}
 			}
-		})
+			return nil
+		}); err != nil {
+			log.Warn("exit callback: status transition did not land", "session", i.Title, "err", err)
+		}
 		// Capture the diff snapshot before firing EventExited so listeners (e.g.
 		// sessionSummaryListener) can read a fresh i.GetDiffStats() synchronously
 		// from the callback — see ADR-002 / plan.md's "Diff-stat capture timing"
@@ -853,6 +891,25 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	return i.sendSyncErr(func(s *instanceState) error {
 		return startLocked(s, firstTimeSetup)
 	})
+}
+
+// recoverConversationBeforeLaunch tries to recover a persisted conversation UUID
+// from disk BEFORE initTmuxSession() reads it to decide whether to embed --resume.
+// Shared by startLocked() and legacy start() so the two call sites can't drift
+// (pre-mortem failure mode #4). Falls through to tryExtractConversationUUID's
+// DetectByPath fallback, guarded by conversationClearedAt.
+//
+// Only changes the actual launch command for a genuinely fresh Instance:
+// initTmuxSession() early-returns via HasSession() whenever a TmuxSession object
+// already exists in-process (e.g. after KillSession()), so this recovery is a
+// no-op for in-process restart-churn — confirmed by
+// TestKillSessionThenStart_DoesNotRebuildLaunchCommand; see plan.md Risk Control
+// item 8.
+func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
+	if firstTimeSetup || i.pm().IsAlive() || i.HasClaudeSession() {
+		return
+	}
+	i.tryExtractConversationUUID()
 }
 
 // startLocked is the actor-safe body of Start(). Called only from within
@@ -879,6 +936,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	i.recoverConversationBeforeLaunch(firstTimeSetup)
 	i.initTmuxSession()
 
 	i.pm().ResetExitOnce()
@@ -1060,6 +1118,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	if i.Title == "" {
 		return fmt.Errorf("instance title cannot be empty")
 	}
+
+	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
 	i.initTmuxSession()
 

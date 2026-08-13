@@ -69,6 +69,7 @@ func reviewVerdictToSummary(rv *ent.ReviewVerdict) *ReviewVerdictSummary {
 		OverallOutcome: rv.OverallOutcome,
 		PerCriterion:   rv.PerCriterion,
 		Summary:        rv.Summary,
+		DiffHash:       rv.DiffHash,
 		DiffTokenCount: rv.DiffTokenCount,
 		DiffTruncated:  rv.DiffTruncated,
 		OverrideBy:     rv.OverrideBy,
@@ -189,6 +190,8 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		QueuedAt:                     item.QueuedAt,
 		QueuedAutonomous:             item.QueuedAutonomous,
 		PlanArtifactsPath:            item.PlanArtifactsPath,
+		PlanRejectionReason:          item.PlanRejectionReason,
+		PlanRejectedAt:               item.PlanRejectedAt,
 		Notes:                        item.Notes,
 		ExternalID:                   item.ExternalID,
 		ExternalURL:                  item.ExternalURL,
@@ -296,6 +299,8 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillableQueuedAt(data.QueuedAt).
 		SetQueuedAutonomous(data.QueuedAutonomous).
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
+		SetNillablePlanRejectionReason(&data.PlanRejectionReason).
+		SetNillablePlanRejectedAt(data.PlanRejectedAt).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
 		SetNillableExternalURL(&data.ExternalURL).
@@ -344,6 +349,50 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 	}
 	result := backlogItemToData(item)
 	return &result, nil
+}
+
+// GetRepoPathAndLatestCompletedWorkSessionCommits returns itemID's RepoPath
+// plus the Base/LastCommitSha of its most recent completed (session_role ==
+// work, ended_at set) ItemSession — the minimal data
+// Storage.ComputeCurrentDiffHash needs. Unlike GetBacklogItem (which also
+// eager-loads StatusEvents/ProgressNotes) and ListItemSessions (unbounded,
+// eager-loads ReviewVerdict for every session), this pushes the "most recent
+// completed work session" filter/order/limit into SQL — two bounded, no-edge
+// queries regardless of how many sessions/events/notes the item has
+// accumulated, rather than O(sessions_for_item) work on every review-verdict
+// save. baseSHA/headSHA are both "" (no error) when the item has no
+// completed work session yet.
+func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA string, err error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return "", "", "", fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	item, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ID(parsedID)).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return "", "", "", fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+		}
+		return "", "", "", fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
+	}
+
+	ws, err := r.client.ItemSession.Query().
+		Where(
+			itemsession.HasBacklogItemWith(backlogitem.ID(parsedID)),
+			itemsession.SessionRoleEQ(SessionRoleWork),
+			itemsession.EndedAtNotNil(),
+		).
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		First(ctx)
+	if ent.IsNotFound(err) {
+		return item.RepoPath, "", "", nil
+	}
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to query latest completed work session for item %s: %w", itemID, err)
+	}
+	return item.RepoPath, ws.BaseCommitSha, ws.LastCommitSha, nil
 }
 
 // excludedTerminalStatuses returns the statuses filter.ExcludeDone/ExcludeArchived
@@ -619,6 +668,14 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.PlanArtifactsPath != nil {
 		u.SetPlanArtifactsPath(*update.PlanArtifactsPath)
 	}
+	if update.PlanRejectionReason != nil {
+		u.SetPlanRejectionReason(*update.PlanRejectionReason)
+	}
+	if update.ClearPlanRejectedAt {
+		u.ClearPlanRejectedAt()
+	} else if update.PlanRejectedAt != nil {
+		u.SetPlanRejectedAt(*update.PlanRejectedAt)
+	}
 	if update.PrURL != nil {
 		u.SetPrURL(*update.PrURL)
 	}
@@ -740,6 +797,12 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.PlanArtifactsPath != nil {
 		fields = append(fields, "planArtifactsPath")
+	}
+	if update.PlanRejectionReason != nil {
+		fields = append(fields, "planRejectionReason")
+	}
+	if update.PlanRejectedAt != nil || update.ClearPlanRejectedAt {
+		fields = append(fields, "planRejectedAt")
 	}
 	if update.PrURL != nil {
 		fields = append(fields, "prUrl")

@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import type { BacklogItem, TriageResult, TriageTask, AcCriterion } from "@/lib/hooks/useBacklogService";
 import { TriageDiffSection } from "./TriageDiffSection";
 import { TriageErrorBanner } from "./TriageErrorBanner";
+import { TriageRelatedWorkSection } from "./TriageRelatedWorkSection";
 import * as styles from "./TriageReviewPanel.css";
 
 const DISMISSED_KEY = (id: string) => `triage-panel-dismissed-${id}`;
@@ -47,6 +48,8 @@ export interface TriageReviewPanelWriteProps extends TriageReviewPanelBaseProps 
   onSkip: () => void;
   /** Called when the user submits feedback to refine this triage result. */
   onRefine?: (feedback: string) => Promise<void>;
+  /** Called with a composed "Q:.../A:..." feedback string when the operator answers a specific triage question inline. */
+  onAnswerQuestion?: (feedback: string) => Promise<void>;
 }
 
 export type TriageReviewPanelProps = TriageReviewPanelReadOnlyProps | TriageReviewPanelWriteProps;
@@ -68,6 +71,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
   const onUndoApply = isReadOnlyProps(props) ? undefined : props.onUndoApply;
   const onSkip = isReadOnlyProps(props) ? undefined : props.onSkip;
   const onRefine = isReadOnlyProps(props) ? undefined : props.onRefine;
+  const onAnswerQuestion = isReadOnlyProps(props) ? undefined : props.onAnswerQuestion;
   // readOnly panels ignore the interactive dismissed flag entirely — it's
   // keyed by item.id, which a readOnly historical-record render (Story
   // 4.1.2) shares with the live interactive panel for the same item, so
@@ -220,6 +224,13 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
           <p className={styles.summaryText}>{triageResult.summary}</p>
         </div>
 
+        {!readOnly && (
+          <>
+            <hr className={styles.divider} aria-hidden="true" />
+            <TriageRelatedWorkSection itemTitle={item.title} repoPath={item.repoPath} />
+          </>
+        )}
+
         {hasSuggestions && (
           <>
             <hr className={styles.divider} aria-hidden="true" />
@@ -228,6 +239,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
               <TriageDiffSection
                 currentCriteria={item.acCriteria}
                 suggestedSuggestions={triageResult.suggestions}
+                onAnswerQuestion={onAnswerQuestion}
               />
             </div>
           </>

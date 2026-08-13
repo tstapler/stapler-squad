@@ -160,9 +160,9 @@ reports PASS, or you have deliberately accepted and documented any remaining CON
 Once sdd:6-verify is clean, call request_review with item_id={{item_id}} and a 2-3
 sentence summary of what was built, including the sdd:6-verify verdict.
 
-Do NOT end your session after this. Wait a bit, then call get_backlog_item (or run
-/backlog/status) again - the verdict appears under Latest Review Verdict once the
-reviewer submits it.
+Do NOT end your session after this. Call wait_for_backlog_event(item_id, event_type="verdict_recorded")
+instead of polling - it blocks until the verdict lands (or times out) and returns the
+outcome directly, or returns immediately if a verdict is already recorded.
 
 PASS leads to running /backlog/ship now to open the pull request yourself - it drives
 /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution.
