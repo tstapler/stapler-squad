@@ -283,6 +283,7 @@ export const error = style({
   background: vars.color.errorBg,
   borderRadius: 6,
   margin: "0 16px",
+  overflowWrap: "break-word",
 });
 
 export const shortcuts = style({
