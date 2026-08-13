@@ -945,7 +945,6 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
-	i.initTmuxSession()
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -954,6 +953,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	var setupErr error
@@ -1037,6 +1043,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		i.startVNCDisplay(context.Background())
 		i.allocateCDPPort()
@@ -1129,8 +1142,6 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
-	i.initTmuxSession()
-
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
 	// the callback to fire again after the sync.Once was exhausted in the prior run.
@@ -1142,6 +1153,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	// Cleanup on error: kill session and invalidate the caller's cleanup handle.
@@ -1253,6 +1271,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 		// can be injected via ExtraEnv at new-session time. This ensures the agent
