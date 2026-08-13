@@ -1772,98 +1772,151 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Co
 	}
 
 	for itemID, rows := range byItem {
-		var nonEscalation []OpenStuckStateData
-		var bouncingRow OpenStuckStateData
-		var hasBouncing, hasAbandonedReview bool
-		for _, row := range rows {
-			if row.Reason == domain.StuckReasonMultipleReasons || row.Reason == domain.StuckReasonBounceCapExhausted {
-				continue
+		l.reconcileMultiReasonEscalationForItem(ctx, er, itemID, rows)
+	}
+}
+
+// multiReasonRowSet is the per-item categorization of open stuck-state rows
+// that reconcileMultiReasonEscalation needs to decide whether the
+// multi-reason escalation should be raised, cleared, or left alone.
+type multiReasonRowSet struct {
+	nonEscalation      []OpenStuckStateData
+	bouncingRow        OpenStuckStateData
+	hasBouncing        bool
+	hasAbandonedReview bool
+}
+
+// categorizeOpenStuckRows partitions an item's open stuck-state rows into
+// the ones eligible to count toward multi-reason escalation (excluding
+// StuckReasonMultipleReasons and StuckReasonBounceCapExhausted, which are
+// derived signals rather than independent reasons) and tracks whether a
+// bouncing/abandoned-review pair is present for the structural-coupling
+// exclusion below.
+func categorizeOpenStuckRows(rows []OpenStuckStateData) multiReasonRowSet {
+	var set multiReasonRowSet
+	for _, row := range rows {
+		if row.Reason == domain.StuckReasonMultipleReasons || row.Reason == domain.StuckReasonBounceCapExhausted {
+			continue
+		}
+		if row.Reason == domain.StuckReasonBouncing {
+			set.hasBouncing = true
+			set.bouncingRow = row
+		}
+		if row.Reason == domain.StuckReasonAbandonedReview {
+			set.hasAbandonedReview = true
+		}
+		set.nonEscalation = append(set.nonEscalation, row)
+	}
+	return set
+}
+
+// excludeStructurallyCoupledAbandonedReview applies the ADR-001 exclusion
+// (plan.md Task 1.2.2a): a bouncing item's abandoned-review row is expected
+// structural coupling, not an independent signal, while remediation for the
+// bouncing reason is still blocked (parked or mid-backoff). Evaluated
+// in-process from set.bouncingRow (already fetched via FindOpenStuckStates)
+// rather than via l.storage.RemediationBlocked, which would re-query every
+// open stuck row across the whole system again just to look up the one row
+// already in hand. Mirrors RemediationBlocked's own decision set
+// (session/backlog_remediation.go): blocked iff the gate is parked or
+// mid-backoff, not eligible/granted.
+func excludeStructurallyCoupledAbandonedReview(set multiReasonRowSet) []OpenStuckStateData {
+	if !set.hasBouncing || !set.hasAbandonedReview {
+		return set.nonEscalation
+	}
+	switch evaluateRemediation(set.bouncingRow, time.Now(), serverStartTime) {
+	case remediationSkippedParked, remediationSkippedNotDue:
+		filtered := make([]OpenStuckStateData, 0, len(set.nonEscalation))
+		for _, row := range set.nonEscalation {
+			if row.Reason != domain.StuckReasonAbandonedReview {
+				filtered = append(filtered, row)
 			}
-			if row.Reason == domain.StuckReasonBouncing {
-				hasBouncing = true
-				bouncingRow = row
-			}
-			if row.Reason == domain.StuckReasonAbandonedReview {
-				hasAbandonedReview = true
-			}
-			nonEscalation = append(nonEscalation, row)
 		}
+		return filtered
+	}
+	return set.nonEscalation
+}
 
-		// Structural-coupling exclusion (ADR-001, plan.md Task 1.2.2a):
-		// evaluated in-process from bouncingRow (already fetched above via
-		// FindOpenStuckStates) rather than via l.storage.RemediationBlocked,
-		// which would re-query every open stuck row across the whole system
-		// again just to look up the one row already in hand. Mirrors
-		// RemediationBlocked's own decision set (session/backlog_remediation.go):
-		// blocked iff the gate is parked or mid-backoff, not eligible/granted.
-		if hasBouncing && hasAbandonedReview {
-			switch evaluateRemediation(bouncingRow, time.Now(), serverStartTime) {
-			case remediationSkippedParked, remediationSkippedNotDue:
-				filtered := make([]OpenStuckStateData, 0, len(nonEscalation))
-				for _, row := range nonEscalation {
-					if row.Reason != domain.StuckReasonAbandonedReview {
-						filtered = append(filtered, row)
-					}
-				}
-				nonEscalation = filtered
-			}
-		}
-
-		existingRow, hasExistingRow := findOpenStuckStateFor(rows, itemID, domain.StuckReasonMultipleReasons)
-
-		if !isMultiReasonEscalated(len(nonEscalation)) {
-			if hasExistingRow {
-				if _, resolveErr := er.ResolveStuck(ctx, itemID, domain.StuckReasonMultipleReasons); resolveErr != nil {
-					log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation ResolveStuck item=%s: %v", itemID, resolveErr)
-				} else {
-					log.InfoLog.Printf("[BacklogLifecycle] de-escalated item=%s open_reasons=%d", itemID, len(nonEscalation))
-				}
-			}
-			continue
-		}
-
-		reasonLabels := make([]string, 0, len(nonEscalation))
-		for _, row := range nonEscalation {
-			reasonLabels = append(reasonLabels, string(row.Reason))
-		}
-		contextString := strings.Join(reasonLabels, ", ")
-
-		applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonMultipleReasons, rows[0].ItemStatus, contextString)
-		if markErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuck item=%s: %v", itemID, markErr)
-			continue
-		}
-		if !applied {
-			continue
-		}
-		log.InfoLog.Printf("[BacklogLifecycle] escalated item=%s open_reasons=%d", itemID, len(nonEscalation))
-
-		// Determine notify-readiness from the pre-MarkStuck row, if one was
-		// already open this tick: MarkStuck does not change FirstDetectedAt
-		// or NotifiedAt for a row that was already open (only for one it
-		// reopens from a resolved state), so the pre-fetched values are
-		// still accurate post-MarkStuck. A freshly-created row (no
-		// existingRow) was just opened this tick, so it is never
-		// notify-ready yet.
-		if !hasExistingRow {
-			continue
-		}
-		if existingRow.NotifiedAt != nil {
-			continue
-		}
-		if !multiReasonEscalationNotifyReady(existingRow.FirstDetectedAt, time.Now()) {
-			continue
-		}
-		l.notify(itemID,
-			"Multiple stuck reasons open",
-			fmt.Sprintf("%s — %d stuck reasons currently open simultaneously (%s). This combination is a stronger signal than any single reason alone.", rows[0].ItemTitle, len(nonEscalation), contextString),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
-		)
-		if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonMultipleReasons); notifyErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuckNotified item=%s: %v", itemID, notifyErr)
+// deescalateMultiReasonIfNeeded resolves an item's open StuckReasonMultipleReasons
+// row once fewer than the escalation threshold of independent reasons remain
+// open. It reports whether de-escalation was the outcome (true) so the
+// caller can stop processing the item, or whether escalation should still be
+// evaluated (false).
+func (l *BacklogLifecycleListener) deescalateMultiReasonIfNeeded(ctx context.Context, er *EntRepository, itemID string, hasExistingRow bool, openReasonsCount int) bool {
+	if isMultiReasonEscalated(openReasonsCount) {
+		return false
+	}
+	if hasExistingRow {
+		if _, resolveErr := er.ResolveStuck(ctx, itemID, domain.StuckReasonMultipleReasons); resolveErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation ResolveStuck item=%s: %v", itemID, resolveErr)
+		} else {
+			log.InfoLog.Printf("[BacklogLifecycle] de-escalated item=%s open_reasons=%d", itemID, openReasonsCount)
 		}
 	}
+	return true
+}
+
+// notifyMultiReasonEscalationIfReady sends the multi-reason-escalation
+// notification once, using notify-readiness derived from the pre-MarkStuck
+// row (if one was already open this tick): MarkStuck does not change
+// FirstDetectedAt or NotifiedAt for a row that was already open (only for
+// one it reopens from a resolved state), so the pre-fetched values are still
+// accurate post-MarkStuck. A freshly-created row (no existingRow) was just
+// opened this tick, so it is never notify-ready yet.
+func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx context.Context, er *EntRepository, itemID, itemTitle, contextString string, nonEscalationCount int, existingRow OpenStuckStateData, hasExistingRow bool) {
+	if !hasExistingRow {
+		return
+	}
+	if existingRow.NotifiedAt != nil {
+		return
+	}
+	if !multiReasonEscalationNotifyReady(existingRow.FirstDetectedAt, time.Now()) {
+		return
+	}
+	l.notify(itemID,
+		"Multiple stuck reasons open",
+		fmt.Sprintf("%s — %d stuck reasons currently open simultaneously (%s). This combination is a stronger signal than any single reason alone.", itemTitle, nonEscalationCount, contextString),
+		7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+		4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
+	)
+	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonMultipleReasons); notifyErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuckNotified item=%s: %v", itemID, notifyErr)
+	}
+}
+
+// reconcileMultiReasonEscalationForItem applies the multi-reason escalation
+// decision (de-escalate, leave alone, or escalate + notify) for a single
+// item's open stuck-state rows. Split out of reconcileMultiReasonEscalation
+// to keep the per-item decision tree — categorize, exclude structurally
+// coupled rows, de-escalate-or-escalate, notify — independently readable and
+// under the complexity gate.
+func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx context.Context, er *EntRepository, itemID string, rows []OpenStuckStateData) {
+	set := categorizeOpenStuckRows(rows)
+	nonEscalation := excludeStructurallyCoupledAbandonedReview(set)
+
+	existingRow, hasExistingRow := findOpenStuckStateFor(rows, itemID, domain.StuckReasonMultipleReasons)
+
+	if l.deescalateMultiReasonIfNeeded(ctx, er, itemID, hasExistingRow, len(nonEscalation)) {
+		return
+	}
+
+	reasonLabels := make([]string, 0, len(nonEscalation))
+	for _, row := range nonEscalation {
+		reasonLabels = append(reasonLabels, string(row.Reason))
+	}
+	contextString := strings.Join(reasonLabels, ", ")
+
+	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonMultipleReasons, rows[0].ItemStatus, contextString)
+	if markErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuck item=%s: %v", itemID, markErr)
+		return
+	}
+	if !applied {
+		return
+	}
+	log.InfoLog.Printf("[BacklogLifecycle] escalated item=%s open_reasons=%d", itemID, len(nonEscalation))
+
+	l.notifyMultiReasonEscalationIfReady(ctx, er, itemID, rows[0].ItemTitle, contextString, len(nonEscalation), existingRow, hasExistingRow)
 }
 
 // hasActiveSession reports whether any of the provided ItemSessions is an
