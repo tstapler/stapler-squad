@@ -310,3 +310,111 @@ func TestIsCorruptedClone_ReturnsTrue_When_NotAGitRepo(t *testing.T) {
 		t.Errorf("isCorruptedClone(%q) = false, want true for a non-git directory", dir)
 	}
 }
+
+// TestRepairCorruptedGitRepo_ReRepairs_When_HeadIsUnresolvable is the
+// regression test for CreateBacklogWorktree's repair gap: EnsureRepoCloned
+// self-heals a corrupted clone, but backlog-triage-reached repos never went
+// through EnsureRepoCloned, so RepairCorruptedGitRepo generalizes the same
+// self-heal to a plain on-disk repo path. This clones a real local "origin"
+// repo, corrupts the clone's HEAD the same way TestIsCorruptedClone_* does,
+// then verifies repair re-clones it into a healthy state with the original
+// commit intact.
+func TestRepairCorruptedGitRepo_ReRepairs_When_HeadIsUnresolvable(t *testing.T) {
+	originDir := t.TempDir()
+	originRepo, err := git.PlainInit(originDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit(origin) failed: %v", err)
+	}
+	wt, err := originRepo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(originDir, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if _, err := wt.Add("f.txt"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	commitSHA, err := wt.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}})
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	clonePath := filepath.Join(t.TempDir(), "clone")
+	if _, err := git.PlainClone(clonePath, false, &git.CloneOptions{URL: originDir}); err != nil {
+		t.Fatalf("PlainClone failed: %v", err)
+	}
+	headPath := filepath.Join(clonePath, ".git", "HEAD")
+	if err := os.WriteFile(headPath, []byte("ref: refs/heads/.invalid\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(HEAD) failed: %v", err)
+	}
+	if !isCorruptedClone(clonePath) {
+		t.Fatalf("test setup failed: clone at %q should be corrupted before repair", clonePath)
+	}
+
+	if err := RepairCorruptedGitRepo(clonePath); err != nil {
+		t.Fatalf("RepairCorruptedGitRepo failed: %v", err)
+	}
+
+	if isCorruptedClone(clonePath) {
+		t.Errorf("RepairCorruptedGitRepo(%q): repo still corrupted after repair", clonePath)
+	}
+	repairedRepo, err := git.PlainOpen(clonePath)
+	if err != nil {
+		t.Fatalf("PlainOpen(repaired clone) failed: %v", err)
+	}
+	head, err := repairedRepo.Head()
+	if err != nil {
+		t.Fatalf("Head() failed after repair: %v", err)
+	}
+	if head.Hash() != commitSHA {
+		t.Errorf("repaired clone HEAD = %s, want %s", head.Hash(), commitSHA)
+	}
+}
+
+// TestRepairCorruptedGitRepo_NoOp_When_RepoIsHealthy guards against
+// unnecessarily deleting and re-cloning a perfectly good repo.
+func TestRepairCorruptedGitRepo_NoOp_When_RepoIsHealthy(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit failed: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if _, err := wt.Add("f.txt"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if _, err := wt.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}}); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	if err := RepairCorruptedGitRepo(dir); err != nil {
+		t.Fatalf("RepairCorruptedGitRepo failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "f.txt")); err != nil {
+		t.Errorf("RepairCorruptedGitRepo deleted/re-cloned a healthy repo: %v", err)
+	}
+}
+
+// TestRepairCorruptedGitRepo_NoOp_When_NotAGitRepo guards the other no-op
+// case: a plain directory (e.g. a resolved path that isn't actually a git
+// repo) must not be treated as corrupted and deleted.
+func TestRepairCorruptedGitRepo_NoOp_When_NotAGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := RepairCorruptedGitRepo(dir); err != nil {
+		t.Fatalf("RepairCorruptedGitRepo failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "f.txt")); err != nil {
+		t.Errorf("RepairCorruptedGitRepo deleted a non-git directory: %v", err)
+	}
+}
