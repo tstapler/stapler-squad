@@ -6,7 +6,7 @@ set -e
 # Resolution order:
 #   1. REPO env var override (e.g. REPO=tstapler/stapler-squad ./install.sh)
 #   2. git remote origin of the current directory (works when run from a clone)
-#   3. Default: TylerStaplerAtFanatics/stapler-squad
+#   3. Default: tstapler/stapler-squad
 detect_repo() {
     if [ -n "${REPO:-}" ]; then
         echo "$REPO"
@@ -27,7 +27,7 @@ detect_repo() {
         fi
     fi
 
-    echo "TylerStaplerAtFanatics/stapler-squad"
+    echo "tstapler/stapler-squad"
 }
 
 GITHUB_REPO=$(detect_repo)

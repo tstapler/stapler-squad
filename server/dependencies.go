@@ -953,8 +953,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 			// WorktreePRPoller enriches worktrees-without-sessions with GitHub PR data.
 			// The scannerSource adapter bridges session/unfinished → session without a cycle.
+			// Shares svc.PRStatusPoller's ETagCache instead of constructing its own — per
+			// ADR-022, a separate cache would double API call volume for repos both pollers hit.
 			worktreePRPoller = session.NewWorktreePRPoller(
-				githubpkg.NewETagCache(),
+				svc.PRStatusPoller.ETagCache(),
 				svc.PRStatusPoller,
 			)
 			worktreePRPoller.SetSource(&scannerSource{s: unfinishedScanner})

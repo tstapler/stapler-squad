@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { createClient } from "@connectrpc/connect";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createClient, type Client } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
+import AnsiToHtml from "ansi-to-html";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 
@@ -16,6 +17,9 @@ interface SnapshotCacheEntry {
 // Prevents thundering-herd on mount when the session list renders 20+ cards at once.
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
 const CACHE_TTL_MS = 5_000;
+// Randomize each card's refresh cadence by up to ±20% so N cards' timers don't
+// stay phase-locked and fire their refetch in the same synchronized burst forever.
+const CACHE_TTL_JITTER_MS = CACHE_TTL_MS * 0.2;
 const LAST_N_LINES = 20;
 
 function getCached(sessionId: string): SnapshotCacheEntry | null {
@@ -24,13 +28,33 @@ function getCached(sessionId: string): SnapshotCacheEntry | null {
   return null;
 }
 
+// Shared client, built once and reused by every card instead of once per
+// fetch — createClient/createConnectTransport are non-trivial object graphs
+// and this hook is instantiated per visible session card, polling every 5s.
+let sharedClient: Client<typeof SessionService> | null = null;
+
+function getSharedClient(): Client<typeof SessionService> {
+  if (!sharedClient) {
+    sharedClient = createClient(
+      SessionService,
+      createConnectTransport({
+        baseUrl: getApiBaseUrl(),
+        interceptors: [createAuthInterceptor()],
+      })
+    );
+  }
+  return sharedClient;
+}
+
+// Singleton converter — ansi-to-html's Convert holds no per-call state, so
+// constructing a fresh instance (plus a dynamic require()) on every render
+// was pure overhead at polling scale.
+const ansiConverter = new AnsiToHtml({ escapeXML: true });
+
 /** Render ANSI escape sequences as HTML spans. Falls back to plain text on error. */
 function renderAnsi(raw: string): string {
   try {
-    // Dynamically require to avoid server-side import issues (ansi-to-html is browser-only).
-    const Convert = require("ansi-to-html");
-    const convert = new Convert({ escapeXML: true });
-    return convert.toHtml(raw);
+    return ansiConverter.toHtml(raw);
   } catch {
     // Plain text fallback — escape HTML entities to prevent XSS
     return raw
@@ -82,13 +106,7 @@ export function useTerminalSnapshot(
       setError(null);
 
       try {
-        const client = createClient(
-          SessionService,
-          createConnectTransport({
-            baseUrl: getApiBaseUrl(),
-            interceptors: [createAuthInterceptor()],
-          })
-        );
+        const client = getSharedClient();
         const response = await client.getTerminalSnapshot({
           sessionId,
           lastNLines: LAST_N_LINES,
@@ -112,11 +130,26 @@ export function useTerminalSnapshot(
     [sessionId, enabled]
   );
 
+  const fetchRef = useRef(fetch);
+  fetchRef.current = fetch;
+
   useEffect(() => {
     if (!enabled) return;
+
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const scheduleNext = () => {
+      // Jitter each card's next tick independently so N cards mounted in the
+      // same render burst don't stay phase-locked and refetch in lockstep forever.
+      const jitter = (Math.random() * 2 - 1) * CACHE_TTL_JITTER_MS;
+      timeoutId = setTimeout(() => {
+        fetchRef.current(true);
+        scheduleNext();
+      }, CACHE_TTL_MS + jitter);
+    };
+
     fetch();
-    const interval = setInterval(() => fetch(true), CACHE_TTL_MS);
-    return () => clearInterval(interval);
+    scheduleNext();
+    return () => clearTimeout(timeoutId);
   }, [fetch, enabled]);
 
   return { html, isEmpty, loading, error, refetch: () => fetch(true) };

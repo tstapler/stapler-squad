@@ -60,6 +60,11 @@ jest.mock("@/lib/hooks/useBrowserLogStream", () => ({
   useBrowserLogStream: jest.fn(),
 }));
 
+const mockUseViewport = jest.fn();
+jest.mock("@/components/providers/ViewportProvider", () => ({
+  useViewport: () => mockUseViewport(),
+}));
+
 // ── Imports (after mocks) ──────────────────────────────────────────────────────
 
 // eslint-disable-next-line import/first
@@ -105,6 +110,15 @@ beforeEach(() => {
   localStorage.setItem("stapler-squad-toolbar-expanded", "true");
   localStorage.setItem("stapler-squad-dev-toolbar", "true");
   (useTerminalStream as jest.Mock).mockReturnValue(makeStreamMock());
+  // Default: desktop-shaped viewport (not mobile, no fine pointer) — compactToolbar
+  // stays false so existing tests keep exercising the expanded toolbar untouched.
+  mockUseViewport.mockReturnValue({
+    isMobile: false,
+    isFoldable: false,
+    isInnerScreen: true,
+    hasFinePointer: false,
+    isVirtualKeyboardOpen: false,
+  });
   jest.spyOn(console, "log").mockImplementation(() => {});
   jest.spyOn(console, "warn").mockImplementation(() => {});
   jest.spyOn(console, "error").mockImplementation(() => {});
@@ -210,6 +224,16 @@ describe("toolbar analytics", () => {
   });
 
   it("fires track with button:mouse state:on when Mouse enabled", () => {
+    // Mouse mode defaults to "any" (ON) on desktop viewports (isMobile: false, the
+    // beforeEach default) and only starts "none" (OFF) on mobile — override to mobile
+    // here so the button starts in the "Enable mouse mode" state this test expects.
+    mockUseViewport.mockReturnValue({
+      isMobile: true,
+      isFoldable: false,
+      isInnerScreen: true,
+      hasFinePointer: false,
+      isVirtualKeyboardOpen: false,
+    });
     renderTerminal();
     fireEvent.click(screen.getByRole("button", { name: /enable mouse mode/i }));
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
@@ -339,5 +363,79 @@ describe("dev panel behavior", () => {
     renderTerminal();
     const recordBtn = screen.getByRole("button", { name: /start recording terminal output/i });
     expect(recordBtn).toBeInTheDocument();
+  });
+});
+
+// ── Compact toolbar auto-collapse tests (mouse+keyboard-on-mobile detection) ──
+
+describe("compact toolbar auto-collapse", () => {
+  it("collapses the toolbar and hides the mobile keyboard row when isMobile+hasFinePointer with default (auto) override", () => {
+    mockUseViewport.mockReturnValue({
+      isMobile: true,
+      isFoldable: false,
+      isInnerScreen: false,
+      hasFinePointer: true,
+      isVirtualKeyboardOpen: false,
+    });
+    renderTerminal();
+    expect(screen.getByTestId("toolbar-toggle")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryAllByTestId("mobile-key")).toHaveLength(0);
+  });
+
+  it("does not compact when isMobile but no fine pointer detected (touch-only phone)", () => {
+    mockUseViewport.mockReturnValue({
+      isMobile: true,
+      isFoldable: false,
+      isInnerScreen: false,
+      hasFinePointer: false,
+      isVirtualKeyboardOpen: false,
+    });
+    renderTerminal();
+    expect(screen.getByTestId("toolbar-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryAllByTestId("mobile-key").length).toBeGreaterThan(0);
+  });
+
+  it("respects an explicit prior keyboard-visibility choice instead of forcing it hidden", () => {
+    localStorage.setItem("stapler-squad-mobile-keyboard-visible-session-abc", "true");
+    mockUseViewport.mockReturnValue({
+      isMobile: true,
+      isFoldable: false,
+      isInnerScreen: false,
+      hasFinePointer: true,
+      isVirtualKeyboardOpen: false,
+    });
+    renderTerminal();
+    // Toolbar still collapses (no such override guard exists for it)...
+    expect(screen.getByTestId("toolbar-toggle")).toHaveAttribute("aria-expanded", "false");
+    // ...but the user's explicit choice to keep the keyboard row visible is respected.
+    expect(screen.queryAllByTestId("mobile-key").length).toBeGreaterThan(0);
+  });
+
+  it("forces compact mode with inputModeOverride:desktop even without a fine pointer", () => {
+    localStorage.setItem("stapler-squad:input-mode-override", "desktop");
+    mockUseViewport.mockReturnValue({
+      isMobile: false,
+      isFoldable: false,
+      isInnerScreen: true,
+      hasFinePointer: false,
+      isVirtualKeyboardOpen: false,
+    });
+    renderTerminal();
+    expect(screen.getByTestId("toolbar-toggle")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryAllByTestId("mobile-key")).toHaveLength(0);
+  });
+
+  it("never compacts with inputModeOverride:touch even when isMobile+hasFinePointer", () => {
+    localStorage.setItem("stapler-squad:input-mode-override", "touch");
+    mockUseViewport.mockReturnValue({
+      isMobile: true,
+      isFoldable: false,
+      isInnerScreen: false,
+      hasFinePointer: true,
+      isVirtualKeyboardOpen: false,
+    });
+    renderTerminal();
+    expect(screen.getByTestId("toolbar-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryAllByTestId("mobile-key").length).toBeGreaterThan(0);
   });
 });

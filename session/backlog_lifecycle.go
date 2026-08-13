@@ -1364,6 +1364,17 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 // worktrees of the same repo share one object store — the same fallback
 // shape getWorkSessionDiff/GetGitDiffRef already rely on for the review-diff
 // path. Returns "" if neither resolves.
+//
+// Before trusting the worktree HEAD, confirms the directory still has
+// wt.BranchName checked out. Worktree paths are recycled across sessions
+// once a session ends, so a directory existing at wt.WorktreePath does not
+// mean it still holds *this* session's branch. Confirmed live 2026-08-12:
+// item 0f5d760b's ended work session still pointed at a worktree path that
+// had since been reassigned to a later item's branch (0f127033's, then
+// a3ca3918's — same shape recurred across items), so its HEAD resolved to
+// that other item's legitimately-merged commit instead of "no commits",
+// falsely marking 0f5d760b (and the others) shipped. A branch mismatch falls
+// through to the branch-name lookup below, same as the worktree-gone case.
 func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
 	wt, err := l.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	if err != nil {
@@ -1372,8 +1383,12 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	}
 	if wt.WorktreePath != "" {
 		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
-			if sha, headErr := GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
-				return sha
+			if branch, branchErr := git.GetCurrentBranchName(wt.WorktreePath); branchErr == nil && (wt.BranchName == "" || branch == wt.BranchName) {
+				if sha, headErr := GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+					return sha
+				}
+			} else if branchErr == nil {
+				log.WarningLog.Printf("[BacklogLifecycle] resolveLatestWorkCommit: worktree path %s now holds branch %q, not session's %q (path recycled?) — falling back to repo-wide branch lookup", wt.WorktreePath, branch, wt.BranchName)
 			}
 		}
 	}

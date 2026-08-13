@@ -60,6 +60,15 @@ type CommitImportParams struct {
 	DisambiguationChoice string
 	OriginalPID          int32
 	OriginalCreateTimeMs int64
+
+	// TmuxServerSocket, when non-empty, isolates the committed instance's
+	// tmux server via the -L flag (see InstanceOptions.TmuxServerSocket).
+	// Empty (the production default) uses the shared default tmux server.
+	// Tests that exercise the real Start() path should set this to a unique
+	// per-test socket (matching instance_cold_restore_test.go's
+	// coldRestoreSocket pattern) to avoid contending with every other test's
+	// tmux operations on the single shared server under parallel CI load.
+	TmuxServerSocket string
 }
 
 // CommitImportResult is the domain-level outcome of a successful commit.
@@ -127,10 +136,11 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 
 		return CreateManagedInstance(ctx, CreateManagedInstanceParams{
 			Options: InstanceOptions{
-				Title:       importInstanceTitle(params.Candidate),
-				Path:        params.Candidate.Path,
-				Program:     params.Candidate.Program,
-				SessionType: SessionTypeDirectory,
+				Title:            importInstanceTitle(params.Candidate),
+				Path:             params.Candidate.Path,
+				Program:          params.Candidate.Program,
+				SessionType:      SessionTypeDirectory,
+				TmuxServerSocket: params.TmuxServerSocket,
 			},
 			Storage:  params.Storage,
 			Registry: params.Registry,
