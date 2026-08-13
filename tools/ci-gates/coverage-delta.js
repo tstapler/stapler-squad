@@ -1,0 +1,47 @@
+'use strict';
+
+// Marker owns the previous percentage itself (`pct=NN.N`) rather than
+// scraping it out of the free-form summary sentence — a future edit to that
+// sentence's wording can't silently break parsing this way. Lookup uses the
+// stable prefix (not the full marker, which varies run to run since it
+// embeds the *current* run's pct).
+const MARKER_PREFIX = '<!-- feature-coverage:pct=';
+const MARKER_RE = /feature-coverage:pct=([\d.]+)/;
+
+function buildMarker(currentPct) {
+  return `${MARKER_PREFIX}${currentPct} -->`;
+}
+
+function findExisting(comments) {
+  return comments.find((c) => c.body.includes(MARKER_PREFIX));
+}
+
+function previousCoveragePct(existingBody) {
+  if (!existingBody) return null;
+  const m = existingBody.match(MARKER_RE);
+  return m ? parseFloat(m[1]) : null;
+}
+
+// An unchanged coverage number is the steady state, not a resolved problem
+// the way a cleared regression is — never actionable, and (see gateAction)
+// never deleted either, unlike the other 3 workflows' gates.
+function isActionable({ existingBody, currentPct }) {
+  if (!existingBody) return true;
+  const prev = previousCoveragePct(existingBody);
+  if (prev === null) return true; // malformed/missing marker — safe fallback: post
+  if (isNaN(currentPct)) return true;
+  return currentPct !== prev;
+}
+
+function gateAction(actionable) {
+  return actionable ? 'post' : 'noop';
+}
+
+module.exports = {
+  MARKER_PREFIX,
+  buildMarker,
+  findExisting,
+  previousCoveragePct,
+  isActionable,
+  gateAction,
+};
