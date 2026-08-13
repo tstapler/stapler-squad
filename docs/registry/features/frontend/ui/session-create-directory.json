@@ -1,0 +1,15 @@
+{
+  "id": "session-create-directory",
+  "type": "frontend",
+  "component": "OmnibarCreationPanel",
+  "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+  "tested": true,
+  "testIds": [
+    "directory session creation > directory type is selectable",
+    "directory session creation > hides branch controls when directory is selected",
+    "directory session creation > shows working directory field for directory mode",
+    "directory session creation > submit is disabled without a path",
+    "directory session creation > sends directory session type in payload"
+  ],
+  "lastModified": "2026-05-01T00:00:00Z"
+}

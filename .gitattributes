@@ -1,0 +1,2 @@
+benchmarks/**/*.txt filter=lfs diff=lfs merge=lfs -text
+benchmarks/**/*.json filter=lfs diff=lfs merge=lfs -text

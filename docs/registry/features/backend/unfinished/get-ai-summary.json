@@ -1,0 +1,11 @@
+{
+  "id": "unfinished:get-ai-summary",
+  "type": "backend",
+  "service": "UnfinishedWorkService",
+  "method": "GetWorktreeAISummary",
+  "protoFile": "proto/session/v1/unfinished.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-17T16:40:58.370370777-07:00"
+}

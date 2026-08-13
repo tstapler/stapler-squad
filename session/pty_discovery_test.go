@@ -1,0 +1,585 @@
+package session
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
+)
+
+// fakeSessionLister is a test double for tmux.SessionLister.
+type fakeSessionLister struct {
+	sessions map[string]bool
+	healthy  bool
+}
+
+func (f *fakeSessionLister) ListSessions() map[string]bool {
+	m := make(map[string]bool, len(f.sessions))
+	for k, v := range f.sessions {
+		m[k] = v
+	}
+	return m
+}
+
+func (f *fakeSessionLister) IsHealthy() bool { return f.healthy }
+
+// Compile-time check: fakeSessionLister satisfies the interface.
+var _ tmux.SessionLister = (*fakeSessionLister)(nil)
+
+func TestNewPTYDiscovery(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	if pd == nil {
+		t.Fatal("NewPTYDiscovery returned nil")
+	}
+
+	if pd.connections == nil {
+		t.Error("connections slice not initialized")
+	}
+
+	if pd.sessionMap == nil {
+		t.Error("sessionMap not initialized")
+	}
+
+	if pd.stopCh == nil {
+		t.Error("stopCh not initialized")
+	}
+
+	if pd.refreshRate != 5*time.Second {
+		t.Errorf("refreshRate = %v, want %v", pd.refreshRate, 5*time.Second)
+	}
+}
+
+func TestPTYDiscovery_SetSessions(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	sessions := []*Instance{
+		{Title: "session1", Status: Running, Program: "claude"},
+		{Title: "session2", Status: Paused, Program: "claude"},
+		{Title: "session3", Status: Running, Program: "aider"},
+	}
+
+	pd.SetSessions(sessions)
+
+	if len(pd.sessionMap) != 3 {
+		t.Errorf("sessionMap length = %d, want 3", len(pd.sessionMap))
+	}
+
+	if pd.sessionMap["session1"] == nil {
+		t.Error("session1 not found in sessionMap")
+	}
+
+	if pd.sessionMap["session1"].Program != "claude" {
+		t.Errorf("session1 Program = %s, want claude", pd.sessionMap["session1"].Program)
+	}
+}
+
+func TestPTYDiscovery_GetConnections(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	// Initially empty
+	conns := pd.GetConnections()
+	if len(conns) != 0 {
+		t.Errorf("initial connections length = %d, want 0", len(conns))
+	}
+
+	// Add connections directly for testing
+	pd.mu.Lock()
+	pd.connections = []*PTYConnection{
+		{Path: "/dev/pts/1", PID: 1234, Command: "claude"},
+		{Path: "/dev/pts/2", PID: 5678, Command: "aider"},
+	}
+	pd.mu.Unlock()
+
+	conns = pd.GetConnections()
+	if len(conns) != 2 {
+		t.Errorf("connections length = %d, want 2", len(conns))
+	}
+
+	// Verify it's a copy (modifying returned slice shouldn't affect internal state)
+	conns[0].Path = "/modified"
+	internalConns := pd.GetConnections()
+	if internalConns[0].Path == "/modified" {
+		t.Error("GetConnections did not return a copy")
+	}
+}
+
+func TestPTYDiscovery_GetConnectionsByCategory(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	// Set up test data
+	pd.mu.Lock()
+	pd.connections = []*PTYConnection{
+		{Path: "/dev/pts/1", PID: 1234, Command: "claude", SessionName: "session1"},
+		{Path: "/dev/pts/2", PID: 5678, Command: "claude", SessionName: ""},
+		{Path: "/dev/pts/3", PID: 9012, Command: "aider", SessionName: ""},
+	}
+	pd.mu.Unlock()
+
+	categorized := pd.GetConnectionsByCategory()
+
+	// Check squad category (has SessionName)
+	if len(categorized[PTYCategorySquad]) != 1 {
+		t.Errorf("Squad category count = %d, want 1", len(categorized[PTYCategorySquad]))
+	}
+
+	// Check orphaned category (Claude without SessionName)
+	if len(categorized[PTYCategoryOrphaned]) != 1 {
+		t.Errorf("Orphaned category count = %d, want 1", len(categorized[PTYCategoryOrphaned]))
+	}
+
+	// Check other category (non-Claude)
+	if len(categorized[PTYCategoryOther]) != 1 {
+		t.Errorf("Other category count = %d, want 1", len(categorized[PTYCategoryOther]))
+	}
+}
+
+func TestPTYDiscovery_GetConnection(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	pd.mu.Lock()
+	pd.connections = []*PTYConnection{
+		{Path: "/dev/pts/1", PID: 1234, Command: "claude"},
+		{Path: "/dev/pts/2", PID: 5678, Command: "aider"},
+	}
+	pd.mu.Unlock()
+
+	// Test finding existing connection
+	conn := pd.GetConnection("/dev/pts/1")
+	if conn == nil {
+		t.Fatal("GetConnection returned nil for existing path")
+	}
+	if conn.PID != 1234 {
+		t.Errorf("conn.PID = %d, want 1234", conn.PID)
+	}
+
+	// Test non-existent connection
+	conn = pd.GetConnection("/dev/pts/99")
+	if conn != nil {
+		t.Error("GetConnection should return nil for non-existent path")
+	}
+}
+
+func TestPTYStatus_String(t *testing.T) {
+	tests := []struct {
+		status PTYStatus
+		want   string
+	}{
+		{PTYReady, "Ready"},
+		{PTYBusy, "Busy"},
+		{PTYIdle, "Idle"},
+		{PTYError, "Error"},
+		{PTYStatus(99), "Unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := tt.status.String()
+			if got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPTYCategory_String(t *testing.T) {
+	tests := []struct {
+		category PTYCategory
+		want     string
+	}{
+		{PTYCategorySquad, "Squad Sessions"},
+		{PTYCategoryOrphaned, "Orphaned"},
+		{PTYCategoryOther, "Other"},
+		{PTYCategory(99), "Unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := tt.category.String()
+			if got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPTYConnection_GetStatusIcon(t *testing.T) {
+	tests := []struct {
+		status PTYStatus
+		want   string
+	}{
+		{PTYReady, "●"},
+		{PTYBusy, "◐"},
+		{PTYIdle, "◯"},
+		{PTYError, "✗"},
+		{PTYStatus(99), "?"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status.String(), func(t *testing.T) {
+			conn := &PTYConnection{Status: tt.status}
+			got := conn.GetStatusIcon()
+			if got != tt.want {
+				t.Errorf("GetStatusIcon() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPTYConnection_GetStatusColor(t *testing.T) {
+	tests := []struct {
+		status PTYStatus
+		want   string
+	}{
+		{PTYReady, "82"},
+		{PTYBusy, "214"},
+		{PTYIdle, "240"},
+		{PTYError, "196"},
+		{PTYStatus(99), "255"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status.String(), func(t *testing.T) {
+			conn := &PTYConnection{Status: tt.status}
+			got := conn.GetStatusColor()
+			if got != tt.want {
+				t.Errorf("GetStatusColor() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPTYConnection_GetDisplayName(t *testing.T) {
+	tests := []struct {
+		name string
+		conn PTYConnection
+		want string
+	}{
+		{
+			name: "with session name",
+			conn: PTYConnection{SessionName: "my-session", Command: "claude"},
+			want: "my-session",
+		},
+		{
+			name: "without session name",
+			conn: PTYConnection{SessionName: "", Command: "claude"},
+			want: "(claude)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.conn.GetDisplayName()
+			if got != tt.want {
+				t.Errorf("GetDisplayName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPTYConnection_GetPTYBasename(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/dev/pts/12", "12"},
+		{"/dev/pts/0", "0"},
+		{"/dev/tty1", "tty1"},
+		{"/dev/pts/", "pts"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			conn := &PTYConnection{Path: tt.path}
+			got := conn.GetPTYBasename()
+			if got != tt.want {
+				t.Errorf("GetPTYBasename() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPTYDiscovery_CategorizeConnection(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	tests := []struct {
+		name string
+		conn *PTYConnection
+		want PTYCategory
+	}{
+		{
+			name: "squad session",
+			conn: &PTYConnection{SessionName: "my-session", Command: "claude"},
+			want: PTYCategorySquad,
+		},
+		{
+			name: "orphaned claude",
+			conn: &PTYConnection{SessionName: "", Command: "claude"},
+			want: PTYCategoryOrphaned,
+		},
+		{
+			name: "orphaned claude mixed case",
+			conn: &PTYConnection{SessionName: "", Command: "Claude"},
+			want: PTYCategoryOrphaned,
+		},
+		{
+			name: "other tool",
+			conn: &PTYConnection{SessionName: "", Command: "aider"},
+			want: PTYCategoryOther,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pd.categorizeConnection(tt.conn)
+			if got != tt.want {
+				t.Errorf("categorizeConnection() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPTYDiscovery_StartStop(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	// Start monitoring
+	pd.Start()
+
+	// Stop monitoring
+	pd.Stop()
+
+	// Verify stop channel is closed by polling
+	if err := wait.WaitForCondition(func() bool {
+		select {
+		case <-pd.stopCh:
+			return true
+		default:
+			return false
+		}
+	}, wait.FastWaitConfig()); err != nil {
+		t.Error("Stop did not close stopCh")
+	}
+}
+
+func TestPTYDiscovery_OrganizeByCategory(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	pd.mu.Lock()
+	pd.connections = []*PTYConnection{
+		{Path: "/dev/pts/1", SessionName: "session1", Command: "claude"},
+		{Path: "/dev/pts/2", SessionName: "session2", Command: "claude"},
+		{Path: "/dev/pts/3", SessionName: "", Command: "claude"},
+		{Path: "/dev/pts/4", SessionName: "", Command: "aider"},
+	}
+	pd.mu.Unlock()
+
+	categorized := pd.GetConnectionsByCategory()
+
+	if len(categorized[PTYCategorySquad]) != 2 {
+		t.Errorf("Squad category = %d, want 2", len(categorized[PTYCategorySquad]))
+	}
+
+	if len(categorized[PTYCategoryOrphaned]) != 1 {
+		t.Errorf("Orphaned category = %d, want 1", len(categorized[PTYCategoryOrphaned]))
+	}
+
+	if len(categorized[PTYCategoryOther]) != 1 {
+		t.Errorf("Other category = %d, want 1", len(categorized[PTYCategoryOther]))
+	}
+}
+
+// TestWithSessionLister verifies that the functional option wires the lister field.
+func TestWithSessionLister(t *testing.T) {
+	lister := &fakeSessionLister{
+		sessions: map[string]bool{"staplersquad_test": true},
+		healthy:  true,
+	}
+	pd := NewPTYDiscovery(WithSessionLister(lister))
+	if pd.sessionLister != lister {
+		t.Error("WithSessionLister did not set sessionLister field")
+	}
+}
+
+// TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister verifies that when the
+// SessionLister is healthy no exec.Command("tmux","list-sessions") fork occurs.
+// The lister returns two staplersquad_ sessions; because there is no real tmux
+// process the PTY lookup (getPTYInfoFromTmuxWithSocket) will fail and both sessions will
+// be skipped — but the point is we exercised the lister path without error.
+func TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister(t *testing.T) {
+	lister := &fakeSessionLister{
+		sessions: map[string]bool{
+			"staplersquad_foo": true,
+			"staplersquad_bar": true,
+		},
+		healthy: true,
+	}
+
+	pd := NewPTYDiscovery(WithSessionLister(lister))
+
+	// discoverOrphanedPTYs must not panic and must consume sessions from the
+	// lister without forking tmux list-sessions.
+	result := pd.discoverOrphanedPTYs()
+
+	// In a test environment getPTYInfoFromTmuxWithSocket will fail for every session,
+	// so the returned slice will be empty — but no exec fork occurred.
+	// We assert nil-safety only; the important invariant is no panic.
+	if result == nil {
+		t.Error("discoverOrphanedPTYs returned nil slice")
+	}
+}
+
+// TestPTYDiscovery_DiscoverOrphanedPTYs_FallbackWhenUnhealthy verifies that
+// when IsHealthy returns false the method falls back to exec (which fails in
+// the test environment and returns an empty slice gracefully).
+func TestPTYDiscovery_DiscoverOrphanedPTYs_FallbackWhenUnhealthy(t *testing.T) {
+	tests := []struct {
+		name   string
+		lister *fakeSessionLister
+	}{
+		{
+			name:   "unhealthy lister",
+			lister: &fakeSessionLister{sessions: map[string]bool{"staplersquad_foo": true}, healthy: false},
+		},
+		{
+			name:   "nil lister",
+			lister: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var opts []PTYDiscoveryOption
+			if tt.lister != nil {
+				opts = append(opts, WithSessionLister(tt.lister))
+			} else {
+				// Override the default registry with nil to force exec fallback.
+				opts = append(opts, WithSessionLister(nil))
+			}
+
+			pd := NewPTYDiscovery(opts...)
+
+			// In a test environment tmux list-sessions will return an error or
+			// empty output, so the result should be a non-nil empty slice.
+			result := pd.discoverOrphanedPTYs()
+			if result == nil {
+				t.Error("discoverOrphanedPTYs returned nil slice on exec fallback")
+			}
+		})
+	}
+}
+
+// TestBatchPaneActivity_UsesIsolatedSocketWhenCalledWithoutOne is the regression guard
+// for the raw "tmux list-panes -a" call that, before ResolveSocket existed, always
+// targeted the shared, machine-wide default tmux socket when called with an empty
+// socket argument — the same class of bug that let a test process enumerate another
+// running stapler-squad instance's panes. It replaces the tmux binary with a fake
+// script that records its argv and asserts the call is socket-scoped to the
+// per-process isolated socket rather than the shared default.
+func TestBatchPaneActivity_UsesIsolatedSocketWhenCalledWithoutOne(t *testing.T) {
+	logPath := installFakeTmuxBinary(t)
+
+	batchPaneActivity("")
+
+	assertInvocationsUseIsolatedSocket(t, logPath, "list-panes")
+}
+
+// TestBatchPTYInfo_UsesIsolatedSocketWhenCalledWithoutOne mirrors
+// TestBatchPaneActivity_UsesIsolatedSocketWhenCalledWithoutOne for the sibling
+// "tmux list-panes -a" call in batchPTYInfo.
+func TestBatchPTYInfo_UsesIsolatedSocketWhenCalledWithoutOne(t *testing.T) {
+	logPath := installFakeTmuxBinary(t)
+
+	batchPTYInfo("")
+
+	assertInvocationsUseIsolatedSocket(t, logPath, "list-panes")
+}
+
+// installFakeTmuxBinary points TMUX_BIN (auto-restored by t.Setenv) at a script that
+// appends its argv to a log file and exits non-zero, so callers gracefully return
+// empty results. Returns the log path.
+func installFakeTmuxBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "argv.log")
+	fakeTmux := filepath.Join(dir, "tmux")
+
+	script := "#!/bin/sh\necho \"$@\" >> \"" + logPath + "\"\nexit 1\n"
+	if err := os.WriteFile(fakeTmux, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write fake tmux binary: %v", err)
+	}
+	t.Setenv("TMUX_BIN", fakeTmux)
+	return logPath
+}
+
+// assertInvocationsUseIsolatedSocket asserts that the fake tmux binary was invoked
+// at least once with the given subcommand, and that EVERY invocation logged --
+// including any from unrelated background goroutines (e.g. hibernation sweepers)
+// left running by earlier tests in this process, since TMUX_BIN is process-global --
+// is socket-scoped with "-L <isolated-socket>" rather than falling through to the
+// shared default (no -L at all). A stray unscoped call from anywhere would mean
+// ResolveSocket's isolation guarantee has a hole.
+func assertInvocationsUseIsolatedSocket(t *testing.T, logPath string, wantSubcommand string) {
+	t.Helper()
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("expected the fake tmux binary to have been invoked: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+	if len(lines) == 0 {
+		t.Fatalf("expected at least one tmux invocation, got none")
+	}
+
+	sawWantedSubcommand := false
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "-L ") {
+			t.Fatalf("expected every invocation to be socket-scoped with -L, got: %q", line)
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.Contains(fields[1], "test-isolated-") {
+			t.Fatalf("expected the per-process isolated socket, not the shared default, got: %q", line)
+		}
+		if strings.Contains(line, wantSubcommand) {
+			sawWantedSubcommand = true
+		}
+	}
+	if !sawWantedSubcommand {
+		t.Fatalf("expected an invocation containing %q, got: %v", wantSubcommand, lines)
+	}
+}
+
+// TestPTYDiscovery_SkipsTickWhenPreviousStillRunning is a regression test for
+// monitorLoop's "skip this tick if the previous one is still running" guard:
+// this poller fires every refreshRate (default 5s) forever regardless of
+// session count, and without the guard, a slow tmux call (server under load)
+// would let ticks pile up as concurrent Refresh() calls instead of backing off.
+func TestPTYDiscovery_SkipsTickWhenPreviousStillRunning(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	// Simulate a refresh already in flight (as if a previous tick's Refresh()
+	// hadn't returned yet).
+	pd.refreshing.Store(true)
+
+	ran, err := pd.tryRefreshOnce()
+	if ran {
+		t.Fatal("tryRefreshOnce ran Refresh() while a previous call was still marked in-flight")
+	}
+	if err != nil {
+		t.Fatalf("skipped tick should return a nil error, got: %v", err)
+	}
+
+	// Once the in-flight refresh "finishes" (guard cleared), the next call must
+	// actually run Refresh() again -- proves this isn't just permanently stuck.
+	pd.refreshing.Store(false)
+	ran, _ = pd.tryRefreshOnce()
+	if !ran {
+		t.Fatal("tryRefreshOnce should run Refresh() once the guard is clear")
+	}
+	if pd.refreshing.Load() {
+		t.Fatal("tryRefreshOnce must clear the in-flight guard after Refresh() returns")
+	}
+}

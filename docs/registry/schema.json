@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Backend Feature Registry",
+  "description": "Registry of backend RPC features discovered from proto definitions and source markers.",
+  "type": "object",
+  "required": ["version", "generatedAt", "features"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Registry schema version."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the registry was generated."
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Feature"
+      }
+    }
+  },
+  "definitions": {
+    "Feature": {
+      "type": "object",
+      "required": ["id", "type", "backend", "tested", "testIds", "lastModified"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Canonical feature ID in scope:action format (e.g. session:create)."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["backend"],
+          "description": "Feature type."
+        },
+        "backend": {
+          "$ref": "#/definitions/BackendDetails"
+        },
+        "tested": {
+          "type": "boolean",
+          "description": "Whether the feature has associated test IDs."
+        },
+        "testIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Test identifiers covering this feature."
+        },
+        "lastModified": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last modification time of the proto file."
+        }
+      }
+    },
+    "BackendDetails": {
+      "type": "object",
+      "required": ["service", "method", "protoFile", "markerFound"],
+      "properties": {
+        "service": {
+          "type": "string",
+          "description": "Proto service name."
+        },
+        "method": {
+          "type": "string",
+          "description": "RPC method name as defined in the proto file."
+        },
+        "protoFile": {
+          "type": "string",
+          "description": "Relative path to the proto file defining this method."
+        },
+        "markerFound": {
+          "type": "boolean",
+          "description": "Whether a // +api: marker was found in a handler file."
+        },
+        "handlerFile": {
+          "type": "string",
+          "description": "Path to the Go file containing the // +api: marker (if found)."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,409 @@
+package events
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil"
+)
+
+// TestEventBusBasicSubscribePublish tests basic subscription and event delivery.
+func TestEventBusBasicSubscribePublish(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Subscribe to events
+	events, subID := bus.Subscribe(ctx)
+
+	// Create a test event
+	testEvent := NewSessionCreatedEvent(&session.Instance{Title: "test-session"})
+
+	// Publish event
+	bus.Publish(testEvent)
+
+	// Verify event received
+	select {
+	case received := <-events:
+		if received.Type != EventSessionCreated {
+			t.Errorf("Expected event type %s, got %s", EventSessionCreated, received.Type)
+		}
+		if received.Session.Title != "test-session" {
+			t.Errorf("Expected session title 'test-session', got '%s'", received.Session.Title)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for event")
+	}
+
+	// Verify subscriber count
+	if count := bus.SubscriberCount(); count != 1 {
+		t.Errorf("Expected 1 subscriber, got %d", count)
+	}
+
+	// Unsubscribe
+	bus.Unsubscribe(subID)
+
+	// Verify subscriber removed
+	if count := bus.SubscriberCount(); count != 0 {
+		t.Errorf("Expected 0 subscribers after unsubscribe, got %d", count)
+	}
+}
+
+// TestEventBus_should_deliverBacklogItemPayload_When_PublishedAndSubscribed verifies that
+// a real EventBus instance delivers EventBacklogItemChanged events with their
+// BacklogItemPayload intact, and assigns a non-zero Seq (Story 1.2.1 AC).
+func TestEventBus_should_deliverBacklogItemPayload_When_PublishedAndSubscribed(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eventCh, _ := bus.Subscribe(ctx)
+
+	bus.Publish(&Event{
+		Type: EventBacklogItemChanged,
+		BacklogItemPayload: &BacklogItemEventPayload{
+			Kind:      BacklogChangeStatusTransition,
+			OldStatus: "in_progress",
+			NewStatus: "review",
+		},
+	})
+
+	select {
+	case received := <-eventCh:
+		if received.Type != EventBacklogItemChanged {
+			t.Errorf("Expected event type %s, got %s", EventBacklogItemChanged, received.Type)
+		}
+		if received.BacklogItemPayload == nil {
+			t.Fatal("Expected BacklogItemPayload to be non-nil")
+		}
+		if received.BacklogItemPayload.Kind != BacklogChangeStatusTransition {
+			t.Errorf("Expected Kind %s, got %s", BacklogChangeStatusTransition, received.BacklogItemPayload.Kind)
+		}
+		if received.Seq == 0 {
+			t.Error("Expected Seq to be assigned (non-zero) by Publish")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for event")
+	}
+}
+
+// TestEventBusMultipleSubscribers tests broadcasting to multiple subscribers.
+func TestEventBusMultipleSubscribers(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create multiple subscribers
+	numSubscribers := 5
+	subscribers := make([]<-chan *Event, numSubscribers)
+	for i := 0; i < numSubscribers; i++ {
+		events, _ := bus.Subscribe(ctx)
+		subscribers[i] = events
+	}
+
+	// Verify subscriber count
+	if count := bus.SubscriberCount(); count != numSubscribers {
+		t.Errorf("Expected %d subscribers, got %d", numSubscribers, count)
+	}
+
+	// Publish event
+	testEvent := NewSessionDeletedEvent("test-id")
+	bus.Publish(testEvent)
+
+	// Verify all subscribers receive the event
+	var wg sync.WaitGroup
+	wg.Add(numSubscribers)
+
+	for i, sub := range subscribers {
+		go func(idx int, events <-chan *Event) {
+			defer wg.Done()
+			select {
+			case received := <-events:
+				if received.Type != EventSessionDeleted {
+					t.Errorf("Subscriber %d: Expected event type %s, got %s", idx, EventSessionDeleted, received.Type)
+				}
+				if received.SessionID != "test-id" {
+					t.Errorf("Subscriber %d: Expected session ID 'test-id', got '%s'", idx, received.SessionID)
+				}
+			case <-time.After(time.Second):
+				t.Errorf("Subscriber %d: Timeout waiting for event", idx)
+			}
+		}(i, sub)
+	}
+
+	wg.Wait()
+}
+
+// TestEventBusConcurrentPublish tests thread safety with concurrent publishing.
+func TestEventBusConcurrentPublish(t *testing.T) {
+	bus := NewEventBus(100)
+	defer bus.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create subscriber
+	events, _ := bus.Subscribe(ctx)
+
+	// Track received events
+	received := make(map[string]bool)
+	var mu sync.Mutex
+
+	// Start receiving events
+	done := make(chan bool)
+	go func() {
+		for event := range events {
+			mu.Lock()
+			received[event.SessionID] = true
+			mu.Unlock()
+		}
+		done <- true
+	}()
+
+	// Publish events concurrently
+	numEvents := 100
+	var wg sync.WaitGroup
+	wg.Add(numEvents)
+
+	for i := 0; i < numEvents; i++ {
+		go func(id int) {
+			defer wg.Done()
+			event := NewSessionDeletedEvent(string(rune(id)))
+			bus.Publish(event)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Wait for all events to be received
+	_ = testutil.WaitForCondition(func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) > 0
+	}, testutil.FastWaitConfig())
+	cancel() // Close subscriber
+
+	<-done
+
+	// Verify we received events (exact count may vary due to timing)
+	mu.Lock()
+	count := len(received)
+	mu.Unlock()
+
+	if count == 0 {
+		t.Error("Expected to receive some events, got none")
+	}
+}
+
+// TestEventBusContextCancellation tests automatic cleanup on context cancel.
+func TestEventBusContextCancellation(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Subscribe
+	events, subID := bus.Subscribe(ctx)
+
+	// Verify subscriber exists
+	if count := bus.SubscriberCount(); count != 1 {
+		t.Errorf("Expected 1 subscriber, got %d", count)
+	}
+
+	// Cancel context
+	cancel()
+
+	// Wait for cleanup
+	_ = testutil.WaitForCondition(func() bool {
+		return bus.SubscriberCount() == 0
+	}, testutil.FastWaitConfig())
+
+	// Verify subscriber was removed
+	if count := bus.SubscriberCount(); count != 0 {
+		t.Errorf("Expected 0 subscribers after context cancel, got %d", count)
+	}
+
+	// Verify channel is closed
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Error("Expected channel to be closed")
+		}
+	case <-time.After(time.Second):
+		t.Error("Channel should have been closed immediately")
+	}
+
+	// Verify double unsubscribe is safe
+	bus.Unsubscribe(subID)
+}
+
+// TestEventBusBufferOverflow tests behavior when subscriber buffer is full.
+func TestEventBusBufferOverflow(t *testing.T) {
+	bufferSize := 5
+	bus := NewEventBus(bufferSize)
+	defer bus.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create slow subscriber (doesn't consume events)
+	events, _ := bus.Subscribe(ctx)
+
+	// Publish more events than buffer can hold
+	for i := 0; i < bufferSize*2; i++ {
+		event := NewSessionDeletedEvent(string(rune(i)))
+		bus.Publish(event)
+	}
+
+	// Verify buffer has events but didn't block
+	received := 0
+	timeout := time.After(100 * time.Millisecond)
+
+drainLoop:
+	for {
+		select {
+		case <-events:
+			received++
+		case <-timeout:
+			break drainLoop
+		}
+	}
+
+	// Should have received exactly buffer size (overflow events dropped)
+	if received > bufferSize+1 { // +1 for race condition tolerance
+		t.Errorf("Expected at most %d events (buffer size), got %d", bufferSize, received)
+	}
+}
+
+// TestEventBusClose tests graceful shutdown.
+func TestEventBusClose(t *testing.T) {
+	bus := NewEventBus(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create multiple subscribers
+	numSubscribers := 3
+	channels := make([]<-chan *Event, numSubscribers)
+	for i := 0; i < numSubscribers; i++ {
+		events, _ := bus.Subscribe(ctx)
+		channels[i] = events
+	}
+
+	// Close the bus
+	bus.Close()
+
+	// Verify all channels are closed
+	for i, ch := range channels {
+		select {
+		case _, ok := <-ch:
+			if ok {
+				t.Errorf("Subscriber %d: Expected channel to be closed", i)
+			}
+		case <-time.After(time.Second):
+			t.Errorf("Subscriber %d: Timeout waiting for channel close", i)
+		}
+	}
+
+	// Verify subscriber count is zero
+	if count := bus.SubscriberCount(); count != 0 {
+		t.Errorf("Expected 0 subscribers after close, got %d", count)
+	}
+}
+
+// TestEventBusEventTypes tests all event type constructors.
+func TestEventBusEventTypes(t *testing.T) {
+	testSession := &session.Instance{Title: "test"}
+
+	tests := []struct {
+		name      string
+		event     *Event
+		eventType EventType
+	}{
+		{
+			name:      "SessionCreated",
+			event:     NewSessionCreatedEvent(testSession),
+			eventType: EventSessionCreated,
+		},
+		{
+			name:      "SessionUpdated",
+			event:     NewSessionUpdatedEvent(testSession, []string{"title", "category"}),
+			eventType: EventSessionUpdated,
+		},
+		{
+			name:      "SessionDeleted",
+			event:     NewSessionDeletedEvent("test-id"),
+			eventType: EventSessionDeleted,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.event.Type != tt.eventType {
+				t.Errorf("Expected event type %s, got %s", tt.eventType, tt.event.Type)
+			}
+			if tt.event.Timestamp.IsZero() {
+				t.Error("Expected timestamp to be set")
+			}
+		})
+	}
+}
+
+// TestEventsSince verifies catch-up replay semantics for reconnecting clients.
+func TestEventsSince(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+
+	// Publish 5 events.
+	for i := 0; i < 5; i++ {
+		bus.Publish(NewSessionCreatedEvent(&session.Instance{Title: "s"}))
+	}
+
+	// Seq numbers are 1–5 (nextSeq starts at 0, Add(1) gives 1..5).
+	t.Run("returns events after given seq", func(t *testing.T) {
+		got := bus.EventsSince(3)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 events (seq 4,5), got %d", len(got))
+		}
+		if got[0].Seq != 4 || got[1].Seq != 5 {
+			t.Errorf("unexpected seqs: %d, %d", got[0].Seq, got[1].Seq)
+		}
+	})
+
+	t.Run("zero returns nil (no replay)", func(t *testing.T) {
+		if bus.EventsSince(0) != nil {
+			t.Error("expected nil for afterSeq=0")
+		}
+	})
+
+	t.Run("seq past end returns nil", func(t *testing.T) {
+		if bus.EventsSince(999) != nil {
+			t.Error("expected nil for afterSeq beyond last published seq")
+		}
+	})
+
+	t.Run("seq assigns monotonically", func(t *testing.T) {
+		got := bus.EventsSince(0)
+		// EventsSince(0) returns nil, so verify via the published events directly.
+		all := bus.EventsSince(0)
+		if all != nil {
+			t.Error("should be nil")
+		}
+		// Publish one more and check Seq increments.
+		e := NewSessionCreatedEvent(&session.Instance{Title: "s"})
+		bus.Publish(e)
+		if e.Seq != 6 {
+			t.Errorf("expected seq 6, got %d", e.Seq)
+		}
+		_ = got
+	})
+}

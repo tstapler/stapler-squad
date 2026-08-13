@@ -1,0 +1,12 @@
+{
+  "id": "review-queue-pr-creation",
+  "type": "frontend",
+  "component": "ReviewQueuePanel",
+  "path": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/sessions/__tests__/ReviewQueuePanel.test.tsx"
+  ],
+  "lastModified": "2026-04-24T00:00:00Z"
+}

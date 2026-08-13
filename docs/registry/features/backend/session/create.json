@@ -1,0 +1,15 @@
+{
+  "id": "session:create",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "CreateSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported",
+    "TestCreateSession_should_SetAutoApprove_When_ProgramIsClaude"
+  ],
+  "lastModified": "2026-08-11T21:27:24Z"
+}

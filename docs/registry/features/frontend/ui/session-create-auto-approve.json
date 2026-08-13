@@ -1,0 +1,12 @@
+{
+  "id": "session-create-auto-approve",
+  "type": "frontend",
+  "component": "OmnibarCreationPanel",
+  "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+  "tested": true,
+  "testIds": [
+    "auto-approve session creation > disables checkbox for unsupported agent",
+    "auto-approve session creation > creates session with auto_approve flag"
+  ],
+  "lastModified": "2026-08-11T21:27:24Z"
+}

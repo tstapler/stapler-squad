@@ -1,0 +1,11 @@
+{
+  "id": "alias:list",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListAliases",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-21T00:00:00Z"
+}

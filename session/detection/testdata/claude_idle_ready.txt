@@ -1,0 +1,9 @@
+ Both ran without prompting you — your permission mode is set to auto-approve Bash commands. To see the approval dialog, you'd need to either:
+
+  1. Switch to a more restrictive permission mode — in settings, change from "auto-approve all" to something like "approve bash commands"
+  2. Use --dangerouslyDisableSandbox false (default cautious mode) when launching Claude Code
+
+What permission mode are you currently running in? You can check with /permissions or look at your Claude Code settings.
+
+>
+? for shortcuts

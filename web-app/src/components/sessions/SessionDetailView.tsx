@@ -1,0 +1,1579 @@
+"use client";
+
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useShortcut } from "@/lib/shortcuts/useShortcut";
+import type { LucideIcon } from "lucide-react";
+import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package, FileText } from "lucide-react";
+import dynamic from "next/dynamic";
+import { Session, InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
+import { DiffViewer } from "./DiffViewer";
+import { VcsPanel } from "./VcsPanel";
+import { WorkspaceSwitchModal } from "./WorkspaceSwitchModal";
+import { SessionLogsTab } from "./SessionLogsTab";
+import { FilesTab } from "./FilesTab";
+import { BrowserTab } from "./BrowserTab";
+import { ArtifactsTab } from "./ArtifactsTab";
+import { SessionSummaryPanel } from "./SessionSummaryPanel";
+import { VNCStatus } from "@/gen/session/v1/types_pb";
+import { ActionBar } from "@/components/ui/ActionBar";
+import { useSessionActions } from "@/lib/hooks/useSessionActions";
+import { getApiBaseUrl } from "@/lib/config";
+import { getProgramDisplay, isKnownProgram } from "@/lib/constants/programs";
+import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
+import { Modal, ModalContent, ModalTitle, ModalFooter } from "@/components/ui/Modal";
+import { ResumeSessionModal } from "./ResumeSessionModal";
+import { TagEditor } from "./TagEditor";
+import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
+import { GoalPanel } from "./GoalPanel";
+import { NotePanel } from "./NotePanel";
+import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
+import { useShells } from "@/lib/hooks/useShells";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { ShellTabLabel } from "./ShellTab";
+import { NewShellDialog } from "./NewShellDialog";
+import * as styles from "./SessionDetail.css";
+import {
+  diffAdded,
+  pausedOverlay,
+  pausedOverlayIcon,
+  pausedOverlayTitle,
+  pausedOverlayReason,
+  pausedOverlayButton,
+  crashedOverlayIcon,
+} from "./SessionDetailView.css";
+import { tabDisabled } from "./SessionDetail.css";
+import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
+import type { SessionDetailTab } from "./SessionDetail";
+
+// Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
+const TerminalOutput = dynamic(
+  () => import("./TerminalOutput").then((mod) => mod.TerminalOutput),
+  {
+    ssr: false,
+    loading: () => (
+      <div style={{ padding: "20px", textAlign: "center" }}>
+        Loading terminal...
+      </div>
+    ),
+  }
+);
+
+export interface SessionDetailViewProps {
+  session: Session;
+  allSessions: Session[];
+  actions: ReturnType<typeof useSessionActions>;
+  onClose: () => void;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
+  onTabChange?: (tab: SessionDetailTab) => void;
+  initialTab?: SessionDetailTab;
+  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
+  embedded?: boolean;
+  onNext?: () => void;
+  onPrevious?: () => void;
+  showNavigation?: boolean;
+  onApprovalResolved?: () => void;
+  onDismissFromQueue?: () => void;
+  queuePosition?: number;
+  queueTotal?: number;
+  nextSessionName?: string;
+  previousSessionName?: string;
+  onBack?: () => void;
+  canGoBack?: boolean;
+  /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
+  backlogItemId?: string;
+}
+
+// Terminal per the SessionStatus doc comment: "Session has been stopped
+// (terminal state, cannot transition further)." Used to gate the Summary
+// tab, which only has content once the session has ended.
+function isSessionTerminal(status: SessionStatus): boolean {
+  return status === SessionStatus.STOPPED;
+}
+
+function getStatusLabel(status: SessionStatus): string {
+  switch (status) {
+    case SessionStatus.RUNNING: return "Running";
+    case SessionStatus.READY: return "Ready";
+    case SessionStatus.LOADING: return "Loading";
+    case SessionStatus.PAUSED: return "Paused";
+    case SessionStatus.NEEDS_APPROVAL: return "Needs Approval";
+    case SessionStatus.CREATING: return "Creating";
+    case SessionStatus.STOPPED: return "Stopped";
+    default: return "Unknown";
+  }
+}
+
+function getSessionTypeLabel(type: SessionType): string {
+  switch (type) {
+    case SessionType.DIRECTORY: return "Directory";
+    case SessionType.NEW_WORKTREE: return "New Worktree";
+    case SessionType.EXISTING_WORKTREE: return "Existing Worktree";
+    default: return "Unknown";
+  }
+}
+
+const POOL_PANE_BASE: React.CSSProperties = {
+  position: "absolute",
+  top: 0, left: 0, right: 0, bottom: 0,
+};
+
+export function SessionDetailView({
+  session,
+  allSessions,
+  actions,
+  onClose,
+  onFullscreenChange,
+  onTabChange,
+  initialTab = "info",
+  embedded = false,
+  onNext,
+  onPrevious,
+  showNavigation = false,
+  onApprovalResolved: _onApprovalResolved,
+  onDismissFromQueue,
+  queuePosition,
+  queueTotal,
+  nextSessionName,
+  previousSessionName,
+  onBack,
+  canGoBack,
+  backlogItemId,
+}: SessionDetailViewProps) {
+  // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
+  const [activeTabId, setActiveTabId] = useState<string>(initialTab);
+
+  // Reason text for a disabled tab, surfaced on tap since touch devices have no
+  // hover to reveal the `title` attribute. Cleared after a few seconds or on next tap.
+  const [disabledTabHint, setDisabledTabHint] = useState<string | null>(null);
+  const disabledTabHintTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDisabledTabHint = (reason: string) => {
+    if (disabledTabHintTimeoutRef.current) clearTimeout(disabledTabHintTimeoutRef.current);
+    setDisabledTabHint(reason);
+    disabledTabHintTimeoutRef.current = setTimeout(() => setDisabledTabHint(null), 3000);
+  };
+  useEffect(() => () => {
+    if (disabledTabHintTimeoutRef.current) clearTimeout(disabledTabHintTimeoutRef.current);
+  }, []);
+
+  // Sync active tab when the pane's controlled tab changes (e.g. PaneHeader tab click)
+  useEffect(() => {
+    setActiveTabId(initialTab);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTab]);
+
+  // Backward-compat alias for code that still references activeTab
+  const activeTab = activeTabId as SessionDetailTab;
+
+  // Shell tabs
+  const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
+  const [showNewShellDialog, setShowNewShellDialog] = useState(false);
+  const { addNotification } = useNotifications();
+
+  // Fire a toast notification when a shell exits with a non-zero exit code.
+  // Track which shell IDs we've already notified to avoid duplicate toasts.
+  const notifiedShellExitsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const shell of shells) {
+      if (
+        shell.status !== "running" &&
+        shell.exitCode != null &&
+        shell.exitCode !== 0 &&
+        !notifiedShellExitsRef.current.has(shell.id)
+      ) {
+        notifiedShellExitsRef.current.add(shell.id);
+        addNotification({
+          sessionId: session.id,
+          sessionName: session.title,
+          message: `Shell "${shell.name || shell.command || "shell"}" exited with code ${shell.exitCode}`,
+          priority: "medium",
+          notificationType: "error",
+        });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shells]);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [filesSelectedPath, setFilesSelectedPath] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const hash = window.location.hash;
+    if (hash.startsWith("#file=")) return decodeURIComponent(hash.slice(6)) || null;
+    return null;
+  });
+  // Sync file selection to/from URL hash so the user can always navigate back.
+  React.useEffect(() => {
+    if (filesSelectedPath) {
+      history.replaceState(null, "", `#file=${encodeURIComponent(filesSelectedPath)}`);
+    } else {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }, [filesSelectedPath]);
+  // Clear file selection when the session changes so stale paths don't leak across sessions.
+  React.useEffect(() => {
+    setFilesSelectedPath(null);
+  }, [session.id]);
+  const [showWorkspaceSwitchModal, setShowWorkspaceSwitchModal] = useState(false);
+  const availablePrograms = useAvailablePrograms();
+  const [isEditingProgram, setIsEditingProgram] = useState(false);
+  const [programValue, setProgramValue] = useState(session.program || "");
+  // Re-sync when server pushes an update (WatchSessions), but only while not actively editing.
+  React.useEffect(() => {
+    if (!isEditingProgram) setProgramValue(session.program || "");
+  }, [session.program, isEditingProgram]);
+  const [isEditingWorkingDir, setIsEditingWorkingDir] = useState(false);
+  const [workingDirValue, setWorkingDirValue] = useState(session.workingDir || "");
+  // Action sheet state
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showResumeModal, setShowResumeModal] = useState(false);
+  // Rename state
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameValue, setRenameValue] = useState(session.title);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  // Tag editor state
+  const [showTagEditor, setShowTagEditor] = useState(false);
+  const [showRestartConfirm, setShowRestartConfirm] = useState(false);
+  const [showCheckpointModal, setShowCheckpointModal] = useState(false);
+  const [checkpointLabel, setCheckpointLabel] = useState("");
+  // Category/Tags inline editing state
+  const [isEditingCategory, setIsEditingCategory] = useState(false);
+  const [categoryValue, setCategoryValue] = useState(session.category || "");
+  const [isEditingTags, setIsEditingTags] = useState(false);
+  const [tagsInputValue, setTagsInputValue] = useState((session.tags ?? []).join(", "));
+  // Launch command display state
+  const [launchCmdExpanded, setLaunchCmdExpanded] = useState(false);
+  const [copiedLaunchCmd, setCopiedLaunchCmd] = useState(false);
+
+  // Measure click-to-render latency when the detail panel first mounts for a session
+  useEffect(() => {
+    if (typeof performance === "undefined") return;
+    try {
+      performance.measure("session:click-to-render", "session:click");
+    } catch {
+      // mark may be absent (e.g. deep-link navigation with no prior click)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id]);
+
+  // Terminal instance pool: keeps up to 8 session terminals alive (LRU, oldest first)
+  // Pool entries are either session IDs or "shell:<shellId>" strings.
+  const [pooledSessionIds, setPooledSessionIds] = useState<string[]>([]);
+  const [pooledMuxPaths, setPooledMuxPaths] = useState<string[]>([]);
+  // Separate pool for shell PTY terminals, keyed by "shell:<shellId>"
+  const [pooledShellKeys, setPooledShellKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    setPooledSessionIds(prev => {
+      if (prev.includes(session.id)) return prev;
+      const updated = [...prev, session.id];
+      if (updated.length > 8) return updated.slice(-8);
+      return updated;
+    });
+  }, [session.id]);
+
+  useEffect(() => {
+    const muxPath = session.externalMetadata?.muxSocketPath;
+    if (!muxPath) return;
+    setPooledMuxPaths(prev => {
+      if (prev.includes(muxPath)) return prev;
+      const updated = [...prev, muxPath];
+      if (updated.length > 8) return updated.slice(-8);
+      return updated;
+    });
+  }, [session.externalMetadata?.muxSocketPath]);
+
+  // Add shell terminal to the pool when its tab becomes active
+  useEffect(() => {
+    if (!activeTabId.startsWith("shell:")) return;
+    const shellKey = activeTabId; // already "shell:<shellId>"
+    setPooledShellKeys(prev => {
+      if (prev.includes(shellKey)) return prev;
+      const updated = [...prev, shellKey];
+      if (updated.length > 8) return updated.slice(-8);
+      return updated;
+    });
+  }, [activeTabId]);
+
+  // Notify parent of fullscreen state changes
+  useEffect(() => {
+    onFullscreenChange?.(isFullscreen);
+  }, [isFullscreen, onFullscreenChange]);
+
+  const vncState = session.vncState;
+  const vncStatus = vncState?.status ?? VNCStatus.VNC_STATUS_UNSPECIFIED;
+  const isBrowserAvailable = vncStatus !== VNCStatus.VNC_STATUS_UNAVAILABLE && vncStatus !== VNCStatus.VNC_STATUS_UNSPECIFIED;
+
+  const tabs: { id: SessionDetailTab; label: string; icon: LucideIcon; disabled?: boolean }[] = [
+    { id: "terminal", label: "Terminal", icon: Terminal },
+    { id: "diff", label: "Diff", icon: GitCompare },
+    { id: "vcs", label: "VCS", icon: GitBranch },
+    { id: "files", label: "Files", icon: FolderOpen },
+    { id: "logs", label: "Logs", icon: ScrollText },
+    { id: "info", label: "Info", icon: Info },
+    { id: "browser", label: "Browser", icon: Globe, disabled: !isBrowserAvailable },
+    { id: "artifacts", label: "Artifacts", icon: Package },
+    { id: "summary", label: "Summary", icon: FileText, disabled: !isSessionTerminal(session.status) },
+  ];
+
+  const handleTabChange = (tabId: string) => {
+    setActiveTabId(tabId);
+    // Only propagate static tabs to external callers
+    if (!tabId.startsWith("shell:")) {
+      onTabChange?.(tabId as SessionDetailTab);
+    }
+  };
+
+  const handleOpenNewShellDialog = useCallback(() => setShowNewShellDialog(true), []);
+  useShortcut("terminal.spawn-shell", {
+    key: "t",
+    modifiers: { ctrl: true },
+    label: "Spawn new shell",
+    context: "terminal",
+    action: handleOpenNewShellDialog,
+  });
+
+  const handleSpawnShell = useCallback(async (params: { name?: string; command?: string; workingDir?: string }) => {
+    const tab = await spawnShell(params);
+    if (tab) {
+      setShowNewShellDialog(false);
+      handleTabChange(`shell:${tab.id}`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spawnShell]);
+
+  const handleCopy = (field: string, value: string) => {
+    navigator.clipboard.writeText(value)
+      .then(() => {
+        setCopiedField(field);
+        setTimeout(() => setCopiedField(null), 1500);
+      })
+      .catch((err) => {
+        console.warn("[SessionDetailView] clipboard write failed", err);
+      });
+  };
+
+  // Keyboard shortcuts: Escape to exit fullscreen, Shift+Arrow for navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isFullscreen) {
+        setIsFullscreen(false);
+      }
+
+      // Review queue navigation shortcuts (Shift+Arrow)
+      if (showNavigation && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (e.key === "ArrowRight" && onNext) {
+          e.preventDefault();
+          onNext();
+        } else if (e.key === "ArrowLeft" && onPrevious) {
+          e.preventDefault();
+          onPrevious();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFullscreen, showNavigation, onNext, onPrevious]);
+
+  function makeStringFieldEditor(
+    editValue: string,
+    originalValue: string,
+    setValue: (v: string) => void,
+    setEditing: (v: boolean) => void,
+    updateFn: (v: string) => Promise<unknown>,
+  ) {
+    return {
+      handleSave: async () => {
+        if (editValue !== originalValue) await updateFn(editValue);
+        setEditing(false);
+      },
+      handleCancel: () => {
+        setValue(originalValue);
+        setEditing(false);
+      },
+    };
+  }
+
+  const { handleSave: handleSaveProgram, handleCancel: handleCancelProgramEdit } =
+    makeStringFieldEditor(
+      programValue, session.program || "", setProgramValue, setIsEditingProgram,
+      (v) => actions.update({ program: v }),
+    );
+
+  const { handleSave: handleSaveWorkingDir, handleCancel: handleCancelWorkingDirEdit } =
+    makeStringFieldEditor(
+      workingDirValue, session.workingDir || "", setWorkingDirValue, setIsEditingWorkingDir,
+      (v) => actions.update({ workingDir: v }),
+    );
+
+  const { handleSave: handleSaveCategory, handleCancel: handleCancelCategoryEdit } =
+    makeStringFieldEditor(
+      categoryValue, session.category || "", setCategoryValue, setIsEditingCategory,
+      (v) => actions.update({ category: v }),
+    );
+
+  const handleSaveTags = async () => {
+    const newTags = tagsInputValue.split(",").map((t) => t.trim()).filter(Boolean);
+    const current = session.tags ?? [];
+    if (JSON.stringify(newTags) !== JSON.stringify(current)) {
+      await actions.update({ tags: newTags });
+    }
+    setIsEditingTags(false);
+  };
+
+  const handleCancelTagsEdit = () => {
+    setTagsInputValue((session.tags ?? []).join(", "));
+    setIsEditingTags(false);
+  };
+
+  // Action sheet handlers
+  const handlePauseResume = async () => {
+    if (session.status === SessionStatus.PAUSED) {
+      setActionSheetOpen(false);
+      setShowResumeModal(true);
+    } else {
+      await actions.pause();
+      setActionSheetOpen(false);
+    }
+  };
+
+  const handleResumeFromCrash = async () => {
+    await actions.resumeFromCrash();
+  };
+
+  const handleDeleteClick = () => {
+    if (session.status === SessionStatus.RUNNING || session.status === SessionStatus.NEEDS_APPROVAL) {
+      setShowDeleteConfirm(true);
+    } else {
+      handleConfirmDelete();
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    setShowDeleteConfirm(false);
+    setActionSheetOpen(false);
+    await actions.delete();
+    onClose();
+  };
+
+  const handleRenameSave = async () => {
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      setRenameError("Session name cannot be empty");
+      return;
+    }
+    setRenameError(null);
+    await actions.rename(trimmed);
+    setShowRenameModal(false);
+  };
+
+  return (
+    <div className={`${styles.container} ${isFullscreen ? styles.fullscreen : ""}`}>
+      {!embedded && <div className={`${styles.header} ${isFullscreen ? styles.fullscreenMobileHeader : ""}`} data-testid="session-header">
+        <h2
+          className={`${styles.title} ${isFullscreen ? styles.fullscreenMobileTitle : ""}`}
+          title={session.title}
+          data-testid="session-header-title"
+        >
+          {session.title}
+          <span className={styles.statusBadge} data-testid="session-status-badge">
+            {getStatusLabel(session.status)}
+          </span>
+        </h2>
+        <ActionBar gap="sm" justify="end" scroll className={`${styles.headerActions} ${isFullscreen ? styles.fullscreenMobileHeaderActions : ""}`}>
+          {/* Fullscreen — most used when viewing terminal/diff/vcs */}
+          {(activeTab === "terminal" || activeTab === "diff" || activeTab === "vcs") && (
+            <button
+              className={styles.fullscreenButton}
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              title={isFullscreen ? "Exit fullscreen (Esc)" : "Enter fullscreen"}
+            >
+              {isFullscreen ? "⊗" : "⛶"}
+            </button>
+          )}
+          {/* Back in history */}
+          {canGoBack && onBack && (
+            <button
+              className={styles.navButton}
+              onClick={onBack}
+              aria-label="Go back to previous session"
+              title="Back (previously visited)"
+            >
+              ↩
+            </button>
+          )}
+          {/* Queue navigation — most used in review queue mode */}
+          {showNavigation && (
+            <>
+              <div className={styles.navButtonWithLabel}>
+                <button
+                  className={styles.navButton}
+                  onClick={onPrevious}
+                  aria-label={previousSessionName ? `Previous session: ${previousSessionName}` : "Previous session"}
+                  title={previousSessionName ? `Previous: ${previousSessionName} (Shift+←)` : "Previous session (Shift+←)"}
+                >
+                  ←
+                </button>
+                {previousSessionName && (
+                  <span className={styles.navSessionLabel} aria-hidden="true">{previousSessionName}</span>
+                )}
+              </div>
+              {queuePosition !== undefined && queuePosition > 0 && queueTotal !== undefined && queueTotal > 0 && (
+                <span className={styles.queuePosition} aria-live="polite">
+                  {queuePosition} of {queueTotal}
+                </span>
+              )}
+              <div className={styles.navButtonWithLabel}>
+                <button
+                  className={styles.navButton}
+                  onClick={onNext}
+                  aria-label={nextSessionName ? `Next session: ${nextSessionName}` : "Next session"}
+                  title={nextSessionName ? `Next: ${nextSessionName} (Shift+→)` : "Next session (Shift+→)"}
+                >
+                  →
+                </button>
+                {nextSessionName && (
+                  <span className={styles.navSessionLabel} aria-hidden="true">{nextSessionName}</span>
+                )}
+              </div>
+            </>
+          )}
+          {/* Dismiss from queue */}
+          {onDismissFromQueue && (
+            <button
+              className={styles.navButton}
+              onClick={onDismissFromQueue}
+              aria-label="Clear from queue and advance"
+              title="Clear from queue and advance to next"
+            >
+              ⏭
+            </button>
+          )}
+          {/* Switch workspace — less frequent */}
+          {session.instanceType !== InstanceType.EXTERNAL && (
+            <button
+              className={styles.switchWorkspaceButton}
+              onClick={() => setShowWorkspaceSwitchModal(true)}
+              aria-label="Switch workspace"
+              title="Switch branch, bookmark, or worktree"
+            >
+              ⎇ Switch
+            </button>
+          )}
+          {/* More actions — opens action sheet */}
+          <button
+            className={styles.moreActionsButton}
+            onClick={() => setActionSheetOpen(true)}
+            aria-label="Session actions"
+            data-testid="more-actions-button"
+          >
+            ⋯
+          </button>
+          {/* Close — conventional rightmost */}
+          <button
+            className={styles.closeButton}
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </ActionBar>
+      </div>}
+
+      <div className={styles.tabsWrapper}>
+      <div
+        className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
+        role="tablist"
+        onKeyDown={(e) => {
+          const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
+          if (e.key === "ArrowRight") {
+            e.preventDefault();
+            const nextIndex = (currentIndex + 1) % tabs.length;
+            handleTabChange(tabs[nextIndex].id);
+            const el = e.currentTarget.querySelectorAll('[role="tab"]')[nextIndex] as HTMLElement | undefined;
+            el?.focus();
+            el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+          } else if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+            handleTabChange(tabs[prevIndex].id);
+            const el = e.currentTarget.querySelectorAll('[role="tab"]')[prevIndex] as HTMLElement | undefined;
+            el?.focus();
+            el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+          }
+        }}
+      >
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          const disabledReason = tab.disabled && tab.id === "browser"
+            ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
+            : tab.disabled && tab.id === "summary"
+              ? "Summary is generated after the session ends."
+              : undefined;
+          return (
+            <button
+              key={tab.id}
+              id={`tab-${tab.id}`}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              aria-disabled={tab.disabled}
+              aria-label={disabledReason ? `${tab.label}: ${disabledReason}` : undefined}
+              className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""} ${tab.disabled ? tabDisabled : ""}`}
+              onClick={() => {
+                if (tab.disabled) {
+                  // title (hover) is unreachable on touch — surface the reason on tap instead.
+                  if (disabledReason) showDisabledTabHint(disabledReason);
+                  return;
+                }
+                handleTabChange(tab.id);
+              }}
+              title={disabledReason}
+            >
+              <span className={styles.tabIcon}><Icon size={16} /></span>
+              <span className={styles.tabLabel}>{tab.label}</span>
+            </button>
+          );
+        })}
+        {/* Shell tabs */}
+        {shells.map((shell) => {
+          const shellTabId = `shell:${shell.id}`;
+          return (
+            <button
+              key={shellTabId}
+              id={`tab-${shellTabId}`}
+              role="tab"
+              aria-selected={activeTabId === shellTabId}
+              className={`${styles.tab} ${activeTabId === shellTabId ? styles.active : ""}`}
+              onClick={() => handleTabChange(shellTabId)}
+            >
+              <ShellTabLabel
+                shell={shell}
+                onStop={(id) => stopShell(id)}
+                onRestart={(id) => restartShell(id)}
+                onClose={async (id) => {
+                  await deleteShell(id);
+                  // If we were viewing this shell, go back to terminal tab
+                  if (activeTabId === `shell:${id}`) {
+                    handleTabChange("terminal");
+                  }
+                }}
+              />
+            </button>
+          );
+        })}
+        {/* Add new shell button */}
+        <button
+          className={styles.tab}
+          onClick={() => setShowNewShellDialog(true)}
+          aria-label="Spawn new shell"
+          title="Spawn new shell"
+          style={{ padding: "0 8px", fontSize: "16px" }}
+        >
+          +
+        </button>
+      </div>
+      <div className={styles.tabsFade} data-testid="tab-scroll-fade" aria-hidden="true" />
+      {disabledTabHint && (
+        <div
+          className={styles.disabledTabHint}
+          data-testid="disabled-tab-hint"
+          role="status"
+          aria-live="polite"
+          onClick={() => setDisabledTabHint(null)}
+        >
+          {disabledTabHint}
+        </div>
+      )}
+      </div>
+
+      <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
+        {/* Terminal tab: kept mounted but hidden via display:none to preserve xterm.js instances */}
+        <div
+          className={styles.tabContent}
+          role="tabpanel"
+          aria-labelledby="tab-terminal"
+          aria-hidden={activeTab !== "terminal"}
+          style={{ display: activeTab === "terminal" ? "flex" : "none", flexDirection: "row" }}
+        >
+          {/* Terminal content wrapper with flex: 1 to allow BacklogItemPanel to sit beside it */}
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            {/* ApprovalPanel removed — approvals now handled in the global ApprovalDrawer in Header */}
+            {session.instanceType === InstanceType.EXTERNAL && !session.externalMetadata?.muxSocketPath ? (
+              <div className={styles.noTerminalPlaceholder}>
+                <span className={styles.noTerminalIcon}>⛓️</span>
+                <p className={styles.noTerminalText}>Terminal not available</p>
+                <p className={styles.noTerminalSubtext}>
+                  This session is running in an external terminal. Use Approve / Deny above to respond to pending requests.
+                </p>
+              </div>
+            ) : session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
+              // External mux sessions cannot be paused; no overlay needed.
+              <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+                {pooledMuxPaths.map(poolPath => (
+                  <div
+                    key={poolPath}
+                    style={{
+                      ...POOL_PANE_BASE,
+                      visibility: poolPath === session.externalMetadata?.muxSocketPath ? "visible" : "hidden",
+                      pointerEvents: poolPath === session.externalMetadata?.muxSocketPath ? "auto" : "none",
+                    }}
+                  >
+                    <TerminalOutput
+                      sessionId={poolPath}
+                      baseUrl={getApiBaseUrl()}
+                      isExternal={true}
+                      tmuxSessionName={session.externalMetadata?.tmuxSessionName}
+                      isVisible={poolPath === session.externalMetadata?.muxSocketPath}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+                {pooledSessionIds.map(poolId => (
+                  <div
+                    key={poolId}
+                    style={{
+                      ...POOL_PANE_BASE,
+                      visibility: poolId === session.id ? "visible" : "hidden",
+                      pointerEvents: poolId === session.id ? "auto" : "none",
+                    }}
+                  >
+                    <TerminalOutput
+                      sessionId={poolId}
+                      baseUrl={getApiBaseUrl()}
+                      isVisible={poolId === session.id}
+                    />
+                  </div>
+                ))}
+                {/* Paused overlay: sits above the pool (which stays mounted for keep-alive).
+                    Only rendered for the current session when status is PAUSED. */}
+                {session.status === SessionStatus.PAUSED && (
+                  <div
+                    className={pausedOverlay}
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Session is paused"
+                  >
+                    <span className={pausedOverlayIcon} aria-hidden="true">⏸</span>
+                    <p className={pausedOverlayTitle}>This session is paused</p>
+                    {session.pauseReason && (
+                      <p className={pausedOverlayReason}>
+                        {formatPauseReason(session.pauseReason)}
+                      </p>
+                    )}
+                    <button
+                      className={pausedOverlayButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePauseResume();
+                      }}
+                      aria-label="Resume this session"
+                    >
+                      ▶ Resume Session
+                    </button>
+                  </div>
+                )}
+                {/* Crashed overlay: the tmux pane exited abnormally (remain-on-exit
+                    dead pane) and was detected by SessionHealthChecker. Distinct
+                    from the paused overlay above — same layout, error palette. */}
+                {session.status === SessionStatus.CRASHED && (
+                  <div
+                    className={pausedOverlay}
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Session has crashed"
+                  >
+                    <span className={crashedOverlayIcon} aria-hidden="true">⚠️</span>
+                    <p className={pausedOverlayTitle}>This session has crashed</p>
+                    {session.exitReason && (
+                      <p className={pausedOverlayReason}>
+                        {session.exitReason}
+                      </p>
+                    )}
+                    <button
+                      className={pausedOverlayButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleResumeFromCrash();
+                      }}
+                      aria-label="Resume this session"
+                    >
+                      ▶ Resume Session
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* BacklogItemPanel — collapsible right sidebar showing linked backlog item */}
+          {backlogItemId && (
+            <BacklogItemPanel
+              backlogItemId={backlogItemId}
+              sessionId={session.id}
+            />
+          )}
+        </div>
+        {/* Browser tab: always mounted (not conditionally rendered) so the noVNC RFB
+            connection persists across tab switches. Visibility controlled via CSS,
+            matching the TerminalOutput keep-alive pattern exactly. */}
+        <div
+          className={styles.tabContent}
+          role="tabpanel"
+          aria-labelledby="tab-browser"
+          aria-hidden={activeTab !== "browser"}
+          style={{ display: activeTab === "browser" ? undefined : 'none' }}
+        >
+          <BrowserTab
+            sessionId={session.id}
+            baseUrl={getApiBaseUrl()}
+            isVisible={activeTab === "browser"}
+            vncState={vncState}
+          />
+        </div>
+
+        {/* Shell tab panels — each shell PTY terminal kept mounted but hidden */}
+        {pooledShellKeys.map(shellKey => {
+          const shellId = shellKey.replace(/^shell:/, "");
+          const shell = shells.find(s => s.id === shellId);
+          return (
+            <div
+              key={shellKey}
+              className={styles.tabContent}
+              role="tabpanel"
+              aria-labelledby={`tab-${shellKey}`}
+              aria-hidden={activeTabId !== shellKey}
+              style={{ display: activeTabId === shellKey ? "flex" : "none", flexDirection: "column" }}
+            >
+              <TerminalOutput
+                sessionId={session.id}
+                baseUrl={getApiBaseUrl()}
+                shellId={shellId}
+                isVisible={activeTabId === shellKey}
+                onShellStatusChange={(status, exitCode) => {
+                  updateShellStatus(shellId, status, exitCode);
+                }}
+              />
+              {shell && shell.status !== "running" && (
+                <div style={{ padding: "8px 16px", fontSize: "13px", color: "var(--text-secondary)" }}>
+                  Shell {shell.status === "stopped" ? "stopped" : "errored"}{shell.exitCode !== undefined ? ` (exit ${shell.exitCode})` : ""}.
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* NewShellDialog portal */}
+        {showNewShellDialog && (
+          <NewShellDialog
+            onSubmit={handleSpawnShell}
+            onCancel={() => setShowNewShellDialog(false)}
+            defaultWorkingDir={session.workingDir}
+          />
+        )}
+
+
+        {activeTab === "diff" && (
+          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-diff">
+            <DiffViewer session={session} />
+          </div>
+        )}
+        {activeTab === "vcs" && (
+          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-vcs">
+            <VcsPanel
+              session={session}
+              onNavigateToFile={(path) => {
+                setFilesSelectedPath(path);
+                handleTabChange("files");
+              }}
+            />
+          </div>
+        )}
+        <div
+          className={styles.tabContent}
+          role="tabpanel"
+          aria-labelledby="tab-files"
+          aria-hidden={activeTab !== "files"}
+          data-active={activeTab === "files"}
+        >
+          <FilesTab
+            sessionId={session.id}
+            baseUrl={getApiBaseUrl()}
+            initialSelectedPath={filesSelectedPath}
+            onSelectedPathChange={setFilesSelectedPath}
+          />
+        </div>
+        {activeTab === "logs" && (
+          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
+            <SessionLogsTab sessionId={session.id} />
+          </div>
+        )}
+        {activeTab === "info" && (
+          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-info">
+            <div className={styles.infoGrid}>
+              {/* Identity */}
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Instance ID:</span>
+                <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
+                  {session.id}
+                  <button onClick={() => handleCopy('instanceId', session.id)} className={styles.editButton} title="Copy to clipboard">{copiedField === 'instanceId' ? '✓' : '📋'}</button>
+                </span>
+              </div>
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Status:</span>
+                <span className={styles.infoValue}>{getStatusLabel(session.status)}</span>
+              </div>
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Session Type:</span>
+                <span className={styles.infoValue}>{getSessionTypeLabel(session.sessionType)}</span>
+              </div>
+              {session.instanceType === InstanceType.EXTERNAL && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Instance Type:</span>
+                  <span className={styles.infoValue}>External</span>
+                </div>
+              )}
+              {/* Timestamps */}
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Created:</span>
+                <span className={styles.infoValue}>
+                  {session.createdAt ? new Date(Number(session.createdAt.seconds) * 1000).toLocaleString() : "N/A"}
+                </span>
+              </div>
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Updated:</span>
+                <span className={styles.infoValue}>
+                  {session.updatedAt ? new Date(Number(session.updatedAt.seconds) * 1000).toLocaleString() : "N/A"}
+                </span>
+              </div>
+              {/* Location */}
+              {session.branch && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Branch:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace' }}>{session.branch}</span>
+                </div>
+              )}
+              {session.path && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Workspace Path:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{session.path}</span>
+                </div>
+              )}
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Working Directory:</span>
+                {isEditingWorkingDir ? (
+                  <div className={styles.editContainer}>
+                    <input
+                      type="text"
+                      value={workingDirValue}
+                      onChange={(e) => setWorkingDirValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleSaveWorkingDir(); else if (e.key === "Escape") handleCancelWorkingDirEdit(); }}
+                      autoFocus
+                      className={styles.editInput}
+                      placeholder={session.path || ""}
+                      style={{ fontFamily: 'monospace', minWidth: '20ch' }}
+                    />
+                    <button onClick={handleSaveWorkingDir} className={styles.saveButton}>✓</button>
+                    <button onClick={handleCancelWorkingDirEdit} className={styles.cancelButton}>✕</button>
+                  </div>
+                ) : (
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                    {session.workingDir || <em style={{ opacity: 0.5 }}>{session.path}</em>}
+                    <button
+                      onClick={() => { setWorkingDirValue(session.workingDir || ""); setIsEditingWorkingDir(true); }}
+                      className={styles.editButton}
+                      title="Edit working directory"
+                    >
+                      ✏️
+                    </button>
+                  </span>
+                )}
+              </div>
+              {/* Organization */}
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Category:</span>
+                {isEditingCategory ? (
+                  <div className={styles.editContainer}>
+                    <input
+                      type="text"
+                      value={categoryValue}
+                      onChange={(e) => setCategoryValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleSaveCategory(); else if (e.key === "Escape") handleCancelCategoryEdit(); }}
+                      autoFocus
+                      className={styles.editInput}
+                      placeholder="e.g. Work/Frontend"
+                    />
+                    <button onClick={handleSaveCategory} className={styles.saveButton}>✓</button>
+                    <button onClick={handleCancelCategoryEdit} className={styles.cancelButton}>✕</button>
+                  </div>
+                ) : (
+                  <span className={styles.infoValue}>
+                    {session.category || <em style={{ opacity: 0.5 }}>None</em>}
+                    <button
+                      onClick={() => { setCategoryValue(session.category || ""); setIsEditingCategory(true); }}
+                      className={styles.editButton}
+                      title="Edit category"
+                    >
+                      ✏️
+                    </button>
+                  </span>
+                )}
+              </div>
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Tags:</span>
+                {isEditingTags ? (
+                  <div className={styles.editContainer}>
+                    <input
+                      type="text"
+                      value={tagsInputValue}
+                      onChange={(e) => setTagsInputValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleSaveTags(); else if (e.key === "Escape") handleCancelTagsEdit(); }}
+                      autoFocus
+                      className={styles.editInput}
+                      placeholder="tag1, tag2, tag3"
+                    />
+                    <button onClick={handleSaveTags} className={styles.saveButton}>✓</button>
+                    <button onClick={handleCancelTagsEdit} className={styles.cancelButton}>✕</button>
+                  </div>
+                ) : (
+                  <span className={styles.infoValue}>
+                    {(session.tags ?? []).length > 0 ? session.tags!.join(", ") : <em style={{ opacity: 0.5 }}>None</em>}
+                    <button
+                      onClick={() => { setTagsInputValue((session.tags ?? []).join(", ")); setIsEditingTags(true); }}
+                      className={styles.editButton}
+                      title="Edit tags"
+                    >
+                      ✏️
+                    </button>
+                  </span>
+                )}
+              </div>
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Auto Yes:</span>
+                <span className={styles.infoValue}>{session.autoYes ? "Enabled" : "Disabled"}</span>
+              </div>
+              {/* Program */}
+              <div className={styles.infoItem}>
+                <span className={styles.infoLabel}>Program:</span>
+                {isEditingProgram ? (
+                  <div className={styles.editContainer}>
+                    <select
+                      value={programValue}
+                      onChange={(e) => setProgramValue(e.target.value)}
+                      autoFocus
+                      className={styles.editInput}
+                    >
+                      {availablePrograms.map((p) => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                      {!isKnownProgram(programValue) && (
+                        <option value={programValue}>Custom: {programValue}</option>
+                      )}
+                    </select>
+                    <button onClick={handleSaveProgram} className={styles.saveButton}>✓</button>
+                    <button onClick={handleCancelProgramEdit} className={styles.cancelButton}>✕</button>
+                  </div>
+                ) : (
+                  <span className={styles.infoValue}>
+                    {session.program ? getProgramDisplay(session.program) : <em style={{ opacity: 0.5 }}>None</em>}
+                    <button
+                      onClick={() => { setProgramValue(session.program || ""); setIsEditingProgram(true); }}
+                      className={styles.editButton}
+                      title="Edit program"
+                    >
+                      ✏️
+                    </button>
+                  </span>
+                )}
+              </div>
+              <div className={styles.infoItem} style={{ alignItems: 'flex-start' }}>
+                <span className={styles.infoLabel} style={{ paddingTop: '2px' }}>Launch Command:</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {session.launchCommand ? (
+                    <>
+                      <pre style={{
+                        fontFamily: 'monospace',
+                        fontSize: '0.82em',
+                        margin: 0,
+                        padding: '6px 8px',
+                        background: 'var(--terminal-background, #1a1a2e)',
+                        color: 'var(--terminal-foreground, #e0e0e0)',
+                        borderRadius: '4px',
+                        overflowX: launchCmdExpanded ? 'auto' : 'hidden',
+                        whiteSpace: launchCmdExpanded ? 'pre' : 'nowrap',
+                        textOverflow: launchCmdExpanded ? 'clip' : 'ellipsis',
+                        maxHeight: launchCmdExpanded ? '200px' : undefined,
+                        overflowY: launchCmdExpanded ? 'auto' : undefined,
+                        cursor: 'default',
+                      }}>
+                        {session.launchCommand}
+                      </pre>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                        <button
+                          onClick={() => setLaunchCmdExpanded((v) => !v)}
+                          className={styles.editButton}
+                          title={launchCmdExpanded ? "Collapse" : "Expand full command"}
+                          style={{ fontSize: '0.75em' }}
+                        >
+                          {launchCmdExpanded ? "▲ collapse" : "▼ expand"}
+                        </button>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(session.launchCommand)
+                              .then(() => {
+                                setCopiedLaunchCmd(true);
+                                setTimeout(() => setCopiedLaunchCmd(false), 2000);
+                              })
+                              .catch((err) => {
+                                console.warn("[SessionDetailView] clipboard write failed", err);
+                              });
+                          }}
+                          className={styles.editButton}
+                          title="Copy to clipboard"
+                          style={{ fontSize: '0.75em' }}
+                        >
+                          {copiedLaunchCmd ? "✓ copied" : "⎘ copy"}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <em style={{ opacity: 0.5 }}>Not started yet</em>
+                  )}
+                </div>
+              </div>
+              {session.tmuxPrefix && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Tmux Prefix:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace' }}>{session.tmuxPrefix}</span>
+                </div>
+              )}
+              {/* Claude session */}
+              {session.claudeSession?.sessionId && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Claude Conversation UUID:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
+                    {session.claudeSession.sessionId}
+                    <button onClick={() => handleCopy('claudeUuid', session.claudeSession!.sessionId)} className={styles.editButton} title="Copy to clipboard">{copiedField === 'claudeUuid' ? '✓' : '📋'}</button>
+                  </span>
+                </div>
+              )}
+              {session.claudeSession?.projectName && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Claude Project:</span>
+                  <span className={styles.infoValue}>{session.claudeSession.projectName}</span>
+                </div>
+              )}
+              {session.historyFilePath && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>History File:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.85em' }}>{session.historyFilePath}</span>
+                </div>
+              )}
+              {/* Git worktree */}
+              {session.gitWorktree && (
+                <>
+                  {session.gitWorktree.repoPath && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Repo Path:</span>
+                      <span className={styles.infoValue} style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{session.gitWorktree.repoPath}</span>
+                    </div>
+                  )}
+                  {session.gitWorktree.worktreePath && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Worktree Path:</span>
+                      <span className={styles.infoValue} style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{session.gitWorktree.worktreePath}</span>
+                    </div>
+                  )}
+                  {session.gitWorktree.branchName && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Worktree Branch:</span>
+                      <span className={styles.infoValue} style={{ fontFamily: 'monospace' }}>{session.gitWorktree.branchName}</span>
+                    </div>
+                  )}
+                  {session.gitWorktree.baseCommitSha && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Base Commit:</span>
+                      <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>
+                        {session.gitWorktree.baseCommitSha}
+                        <button onClick={() => handleCopy('baseCommit', session.gitWorktree!.baseCommitSha)} className={styles.editButton} title="Copy to clipboard">{copiedField === 'baseCommit' ? '✓' : '📋'}</button>
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+              {/* Diff stats */}
+              {session.diffStats && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Diff Stats:</span>
+                  <span className={styles.infoValue}>
+                    <span className={diffAdded}>+{session.diffStats.added}</span>
+                    {" / "}
+                    <span style={{ color: 'var(--color-error, #ef4444)' }}>-{session.diffStats.removed}</span>
+                  </span>
+                </div>
+              )}
+              {/* GitHub PR */}
+              {session.githubPrUrl && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>GitHub PR:</span>
+                  <span className={styles.infoValue}>
+                    <a href={session.githubPrUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-link, #3b82f6)' }}>
+                      #{session.githubPrNumber} {session.githubPrState && `(${session.githubPrState})`}
+                      {session.githubPrIsDraft && " [Draft]"}
+                    </a>
+                  </span>
+                </div>
+              )}
+              {session.githubOwner && session.githubRepo && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>GitHub Repo:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace' }}>{session.githubOwner}/{session.githubRepo}</span>
+                </div>
+              )}
+              {session.githubSourceRef && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Source Ref:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace' }}>{session.githubSourceRef}</span>
+                </div>
+              )}
+              {(session.githubApprovedCount > 0 || session.githubChangesReqCount > 0) && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Reviews:</span>
+                  <span className={styles.infoValue}>
+                    {session.githubApprovedCount > 0 && <span className={diffAdded}>{session.githubApprovedCount} approved</span>}
+                    {session.githubApprovedCount > 0 && session.githubChangesReqCount > 0 && " · "}
+                    {session.githubChangesReqCount > 0 && <span style={{ color: 'var(--color-error, #ef4444)' }}>{session.githubChangesReqCount} changes requested</span>}
+                  </span>
+                </div>
+              )}
+              {session.githubCheckConclusion && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>CI Status:</span>
+                  <span className={styles.infoValue}>{session.githubCheckConclusion}</span>
+                </div>
+              )}
+              {session.clonedRepoPath && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Cloned Repo:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{session.clonedRepoPath}</span>
+                </div>
+              )}
+              {/* External session metadata */}
+              {session.instanceType === InstanceType.EXTERNAL && session.externalMetadata && (
+                <>
+                  {session.externalMetadata.sourceTerminal && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Source Terminal:</span>
+                      <span className={styles.infoValue}>{session.externalMetadata.sourceTerminal}</span>
+                    </div>
+                  )}
+                  {session.externalMetadata.muxEnabled && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Mux Enabled:</span>
+                      <span className={styles.infoValue}>Yes</span>
+                    </div>
+                  )}
+                  {session.externalMetadata.tmuxSessionName && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Tmux Session:</span>
+                      <span className={styles.infoValue} style={{ fontFamily: 'monospace' }}>{session.externalMetadata.tmuxSessionName}</span>
+                    </div>
+                  )}
+                </>
+              )}
+              {/* Launch prompt — passed as command-line arg to the program */}
+              {session.prompt && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Launch Prompt:</span>
+                  <span className={styles.infoValue}>{session.prompt}</span>
+                </div>
+              )}
+              {/* Terminal prompt — injected as keystrokes once the agent reached ready state */}
+              {session.initialPrompt && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Terminal Prompt:</span>
+                  <span className={styles.infoValue} style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: "0.85em" }}>
+                    {session.initialPrompt}
+                  </span>
+                </div>
+              )}
+              {/* Workflow metadata */}
+              {session.workflowId && (
+                <div className={styles.workflowSection} data-testid="workflow-metadata-section">
+                  <div className={styles.infoItem}>
+                    <span className={styles.infoLabel}>Workflow:</span>
+                    <span className={styles.infoValue}>
+                      {session.workflowName || session.workflowId}
+                    </span>
+                  </div>
+                  <div className={styles.infoItem}>
+                    <span className={styles.infoLabel}>Workflow ID:</span>
+                    <span className={styles.infoValue} style={{ fontFamily: "monospace", fontSize: "0.85em" }}>
+                      {session.workflowId}
+                      <button onClick={() => handleCopy("workflowId", session.workflowId)} className={styles.editButton} title="Copy to clipboard">
+                        {copiedField === "workflowId" ? "✓" : "📋"}
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* Goal & Task panel — shown when a goal has been set via MCP */}
+            {session.goal?.goalText && (
+              <GoalPanel goal={session.goal} />
+            )}
+            <NotePanel
+              note={session.note ?? ""}
+              onSave={async (v) => {
+                // actions.update resolves to null (never rejects) on RPC failure — NotePanel's
+                // save-error UI (aria-live assertive message, textarea preserved) only fires on
+                // a rejected promise, so a null result must be converted into a throw here.
+                const result = await actions.update({ note: v });
+                if (!result) throw new Error("Failed to save note");
+              }}
+            />
+            {/* Other sessions sharing this workspace — shown when peers exist */}
+            <WorkspacePeersPanel session={session} />
+          </div>
+        )}
+        {activeTab === "artifacts" && (
+          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-artifacts">
+            <ArtifactsTab session={session} />
+          </div>
+        )}
+        {activeTab === "summary" && (
+          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-summary">
+            <SessionSummaryPanel sessionId={session.id} />
+          </div>
+        )}
+      </div>
+
+      {/* Workspace Switch Modal */}
+      {showWorkspaceSwitchModal && (
+        <WorkspaceSwitchModal
+          sessionId={session.id}
+          sessionName={session.title}
+          baseUrl={getApiBaseUrl()}
+          onClose={() => setShowWorkspaceSwitchModal(false)}
+          onSwitched={() => {
+            // The session will be updated via the event bus
+            setShowWorkspaceSwitchModal(false);
+          }}
+        />
+      )}
+
+      {/* Action Sheet — Radix Dialog with bottom-sheet behavior on mobile via globals.css */}
+      <Modal open={actionSheetOpen} onOpenChange={setActionSheetOpen}>
+        <ModalContent fallbackTitle={session.title} data-testid="action-sheet">
+          <ModalTitle>{session.title}</ModalTitle>
+          <div className={styles.actionSheet}>
+            {/* Pause/Resume — hide for external sessions */}
+            {session.instanceType !== InstanceType.EXTERNAL && (
+              <button
+                className={styles.actionSheetItem}
+                onClick={handlePauseResume}
+                data-testid="action-pause"
+              >
+                {session.status === SessionStatus.PAUSED ? '▶ Resume' : '⏸ Pause'}
+              </button>
+            )}
+            <button
+              className={styles.actionSheetItem}
+              onClick={() => { setActionSheetOpen(false); setRenameValue(session.title); setShowRenameModal(true); }}
+              data-testid="action-rename"
+            >
+              ✏️ Rename
+            </button>
+            <button
+              className={styles.actionSheetItem}
+              onClick={() => { setActionSheetOpen(false); setShowTagEditor(true); }}
+              data-testid="action-edit-tags"
+            >
+              🏷 Edit Tags
+            </button>
+            {session.instanceType !== InstanceType.EXTERNAL && (
+              <button
+                className={styles.actionSheetItem}
+                onClick={() => { setActionSheetOpen(false); setCheckpointLabel(""); setShowCheckpointModal(true); }}
+                data-testid="action-checkpoint"
+              >
+                📸 Create Checkpoint
+              </button>
+            )}
+            {/* Switch workspace */}
+            {session.instanceType !== InstanceType.EXTERNAL && (
+              <button
+                className={styles.actionSheetItem}
+                onClick={() => { setActionSheetOpen(false); setShowWorkspaceSwitchModal(true); }}
+              >
+                ⎇ Switch Workspace
+              </button>
+            )}
+            {session.instanceType !== InstanceType.EXTERNAL && (
+              <button
+                className={styles.actionSheetItem}
+                onClick={() => { setActionSheetOpen(false); setShowRestartConfirm(true); }}
+                data-testid="action-restart"
+              >
+                🔄 Restart
+              </button>
+            )}
+            <button
+              className={styles.actionSheetItem}
+              onClick={() => { setActionSheetOpen(false); setShowNewShellDialog(true); }}
+              data-testid="action-spawn-shell"
+            >
+              &gt;_ Spawn new shell
+            </button>
+            <hr className={styles.actionDivider} />
+            <button
+              className={`${styles.actionSheetItem} ${styles.actionSheetItemDestructive}`}
+              onClick={handleDeleteClick}
+              data-testid="action-delete"
+            >
+              🗑 Delete
+            </button>
+          </div>
+        </ModalContent>
+      </Modal>
+
+      {/* Delete confirmation dialog */}
+      <Modal open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <ModalContent fallbackTitle="Confirm delete" data-testid="delete-confirm-dialog">
+          <ModalTitle>Delete session?</ModalTitle>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+            This session is currently running. Stop and delete it?
+          </p>
+          <ModalFooter>
+            <button
+              className={styles.actionButton}
+              onClick={() => setShowDeleteConfirm(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className={`${styles.actionButton} ${styles.actionButtonDanger}`}
+              onClick={handleConfirmDelete}
+              data-testid="delete-confirm"
+            >
+              Delete
+            </button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Rename modal */}
+      <Modal open={showRenameModal} onOpenChange={setShowRenameModal}>
+        <ModalContent fallbackTitle="Rename session">
+          <ModalTitle>Rename session</ModalTitle>
+          <input
+            type="text"
+            value={renameValue}
+            onChange={(e) => { setRenameValue(e.target.value); setRenameError(null); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleRenameSave();
+              else if (e.key === 'Escape') setShowRenameModal(false);
+            }}
+            autoFocus
+            className={styles.editInput}
+            data-testid="rename-input"
+          />
+          {renameError && (
+            <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{renameError}</p>
+          )}
+          <ModalFooter>
+            <button className={styles.actionButton} onClick={() => setShowRenameModal(false)}>
+              Cancel
+            </button>
+            <button
+              className={`${styles.actionButton} ${styles.actionButtonSave}`}
+              onClick={handleRenameSave}
+              data-testid="rename-save"
+            >
+              Save
+            </button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Restart confirmation */}
+      <Modal open={showRestartConfirm} onOpenChange={setShowRestartConfirm}>
+        <ModalContent fallbackTitle="Restart session">
+          <ModalTitle>Restart session?</ModalTitle>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+            This will stop and restart the session process.
+          </p>
+          <ModalFooter>
+            <button className={styles.actionButton} onClick={() => setShowRestartConfirm(false)}>
+              Cancel
+            </button>
+            <button
+              className={`${styles.actionButton} ${styles.actionButtonDanger}`}
+              onClick={async () => { setShowRestartConfirm(false); await actions.restart(); }}
+              data-testid="restart-confirm"
+            >
+              Restart
+            </button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Create checkpoint */}
+      <Modal open={showCheckpointModal} onOpenChange={setShowCheckpointModal}>
+        <ModalContent fallbackTitle="Create checkpoint">
+          <ModalTitle>Create checkpoint</ModalTitle>
+          <input
+            type="text"
+            value={checkpointLabel}
+            onChange={(e) => setCheckpointLabel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { setShowCheckpointModal(false); actions.createCheckpoint(checkpointLabel.trim()); }
+              else if (e.key === 'Escape') setShowCheckpointModal(false);
+            }}
+            placeholder="Optional label..."
+            autoFocus
+            className={styles.editInput}
+            data-testid="checkpoint-input"
+          />
+          <ModalFooter>
+            <button className={styles.actionButton} onClick={() => setShowCheckpointModal(false)}>
+              Cancel
+            </button>
+            <button
+              className={`${styles.actionButton} ${styles.actionButtonSave}`}
+              onClick={() => { setShowCheckpointModal(false); actions.createCheckpoint(checkpointLabel.trim()); }}
+              data-testid="checkpoint-save"
+            >
+              Save
+            </button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Tag editor */}
+      {showTagEditor && (
+        <TagEditor
+          tags={session.tags || []}
+          sessionTitle={session.title}
+          onSave={(tags) => { actions.updateTags(tags); setShowTagEditor(false); }}
+          onCancel={() => setShowTagEditor(false)}
+        />
+      )}
+
+      {/* Resume session modal */}
+      {showResumeModal && (
+        <ResumeSessionModal
+          session={session}
+          sessions={allSessions}
+          onConfirm={async (updates) => {
+            await actions.resume({ title: updates.title, tags: updates.tags });
+            setShowResumeModal(false);
+          }}
+          onCancel={() => setShowResumeModal(false)}
+        />
+      )}
+    </div>
+  );
+}

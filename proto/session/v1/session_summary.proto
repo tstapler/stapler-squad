@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+import "session/v1/types.proto";
+
+// SessionSummaryService provides read and regenerate access to session
+// completion summaries, sourced from the SessionSummary table rather than
+// SessionService's live-instance machinery.
+service SessionSummaryService {
+  // GetSessionSummary returns the current summary for a session, if one
+  // exists. The response's summary field is unset when no row exists yet
+  // (e.g. the session is still running).
+  rpc GetSessionSummary(GetSessionSummaryRequest) returns (GetSessionSummaryResponse) {}
+
+  // RegenerateSessionSummary triggers regeneration of a session's summary
+  // and returns the resulting summary.
+  rpc RegenerateSessionSummary(RegenerateSessionSummaryRequest) returns (RegenerateSessionSummaryResponse) {}
+}
+
+// SessionSummaryProto is the completion summary for a single session.
+message SessionSummaryProto {
+  string session_id     = 1;
+  string session_title  = 2;
+  SessionSummaryStatus status = 3;
+
+  string narrative               = 4;
+  bool   narrative_fallback_used = 5;
+
+  // Diff aggregates file change stats for the session.
+  message Diff {
+    int32 files_changed = 1;
+    int32 added         = 2;
+    int32 removed       = 3;
+  }
+  Diff diff = 6;
+
+  // Decisions aggregates review/approval outcomes for the session.
+  message Decisions {
+    int32 auto_approved          = 1;
+    int32 manually_approved      = 2;
+    int32 denied                 = 3;
+    int32 review_queue_resolved  = 4;
+    int32 still_open             = 5;
+  }
+  Decisions decisions = 7;
+
+  // Timeline records when the session ran and for how long.
+  message Timeline {
+    google.protobuf.Timestamp started_at = 1;
+    google.protobuf.Timestamp stopped_at = 2;
+    int64 duration_ms                    = 3;
+  }
+  Timeline timeline = 8;
+
+  // Cost aggregates token usage and estimated spend for the session.
+  message Cost {
+    int64  total_tokens        = 1;
+    double estimated_cost_usd  = 2;
+    bool   data_unavailable    = 3;
+  }
+  Cost cost = 9;
+
+  string markdown = 10;
+
+  string error_message = 11;
+  string error_stage    = 12;
+
+  google.protobuf.Timestamp generated_at = 13;
+}
+
+message GetSessionSummaryRequest {
+  string session_id = 1;
+}
+message GetSessionSummaryResponse {
+  // summary is unset/null when no row exists yet (e.g. session still running).
+  optional SessionSummaryProto summary = 1;
+}
+
+message RegenerateSessionSummaryRequest {
+  string session_id = 1;
+}
+message RegenerateSessionSummaryResponse {
+  SessionSummaryProto summary = 1;
+}

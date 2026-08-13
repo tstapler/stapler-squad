@@ -1,0 +1,9 @@
+{
+  "mode": "managed-only",
+  "allow_external_attach": false,
+  "confirm_external_operations": true,
+  "socket_paths": [],
+  "excluded_socket_paths": [],
+  "discover_interval": 10000,
+  "auto_refresh_external": true
+}

@@ -1,0 +1,19 @@
+{
+  "id": "ListGitHubIssues",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "ListGitHubIssues",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestListGitHubIssues_NilStorage",
+    "TestListGitHubIssues_EmptyOwner",
+    "TestListGitHubIssues_EmptyRepo",
+    "TestListGitHubIssues_InvalidOwnerChars",
+    "TestListGitHubIssues_DefaultState",
+    "TestListGitHubIssues_SearchUsesSearchAPI",
+    "TestListGitHubIssues_PopulatesBodyAuthorAndTimestamps"
+  ],
+  "lastModified": "2026-07-24T15:00:00-07:00"
+}

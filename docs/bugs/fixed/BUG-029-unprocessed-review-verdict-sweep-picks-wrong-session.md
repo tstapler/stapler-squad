@@ -1,0 +1,46 @@
+# BUG-029: `reconcileUnprocessedReviewVerdicts` Skips Items Whose Newest Review Session Has No Verdict of Its Own [SEVERITY: High]
+
+**Status**: ✅ FIXED (2026-07-22)
+**Discovered**: 2026-07-22 — `backlog-feature-improvement` skill audit, live incident on backlog item `9264efe7-b4c2-455a-9e2a-ab0196a63ecd` ("Backlog History feature Broken", PR #173)
+**Fixed**: 2026-07-22 — `session/backlog_lifecycle.go`
+**Impact**: A backlog item whose review session recorded a real FAIL/PARTIAL/UNVERIFIABLE verdict and then died (crash, OOM, or an exit event lost across a service restart) is permanently invisible to the one crash-recovery sweep built to catch exactly this — `reconcileUnprocessedReviewVerdicts` — whenever any *later* review-role session was also created for the item without ever writing its own verdict. The item sits stuck in `review` forever with no PASS verdict, tripping `STUCK_REASON_BOUNCING` and `STUCK_REASON_AUTONOMOUS_STUCK` with no automated remediation ever firing.
+
+## Live Incident Reproduction (2026-07-22)
+
+Backlog item `9264efe7-b4c2-455a-9e2a-ab0196a63ecd` had a review-role session (`5c319d5a-ad76-4887-99be-ffa1f1b023ed`, tmux `staplersquad_review_9264efe7`) that ran a real review on 2026-07-19, called `submit_review_verdict` with outcome **FAIL**, and then its process exited (`tmux capture-pane` on that session showed `Pane is dead (status 0, Sun Jul 19 11:27:21 2026)`, 3 days stale by the time this was investigated). The `Instance` was still reported `Active` — the real-time exit callback (`instanceOnExitCallback`, `session/instance.go:777`) that would normally trigger `handleReviewSessionExited` never ran for this pane death, most likely lost across one of several `make install-service` restarts found in the service logs from the same window (`--tmux-keep-server` preserves the tmux panes themselves, but not the in-process control-mode exit-watcher).
+
+Two further review-role `item_sessions` rows were created for this item afterward — one on 2026-07-20T20:54 (`endedAt: null` at time of writing), one a `headless-re-review` on 2026-07-22T03:09 (started and ended in the same instant, consistent with a fast crash before ever calling `submit_review_verdict`) — neither ever wrote a `ReviewVerdict` of its own. `ListStuckBacklogItems` flagged the item `STUCK_REASON_BOUNCING` ("bounced in_progress<->review 3 times in the last 24h with no PASS verdict") and `STUCK_REASON_AUTONOMOUS_STUCK` ("autonomous driver stopped after 20 turns without a DONE signal").
+
+## Root Cause
+
+`FindReviewItemsWithUnprocessedVerdict` (`session/storage_backlog.go:1075`) correctly matches items in `review` status that have *some* review-role session with a recorded verdict, via `backlogitem.HasItemSessionsWith(itemsession.SessionRole(review), itemsession.HasReviewVerdict())` — an item-level existence filter. Its `WithItemSessions` eager-load, however, loads **every** review-role session for the item (ordered `CreatedAt` desc) — it does not additionally filter to sessions that have a verdict.
+
+`reconcileUnprocessedReviewVerdicts` (`session/backlog_lifecycle.go:1517`) took `item.Edges.ItemSessions[0]` (the single newest review-role session) as `latest`, then bailed out immediately if `latest.Edges.ReviewVerdict == nil`, with the comment "defensive: query already filters on HasReviewVerdict()". That comment described a false invariant: the query's filter guarantees the *item* has a verdicted review session somewhere in its history, not that element `[0]` — the newest one — is that session. Whenever a later, verdict-less review-role session existed on top of the real one (exactly the shape produced by a repeatedly-bouncing item), the early bailout skipped the entire item on every tick, forever. Neither the real, older unprocessed verdict nor `handleReviewSessionExited`'s own "review session exited without a verdict, treat as failed" fallback (`session/backlog_lifecycle.go:824-836`) — which is the *correct* handling for a dead, verdict-less latest session — ever ran.
+
+## Fix Applied
+
+`session/backlog_lifecycle.go`, `reconcileUnprocessedReviewVerdicts`: removed the early `latest.Edges.ReviewVerdict == nil` bailout. A dead, verdict-less `latest` now flows through the same liveness check and into `handleReviewSessionExited` as a verdicted one would — that function already re-derives the verdict by `SessionUUID` on its own `ListItemSessions` call and correctly treats a missing verdict as a failed review needing rework (`autoReopenWithBackoffGate`). The log line that referenced `latest.Edges.ReviewVerdict.OverallOutcome` unconditionally is now guarded to avoid a nil-pointer dereference in the no-verdict case.
+
+## Files Affected
+
+- `session/backlog_lifecycle.go` — `reconcileUnprocessedReviewVerdicts`
+
+## Verification
+
+- `TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_NewestReviewSessionHasNoVerdictButIsDead` (`session/backlog_lifecycle_stuck_test.go`) — reproduces the exact shape: an older review-role session with a real FAIL verdict, a newer dead review-role session with no verdict of its own. Asserts the auto-reopener is invoked with the item's ID (matching this package's existing test-boundary pattern — `AutoReopenAfterFailedReview`'s real implementation lives in `server/services` and is exercised here via the `AutoReopenSpawner` interface, same as `TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener`). **Verified to fail against the pre-fix code** (`git stash` on `session/backlog_lifecycle.go` alone, re-run: `timeout waiting for AutoReopenAfterFailedReview to be called`) and pass with the fix restored.
+- `go test ./session/...` — full existing suite green, no regressions.
+- `make build` — clean.
+
+## Reflection (Phase D — fix the class, not the instance)
+
+**Classification**: Semantic/Intent — the code was syntactically correct but rested on a false assumption (a defensive comment asserting an invariant the query never actually provided). Static analysis cannot detect intent mismatches like this; only a test asserting the specific scenario the assumption breaks on can.
+
+**Earliest achievable enforcement**: A unit test is the earliest achievable level here. This is Ent-specific query/eager-load semantics (a `HasXWith` existence filter not implying the corresponding `WithX` eager-load is itself filtered) — there is no generic compile-time or lint-level construct that would flag "this eager-loaded slice's first element isn't guaranteed to satisfy the predicate that selected the parent row." The regression test added is the correct and sufficient enforcement level; no further ladder escalation is warranted.
+
+**Recurring shape**: This is another instance of a shape already named in `docs/tasks/backlog-feature-improvement.md`'s dated audit history — "a sweep meant to catch dead/unprocessed state excludes the exact case it should catch" (previously seen in BUG-026's fix #3, which added the `GetMostRecentStatusEventAt` staleness guard to this same function) and "an event is lost across a restart with no catch-up path" (the underlying trigger — `instanceOnExitCallback` missing the natural exit — is not itself fixed by this change; this fix repairs the crash-recovery sweep that exists specifically to compensate for it). `reconcileUnprocessedReviewVerdicts` has now had two independent bugs found in it (BUG-026's staleness gap, this one) in the same 48-hour window — a signal that this function's invariants (which review-role session is "the one whose outcome should be judged," under what conditions it's safe to act) deserve a clearer, centrally-tested contract rather than continuing to accumulate one-off guards as each new gap is found live. Not undertaken here to keep this fix scoped to the specific incident; flagged for a future `quality:architecture-review` pass scoped to `session/backlog_lifecycle.go`'s reconciliation sweeps.
+
+## Related
+
+- BUG-026 (`docs/bugs/fixed/BUG-026-backlog-transition-status-toctou-reopen.md`) — same function, a different but sibling gap (stale-verdict staleness guard vs. this fix's wrong-session-selection guard).
+- BUG-027 (`docs/bugs/open/BUG-027-stop-session-skips-item-session-ended-at.md`) — a different *trigger* (manual `stop_session` bypassing `onSessionExited` entirely) producing the same downstream symptom class (`ItemSession.EndedAt` never set, the one downstream handler never runs). Not the same bug, but the same broader shape: multiple session-teardown paths exist, and only the "natural exit while server is live" path is reliably wired to `handleReviewSessionExited` — every other path has needed its own bespoke patch.
+- BUG-030 (`docs/bugs/open/BUG-030-autoreopen-spawn-silent-stall.md`) — found investigating the same live incident: a second, distinct item (`54e5aa1f`, camera-dialog) that transitioned `review → in_progress` via this same `AutoReopenAfterFailedReview` path but never got a new work session spawned. Traced far enough to rule out the WIP-cap gate and the `hasActiveWorkSession` guard as the cause (both correctly bypassed/cleared for this item); not yet root-caused to a specific line. Tracked separately rather than folded into this fix, since it is a different code path (`spawnSessionAfterGates`/the rollback branch) with its own not-yet-confirmed root cause.

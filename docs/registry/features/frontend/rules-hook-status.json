@@ -1,0 +1,12 @@
+{
+  "id": "rules-hook-status",
+  "type": "frontend",
+  "name": "Claude Code hook install/status panel on Rules page",
+  "component": "HookStatusPanel",
+  "path": "web-app/src/components/sessions/HookStatusPanel.tsx",
+  "filePath": "web-app/src/components/sessions/HookStatusPanel.tsx",
+  "markerLine": 1,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-07-20T00:00:00Z"
+}

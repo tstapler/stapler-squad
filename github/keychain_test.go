@@ -1,0 +1,127 @@
+package github
+
+import (
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/zalando/go-keyring"
+)
+
+// TestCollectAllTokens_AmbientEnvVarsNeutralizedByTestMain guards the
+// defense-in-depth fix alongside graphQLURLForHost's EnterpriseBaseURLOverride
+// gap: TestMain (github/main_test.go) clears GITHUB_TOKEN/GH_TOKEN before any
+// test in this package runs, so a real token left in a developer's shell (gh
+// CLI auth) or a CI runner's env can't silently flow into
+// UserPRCache.resolveAllLogins/fetch and dial the real GitHub API mid-suite.
+//
+// Asserts the env vars directly rather than only checking collectAllTokens()'s
+// output: with a clean env to begin with, collectAllTokens() returns nothing
+// "env:"-prefixed regardless of whether TestMain actually cleared anything, so
+// that alone can't tell a working TestMain apart from a reverted one.
+func TestCollectAllTokens_AmbientEnvVarsNeutralizedByTestMain(t *testing.T) {
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		t.Fatalf("GITHUB_TOKEN = %q; TestMain must clear it before any test runs", tok)
+	}
+	if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		t.Fatalf("GH_TOKEN = %q; TestMain must clear it before any test runs", tok)
+	}
+
+	keyring.MockInit()
+	for _, tok := range collectAllTokens() {
+		if strings.HasPrefix(tok.Username, "env:") {
+			t.Fatalf("collectAllTokens() returned ambient env token %q; TestMain must clear GITHUB_TOKEN/GH_TOKEN", tok.Username)
+		}
+	}
+}
+
+// TestSetKeychainTokenForAccount_NoRace_When_ConcurrentWithListAndGetAllTokens
+// is the BUG-052 regression test. It reproduces the exact race the bug
+// documented: SetKeychainTokenForAccount (write path, e.g. an
+// AddGitHubAccountWithToken RPC call) running concurrently with
+// ListKeychainAccounts / GetAllKeychainTokens (read path, e.g. UserPRCache's
+// background refresh loop -> fetch -> resolveAllLogins -> collectAllTokens).
+//
+// Before the fix (keychainMu guarding every keyring.Get/Set/Delete call in
+// this file), `go test -race` fails this test with a DATA RACE between
+// mockProvider.Set and mockProvider.Get. After the fix, it passes clean.
+func TestSetKeychainTokenForAccount_NoRace_When_ConcurrentWithListAndGetAllTokens(t *testing.T) {
+	keyring.MockInit()
+
+	const writers = 20
+	const readers = 20
+
+	var wg sync.WaitGroup
+	wg.Add(writers + readers)
+
+	for i := 0; i < writers; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			username := "writer-" + strconv.Itoa(i)
+			if err := SetKeychainTokenForAccount("github.com", username, "token-"+strconv.Itoa(i)); err != nil {
+				t.Errorf("SetKeychainTokenForAccount(%q) failed: %v", username, err)
+			}
+		}()
+	}
+
+	for i := 0; i < readers; i++ {
+		go func() {
+			defer wg.Done()
+			// Exercise both read paths implicated in the original race trace:
+			// ListKeychainAccounts (github/keychain.go:63 in the bug trace) and
+			// GetAllKeychainTokens (github/keychain.go:114 in the bug trace, via
+			// collectAllTokens in user_pr_cache.go).
+			_ = ListKeychainAccounts()
+			_ = GetAllKeychainTokens()
+		}()
+	}
+
+	wg.Wait()
+
+	// Sanity: every writer's token actually landed, proving the mutex serializes
+	// access without silently dropping writes.
+	for i := 0; i < writers; i++ {
+		username := "writer-" + strconv.Itoa(i)
+		got := GetKeychainTokenForAccount("github.com", username)
+		want := "token-" + strconv.Itoa(i)
+		if got != want {
+			t.Errorf("GetKeychainTokenForAccount(%q) = %q, want %q", username, got, want)
+		}
+	}
+}
+
+// TestDeleteKeychainTokenForAccount_NoRace_When_ConcurrentWithReads covers the
+// delete path (DeleteKeychainTokenForAccount / removeFromAccountList), which
+// the original bug trace did not exercise directly but uses the same
+// unguarded keyring.Delete call sites.
+func TestDeleteKeychainTokenForAccount_NoRace_When_ConcurrentWithReads(t *testing.T) {
+	keyring.MockInit()
+
+	const accounts = 20
+	for i := 0; i < accounts; i++ {
+		if err := SetKeychainTokenForAccount("github.com", "acct-"+strconv.Itoa(i), "tok"); err != nil {
+			t.Fatalf("setup SetKeychainTokenForAccount failed: %v", err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(accounts * 2)
+	for i := 0; i < accounts; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			if err := DeleteKeychainTokenForAccount("github.com", "acct-"+strconv.Itoa(i)); err != nil {
+				t.Errorf("DeleteKeychainTokenForAccount failed: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			_ = ListKeychainAccounts()
+			_ = GetAllKeychainTokens()
+		}()
+	}
+	wg.Wait()
+}

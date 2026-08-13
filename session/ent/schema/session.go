@@ -1,0 +1,190 @@
+package schema
+
+import (
+	"time"
+
+	"entgo.io/ent"
+	"entgo.io/ent/schema/edge"
+	"entgo.io/ent/schema/field"
+	"entgo.io/ent/schema/index"
+)
+
+// Session holds the schema definition for the Session entity.
+type Session struct {
+	ent.Schema
+}
+
+// Fields of the Session.
+func (Session) Fields() []ent.Field {
+	return []ent.Field{
+		field.String("title").
+			Unique().
+			NotEmpty(),
+		// uuid is a stable identifier assigned at creation time and persisted across restarts.
+		// Optional with empty-string default so existing rows (which have no uuid) migrate safely.
+		field.String("uuid").
+			Optional().
+			Default(""),
+		field.String("path").
+			NotEmpty(),
+		field.String("working_dir").
+			Optional(),
+		field.String("branch").
+			Optional(),
+		field.Int("status").
+			Comment("Session status: Running, Paused, etc."),
+		field.Int("height").
+			Optional(),
+		field.Int("width").
+			Optional(),
+		field.Time("created_at").
+			Default(time.Now).
+			Immutable(),
+		field.Time("updated_at").
+			Default(time.Now).
+			UpdateDefault(time.Now),
+		field.Bool("auto_yes").
+			Default(false),
+		field.Bool("auto_approve").
+			Default(false).
+			Comment("Independent of auto_yes: injects a per-agent CLI flag (--dangerously-skip-permissions for Claude, --yes-always for Aider) that skips permission prompts entirely. See auto_yes for the separate TapEnter/daemon keystroke mechanism."),
+		field.Bool("autonomous_mode").
+			Default(false).
+			Comment("Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation."),
+		field.String("prompt").
+			Optional(),
+		field.String("program").
+			NotEmpty(),
+		field.String("existing_worktree").
+			Optional(),
+		field.String("category").
+			Optional(),
+		field.Bool("is_expanded").
+			Default(true),
+		field.String("session_type").
+			Optional(),
+		field.String("tmux_prefix").
+			Optional(),
+		field.Time("last_terminal_update").
+			Optional().
+			Nillable(),
+		field.Time("last_meaningful_output").
+			Optional().
+			Nillable(),
+		field.String("last_output_signature").
+			Optional(),
+		field.Time("last_added_to_queue").
+			Optional().
+			Nillable(),
+		field.Time("last_viewed").
+			Optional().
+			Nillable(),
+		field.Time("last_acknowledged").
+			Optional().
+			Nillable(),
+		field.String("mcp_server_url").
+			Optional(),
+		field.String("initial_prompt").
+			Optional().
+			Comment("Prompt typed into the session terminal once the session reaches Ready state."),
+		field.Bool("one_shot").
+			Default(false).
+			Comment("When true, runs claude in -p mode; session exits after task completes."),
+		// Review-queue interaction state — persisted so these survive restarts.
+		field.Time("last_user_response").
+			Optional().
+			Nillable(),
+		field.Time("processing_grace_until").
+			Optional().
+			Nillable(),
+		field.Time("last_prompt_detected").
+			Optional().
+			Nillable(),
+		field.String("last_prompt_signature").
+			Optional(),
+		field.Bool("hidden").
+			Default(false).
+			Comment("When true, session is excluded from the default session list and review queue."),
+		field.String("pause_reason").
+			Optional().
+			Comment("Reason the session was paused: manual, auto:inactivity, auto:session_limit, auto:resource. Empty when never paused."),
+		field.String("exit_reason").
+			Optional().
+			Comment("Reason the session's pane crashed (status == Crashed), e.g. 'signal SIGKILL (exit code 137)'. Empty when the session has never crashed."),
+		field.String("workflow_id").
+			Optional().
+			Comment("UUID of the Workflow that spawned this session, if any."),
+		field.Time("archived_at").
+			Optional().
+			Nillable().
+			Comment("Set when the session is archived; nil = not archived."),
+		field.String("github_pr_url").
+			Optional().
+			Comment("Full URL to the GitHub PR associated with this session (e.g. https://github.com/owner/repo/pull/123)."),
+		field.Int("github_pr_number").
+			Optional().
+			Default(0).
+			Comment("GitHub PR number discovered by PRStatusPoller or extracted from push output. 0 = not yet discovered."),
+		field.String("github_owner").
+			Optional().
+			Comment("GitHub repository owner (user or org) associated with this session."),
+		field.String("github_repo").
+			Optional().
+			Comment("GitHub repository name associated with this session."),
+		field.String("session_artifacts").
+			Optional().
+			Default("").
+			Comment("JSON-encoded SessionArtifactsBlob: PRURLs, CommitSHAs, ExternalURLs, scan offset."),
+		field.Text("note").
+			Optional().
+			Default("").
+			MaxLen(10000).
+			Comment("User-authored free-form markdown note attached to this session. Capped at 10,000 bytes — see session.MaxNoteLength cross-reference in session/instance.go."),
+	}
+}
+
+// Edges of the Session.
+func (Session) Edges() []ent.Edge {
+	return []ent.Edge{
+		// One-to-one relationship with Worktree
+		edge.To("worktree", Worktree.Type).
+			Unique(),
+
+		// One-to-one relationship with DiffStats
+		edge.To("diff_stats", DiffStats.Type).
+			Unique(),
+
+		// Many-to-many relationship with Tags
+		edge.To("tags", Tag.Type),
+
+		// One-to-one relationship with ClaudeSession
+		edge.To("claude_session", ClaudeSession.Type).
+			Unique(),
+
+		// Many-to-one relationship with Project (nullable FK)
+		edge.From("project", Project.Type).
+			Ref("sessions").
+			Unique(),
+
+		// Back-reference from BacklogItem many-to-many
+		edge.From("backlog_items", BacklogItem.Type).
+			Ref("sessions"),
+
+		// One-to-many relationship with Shell (custom shell tabs)
+		edge.To("shells", Shell.Type),
+	}
+}
+
+// Indexes of the Session.
+func (Session) Indexes() []ent.Index {
+	return []ent.Index{
+		index.Fields("title"),
+		index.Fields("status"),
+		index.Fields("category"),
+		index.Fields("last_meaningful_output"),
+		index.Fields("last_acknowledged"),
+		index.Fields("created_at"),
+		index.Fields("workflow_id"),
+		index.Fields("archived_at"),
+	}
+}

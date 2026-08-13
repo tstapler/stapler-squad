@@ -1,0 +1,19 @@
+{
+  "id": "terminal-browser-log-stream",
+  "type": "frontend",
+  "component": "TerminalOutput",
+  "path": "web-app/src/components/sessions/TerminalOutput.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "UT-UI-01: renders_log_stream_button_in_expanded_toolbar",
+    "UT-UI-02: log_stream_button_has_devOnly_class",
+    "UT-UI-03: toggle_on_calls_localStorage_setItem_with_correct_key",
+    "UT-UI-04: toggle_off_calls_localStorage_removeItem",
+    "UT-UI-05: default_state_is_off_when_localStorage_empty",
+    "UT-UI-06: active_state_shows_ON_label_and_green_style",
+    "UT-UI-07: hook_called_with_sessionId_prop",
+    "UT-UI-08: initializes_from_localStorage_true"
+  ],
+  "lastModified": "2026-05-02T00:00:00.000Z"
+}

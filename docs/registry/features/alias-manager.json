@@ -1,0 +1,9 @@
+{
+  "id": "alias:manage",
+  "type": "frontend",
+  "description": "Settings UI for creating, editing, and deleting alias session presets",
+  "component": "AliasesManager",
+  "filePath": "web-app/src/components/settings/AliasesManager.tsx",
+  "tested": false,
+  "testIds": []
+}

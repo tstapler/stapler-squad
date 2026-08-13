@@ -1,0 +1,32 @@
+{
+  "id": "backlog-item-detail",
+  "type": "frontend",
+  "component": "BacklogItemDetail",
+  "path": "web-app/src/components/backlog/BacklogItemDetail.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "BacklogItemDetail — background refresh must not unmount the view",
+    "BacklogItemDetail — description markdown rendering",
+    "BacklogItemDetail — Ship PR action",
+    "e2e:plan-gate-blocks-spawn-until-approved-or-skipped",
+    "BacklogItemDetail — Story 5.3.1: shouldPoll removal / live updates — does not re-fetch on an interval for a triage-running item — the deleted shouldPoll timer never fires",
+    "BacklogItemDetail — Story 5.3.1: shouldPoll removal / live updates — applies a live update from the shared store to the displayed item when not editing",
+    "BacklogItemDetail — Story 5.3.2: edit-mode buffering — does not apply a buffered event to visible form fields while editMode is true, and applies it on Reload",
+    "BacklogItemDetail — Story 5.3.2: edit-mode buffering — warns before overwriting when Save is clicked while a live update is buffered — Save Anyway proceeds with the original save",
+    "BacklogItemDetail — Story 5.3.2: edit-mode buffering — warns before overwriting when Save is clicked while a live update is buffered — Reload discards the edit and returns to view mode",
+    "BacklogItemDetail — Task 5.3.1c: terminal-state banner — shows an archived banner and hides action buttons when BacklogItemArchivedEvent arrives for the open item",
+    "BacklogItemDetail — Task 5.3.1c: terminal-state banner — shows a removed banner when BacklogItemRemovedEvent arrives for the open item",
+    "BacklogItemDetail — Task 5.3.1c: terminal-state banner — ignores a terminal event for a different item id",
+    "Backlog item ID + deep link > detail view shows the item ID as visible, selectable text",
+    "Backlog item ID + deep link > copies the item ID to the clipboard with a reverting confirmation state",
+    "Backlog item ID + deep link > copies a shareable deep link to the clipboard",
+    "Backlog item ID + deep link > visiting /backlog?item=<id> opens the matching item detail pane directly",
+    "Backlog item ID + deep link > an invalid item ID shows the not-found state on both /backlog and /backlog/board without crashing",
+    "Backlog item ID + deep link > a malformed item ID shows the not-found state without crashing",
+    "Backlog item ID + deep link > copy buttons are 44px+ touch targets on a mobile viewport",
+    "BacklogItemDetail_should_OmitSourceSection_When_ExternalUrlEmpty",
+    "BacklogItemDetail_should_RenderSourceSection_When_ExternalUrlPresent"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "bottom-nav",
+  "type": "frontend",
+  "component": "BottomNav",
+  "path": "web-app/src/components/layout/BottomNav.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "web-app/tests/e2e/navigation.spec.ts"
+  ],
+  "lastModified": "2026-04-27T00:00:00Z"
+}

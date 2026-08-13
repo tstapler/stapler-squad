@@ -1,0 +1,14 @@
+{
+  "id": "paused-session-row-distinction",
+  "type": "frontend",
+  "description": "SessionRow dimming and always-visible Resume button for paused sessions",
+  "component": "SessionRow",
+  "path": "web-app/src/components/sessions/SessionRow.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "paused-session-ux > paused-session-ux_should_dimRow_When_sessionIsPaused",
+    "paused-session-ux > paused-session-ux_should_showResumeButton_When_rowIsPaused"
+  ],
+  "lastModified": "2026-05-28T00:00:00Z"
+}
