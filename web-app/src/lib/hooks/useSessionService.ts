@@ -280,6 +280,7 @@ export function useSessionService(
             permissionMode: request.permissionMode ?? "",
             aliasName: request.aliasName ?? "",
             cliFlags: request.cliFlags ?? "",
+            extraArgs: request.extraArgs ?? [],
           },
           { timeoutMs: CREATE_SESSION_TIMEOUT_MS }
         );

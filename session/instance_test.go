@@ -312,6 +312,43 @@ func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
 	}
 }
 
+func TestNewInstance_should_PreserveExtraArgsExactly_When_OptionsIncludeExtraArgs(t *testing.T) {
+	opts := InstanceOptions{
+		Title:       "test",
+		Path:        t.TempDir(),
+		SessionType: SessionTypeDirectory,
+		ExtraArgs:   []string{"-t", "host", "cd ~/repo && exec claude"},
+	}
+	inst, err := NewInstance(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"-t", "host", "cd ~/repo && exec claude"}
+	if len(inst.ExtraArgs) != len(want) {
+		t.Fatalf("expected ExtraArgs %v, got %v", want, inst.ExtraArgs)
+	}
+	for i, v := range want {
+		if inst.ExtraArgs[i] != v {
+			t.Errorf("ExtraArgs[%d] = %q, want %q", i, inst.ExtraArgs[i], v)
+		}
+	}
+}
+
+func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testing.T) {
+	opts := InstanceOptions{
+		Title:       "test",
+		Path:        t.TempDir(),
+		SessionType: SessionTypeDirectory,
+	}
+	inst, err := NewInstance(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(inst.ExtraArgs) != 0 {
+		t.Errorf("expected empty ExtraArgs, got %v", inst.ExtraArgs)
+	}
+}
+
 // Destroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffStatsRunsFirst
 // verifies the ADR-002 ordering: Destroy() must call i.UpdateDiffStats() (added
 // ahead of CleanupWorktree() per plan.md Task 1.1.1a) so a fresh diff snapshot is

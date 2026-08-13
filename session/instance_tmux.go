@@ -140,7 +140,11 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 		// swallowed as inert positional text instead of a real flag.
 		cmd = i.buildClaudeCommand(p.base, claudeSessionID)
 	case plainProgram:
-		cmd = p.cmd
+		// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
+		// Program values like "sleep 300" that rely on shell word-splitting, while still
+		// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
+		// /tmp/pwned" -- from terminating the command and injecting a second one.
+		cmd = shellQuoteFields(p.cmd)
 		if i.AutoApprove {
 			if flag := yoloFlagFor(i.Program); flag != "" {
 				cmd = cmd + " " + flag
@@ -150,8 +154,15 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	default:
 		panic(fmt.Sprintf("unknown programKind %T", p))
 	}
-	for _, f := range strings.Fields(i.CLIFlags) {
-		cmd = cmd + " " + shellQuote(f)
+	if flags := shellQuoteFields(i.CLIFlags); flags != "" {
+		cmd = cmd + " " + flags
+	}
+	// ExtraArgs elements are appended after CLIFlags, each independently shell-quoted as one
+	// unit — never whitespace-split — so a multi-word element (e.g. a remote-exec fragment
+	// like "cd ~/repo && exec claude") survives intact instead of being re-split into several
+	// argv positions.
+	for _, a := range i.ExtraArgs {
+		cmd = cmd + " " + shellQuote(a)
 	}
 	return cmd
 }
@@ -163,6 +174,20 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 // quote, escaped by closing the quoted string, emitting \', and reopening.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellQuoteFields splits s on whitespace and shell-quotes each resulting token
+// independently, joining them back with single spaces. Used wherever a caller-supplied
+// string must be safe against embedded shell metacharacters while still preserving
+// multi-word values that rely on ordinary shell word-splitting (e.g. cli_flags,
+// or a plainProgram value like "sleep 300"). Returns "" for an empty/whitespace-only s.
+func shellQuoteFields(s string) string {
+	fields := strings.Fields(s)
+	quoted := make([]string, len(fields))
+	for i, f := range fields {
+		quoted[i] = shellQuote(f)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // buildClaudeCommand assembles the full claude invocation with all instance flags.
