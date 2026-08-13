@@ -9,6 +9,25 @@ type NotificationPrefs struct {
 	PushEnabled bool `json:"push_enabled"`
 }
 
+// CallbackConfig holds the global singleton outbound-callback URLs fired by
+// server/services.CallbackDispatcher on the three lifecycle events FR7
+// covers. Never echoed back in plaintext by any RPC (see
+// sessionv1.CallbackConfigProto, which reports booleans only) — same
+// masked-boolean-not-value shape as the (unimplemented)
+// project_plans/slack-review-notifications design, applied fresh here since
+// that project has no shipped code to reuse.
+type CallbackConfig struct {
+	// OnSessionCompleteURL receives a POST when a backlog item transitions to
+	// BacklogStatusDone. Empty string means disabled.
+	OnSessionCompleteURL string `json:"on_session_complete_url,omitempty"`
+	// OnSessionStaleURL receives a POST the first time a work session is
+	// detected stale (StuckReasonStaleWork). Empty string means disabled.
+	OnSessionStaleURL string `json:"on_session_stale_url,omitempty"`
+	// OnQueueItemCreatedURL receives a POST when an item is added to the
+	// review queue. Empty string means disabled.
+	OnQueueItemCreatedURL string `json:"on_queue_item_created_url,omitempty"`
+}
+
 // HibernationConfig holds configuration for the session hibernation feature.
 type HibernationConfig struct {
 	// Enabled controls whether hibernation is active. Default: true.

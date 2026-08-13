@@ -33,6 +33,19 @@ func (Workflow) Fields() []ent.Field {
 			Comment("Keep only the N most recent sessions per workflow (0 = keep all, disabled)."),
 		field.Int("archive_after_hours").Optional().Default(0).
 			Comment("Auto-archive completed sessions after this many hours (0 = disabled)."),
+		// Trigger fields (webhook-triggers Epic 1.1). trigger_type discriminates which
+		// activation mechanism fires this row: "cron" | "github_push" | "webhook" | "manual".
+		// Existing rows are backfilled by Scheduler.Start (Task 1.1.1d) since this field
+		// didn't previously exist.
+		field.String("trigger_type").Optional().Default("manual"),
+		field.String("github_repo").Optional(),
+		field.String("github_branch").Optional(),
+		field.String("webhook_slug").Optional().Unique(),
+		field.String("webhook_secret_encrypted").Optional(),
+		field.String("event_filter").Optional(),
+		field.String("label_filter").Optional(),
+		field.String("prompt_template").Optional(),
+		field.Time("last_fired_at").Optional().Nillable(),
 	}
 }
 
@@ -45,5 +58,7 @@ func (Workflow) Indexes() []ent.Index {
 		index.Fields("slug"),
 		index.Fields("cron_enabled"),
 		index.Fields("created_at"),
+		index.Fields("webhook_slug"),
+		index.Fields("trigger_type"),
 	}
 }

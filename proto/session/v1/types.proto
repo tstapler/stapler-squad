@@ -249,6 +249,10 @@ message Session {
   // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
   // Independent of auto_yes — see auto_yes's own comment for the distinction.
   bool auto_approve = 74;
+
+  // Count of active background agents/shells/monitors from the WaitingForAgent detector.
+  // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
+  int32 subagent_count = 75;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's

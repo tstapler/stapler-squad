@@ -17,6 +17,7 @@ import { BulkActions } from "./BulkActions";
 import { TagEditor } from "./TagEditor";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions, cycleGroupingStrategy } from "@/lib/grouping/strategies";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
+import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { ColumnPicker } from "./ColumnPicker";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
@@ -239,33 +240,87 @@ const BASE_STORAGE_KEYS = {
   VISIBLE_COLUMNS: 'stapler-squad-visible-columns',
 };
 
-function makeStorageKeys(prefix = '') {
-  if (!prefix) return BASE_STORAGE_KEYS;
-  return Object.fromEntries(
-    Object.entries(BASE_STORAGE_KEYS).map(([k, v]) => [k, `${prefix}${v}`])
-  ) as typeof BASE_STORAGE_KEYS;
+interface SessionListPersistedState {
+  searchQuery: string;
+  selectedStatus: SessionStatus | "all";
+  selectedCategory: string | "all";
+  selectedTag: string | "all";
+  hidePaused: boolean;
+  showArchived: boolean;
+  filterNeedsApproval: boolean;
+  groupingStrategy: GroupingStrategy;
+  collapsedGroups: Set<string>;
+  sortField: SortField;
+  sortDir: SortDir;
+  visibleColumns: ColumnKey[];
 }
 
-// Helper functions for local storage operations
-const loadFromStorage = <T,>(key: string, defaultValue: T): T => {
-  if (typeof window === 'undefined') return defaultValue;
-  try {
-    const item = window.localStorage.getItem(key);
-    return item ? JSON.parse(item) : defaultValue;
-  } catch (error) {
-    console.warn(`Failed to load ${key} from localStorage:`, error);
-    return defaultValue;
-  }
-};
+const SORT_FIELDS: SortField[] = ['lastActivity', 'name', 'createdAt', 'updatedAt', 'tokenCost'];
+const SORT_DIRS: SortDir[] = ['asc', 'desc'];
+const GROUPING_STRATEGY_VALUES = Object.values(GroupingStrategy);
 
-const saveToStorage = <T,>(key: string, value: T): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch (error) {
-    console.warn(`Failed to save ${key} to localStorage:`, error);
-  }
-};
+// Builds a PersistedFieldsConfig keyed off BASE_STORAGE_KEYS, prefixed per-instance
+// (e.g. split-pane view) so multiple SessionList instances don't collide in localStorage.
+function buildPersistedFieldsConfig(prefix = ''): PersistedFieldsConfig<SessionListPersistedState> {
+  const k = (base: string) => `${prefix}${base}`;
+  return {
+    searchQuery: { key: k(BASE_STORAGE_KEYS.SEARCH_QUERY), defaultValue: "" },
+    selectedStatus: {
+      key: k(BASE_STORAGE_KEYS.SELECTED_STATUS),
+      defaultValue: "all",
+      isValid: (v) => v === "all" || typeof v === "number",
+    },
+    selectedCategory: { key: k(BASE_STORAGE_KEYS.SELECTED_CATEGORY), defaultValue: "all" },
+    selectedTag: { key: k(BASE_STORAGE_KEYS.SELECTED_TAG), defaultValue: "all" },
+    hidePaused: {
+      key: k(BASE_STORAGE_KEYS.HIDE_PAUSED),
+      defaultValue: false,
+      isValid: (v) => typeof v === "boolean",
+    },
+    // showArchived: when true, re-fetches sessions with includeArchived=true (server-side
+    // default excludes archived sessions) and stops client-side filtering them out below.
+    showArchived: {
+      key: k(BASE_STORAGE_KEYS.SHOW_ARCHIVED),
+      defaultValue: false,
+      isValid: (v) => typeof v === "boolean",
+    },
+    // filterNeedsApproval: when true, show only Active sessions with subStatus === NEEDS_APPROVAL.
+    filterNeedsApproval: {
+      key: k(BASE_STORAGE_KEYS.FILTER_NEEDS_APPROVAL),
+      defaultValue: false,
+      isValid: (v) => typeof v === "boolean",
+    },
+    groupingStrategy: {
+      key: k(BASE_STORAGE_KEYS.GROUPING_STRATEGY),
+      defaultValue: GroupingStrategy.Category,
+      isValid: (v) => GROUPING_STRATEGY_VALUES.includes(v as GroupingStrategy),
+    },
+    // Collapsed group keys — flat set shared across grouping strategies (a key that
+    // recurs after switching strategies, e.g. "Backlog", stays collapsed).
+    collapsedGroups: {
+      key: k(BASE_STORAGE_KEYS.COLLAPSED_GROUPS),
+      defaultValue: new Set<string>(),
+      serialize: (value) => Array.from(value),
+      deserialize: (raw) => new Set(raw as string[]),
+      isValid: (v) => v instanceof Set,
+    },
+    sortField: {
+      key: k(BASE_STORAGE_KEYS.SORT_FIELD),
+      defaultValue: 'lastActivity',
+      isValid: (v) => SORT_FIELDS.includes(v as SortField),
+    },
+    sortDir: {
+      key: k(BASE_STORAGE_KEYS.SORT_DIR),
+      defaultValue: 'desc',
+      isValid: (v) => SORT_DIRS.includes(v as SortDir),
+    },
+    visibleColumns: {
+      key: k(BASE_STORAGE_KEYS.VISIBLE_COLUMNS),
+      defaultValue: DEFAULT_VISIBLE_COLUMNS,
+      isValid: (v) => Array.isArray(v),
+    },
+  };
+}
 
 const getTimestampMs = (ts?: { seconds: bigint; nanos: number }): number => {
   if (!ts || ts.seconds === BigInt(0)) return 0;
@@ -303,8 +358,6 @@ export function SessionList({
   extraHeaderActions,
   viewMode = "row",
 }: SessionListProps) {
-  // Stable storage key set — only recomputed when storageKeyPrefix changes
-  const STORAGE_KEYS = useMemo(() => makeStorageKeys(storageKeyPrefix), [storageKeyPrefix]);
   // Review queue items indexed by session ID for badge display on session cards
   const { items: reviewItems } = useReviewQueueContext();
   const reviewItemBySessionId = useMemo(() => {
@@ -318,47 +371,38 @@ export function SessionList({
   // clearedSessions: optimistic approval suppression per session (card mode only; row mode uses SubStatusChip suppression)
   const { clearedSessions } = useApprovalsContext();
 
-  // Initialize state from local storage
-  const [searchQuery, setSearchQuery] = useState(() => loadFromStorage(STORAGE_KEYS.SEARCH_QUERY, ""));
-  const [selectedStatus, setSelectedStatus] = useState<SessionStatus | "all">(() =>
-    loadFromStorage(STORAGE_KEYS.SELECTED_STATUS, "all")
-  );
-  const [selectedCategory, setSelectedCategory] = useState<string | "all">(() =>
-    loadFromStorage(STORAGE_KEYS.SELECTED_CATEGORY, "all")
-  );
-  const [selectedTag, setSelectedTag] = useState<string | "all">(() =>
-    loadFromStorage(STORAGE_KEYS.SELECTED_TAG, "all")
-  );
-  const [hidePaused, setHidePaused] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.HIDE_PAUSED, false)
-  );
-  // showArchived: when true, re-fetches sessions with includeArchived=true (server-side
-  // default excludes archived sessions) and stops client-side filtering them out below.
-  const [showArchived, setShowArchived] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.SHOW_ARCHIVED, false)
-  );
-  // filterNeedsApproval: when true, show only Active sessions with subStatus === NEEDS_APPROVAL.
-  // Replaces the old lifecycle-status NEEDS_APPROVAL filter (which was status===5).
-  const [filterNeedsApproval, setFilterNeedsApproval] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.FILTER_NEEDS_APPROVAL, false)
-  );
-  const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
-    loadFromStorage(STORAGE_KEYS.GROUPING_STRATEGY, GroupingStrategy.Category)
-  );
-  // Collapsed group keys — flat set shared across grouping strategies (a key that
-  // recurs after switching strategies, e.g. "Backlog", stays collapsed).
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
-    () => new Set(loadFromStorage<string[]>(STORAGE_KEYS.COLLAPSED_GROUPS, []))
-  );
-  const [sortField, setSortField] = useState<SortField>(() =>
-    loadFromStorage(STORAGE_KEYS.SORT_FIELD, 'lastActivity')
-  );
-  const [sortDir, setSortDir] = useState<SortDir>(() =>
-    loadFromStorage(STORAGE_KEYS.SORT_DIR, 'desc')
-  );
-  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() =>
-    loadFromStorage(STORAGE_KEYS.VISIBLE_COLUMNS, DEFAULT_VISIBLE_COLUMNS)
-  );
+  // Filters, sort, grouping, and visible columns — persisted across page loads,
+  // namespaced per-instance via storageKeyPrefix (e.g. split-pane view).
+  const persistedFields = useMemo(() => buildPersistedFieldsConfig(storageKeyPrefix), [storageKeyPrefix]);
+  const sessionListViewState = usePersistedViewState<SessionListPersistedState>(persistedFields);
+  const {
+    searchQuery,
+    selectedStatus,
+    selectedCategory,
+    selectedTag,
+    hidePaused,
+    showArchived,
+    filterNeedsApproval,
+    groupingStrategy,
+    collapsedGroups,
+    sortField,
+    sortDir,
+    visibleColumns,
+  } = sessionListViewState.state;
+  const {
+    searchQuery: setSearchQuery,
+    selectedStatus: setSelectedStatus,
+    selectedCategory: setSelectedCategory,
+    selectedTag: setSelectedTag,
+    hidePaused: setHidePaused,
+    showArchived: setShowArchived,
+    filterNeedsApproval: setFilterNeedsApproval,
+    groupingStrategy: setGroupingStrategy,
+    collapsedGroups: setCollapsedGroups,
+    sortField: setSortField,
+    sortDir: setSortDir,
+    visibleColumns: setVisibleColumns,
+  } = sessionListViewState.setters;
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
 
   // Multi-select state for bulk actions
@@ -449,31 +493,6 @@ export function SessionList({
     await fetchProjects();
   }, [fetchProjects]);
 
-  // Persist filter preferences to local storage whenever they change
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.SEARCH_QUERY, searchQuery);
-  }, [STORAGE_KEYS, searchQuery]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.SELECTED_STATUS, selectedStatus);
-  }, [STORAGE_KEYS, selectedStatus]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.SELECTED_CATEGORY, selectedCategory);
-  }, [STORAGE_KEYS, selectedCategory]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.SELECTED_TAG, selectedTag);
-  }, [STORAGE_KEYS, selectedTag]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.HIDE_PAUSED, hidePaused);
-  }, [STORAGE_KEYS, hidePaused]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.SHOW_ARCHIVED, showArchived);
-  }, [STORAGE_KEYS, showArchived]);
-
   // Re-fetch with includeArchived whenever the toggle changes (including on mount, so a
   // persisted "on" preference re-fetches archived sessions rather than showing a stale
   // client-only filtered view). The server excludes archived sessions by default, so
@@ -484,30 +503,6 @@ export function SessionList({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArchived]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.FILTER_NEEDS_APPROVAL, filterNeedsApproval);
-  }, [STORAGE_KEYS, filterNeedsApproval]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.GROUPING_STRATEGY, groupingStrategy);
-  }, [STORAGE_KEYS, groupingStrategy]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.COLLAPSED_GROUPS, Array.from(collapsedGroups));
-  }, [STORAGE_KEYS, collapsedGroups]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.SORT_FIELD, sortField);
-  }, [STORAGE_KEYS, sortField]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.SORT_DIR, sortDir);
-  }, [STORAGE_KEYS, sortDir]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.VISIBLE_COLUMNS, visibleColumns);
-  }, [STORAGE_KEYS, visibleColumns]);
 
   // Extract unique categories from sessions
   const categories = useMemo(() => {

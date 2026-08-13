@@ -29,6 +29,27 @@ export interface WorkflowFormData {
   cronEnabled: boolean;
   keepSessions?: number;
   archiveAfterHours?: number;
+  /**
+   * Trigger fields (webhook-triggers Phase 7). triggerType discriminates the
+   * activation mechanism: "cron" | "github_push" | "webhook" | "manual".
+   * cronEnabled doubles as the generic per-trigger enable/disable flag for every
+   * trigger type (see server/services/generic_webhook_handler.go's `!wf.CronEnabled`
+   * check) — not just cron triggers.
+   */
+  triggerType?: string;
+  githubRepo?: string;
+  githubBranch?: string;
+  webhookSlug?: string;
+  eventFilter?: string;
+  labelFilter?: string;
+  promptTemplate?: string;
+  /**
+   * Write-only plaintext webhook/HMAC shared secret (webhook-triggers Phase 7 backend
+   * follow-up). "" or undefined means "no change" on update, or "no secret configured"
+   * on create — see CreateWorkflowRequest.webhook_secret's proto doc comment. Never
+   * populated when reading a WorkflowProto back (it has no such field).
+   */
+  webhookSecret?: string;
 }
 
 interface UseWorkflowsReturn {
@@ -101,6 +122,14 @@ export function useWorkflows(): UseWorkflowsReturn {
         cronEnabled: data.cronEnabled,
         ...(data.keepSessions !== undefined && { keepSessions: data.keepSessions }),
         ...(data.archiveAfterHours !== undefined && { archiveAfterHours: data.archiveAfterHours }),
+        triggerType: data.triggerType ?? "",
+        githubRepo: data.githubRepo ?? "",
+        githubBranch: data.githubBranch ?? "",
+        webhookSlug: data.webhookSlug ?? "",
+        eventFilter: data.eventFilter ?? "",
+        labelFilter: data.labelFilter ?? "",
+        promptTemplate: data.promptTemplate ?? "",
+        webhookSecret: data.webhookSecret ?? "",
       });
       await clientRef.current.createWorkflow(req);
       await refresh();
@@ -125,6 +154,17 @@ export function useWorkflows(): UseWorkflowsReturn {
         ...(data.cronEnabled !== undefined && { cronEnabled: data.cronEnabled }),
         ...(data.keepSessions !== undefined && { keepSessions: data.keepSessions }),
         ...(data.archiveAfterHours !== undefined && { archiveAfterHours: data.archiveAfterHours }),
+        ...(data.triggerType !== undefined && { triggerType: data.triggerType }),
+        ...(data.githubRepo !== undefined && { githubRepo: data.githubRepo }),
+        ...(data.githubBranch !== undefined && { githubBranch: data.githubBranch }),
+        ...(data.webhookSlug !== undefined && { webhookSlug: data.webhookSlug }),
+        ...(data.eventFilter !== undefined && { eventFilter: data.eventFilter }),
+        ...(data.labelFilter !== undefined && { labelFilter: data.labelFilter }),
+        ...(data.promptTemplate !== undefined && { promptTemplate: data.promptTemplate }),
+        // Not `optional` on the wire (see WorkflowFormData.webhookSecret) — "" is
+        // always a safe no-op ("leave unchanged"), so always include it rather than
+        // conditionally spreading like the optional fields above.
+        webhookSecret: data.webhookSecret ?? "",
       });
       await clientRef.current.updateWorkflow(req);
       await refresh();

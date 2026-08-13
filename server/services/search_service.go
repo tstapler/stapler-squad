@@ -336,6 +336,38 @@ func (ss *SearchService) ListClaudeHistory(
 	}), nil
 }
 
+// resolveHistoryEntry looks up a history entry by id, retrying against the
+// tmux-session-UUID -> Claude-conversation-UUID resolver when the direct
+// lookup fails. Callers (e.g. the backlog UI) sometimes pass a tmux session
+// UUID rather than the Claude conversation UUID that history.jsonl entries
+// are actually keyed by; resolveConversationUUID bridges that gap.
+//
+// Returns the entry and the ID it was ultimately found under (equal to id
+// unless the fallback fired), so callers needing the resolved ID for a
+// follow-up lookup (e.g. GetMessagesFromConversationFile) can reuse it.
+func (ss *SearchService) resolveHistoryEntry(
+	ctx context.Context,
+	hist *session.ClaudeSessionHistory,
+	id string,
+) (*session.ClaudeHistoryEntry, string, error) {
+	entry, err := hist.GetByID(id)
+	if err == nil {
+		return entry, id, nil
+	}
+	if ss.resolveConversationUUID == nil {
+		return nil, "", err
+	}
+	resolved, resolveErr := ss.resolveConversationUUID(ctx, id)
+	if resolveErr != nil || resolved == "" || resolved == id {
+		return nil, "", err
+	}
+	resolvedEntry, resolvedErr := hist.GetByID(resolved)
+	if resolvedErr != nil {
+		return nil, "", err
+	}
+	return resolvedEntry, resolved, nil
+}
+
 // GetClaudeHistoryDetail retrieves detailed information for a specific history entry,
 // including lazily-fetched VCS status for the project directory.
 //
@@ -350,7 +382,7 @@ func (ss *SearchService) GetClaudeHistoryDetail(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
 
-	entry, err := hist.GetByID(req.Msg.Id)
+	entry, _, err := ss.resolveHistoryEntry(ctx, hist, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
@@ -419,7 +451,7 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
 
-	_, err = hist.GetByID(req.Msg.Id)
+	_, resolvedID, err := ss.resolveHistoryEntry(ctx, hist, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %w", err))
 	}
@@ -431,7 +463,7 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 	if req.Msg.Tail && req.Msg.Limit > 0 && req.Msg.Offset == 0 {
 		fileLimit = int(req.Msg.Limit)
 	}
-	messages, err := hist.GetMessagesFromConversationFile(req.Msg.Id, fileLimit)
+	messages, err := hist.GetMessagesFromConversationFile(resolvedID, fileLimit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load messages: %w", err))
 	}

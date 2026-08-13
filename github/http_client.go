@@ -121,6 +121,17 @@ func newGHRequestForHostWithToken(ctx context.Context, host, path, token string)
 	return req, nil
 }
 
+// isGHRateLimited reports whether resp carries GitHub's rate-limit signals:
+// a Retry-After header (secondary/abuse limit) or X-RateLimit-Remaining: 0
+// (primary limit exhausted). Both only appear on 403 responses; a 429 is
+// always a rate limit regardless of headers.
+func isGHRateLimited(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0"
+}
+
 // classifyGHResponse inspects a non-2xx GitHub REST API response and returns
 // an appropriately classified error, reading (or draining) resp.Body as
 // needed. Callers must check resp.StatusCode == http.StatusOK themselves
