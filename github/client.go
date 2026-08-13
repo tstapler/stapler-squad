@@ -203,7 +203,8 @@ func CheckGHAuth() error {
 
 // GetCurrentUserLogin returns the GitHub login of the authenticated user via
 // GET /user. Returns an empty string (not an error) when unauthenticated so
-// callers can degrade gracefully.
+// callers can degrade gracefully. Returns a non-nil error when the request
+// is rate limited instead — that isn't the same as being unauthenticated.
 func GetCurrentUserLogin(ctx context.Context) (string, error) {
 	req, err := newGHRequest(ctx, "user")
 	if err != nil {
@@ -214,7 +215,8 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 
 // GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token
 // on host ("" means github.com).
-// Returns ("", nil) when the token is invalid or unauthenticated.
+// Returns ("", nil) when the token is invalid or unauthenticated, and a
+// non-nil error when the request is rate limited instead.
 func GetCurrentUserLoginWithToken(ctx context.Context, host, token string) (string, error) {
 	req, err := newGHRequestForHostWithToken(ctx, host, "user", token)
 	if err != nil {
@@ -231,6 +233,12 @@ func fetchLoginFromRequest(req *http.Request) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// A rate-limited 403 isn't "unauthenticated" — surface it as an error
+		// so callers don't silently treat rate limiting as a missing/invalid
+		// token and degrade as if no one is logged in.
+		if isGHRateLimited(resp) {
+			return "", classifyGHResponse(resp, "", false)
+		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return "", nil
 	}
