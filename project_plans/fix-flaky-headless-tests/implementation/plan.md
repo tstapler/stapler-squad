@@ -631,6 +631,10 @@ under `-race`), **so that** "done" is backed by evidence, not a claim.
 
 ## Phase 5: macOS Follow-Up Tracking
 
+**As-built**: filed as backlog item `44b7d757-753c-4be3-b9a4-6fbd3831a039`
+("Confirm fix-flaky-headless-tests clusters 1+2 fix on macOS"), created before
+PR-open time per Task 5.1.1b.
+
 ### Epic 5.1: Explicit post-merge verification task (AC6)
 **Goal**: Ensure the parts of this fix that cannot be verified on Linux are
 tracked as an explicit task, not silently assumed fixed, per AC6 and
