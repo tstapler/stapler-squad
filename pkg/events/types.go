@@ -70,6 +70,10 @@ type BacklogItemEventPayload struct {
 	UpdatedFields []string
 	// SessionID identifies the session for BacklogChangeSessionAttached.
 	SessionID string
+	// ClaimantHostID is the attaching process's own stable host identifier for
+	// BacklogChangeSessionAttached, mirrored from session.BacklogItemChange —
+	// never derived from the session being attached.
+	ClaimantHostID string
 	// ArchivedAt is the archival timestamp for BacklogChangeItemArchived.
 	ArchivedAt *time.Time
 	// RemovedReason describes why an item was removed for BacklogChangeItemRemoved.

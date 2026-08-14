@@ -60,6 +60,8 @@ type ItemSession struct {
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// Cost in USD; populated for headless sessions from claude -p output
 	EstimatedCostUsd float64 `json:"estimated_cost_usd,omitempty"`
+	// Identifies the physical stapler-squad process/host that claimed this item (SpawnSessionFromItem) or attached this session (AttachSessionToItem, using the attaching process's own identity). A random UUID generated once and persisted via Config.GetOrCreateClaimantHostID, stable across restarts of the same process/config dir. Not STAPLER_SQUAD_INSTANCE (namespaces state on one machine) and not session/contexts.go's CloudContext.InstanceID (a cloud provider instance id, unpopulated locally). Purely descriptive; empty for rows created before this field existed.
+	ClaimantHostID string `json:"claimant_host_id,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the ItemSessionQuery when eager-loading is set.
 	Edges                      ItemSessionEdges `json:"edges"`
@@ -109,7 +111,7 @@ func (*ItemSession) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case itemsession.FieldCommitCountSinceSpawn:
 			values[i] = new(sql.NullInt64)
-		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldEndReason, itemsession.FieldFailureCapturePath, itemsession.FieldAcSnapshot, itemsession.FieldPipelineModeSnapshot, itemsession.FieldPipelineModeSnapshotHash, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage:
+		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldEndReason, itemsession.FieldFailureCapturePath, itemsession.FieldAcSnapshot, itemsession.FieldPipelineModeSnapshot, itemsession.FieldPipelineModeSnapshotHash, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage, itemsession.FieldClaimantHostID:
 			values[i] = new(sql.NullString)
 		case itemsession.FieldStartedAt, itemsession.FieldEndedAt, itemsession.FieldLastCommitAt, itemsession.FieldLastFileTouchAt, itemsession.FieldLastProgressAt, itemsession.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -263,6 +265,12 @@ func (_m *ItemSession) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.EstimatedCostUsd = value.Float64
 			}
+		case itemsession.FieldClaimantHostID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field claimant_host_id", values[i])
+			} else if value.Valid {
+				_m.ClaimantHostID = value.String
+			}
 		case itemsession.ForeignKeys[0]:
 			if value, ok := values[i].(*sql.NullScanner); !ok {
 				return fmt.Errorf("unexpected type %T for field backlog_item_item_sessions", values[i])
@@ -385,6 +393,9 @@ func (_m *ItemSession) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("estimated_cost_usd=")
 	builder.WriteString(fmt.Sprintf("%v", _m.EstimatedCostUsd))
+	builder.WriteString(", ")
+	builder.WriteString("claimant_host_id=")
+	builder.WriteString(_m.ClaimantHostID)
 	builder.WriteByte(')')
 	return builder.String()
 }

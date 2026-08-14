@@ -373,13 +373,13 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	capCfg = capCfg.CapacityConfigOrDefault()
 
-	var directCfg config.Config
+	directCfg := &config.Config{}
 	if dir, err := config.GetConfigDir(); err == nil {
 		if c, err := config.LoadConfigFromPath(filepath.Join(dir, "config.json")); err == nil {
-			directCfg = *c
+			directCfg = c
 		}
 	}
-	credChain := NewDefaultChain(&directCfg)
+	credChain := NewDefaultChain(directCfg)
 
 	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
