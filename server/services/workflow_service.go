@@ -425,10 +425,23 @@ func (s *WorkflowService) UpdateWorkflow(
 		update.WebhookSecretEncrypted = &encrypted
 	}
 
-	wf, err := s.repo.Update(ctx, id, update)
+	// Optimistic-concurrency CAS (webhook-triggers verify follow-ups AC9): when the
+	// caller supplies expected_updated_at, the write is rejected unless the row's
+	// current updated_at still matches what the caller read — mirrors
+	// ClaimChainFire's SQL-level CAS (ent_repository_backlog.go). Omitted (nil) means
+	// no precondition, preserving prior single-writer callers' behavior.
+	var wf *ent.Workflow
+	if req.Msg.ExpectedUpdatedAt != nil {
+		wf, err = s.repo.UpdateConditional(ctx, id, update, req.Msg.ExpectedUpdatedAt.AsTime())
+	} else {
+		wf, err = s.repo.Update(ctx, id, update)
+	}
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
+		}
+		if errors.Is(err, session.ErrPreconditionFailed) {
+			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("workflow %s was changed concurrently, reload and retry", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update workflow: %w", err))
 	}

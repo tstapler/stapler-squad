@@ -12,6 +12,12 @@ import (
 type WorkflowRepository interface {
 	Create(ctx context.Context, w WorkflowCreateInput) (*ent.Workflow, error)
 	Update(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput) (*ent.Workflow, error)
+	// UpdateConditional applies a partial update only if the row's current updated_at
+	// exactly matches expectedUpdatedAt (optimistic-concurrency CAS, mirrors
+	// EntRepository.TransitionBacklogItemStatus's precondition pattern). Returns
+	// ErrPreconditionFailed if the row has been modified since expectedUpdatedAt was
+	// read, or ErrNotFound if the row doesn't exist.
+	UpdateConditional(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput, expectedUpdatedAt time.Time) (*ent.Workflow, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*ent.Workflow, error)
 	GetBySlug(ctx context.Context, slug string) (*ent.Workflow, error)

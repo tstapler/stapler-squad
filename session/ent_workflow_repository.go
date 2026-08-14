@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -91,9 +92,24 @@ func (r *EntWorkflowRepository) Create(ctx context.Context, w WorkflowCreateInpu
 	return wf, nil
 }
 
-// Update applies a partial update to an existing workflow by UUID.
+// Update applies a partial update to an existing workflow by UUID, unconditionally.
+// Thin wrapper over UpdateConditional with the zero time.Time, which applies no
+// updated_at precondition — kept as a separate method so existing single-writer
+// callers don't need to thread an expectedUpdatedAt they don't have.
 func (r *EntWorkflowRepository) Update(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput) (*ent.Workflow, error) {
-	u := r.client.Workflow.UpdateOneID(id)
+	return r.UpdateConditional(ctx, id, w, time.Time{})
+}
+
+// UpdateConditional applies a partial update to an existing workflow by UUID, only if
+// the row's current updated_at exactly matches expectedUpdatedAt — an optimistic-
+// concurrency CAS mirroring EntRepository.TransitionBacklogItemStatus's precondition
+// pattern (ent_repository_backlog.go). A zero expectedUpdatedAt applies no precondition
+// (always writes), matching Update's unconditional behavior.
+func (r *EntWorkflowRepository) UpdateConditional(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput, expectedUpdatedAt time.Time) (*ent.Workflow, error) {
+	u := r.client.Workflow.Update().Where(workflow.ID(id))
+	if !expectedUpdatedAt.IsZero() {
+		u = u.Where(workflow.UpdatedAtEQ(expectedUpdatedAt))
+	}
 
 	if w.Name != nil {
 		u.SetName(*w.Name)
@@ -171,15 +187,29 @@ func (r *EntWorkflowRepository) Update(ctx context.Context, id uuid.UUID, w Work
 		u.SetLastFiredAt(*w.LastFiredAt)
 	}
 
-	wf, err := u.Save(ctx)
+	affected, err := u.Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: workflow %s", ErrNotFound, id)
-		}
 		if ent.IsConstraintError(err) {
 			return nil, fmt.Errorf("%w: slug already exists", ErrConflict)
 		}
 		return nil, fmt.Errorf("update workflow %s: %w", id, err)
+	}
+
+	// Where(...).Save() returns an affected-row count, not the entity — reload it.
+	// This also resolves whether affected==0 means the row doesn't exist at all.
+	wf, err := r.client.Workflow.Get(ctx, id)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: workflow %s", ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("get workflow %s: %w", id, err)
+	}
+	if affected == 0 && !expectedUpdatedAt.IsZero() {
+		// The row exists (Get above succeeded) but the precondition WHERE clause
+		// excluded it — updated_at no longer matches what the caller expected, i.e.
+		// a concurrent writer won the race between the caller reading
+		// expectedUpdatedAt and this write landing.
+		return nil, fmt.Errorf("%w: workflow %s updated_at mismatch", ErrPreconditionFailed, id)
 	}
 	return wf, nil
 }
