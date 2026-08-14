@@ -35,7 +35,7 @@ const KIND_CONFIG: Record<BlockedNoticeKind, { icon: string; label: string; fall
 
 export interface BlockedNoticeProps {
   kind: BlockedNoticeKind;
-  session: Pick<LinkedSession, "reviewVerdict">;
+  session: Pick<LinkedSession, "reviewVerdict" | "endReason" | "failureCapturePath">;
 }
 
 /**
@@ -68,17 +68,30 @@ export interface BlockedNoticeProps {
  *    security review as RunPreGateSecurityCheck — if GetGitDiffRef's error
  *    wrapping is ever changed to include cmd.Stderr, that regression test
  *    is what would catch it before it reaches this UI surface.
+ *
+ * A "missing_diagnostic_data" notice most commonly means a headless
+ * triage/review call itself errored or produced output that failed to parse
+ * (see classifyHeadlessCallError, server/services/backlog_service_triage.go) —
+ * `session.endReason`/`session.failureCapturePath` are populated in exactly
+ * that case, so this renders that instead of the generic fallback text when
+ * present, giving a concrete reason and a server-local path to the full raw
+ * LLM output instead of an unexplained "no diagnostic data."
  */
 export function BlockedNotice({ kind, session }: BlockedNoticeProps) {
   const config = KIND_CONFIG[kind];
   const summary = session.reviewVerdict?.summary;
+  const headlessFailureText = session.endReason
+    ? `Headless call failed (${session.endReason}).${
+        session.failureCapturePath ? ` Full raw output captured on the server at: ${session.failureCapturePath}` : ""
+      }`
+    : undefined;
 
   return (
     <div className={styles.notice} role="status" data-testid="blocked-notice">
       <p className={styles.label}>
         <span aria-hidden="true">{config.icon}</span> {config.label}
       </p>
-      <p className={styles.summaryText}>{summary || config.fallbackText}</p>
+      <p className={styles.summaryText}>{summary || headlessFailureText || config.fallbackText}</p>
     </div>
   );
 }

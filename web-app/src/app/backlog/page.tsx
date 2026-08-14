@@ -27,6 +27,7 @@ import {
   type GitHubIssue,
 } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useAppDispatch } from "@/lib/store";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { getStatusLabel } from "@/lib/backlog/status";
@@ -51,6 +52,55 @@ const ALL_STATUSES: BacklogItemStatus[] = [
   "done",
   "archived",
 ];
+
+const SORT_COLUMNS: SortColumn[] = ["title", "status", "priority", "updatedAt", "repoPath"];
+const GROUP_BY_VALUES: GroupBy[] = ["none", "repoPath"];
+
+interface BacklogViewState {
+  search: string;
+  statusFilter: BacklogItemStatus[];
+  priorityFilter: number[];
+  showArchived: boolean;
+  sortCol: SortColumn;
+  sortAsc: boolean;
+  groupBy: GroupBy;
+}
+
+// Persisted under stapler-squad-backlog-* keys (see usePersistedViewState) —
+// namespaced separately from SessionList's stapler-squad-* keys.
+const BACKLOG_VIEW_FIELDS: PersistedFieldsConfig<BacklogViewState> = {
+  search: { key: "stapler-squad-backlog-search", defaultValue: "" },
+  statusFilter: {
+    key: "stapler-squad-backlog-status-filter",
+    defaultValue: [],
+    isValid: (v) => Array.isArray(v) && v.every((s) => ALL_STATUSES.includes(s as BacklogItemStatus)),
+  },
+  priorityFilter: {
+    key: "stapler-squad-backlog-priority-filter",
+    defaultValue: [],
+    isValid: (v) => Array.isArray(v) && v.every((n) => typeof n === "number"),
+  },
+  showArchived: {
+    key: "stapler-squad-backlog-show-archived",
+    defaultValue: false,
+    isValid: (v) => typeof v === "boolean",
+  },
+  sortCol: {
+    key: "stapler-squad-backlog-sort-col",
+    defaultValue: "updatedAt",
+    isValid: (v) => SORT_COLUMNS.includes(v as SortColumn),
+  },
+  sortAsc: {
+    key: "stapler-squad-backlog-sort-asc",
+    defaultValue: false,
+    isValid: (v) => typeof v === "boolean",
+  },
+  groupBy: {
+    key: "stapler-squad-backlog-group-by",
+    defaultValue: "none",
+    isValid: (v) => GROUP_BY_VALUES.includes(v as GroupBy),
+  },
+};
 
 const STATUS_CSS: Record<string, string> = {
   idea: styles.statusIdea,
@@ -290,21 +340,31 @@ function BacklogPageInner() {
   // or spinner out (design/ux.md Surface 1 "Error / edge cases").
   const loading = connectionState === "connecting" && items.length === 0;
 
-  // Filters
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<BacklogItemStatus[]>([]);
-  const [priorityFilter, setPriorityFilter] = useState<number[]>([]);
-  // showArchived: archived items are excluded client-side by default (Epic
-  // 5.1 — see filteredItems below); enabling this reveals them from the
-  // already-loaded live store. Mirrors SessionList's "Show Archived" toggle.
-  const [showArchived, setShowArchived] = useState(false);
-
-  // Sort
-  const [sortCol, setSortCol] = useState<SortColumn>("updatedAt");
-  const [sortAsc, setSortAsc] = useState(false);
-
-  // Group by
-  const [groupBy, setGroupBy] = useState<GroupBy>("none");
+  // Filters, sort, and grouping — persisted across page loads under
+  // stapler-squad-backlog-* keys (see usePersistedViewState).
+  const backlogViewState = usePersistedViewState<BacklogViewState>(BACKLOG_VIEW_FIELDS);
+  const {
+    search,
+    statusFilter,
+    priorityFilter,
+    // showArchived: archived items are excluded client-side by default (Epic
+    // 5.1 — see filteredItems below); enabling this reveals them from the
+    // already-loaded live store. Mirrors SessionList's "Show Archived" toggle.
+    showArchived,
+    sortCol,
+    sortAsc,
+    groupBy,
+  } = backlogViewState.state;
+  const {
+    search: setSearch,
+    statusFilter: setStatusFilter,
+    priorityFilter: setPriorityFilter,
+    showArchived: setShowArchived,
+    sortCol: setSortCol,
+    sortAsc: setSortAsc,
+    groupBy: setGroupBy,
+  } = backlogViewState.setters;
+  const resetViewState = backlogViewState.resetToDefaults;
 
   // Detail pane resize
   const [detailWidth, setDetailWidth] = useState(420);
@@ -718,6 +778,15 @@ function BacklogPageInner() {
             <option value="repoPath">Repository</option>
           </select>
         </label>
+        <button
+          type="button"
+          className={styles.resetViewButton}
+          onClick={resetViewState}
+          aria-label="Reset view"
+          data-testid="backlog-reset-view-button"
+        >
+          Reset view
+        </button>
       </div>
 
       {/* Content */}
@@ -730,7 +799,7 @@ function BacklogPageInner() {
           ) : sortedItems.length === 0 && items.length === 0 ? (
             <BacklogEmptyState onCreateItem={() => { setFormMode("manual"); setShowForm(true); }} />
           ) : sortedItems.length === 0 ? (
-            <FilterZeroState onClearFilters={() => { setStatusFilter([]); setPriorityFilter([]); setSearch(""); }} />
+            <FilterZeroState onClearFilters={resetViewState} />
           ) : (
             <table className={styles.table} aria-label="Backlog items">
               <thead className={styles.tableHead}>

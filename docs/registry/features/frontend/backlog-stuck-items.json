@@ -25,7 +25,12 @@
     "StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap",
     "getStuckReasonLabel_should_returnDistinctLabel_When_ReworkBlockedStale",
     "getStuckReasonIcon_should_returnNonFallbackIcon_When_ReworkBlockedStale",
-    "StuckItemDetail_should_linkToItemDetail_When_Rendered"
+    "StuckItemDetail_should_linkToItemDetail_When_Rendered",
+    "getStuckReasonLabel_should_returnDistinctLabel_When_MultipleReasons",
+    "getStuckReasonLabel_should_returnDistinctLabel_When_BounceCapExhausted",
+    "StuckItemsSection_should_renderMultipleReasonsGroup_When_ItemEscalated",
+    "StuckItemsSection_should_ExcludeEscalationReasonFromOtherReasonsCount_When_ItemHasMultipleReasonsRow",
+    "StuckItemsSection_should_ShowDeescalationBanner_When_MultipleReasonsRowResolvesButItemRemainsOpen"
   ],
-  "lastModified": "2026-07-24T00:00:00Z"
+  "lastModified": "2026-08-11T00:00:00Z"
 }

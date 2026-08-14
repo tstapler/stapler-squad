@@ -337,3 +337,12 @@ func TestGetEscapeAnalyticsGlobalSummary_should_ReturnExactMangledCount_When_Fix
 	assert.Equal(t, int64(2), resp.Msg.PerSession[0].TotalMangled)
 	assert.InDelta(t, 2.0/5.0, resp.Msg.PerSession[0].MangleRate, 1e-9)
 }
+
+func TestEscapeMangleRate_should_ComputeRatio_When_TotalSequencesPositive(t *testing.T) {
+	assert.InDelta(t, 0.4, escapeMangleRate(5, 2), 1e-9)
+	assert.Equal(t, 1.0, escapeMangleRate(3, 3))
+}
+
+func TestEscapeMangleRate_should_ReturnZero_When_TotalSequencesIsZero(t *testing.T) {
+	assert.Equal(t, 0.0, escapeMangleRate(0, 0))
+}

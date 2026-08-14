@@ -6,6 +6,7 @@ export class SessionsPage {
   readonly statusFilter: Locator;
   readonly groupBySelect: Locator;
   readonly newSessionButton: Locator;
+  readonly createSessionSubmitButton: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -13,6 +14,7 @@ export class SessionsPage {
     this.statusFilter = page.locator('select[aria-label="Filter by status"]').first();
     this.groupBySelect = page.locator('select[aria-label="Group sessions by"]').first();
     this.newSessionButton = page.getByRole('button', { name: /new session/i }).first();
+    this.createSessionSubmitButton = page.getByTestId('omnibar-create-session-button');
   }
 
   async goto() {

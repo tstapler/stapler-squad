@@ -25,6 +25,7 @@ export const routes = {
   backlogBoard: "/backlog/board",
   sessionsImport: "/sessions/import",
   workflows: "/workflows",
+  triggers: "/triggers",
   login: "/login",
   account: "/account",
   escapeAnalytics: "/analytics/escape",

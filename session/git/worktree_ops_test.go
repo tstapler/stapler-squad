@@ -3,9 +3,11 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-git/go-git/v5"
@@ -204,6 +206,51 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 	assert.Equal(t, expectedHash, afterRef.Hash())
 }
 
+// TestSetupNewWorktree_RespectsPreSetBaseCommitSHA is the regression test for the
+// stale-HEAD backlog-spawn bug: setupNewWorktree() used to unconditionally overwrite
+// baseCommitSHA with `rev-parse HEAD` of repoPath, silently discarding any base a caller
+// had already selected (e.g. NewGitWorktreeFromCommitSHA, or CreateBacklogWorktree
+// resolving origin/main's fetched tip). This asserts the worktree is branched from the
+// pre-set commit even though repoPath's own HEAD has since moved past it.
+func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
+	repoDir := setupTestRepo(t)
+
+	firstCommit, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err)
+	baseSHA := strings.TrimSpace(string(firstCommit))
+
+	// Advance repoPath's HEAD past baseSHA, simulating a shared checkout that has drifted
+	// ahead of (or independently of) the commit the caller actually wants to branch from.
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "later.txt"), []byte("later"), 0644))
+	for _, args := range [][]string{
+		{"-C", repoDir, "add", "."},
+		{"-C", repoDir, "commit", "-m", "second commit"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+	headCommit, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err)
+	require.NotEqual(t, baseSHA, strings.TrimSpace(string(headCommit)), "test setup must advance HEAD past baseSHA")
+
+	branchName := "backlog/pre-set-base-sha"
+	wt, _, err := NewGitWorktreeFromCommitSHA(repoDir, "test-pre-set-base", branchName, baseSHA)
+	require.NoError(t, err)
+
+	err = wt.setupNewWorktree()
+	require.NoError(t, err)
+	defer func() { _ = wt.Cleanup() }()
+
+	assert.Equal(t, baseSHA, wt.GetBaseCommitSHA(), "baseCommitSHA must remain the pre-set commit, not be overwritten by repoPath's HEAD")
+
+	worktreeHead, err := safeexec.CommandContext(context.Background(), "git", "-C", wt.worktreePath, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err)
+	assert.Equal(t, baseSHA, strings.TrimSpace(string(worktreeHead)), "worktree must be checked out at the pre-set base commit, not repoPath's current HEAD")
+
+	_, statErr := os.Stat(filepath.Join(wt.worktreePath, "later.txt"))
+	assert.True(t, os.IsNotExist(statErr), "worktree must not contain changes made after the pre-set base commit")
+}
+
 // TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers setupNewWorktree()'s
 // own reuse path directly, independent of Setup()'s upfront goroutine (which would normally
 // short-circuit straight to setupFromExistingBranch and never reach setupNewWorktree() at
@@ -228,4 +275,105 @@ func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) 
 	out, statErr := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", branchName).CombinedOutput()
 	require.NoError(t, statErr)
 	assert.True(t, strings.Contains(string(out), branchName), "branch must still exist after reuse")
+}
+
+// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate is the regression
+// test for the self-heal fallback in setupNewWorktree's "worktree add -b" error handling.
+// Unlike TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists — which pre-creates the
+// branch before calling setupNewWorktree, so branchRefExists is already true at the
+// function's own upfront check and setupFromExistingBranch is reached via that early path —
+// this test starts with the branch absent for both callers and races two real
+// setupNewWorktree calls against the identical branch name, the same shape as two concurrent
+// backlog spawns for the same item computing the same deterministic branchWorkSlug. Both
+// callers' upfront branchRefExists checks can observe "false" before either has created the
+// branch; the loser's "git worktree add -b" fails with "a branch named '<branch>' already
+// exists", triggering setupNewWorktree's fallback into setupFromExistingBranch — which then
+// hits its own second race window: by the time it runs, the winner has often already checked
+// out the branch into its worktree, so setupFromExistingBranch's own "worktree add <path>
+// <branch>" (no -b) fails too, with git 2.50.1's "'<branch>' is already used by worktree at
+// '<path>'" (older git instead says "already checked out") — which setupFromExistingBranch
+// must also recognize to find and reuse the winner's worktree rather than hard-failing. This
+// test exercises both layers together. Which of the two callers wins vs. loses is inherently
+// nondeterministic (real git subprocess timing), so this test does not assert on which one
+// self-healed — only on the invariant the fix guarantees: neither concurrent caller may
+// hard-fail.
+func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/concurrent-race-fixture"
+
+	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "test-race-1", branchName)
+	require.NoError(t, err)
+	wt2, _, err := NewGitWorktreeWithBranch(repoDir, "test-race-2", branchName)
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		errs[0] = wt1.setupNewWorktree()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		errs[1] = wt2.setupNewWorktree()
+	}()
+	close(start)
+	wg.Wait()
+
+	require.NoError(t, errs[0], "first concurrent setup must not hard-fail on a lost branch-create race")
+	require.NoError(t, errs[1], "second concurrent setup must not hard-fail on a lost branch-create race")
+	defer func() { _ = wt1.Cleanup() }()
+	defer func() { _ = wt2.Cleanup() }()
+
+	out, statErr := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", branchName).CombinedOutput()
+	require.NoError(t, statErr)
+	assert.True(t, strings.Contains(string(out), branchName), "branch must exist once the race resolves")
+}
+
+// TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo models the
+// real-world failure this fix addresses: several independent worktree creations (e.g. multiple
+// backlog-triage spawns, or duplicate server processes) hitting the same repo's shared
+// .git/worktrees/ administrative metadata at once, each for a distinct branch/worktree path.
+// Unlike TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate (which calls the
+// unlocked setupNewWorktree() directly to exercise same-branch self-heal logic), this test calls
+// the public, now-lock-wrapped Setup() to verify WithRepoWorktreeLock actually prevents the
+// metadata race rather than merely tolerating one branch-create collision.
+func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	const n = 8
+
+	worktrees := make([]*GitWorktree, n)
+	for i := 0; i < n; i++ {
+		branchName := fmt.Sprintf("backlog/concurrent-setup-%d", i)
+		wt, _, err := NewGitWorktreeWithBranch(repoDir, fmt.Sprintf("test-concurrent-setup-%d", i), branchName)
+		require.NoError(t, err)
+		worktrees[i] = wt
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[i] = worktrees[i].Setup()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		assert.NoError(t, err, "concurrent Setup() for worktree %d must not fail due to a .git/worktrees/ metadata race", i)
+	}
+
+	for _, wt := range worktrees {
+		wt := wt
+		defer func() { _ = wt.Cleanup() }()
+	}
 }

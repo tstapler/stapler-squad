@@ -110,6 +110,14 @@ type LifecycleListener interface {
 // kept in sync by comment, not by shared constant.
 const MaxNoteLength = 10000
 
+// MaxSteerMessageLength is the maximum length, in bytes, of a steer_message sent
+// via UpdateSession. No RPC in this server currently enforces a request-size cap
+// (see grep for WithReadMaxBytes across server/ — a known, pre-existing, repo-wide
+// gap), but steer_message is a new/widened free-text entry point that now reaches
+// ordinary work/review sessions, not just autonomous ones, so it gets an explicit
+// cap here rather than waiting on that broader fix. Matches MaxNoteLength's value.
+const MaxSteerMessageLength = 10000
+
 // Instance is a running instance of claude code.
 type Instance struct {
 	// ID is the stable, immutable identifier for this instance.
@@ -853,13 +861,23 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		}
 		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
 		log.ForSession(i.Title).Info("session exited unexpectedly", "reason", reason)
-		i.send(func(s *instanceState) {
+		// Blocks (sendSyncErr, not send) so the Active->Stopped transition has
+		// landed -- and its snapshot republished -- before EventExited fires below.
+		// This callback runs on the tmux control-mode reader goroutine, never on
+		// the actor's own goroutine, so blocking here cannot deadlock against the
+		// actor. Without this, sessionExitedPublisher (server/services/session_service.go)
+		// could publish the SessionUpdated event while the transition is still
+		// in-flight, racing GetStatus()/Snapshot() reads on the delivery path.
+		if err := i.sendSyncErr(func(s *instanceState) error {
 			if s.inst.Status == Active {
 				if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}
 			}
-		})
+			return nil
+		}); err != nil {
+			log.Warn("exit callback: status transition did not land", "session", i.Title, "err", err)
+		}
 		// Capture the diff snapshot before firing EventExited so listeners (e.g.
 		// sessionSummaryListener) can read a fresh i.GetDiffStats() synchronously
 		// from the callback — see ADR-002 / plan.md's "Diff-stat capture timing"
@@ -927,7 +945,6 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
-	i.initTmuxSession()
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -936,6 +953,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	var setupErr error
@@ -1019,6 +1043,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		i.startVNCDisplay(context.Background())
 		i.allocateCDPPort()
@@ -1111,8 +1142,6 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
-	i.initTmuxSession()
-
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
 	// the callback to fire again after the sync.Once was exhausted in the prior run.
@@ -1124,6 +1153,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	// Cleanup on error: kill session and invalidate the caller's cleanup handle.
@@ -1235,6 +1271,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 		// can be injected via ExtraEnv at new-session time. This ensures the agent

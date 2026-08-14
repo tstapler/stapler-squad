@@ -2637,6 +2637,138 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
 }
 
+// TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingResolves
+// verifies Signal 2's resolve-alongside-bouncing wiring (plan.md Story
+// 1.3.2): bounce_cap_exhausted can only ever coexist with an open bouncing
+// row, so it must clear in the same tick bouncing itself resolves via the
+// merged-PR branch, rather than outliving the condition it describes.
+func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingResolves(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item, capped, with merged PR",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 173
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-capped-merged", "")
+
+	// Seed both bouncing and bounce_cap_exhausted open — the exact live shape
+	// once a bouncing item's remediation gate has already parked.
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "5 cycles, capped")
+	require.NoError(t, err)
+	require.True(t, applied)
+	applied, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBounceCapExhausted, BacklogStatusInProgress, "cap exhausted while bouncing")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// 3 in_progress->review round trips with no PASS verdict — the exact
+	// shape isBouncing flags (mirrors the sibling merged-PR test above).
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-capped-merged")
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+		"an item whose linked PR already merged must transition to done, not stay bouncing")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "both bouncing and bounce_cap_exhausted must resolve once the item's PR is confirmed merged")
+}
+
+// TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_LinkedPRAlreadyMerged
+// is a regression test for the direct in_progress->done review-gate bypass:
+// reconcileBouncingItems used to call the raw storage-layer
+// TransitionBacklogItemStatus straight from item.Status (which can be
+// in_progress) to done, skipping both validTransitions (in_progress->done
+// isn't a legal edge) and TransitionGuard's ErrVerdictRequired gate entirely,
+// because that raw layer has no knowledge of either. This asserts the item
+// instead picks up a genuine PASS verdict along the way and lands on done via
+// the legal in_progress->review->done edge sequence.
+func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_LinkedPRAlreadyMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with merged PR, verdict gate check",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 174
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/174"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-verdict-gate", "")
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	// Confirm there is no PASS verdict yet — the item genuinely never passed
+	// review before reconcileBouncingItems runs.
+	outcomeBefore, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, ReviewVerdictPass, outcomeBefore, "item must not already have a PASS verdict before the fix runs")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-verdict-gate")
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status)
+
+	outcomeAfter, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ReviewVerdictPass, outcomeAfter,
+		"reaching done via reconcileBouncingItems must record a genuine PASS verdict, not bypass the verdict gate entirely")
+
+	// Now that a PASS verdict is on record, the guarded front-door path's own
+	// gate (TransitionGuard) would have allowed this exact transition —
+	// closing the loop on the bypass this test guards against.
+	guardInput := BacklogItemTransitionInput{
+		Status:         domain.BacklogStatusReview,
+		OverallOutcome: outcomeAfter,
+	}
+	assert.NoError(t, domain.TransitionGuard(guardInput, domain.BacklogStatusDone))
+}
+
 // TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge
 // is a regression test for one of the sibling "silent status-transition
 // failure" instances found by the silenttransition lint analyzer (same shape
@@ -3069,6 +3201,96 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason)
 }
 
+// TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToAnotherBranch
+// is the regression test for the 2026-08-12 live repro: worktree paths are
+// reused across sessions once a session ends, so a directory existing at a
+// stale session's recorded WorktreePath does not mean it still holds that
+// session's branch. resolveLatestWorkCommit used to trust any existing
+// directory's HEAD unconditionally, so once the path was reassigned to a
+// later, unrelated item's branch, the stale item's reconcile pass read that
+// later item's real (legitimately merged) commit as its own "shipped" work.
+// Confirmed live for backlog items 0f5d760b, 6f6f6f4e, and a3ca3918 in the
+// docspan repo: each was falsely marked done off another item's commit.
+//
+// The fix (session/backlog_lifecycle.go resolveLatestWorkCommit) checks that
+// the worktree path's currently checked-out branch still matches the
+// session's own recorded BranchName before trusting its HEAD; on a mismatch
+// it falls back to the existing repo-wide branch-name lookup, same as the
+// worktree-gone case.
+func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToAnotherBranch(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	repoPath, _ := setupBounceMainRepo(t)
+	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("stale item's unshipped work\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "feature.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "work that never merged")
+	staleFeatureSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Stale item whose worktree path got recycled",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	workSessionUUID := "recycled-worktree-work-session"
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// The stale session's worktree row still records its own branch ("feature")
+	// and the path it used to live at, but the directory at that path has since
+	// been reused by a later, unrelated session: it's now checked out on
+	// "other-item-branch" with a commit this item never authored.
+	inst := newTestInstance("recycled-worktree-instance")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "recycled-worktree-instance", "feature", staleFeatureSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	// A later, unrelated item is spawned into the very same path (worktree
+	// paths are recycled once a session ends), does real work, and gets
+	// merged. The path is left checked out on that later item's branch —
+	// exactly the state the reconciler finds when it later re-evaluates the
+	// stale session above.
+	runGitTestCmd(t, repoPath, "checkout", "-b", "other-item-branch")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "other-item.txt"), []byte("a later item's own commit\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "other-item.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "later item's real work")
+	runGitTestCmd(t, repoPath, "checkout", "main")
+	runGitTestCmd(t, repoPath, "merge", "--no-ff", "-m", "merge later item's work", "other-item-branch")
+	runGitTestCmd(t, repoPath, "checkout", "other-item-branch")
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status,
+		"a stale item must not be marked done off a commit read from its recycled worktree path's current (different) branch")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "the item must still go through normal bouncing detection instead of being silently marked done")
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason)
+}
+
 // TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedDirectlyToMainBranch
 // verifies BUG-039's fix doesn't regress the legitimate case
 // TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR
@@ -3480,6 +3702,65 @@ func TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass(t *t
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "bouncing row must resolve once the item reaches done")
+}
+
+// TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInProgressOrReview
+// is the backstop test for Task 1.3.2b: an open bounce_cap_exhausted row must
+// resolve via selfHealStuck's own status-anchor case (mirroring bouncing's
+// own anchor scope) once the item's status leaves in_progress/review —
+// exercised here with a NON-terminal status (pr_pending) so this asserts the
+// reason-specific case fires, not the blanket terminal-status rule (which a
+// done/archived status would exercise instead, per
+// TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass
+// immediately above).
+func TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInProgressOrReview(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bounce cap exhausted item now pr_pending",
+		Status: string(BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBounceCapExhausted, BacklogStatusPRPending, "cap exhausted while bouncing, now pr_pending")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "bounce_cap_exhausted row must resolve once the item's status leaves in_progress/review, mirroring bouncing's own anchor rule")
+}
+
+// TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInReview
+// verifies the negative case: the row must stay open while the item is still
+// anchored in review (one of bounce_cap_exhausted's two valid anchor statuses).
+func TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInReview(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bounce cap exhausted item still in review",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBounceCapExhausted, BacklogStatusReview, "cap exhausted while bouncing")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "bounce_cap_exhausted row must stay open while the item is still in review")
+	assert.Equal(t, domain.StuckReasonBounceCapExhausted, open[0].Reason)
 }
 
 // TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal
@@ -4250,4 +4531,333 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "leaving pr_pending must resolve the pr_pending_no_pr row via the status-anchored self-heal sweep")
+}
+
+// --- blocked_by_dependency: reconcileBlockedByDependencyResolution orchestration ---
+//
+// The mark side (notifyBlockedByDependency, server/services/
+// backlog_service_triage.go) only runs from inside DequeueNextQueuedItems's
+// claim-error path, so a row marked once and then skipped by that sweep would
+// otherwise sit open forever even after its blocker ships or is archived.
+// These tests exercise reconcileBlockedByDependencyResolution directly to
+// confirm the independent sweep — not any inline resolve — is what
+// guarantees resolution.
+
+// TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHasShipped
+// is the positive case: once the blocker reaches BacklogStatusDone, the sweep
+// must resolve the blocked item's open blocked_by_dependency row.
+func TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHasShipped(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	blocker, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
+	require.NoError(t, err)
+	blocked, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "item blocked by a dependency that is about to ship",
+		Status: string(BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, er.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+		BlockerID: blocker.ID,
+		BlockedID: blocked.ID,
+	}))
+
+	applied, err := er.MarkStuck(ctx, blocked.ID, domain.StuckReasonBlockedByDependency, BacklogStatusQueued,
+		"blocked on unresolved dependency "+blocker.ID)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The blocker ships.
+	_, err = storage.TransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileBlockedByDependencyResolution(ctx, er)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	for _, row := range open {
+		assert.False(t, row.ItemID == blocked.ID && row.Reason == domain.StuckReasonBlockedByDependency,
+			"the blocked_by_dependency row must be resolved once its blocker ships")
+	}
+}
+
+// TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_BlockerStillUnresolved
+// is the negative case: the sweep must not clear a row while the blocker
+// genuinely remains unresolved.
+func TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_BlockerStillUnresolved(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	blocker, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item still in progress"})
+	require.NoError(t, err)
+	blocked, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "item blocked by a dependency that has not shipped",
+		Status: string(BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, er.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+		BlockerID: blocker.ID,
+		BlockedID: blocked.ID,
+	}))
+
+	applied, err := er.MarkStuck(ctx, blocked.ID, domain.StuckReasonBlockedByDependency, BacklogStatusQueued,
+		"blocked on unresolved dependency "+blocker.ID)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileBlockedByDependencyResolution(ctx, er)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	found := false
+	for _, row := range open {
+		if row.ItemID == blocked.ID && row.Reason == domain.StuckReasonBlockedByDependency {
+			found = true
+		}
+	}
+	assert.True(t, found, "the blocked_by_dependency row must stay open while the blocker remains unresolved")
+}
+
+// TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_ThresholdFirstCrossed
+// verifies the escalate branch: an item with 2 simultaneously open,
+// independent (non-coupled) non-escalation reasons gets a durable
+// multiple_reasons row within one tick, but is NOT notified on the same tick
+// that created the row (multiReasonEscalationNotifyReady's dwell gate).
+func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_ThresholdFirstCrossed(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Multi-reason item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	require.True(t, applied)
+	applied, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "no progress")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	require.True(t, ok, "an item with 2 open non-escalation reasons must get a multiple_reasons row")
+	assert.Nil(t, row.NotifiedAt, "must not notify on the tick that created the row")
+	assert.Empty(t, notifier.calls, "must not notify on the tick that created the row")
+}
+
+// TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen
+// verifies the notify branch: once the multiple_reasons row has been open
+// past multiReasonNotifyDwell and the condition still holds, the next tick
+// notifies exactly once and marks the row notified.
+func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Multi-reason item, dwell elapsed",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "no progress")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	// First tick: creates the row, does not notify.
+	listener.reconcileMultiReasonEscalation(ctx, er)
+	require.Empty(t, notifier.calls)
+
+	backdateStuckFirstDetected(t, er, item.ID, domain.StuckReasonMultipleReasons, time.Now().Add(-61*time.Second))
+
+	// Second tick: dwell elapsed, condition still holds.
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, "Multiple stuck reasons open", notifier.calls[0].Title)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	require.True(t, ok)
+	assert.NotNil(t, row.NotifiedAt, "row must be marked notified after the dwell-gated notify fires")
+
+	// Third tick: already notified, must not re-notify.
+	listener.reconcileMultiReasonEscalation(ctx, er)
+	assert.Len(t, notifier.calls, 1, "must notify at most once per row lifetime")
+}
+
+// TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold
+// verifies the de-escalate branch: once one of the two underlying reasons
+// resolves (dropping the non-escalation count below multiReasonThreshold),
+// the next tick resolves the multiple_reasons row.
+func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Multi-reason item, de-escalating",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "no progress")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	require.True(t, ok, "row must be open before de-escalation")
+
+	_, err = er.ResolveStuck(ctx, item.ID, domain.StuckReasonStaleWork)
+	require.NoError(t, err)
+
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err = er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok = findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "multiple_reasons row must resolve once the open-reason count drops below threshold")
+}
+
+// TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount_When_Counting
+// is the ADR-001 self-reinforcement guard: an item with a single
+// non-escalation reason (bouncing) plus its own already-open
+// multiple_reasons row must NOT count the multiple_reasons row itself toward
+// the threshold — only 1 non-escalation reason is open, so the escalation
+// must actually de-escalate/resolve, not stay pinned open by counting itself.
+func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount_When_Counting(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Self-reinforcement guard item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusInProgress, "3 cycles")
+	require.NoError(t, err)
+	// Seed the escalation row directly (as if a prior tick had wrongly counted
+	// itself, or it survived from a since-resolved second reason).
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonMultipleReasons, BacklogStatusInProgress, "bouncing, multiple_reasons")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "multiple_reasons must not count itself toward its own threshold — with only 1 real reason open, it must resolve")
+}
+
+// TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBouncingAndAbandonedReviewOpen
+// is the structural-coupling regression guard (Task 1.2.2a/e): bouncing and
+// abandoned_review co-occur on nearly every bouncing item whose reopen gate
+// is currently blocked (mid-backoff) — see markAbandonedReview's own
+// identical gate, TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue.
+// With only that coupled pair open, escalation must NOT fire.
+func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBouncingAndAbandonedReviewOpen(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Coupled bouncing+abandoned_review item",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	// Drive the bouncing gate into "blocked" (mid-backoff), mirroring
+	// TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue's seeding.
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonAbandonedReview, BacklogStatusReview, "stuck in review")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "the coupled bouncing+abandoned_review pair alone must not self-escalate")
+}
+
+// TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusIndependentReasonOpen
+// is the companion case to the exclusion guard above: the same coupled
+// bouncing+abandoned_review pair PLUS one genuinely independent third reason
+// (push_failed) must still escalate — confirming the coupling exclusion
+// narrows the count rather than disabling escalation outright.
+func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusIndependentReasonOpen(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Coupled pair plus independent reason item",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonAbandonedReview, BacklogStatusReview, "stuck in review")
+	require.NoError(t, err)
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview, "push failed")
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	require.True(t, ok, "bouncing+push_failed (abandoned_review excluded by the coupling guard) is still 2 independent reasons — must escalate")
+	assert.Contains(t, row.Context, "bouncing")
+	assert.Contains(t, row.Context, "push_failed")
+	assert.NotContains(t, row.Context, "abandoned_review", "the coupled abandoned_review row must be excluded from the escalation context")
 }

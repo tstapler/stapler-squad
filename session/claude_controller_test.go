@@ -849,6 +849,42 @@ func TestGetCurrentStatus_CacheHit(t *testing.T) {
 	}
 }
 
+func TestGetCurrentStatus_ThenGetStatusAndIdleInfo_should_shareSubagentCount_When_sameTailHash(t *testing.T) {
+	cc, _ := newControllerWithMock("✻ Waiting for 2 background agents to finish")
+
+	// GetCurrentStatus populates the shared statusCache first.
+	cc.GetCurrentStatus()
+	if sc := cc.statusCache.Load(); sc == nil || sc.subagentCount != 2 {
+		t.Fatalf("statusCache.subagentCount = %v, want 2 after GetCurrentStatus", sc)
+	}
+
+	// GetStatusAndIdleInfo, called immediately after with the same unchanged tail, must
+	// read the same count back off the cache (cache-hit path) — the two methods must
+	// never disagree. See ADR-001.
+	status, _, _, count := cc.GetStatusAndIdleInfo()
+	if status != detection.StatusWaitingForAgent {
+		t.Fatalf("status = %v, want StatusWaitingForAgent", status)
+	}
+	if count != 2 {
+		t.Errorf("GetStatusAndIdleInfo count = %d, want 2 (must match GetCurrentStatus's cached write)", count)
+	}
+	if sc := cc.statusCache.Load(); sc == nil || sc.subagentCount != 2 {
+		t.Errorf("statusCache.subagentCount = %v, want 2 to remain after GetStatusAndIdleInfo", sc)
+	}
+}
+
+func TestGetStatusAndIdleInfo_should_returnZeroCount_When_statusIsNotWaitingForAgent(t *testing.T) {
+	cc, _ := newControllerWithMock("✻ Baked for 3s")
+
+	status, _, _, count := cc.GetStatusAndIdleInfo()
+	if status == detection.StatusWaitingForAgent {
+		t.Fatalf("test fixture unexpectedly matched StatusWaitingForAgent")
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}
+
 func TestGetCurrentStatus_CacheMissOnChange(t *testing.T) {
 	cc, _ := newControllerWithMock(tmuxOutputSmall)
 	_, _ = cc.GetCurrentStatus()

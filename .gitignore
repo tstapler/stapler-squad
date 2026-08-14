@@ -15,7 +15,13 @@ stapler-squad-test
 !web-app/src/**/logs/
 !web-app/src/**/logs/**
 
-# Generated protocol buffer code
+# Generated protocol buffer code — regenerate with: make proto-gen (or buf generate proto).
+# NEVER force-add (git add -f) files under these paths, even to "fix" a build. Every
+# make target that consumes generated code (build, test, lint) already depends on
+# proto-gen; CI generates fresh before every consuming step. Committing these files
+# has caused real breakage twice: once by force-adding a stale/incomplete generation,
+# once by a CI workflow step ordering bug that only "worked" because these were
+# force-added in the first place (see PR #445 and CI job "no-checked-in-generated-protos").
 gen/
 web/src/gen/
 web-app/src/gen/
@@ -35,6 +41,7 @@ session/ent/*/
 /web-app/.env.local
 /server/web/dist/
 /.playwright-mcp
+/tools/ci-gates/node_modules/
 
 # worktrees
 worktrees/

@@ -42,7 +42,12 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 (full history, all branches) is required so `origin/main` is
+      # resolvable locally for the complexity gate's --new-from-rev=origin/main below —
+      # see that step's comment for why.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -71,16 +76,22 @@ jobs:
         working-directory: web-app
         run: pnpm install --frozen-lockfile
 
-      - name: Jest
-        working-directory: web-app
-        run: npx jest --ci --maxWorkers=4
-
+      # Must run before Jest (and before golangci-lint below): generated code is
+      # gitignored, not committed (see #445) — any step that reads gen/ or
+      # web-app/src/gen/ needs these to have run first in THIS job. Ordering
+      # bug history: Jest used to run before this step, so it silently depended
+      # on generated files happening to already be committed; the one proto
+      # file whose generated output wasn't committed broke Jest with "Could not
+      # locate module" until this reorder.
       - name: Generate protobuf code
         run: buf generate proto
 
       - name: Generate ent ORM code
         run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
+      - name: Jest
+        working-directory: web-app
+        run: npx jest --ci --maxWorkers=4
 
       - name: Create web dist stub
         run: |
@@ -99,17 +110,28 @@ jobs:
       # big or too complex — the shape that let session/backlog_lifecycle.go grow to 4930
       # lines before anyone noticed (see the code-hotspot-analysis skill + the split PR that
       # added this step). Thresholds live in .golangci.yml's settings block. Run as a
-      # separate step (not folded into the block above) because it needs only-new-issues:
-      # true — the repo has ~100 pre-existing violations in files this step doesn't touch,
-      # and failing on those would block unrelated PRs. `make lint`/`make ci` are
+      # separate step (not folded into the block above) because it needs new-issues-only
+      # filtering — the repo has ~100 pre-existing violations in files this step doesn't
+      # touch, and failing on those would block unrelated PRs. `make lint`/`make ci` are
       # deliberately unaffected (these 4 linters are NOT in .golangci.yml's enable: list).
+      #
+      # Uses golangci-lint's native --new-from-rev (git-based) instead of the action's own
+      # only-new-issues: true. only-new-issues fetches the PR diff from the GitHub REST API
+      # (pulls.get with the diff media type), which hard-caps at 20000 changed lines — past
+      # that it 406s and the action silently falls back to reporting EVERY issue in the
+      # whole repo instead of just new ones (see golangci/golangci-lint-action#996). PR #381
+      # hit this: a large merge-driven diff (~161k lines, almost entirely from generated
+      # session/ent/*.go files this branch has untracked but main still has committed)
+      # blew past the cap and flooded the check with ~90 unrelated pre-existing violations.
+      # --new-from-rev computes the diff via local git instead (no API, no line cap) —
+      # requires fetch-depth: 0 above so origin/main is resolvable.
       - name: golangci-lint (complexity/size gate — new code only)
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
-          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 --enable=gocyclo,gocognit,funlen,revive
+          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 --enable=gocyclo,gocognit,funlen,revive --new-from-rev=origin/main
           skip-cache: false
-          only-new-issues: true
+          only-new-issues: false
 
       - name: Import cycle check
         run: go build ./...

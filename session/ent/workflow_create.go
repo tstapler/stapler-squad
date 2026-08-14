@@ -210,6 +210,132 @@ func (_c *WorkflowCreate) SetNillableArchiveAfterHours(v *int) *WorkflowCreate {
 	return _c
 }
 
+// SetTriggerType sets the "trigger_type" field.
+func (_c *WorkflowCreate) SetTriggerType(v string) *WorkflowCreate {
+	_c.mutation.SetTriggerType(v)
+	return _c
+}
+
+// SetNillableTriggerType sets the "trigger_type" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableTriggerType(v *string) *WorkflowCreate {
+	if v != nil {
+		_c.SetTriggerType(*v)
+	}
+	return _c
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (_c *WorkflowCreate) SetGithubRepo(v string) *WorkflowCreate {
+	_c.mutation.SetGithubRepo(v)
+	return _c
+}
+
+// SetNillableGithubRepo sets the "github_repo" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableGithubRepo(v *string) *WorkflowCreate {
+	if v != nil {
+		_c.SetGithubRepo(*v)
+	}
+	return _c
+}
+
+// SetGithubBranch sets the "github_branch" field.
+func (_c *WorkflowCreate) SetGithubBranch(v string) *WorkflowCreate {
+	_c.mutation.SetGithubBranch(v)
+	return _c
+}
+
+// SetNillableGithubBranch sets the "github_branch" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableGithubBranch(v *string) *WorkflowCreate {
+	if v != nil {
+		_c.SetGithubBranch(*v)
+	}
+	return _c
+}
+
+// SetWebhookSlug sets the "webhook_slug" field.
+func (_c *WorkflowCreate) SetWebhookSlug(v string) *WorkflowCreate {
+	_c.mutation.SetWebhookSlug(v)
+	return _c
+}
+
+// SetNillableWebhookSlug sets the "webhook_slug" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableWebhookSlug(v *string) *WorkflowCreate {
+	if v != nil {
+		_c.SetWebhookSlug(*v)
+	}
+	return _c
+}
+
+// SetWebhookSecretEncrypted sets the "webhook_secret_encrypted" field.
+func (_c *WorkflowCreate) SetWebhookSecretEncrypted(v string) *WorkflowCreate {
+	_c.mutation.SetWebhookSecretEncrypted(v)
+	return _c
+}
+
+// SetNillableWebhookSecretEncrypted sets the "webhook_secret_encrypted" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableWebhookSecretEncrypted(v *string) *WorkflowCreate {
+	if v != nil {
+		_c.SetWebhookSecretEncrypted(*v)
+	}
+	return _c
+}
+
+// SetEventFilter sets the "event_filter" field.
+func (_c *WorkflowCreate) SetEventFilter(v string) *WorkflowCreate {
+	_c.mutation.SetEventFilter(v)
+	return _c
+}
+
+// SetNillableEventFilter sets the "event_filter" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableEventFilter(v *string) *WorkflowCreate {
+	if v != nil {
+		_c.SetEventFilter(*v)
+	}
+	return _c
+}
+
+// SetLabelFilter sets the "label_filter" field.
+func (_c *WorkflowCreate) SetLabelFilter(v string) *WorkflowCreate {
+	_c.mutation.SetLabelFilter(v)
+	return _c
+}
+
+// SetNillableLabelFilter sets the "label_filter" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableLabelFilter(v *string) *WorkflowCreate {
+	if v != nil {
+		_c.SetLabelFilter(*v)
+	}
+	return _c
+}
+
+// SetPromptTemplate sets the "prompt_template" field.
+func (_c *WorkflowCreate) SetPromptTemplate(v string) *WorkflowCreate {
+	_c.mutation.SetPromptTemplate(v)
+	return _c
+}
+
+// SetNillablePromptTemplate sets the "prompt_template" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillablePromptTemplate(v *string) *WorkflowCreate {
+	if v != nil {
+		_c.SetPromptTemplate(*v)
+	}
+	return _c
+}
+
+// SetLastFiredAt sets the "last_fired_at" field.
+func (_c *WorkflowCreate) SetLastFiredAt(v time.Time) *WorkflowCreate {
+	_c.mutation.SetLastFiredAt(v)
+	return _c
+}
+
+// SetNillableLastFiredAt sets the "last_fired_at" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableLastFiredAt(v *time.Time) *WorkflowCreate {
+	if v != nil {
+		_c.SetLastFiredAt(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *WorkflowCreate) SetID(v uuid.UUID) *WorkflowCreate {
 	_c.mutation.SetID(v)
@@ -282,6 +408,10 @@ func (_c *WorkflowCreate) defaults() {
 	if _, ok := _c.mutation.ArchiveAfterHours(); !ok {
 		v := workflow.DefaultArchiveAfterHours
 		_c.mutation.SetArchiveAfterHours(v)
+	}
+	if _, ok := _c.mutation.TriggerType(); !ok {
+		v := workflow.DefaultTriggerType
+		_c.mutation.SetTriggerType(v)
 	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := workflow.DefaultID()
@@ -419,6 +549,42 @@ func (_c *WorkflowCreate) createSpec() (*Workflow, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ArchiveAfterHours(); ok {
 		_spec.SetField(workflow.FieldArchiveAfterHours, field.TypeInt, value)
 		_node.ArchiveAfterHours = value
+	}
+	if value, ok := _c.mutation.TriggerType(); ok {
+		_spec.SetField(workflow.FieldTriggerType, field.TypeString, value)
+		_node.TriggerType = value
+	}
+	if value, ok := _c.mutation.GithubRepo(); ok {
+		_spec.SetField(workflow.FieldGithubRepo, field.TypeString, value)
+		_node.GithubRepo = value
+	}
+	if value, ok := _c.mutation.GithubBranch(); ok {
+		_spec.SetField(workflow.FieldGithubBranch, field.TypeString, value)
+		_node.GithubBranch = value
+	}
+	if value, ok := _c.mutation.WebhookSlug(); ok {
+		_spec.SetField(workflow.FieldWebhookSlug, field.TypeString, value)
+		_node.WebhookSlug = value
+	}
+	if value, ok := _c.mutation.WebhookSecretEncrypted(); ok {
+		_spec.SetField(workflow.FieldWebhookSecretEncrypted, field.TypeString, value)
+		_node.WebhookSecretEncrypted = value
+	}
+	if value, ok := _c.mutation.EventFilter(); ok {
+		_spec.SetField(workflow.FieldEventFilter, field.TypeString, value)
+		_node.EventFilter = value
+	}
+	if value, ok := _c.mutation.LabelFilter(); ok {
+		_spec.SetField(workflow.FieldLabelFilter, field.TypeString, value)
+		_node.LabelFilter = value
+	}
+	if value, ok := _c.mutation.PromptTemplate(); ok {
+		_spec.SetField(workflow.FieldPromptTemplate, field.TypeString, value)
+		_node.PromptTemplate = value
+	}
+	if value, ok := _c.mutation.LastFiredAt(); ok {
+		_spec.SetField(workflow.FieldLastFiredAt, field.TypeTime, value)
+		_node.LastFiredAt = &value
 	}
 	return _node, _spec
 }
@@ -703,6 +869,168 @@ func (u *WorkflowUpsert) AddArchiveAfterHours(v int) *WorkflowUpsert {
 // ClearArchiveAfterHours clears the value of the "archive_after_hours" field.
 func (u *WorkflowUpsert) ClearArchiveAfterHours() *WorkflowUpsert {
 	u.SetNull(workflow.FieldArchiveAfterHours)
+	return u
+}
+
+// SetTriggerType sets the "trigger_type" field.
+func (u *WorkflowUpsert) SetTriggerType(v string) *WorkflowUpsert {
+	u.Set(workflow.FieldTriggerType, v)
+	return u
+}
+
+// UpdateTriggerType sets the "trigger_type" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateTriggerType() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldTriggerType)
+	return u
+}
+
+// ClearTriggerType clears the value of the "trigger_type" field.
+func (u *WorkflowUpsert) ClearTriggerType() *WorkflowUpsert {
+	u.SetNull(workflow.FieldTriggerType)
+	return u
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (u *WorkflowUpsert) SetGithubRepo(v string) *WorkflowUpsert {
+	u.Set(workflow.FieldGithubRepo, v)
+	return u
+}
+
+// UpdateGithubRepo sets the "github_repo" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateGithubRepo() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldGithubRepo)
+	return u
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (u *WorkflowUpsert) ClearGithubRepo() *WorkflowUpsert {
+	u.SetNull(workflow.FieldGithubRepo)
+	return u
+}
+
+// SetGithubBranch sets the "github_branch" field.
+func (u *WorkflowUpsert) SetGithubBranch(v string) *WorkflowUpsert {
+	u.Set(workflow.FieldGithubBranch, v)
+	return u
+}
+
+// UpdateGithubBranch sets the "github_branch" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateGithubBranch() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldGithubBranch)
+	return u
+}
+
+// ClearGithubBranch clears the value of the "github_branch" field.
+func (u *WorkflowUpsert) ClearGithubBranch() *WorkflowUpsert {
+	u.SetNull(workflow.FieldGithubBranch)
+	return u
+}
+
+// SetWebhookSlug sets the "webhook_slug" field.
+func (u *WorkflowUpsert) SetWebhookSlug(v string) *WorkflowUpsert {
+	u.Set(workflow.FieldWebhookSlug, v)
+	return u
+}
+
+// UpdateWebhookSlug sets the "webhook_slug" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateWebhookSlug() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldWebhookSlug)
+	return u
+}
+
+// ClearWebhookSlug clears the value of the "webhook_slug" field.
+func (u *WorkflowUpsert) ClearWebhookSlug() *WorkflowUpsert {
+	u.SetNull(workflow.FieldWebhookSlug)
+	return u
+}
+
+// SetWebhookSecretEncrypted sets the "webhook_secret_encrypted" field.
+func (u *WorkflowUpsert) SetWebhookSecretEncrypted(v string) *WorkflowUpsert {
+	u.Set(workflow.FieldWebhookSecretEncrypted, v)
+	return u
+}
+
+// UpdateWebhookSecretEncrypted sets the "webhook_secret_encrypted" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateWebhookSecretEncrypted() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldWebhookSecretEncrypted)
+	return u
+}
+
+// ClearWebhookSecretEncrypted clears the value of the "webhook_secret_encrypted" field.
+func (u *WorkflowUpsert) ClearWebhookSecretEncrypted() *WorkflowUpsert {
+	u.SetNull(workflow.FieldWebhookSecretEncrypted)
+	return u
+}
+
+// SetEventFilter sets the "event_filter" field.
+func (u *WorkflowUpsert) SetEventFilter(v string) *WorkflowUpsert {
+	u.Set(workflow.FieldEventFilter, v)
+	return u
+}
+
+// UpdateEventFilter sets the "event_filter" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateEventFilter() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldEventFilter)
+	return u
+}
+
+// ClearEventFilter clears the value of the "event_filter" field.
+func (u *WorkflowUpsert) ClearEventFilter() *WorkflowUpsert {
+	u.SetNull(workflow.FieldEventFilter)
+	return u
+}
+
+// SetLabelFilter sets the "label_filter" field.
+func (u *WorkflowUpsert) SetLabelFilter(v string) *WorkflowUpsert {
+	u.Set(workflow.FieldLabelFilter, v)
+	return u
+}
+
+// UpdateLabelFilter sets the "label_filter" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateLabelFilter() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldLabelFilter)
+	return u
+}
+
+// ClearLabelFilter clears the value of the "label_filter" field.
+func (u *WorkflowUpsert) ClearLabelFilter() *WorkflowUpsert {
+	u.SetNull(workflow.FieldLabelFilter)
+	return u
+}
+
+// SetPromptTemplate sets the "prompt_template" field.
+func (u *WorkflowUpsert) SetPromptTemplate(v string) *WorkflowUpsert {
+	u.Set(workflow.FieldPromptTemplate, v)
+	return u
+}
+
+// UpdatePromptTemplate sets the "prompt_template" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdatePromptTemplate() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldPromptTemplate)
+	return u
+}
+
+// ClearPromptTemplate clears the value of the "prompt_template" field.
+func (u *WorkflowUpsert) ClearPromptTemplate() *WorkflowUpsert {
+	u.SetNull(workflow.FieldPromptTemplate)
+	return u
+}
+
+// SetLastFiredAt sets the "last_fired_at" field.
+func (u *WorkflowUpsert) SetLastFiredAt(v time.Time) *WorkflowUpsert {
+	u.Set(workflow.FieldLastFiredAt, v)
+	return u
+}
+
+// UpdateLastFiredAt sets the "last_fired_at" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateLastFiredAt() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldLastFiredAt)
+	return u
+}
+
+// ClearLastFiredAt clears the value of the "last_fired_at" field.
+func (u *WorkflowUpsert) ClearLastFiredAt() *WorkflowUpsert {
+	u.SetNull(workflow.FieldLastFiredAt)
 	return u
 }
 
@@ -1027,6 +1355,195 @@ func (u *WorkflowUpsertOne) UpdateArchiveAfterHours() *WorkflowUpsertOne {
 func (u *WorkflowUpsertOne) ClearArchiveAfterHours() *WorkflowUpsertOne {
 	return u.Update(func(s *WorkflowUpsert) {
 		s.ClearArchiveAfterHours()
+	})
+}
+
+// SetTriggerType sets the "trigger_type" field.
+func (u *WorkflowUpsertOne) SetTriggerType(v string) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetTriggerType(v)
+	})
+}
+
+// UpdateTriggerType sets the "trigger_type" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateTriggerType() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateTriggerType()
+	})
+}
+
+// ClearTriggerType clears the value of the "trigger_type" field.
+func (u *WorkflowUpsertOne) ClearTriggerType() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearTriggerType()
+	})
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (u *WorkflowUpsertOne) SetGithubRepo(v string) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetGithubRepo(v)
+	})
+}
+
+// UpdateGithubRepo sets the "github_repo" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateGithubRepo() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateGithubRepo()
+	})
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (u *WorkflowUpsertOne) ClearGithubRepo() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearGithubRepo()
+	})
+}
+
+// SetGithubBranch sets the "github_branch" field.
+func (u *WorkflowUpsertOne) SetGithubBranch(v string) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetGithubBranch(v)
+	})
+}
+
+// UpdateGithubBranch sets the "github_branch" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateGithubBranch() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateGithubBranch()
+	})
+}
+
+// ClearGithubBranch clears the value of the "github_branch" field.
+func (u *WorkflowUpsertOne) ClearGithubBranch() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearGithubBranch()
+	})
+}
+
+// SetWebhookSlug sets the "webhook_slug" field.
+func (u *WorkflowUpsertOne) SetWebhookSlug(v string) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetWebhookSlug(v)
+	})
+}
+
+// UpdateWebhookSlug sets the "webhook_slug" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateWebhookSlug() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateWebhookSlug()
+	})
+}
+
+// ClearWebhookSlug clears the value of the "webhook_slug" field.
+func (u *WorkflowUpsertOne) ClearWebhookSlug() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearWebhookSlug()
+	})
+}
+
+// SetWebhookSecretEncrypted sets the "webhook_secret_encrypted" field.
+func (u *WorkflowUpsertOne) SetWebhookSecretEncrypted(v string) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetWebhookSecretEncrypted(v)
+	})
+}
+
+// UpdateWebhookSecretEncrypted sets the "webhook_secret_encrypted" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateWebhookSecretEncrypted() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateWebhookSecretEncrypted()
+	})
+}
+
+// ClearWebhookSecretEncrypted clears the value of the "webhook_secret_encrypted" field.
+func (u *WorkflowUpsertOne) ClearWebhookSecretEncrypted() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearWebhookSecretEncrypted()
+	})
+}
+
+// SetEventFilter sets the "event_filter" field.
+func (u *WorkflowUpsertOne) SetEventFilter(v string) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetEventFilter(v)
+	})
+}
+
+// UpdateEventFilter sets the "event_filter" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateEventFilter() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateEventFilter()
+	})
+}
+
+// ClearEventFilter clears the value of the "event_filter" field.
+func (u *WorkflowUpsertOne) ClearEventFilter() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearEventFilter()
+	})
+}
+
+// SetLabelFilter sets the "label_filter" field.
+func (u *WorkflowUpsertOne) SetLabelFilter(v string) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetLabelFilter(v)
+	})
+}
+
+// UpdateLabelFilter sets the "label_filter" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateLabelFilter() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateLabelFilter()
+	})
+}
+
+// ClearLabelFilter clears the value of the "label_filter" field.
+func (u *WorkflowUpsertOne) ClearLabelFilter() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearLabelFilter()
+	})
+}
+
+// SetPromptTemplate sets the "prompt_template" field.
+func (u *WorkflowUpsertOne) SetPromptTemplate(v string) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetPromptTemplate(v)
+	})
+}
+
+// UpdatePromptTemplate sets the "prompt_template" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdatePromptTemplate() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdatePromptTemplate()
+	})
+}
+
+// ClearPromptTemplate clears the value of the "prompt_template" field.
+func (u *WorkflowUpsertOne) ClearPromptTemplate() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearPromptTemplate()
+	})
+}
+
+// SetLastFiredAt sets the "last_fired_at" field.
+func (u *WorkflowUpsertOne) SetLastFiredAt(v time.Time) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetLastFiredAt(v)
+	})
+}
+
+// UpdateLastFiredAt sets the "last_fired_at" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateLastFiredAt() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateLastFiredAt()
+	})
+}
+
+// ClearLastFiredAt clears the value of the "last_fired_at" field.
+func (u *WorkflowUpsertOne) ClearLastFiredAt() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearLastFiredAt()
 	})
 }
 
@@ -1518,6 +2035,195 @@ func (u *WorkflowUpsertBulk) UpdateArchiveAfterHours() *WorkflowUpsertBulk {
 func (u *WorkflowUpsertBulk) ClearArchiveAfterHours() *WorkflowUpsertBulk {
 	return u.Update(func(s *WorkflowUpsert) {
 		s.ClearArchiveAfterHours()
+	})
+}
+
+// SetTriggerType sets the "trigger_type" field.
+func (u *WorkflowUpsertBulk) SetTriggerType(v string) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetTriggerType(v)
+	})
+}
+
+// UpdateTriggerType sets the "trigger_type" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateTriggerType() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateTriggerType()
+	})
+}
+
+// ClearTriggerType clears the value of the "trigger_type" field.
+func (u *WorkflowUpsertBulk) ClearTriggerType() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearTriggerType()
+	})
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (u *WorkflowUpsertBulk) SetGithubRepo(v string) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetGithubRepo(v)
+	})
+}
+
+// UpdateGithubRepo sets the "github_repo" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateGithubRepo() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateGithubRepo()
+	})
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (u *WorkflowUpsertBulk) ClearGithubRepo() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearGithubRepo()
+	})
+}
+
+// SetGithubBranch sets the "github_branch" field.
+func (u *WorkflowUpsertBulk) SetGithubBranch(v string) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetGithubBranch(v)
+	})
+}
+
+// UpdateGithubBranch sets the "github_branch" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateGithubBranch() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateGithubBranch()
+	})
+}
+
+// ClearGithubBranch clears the value of the "github_branch" field.
+func (u *WorkflowUpsertBulk) ClearGithubBranch() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearGithubBranch()
+	})
+}
+
+// SetWebhookSlug sets the "webhook_slug" field.
+func (u *WorkflowUpsertBulk) SetWebhookSlug(v string) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetWebhookSlug(v)
+	})
+}
+
+// UpdateWebhookSlug sets the "webhook_slug" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateWebhookSlug() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateWebhookSlug()
+	})
+}
+
+// ClearWebhookSlug clears the value of the "webhook_slug" field.
+func (u *WorkflowUpsertBulk) ClearWebhookSlug() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearWebhookSlug()
+	})
+}
+
+// SetWebhookSecretEncrypted sets the "webhook_secret_encrypted" field.
+func (u *WorkflowUpsertBulk) SetWebhookSecretEncrypted(v string) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetWebhookSecretEncrypted(v)
+	})
+}
+
+// UpdateWebhookSecretEncrypted sets the "webhook_secret_encrypted" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateWebhookSecretEncrypted() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateWebhookSecretEncrypted()
+	})
+}
+
+// ClearWebhookSecretEncrypted clears the value of the "webhook_secret_encrypted" field.
+func (u *WorkflowUpsertBulk) ClearWebhookSecretEncrypted() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearWebhookSecretEncrypted()
+	})
+}
+
+// SetEventFilter sets the "event_filter" field.
+func (u *WorkflowUpsertBulk) SetEventFilter(v string) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetEventFilter(v)
+	})
+}
+
+// UpdateEventFilter sets the "event_filter" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateEventFilter() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateEventFilter()
+	})
+}
+
+// ClearEventFilter clears the value of the "event_filter" field.
+func (u *WorkflowUpsertBulk) ClearEventFilter() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearEventFilter()
+	})
+}
+
+// SetLabelFilter sets the "label_filter" field.
+func (u *WorkflowUpsertBulk) SetLabelFilter(v string) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetLabelFilter(v)
+	})
+}
+
+// UpdateLabelFilter sets the "label_filter" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateLabelFilter() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateLabelFilter()
+	})
+}
+
+// ClearLabelFilter clears the value of the "label_filter" field.
+func (u *WorkflowUpsertBulk) ClearLabelFilter() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearLabelFilter()
+	})
+}
+
+// SetPromptTemplate sets the "prompt_template" field.
+func (u *WorkflowUpsertBulk) SetPromptTemplate(v string) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetPromptTemplate(v)
+	})
+}
+
+// UpdatePromptTemplate sets the "prompt_template" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdatePromptTemplate() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdatePromptTemplate()
+	})
+}
+
+// ClearPromptTemplate clears the value of the "prompt_template" field.
+func (u *WorkflowUpsertBulk) ClearPromptTemplate() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearPromptTemplate()
+	})
+}
+
+// SetLastFiredAt sets the "last_fired_at" field.
+func (u *WorkflowUpsertBulk) SetLastFiredAt(v time.Time) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetLastFiredAt(v)
+	})
+}
+
+// UpdateLastFiredAt sets the "last_fired_at" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateLastFiredAt() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateLastFiredAt()
+	})
+}
+
+// ClearLastFiredAt clears the value of the "last_fired_at" field.
+func (u *WorkflowUpsertBulk) ClearLastFiredAt() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearLastFiredAt()
 	})
 }
 

@@ -30,6 +30,36 @@ export function hasPendingProgramChange(session: Pick<Session, "status" | "progr
   );
 }
 
+// A secondary info-row value is redundant with the primary title when it is
+// the exact same text (surrounding whitespace aside) — repeating it below the
+// title adds visual noise with no new information. Deliberately NOT
+// case-insensitive (a user who capitalizes a branch/title differently likely
+// meant it) and NOT substring/basename-aware here — callers that need
+// basename comparison (Path/Working Dir/Cloned To) pre-normalize via
+// `basenameOf` before calling this.
+export function isRedundantWithTitle(value: string | undefined | null, title: string): boolean {
+  if (!value) return false;
+  return value.trim() === title.trim();
+}
+
+// Last "/"-separated segment of a trimmed path string. Mirrors the
+// `p.split("/").pop() || p` idiom already used in SessionsTable.tsx,
+// page.tsx, RecentFilesSection.tsx, and useAvailablePrograms.ts (not
+// `path.basename` — no Node `path` polyfill in this "use client" component).
+export function basenameOf(pathValue: string): string {
+  const trimmed = pathValue.trim();
+  return trimmed.split("/").pop() || trimmed;
+}
+
+// Path-shaped info rows (Path, Working Dir, Cloned To) compare the value's
+// basename against the title, unlike Branch/Goal which compare raw text —
+// wrapping that in its own named function keeps the two comparison shapes
+// structurally distinct instead of relying on callers to remember which rows
+// need basenameOf() and which don't.
+function isPathRedundantWithTitle(pathValue: string, title: string): boolean {
+  return isRedundantWithTitle(basenameOf(pathValue), title);
+}
+
 const AUTO_APPROVE_FLAG_LITERALS = ["--dangerously-skip-permissions", "--yes-always"];
 
 // Mirrors hasPendingProgramChange's shape: true when the persisted autoApprove value
@@ -799,19 +829,21 @@ function SessionCardInner({
             <span className={label}>Program:</span>
             <span className={value}>{session.program}</span>
           </div>
-          {session.branch && (
+          {session.branch && !isRedundantWithTitle(session.branch, session.title) && (
             <div className={infoRow}>
               <span className={label}>Branch:</span>
               <span className={value}>{session.branch}</span>
             </div>
           )}
-          <div className={infoRow}>
-            <span className={label}>Path:</span>
-            <span className={value} title={session.path}>
-              {session.path}
-            </span>
-          </div>
-          {session.workingDir && (
+          {session.path && !isPathRedundantWithTitle(session.path, session.title) && (
+            <div className={infoRow}>
+              <span className={label}>Path:</span>
+              <span className={value} title={session.path}>
+                {session.path}
+              </span>
+            </div>
+          )}
+          {session.workingDir && !isPathRedundantWithTitle(session.workingDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Working Dir:</span>
               <span className={value}>{session.workingDir}</span>
@@ -851,7 +883,7 @@ function SessionCardInner({
               </span>
             </div>
           )}
-          {session.clonedRepoPath && (
+          {session.clonedRepoPath && !isPathRedundantWithTitle(session.clonedRepoPath, session.title) && (
             <div className={infoRow}>
               <span className={label}>Cloned To:</span>
               <span className={value} title={session.clonedRepoPath}>
@@ -859,7 +891,7 @@ function SessionCardInner({
               </span>
             </div>
           )}
-          {session.goal?.goalText && (
+          {session.goal?.goalText && !isRedundantWithTitle(session.goal.goalText, session.title) && (
             <div className={infoRow}>
               <span className={label}>Goal</span>
               <span className={value}>

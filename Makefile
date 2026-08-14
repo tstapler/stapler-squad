@@ -192,7 +192,7 @@ qr: ensure-tools proto-gen ## Print remote access QR codes for phone setup
 
 restart-web: build-all ## Rebuild and restart the web server
 	@echo "Stopping existing stapler-squad processes..."
-	@-pkill -f "^\./stapler-squad" 2>/dev/null || true
+	@-pkill -f "(^|/)stapler-squad([[:space:]]|$$)" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
 	@./stapler-squad $(SERVER_FLAGS) $(PROFILE_FLAGS) &
@@ -215,7 +215,7 @@ restart-web-profile: ## Rebuild and restart web server with profiling enabled
 
 web-dev: build-all ## Build web UI and server, then restart (detects file changes automatically)
 	@echo "Stopping existing stapler-squad processes..."
-	@-pkill -f "^\./stapler-squad" 2>/dev/null || true
+	@-pkill -f "(^|/)stapler-squad([[:space:]]|$$)" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
 	@./stapler-squad $(PROFILE_FLAGS) &
@@ -457,7 +457,6 @@ test-coverage: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with coverage rep
 	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -cover ./... -coverprofile=coverage.out
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
-	@which open >/dev/null 2>&1 && open coverage.html || true
 
 coverage-func: ensure-tools proto-gen ## Show function-level coverage sorted by % (all non-100% functions)
 	@go test -short -coverprofile=coverage.out -covermode=atomic ./... 2>/dev/null

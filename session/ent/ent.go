@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -35,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
 	"github.com/tstapler/stapler-squad/session/ent/workflow"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -100,6 +102,7 @@ func checkColumn(t, c string) error {
 			analyticsevent.Table:          analyticsevent.ValidColumn,
 			approvalrule.Table:            approvalrule.ValidColumn,
 			backlogitem.Table:             backlogitem.ValidColumn,
+			backlogitemdependency.Table:   backlogitemdependency.ValidColumn,
 			backlogprogressnote.Table:     backlogprogressnote.ValidColumn,
 			backlogstatusevent.Table:      backlogstatusevent.ValidColumn,
 			backlogstuckstate.Table:       backlogstuckstate.ValidColumn,
@@ -120,6 +123,7 @@ func checkColumn(t, c string) error {
 			shell.Table:                   shell.ValidColumn,
 			sourcesyncevent.Table:         sourcesyncevent.ValidColumn,
 			tag.Table:                     tag.ValidColumn,
+			triggerfireevent.Table:        triggerfireevent.ValidColumn,
 			workflow.Table:                workflow.ValidColumn,
 			worktree.Table:                worktree.ValidColumn,
 		})

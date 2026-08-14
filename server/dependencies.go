@@ -94,6 +94,11 @@ type ServerDependencies struct {
 	// WorkflowScheduler manages cron-based workflow execution.
 	WorkflowScheduler *workflows.Scheduler
 
+	// TriggerFireEventRepo persists the trigger-fire audit trail (webhook-triggers
+	// Epic 1.2), shared by Scheduler, WorkflowService, and the inbound webhook
+	// handlers (Epic 2.2/2.3). Nil when storage is not ent-backed.
+	TriggerFireEventRepo session.TriggerFireEventRepository
+
 	// Registry is the live-handle map for all running sessions.
 	Registry *session.Registry
 
@@ -140,6 +145,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		HeadlessPool:            rt.HeadlessPool,
 		WorkflowRepo:            rt.WorkflowRepo,
 		WorkflowScheduler:       rt.WorkflowScheduler,
+		TriggerFireEventRepo:    rt.TriggerFireEventRepo,
 		Registry:                rt.Registry,
 		SessionSummaryGenerator: rt.SessionSummaryGenerator,
 	}
@@ -436,6 +442,11 @@ type RuntimeDeps struct {
 
 	// WorkflowScheduler manages cron-based workflow execution.
 	WorkflowScheduler *workflows.Scheduler
+
+	// TriggerFireEventRepo persists the trigger-fire audit trail (webhook-triggers
+	// Epic 1.2), shared by Scheduler, WorkflowService, and the inbound webhook
+	// handlers (Epic 2.2/2.3). Nil when storage is not ent-backed.
+	TriggerFireEventRepo session.TriggerFireEventRepository
 
 	// Registry is the live-handle map for all running sessions.
 	Registry *session.Registry
@@ -825,6 +836,26 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	reactiveQueueMgr.SetOneShotRunner(sessionService)
 	log.Info("ReactiveQueueManager initialized")
 
+	// CallbackDispatcher (webhook-triggers Phase 5, FR7-FR9): a single shared
+	// instance fires on_session_complete/on_session_stale/on_queue_item_created.
+	// Reads cfg.Callbacks and the webhook_triggers feature flag live on every
+	// Dispatch call, so a CallbackConfigService.UpdateCallbackConfig save takes
+	// effect immediately without a restart — same live-cfg-pointer shape as
+	// SetSharedBacklogConfig below. Wired to both the EntRepository (via
+	// Storage's forwarding setter, for on_session_complete/on_session_stale) and
+	// ReactiveQueueManager (for on_queue_item_created).
+	callbackDispatcher := services.NewCallbackDispatcher(cfg)
+	storage.SetCallbackDispatcher(callbackDispatcher)
+	reactiveQueueMgr.SetCallbackDispatcher(callbackDispatcher)
+	// Share callbackDispatcher's live *config.Config instance (and its guarding
+	// mutex) with CallbackConfigService so a Settings save of a callback URL
+	// takes effect on the very next Dispatch call instead of requiring a
+	// process restart (sdd:6-verify finding, mirrors PR #199 review F1's
+	// SetSharedBacklogConfig pattern) — see
+	// CallbackConfigService.SetSharedCallbackConfig's doc comment.
+	sessionService.SetSharedCallbackConfig(cfg, callbackDispatcher.ConfigMu())
+	log.Info("CallbackDispatcher initialized")
+
 	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
 	historyLinker := session.NewHistoryLinkerFromRealInspector()
@@ -953,8 +984,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 			// WorktreePRPoller enriches worktrees-without-sessions with GitHub PR data.
 			// The scannerSource adapter bridges session/unfinished → session without a cycle.
+			// Shares svc.PRStatusPoller's ETagCache instead of constructing its own — per
+			// ADR-022, a separate cache would double API call volume for repos both pollers hit.
 			worktreePRPoller = session.NewWorktreePRPoller(
-				githubpkg.NewETagCache(),
+				svc.PRStatusPoller.ETagCache(),
 				svc.PRStatusPoller,
 			)
 			worktreePRPoller.SetSource(&scannerSource{s: unfinishedScanner})
@@ -1309,6 +1342,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Initialize WorkflowScheduler and WorkflowService with deferred injection.
 	// Order: SessionService → WorkflowScheduler → WorkflowService → SessionService.SetWorkflowService
 	var workflowScheduler *workflows.Scheduler
+	// triggerFireEventRepo is hoisted out of the block below (rather than declared
+	// inline) so it's available to RuntimeDeps for the inbound webhook handlers
+	// (webhook-triggers Epic 2.2/2.3), which are wired later in server.go independently
+	// of the Scheduler/WorkflowService construction above.
+	var triggerFireEventRepo session.TriggerFireEventRepository
 	if workflowRepo != nil {
 		workflowScheduler = workflows.NewScheduler(workflowRepo, sessionService, eventBus)
 		// Model-family overrides (e.g. bumping "sonnet"'s "latest" to a new release)
@@ -1327,7 +1365,39 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
+		// Close the WIP-gate bypass (webhook-triggers Epic 1.3): every trigger-fired
+		// session must pass the same admission check BacklogService's own spawn path
+		// enforces. backlogSvc is constructed earlier in this function (see
+		// services.NewBacklogService above).
+		workflowScheduler.SetAdmissionGate(backlogSvc)
+		// Per-Workflow rate limit (webhook-triggers Epic 2.4.2) — shared across cron/
+		// manual fires (FireNow) and the inbound webhook handlers (github_push/generic),
+		// both of which route through the shared Scheduler.FireTrigger (FireNow is a
+		// thin wrapper around it — see server/workflows/scheduler.go).
+		workflowScheduler.SetRateLimiter(services.NewTriggerRateLimiter())
+		if entClient := storage.GetEntClient(); entClient != nil {
+			fireEventRepo := session.NewEntTriggerFireEventRepository(entClient)
+			workflowScheduler.SetTriggerFireEventRepo(fireEventRepo)
+			workflowSvc.SetTriggerFireEventRepo(fireEventRepo)
+			triggerFireEventRepo = fireEventRepo
+		}
 		log.Info("WorkflowService and WorkflowScheduler initialized")
+
+		// ChainFirer + TriggerChainReconciler (webhook-triggers Phase 6, Epic 6.2/
+		// 6.3): pipeline chaining needs the same three collaborators as the
+		// Scheduler itself (workflowRepo to resolve NextWorkflowID,
+		// triggerFireEventRepo for the audit trail, workflowScheduler.
+		// FireTriggerChained as the actual fire path), so it can only be wired
+		// once all three exist above. Wired to both EntRepository (the happy-path
+		// dispatcher, called from TransitionBacklogItemStatus right after a
+		// "done" transition commits — AC9) and BacklogLifecycleListener (the
+		// restart-recovery reconciler, running on the existing 60s tick).
+		if triggerFireEventRepo != nil {
+			if chainFirer := storage.WireChainFirer(workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
+				backlogLifecycleListener.SetChainReconciler(session.NewTriggerChainReconciler(chainFirer))
+				log.Info("ChainFirer and TriggerChainReconciler initialized")
+			}
+		}
 	} else {
 		log.Warn("WorkflowScheduler disabled: no workflow repository available")
 	}
@@ -1372,6 +1442,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		CDPDeps:                 cdpDeps,
 		WorkflowRepo:            workflowRepo,
 		WorkflowScheduler:       workflowScheduler,
+		TriggerFireEventRepo:    triggerFireEventRepo,
 		Registry:                svc.Registry,
 		SessionSummaryGenerator: sessionSummaryGenerator,
 	}, nil

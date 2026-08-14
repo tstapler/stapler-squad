@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -258,6 +260,34 @@ func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
 	if er, ok := s.repo.(*EntRepository); ok {
 		er.SetItemChangePublisher(p)
 	}
+}
+
+// SetCallbackDispatcher forwards to the concrete *EntRepository's
+// SetCallbackDispatcher, mirroring SetItemChangePublisher above — same reasoning:
+// server/dependencies.go only has a *Storage value in scope. When the repository
+// is not ent-backed, the dispatcher is simply never wired (no panic).
+func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
+	if er, ok := s.repo.(*EntRepository); ok {
+		er.SetCallbackDispatcher(d)
+	}
+}
+
+// WireChainFirer constructs a ChainFirer bound to the underlying
+// *EntRepository (so its ListItemSessions/UpdateBacklogItem calls share the
+// exact same callbackDispatcher/itemChangePublisher wiring as every other
+// backlog mutation) and wires it as that repository's own chain-fire
+// dispatcher (EntRepository.SetChainFirer — the happy-path caller from
+// TransitionBacklogItemStatus, webhook-triggers Phase 6). Returns nil when
+// the repository is not ent-backed, mirroring GetEntClient's nil-on-mismatch
+// behavior — callers should skip TriggerChainReconciler wiring in that case.
+func (s *Storage) WireChainFirer(workflows WorkflowRepository, fireEvents TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil
+	}
+	cf := NewChainFirer(er, workflows, fireEvents, firer, cfg)
+	er.SetChainFirer(cf)
+	return cf
 }
 
 // SaveInstances upserts each started instance into the repository.
@@ -734,6 +764,21 @@ func (s *Storage) ListBacklogItemSummaries(ctx context.Context, filter BacklogIt
 	return s.repo.ListBacklogItemSummaries(ctx, filter)
 }
 
+// AddBacklogItemDependency records a blocker/blocked dependency edge.
+func (s *Storage) AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+	return s.repo.AddBacklogItemDependency(ctx, edge)
+}
+
+// UnresolvedBlockerItemIDs returns the subset of itemIDs blocked by an unresolved dependency.
+func (s *Storage) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
+	return s.repo.UnresolvedBlockerItemIDs(ctx, itemIDs)
+}
+
+// UnresolvedBlockerIDs returns the specific blocker item IDs still unresolved for a single item.
+func (s *Storage) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
+	return s.repo.UnresolvedBlockerIDs(ctx, itemID)
+}
+
 // UpdateBacklogItem modifies an existing backlog item.
 func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
@@ -1154,6 +1199,17 @@ func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id strin
 	return er.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
 }
 
+// UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
+// capture file for a headless triage/review call that errored or produced
+// unparseable output. See EntRepository.UpdateItemSessionFailureCapture.
+func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string, path string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionFailureCapture(ctx, id, path)
+}
+
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 // Returns ErrNotFound if no matching record exists.
 func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {
@@ -1202,6 +1258,37 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 		return fmt.Errorf("review verdicts not supported by this storage backend")
 	}
 	return er.SaveReviewVerdict(ctx, itemSessionID, verdict)
+}
+
+// ComputeCurrentDiffHash resolves itemID's most recent completed work
+// session's base..head commit range (via
+// GetRepoPathAndLatestCompletedWorkSessionCommits — two bounded, no-edge
+// queries, not GetBacklogItem/ListItemSessions' unbounded eager-loaded
+// fetch) and returns a content hash of that diff (git.DiffHashBetween), for
+// stamping onto a review verdict's DiffHash at save time — see
+// stuck_decisions.go's IsFlakyVerdictFlipFlop, which the hash feeds.
+//
+// Best-effort: any resolution failure (item/session lookup, missing SHAs, a
+// git error) returns "" rather than propagating an error, matching this
+// codebase's "best-effort, never blocks the write it's attached to"
+// convention (see e.g. SaveReviewVerdict's publish-hook comments) — a
+// missing DiffHash just means IsFlakyVerdictFlipFlop treats that verdict as
+// unknown, never as a false match.
+func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) string {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ""
+	}
+	repoPath, baseSHA, headSHA, err := er.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, itemID)
+	if err != nil || repoPath == "" || baseSHA == "" || headSHA == "" {
+		return ""
+	}
+	hash, err := git.DiffHashBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
+		return ""
+	}
+	return hash
 }
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.

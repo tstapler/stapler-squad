@@ -315,6 +315,27 @@ func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id
 	return nil
 }
 
+// UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
+// capture file (session.WriteHeadlessFailureCapture) for a headless triage/review
+// call that errored or produced unparseable output — see the failure_capture_path
+// schema comment. Set independently of UpdateItemSessionEndedWithReason (a separate,
+// orthogonal column) so a caller that already wrote the capture file to disk can
+// record its path without re-specifying ended_at/end_reason.
+func (r *EntRepository) UpdateItemSessionFailureCapture(ctx context.Context, id string, path string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		SetFailureCapturePath(path).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to set failure_capture_path on item session %s: %w", id, err)
+	}
+	return nil
+}
+
 // SetItemSessionBaseCommit records the worktree's pre-work HEAD SHA for the
 // item session, so the review gate can diff base..HEAD across every commit the
 // agent makes rather than just HEAD~1..HEAD.
@@ -991,9 +1012,9 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 
 // GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for the
 // given BacklogItem UUID, most recent first. Reuses the existing
-// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome and
-// Summary are populated, since that's all callers (IsRepeatedFailure in
-// stuck_decisions.go) need.
+// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome,
+// Summary, and DiffHash are populated, since that's all callers
+// (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck_decisions.go) need.
 func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
 	parsedItemID, err := uuid.Parse(itemID)
 	if err != nil {
@@ -1022,6 +1043,7 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 			ID:             is.Edges.ReviewVerdict.ID.String(),
 			OverallOutcome: is.Edges.ReviewVerdict.OverallOutcome,
 			Summary:        is.Edges.ReviewVerdict.Summary,
+			DiffHash:       is.Edges.ReviewVerdict.DiffHash,
 		})
 	}
 	return result, nil

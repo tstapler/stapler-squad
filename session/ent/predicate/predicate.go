@@ -15,6 +15,9 @@ type ApprovalRule func(*sql.Selector)
 // BacklogItem is the predicate function for backlogitem builders.
 type BacklogItem func(*sql.Selector)
 
+// BacklogItemDependency is the predicate function for backlogitemdependency builders.
+type BacklogItemDependency func(*sql.Selector)
+
 // BacklogProgressNote is the predicate function for backlogprogressnote builders.
 type BacklogProgressNote func(*sql.Selector)
 
@@ -74,6 +77,9 @@ type SourceSyncEvent func(*sql.Selector)
 
 // Tag is the predicate function for tag builders.
 type Tag func(*sql.Selector)
+
+// TriggerFireEvent is the predicate function for triggerfireevent builders.
+type TriggerFireEvent func(*sql.Selector)
 
 // Workflow is the predicate function for workflow builders.
 type Workflow func(*sql.Selector)

@@ -130,6 +130,51 @@ func ArchiveAfterHours(v int) predicate.Workflow {
 	return predicate.Workflow(sql.FieldEQ(FieldArchiveAfterHours, v))
 }
 
+// TriggerType applies equality check predicate on the "trigger_type" field. It's identical to TriggerTypeEQ.
+func TriggerType(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldTriggerType, v))
+}
+
+// GithubRepo applies equality check predicate on the "github_repo" field. It's identical to GithubRepoEQ.
+func GithubRepo(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldGithubRepo, v))
+}
+
+// GithubBranch applies equality check predicate on the "github_branch" field. It's identical to GithubBranchEQ.
+func GithubBranch(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldGithubBranch, v))
+}
+
+// WebhookSlug applies equality check predicate on the "webhook_slug" field. It's identical to WebhookSlugEQ.
+func WebhookSlug(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldWebhookSlug, v))
+}
+
+// WebhookSecretEncrypted applies equality check predicate on the "webhook_secret_encrypted" field. It's identical to WebhookSecretEncryptedEQ.
+func WebhookSecretEncrypted(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldWebhookSecretEncrypted, v))
+}
+
+// EventFilter applies equality check predicate on the "event_filter" field. It's identical to EventFilterEQ.
+func EventFilter(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldEventFilter, v))
+}
+
+// LabelFilter applies equality check predicate on the "label_filter" field. It's identical to LabelFilterEQ.
+func LabelFilter(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldLabelFilter, v))
+}
+
+// PromptTemplate applies equality check predicate on the "prompt_template" field. It's identical to PromptTemplateEQ.
+func PromptTemplate(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldPromptTemplate, v))
+}
+
+// LastFiredAt applies equality check predicate on the "last_fired_at" field. It's identical to LastFiredAtEQ.
+func LastFiredAt(v time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldLastFiredAt, v))
+}
+
 // SlugEQ applies the EQ predicate on the "slug" field.
 func SlugEQ(v string) predicate.Workflow {
 	return predicate.Workflow(sql.FieldEQ(FieldSlug, v))
@@ -1038,6 +1083,656 @@ func ArchiveAfterHoursIsNil() predicate.Workflow {
 // ArchiveAfterHoursNotNil applies the NotNil predicate on the "archive_after_hours" field.
 func ArchiveAfterHoursNotNil() predicate.Workflow {
 	return predicate.Workflow(sql.FieldNotNull(FieldArchiveAfterHours))
+}
+
+// TriggerTypeEQ applies the EQ predicate on the "trigger_type" field.
+func TriggerTypeEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldTriggerType, v))
+}
+
+// TriggerTypeNEQ applies the NEQ predicate on the "trigger_type" field.
+func TriggerTypeNEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldTriggerType, v))
+}
+
+// TriggerTypeIn applies the In predicate on the "trigger_type" field.
+func TriggerTypeIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldTriggerType, vs...))
+}
+
+// TriggerTypeNotIn applies the NotIn predicate on the "trigger_type" field.
+func TriggerTypeNotIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldTriggerType, vs...))
+}
+
+// TriggerTypeGT applies the GT predicate on the "trigger_type" field.
+func TriggerTypeGT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldTriggerType, v))
+}
+
+// TriggerTypeGTE applies the GTE predicate on the "trigger_type" field.
+func TriggerTypeGTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldTriggerType, v))
+}
+
+// TriggerTypeLT applies the LT predicate on the "trigger_type" field.
+func TriggerTypeLT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldTriggerType, v))
+}
+
+// TriggerTypeLTE applies the LTE predicate on the "trigger_type" field.
+func TriggerTypeLTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldTriggerType, v))
+}
+
+// TriggerTypeContains applies the Contains predicate on the "trigger_type" field.
+func TriggerTypeContains(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContains(FieldTriggerType, v))
+}
+
+// TriggerTypeHasPrefix applies the HasPrefix predicate on the "trigger_type" field.
+func TriggerTypeHasPrefix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasPrefix(FieldTriggerType, v))
+}
+
+// TriggerTypeHasSuffix applies the HasSuffix predicate on the "trigger_type" field.
+func TriggerTypeHasSuffix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasSuffix(FieldTriggerType, v))
+}
+
+// TriggerTypeIsNil applies the IsNil predicate on the "trigger_type" field.
+func TriggerTypeIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldTriggerType))
+}
+
+// TriggerTypeNotNil applies the NotNil predicate on the "trigger_type" field.
+func TriggerTypeNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldTriggerType))
+}
+
+// TriggerTypeEqualFold applies the EqualFold predicate on the "trigger_type" field.
+func TriggerTypeEqualFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEqualFold(FieldTriggerType, v))
+}
+
+// TriggerTypeContainsFold applies the ContainsFold predicate on the "trigger_type" field.
+func TriggerTypeContainsFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContainsFold(FieldTriggerType, v))
+}
+
+// GithubRepoEQ applies the EQ predicate on the "github_repo" field.
+func GithubRepoEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldGithubRepo, v))
+}
+
+// GithubRepoNEQ applies the NEQ predicate on the "github_repo" field.
+func GithubRepoNEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldGithubRepo, v))
+}
+
+// GithubRepoIn applies the In predicate on the "github_repo" field.
+func GithubRepoIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldGithubRepo, vs...))
+}
+
+// GithubRepoNotIn applies the NotIn predicate on the "github_repo" field.
+func GithubRepoNotIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldGithubRepo, vs...))
+}
+
+// GithubRepoGT applies the GT predicate on the "github_repo" field.
+func GithubRepoGT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldGithubRepo, v))
+}
+
+// GithubRepoGTE applies the GTE predicate on the "github_repo" field.
+func GithubRepoGTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldGithubRepo, v))
+}
+
+// GithubRepoLT applies the LT predicate on the "github_repo" field.
+func GithubRepoLT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldGithubRepo, v))
+}
+
+// GithubRepoLTE applies the LTE predicate on the "github_repo" field.
+func GithubRepoLTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldGithubRepo, v))
+}
+
+// GithubRepoContains applies the Contains predicate on the "github_repo" field.
+func GithubRepoContains(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContains(FieldGithubRepo, v))
+}
+
+// GithubRepoHasPrefix applies the HasPrefix predicate on the "github_repo" field.
+func GithubRepoHasPrefix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasPrefix(FieldGithubRepo, v))
+}
+
+// GithubRepoHasSuffix applies the HasSuffix predicate on the "github_repo" field.
+func GithubRepoHasSuffix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasSuffix(FieldGithubRepo, v))
+}
+
+// GithubRepoIsNil applies the IsNil predicate on the "github_repo" field.
+func GithubRepoIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldGithubRepo))
+}
+
+// GithubRepoNotNil applies the NotNil predicate on the "github_repo" field.
+func GithubRepoNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldGithubRepo))
+}
+
+// GithubRepoEqualFold applies the EqualFold predicate on the "github_repo" field.
+func GithubRepoEqualFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEqualFold(FieldGithubRepo, v))
+}
+
+// GithubRepoContainsFold applies the ContainsFold predicate on the "github_repo" field.
+func GithubRepoContainsFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContainsFold(FieldGithubRepo, v))
+}
+
+// GithubBranchEQ applies the EQ predicate on the "github_branch" field.
+func GithubBranchEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldGithubBranch, v))
+}
+
+// GithubBranchNEQ applies the NEQ predicate on the "github_branch" field.
+func GithubBranchNEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldGithubBranch, v))
+}
+
+// GithubBranchIn applies the In predicate on the "github_branch" field.
+func GithubBranchIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldGithubBranch, vs...))
+}
+
+// GithubBranchNotIn applies the NotIn predicate on the "github_branch" field.
+func GithubBranchNotIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldGithubBranch, vs...))
+}
+
+// GithubBranchGT applies the GT predicate on the "github_branch" field.
+func GithubBranchGT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldGithubBranch, v))
+}
+
+// GithubBranchGTE applies the GTE predicate on the "github_branch" field.
+func GithubBranchGTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldGithubBranch, v))
+}
+
+// GithubBranchLT applies the LT predicate on the "github_branch" field.
+func GithubBranchLT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldGithubBranch, v))
+}
+
+// GithubBranchLTE applies the LTE predicate on the "github_branch" field.
+func GithubBranchLTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldGithubBranch, v))
+}
+
+// GithubBranchContains applies the Contains predicate on the "github_branch" field.
+func GithubBranchContains(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContains(FieldGithubBranch, v))
+}
+
+// GithubBranchHasPrefix applies the HasPrefix predicate on the "github_branch" field.
+func GithubBranchHasPrefix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasPrefix(FieldGithubBranch, v))
+}
+
+// GithubBranchHasSuffix applies the HasSuffix predicate on the "github_branch" field.
+func GithubBranchHasSuffix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasSuffix(FieldGithubBranch, v))
+}
+
+// GithubBranchIsNil applies the IsNil predicate on the "github_branch" field.
+func GithubBranchIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldGithubBranch))
+}
+
+// GithubBranchNotNil applies the NotNil predicate on the "github_branch" field.
+func GithubBranchNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldGithubBranch))
+}
+
+// GithubBranchEqualFold applies the EqualFold predicate on the "github_branch" field.
+func GithubBranchEqualFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEqualFold(FieldGithubBranch, v))
+}
+
+// GithubBranchContainsFold applies the ContainsFold predicate on the "github_branch" field.
+func GithubBranchContainsFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContainsFold(FieldGithubBranch, v))
+}
+
+// WebhookSlugEQ applies the EQ predicate on the "webhook_slug" field.
+func WebhookSlugEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldWebhookSlug, v))
+}
+
+// WebhookSlugNEQ applies the NEQ predicate on the "webhook_slug" field.
+func WebhookSlugNEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldWebhookSlug, v))
+}
+
+// WebhookSlugIn applies the In predicate on the "webhook_slug" field.
+func WebhookSlugIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldWebhookSlug, vs...))
+}
+
+// WebhookSlugNotIn applies the NotIn predicate on the "webhook_slug" field.
+func WebhookSlugNotIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldWebhookSlug, vs...))
+}
+
+// WebhookSlugGT applies the GT predicate on the "webhook_slug" field.
+func WebhookSlugGT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldWebhookSlug, v))
+}
+
+// WebhookSlugGTE applies the GTE predicate on the "webhook_slug" field.
+func WebhookSlugGTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldWebhookSlug, v))
+}
+
+// WebhookSlugLT applies the LT predicate on the "webhook_slug" field.
+func WebhookSlugLT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldWebhookSlug, v))
+}
+
+// WebhookSlugLTE applies the LTE predicate on the "webhook_slug" field.
+func WebhookSlugLTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldWebhookSlug, v))
+}
+
+// WebhookSlugContains applies the Contains predicate on the "webhook_slug" field.
+func WebhookSlugContains(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContains(FieldWebhookSlug, v))
+}
+
+// WebhookSlugHasPrefix applies the HasPrefix predicate on the "webhook_slug" field.
+func WebhookSlugHasPrefix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasPrefix(FieldWebhookSlug, v))
+}
+
+// WebhookSlugHasSuffix applies the HasSuffix predicate on the "webhook_slug" field.
+func WebhookSlugHasSuffix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasSuffix(FieldWebhookSlug, v))
+}
+
+// WebhookSlugIsNil applies the IsNil predicate on the "webhook_slug" field.
+func WebhookSlugIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldWebhookSlug))
+}
+
+// WebhookSlugNotNil applies the NotNil predicate on the "webhook_slug" field.
+func WebhookSlugNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldWebhookSlug))
+}
+
+// WebhookSlugEqualFold applies the EqualFold predicate on the "webhook_slug" field.
+func WebhookSlugEqualFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEqualFold(FieldWebhookSlug, v))
+}
+
+// WebhookSlugContainsFold applies the ContainsFold predicate on the "webhook_slug" field.
+func WebhookSlugContainsFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContainsFold(FieldWebhookSlug, v))
+}
+
+// WebhookSecretEncryptedEQ applies the EQ predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedNEQ applies the NEQ predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedNEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedIn applies the In predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldWebhookSecretEncrypted, vs...))
+}
+
+// WebhookSecretEncryptedNotIn applies the NotIn predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedNotIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldWebhookSecretEncrypted, vs...))
+}
+
+// WebhookSecretEncryptedGT applies the GT predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedGT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedGTE applies the GTE predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedGTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedLT applies the LT predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedLT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedLTE applies the LTE predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedLTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedContains applies the Contains predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedContains(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContains(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedHasPrefix applies the HasPrefix predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedHasPrefix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasPrefix(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedHasSuffix applies the HasSuffix predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedHasSuffix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasSuffix(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedIsNil applies the IsNil predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldWebhookSecretEncrypted))
+}
+
+// WebhookSecretEncryptedNotNil applies the NotNil predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldWebhookSecretEncrypted))
+}
+
+// WebhookSecretEncryptedEqualFold applies the EqualFold predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedEqualFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEqualFold(FieldWebhookSecretEncrypted, v))
+}
+
+// WebhookSecretEncryptedContainsFold applies the ContainsFold predicate on the "webhook_secret_encrypted" field.
+func WebhookSecretEncryptedContainsFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContainsFold(FieldWebhookSecretEncrypted, v))
+}
+
+// EventFilterEQ applies the EQ predicate on the "event_filter" field.
+func EventFilterEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldEventFilter, v))
+}
+
+// EventFilterNEQ applies the NEQ predicate on the "event_filter" field.
+func EventFilterNEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldEventFilter, v))
+}
+
+// EventFilterIn applies the In predicate on the "event_filter" field.
+func EventFilterIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldEventFilter, vs...))
+}
+
+// EventFilterNotIn applies the NotIn predicate on the "event_filter" field.
+func EventFilterNotIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldEventFilter, vs...))
+}
+
+// EventFilterGT applies the GT predicate on the "event_filter" field.
+func EventFilterGT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldEventFilter, v))
+}
+
+// EventFilterGTE applies the GTE predicate on the "event_filter" field.
+func EventFilterGTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldEventFilter, v))
+}
+
+// EventFilterLT applies the LT predicate on the "event_filter" field.
+func EventFilterLT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldEventFilter, v))
+}
+
+// EventFilterLTE applies the LTE predicate on the "event_filter" field.
+func EventFilterLTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldEventFilter, v))
+}
+
+// EventFilterContains applies the Contains predicate on the "event_filter" field.
+func EventFilterContains(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContains(FieldEventFilter, v))
+}
+
+// EventFilterHasPrefix applies the HasPrefix predicate on the "event_filter" field.
+func EventFilterHasPrefix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasPrefix(FieldEventFilter, v))
+}
+
+// EventFilterHasSuffix applies the HasSuffix predicate on the "event_filter" field.
+func EventFilterHasSuffix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasSuffix(FieldEventFilter, v))
+}
+
+// EventFilterIsNil applies the IsNil predicate on the "event_filter" field.
+func EventFilterIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldEventFilter))
+}
+
+// EventFilterNotNil applies the NotNil predicate on the "event_filter" field.
+func EventFilterNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldEventFilter))
+}
+
+// EventFilterEqualFold applies the EqualFold predicate on the "event_filter" field.
+func EventFilterEqualFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEqualFold(FieldEventFilter, v))
+}
+
+// EventFilterContainsFold applies the ContainsFold predicate on the "event_filter" field.
+func EventFilterContainsFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContainsFold(FieldEventFilter, v))
+}
+
+// LabelFilterEQ applies the EQ predicate on the "label_filter" field.
+func LabelFilterEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldLabelFilter, v))
+}
+
+// LabelFilterNEQ applies the NEQ predicate on the "label_filter" field.
+func LabelFilterNEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldLabelFilter, v))
+}
+
+// LabelFilterIn applies the In predicate on the "label_filter" field.
+func LabelFilterIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldLabelFilter, vs...))
+}
+
+// LabelFilterNotIn applies the NotIn predicate on the "label_filter" field.
+func LabelFilterNotIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldLabelFilter, vs...))
+}
+
+// LabelFilterGT applies the GT predicate on the "label_filter" field.
+func LabelFilterGT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldLabelFilter, v))
+}
+
+// LabelFilterGTE applies the GTE predicate on the "label_filter" field.
+func LabelFilterGTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldLabelFilter, v))
+}
+
+// LabelFilterLT applies the LT predicate on the "label_filter" field.
+func LabelFilterLT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldLabelFilter, v))
+}
+
+// LabelFilterLTE applies the LTE predicate on the "label_filter" field.
+func LabelFilterLTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldLabelFilter, v))
+}
+
+// LabelFilterContains applies the Contains predicate on the "label_filter" field.
+func LabelFilterContains(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContains(FieldLabelFilter, v))
+}
+
+// LabelFilterHasPrefix applies the HasPrefix predicate on the "label_filter" field.
+func LabelFilterHasPrefix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasPrefix(FieldLabelFilter, v))
+}
+
+// LabelFilterHasSuffix applies the HasSuffix predicate on the "label_filter" field.
+func LabelFilterHasSuffix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasSuffix(FieldLabelFilter, v))
+}
+
+// LabelFilterIsNil applies the IsNil predicate on the "label_filter" field.
+func LabelFilterIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldLabelFilter))
+}
+
+// LabelFilterNotNil applies the NotNil predicate on the "label_filter" field.
+func LabelFilterNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldLabelFilter))
+}
+
+// LabelFilterEqualFold applies the EqualFold predicate on the "label_filter" field.
+func LabelFilterEqualFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEqualFold(FieldLabelFilter, v))
+}
+
+// LabelFilterContainsFold applies the ContainsFold predicate on the "label_filter" field.
+func LabelFilterContainsFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContainsFold(FieldLabelFilter, v))
+}
+
+// PromptTemplateEQ applies the EQ predicate on the "prompt_template" field.
+func PromptTemplateEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldPromptTemplate, v))
+}
+
+// PromptTemplateNEQ applies the NEQ predicate on the "prompt_template" field.
+func PromptTemplateNEQ(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldPromptTemplate, v))
+}
+
+// PromptTemplateIn applies the In predicate on the "prompt_template" field.
+func PromptTemplateIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldPromptTemplate, vs...))
+}
+
+// PromptTemplateNotIn applies the NotIn predicate on the "prompt_template" field.
+func PromptTemplateNotIn(vs ...string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldPromptTemplate, vs...))
+}
+
+// PromptTemplateGT applies the GT predicate on the "prompt_template" field.
+func PromptTemplateGT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldPromptTemplate, v))
+}
+
+// PromptTemplateGTE applies the GTE predicate on the "prompt_template" field.
+func PromptTemplateGTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldPromptTemplate, v))
+}
+
+// PromptTemplateLT applies the LT predicate on the "prompt_template" field.
+func PromptTemplateLT(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldPromptTemplate, v))
+}
+
+// PromptTemplateLTE applies the LTE predicate on the "prompt_template" field.
+func PromptTemplateLTE(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldPromptTemplate, v))
+}
+
+// PromptTemplateContains applies the Contains predicate on the "prompt_template" field.
+func PromptTemplateContains(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContains(FieldPromptTemplate, v))
+}
+
+// PromptTemplateHasPrefix applies the HasPrefix predicate on the "prompt_template" field.
+func PromptTemplateHasPrefix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasPrefix(FieldPromptTemplate, v))
+}
+
+// PromptTemplateHasSuffix applies the HasSuffix predicate on the "prompt_template" field.
+func PromptTemplateHasSuffix(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldHasSuffix(FieldPromptTemplate, v))
+}
+
+// PromptTemplateIsNil applies the IsNil predicate on the "prompt_template" field.
+func PromptTemplateIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldPromptTemplate))
+}
+
+// PromptTemplateNotNil applies the NotNil predicate on the "prompt_template" field.
+func PromptTemplateNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldPromptTemplate))
+}
+
+// PromptTemplateEqualFold applies the EqualFold predicate on the "prompt_template" field.
+func PromptTemplateEqualFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEqualFold(FieldPromptTemplate, v))
+}
+
+// PromptTemplateContainsFold applies the ContainsFold predicate on the "prompt_template" field.
+func PromptTemplateContainsFold(v string) predicate.Workflow {
+	return predicate.Workflow(sql.FieldContainsFold(FieldPromptTemplate, v))
+}
+
+// LastFiredAtEQ applies the EQ predicate on the "last_fired_at" field.
+func LastFiredAtEQ(v time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldLastFiredAt, v))
+}
+
+// LastFiredAtNEQ applies the NEQ predicate on the "last_fired_at" field.
+func LastFiredAtNEQ(v time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldLastFiredAt, v))
+}
+
+// LastFiredAtIn applies the In predicate on the "last_fired_at" field.
+func LastFiredAtIn(vs ...time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldLastFiredAt, vs...))
+}
+
+// LastFiredAtNotIn applies the NotIn predicate on the "last_fired_at" field.
+func LastFiredAtNotIn(vs ...time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldLastFiredAt, vs...))
+}
+
+// LastFiredAtGT applies the GT predicate on the "last_fired_at" field.
+func LastFiredAtGT(v time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldLastFiredAt, v))
+}
+
+// LastFiredAtGTE applies the GTE predicate on the "last_fired_at" field.
+func LastFiredAtGTE(v time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldLastFiredAt, v))
+}
+
+// LastFiredAtLT applies the LT predicate on the "last_fired_at" field.
+func LastFiredAtLT(v time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldLastFiredAt, v))
+}
+
+// LastFiredAtLTE applies the LTE predicate on the "last_fired_at" field.
+func LastFiredAtLTE(v time.Time) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldLastFiredAt, v))
+}
+
+// LastFiredAtIsNil applies the IsNil predicate on the "last_fired_at" field.
+func LastFiredAtIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldLastFiredAt))
+}
+
+// LastFiredAtNotNil applies the NotNil predicate on the "last_fired_at" field.
+func LastFiredAtNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldLastFiredAt))
 }
 
 // And groups predicates with the AND operator between them.

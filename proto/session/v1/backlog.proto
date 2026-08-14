@@ -81,6 +81,17 @@ message ItemSession {
   string worktree_path = 15;
   string pipeline_mode_snapshot = 16;
   string pipeline_mode_snapshot_hash = 17;
+  // end_reason is set alongside ended_at for a headless (triage/review) call:
+  // classifyHeadlessCallError's bucket ("shutdown", "timeout", "process_error",
+  // "claude_not_found", "other"), or empty for a successful end. Already captured
+  // durably (session.ItemSessionSummary.EndReason) but previously never surfaced
+  // over the wire.
+  string end_reason = 18;
+  // failure_capture_path is the absolute path to a durable file holding the
+  // size-capped raw stdout of a headless triage/review call that errored or
+  // whose result failed to parse — see session.WriteHeadlessFailureCapture. Empty
+  // when the call succeeded and parsed cleanly, or capture itself failed.
+  string failure_capture_path = 19;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.
@@ -159,6 +170,12 @@ message BacklogItem {
   // a manual status override may choose from. The frontend must render this
   // list verbatim rather than re-encoding the transition graph client-side.
   repeated string allowed_transitions = 32;
+  // plan_rejection_reason is the free-text reason from the most recent
+  // RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage
+  // completion, and on backward transition to idea/refining. Empty means
+  // "no outstanding rejection".
+  string plan_rejection_reason = 33;
+  google.protobuf.Timestamp plan_rejected_at = 34;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -407,6 +424,18 @@ message DeleteBacklogItemRequest {
 
 message DeleteBacklogItemResponse {}
 
+message AddBacklogItemDependencyRequest {
+  // Item that must reach a resolved status (done or archived) before
+  // blocked_item_id becomes eligible for dequeue/start.
+  string blocker_item_id = 1;
+  // Dependent item, gated until blocker_item_id resolves.
+  string blocked_item_id = 2;
+}
+
+message AddBacklogItemDependencyResponse {
+  BacklogItem item = 1;
+}
+
 message TransitionBacklogItemStatusRequest {
   string item_id = 1;
   string target_status = 2;
@@ -466,6 +495,19 @@ message ApprovePlanRequest {
 }
 
 message ApprovePlanResponse {
+  BacklogItem item = 1;
+}
+
+message RejectPlanRequest {
+  string item_id = 1;
+  // reason is required free-text feedback explaining what should change,
+  // mirroring TriggerTriageRequest.feedback's refinement-input pattern.
+  // RejectPlan does not itself trigger regeneration — see
+  // project_plans/plan-approval-ux/decisions/ADR-002.
+  string reason = 2;
+}
+
+message RejectPlanResponse {
   BacklogItem item = 1;
 }
 
@@ -806,6 +848,11 @@ service BacklogService {
   // ApprovePlan marks the planning artifacts for an item as approved.
   rpc ApprovePlan(ApprovePlanRequest) returns (ApprovePlanResponse) {}
 
+  // RejectPlan records a rejection reason for an item's current plan
+  // artifacts and clears any existing approval. Does not itself trigger
+  // regeneration — see project_plans/plan-approval-ux/decisions/ADR-002.
+  rpc RejectPlan(RejectPlanRequest) returns (RejectPlanResponse) {}
+
   // SuggestNextItem recommends the highest-priority actionable backlog item.
   rpc SuggestNextItem(SuggestNextItemRequest) returns (SuggestNextItemResponse) {}
 
@@ -917,6 +964,13 @@ service BacklogService {
   // Rejects with an error (rather than silently un-parking) when the row has
   // already exhausted its attempt budget — use ResetStuckRemediation first.
   rpc TriggerRemediationNow(TriggerRemediationNowRequest) returns (TriggerRemediationNowResponse) {}
+
+  // AddBacklogItemDependency marks blocked_item_id as depending on
+  // (blocked by) blocker_item_id. The dependent item is excluded from
+  // DequeueNextQueuedItems until the blocker resolves (reaches done or
+  // archived status, or is deleted). Rejects self-dependency and any edge
+  // that would close a dependency cycle.
+  rpc AddBacklogItemDependency(AddBacklogItemDependencyRequest) returns (AddBacklogItemDependencyResponse) {}
 
   // WatchBacklogItems streams real-time backlog item events (status changes,
   // verdicts, session attachments, updates, archival, removal).
@@ -1083,6 +1137,22 @@ enum StuckReason {
   // (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview) was
   // skipped because the item already has an active work or review session.
   STUCK_REASON_RESPAWN_BLOCKED_ACTIVE = 14;
+  // STUCK_REASON_LIKELY_FLAKY: see domain.StuckReasonLikelyFlaky
+  // (session/domain/backlog.go) — behavioral evidence (a review-verdict
+  // flip-flop on an unchanged diff, or a test-file-only rework cycle) that
+  // this item's review outcome may be non-deterministic rather than a real
+  // pass/fail signal. Purely informational — never gates the reopen/park
+  // decision; present as a hint to verify, not a confident verdict.
+  STUCK_REASON_LIKELY_FLAKY = 15;
+  // STUCK_REASON_MULTIPLE_REASONS: see domain.StuckReasonMultipleReasons — synthetic aggregate signal for multiple simultaneous stuck reasons.
+  STUCK_REASON_MULTIPLE_REASONS = 16;
+  // STUCK_REASON_BOUNCE_CAP_EXHAUSTED: see domain.StuckReasonBounceCapExhausted — synthetic aggregate signal for a bouncing item that exhausted its remediation cap.
+  STUCK_REASON_BOUNCE_CAP_EXHAUSTED = 17;
+  // STUCK_REASON_BLOCKED_BY_DEPENDENCY: see domain.StuckReasonBlockedByDependency
+  // (session/domain/backlog.go) — DequeueNextQueuedItems' dependency gate
+  // skipped this item because at least one of its blocker items has not yet
+  // reached a resolved status (done or archived).
+  STUCK_REASON_BLOCKED_BY_DEPENDENCY = 18;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

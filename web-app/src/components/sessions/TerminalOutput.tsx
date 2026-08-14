@@ -49,12 +49,15 @@ import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
 import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
+import { InputDropBadge } from "./InputDropBadge";
+import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
+import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
 import * as styles from "./TerminalOutput.css";
 
 interface TerminalOutputProps {
@@ -81,6 +84,9 @@ const MIN_ROWS = 10;
 // and are not used for fast-connect. The actual container size arrives via onResize.
 const XTERM_DEFAULT_COLS = 80;
 const XTERM_DEFAULT_ROWS = 24;
+
+// Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
+const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
   const { track } = useAnalytics();
@@ -248,7 +254,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, [keyboardStorageKey]);
 
   // Mobile detection — use shared ViewportProvider hook for consistency
-  const { isMobile } = useViewport();
+  const { isMobile, hasFinePointer } = useViewport();
+
+  // User-overridable detection for a real mouse+keyboard attached to a phone/tablet —
+  // see Settings > Appearance > Terminal Input Mode.
+  const { inputModeOverride } = useInputModeOverride();
+  const compactToolbar =
+    inputModeOverride === 'desktop' ||
+    (inputModeOverride === 'auto' && isMobile && hasFinePointer);
 
   // Toolbar collapsed/expanded state — persisted in localStorage; collapsed by default
   const [toolbarExpanded, setToolbarExpanded] = useState(() => {
@@ -261,6 +274,25 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   });
   const [mobileOverflowOpen, setMobileOverflowOpen] = useState(false);
+
+  // The first time a mouse+physical keyboard is detected on this mobile session,
+  // collapse the toolbar and hide the on-screen keyboard row by default so they
+  // don't eat screen space — but only if the user hasn't already made an explicit
+  // choice for either. Runs once per session mount; manual toggles afterward are
+  // fully respected.
+  const appliedCompactDefaultsRef = useRef(false);
+  useEffect(() => {
+    if (!compactToolbar || appliedCompactDefaultsRef.current) return;
+    appliedCompactDefaultsRef.current = true;
+    setToolbarExpanded(false);
+    try {
+      if (localStorage.getItem(keyboardStorageKey) === null) {
+        setIsKeyboardVisible(false);
+      }
+    } catch {
+      // localStorage unavailable — leave the on-screen keyboard row visible
+    }
+  }, [compactToolbar, keyboardStorageKey]);
 
   // Dev tools panel — persisted in localStorage; collapsed by default
   const [devGroupOpen, setDevGroupOpen] = useState(() => {
@@ -453,6 +485,38 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
   }, [isExternal]);
+  // Story 2.3 — InputDropBadge: dropped-keystroke count + a monotonic
+  // per-episode sequence number (so two consecutive episodes with an
+  // identical count still produce a distinct announcement, see
+  // InputDropBadge.tsx's `episodeSeq` doc comment).
+  const [dropEpisode, setDropEpisode] = useState({ count: 0, seq: 0 });
+  const handleDropEpisodeFlush = useCallback((count: number) => {
+    if (count <= 0) return; // design/ux.md §3.3 — defensive no-op
+    setDropEpisode((prev) => ({ count, seq: prev.seq + 1 }));
+  }, []);
+  const reportDroppedInput = useDropEpisodeCoalescer(handleDropEpisodeFlush, DROP_EPISODE_COALESCE_WINDOW_MS);
+
+  // Task 2.3.5 — e2e test-only trigger. Reproducing a genuine WebSocket
+  // reconnect race (the real trigger for onInputDropped) inside Playwright
+  // proved impractical for this pass (it would require deterministically
+  // racing a server-side connection teardown against a client keystroke),
+  // so tests/e2e/input-drop-badge.spec.ts exercises the badge's rendering/
+  // announcement/dismiss behavior via this harmless, additive test seam
+  // instead of the full reconnect path (Stories 2.1/2.2 already have direct
+  // Jest coverage of the drop mechanism itself). Gated on NODE_ENV (matching
+  // the existing dev-only-hook convention in WebVitalsReporter.tsx /
+  // rpcTiming.ts) so this unauthenticated, script-callable surface is never
+  // attached in a production bundle — Next.js statically inlines
+  // `process.env.NODE_ENV` at build time, so the production build tree-shakes
+  // this block out entirely rather than merely no-op'ing it at runtime.
+  useEffect(() => {
+    if (typeof window === "undefined" || process.env.NODE_ENV === "production") return;
+    (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped = reportDroppedInput;
+    return () => {
+      delete (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped;
+    };
+  }, [reportDroppedInput]);
+
   const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
@@ -467,6 +531,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     initialCols: lastResizeRef.current?.cols,
     initialRows: lastResizeRef.current?.rows,
     isExternal: isExternal,
+    onInputDropped: reportDroppedInput,
     foreground: isVisible,
   });
 
@@ -1439,6 +1504,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               🔄 Reconnect
             </button>
           )}
+          {/* Resize — always visible (minimized default); heavily used per analytics */}
+          <button
+            className={styles.toolbarButton}
+            onClick={() => {
+              track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
+              handleManualResize();
+            }}
+            aria-label="Resize terminal to fit container"
+            title="Resize terminal to fit container"
+          >
+            ↔️ Resize
+          </button>
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
               {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
@@ -1512,18 +1589,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               >
                 {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
               </button>
-              {/* Resize — always visible, needed to re-fit terminal after layout changes */}
-              <button
-                className={styles.toolbarButton}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
-                  handleManualResize();
-                }}
-                aria-label="Resize terminal to fit container"
-                title="Resize terminal to fit container"
-              >
-                ↔️ Resize
-              </button>
               {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
               <button
                 className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
@@ -1580,7 +1645,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                         track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "log-stream", state: logStreamEnabled ? "off" : "on" } });
                         handleToggleLogStream();
                       }}
-                      title={logStreamEnabled ? "Stop forwarding verbose debug logs to server (info/warn/error always stream)" : "Also forward verbose debug logs to server (info/warn/error already stream automatically)"}
+                      title={logStreamEnabled ? "Stop forwarding verbose debug logs to server (errors always stream)" : "Also forward verbose debug logs to server (errors always stream automatically)"}
                       aria-label={logStreamEnabled ? "Disable verbose debug log streaming" : "Enable verbose debug log streaming"}
                       style={logStreamEnabled ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
                     >
@@ -1701,6 +1766,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   />
 </Suspense>
       </div>
+      {/* Story 2.3 — InputDropBadge is `position: fixed` and portal-rendered
+          to document.body (modeled on XtermTerminal's `copiedToast`), unlike
+          the absolutely-positioned overlays above that live inside
+          styles.terminal — rendering it as a sibling here (not nested inside
+          that container) avoids clipping/mispositioning it. See design/ux.md
+          §Step 4 item 1. */}
+      <InputDropBadge count={dropEpisode.count} episodeSeq={dropEpisode.seq} />
       {/* Mobile keyboard toolbar — Termux-compatible extra-keys layout.
           Row 1: ESC / - HOME ↑ END PGUP
           Row 2: TAB CTRL ALT ← ↓ → PGDN

@@ -155,9 +155,31 @@ permission?: {
 
 This allows per-command-prefix bash gating (e.g., `{"rm -rf": "deny"}`), but it is static configuration — not a dynamic hook that can consult ssq-hooks' rule engine.
 
-**Conclusion: The proxy wrapper approach for opencode is correct.** The current `installOpenCode()` creates a shell wrapper at `~/.local/bin/open-code` that calls `ssq-hooks proxy -- open-code "$@"`. Since opencode has no native PreToolUse hook, the only intercept point is to wrap the binary itself.
+**~~Conclusion: The proxy wrapper approach for opencode is correct.~~ SUPERSEDED — see R4 addendum (2026-08-11) below.** This conclusion was scoped only to the static `@opencode-ai/sdk` config `hook` key; it never inspected the separate `@opencode-ai/plugin` package, which does expose a usable pre-execute hook.
 
 **Config file location:** `~/.config/opencode/opencode.json` (confirmed: `opencode debug paths` shows `config = /home/tstapler/.config/opencode`). The `$schema` in the config points to `https://opencode.ai/config.json`.
+
+### R4 addendum (2026-08-11): `@opencode-ai/plugin`'s `Hooks.tool.execute.before` is a real pre-execute hook
+
+The conclusion above only examined `@opencode-ai/sdk`'s declarative `hook` config key (`file_edited`/`session_completed`). OpenCode ships a **separate** JS/TS plugin package, `@opencode-ai/plugin` (confirmed installed alongside the SDK on this machine: `~/.config/opencode/node_modules/@opencode-ai/plugin/package.json`, resolved version `1.3.10` against `opencode --version` → `1.4.0` for the CLI — declared-vs-resolved version drift noted, do not assume they're in lockstep). Its `Hooks` interface (`~/.config/opencode/node_modules/@opencode-ai/plugin/dist/index.d.ts:193-199`) includes:
+
+```typescript
+"tool.execute.before"?: (input: {
+    tool: string;
+    sessionID: string;
+    callID: string;
+}, output: {
+    args: any;
+}) => Promise<void>;
+```
+
+This is called before the tool executes; throwing inside the handler aborts the call — confirmed by opencode's own docs (`https://opencode.ai/docs/plugins/`, "env-protection" example: `if (...) throw new Error("Do not read .env files")`). `output.args` is also mutable in place. This is a genuine PreToolUse-equivalent that the original R4 research missed by only reading the SDK config types.
+
+**Revised conclusion: `installOpenCode()`'s bash-wrapper proxy is no longer the right approach.** `patchOpenCodeHooks()` should install a plugin subscribing to `tool.execute.before` and route through `ssq-hooks check --opencode`, replacing the wrapper. See `project_plans/antigravity-opencode-parity/implementation/plan.md` (E7, revised) for the replacement design, and the sibling `docs/adr/` entry for the `Escalate` mapping decision this hook's binary throw/no-throw channel forces.
+
+Two related hooks were also considered and rejected as the interception point:
+- `permission.ask` — has a genuine three-state `{ask, deny, allow}` contract (closer to this codebase's Claude/Gemini/Antigravity adapters than `tool.execute.before`'s binary channel), but is confirmed broken two independent ways upstream: [anomalyco/opencode#7006](https://github.com/anomalyco/opencode/issues/7006) (open — the trigger call site was dropped in a refactor and never restored) and [anomalyco/opencode#19927](https://github.com/anomalyco/opencode/issues/19927) (closed by inactivity bot, not fixed — the hook is skipped entirely for first-encounter `needsAsk=true` commands, exactly the case a gate needs to intercept). Do not use it as a substitute for `tool.execute.before`.
+- Subagent (`task`-tool) and `batch`-tool coverage under `tool.execute.before` is disputed/unconfirmed upstream ([anomalyco/opencode#5894](https://github.com/anomalyco/opencode/issues/5894), closed by inactivity bot) — must be live-tested against the target opencode version before this ships as a security gate, not assumed from the issue thread alone.
 
 ---
 
@@ -290,6 +312,6 @@ The `--format json` flag could be useful for structured output parsing but is no
 | R1: agy --print | Confirmed from `agy --help` | Add spec to `knownCLIAgents` |
 | R2: agy hooks path | Both paths written; ~antigravity-cli/ is primary | Fix installAgy() to first-found, primary = antigravity-cli |
 | R3: agy patterns | InputRequired/Error/Idle/Success missing | Add jetski-equivalent patterns, validate live |
-| R4: opencode native hooks | No PreToolUse hook exists (only file_edited, session_completed) | Keep proxy wrapper; document why |
+| R4: opencode native hooks | SUPERSEDED (2026-08-11): the `@opencode-ai/sdk` config `hook` key has no PreToolUse hook, but the separate `@opencode-ai/plugin` package's `Hooks.tool.execute.before` is a real throw-to-block pre-execute hook | Replace proxy wrapper with `patchOpenCodeHooks()` — see R4 addendum above |
 | R5: opencode patterns | Ready/Error/Idle/Success missing | Research TUI output strings, add patterns |
 | R6: opencode run stdin | Unconfirmed — needs live test | Test `echo | opencode run` before shipping |

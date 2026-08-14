@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -256,6 +257,34 @@ func (_c *BacklogItemCreate) SetPlanArtifactsPath(v string) *BacklogItemCreate {
 func (_c *BacklogItemCreate) SetNillablePlanArtifactsPath(v *string) *BacklogItemCreate {
 	if v != nil {
 		_c.SetPlanArtifactsPath(*v)
+	}
+	return _c
+}
+
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (_c *BacklogItemCreate) SetPlanRejectionReason(v string) *BacklogItemCreate {
+	_c.mutation.SetPlanRejectionReason(v)
+	return _c
+}
+
+// SetNillablePlanRejectionReason sets the "plan_rejection_reason" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillablePlanRejectionReason(v *string) *BacklogItemCreate {
+	if v != nil {
+		_c.SetPlanRejectionReason(*v)
+	}
+	return _c
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (_c *BacklogItemCreate) SetPlanRejectedAt(v time.Time) *BacklogItemCreate {
+	_c.mutation.SetPlanRejectedAt(v)
+	return _c
+}
+
+// SetNillablePlanRejectedAt sets the "plan_rejected_at" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillablePlanRejectedAt(v *time.Time) *BacklogItemCreate {
+	if v != nil {
+		_c.SetPlanRejectedAt(*v)
 	}
 	return _c
 }
@@ -504,6 +533,62 @@ func (_c *BacklogItemCreate) SetNillableReworkCapOverride(v *int) *BacklogItemCr
 	return _c
 }
 
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (_c *BacklogItemCreate) SetNextWorkflowID(v uuid.UUID) *BacklogItemCreate {
+	_c.mutation.SetNextWorkflowID(v)
+	return _c
+}
+
+// SetNillableNextWorkflowID sets the "next_workflow_id" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableNextWorkflowID(v *uuid.UUID) *BacklogItemCreate {
+	if v != nil {
+		_c.SetNextWorkflowID(*v)
+	}
+	return _c
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (_c *BacklogItemCreate) SetChainFired(v bool) *BacklogItemCreate {
+	_c.mutation.SetChainFired(v)
+	return _c
+}
+
+// SetNillableChainFired sets the "chain_fired" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableChainFired(v *bool) *BacklogItemCreate {
+	if v != nil {
+		_c.SetChainFired(*v)
+	}
+	return _c
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (_c *BacklogItemCreate) SetChainedAt(v time.Time) *BacklogItemCreate {
+	_c.mutation.SetChainedAt(v)
+	return _c
+}
+
+// SetNillableChainedAt sets the "chained_at" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableChainedAt(v *time.Time) *BacklogItemCreate {
+	if v != nil {
+		_c.SetChainedAt(*v)
+	}
+	return _c
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (_c *BacklogItemCreate) SetTriggeredByChainDepth(v int) *BacklogItemCreate {
+	_c.mutation.SetTriggeredByChainDepth(v)
+	return _c
+}
+
+// SetNillableTriggeredByChainDepth sets the "triggered_by_chain_depth" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableTriggeredByChainDepth(v *int) *BacklogItemCreate {
+	if v != nil {
+		_c.SetTriggeredByChainDepth(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *BacklogItemCreate) SetCreatedAt(v time.Time) *BacklogItemCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -640,6 +725,36 @@ func (_c *BacklogItemCreate) SetSource(v *ItemSource) *BacklogItemCreate {
 	return _c.SetSourceID(v.ID)
 }
 
+// AddBlockingDependencyIDs adds the "blocking_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (_c *BacklogItemCreate) AddBlockingDependencyIDs(ids ...uuid.UUID) *BacklogItemCreate {
+	_c.mutation.AddBlockingDependencyIDs(ids...)
+	return _c
+}
+
+// AddBlockingDependencies adds the "blocking_dependencies" edges to the BacklogItemDependency entity.
+func (_c *BacklogItemCreate) AddBlockingDependencies(v ...*BacklogItemDependency) *BacklogItemCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddBlockingDependencyIDs(ids...)
+}
+
+// AddBlockedByDependencyIDs adds the "blocked_by_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (_c *BacklogItemCreate) AddBlockedByDependencyIDs(ids ...uuid.UUID) *BacklogItemCreate {
+	_c.mutation.AddBlockedByDependencyIDs(ids...)
+	return _c
+}
+
+// AddBlockedByDependencies adds the "blocked_by_dependencies" edges to the BacklogItemDependency entity.
+func (_c *BacklogItemCreate) AddBlockedByDependencies(v ...*BacklogItemDependency) *BacklogItemCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddBlockedByDependencyIDs(ids...)
+}
+
 // Mutation returns the BacklogItemMutation object of the builder.
 func (_c *BacklogItemCreate) Mutation() *BacklogItemMutation {
 	return _c.mutation
@@ -731,6 +846,14 @@ func (_c *BacklogItemCreate) defaults() {
 		v := backlogitem.DefaultShippedSnapshotCaptureFailed
 		_c.mutation.SetShippedSnapshotCaptureFailed(v)
 	}
+	if _, ok := _c.mutation.ChainFired(); !ok {
+		v := backlogitem.DefaultChainFired
+		_c.mutation.SetChainFired(v)
+	}
+	if _, ok := _c.mutation.TriggeredByChainDepth(); !ok {
+		v := backlogitem.DefaultTriggeredByChainDepth
+		_c.mutation.SetTriggeredByChainDepth(v)
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := backlogitem.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -789,6 +912,12 @@ func (_c *BacklogItemCreate) check() error {
 	}
 	if _, ok := _c.mutation.QueuedAutonomous(); !ok {
 		return &ValidationError{Name: "queued_autonomous", err: errors.New(`ent: missing required field "BacklogItem.queued_autonomous"`)}
+	}
+	if _, ok := _c.mutation.ChainFired(); !ok {
+		return &ValidationError{Name: "chain_fired", err: errors.New(`ent: missing required field "BacklogItem.chain_fired"`)}
+	}
+	if _, ok := _c.mutation.TriggeredByChainDepth(); !ok {
+		return &ValidationError{Name: "triggered_by_chain_depth", err: errors.New(`ent: missing required field "BacklogItem.triggered_by_chain_depth"`)}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "BacklogItem.created_at"`)}
@@ -900,6 +1029,14 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 		_spec.SetField(backlogitem.FieldPlanArtifactsPath, field.TypeString, value)
 		_node.PlanArtifactsPath = value
 	}
+	if value, ok := _c.mutation.PlanRejectionReason(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectionReason, field.TypeString, value)
+		_node.PlanRejectionReason = value
+	}
+	if value, ok := _c.mutation.PlanRejectedAt(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectedAt, field.TypeTime, value)
+		_node.PlanRejectedAt = &value
+	}
 	if value, ok := _c.mutation.UserModifiedFields(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedFields, field.TypeString, value)
 		_node.UserModifiedFields = value
@@ -971,6 +1108,22 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ReworkCapOverride(); ok {
 		_spec.SetField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
 		_node.ReworkCapOverride = &value
+	}
+	if value, ok := _c.mutation.NextWorkflowID(); ok {
+		_spec.SetField(backlogitem.FieldNextWorkflowID, field.TypeUUID, value)
+		_node.NextWorkflowID = &value
+	}
+	if value, ok := _c.mutation.ChainFired(); ok {
+		_spec.SetField(backlogitem.FieldChainFired, field.TypeBool, value)
+		_node.ChainFired = value
+	}
+	if value, ok := _c.mutation.ChainedAt(); ok {
+		_spec.SetField(backlogitem.FieldChainedAt, field.TypeTime, value)
+		_node.ChainedAt = &value
+	}
+	if value, ok := _c.mutation.TriggeredByChainDepth(); ok {
+		_spec.SetField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
+		_node.TriggeredByChainDepth = value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(backlogitem.FieldCreatedAt, field.TypeTime, value)
@@ -1075,6 +1228,38 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.item_source_backlog_items = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.BlockingDependenciesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockingDependenciesTable,
+			Columns: []string{backlogitem.BlockingDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.BlockedByDependenciesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockedByDependenciesTable,
+			Columns: []string{backlogitem.BlockedByDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec
@@ -1372,6 +1557,42 @@ func (u *BacklogItemUpsert) UpdatePlanArtifactsPath() *BacklogItemUpsert {
 // ClearPlanArtifactsPath clears the value of the "plan_artifacts_path" field.
 func (u *BacklogItemUpsert) ClearPlanArtifactsPath() *BacklogItemUpsert {
 	u.SetNull(backlogitem.FieldPlanArtifactsPath)
+	return u
+}
+
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (u *BacklogItemUpsert) SetPlanRejectionReason(v string) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldPlanRejectionReason, v)
+	return u
+}
+
+// UpdatePlanRejectionReason sets the "plan_rejection_reason" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdatePlanRejectionReason() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldPlanRejectionReason)
+	return u
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (u *BacklogItemUpsert) ClearPlanRejectionReason() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldPlanRejectionReason)
+	return u
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (u *BacklogItemUpsert) SetPlanRejectedAt(v time.Time) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldPlanRejectedAt, v)
+	return u
+}
+
+// UpdatePlanRejectedAt sets the "plan_rejected_at" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdatePlanRejectedAt() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldPlanRejectedAt)
+	return u
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (u *BacklogItemUpsert) ClearPlanRejectedAt() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldPlanRejectedAt)
 	return u
 }
 
@@ -1723,6 +1944,72 @@ func (u *BacklogItemUpsert) ClearReworkCapOverride() *BacklogItemUpsert {
 	return u
 }
 
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (u *BacklogItemUpsert) SetNextWorkflowID(v uuid.UUID) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldNextWorkflowID, v)
+	return u
+}
+
+// UpdateNextWorkflowID sets the "next_workflow_id" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateNextWorkflowID() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldNextWorkflowID)
+	return u
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (u *BacklogItemUpsert) ClearNextWorkflowID() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldNextWorkflowID)
+	return u
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (u *BacklogItemUpsert) SetChainFired(v bool) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldChainFired, v)
+	return u
+}
+
+// UpdateChainFired sets the "chain_fired" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateChainFired() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldChainFired)
+	return u
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (u *BacklogItemUpsert) SetChainedAt(v time.Time) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldChainedAt, v)
+	return u
+}
+
+// UpdateChainedAt sets the "chained_at" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateChainedAt() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldChainedAt)
+	return u
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (u *BacklogItemUpsert) ClearChainedAt() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldChainedAt)
+	return u
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (u *BacklogItemUpsert) SetTriggeredByChainDepth(v int) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldTriggeredByChainDepth, v)
+	return u
+}
+
+// UpdateTriggeredByChainDepth sets the "triggered_by_chain_depth" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateTriggeredByChainDepth() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldTriggeredByChainDepth)
+	return u
+}
+
+// AddTriggeredByChainDepth adds v to the "triggered_by_chain_depth" field.
+func (u *BacklogItemUpsert) AddTriggeredByChainDepth(v int) *BacklogItemUpsert {
+	u.Add(backlogitem.FieldTriggeredByChainDepth, v)
+	return u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (u *BacklogItemUpsert) SetUpdatedAt(v time.Time) *BacklogItemUpsert {
 	u.Set(backlogitem.FieldUpdatedAt, v)
@@ -2070,6 +2357,48 @@ func (u *BacklogItemUpsertOne) UpdatePlanArtifactsPath() *BacklogItemUpsertOne {
 func (u *BacklogItemUpsertOne) ClearPlanArtifactsPath() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPlanArtifactsPath()
+	})
+}
+
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (u *BacklogItemUpsertOne) SetPlanRejectionReason(v string) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPlanRejectionReason(v)
+	})
+}
+
+// UpdatePlanRejectionReason sets the "plan_rejection_reason" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdatePlanRejectionReason() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePlanRejectionReason()
+	})
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (u *BacklogItemUpsertOne) ClearPlanRejectionReason() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPlanRejectionReason()
+	})
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (u *BacklogItemUpsertOne) SetPlanRejectedAt(v time.Time) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPlanRejectedAt(v)
+	})
+}
+
+// UpdatePlanRejectedAt sets the "plan_rejected_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdatePlanRejectedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePlanRejectedAt()
+	})
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (u *BacklogItemUpsertOne) ClearPlanRejectedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPlanRejectedAt()
 	})
 }
 
@@ -2476,6 +2805,83 @@ func (u *BacklogItemUpsertOne) UpdateReworkCapOverride() *BacklogItemUpsertOne {
 func (u *BacklogItemUpsertOne) ClearReworkCapOverride() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearReworkCapOverride()
+	})
+}
+
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (u *BacklogItemUpsertOne) SetNextWorkflowID(v uuid.UUID) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetNextWorkflowID(v)
+	})
+}
+
+// UpdateNextWorkflowID sets the "next_workflow_id" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateNextWorkflowID() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateNextWorkflowID()
+	})
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (u *BacklogItemUpsertOne) ClearNextWorkflowID() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearNextWorkflowID()
+	})
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (u *BacklogItemUpsertOne) SetChainFired(v bool) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetChainFired(v)
+	})
+}
+
+// UpdateChainFired sets the "chain_fired" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateChainFired() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateChainFired()
+	})
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (u *BacklogItemUpsertOne) SetChainedAt(v time.Time) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetChainedAt(v)
+	})
+}
+
+// UpdateChainedAt sets the "chained_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateChainedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateChainedAt()
+	})
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (u *BacklogItemUpsertOne) ClearChainedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearChainedAt()
+	})
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (u *BacklogItemUpsertOne) SetTriggeredByChainDepth(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetTriggeredByChainDepth(v)
+	})
+}
+
+// AddTriggeredByChainDepth adds v to the "triggered_by_chain_depth" field.
+func (u *BacklogItemUpsertOne) AddTriggeredByChainDepth(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddTriggeredByChainDepth(v)
+	})
+}
+
+// UpdateTriggeredByChainDepth sets the "triggered_by_chain_depth" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateTriggeredByChainDepth() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateTriggeredByChainDepth()
 	})
 }
 
@@ -2998,6 +3404,48 @@ func (u *BacklogItemUpsertBulk) ClearPlanArtifactsPath() *BacklogItemUpsertBulk 
 	})
 }
 
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (u *BacklogItemUpsertBulk) SetPlanRejectionReason(v string) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPlanRejectionReason(v)
+	})
+}
+
+// UpdatePlanRejectionReason sets the "plan_rejection_reason" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdatePlanRejectionReason() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePlanRejectionReason()
+	})
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (u *BacklogItemUpsertBulk) ClearPlanRejectionReason() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPlanRejectionReason()
+	})
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (u *BacklogItemUpsertBulk) SetPlanRejectedAt(v time.Time) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPlanRejectedAt(v)
+	})
+}
+
+// UpdatePlanRejectedAt sets the "plan_rejected_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdatePlanRejectedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePlanRejectedAt()
+	})
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (u *BacklogItemUpsertBulk) ClearPlanRejectedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPlanRejectedAt()
+	})
+}
+
 // SetUserModifiedFields sets the "user_modified_fields" field.
 func (u *BacklogItemUpsertBulk) SetUserModifiedFields(v string) *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
@@ -3401,6 +3849,83 @@ func (u *BacklogItemUpsertBulk) UpdateReworkCapOverride() *BacklogItemUpsertBulk
 func (u *BacklogItemUpsertBulk) ClearReworkCapOverride() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearReworkCapOverride()
+	})
+}
+
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (u *BacklogItemUpsertBulk) SetNextWorkflowID(v uuid.UUID) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetNextWorkflowID(v)
+	})
+}
+
+// UpdateNextWorkflowID sets the "next_workflow_id" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateNextWorkflowID() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateNextWorkflowID()
+	})
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (u *BacklogItemUpsertBulk) ClearNextWorkflowID() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearNextWorkflowID()
+	})
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (u *BacklogItemUpsertBulk) SetChainFired(v bool) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetChainFired(v)
+	})
+}
+
+// UpdateChainFired sets the "chain_fired" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateChainFired() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateChainFired()
+	})
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (u *BacklogItemUpsertBulk) SetChainedAt(v time.Time) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetChainedAt(v)
+	})
+}
+
+// UpdateChainedAt sets the "chained_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateChainedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateChainedAt()
+	})
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (u *BacklogItemUpsertBulk) ClearChainedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearChainedAt()
+	})
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (u *BacklogItemUpsertBulk) SetTriggeredByChainDepth(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetTriggeredByChainDepth(v)
+	})
+}
+
+// AddTriggeredByChainDepth adds v to the "triggered_by_chain_depth" field.
+func (u *BacklogItemUpsertBulk) AddTriggeredByChainDepth(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddTriggeredByChainDepth(v)
+	})
+}
+
+// UpdateTriggeredByChainDepth sets the "triggered_by_chain_depth" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateTriggeredByChainDepth() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateTriggeredByChainDepth()
 	})
 }
 

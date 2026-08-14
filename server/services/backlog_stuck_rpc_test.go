@@ -48,6 +48,8 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 		{domain.StuckReasonPRPendingNoPR, sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR},
 		{domain.StuckReasonReworkBlockedStale, sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE},
 		{domain.StuckReasonPRNeedsFix, sessionv1.StuckReason_STUCK_REASON_PR_NEEDS_FIX},
+		{domain.StuckReasonRespawnBlockedActive, sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE},
+		{domain.StuckReasonLikelyFlaky, sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY},
 	}
 	for _, c := range cases {
 		t.Run(string(c.reason), func(t *testing.T) {
@@ -56,6 +58,23 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 			assert.Equal(t, c.reason, fromProtoStuckReason(c.want))
 		})
 	}
+}
+
+// TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonMultipleReasons
+// verifies the new synthetic aggregate reason (backlog-bounce-escalation,
+// Epic 1.1) maps to its dedicated proto enum value rather than falling
+// through to STUCK_REASON_UNSPECIFIED.
+func TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonMultipleReasons(t *testing.T) {
+	got := toProtoStuckReason(domain.StuckReasonMultipleReasons)
+	assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS, got)
+}
+
+// TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCapExhausted
+// verifies the inverse mapping for the new synthetic aggregate reason
+// (backlog-bounce-escalation, Epic 1.1) recovers the correct domain constant.
+func TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCapExhausted(t *testing.T) {
+	got := fromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED)
+	assert.Equal(t, domain.StuckReasonBounceCapExhausted, got)
 }
 
 // seedOpenStuckRow creates a backlog item and inserts an open BacklogStuckState
@@ -464,6 +483,28 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// blocking session is still active would just re-mark the same row —
 	// exactly what the next reconcile tick already does for free.
 	domain.StuckReasonRespawnBlockedActive: true,
+	// StuckReasonLikelyFlaky: purely informational (plan.md option (c)) — a
+	// behavioral hint that the review outcome may be non-deterministic, not a
+	// condition with a "retry now" fix. There is nothing to remediate: the
+	// item's normal reopen/park flow already proceeds unaffected by this row
+	// (see notifyLikelyFlaky's doc comment in backlog_service_triage.go).
+	domain.StuckReasonLikelyFlaky: true,
+	// StuckReasonBlockedByDependency: purely informational — there is no
+	// "retry now" action because dequeue eligibility is derived automatically
+	// from the blocker's status (DequeueNextQueuedItems re-checks it on every
+	// pass; see criterion 3 in project_plans/backlog-item-dependencies). Once
+	// the blocking item reaches its resolved state, this reason simply stops
+	// firing on the next reconcile tick — nothing to trigger manually.
+	domain.StuckReasonBlockedByDependency: true,
+	// StuckReasonMultipleReasons and StuckReasonBounceCapExhausted
+	// (backlog-bounce-escalation, Epic 1.1) are synthetic, aggregate signals
+	// derived from other open stuck reasons/the remediation-attempt cap, not
+	// independently actionable conditions — there is no "retry now" action
+	// that makes sense for an aggregate row, so both are deliberately
+	// notify + durably mark + resolve-when-the-underlying-condition-clears
+	// only, same shape as StuckReasonReworkBlockedStale above.
+	domain.StuckReasonMultipleReasons:    true,
+	domain.StuckReasonBounceCapExhausted: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

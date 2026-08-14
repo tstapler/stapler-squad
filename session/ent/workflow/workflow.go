@@ -44,6 +44,24 @@ const (
 	FieldKeepSessions = "keep_sessions"
 	// FieldArchiveAfterHours holds the string denoting the archive_after_hours field in the database.
 	FieldArchiveAfterHours = "archive_after_hours"
+	// FieldTriggerType holds the string denoting the trigger_type field in the database.
+	FieldTriggerType = "trigger_type"
+	// FieldGithubRepo holds the string denoting the github_repo field in the database.
+	FieldGithubRepo = "github_repo"
+	// FieldGithubBranch holds the string denoting the github_branch field in the database.
+	FieldGithubBranch = "github_branch"
+	// FieldWebhookSlug holds the string denoting the webhook_slug field in the database.
+	FieldWebhookSlug = "webhook_slug"
+	// FieldWebhookSecretEncrypted holds the string denoting the webhook_secret_encrypted field in the database.
+	FieldWebhookSecretEncrypted = "webhook_secret_encrypted"
+	// FieldEventFilter holds the string denoting the event_filter field in the database.
+	FieldEventFilter = "event_filter"
+	// FieldLabelFilter holds the string denoting the label_filter field in the database.
+	FieldLabelFilter = "label_filter"
+	// FieldPromptTemplate holds the string denoting the prompt_template field in the database.
+	FieldPromptTemplate = "prompt_template"
+	// FieldLastFiredAt holds the string denoting the last_fired_at field in the database.
+	FieldLastFiredAt = "last_fired_at"
 	// Table holds the table name of the workflow in the database.
 	Table = "workflows"
 )
@@ -66,6 +84,15 @@ var Columns = []string{
 	FieldUpdatedAt,
 	FieldKeepSessions,
 	FieldArchiveAfterHours,
+	FieldTriggerType,
+	FieldGithubRepo,
+	FieldGithubBranch,
+	FieldWebhookSlug,
+	FieldWebhookSecretEncrypted,
+	FieldEventFilter,
+	FieldLabelFilter,
+	FieldPromptTemplate,
+	FieldLastFiredAt,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -99,6 +126,8 @@ var (
 	DefaultKeepSessions int
 	// DefaultArchiveAfterHours holds the default value on creation for the "archive_after_hours" field.
 	DefaultArchiveAfterHours int
+	// DefaultTriggerType holds the default value on creation for the "trigger_type" field.
+	DefaultTriggerType string
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -184,4 +213,49 @@ func ByKeepSessions(opts ...sql.OrderTermOption) OrderOption {
 // ByArchiveAfterHours orders the results by the archive_after_hours field.
 func ByArchiveAfterHours(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldArchiveAfterHours, opts...).ToFunc()
+}
+
+// ByTriggerType orders the results by the trigger_type field.
+func ByTriggerType(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTriggerType, opts...).ToFunc()
+}
+
+// ByGithubRepo orders the results by the github_repo field.
+func ByGithubRepo(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGithubRepo, opts...).ToFunc()
+}
+
+// ByGithubBranch orders the results by the github_branch field.
+func ByGithubBranch(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGithubBranch, opts...).ToFunc()
+}
+
+// ByWebhookSlug orders the results by the webhook_slug field.
+func ByWebhookSlug(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWebhookSlug, opts...).ToFunc()
+}
+
+// ByWebhookSecretEncrypted orders the results by the webhook_secret_encrypted field.
+func ByWebhookSecretEncrypted(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWebhookSecretEncrypted, opts...).ToFunc()
+}
+
+// ByEventFilter orders the results by the event_filter field.
+func ByEventFilter(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEventFilter, opts...).ToFunc()
+}
+
+// ByLabelFilter orders the results by the label_filter field.
+func ByLabelFilter(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLabelFilter, opts...).ToFunc()
+}
+
+// ByPromptTemplate orders the results by the prompt_template field.
+func ByPromptTemplate(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPromptTemplate, opts...).ToFunc()
+}
+
+// ByLastFiredAt orders the results by the last_fired_at field.
+func ByLastFiredAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLastFiredAt, opts...).ToFunc()
 }

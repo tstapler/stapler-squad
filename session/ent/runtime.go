@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -30,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
 	"github.com/tstapler/stapler-squad/session/ent/workflow"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -187,27 +189,35 @@ func init() {
 	// backlogitem.DefaultQueuedAutonomous holds the default value on creation for the queued_autonomous field.
 	backlogitem.DefaultQueuedAutonomous = backlogitemDescQueuedAutonomous.Default.(bool)
 	// backlogitemDescPrNumber is the schema descriptor for pr_number field.
-	backlogitemDescPrNumber := backlogitemFields[26].Descriptor()
+	backlogitemDescPrNumber := backlogitemFields[28].Descriptor()
 	// backlogitem.DefaultPrNumber holds the default value on creation for the pr_number field.
 	backlogitem.DefaultPrNumber = backlogitemDescPrNumber.Default.(int)
 	// backlogitemDescShippedApprovedCount is the schema descriptor for shipped_approved_count field.
-	backlogitemDescShippedApprovedCount := backlogitemFields[28].Descriptor()
+	backlogitemDescShippedApprovedCount := backlogitemFields[30].Descriptor()
 	// backlogitem.DefaultShippedApprovedCount holds the default value on creation for the shipped_approved_count field.
 	backlogitem.DefaultShippedApprovedCount = backlogitemDescShippedApprovedCount.Default.(int)
 	// backlogitemDescShippedChangesReqCount is the schema descriptor for shipped_changes_req_count field.
-	backlogitemDescShippedChangesReqCount := backlogitemFields[29].Descriptor()
+	backlogitemDescShippedChangesReqCount := backlogitemFields[31].Descriptor()
 	// backlogitem.DefaultShippedChangesReqCount holds the default value on creation for the shipped_changes_req_count field.
 	backlogitem.DefaultShippedChangesReqCount = backlogitemDescShippedChangesReqCount.Default.(int)
 	// backlogitemDescShippedSnapshotCaptureFailed is the schema descriptor for shipped_snapshot_capture_failed field.
-	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[34].Descriptor()
+	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[36].Descriptor()
 	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
 	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
+	// backlogitemDescChainFired is the schema descriptor for chain_fired field.
+	backlogitemDescChainFired := backlogitemFields[39].Descriptor()
+	// backlogitem.DefaultChainFired holds the default value on creation for the chain_fired field.
+	backlogitem.DefaultChainFired = backlogitemDescChainFired.Default.(bool)
+	// backlogitemDescTriggeredByChainDepth is the schema descriptor for triggered_by_chain_depth field.
+	backlogitemDescTriggeredByChainDepth := backlogitemFields[41].Descriptor()
+	// backlogitem.DefaultTriggeredByChainDepth holds the default value on creation for the triggered_by_chain_depth field.
+	backlogitem.DefaultTriggeredByChainDepth = backlogitemDescTriggeredByChainDepth.Default.(int)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[36].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[42].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[37].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[43].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -216,6 +226,16 @@ func init() {
 	backlogitemDescID := backlogitemFields[0].Descriptor()
 	// backlogitem.DefaultID holds the default value on creation for the id field.
 	backlogitem.DefaultID = backlogitemDescID.Default.(func() uuid.UUID)
+	backlogitemdependencyFields := schema.BacklogItemDependency{}.Fields()
+	_ = backlogitemdependencyFields
+	// backlogitemdependencyDescCreatedAt is the schema descriptor for created_at field.
+	backlogitemdependencyDescCreatedAt := backlogitemdependencyFields[3].Descriptor()
+	// backlogitemdependency.DefaultCreatedAt holds the default value on creation for the created_at field.
+	backlogitemdependency.DefaultCreatedAt = backlogitemdependencyDescCreatedAt.Default.(func() time.Time)
+	// backlogitemdependencyDescID is the schema descriptor for id field.
+	backlogitemdependencyDescID := backlogitemdependencyFields[0].Descriptor()
+	// backlogitemdependency.DefaultID holds the default value on creation for the id field.
+	backlogitemdependency.DefaultID = backlogitemdependencyDescID.Default.(func() uuid.UUID)
 	backlogprogressnoteFields := schema.BacklogProgressNote{}.Fields()
 	_ = backlogprogressnoteFields
 	// backlogprogressnoteDescCriterionIndex is the schema descriptor for criterion_index field.
@@ -372,28 +392,32 @@ func init() {
 	itemsessionDescEndReason := itemsessionFields[5].Descriptor()
 	// itemsession.DefaultEndReason holds the default value on creation for the end_reason field.
 	itemsession.DefaultEndReason = itemsessionDescEndReason.Default.(string)
+	// itemsessionDescFailureCapturePath is the schema descriptor for failure_capture_path field.
+	itemsessionDescFailureCapturePath := itemsessionFields[6].Descriptor()
+	// itemsession.DefaultFailureCapturePath holds the default value on creation for the failure_capture_path field.
+	itemsession.DefaultFailureCapturePath = itemsessionDescFailureCapturePath.Default.(string)
 	// itemsessionDescPipelineModeSnapshot is the schema descriptor for pipeline_mode_snapshot field.
-	itemsessionDescPipelineModeSnapshot := itemsessionFields[7].Descriptor()
+	itemsessionDescPipelineModeSnapshot := itemsessionFields[8].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshot holds the default value on creation for the pipeline_mode_snapshot field.
 	itemsession.DefaultPipelineModeSnapshot = itemsessionDescPipelineModeSnapshot.Default.(string)
 	// itemsessionDescPipelineModeSnapshotHash is the schema descriptor for pipeline_mode_snapshot_hash field.
-	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[8].Descriptor()
+	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[9].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshotHash holds the default value on creation for the pipeline_mode_snapshot_hash field.
 	itemsession.DefaultPipelineModeSnapshotHash = itemsessionDescPipelineModeSnapshotHash.Default.(string)
 	// itemsessionDescBaseCommitSha is the schema descriptor for base_commit_sha field.
-	itemsessionDescBaseCommitSha := itemsessionFields[11].Descriptor()
+	itemsessionDescBaseCommitSha := itemsessionFields[12].Descriptor()
 	// itemsession.DefaultBaseCommitSha holds the default value on creation for the base_commit_sha field.
 	itemsession.DefaultBaseCommitSha = itemsessionDescBaseCommitSha.Default.(string)
 	// itemsessionDescCommitCountSinceSpawn is the schema descriptor for commit_count_since_spawn field.
-	itemsessionDescCommitCountSinceSpawn := itemsessionFields[15].Descriptor()
+	itemsessionDescCommitCountSinceSpawn := itemsessionFields[16].Descriptor()
 	// itemsession.DefaultCommitCountSinceSpawn holds the default value on creation for the commit_count_since_spawn field.
 	itemsession.DefaultCommitCountSinceSpawn = itemsessionDescCommitCountSinceSpawn.Default.(int)
 	// itemsessionDescCreatedAt is the schema descriptor for created_at field.
-	itemsessionDescCreatedAt := itemsessionFields[18].Descriptor()
+	itemsessionDescCreatedAt := itemsessionFields[19].Descriptor()
 	// itemsession.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsession.DefaultCreatedAt = itemsessionDescCreatedAt.Default.(func() time.Time)
 	// itemsessionDescEstimatedCostUsd is the schema descriptor for estimated_cost_usd field.
-	itemsessionDescEstimatedCostUsd := itemsessionFields[19].Descriptor()
+	itemsessionDescEstimatedCostUsd := itemsessionFields[20].Descriptor()
 	// itemsession.DefaultEstimatedCostUsd holds the default value on creation for the estimated_cost_usd field.
 	itemsession.DefaultEstimatedCostUsd = itemsessionDescEstimatedCostUsd.Default.(float64)
 	// itemsessionDescID is the schema descriptor for id field.
@@ -708,6 +732,20 @@ func init() {
 	tagDescName := tagFields[0].Descriptor()
 	// tag.NameValidator is a validator for the "name" field. It is called by the builders before save.
 	tag.NameValidator = tagDescName.Validators[0].(func(string) error)
+	triggerfireeventFields := schema.TriggerFireEvent{}.Fields()
+	_ = triggerfireeventFields
+	// triggerfireeventDescOutcome is the schema descriptor for outcome field.
+	triggerfireeventDescOutcome := triggerfireeventFields[2].Descriptor()
+	// triggerfireevent.OutcomeValidator is a validator for the "outcome" field. It is called by the builders before save.
+	triggerfireevent.OutcomeValidator = triggerfireeventDescOutcome.Validators[0].(func(string) error)
+	// triggerfireeventDescCreatedAt is the schema descriptor for created_at field.
+	triggerfireeventDescCreatedAt := triggerfireeventFields[6].Descriptor()
+	// triggerfireevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	triggerfireevent.DefaultCreatedAt = triggerfireeventDescCreatedAt.Default.(func() time.Time)
+	// triggerfireeventDescID is the schema descriptor for id field.
+	triggerfireeventDescID := triggerfireeventFields[0].Descriptor()
+	// triggerfireevent.DefaultID holds the default value on creation for the id field.
+	triggerfireevent.DefaultID = triggerfireeventDescID.Default.(func() uuid.UUID)
 	workflowFields := schema.Workflow{}.Fields()
 	_ = workflowFields
 	// workflowDescSlug is the schema descriptor for slug field.
@@ -748,6 +786,10 @@ func init() {
 	workflowDescArchiveAfterHours := workflowFields[15].Descriptor()
 	// workflow.DefaultArchiveAfterHours holds the default value on creation for the archive_after_hours field.
 	workflow.DefaultArchiveAfterHours = workflowDescArchiveAfterHours.Default.(int)
+	// workflowDescTriggerType is the schema descriptor for trigger_type field.
+	workflowDescTriggerType := workflowFields[16].Descriptor()
+	// workflow.DefaultTriggerType holds the default value on creation for the trigger_type field.
+	workflow.DefaultTriggerType = workflowDescTriggerType.Default.(string)
 	// workflowDescID is the schema descriptor for id field.
 	workflowDescID := workflowFields[0].Descriptor()
 	// workflow.DefaultID holds the default value on creation for the id field.
