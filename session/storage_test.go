@@ -528,11 +528,14 @@ func TestStorage_UpdateInstance(t *testing.T) {
 	err := storage.UpdateInstance(inst)
 	require.NoError(t, err)
 
-	rows, err := storage.ListInstanceData()
+	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
+	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// instead, which eager-loads tags, to verify persistence.
+	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"alpha", "beta"}, rows[0].Tags, "Tags should be persisted by UpdateInstance")
-	assert.Equal(t, "refactor-tests", rows[0].Category, "Category should be persisted by UpdateInstance")
+	require.Len(t, instances, 1)
+	assert.Equal(t, []string{"alpha", "beta"}, instances[0].Tags, "Tags should be persisted by UpdateInstance")
+	assert.Equal(t, "refactor-tests", instances[0].Category, "Category should be persisted by UpdateInstance")
 }
 
 // TestStorage_ListInstanceData verifies that ListInstanceData returns raw
@@ -594,11 +597,14 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	err := storage.SaveInstancesSync([]*Instance{inst})
 	require.NoError(t, err)
 
-	rows, err := storage.ListInstanceData()
+	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
+	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// instead, which eager-loads tags, to verify persistence.
+	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"sync-tag"}, rows[0].Tags, "Tags should be persisted by SaveInstancesSync")
-	assert.Equal(t, "sync-category", rows[0].Category, "Category should be persisted by SaveInstancesSync")
+	require.Len(t, instances, 1)
+	assert.Equal(t, []string{"sync-tag"}, instances[0].Tags, "Tags should be persisted by SaveInstancesSync")
+	assert.Equal(t, "sync-category", instances[0].Category, "Category should be persisted by SaveInstancesSync")
 }
 
 // TestSaveInstances_WorktreeDataQueryableImmediately is a regression test for the
