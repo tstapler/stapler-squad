@@ -18,6 +18,7 @@
 // new status is a compile error here (see the `never` check in the
 // `default` arm) rather than a silently-missing branch.
 import type { BacklogItem, KnownBacklogStatus } from "@/lib/hooks/useBacklogService";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 
 export type BacklogActionId =
   | "mark_ready"
@@ -218,4 +219,75 @@ export function getAvailableActions(item: ItemActionabilityInput): AvailableActi
   actions.add("delete");
 
   return { actions, isGatedOnPlanApproval, hasPlan };
+}
+
+export interface PrimaryCardAction {
+  label: string;
+  action: string;
+  disabled?: boolean;
+  isDone?: boolean;
+}
+
+export interface PrimaryCardActionInput
+  extends ItemActionabilityInput,
+    Pick<BacklogItem, "acCriteria" | "repoPath" | "planRejectionReason"> {}
+
+/**
+ * getPrimaryCardAction picks the single action a board card's action button
+ * should surface, built on `getAvailableActions` and `derivePlanReviewStatus`
+ * rather than a second, independently-maintained status->action mapping (see
+ * this module's header comment for the class of bug that divergence causes).
+ *
+ * For `ready`/`queued`, the candidate action set from `getAvailableActions`
+ * can contain more than one entry (e.g. `trigger_triage` and `retry_triage`
+ * both present), so precedence is an explicit if/else chain rather than a
+ * read off `Set` iteration order, which is not guaranteed to match desired
+ * priority.
+ */
+export function getPrimaryCardAction(item: PrimaryCardActionInput): PrimaryCardAction {
+  switch (item.status) {
+    case "idea":
+      return {
+        label: "Mark Ready",
+        action: "mark_ready",
+        disabled: item.acCriteria.length === 0,
+      };
+    case "refining":
+      return { label: "Refining…", action: "refining", isDone: true };
+    case "ready":
+    case "queued": {
+      const { actions } = getAvailableActions(item);
+      const planStatus = derivePlanReviewStatus(item);
+      const canSpawnSession =
+        actions.has("spawn_session") && (planStatus === "approved" || planStatus === "skipped");
+
+      if (actions.has("approve_plan")) {
+        return { label: "Approve Plan", action: "approve_plan" };
+      }
+      if (actions.has("retry_triage")) {
+        return { label: "Retry Triage", action: "retry_triage" };
+      }
+      if (canSpawnSession) {
+        return { label: "Spawn Session", action: "spawn_session" };
+      }
+      if (item.status === "ready") {
+        return { label: "Trigger Triage", action: "trigger_triage", disabled: !item.repoPath };
+      }
+      return { label: "Queued", action: "queued", isDone: true, disabled: true };
+    }
+    case "in_progress":
+      return {
+        label: "View Session",
+        action: "view_session",
+        disabled: item.linkedSessions.length === 0,
+      };
+    case "review":
+      return { label: "View Review", action: "view_review" };
+    case "done":
+      return { label: "Done ✓", action: "done", isDone: true };
+    case "archived":
+      return { label: "Archived", action: "archived", isDone: true };
+    default:
+      return { label: item.status, action: item.status, isDone: true };
+  }
 }
