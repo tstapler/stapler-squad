@@ -1285,10 +1285,38 @@ func (r *EntRepository) GetWithOptions(ctx context.Context, title string, option
 	return r.Get(ctx, title)
 }
 
-// ListWithOptions retrieves all sessions with selective child data loading.
-// EntRepository: Delegates to List with full loading.
+// ListWithOptions retrieves all sessions with selective child data loading,
+// honoring the LoadOptions fields the caller requested rather than eager-loading
+// every edge unconditionally.
 func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
-	return r.List(ctx)
+	query := r.client.Session.Query().WithProject()
+
+	if options.LoadWorktree {
+		query = query.WithWorktree()
+	}
+	if options.LoadDiffStats || options.LoadDiffContent {
+		query = query.WithDiffStats()
+	}
+	if options.LoadTags {
+		query = query.WithTags()
+	}
+	if options.LoadClaudeSession {
+		query = query.WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
+			q.WithMetadata()
+		})
+	}
+
+	sessions, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions: %w", err)
+	}
+
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+
+	return result, nil
 }
 
 // ListByStatusWithOptions retrieves sessions filtered by status with selective loading.

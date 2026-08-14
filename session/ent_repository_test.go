@@ -246,6 +246,42 @@ func TestEntRepository_Worktree(t *testing.T) {
 	assert.Equal(t, session.Worktree.BranchName, retrieved.Worktree.BranchName)
 }
 
+// TestEntRepository_ListWithOptions_RespectsLoadWorktree verifies that
+// ListWithOptions honors LoadOptions.LoadWorktree instead of always
+// eager-loading every edge regardless of the requested options.
+func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-worktree")
+	session.Worktree = GitWorktreeData{
+		RepoPath:      "/path/to/repo",
+		WorktreePath:  "/path/to/worktree",
+		SessionName:   "test-session",
+		BranchName:    "feature-branch",
+		BaseCommitSHA: "abc123",
+	}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	// LoadMinimal should skip worktree loading entirely.
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Equal(t, GitWorktreeData{}, minimal[0].Worktree)
+
+	// LoadOptions{LoadWorktree: true} should load it.
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadWorktree: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.Equal(t, session.Worktree.RepoPath, full[0].Worktree.RepoPath)
+	assert.Equal(t, session.Worktree.WorktreePath, full[0].Worktree.WorktreePath)
+	assert.Equal(t, session.Worktree.BranchName, full[0].Worktree.BranchName)
+}
+
 // TestEntRepository_DiffStats tests diff stats persistence
 func TestEntRepository_DiffStats(t *testing.T) {
 	repo, cleanup := createTestEntRepository(t)
