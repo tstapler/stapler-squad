@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.43.1](https://github.com/tstapler/stapler-squad/compare/v1.43.0...v1.43.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **backlog:** stop Sessions list from disappearing on live updates ([#496](https://github.com/tstapler/stapler-squad/issues/496)) ([8b3020e](https://github.com/tstapler/stapler-squad/commit/8b3020e72161b528af7807bf7b58d4cbfcce8f82))
+* **gogitstore:** add deterministic prober to eliminate mmap flake ([#471](https://github.com/tstapler/stapler-squad/issues/471)) ([23b8f08](https://github.com/tstapler/stapler-squad/commit/23b8f089905745903a87ea570e887bc0fe0e1c9a))
+* **session:** make EntRepository.ListWithOptions respect LoadOptions ([#497](https://github.com/tstapler/stapler-squad/issues/497)) ([370fff4](https://github.com/tstapler/stapler-squad/commit/370fff454963c8ebbfcc6d8bcb248b3c9646ba88))
+
 ## [1.43.0](https://github.com/tstapler/stapler-squad/compare/v1.42.0...v1.43.0) (2026-08-14)
 
 
