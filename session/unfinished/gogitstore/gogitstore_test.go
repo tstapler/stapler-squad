@@ -89,20 +89,38 @@ func gitRun(t *testing.T, dir string, args ...string) {
 // running concurrently on a resource-shared runner — the flat, unjittered
 // short delays let concurrent retries pile back into the same contention
 // window in lockstep. See gitRetryBackoff.
+// gitCommandTimeout bounds a single git subprocess invocation. Without this,
+// a wedged git process (e.g. blocked on a lock file left by a detached
+// `gc.auto` background process, or genuine tmpfs/resource contention) blocks
+// cmd.Wait() forever: go test's own -timeout panics the *test binary* and
+// dumps goroutines but never signals the child process, so the goroutine
+// calling Wait() — and the fixture build it's part of — hangs past the test
+// timeout instead of failing. Reproduced directly: a fresh, isolated run of
+// TestMmapIndex_HeapAllocation_LowerThanCopyBased under `-timeout 60s` still
+// hit `panic: test timed out after 1m0s` with goroutine 20 blocked in
+// os/exec.(*Cmd).Wait, called from gitRunErr's CombinedOutput.
+const gitCommandTimeout = 30 * time.Second
+
 func gitRunErr(logf func(format string, args ...any), dir string, args ...string) error {
 	const maxAttempts = 5
 	var lastErr error
 	var lastOut []byte
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
+		cmd := safeexec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",
 			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.local",
 		)
 		out, err := cmd.CombinedOutput()
+		timedOut := ctx.Err() == context.DeadlineExceeded
+		cancel()
 		if err == nil {
 			return nil
+		}
+		if timedOut {
+			err = fmt.Errorf("timed out after %s: %w", gitCommandTimeout, err)
 		}
 		lastErr, lastOut = err, out
 		if !gitCommandIsRetryable(args) || attempt == maxAttempts {
