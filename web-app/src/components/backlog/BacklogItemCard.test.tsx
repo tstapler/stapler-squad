@@ -86,6 +86,153 @@ describe("BacklogItemCard — per-card pending state", () => {
 
 });
 
+describe("BacklogItemCard — disabled action hints (tstapler/stapler-squad#487)", () => {
+  it("BacklogItemCard_should_ShowNoAcceptanceCriteriaHint_When_IdeaStatusHasNoAcCriteria", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "idea", acCriteria: [] })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-mark_ready");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringContaining("AC criterion"));
+
+    const hint = screen.getByTestId("backlog-action-disabled-reason");
+    expect(hint).toHaveTextContent(/AC criterion/i);
+    expect(button).toHaveAttribute("aria-describedby", hint.id);
+  });
+
+  it("BacklogItemCard_should_ShowNoRepoPathHint_When_ReadyStatusHasNoRepoPath", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "ready", repoPath: undefined })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-trigger_triage");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringContaining("repository path"));
+
+    const hint = screen.getByTestId("backlog-action-disabled-reason");
+    expect(hint).toHaveTextContent(/repository path/i);
+    expect(button).toHaveAttribute("aria-describedby", hint.id);
+  });
+
+  it("BacklogItemCard_should_ShowNoLinkedSessionHint_When_InProgressStatusHasNoLinkedSessions", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "in_progress", linkedSessions: [] })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-view_session");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringContaining("linked session"));
+
+    const hint = screen.getByTestId("backlog-action-disabled-reason");
+    expect(hint).toHaveTextContent(/linked session/i);
+    expect(button).toHaveAttribute("aria-describedby", hint.id);
+  });
+
+  it("BacklogItemCard_should_OmitHintAndTitleAndAriaDescribedby_When_IdeaStatusHasAcCriteria", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "idea", acCriteria: [{ text: "Do the thing", status: "todo" } as never] })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-mark_ready");
+    expect(button).not.toBeDisabled();
+    expect(button).not.toHaveAttribute("title");
+    expect(button).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByTestId("backlog-action-disabled-reason")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_OmitHintAndTitleAndAriaDescribedby_When_ReadyStatusHasRepoPath", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "ready", repoPath: "/repo/path" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-trigger_triage");
+    expect(button).not.toBeDisabled();
+    expect(button).not.toHaveAttribute("title");
+    expect(button).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByTestId("backlog-action-disabled-reason")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_OmitHintAndTitleAndAriaDescribedby_When_InProgressStatusHasLinkedSessions", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "in_progress", linkedSessions: [{ sessionId: "s1" } as never] })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-view_session");
+    expect(button).not.toBeDisabled();
+    expect(button).not.toHaveAttribute("title");
+    expect(button).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByTestId("backlog-action-disabled-reason")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_SuppressDomainHint_When_TriageIsRunningEvenThoughRepoPathMissing", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "ready", repoPath: undefined, triageStatus: "running" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-trigger_triage");
+    expect(button).not.toHaveAttribute("title");
+    expect(button).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByTestId("backlog-action-disabled-reason")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_SuppressDomainHint_When_ActionIsPendingEvenThoughConditionUnmet", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "idea", acCriteria: [] })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+        pendingAction="mark_ready"
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-mark_ready");
+    expect(button).not.toHaveAttribute("title");
+    expect(button).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByTestId("backlog-action-disabled-reason")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_OmitHintAndTitle_When_StatusHasNoDisableCondition", () => {
+    render(
+      <BacklogItemCard item={makeItem({ status: "review" })} onAction={jest.fn()} onClick={jest.fn()} />
+    );
+
+    const button = screen.getByTestId("backlog-action-view_review");
+    expect(button).not.toBeDisabled();
+    expect(button).not.toHaveAttribute("title");
+    expect(button).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByTestId("backlog-action-disabled-reason")).not.toBeInTheDocument();
+  });
+});
+
 describe("BacklogItemCard — last-review verdict badge", () => {
   it("shows a FAIL badge when the item's most recent review verdict is FAIL", () => {
     render(

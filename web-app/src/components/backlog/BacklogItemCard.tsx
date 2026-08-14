@@ -44,6 +44,7 @@ interface ActionSpec {
   label: string;
   action: string;
   disabled?: boolean;
+  disabledReason?: string;
   isDone?: boolean;
 }
 
@@ -54,16 +55,23 @@ function getActionSpec(item: BacklogItem): ActionSpec {
         label: "Mark Ready",
         action: "mark_ready",
         disabled: item.acCriteria.length === 0,
+        disabledReason: item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined,
       };
     case "refining":
       return { label: "Refining…", action: "refining", isDone: true };
     case "ready":
-      return { label: "Trigger Triage", action: "trigger_triage", disabled: !item.repoPath };
+      return {
+        label: "Trigger Triage",
+        action: "trigger_triage",
+        disabled: !item.repoPath,
+        disabledReason: !item.repoPath ? "Set repository path first" : undefined,
+      };
     case "in_progress":
       return {
         label: "View Session",
         action: "view_session",
         disabled: item.linkedSessions.length === 0,
+        disabledReason: item.linkedSessions.length === 0 ? "No linked session yet" : undefined,
       };
     case "review":
       return { label: "View Review", action: "view_review" };
@@ -132,6 +140,13 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   const actionSpec = getActionSpec(item);
   const isTriageRunning = item.triageStatus === "running";
   const isActionPending = pendingAction === actionSpec.action;
+  // Transient disable reasons (spinner + "Running…"/"Triage in progress") are
+  // already explained via the button label/TriageLoadingIndicator — never
+  // surface the underlying domain condition's reason on top of those, even
+  // if it's also unmet.
+  const disabledReason =
+    isTriageRunning || pendingAction !== null ? undefined : actionSpec.disabled ? actionSpec.disabledReason : undefined;
+  const disabledReasonId = `${item.id}-disabled-reason`;
 
   // `item.liveVersion` only advances for a genuine live (non-snapshot)
   // BacklogItemEvent (see useWatchBacklogItems.ts / backlogItemsSlice.ts) —
@@ -237,6 +252,8 @@ export const BacklogItemCard = memo(function BacklogItemCard({
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
           disabled={actionSpec.disabled || isTriageRunning || pendingAction !== null}
           aria-label={isActionPending ? "Running…" : isTriageRunning ? "Triage in progress" : actionSpec.label}
+          aria-describedby={disabledReason ? disabledReasonId : undefined}
+          title={disabledReason}
           data-action-button="true"
           data-testid={`backlog-action-${actionSpec.action}`}
           onClick={(e) => {
@@ -257,6 +274,11 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         </button>
         {stuckItem && <BlockerChip variant="compact" item={stuckItem} />}
       </div>
+      {disabledReason && (
+        <span id={disabledReasonId} className={styles.disabledReason} data-testid="backlog-action-disabled-reason">
+          {disabledReason}
+        </span>
+      )}
     </div>
   );
 });
