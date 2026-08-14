@@ -297,4 +297,67 @@ describe('useResyncStaggerQueue', () => {
     expect(fireB).toHaveBeenCalledTimes(1);
     expect(fireC).toHaveBeenCalledTimes(1);
   });
+
+  test('useResyncStaggerQueue_should_PickUpLiveBatchingFlagToggle_When_FlagFlipsWithoutRemount', () => {
+    // Regression test: `batchingEnabled` comes from
+    // `useFeatureFlag("terminal:resync-batching")`, which is live context
+    // state that can change (e.g. toggled from /settings/features) without
+    // the owning SessionDetailView remounting. The lazy `queueRef.current`
+    // construction in useResyncStaggerQueue used to capture batchingEnabled
+    // only once, at first-enable time, so a live toggle was silently
+    // ignored for the rest of the component's lifetime. This asserts the
+    // queue picks up the new mode on the very next schedule() call after the
+    // flag flips, with no dropped or duplicated fires across the toggle.
+    jest.spyOn(Math, 'random').mockReturnValue(0.5); // 150ms delay/shared window
+
+    const { result, rerender } = renderHook(
+      ({ batching }: { batching: boolean }) => useResyncStaggerQueue(true, batching),
+      { initialProps: { batching: false } },
+    );
+
+    // Starts in non-batching mode: two entries fire independently, each on
+    // its own timer (both 150ms here since jitter is mocked constant).
+    const fireA = jest.fn();
+    const fireB = jest.fn();
+    act(() => {
+      result.current('pool-1')?.(fireA, { preempt: false });
+      result.current('pool-2')?.(fireB, { preempt: false });
+    });
+    act(() => {
+      jest.advanceTimersByTime(150);
+    });
+    expect(fireA).toHaveBeenCalledTimes(1);
+    expect(fireB).toHaveBeenCalledTimes(1);
+
+    // Flip the flag live, without unmounting — mirrors toggling
+    // terminal:resync-batching from /settings/features while this view stays
+    // open.
+    rerender({ batching: true });
+
+    // New entries scheduled after the toggle must now coalesce onto one
+    // shared batching timer instead of independent per-instance timers.
+    const fireC = jest.fn();
+    const fireD = jest.fn();
+    act(() => {
+      result.current('pool-3')?.(fireC, { preempt: false });
+      result.current('pool-4')?.(fireD, { preempt: false });
+    });
+    act(() => {
+      jest.advanceTimersByTime(100);
+    });
+    // Not yet fired — still waiting on the shared coalescing window, proving
+    // the post-toggle schedule() calls actually took the batching branch.
+    expect(fireC).not.toHaveBeenCalled();
+    expect(fireD).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(50); // total 150ms
+    });
+    expect(fireC).toHaveBeenCalledTimes(1);
+    expect(fireD).toHaveBeenCalledTimes(1);
+
+    // No entry fired more than once across the whole toggle boundary.
+    expect(fireA).toHaveBeenCalledTimes(1);
+    expect(fireB).toHaveBeenCalledTimes(1);
+  });
 });
