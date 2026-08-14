@@ -41,15 +41,16 @@ func (p *BacklogItemEventPublisher) PublishItemChanged(item *session.BacklogItem
 	}
 
 	payload := &events.BacklogItemEventPayload{
-		Kind:          mapBacklogChangeKind(change.Kind),
-		Item:          item,
-		OldStatus:     change.OldStatus,
-		NewStatus:     change.NewStatus,
-		UpdatedFields: change.UpdatedFields,
-		SessionID:     change.SessionID,
-		ArchivedAt:    change.ArchivedAt,
-		RemovedReason: change.RemovedReason,
-		Verdict:       change.Verdict,
+		Kind:           mapBacklogChangeKind(change.Kind),
+		Item:           item,
+		OldStatus:      change.OldStatus,
+		NewStatus:      change.NewStatus,
+		UpdatedFields:  change.UpdatedFields,
+		SessionID:      change.SessionID,
+		ArchivedAt:     change.ArchivedAt,
+		RemovedReason:  change.RemovedReason,
+		Verdict:        change.Verdict,
+		ClaimantHostID: change.ClaimantHostID,
 	}
 	p.Bus.Publish(events.NewBacklogItemChangedEvent(payload))
 }

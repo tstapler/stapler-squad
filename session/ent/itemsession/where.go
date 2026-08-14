@@ -156,6 +156,11 @@ func EstimatedCostUsd(v float64) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldEstimatedCostUsd, v))
 }
 
+// ClaimantHostID applies equality check predicate on the "claimant_host_id" field. It's identical to ClaimantHostIDEQ.
+func ClaimantHostID(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldClaimantHostID, v))
+}
+
 // SessionUUIDEQ applies the EQ predicate on the "session_uuid" field.
 func SessionUUIDEQ(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldSessionUUID, v))
@@ -1394,6 +1399,81 @@ func EstimatedCostUsdIsNil() predicate.ItemSession {
 // EstimatedCostUsdNotNil applies the NotNil predicate on the "estimated_cost_usd" field.
 func EstimatedCostUsdNotNil() predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldNotNull(FieldEstimatedCostUsd))
+}
+
+// ClaimantHostIDEQ applies the EQ predicate on the "claimant_host_id" field.
+func ClaimantHostIDEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDNEQ applies the NEQ predicate on the "claimant_host_id" field.
+func ClaimantHostIDNEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNEQ(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDIn applies the In predicate on the "claimant_host_id" field.
+func ClaimantHostIDIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIn(FieldClaimantHostID, vs...))
+}
+
+// ClaimantHostIDNotIn applies the NotIn predicate on the "claimant_host_id" field.
+func ClaimantHostIDNotIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotIn(FieldClaimantHostID, vs...))
+}
+
+// ClaimantHostIDGT applies the GT predicate on the "claimant_host_id" field.
+func ClaimantHostIDGT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGT(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDGTE applies the GTE predicate on the "claimant_host_id" field.
+func ClaimantHostIDGTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGTE(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDLT applies the LT predicate on the "claimant_host_id" field.
+func ClaimantHostIDLT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLT(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDLTE applies the LTE predicate on the "claimant_host_id" field.
+func ClaimantHostIDLTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLTE(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDContains applies the Contains predicate on the "claimant_host_id" field.
+func ClaimantHostIDContains(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContains(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDHasPrefix applies the HasPrefix predicate on the "claimant_host_id" field.
+func ClaimantHostIDHasPrefix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasPrefix(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDHasSuffix applies the HasSuffix predicate on the "claimant_host_id" field.
+func ClaimantHostIDHasSuffix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasSuffix(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDIsNil applies the IsNil predicate on the "claimant_host_id" field.
+func ClaimantHostIDIsNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIsNull(FieldClaimantHostID))
+}
+
+// ClaimantHostIDNotNil applies the NotNil predicate on the "claimant_host_id" field.
+func ClaimantHostIDNotNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotNull(FieldClaimantHostID))
+}
+
+// ClaimantHostIDEqualFold applies the EqualFold predicate on the "claimant_host_id" field.
+func ClaimantHostIDEqualFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEqualFold(FieldClaimantHostID, v))
+}
+
+// ClaimantHostIDContainsFold applies the ContainsFold predicate on the "claimant_host_id" field.
+func ClaimantHostIDContainsFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContainsFold(FieldClaimantHostID, v))
 }
 
 // HasBacklogItem applies the HasEdge predicate on the "backlog_item" edge.

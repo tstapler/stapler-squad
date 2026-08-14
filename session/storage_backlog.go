@@ -54,6 +54,11 @@ type ItemSessionData struct {
 	TriageResult             string
 	VerificationNotes        string  // Freeform verification evidence reported via request_review
 	EstimatedCostUsd         float64 // Only set for headless sessions where cost is known at creation time
+	// ClaimantHostID is the claiming/attaching process's own stable host identifier
+	// (Config.GetOrCreateClaimantHostID), never anything derived from the session being
+	// claimed/attached. See ItemSession.claimant_host_id's schema comment for the full
+	// disambiguation against STAPLER_SQUAD_INSTANCE and session/contexts.go's CloudContext.InstanceID.
+	ClaimantHostID string
 }
 
 // ReviewVerdictData is the input data for saving a ReviewVerdict.
@@ -88,7 +93,8 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetPipelineModeSnapshot(data.PipelineModeSnapshot).
 		SetPipelineModeSnapshotHash(data.PipelineModeSnapshotHash).
 		SetNillableTriageResult(nilIfEmpty(data.TriageResult)).
-		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes))
+		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes)).
+		SetClaimantHostID(data.ClaimantHostID)
 	if data.EstimatedCostUsd > 0 {
 		q = q.SetEstimatedCostUsd(data.EstimatedCostUsd)
 	}
@@ -106,8 +112,9 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 	} else {
 		r.attachItemSessionsForPublish(ctx, item)
 		r.publishItemChanged(item, BacklogItemChange{
-			Kind:      ChangeSessionAttached,
-			SessionID: data.SessionUUID,
+			Kind:           ChangeSessionAttached,
+			SessionID:      data.SessionUUID,
+			ClaimantHostID: data.ClaimantHostID,
 		})
 	}
 

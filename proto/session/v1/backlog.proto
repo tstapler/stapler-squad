@@ -92,6 +92,21 @@ message ItemSession {
   // whose result failed to parse — see session.WriteHeadlessFailureCapture. Empty
   // when the call succeeded and parsed cleanly, or capture itself failed.
   string failure_capture_path = 19;
+  // claimant_host_id identifies the physical stapler-squad process/host that
+  // created this ItemSession — either by claiming the item (DequeueNextQueuedItems
+  // -> SpawnSessionFromItem) or by attaching an externally-created session
+  // (AttachSessionToItem, where it is the attaching process's own identity, not
+  // anything embedded in the attached session). A random UUID generated once and
+  // persisted in that process's own config (Config.GetOrCreateClaimantHostID),
+  // stable across restarts of the same process/config directory and distinct
+  // across different hosts or STAPLER_SQUAD_INSTANCE-namespaced config dirs on the
+  // same machine. Purely descriptive provenance — never read by
+  // TransitionBacklogItemStatus's CAS guard. Do not confuse with
+  // STAPLER_SQUAD_INSTANCE (namespaces on-disk state on a single machine) or
+  // session/contexts.go's CloudContext.InstanceID (a cloud provider's instance
+  // identifier, not populated for local/dev sessions). Empty for ItemSession rows
+  // created before this field existed.
+  string claimant_host_id = 20;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.
@@ -757,6 +772,10 @@ message BacklogItemSessionAttachedEvent {
   string session_id = 2;
   BacklogItem item = 3;
   bool is_snapshot = 4;
+  // claimant_host_id is the attaching process's own identity (Config.GetOrCreateClaimantHostID),
+  // never anything read from the attached session. See ItemSession.claimant_host_id for the full
+  // disambiguation against STAPLER_SQUAD_INSTANCE and session/contexts.go's CloudContext.InstanceID.
+  string claimant_host_id = 5;
 }
 
 // BacklogItemUpdatedEvent is emitted when one or more item fields change
