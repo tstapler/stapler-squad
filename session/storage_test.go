@@ -14,15 +14,17 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
-// createTestStorage creates a temporary Storage backed by an Ent repository.
+// createTestStorage creates a Storage backed by an in-memory Ent repository.
 // The caller should defer cleanup().
+//
+// This package's fixtures are called 300+ times across its test files; each
+// call still pays the full Ent schema-creation + backfill-migration cost, but
+// backing it with an in-memory SQLite database (rather than a temp-dir file)
+// removes the disk I/O and WAL fsync overhead that made the full package
+// suite take ~650s and occasionally exceed `go test`'s 10m timeout.
 func createTestStorage(t *testing.T) (*Storage, func()) {
 	t.Helper()
-	tmpDir, err := os.MkdirTemp("", "storage-test-*")
-	require.NoError(t, err)
-
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-	repo, err := NewEntRepository(WithDatabasePath(dbPath))
+	repo, err := NewEntRepository(WithDatabasePath(":memory:"))
 	require.NoError(t, err)
 
 	storage, err := NewStorageWithRepository(repo)
@@ -30,7 +32,6 @@ func createTestStorage(t *testing.T) (*Storage, func()) {
 
 	cleanup := func() {
 		repo.Close()
-		os.RemoveAll(tmpDir)
 	}
 	return storage, cleanup
 }
