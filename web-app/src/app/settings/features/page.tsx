@@ -60,11 +60,14 @@ export default function FeaturesPage() {
           const meta = FEATURE_META[name];
           const label = meta?.label ?? name;
           return (
-            <div key={name} className={flagRow}>
+            <div key={name} className={flagRow} data-testid="feature-flag-row">
               <div className={flagInfo}>
-                <div className={flagName}>
+                <div className={flagName} data-testid="feature-flag-name">
                   {label}
-                  <span className={`${badge} ${enabled ? badgeEnabled : badgeDisabled}`}>
+                  <span
+                    className={`${badge} ${enabled ? badgeEnabled : badgeDisabled}`}
+                    data-testid="feature-flag-status"
+                  >
                     {enabled ? "On" : "Off"}
                   </span>
                 </div>

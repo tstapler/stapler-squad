@@ -48,9 +48,12 @@ test.describe('terminal-resync-feature-flags', () => {
     await gotoFeaturesPage(page);
 
     // Step 1: locate the flag row by its readable label (not the raw flag name).
-    const row = page.locator('div').filter({ hasText: RESYNC_FLAG_LABEL }).last();
+    const row = page.getByTestId('feature-flag-row').filter({
+      has: page.getByTestId('feature-flag-name').getByText(RESYNC_FLAG_LABEL),
+    });
     await expect(row).toBeVisible({ timeout: 10000 });
-    expect(await page.getByText(RESYNC_FLAG, { exact: true }).count()).toBe(0);
+    const nameTexts = await page.getByTestId('feature-flag-name').allTextContents();
+    expect(nameTexts.some((text) => text.trim() === RESYNC_FLAG)).toBe(false);
 
     // Step 2: click the toggle for that flag.
     const toggleButton = page.getByRole('button', { name: `Enable ${RESYNC_FLAG_LABEL}` });
@@ -73,13 +76,15 @@ test.describe('terminal-resync-feature-flags', () => {
     const toggleButton = page.getByRole('button', { name: `Enable ${RESYNC_FLAG_LABEL}` });
     await expect(toggleButton).toBeVisible({ timeout: 10000 });
 
-    const row = page.locator('div').filter({ hasText: RESYNC_FLAG_LABEL }).last();
-    await expect(row.getByText('Off', { exact: true })).toBeVisible();
+    const row = page.getByTestId('feature-flag-row').filter({
+      has: page.getByTestId('feature-flag-name').getByText(RESYNC_FLAG_LABEL),
+    });
+    await expect(row.getByTestId('feature-flag-status')).toHaveText('Off');
 
     await toggleButton.click();
 
     // Badge flips to "On" and no error is shown.
-    await expect(row.getByText('On', { exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(row.getByTestId('feature-flag-status')).toHaveText('On', { timeout: 10000 });
     await expect(page.getByRole('alert')).toHaveCount(0);
 
     // Reload — the toggled state must persist (server-backed, not local-only state).
