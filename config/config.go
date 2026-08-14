@@ -592,6 +592,17 @@ func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
 	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
 }
 
+// PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
+// session launch prompts (see Instance.promptArg). Always defaults to
+// "~/.stapler-squad/prompt-cache".
+func (c *Config) PromptCacheDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "prompt-cache"), nil
+}
+
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
 // If NewProjectBaseDir is empty, it defaults to "~/Projects" with ~ expanded.
 func (c *Config) NewProjectBaseDirOrDefault() (string, error) {

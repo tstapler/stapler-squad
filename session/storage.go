@@ -416,7 +416,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 // Instance objects. This avoids the side effect of FromInstanceData() calling Start()
 // (which spawns PTY processes). Use for read-only existence and title checks.
 func (s *Storage) ListInstanceData() ([]InstanceData, error) {
-	return s.repo.List(context.Background())
+	return s.repo.ListWithOptions(context.Background(), LoadMinimal)
 }
 
 // GetStableID mirrors Instance.GetStableID for InstanceData: returns UUID when set,
