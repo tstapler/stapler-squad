@@ -242,7 +242,7 @@ var fixtureCache sync.Map // int -> *fixtureCacheEntry
 // numCommits, building it for real (with buildPackedFixture's existing
 // whole-fixture-rebuild-on-failure discipline) the first time any test asks
 // for that numCommits value, and reusing it for every subsequent request.
-func goldenFixtureDir(t *testing.T, numCommits int) string {
+func goldenFixtureDir(t testing.TB, numCommits int) string {
 	t.Helper()
 	entryIface, _ := fixtureCache.LoadOrStore(numCommits, &fixtureCacheEntry{})
 	entry := entryIface.(*fixtureCacheEntry) //nolint:errcheck
@@ -285,7 +285,7 @@ func goldenFixtureDir(t *testing.T, numCommits int) string {
 // independent copy of that golden fixture at dir, safe for the caller to
 // mutate freely (further commits, worktrees, concurrent repacks) without
 // affecting any other test.
-func buildPackedFixture(t *testing.T, dir string, numCommits int) {
+func buildPackedFixture(t testing.TB, dir string, numCommits int) {
 	t.Helper()
 	golden := goldenFixtureDir(t, numCommits)
 
@@ -567,7 +567,7 @@ func TestRemoveAllWithRetry_RemovesRealDirectory(t *testing.T) {
 // than retrying any individual git command in place — see
 // buildPackedFixtureAttempts's doc comment for why that distinction
 // matters here specifically.
-func buildPackedFixtureOnce(t *testing.T, dir string, numCommits int) error {
+func buildPackedFixtureOnce(t testing.TB, dir string, numCommits int) error {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
@@ -625,6 +625,15 @@ func buildPackedFixtureOnce(t *testing.T, dir string, numCommits int) error {
 		return err
 	}
 
+	// Every iteration rewrites the SAME 3 filenames (file0.txt..file2.txt),
+	// so only the first iteration ever introduces new (untracked) paths —
+	// from the second iteration on, `git commit -a` stages and commits the
+	// already-tracked modifications in one subprocess instead of a separate
+	// `git add .` + `git commit` pair. This halves the git-subprocess count
+	// of the dominant cost in this function (numCommits can be in the
+	// hundreds across the golden fixtures this builds), with no change to
+	// the resulting object graph: `-a` stages modifications to tracked
+	// files identically to `add .` would for these same paths.
 	for i := 0; i < numCommits; i++ {
 		for f := 0; f < 3; f++ {
 			path := filepath.Join(dir, fmt.Sprintf("file%d.txt", f))
@@ -633,10 +642,16 @@ func buildPackedFixtureOnce(t *testing.T, dir string, numCommits int) error {
 				return fmt.Errorf("write %s: %w", path, err)
 			}
 		}
-		if err := gitRunErr(t.Logf, dir, "add", "."); err != nil {
-			return err
+		if i == 0 {
+			if err := gitRunErr(t.Logf, dir, "add", "."); err != nil {
+				return err
+			}
+			if err := gitRunErr(t.Logf, dir, "commit", "-q", "-m", fmt.Sprintf("commit %d", i)); err != nil {
+				return err
+			}
+			continue
 		}
-		if err := gitRunErr(t.Logf, dir, "commit", "-q", "-m", fmt.Sprintf("commit %d", i)); err != nil {
+		if err := gitRunErr(t.Logf, dir, "commit", "-q", "-a", "-m", fmt.Sprintf("commit %d", i)); err != nil {
 			return err
 		}
 	}
