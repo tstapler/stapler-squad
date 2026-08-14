@@ -67,3 +67,29 @@ func TestIsDuplicateNudge_should_ReturnTrue_When_WithinCooldownBoundary(t *testi
 		t.Fatal("expected true just inside the cooldown boundary")
 	}
 }
+
+// TestNextLastNudge_should_LeavePrevUnchanged_When_DeliveryFailed guards the
+// documented invariant in AutonomousDriver.run(): lastSentNudge must only be
+// updated once BOTH SendKeys writes (content, then the submit keystroke)
+// succeed. A partially-delivered nudge (e.g. the content write landed but the
+// Enter keystroke failed) must not be recorded, or a later isDuplicateNudge
+// check could wrongly suppress a genuinely new message that never actually
+// reached the session.
+func TestNextLastNudge_should_LeavePrevUnchanged_When_DeliveryFailed(t *testing.T) {
+	prev := lastNudge{text: "please continue", at: time.Unix(1000, 0)}
+	got := nextLastNudge(prev, "please run the tests now", false)
+	if got != prev {
+		t.Fatalf("expected lastSentNudge to remain %+v after a failed delivery, got %+v", prev, got)
+	}
+}
+
+func TestNextLastNudge_should_RecordNewNudge_When_DeliverySucceeded(t *testing.T) {
+	prev := lastNudge{text: "please continue", at: time.Unix(1000, 0)}
+	got := nextLastNudge(prev, "please run the tests now", true)
+	if got.text != "please run the tests now" {
+		t.Fatalf("expected new nudge text to be recorded, got %+v", got)
+	}
+	if !got.at.After(prev.at) {
+		t.Fatalf("expected a fresh timestamp newer than %v, got %v", prev.at, got.at)
+	}
+}

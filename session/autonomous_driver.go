@@ -198,6 +198,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	// persistence is needed and a local avoids any d.mu entanglement.
 	var lastSentNudge lastNudge
 
+turnLoop:
 	for turnCount := 0; turnCount < d.maxTurns; turnCount++ {
 		if ctx.Err() != nil {
 			break
@@ -251,7 +252,14 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now())
 		if suppressed {
 			log.Info("AutonomousDriver: suppressed nudge", "session", sessionName, "turn", turnCount+1, "directive", directive)
-			time.Sleep(nudgeCooldown)
+			// ctx-aware wait (not a bare time.Sleep) so Stop() can cancel this
+			// near-immediately instead of blocking the full nudgeCooldown — mirrors
+			// waitForPaneSettle/waitForRateLimitClear's select pattern above.
+			select {
+			case <-ctx.Done():
+				break turnLoop
+			case <-time.After(nudgeCooldown):
+			}
 			continue
 		}
 
@@ -279,9 +287,12 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
-		// Only recorded once both writes above have succeeded (criterion 7) — a
-		// failed send must not be treated as delivered for future dedup checks.
-		lastSentNudge = lastNudge{text: nextMsg, at: time.Now()}
+		// Only recorded once both writes above have succeeded — a failed send must
+		// not be treated as delivered for future dedup checks. Isolated into
+		// nextLastNudge (a pure function) so this invariant is directly unit
+		// testable without needing a tmux-backed Instance to force a partial
+		// SendKeys failure.
+		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true)
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
 		d.fireTurnCallback(turnCount+1, d.maxTurns, nextMsg)
 
@@ -509,6 +520,10 @@ No other text.`
 // LLM-generated content from a prior turn, so it's wrapped in its own <last_nudge> tag
 // (same anti-spoofing rationale as <goal>/<session_output>) rather than interpolated
 // directly into the instruction text.
+// lastNudgeTagEscaper neutralizes the two characters that could otherwise let
+// lastNudgeText close its <last_nudge> block early.
+var lastNudgeTagEscaper = strings.NewReplacer("<", "&lt;", ">", "&gt;")
+
 func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int, lastNudgeText string, lastNudgeAt time.Time) string {
 	const maxTailBytes = 80 * 120 // ~80 lines × 120 chars
 	if len(tail) > maxTailBytes {
@@ -516,7 +531,13 @@ func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int, lastNu
 	}
 	lastNudgeBlock := "None sent yet."
 	if lastNudgeText != "" && !lastNudgeAt.IsZero() {
-		lastNudgeBlock = fmt.Sprintf("%s\n(sent %s ago)", lastNudgeText, time.Since(lastNudgeAt).Round(time.Second))
+		// Escape "<"/">" before interpolating: lastNudgeText is the system's own
+		// prior LLM output being round-tripped back into the prompt, so a nudge
+		// containing "</last_nudge>" (or another tag) could otherwise close the
+		// block early and spoof content into the surrounding instruction text —
+		// the same anti-spoofing rationale as the <goal>/<session_output> wrapping.
+		escapedNudgeText := lastNudgeTagEscaper.Replace(lastNudgeText)
+		lastNudgeBlock = fmt.Sprintf("%s\n(sent %s ago)", escapedNudgeText, time.Since(lastNudgeAt).Round(time.Second))
 	}
 	return fmt.Sprintf(
 		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>\n\n<last_nudge>\n%s\n</last_nudge>\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text>, DONE: <reason>, or WAIT: <reason>.",

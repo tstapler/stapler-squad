@@ -52,6 +52,19 @@ func TestParseOrchestrationResponse_Done(t *testing.T) {
 	}
 }
 
+func TestParseOrchestrationResponse_Wait(t *testing.T) {
+	directive, reason, err := parseOrchestrationResponse("WAIT: agent already acknowledged the plan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if directive != directiveWait {
+		t.Errorf("expected directiveWait, got %v", directive)
+	}
+	if reason != "agent already acknowledged the plan" {
+		t.Errorf("expected reason %q, got %q", "agent already acknowledged the plan", reason)
+	}
+}
+
 func TestParseOrchestrationResponse_Malformed(t *testing.T) {
 	_, _, err := parseOrchestrationResponse("I have no idea what to do")
 	if err == nil {
@@ -447,6 +460,58 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Error("driver did not stop within 2s after Stop()")
+}
+
+// TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression proves the
+// nudge-suppression wait is ctx-aware, not a bare time.Sleep(nudgeCooldown)
+// (production nudgeCooldown is 3 minutes). The driver is driven into the
+// suppression branch via a WAIT directive on the first turn, then Stop() is
+// called shortly after — the run loop must return within the 2s test
+// deadline, not block for the full cooldown.
+func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
+	pool := &fakeHeadlessPool{
+		responses: []string{"WAIT: agent already acknowledged the plan"},
+	}
+
+	inst := &Instance{Title: "test-stop-suppressed", UUID: "abcdefgh-stop1"}
+	cc, _ := NewClaudeController(inst)
+	inst.controllerManager.controller.Store(cc)
+
+	driver := &AutonomousDriver{
+		inst:         inst,
+		controller:   cc,
+		headlessPool: pool,
+		goal:         "goal",
+		maxTurns:     100,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go pumpIdleSignals(ctx, cc)
+
+	if err := driver.Start(ctx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// Give the driver time to reach the WAIT-suppression branch and enter its
+	// cooldown wait before calling Stop.
+	time.Sleep(150 * time.Millisecond)
+	stopStart := time.Now()
+	driver.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !driver.driverRunning.Load() {
+			if elapsed := time.Since(stopStart); elapsed >= nudgeCooldown {
+				t.Fatalf("driver took %v to stop — appears to have blocked on the full nudgeCooldown instead of returning promptly", elapsed)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("driver did not stop within 2s after Stop() while suppressing a nudge — suggests the suppression wait is not ctx-aware")
 }
 
 // panicPool panics on the first call to simulate a driver panic.

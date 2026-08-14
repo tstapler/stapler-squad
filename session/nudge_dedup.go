@@ -40,3 +40,17 @@ func isDuplicateNudge(candidate string, n lastNudge, now time.Time) bool {
 	}
 	return normalizeNudgeText(candidate) == normalizeNudgeText(n.text)
 }
+
+// nextLastNudge computes what lastSentNudge should become after an attempted
+// delivery of nextMsg. delivered must be true only when BOTH SendKeys writes
+// (content, then the submit keystroke) succeeded — a partially- or
+// un-delivered nudge must not be recorded, or a later isDuplicateNudge check
+// could wrongly suppress a genuinely new message that never actually reached
+// the session. Extracted as a pure function so this invariant is directly
+// unit-testable without a tmux-backed Instance.
+func nextLastNudge(prev lastNudge, nextMsg string, delivered bool) lastNudge {
+	if !delivered {
+		return prev
+	}
+	return lastNudge{text: nextMsg, at: time.Now()}
+}
