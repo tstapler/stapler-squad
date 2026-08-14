@@ -279,6 +279,13 @@ async function renderWithSession(session: LinkedSession, modes: PipelineMode[]) 
   });
 }
 
+describe("BacklogItemDetail — LivenessLine wiring (backlog telemetry-to-UI)", () => {
+  it("BacklogItemDetail_should_RenderLivenessLine_When_ItemDetailMounts", async () => {
+    await renderWithSession(makeSession(), []);
+    expect(screen.getByTestId("liveness-line")).toBeInTheDocument();
+  });
+});
+
 describe("BacklogItemDetail — Epic 3.4 'what ran' Pipeline surface", () => {
   it("Case 1 — found, unchanged: shows the mode's name with no drift annotation", async () => {
     const session = makeSession({

@@ -273,10 +273,11 @@ func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID str
 	case events.BacklogChangeSessionAttached:
 		out.Event = &sessionv1.BacklogItemEvent_SessionAttached{
 			SessionAttached: &sessionv1.BacklogItemSessionAttachedEvent{
-				ItemId:     itemID,
-				SessionId:  payload.SessionID,
-				Item:       protoItem,
-				IsSnapshot: payload.IsSnapshot,
+				ItemId:         itemID,
+				SessionId:      payload.SessionID,
+				Item:           protoItem,
+				IsSnapshot:     payload.IsSnapshot,
+				ClaimantHostId: payload.ClaimantHostID,
 			},
 		}
 
