@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -67,14 +68,16 @@ type CallbackDispatcher struct {
 
 	inFlight chan struct{}
 
-	// validateURL performs the send-time SSRF check (Task 5.2.1f). Always
-	// ValidateCallbackURL in production (set by NewCallbackDispatcher); tests in
-	// this package construct a CallbackDispatcher literal directly with a
+	// validateURL performs the send-time SSRF check (Task 5.2.1f) and returns the
+	// validated IP so attempt can pin its dial to it (AC8 — closes the DNS-rebinding
+	// window between validation and the actual dial). Always
+	// resolveAndValidateCallbackHost in production (set by NewCallbackDispatcher);
+	// tests in this package construct a CallbackDispatcher literal directly with a
 	// permissive stub here so they can exercise real delivery/retry/redaction
 	// behavior against an httptest.Server, whose address is necessarily loopback
 	// and would otherwise always fail the real check — ValidateCallbackURL itself
 	// is exercised directly and exhaustively in webhook_ssrf_test.go.
-	validateURL func(ctx context.Context, rawURL string) error
+	validateURL func(ctx context.Context, rawURL string) (net.IP, error)
 }
 
 // NewCallbackDispatcher creates a CallbackDispatcher reading callback URLs and the
@@ -101,7 +104,7 @@ func NewCallbackDispatcher(cfg *config.Config) *CallbackDispatcher {
 		},
 		cfg:         cfg,
 		inFlight:    make(chan struct{}, maxInFlightCallbacks),
-		validateURL: ValidateCallbackURL,
+		validateURL: resolveAndValidateCallbackHost,
 	}
 }
 
@@ -185,13 +188,18 @@ func (d *CallbackDispatcher) deliver(eventType, url string, payload any) {
 		// delivery entirely (no further retries) — retrying against a target
 		// that just failed an SSRF check would only give a DNS-rebinding
 		// attacker more attempts to land the malicious answer.
-		if err := d.validateURL(ctx, url); err != nil {
+		validIP, err := d.validateURL(ctx, url)
+		if err != nil {
 			cancel()
 			log.Warn("[CallbackDispatcher] callback URL failed SSRF validation, aborting delivery", "event", eventType, "attempt", attempt, "err", err)
 			return
 		}
 
-		ok := d.attempt(ctx, url, body)
+		// AC8: dial exactly the IP just validated, not whatever the default
+		// resolver returns when the request is actually sent — closes the window
+		// between this LookupIPAddr call and the dial a rebinding attacker could
+		// otherwise exploit.
+		ok := d.attempt(ctx, url, body, validIP)
 		cancel()
 		if ok {
 			return
@@ -205,14 +213,32 @@ func (d *CallbackDispatcher) deliver(eventType, url string, payload any) {
 // (2xx response). Never returns the response body or any part of url to the
 // caller — attempt itself must not log (its callers decide what to log, and
 // must never log url).
-func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byte) bool {
+//
+// Dials validIP directly via a per-attempt Transport (AC8), rather than letting the
+// request resolve url's host again — the exact address validateURL just checked is
+// the exact address this attempt connects to, with no re-resolution gap in between. A
+// fresh Transport per attempt (not one shared on d) means a pinned IP for one host can
+// never leak onto a different host's connection via pooled keep-alives.
+func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byte, validIP net.IP) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := d.client.Do(req)
+	dialer := &net.Dialer{}
+	pinnedTransport := &http.Transport{
+		DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			_, port, splitErr := net.SplitHostPort(addr)
+			if splitErr != nil {
+				return nil, splitErr
+			}
+			return dialer.DialContext(dialCtx, network, net.JoinHostPort(validIP.String(), port))
+		},
+	}
+	client := &http.Client{Transport: pinnedTransport, CheckRedirect: d.client.CheckRedirect}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
