@@ -133,6 +133,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		VerificationNotes:        is.VerificationNotes,
 		OverallOutcome:           overallOutcome,
 		ReviewVerdict:            reviewVerdictToSummary(is.Edges.ReviewVerdict),
+		ClaimantHostID:           is.ClaimantHostID,
 	}
 }
 

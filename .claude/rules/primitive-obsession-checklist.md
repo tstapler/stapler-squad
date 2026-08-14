@@ -28,13 +28,10 @@ func GetIssue(ctx context.Context, account AccountRef, repo RepoRef, number int)
 `github/repo_ref.go`'s `RepoRef` (unexported `owner`/`repo` fields, constructed only via
 `NewRepoRef(owner, repo string) (RepoRef, error)` which validates both are non-empty) and
 `github/keychain.go`'s `AccountRef{Username, Host string}` are the canonical newtypes for
-this package. A 2026-08 migration found a **duplicate, inferior** plain-struct `RepoRef`
-(exported fields, no validation) had been reintroduced in `github/repos.go` — the two
-`RepoRef` declarations collided at compile time (`RepoRef redeclared in this block`), which
-is what surfaced the problem. Every remaining call site across `github/*.go` and
-`server/services/*.go` that had been passing raw `owner, repo string` pairs (or constructing
-`RepoRef{Owner: ..., Repo: ...}` via the exported-field struct literal) was converted to
-`gh.NewRepoRef(owner, repo)` with error handling.
+this package. A 2026-08 migration found a duplicate, inferior plain-struct `RepoRef`
+(exported fields, no validation) had been reintroduced in `github/repos.go`, colliding at
+compile time with the original. Every call site passing raw `owner, repo string` pairs (or
+building the exported-field struct literal) was converted to `gh.NewRepoRef(owner, repo)`.
 
 ## How to Apply
 
