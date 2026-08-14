@@ -590,6 +590,7 @@ interface UseBacklogServiceReturn {
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
+  unarchiveBacklogItem: (id: string) => Promise<boolean>;
   deleteBacklogItem: (id: string) => Promise<boolean>;
   transitionStatus: (
     id: string,
@@ -784,6 +785,18 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] archiveBacklogItem:", err);
+      setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
+  const unarchiveBacklogItem = useCallback(async (id: string): Promise<boolean> => {
+    if (!clientRef.current) return false;
+    try {
+      await clientRef.current.unarchiveBacklogItem({ itemId: id });
+      return true;
+    } catch (err) {
+      console.error("[useBacklogService] unarchiveBacklogItem:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));
       throw err;
     }
@@ -1157,6 +1170,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       listGitHubIssues,
       updateBacklogItem,
       archiveBacklogItem,
+      unarchiveBacklogItem,
       deleteBacklogItem,
       transitionStatus,
       spawnSessionFromItem,

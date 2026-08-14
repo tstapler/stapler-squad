@@ -418,6 +418,14 @@ message ArchiveBacklogItemResponse {
   BacklogItem item = 1;
 }
 
+message UnarchiveBacklogItemRequest {
+  string item_id = 1;
+}
+
+message UnarchiveBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
 message DeleteBacklogItemRequest {
   string item_id = 1;
 }
@@ -826,6 +834,12 @@ service BacklogService {
 
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // UnarchiveBacklogItem restores a previously archived item to the "idea"
+  // status and clears archived_at. It does not restore any prior status
+  // history, nor recreate a deleted git worktree/session — the item simply
+  // re-enters the idea column needing a fresh session.
+  rpc UnarchiveBacklogItem(UnarchiveBacklogItemRequest) returns (UnarchiveBacklogItemResponse) {}
 
   // DeleteBacklogItem permanently removes an item and all its child records.
   rpc DeleteBacklogItem(DeleteBacklogItemRequest) returns (DeleteBacklogItemResponse) {}

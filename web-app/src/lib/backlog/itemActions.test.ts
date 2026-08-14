@@ -254,9 +254,9 @@ describe("getAvailableActions", () => {
   });
 
   describe("archived", () => {
-    it("exposes only delete", () => {
+    it("exposes delete and unarchive", () => {
       const { actions } = getAvailableActions(makeItem({ id: "a", status: "archived" }));
-      expect(actions).toEqual(new Set(["delete"]));
+      expect(actions).toEqual(new Set(["delete", "unarchive"]));
     });
   });
 

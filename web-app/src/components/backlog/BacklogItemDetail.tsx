@@ -75,6 +75,7 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   re_review: "Re-review triggered.",
   ship_pr: "PR created.",
   archive: "Archived.",
+  unarchive: "Unarchived — back in the idea column. Needs a fresh session.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
   send_back_refining: "Sent back to refining.",
@@ -96,6 +97,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     triggerShipPR,
     submitManualReview,
     archiveBacklogItem,
+    unarchiveBacklogItem,
     deleteBacklogItem,
     updateBacklogItem,
     listPipelineModes,
@@ -643,7 +645,16 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             setShowManualReview(true);
             return;
           case "archive":
+            if (
+              !confirm(
+                "Archive this item? It will be hidden from the default view. Its git worktree (if any) will be deleted from disk and cannot be recreated by unarchiving.",
+              )
+            )
+              return;
             await archiveBacklogItem(item.id);
+            break;
+          case "unarchive":
+            await unarchiveBacklogItem(item.id);
             break;
           case "delete":
             if (!confirm("Permanently delete this item and all its history? This cannot be undone.")) return;
@@ -675,7 +686,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, transitionStatus, triggerTriage, retriggerTriageCore, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
+    [item, transitionStatus, triggerTriage, retriggerTriageCore, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, unarchiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
   // Extracted verbatim from the inline manual-review-submit onClick handler

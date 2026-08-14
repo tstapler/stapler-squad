@@ -138,6 +138,7 @@ var methodToID = map[string]string{
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
 	"ArchiveBacklogItem":          "backlog:archive-item",
+	"UnarchiveBacklogItem":        "backlog:unarchive-item",
 	"TransitionBacklogItemStatus": "backlog:transition-status",
 	"SpawnSessionFromItem":        "backlog:spawn-session",
 	"AttachSessionToItem":         "backlog:attach-session",
