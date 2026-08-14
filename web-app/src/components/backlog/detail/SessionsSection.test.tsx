@@ -556,4 +556,30 @@ describe("SessionsSection steer control (Story 2.2.2, ADR-002)", () => {
 
     expect(screen.queryByText(/\d+ commits? —/)).not.toBeInTheDocument();
   });
+
+  it("SessionsSection_should_ShowCommitCountWithoutDash_When_LastCommitMessageMissing", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-commit-no-message",
+        role: "work",
+        commitCountSinceSpawn: 2,
+        lastCommitMessage: undefined,
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("2 commits")).toBeInTheDocument();
+    expect(screen.queryByText(/—/)).not.toBeInTheDocument();
+  });
 });

@@ -9,18 +9,24 @@ function parseDate(iso: string | undefined): Date | undefined {
 }
 
 /**
- * A session's own "most recent activity" timestamp. Prefers commit/file-touch
- * telemetry (the actual work signal) over endedAt/startedAt (lifecycle
- * timestamps), falling back to the latter when the former are absent (older
- * sessions predating this telemetry, or sessions with no activity yet).
+ * A session's own "most recent activity" timestamp: the max of commit/
+ * file-touch telemetry and endedAt/startedAt (lifecycle timestamps),
+ * whichever is most recent. Falls back to undefined when none are set
+ * (older sessions predating this telemetry, or sessions with no activity yet).
  */
 function sessionActivity(session: LinkedSession): Date | undefined {
-  return (
-    parseDate(session.lastCommitAt) ??
-    parseDate(session.lastFileTouchAt) ??
-    parseDate(session.endedAt) ??
-    parseDate(session.startedAt)
-  );
+  const candidates: Array<Date | undefined> = [
+    parseDate(session.lastCommitAt),
+    parseDate(session.lastFileTouchAt),
+    parseDate(session.endedAt),
+    parseDate(session.startedAt),
+  ];
+
+  const known = candidates.filter((d): d is Date => d !== undefined);
+  if (known.length === 0) {
+    return undefined;
+  }
+  return known.reduce((max, d) => (d.getTime() > max.getTime() ? d : max));
 }
 
 export type LivenessSourceItem = Pick<

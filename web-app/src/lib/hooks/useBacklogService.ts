@@ -350,11 +350,9 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     startedAt: s.startedAt ? new Date(Number(s.startedAt.seconds) * 1000).toISOString() : undefined,
     endedAt: s.endedAt ? new Date(Number(s.endedAt.seconds) * 1000).toISOString() : undefined,
     commitCountSinceSpawn: s.commitCountSinceSpawn ?? 0,
-    lastCommitAt: s.lastCommitAt ? new Date(Number(s.lastCommitAt.seconds) * 1000).toISOString() : undefined,
+    lastCommitAt: s.lastCommitAt ? timestampDate(s.lastCommitAt).toISOString() : undefined,
     lastCommitMessage: s.lastCommitMessage || undefined,
-    lastFileTouchAt: s.lastFileTouchAt
-      ? new Date(Number(s.lastFileTouchAt.seconds) * 1000).toISOString()
-      : undefined,
+    lastFileTouchAt: s.lastFileTouchAt ? timestampDate(s.lastFileTouchAt).toISOString() : undefined,
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
     worktreeBranch: s.worktreeBranch || undefined,
     worktreePath: s.worktreePath || undefined,

@@ -128,6 +128,30 @@ describe("deriveLastActivity", () => {
     const last = deriveLastActivity(item);
     expect(Date.now() - (last as Date).getTime()).toBeLessThan(3 * 60 * 1000);
   });
+
+  it("deriveLastActivity_should_PreferEndedAt_When_MoreRecentThanLastCommitAt", () => {
+    const item = makeItem({
+      linkedSessions: [
+        {
+          entityId: "e1",
+          sessionId: "s1",
+          role: "work",
+          startedAt: iso(3 * 60 * 60 * 1000),
+          // lastCommitAt is stale (3 hours old) — the session kept working
+          // and ended much more recently. The most-recent timestamp should
+          // win, not whichever field is checked first.
+          lastCommitAt: iso(3 * 60 * 60 * 1000),
+          endedAt: iso(10 * 60 * 1000),
+          estimatedCostUsd: 0,
+        },
+      ],
+      statusEvents: [],
+      progressNotes: [],
+    });
+
+    const last = deriveLastActivity(item);
+    expect(Date.now() - (last as Date).getTime()).toBeLessThan(11 * 60 * 1000);
+  });
 });
 
 describe("LivenessLine", () => {

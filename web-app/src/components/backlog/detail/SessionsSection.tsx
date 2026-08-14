@@ -363,9 +363,10 @@ export function SessionsSection({
                       </>
                     )}
                   </div>
-                  {!isSynthetic && s.lastCommitMessage && (s.commitCountSinceSpawn ?? 0) > 0 && (
+                  {!isSynthetic && (s.commitCountSinceSpawn ?? 0) > 0 && (
                     <div className={styles.commitDetail} title={s.lastCommitMessage}>
-                      {s.commitCountSinceSpawn} commit{s.commitCountSinceSpawn === 1 ? "" : "s"} — {firstLine(s.lastCommitMessage)}
+                      {s.commitCountSinceSpawn} commit{s.commitCountSinceSpawn === 1 ? "" : "s"}
+                      {s.lastCommitMessage && <> — {firstLine(s.lastCommitMessage)}</>}
                     </div>
                   )}
                   {/* Synthetic rows' reviewVerdict is shown inside the
