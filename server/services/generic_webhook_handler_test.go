@@ -30,7 +30,7 @@ func newGenericWebhookWorkflow(t *testing.T, infra *webhookTestInfra, slug, secr
 		EventFilter:            eventFilter,
 		LabelFilter:            labelFilter,
 		PromptTemplate:         promptTemplate,
-		CronEnabled:            true,
+		Enabled:                true,
 	})
 	require.NoError(t, err)
 	return wf
@@ -164,6 +164,42 @@ func TestGenericWebhookHandler_should_Return404_When_SlugIsUnknown(t *testing.T)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, int32(0), infra.sessionSvc.callCount.Load())
+}
+
+// TestGenericWebhookHandler_should_Return404_When_EnabledIsFalse_EvenIfCronEnabledTrue
+// proves Enabled and CronEnabled are now independent fields (webhook-triggers verify
+// follow-ups AC0-3): a webhook trigger with CronEnabled=true (a vestigial value that no
+// longer means anything for this trigger type) but Enabled=false must not fire.
+func TestGenericWebhookHandler_should_Return404_When_EnabledIsFalse_EvenIfCronEnabledTrue(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	wf, err := infra.workflowRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug:                   "jira-ticket-disabled",
+		Name:                   "Generic Webhook Trigger",
+		Command:                "base instructions",
+		TriggerType:            "webhook",
+		WebhookSlug:            "jira-ticket-disabled",
+		WebhookSecretEncrypted: infra.encryptSecret(t, "s3cr3t"),
+		EventFilter:            "issue_created",
+		PromptTemplate:         "Triage {{.issue.key}}",
+		CronEnabled:            true,
+		Enabled:                false,
+	})
+	require.NoError(t, err)
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	mux := newGenericWebhookMux(h)
+
+	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+	sig := sign("s3cr3t", body)
+
+	rec := doGenericWebhookRequest(t, mux, "jira-ticket-disabled", body, sig)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, int32(0), infra.sessionSvc.callCount.Load())
+
+	events, err := infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "no_match", events[0].Outcome)
 }
 
 func TestGenericWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *testing.T) {

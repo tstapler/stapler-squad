@@ -27,14 +27,17 @@ export interface WorkflowFormData {
   agentType?: string;
   cronExpression?: string;
   cronEnabled: boolean;
+  /**
+   * enabled is the generic per-trigger-type "is this trigger active" gate, read by
+   * both webhook handlers and written by TriggersPanel.tsx's toggle — distinct from
+   * cronEnabled, which is the literal cron-schedule flag only.
+   */
+  enabled?: boolean;
   keepSessions?: number;
   archiveAfterHours?: number;
   /**
    * Trigger fields (webhook-triggers Phase 7). triggerType discriminates the
    * activation mechanism: "cron" | "github_push" | "webhook" | "manual".
-   * cronEnabled doubles as the generic per-trigger enable/disable flag for every
-   * trigger type (see server/services/generic_webhook_handler.go's `!wf.CronEnabled`
-   * check) — not just cron triggers.
    */
   triggerType?: string;
   githubRepo?: string;
@@ -120,6 +123,7 @@ export function useWorkflows(): UseWorkflowsReturn {
         agentType: data.agentType ?? "",
         cronExpression: data.cronExpression ?? "",
         cronEnabled: data.cronEnabled,
+        ...(data.enabled !== undefined && { enabled: data.enabled }),
         ...(data.keepSessions !== undefined && { keepSessions: data.keepSessions }),
         ...(data.archiveAfterHours !== undefined && { archiveAfterHours: data.archiveAfterHours }),
         triggerType: data.triggerType ?? "",
@@ -152,6 +156,7 @@ export function useWorkflows(): UseWorkflowsReturn {
         ...(data.agentType !== undefined && { agentType: data.agentType }),
         ...(data.cronExpression !== undefined && { cronExpression: data.cronExpression }),
         ...(data.cronEnabled !== undefined && { cronEnabled: data.cronEnabled }),
+        ...(data.enabled !== undefined && { enabled: data.enabled }),
         ...(data.keepSessions !== undefined && { keepSessions: data.keepSessions }),
         ...(data.archiveAfterHours !== undefined && { archiveAfterHours: data.archiveAfterHours }),
         ...(data.triggerType !== undefined && { triggerType: data.triggerType }),

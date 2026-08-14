@@ -26,7 +26,8 @@ func (r *EntWorkflowRepository) Create(ctx context.Context, w WorkflowCreateInpu
 		SetSlug(w.Slug).
 		SetName(w.Name).
 		SetCommand(w.Command).
-		SetCronEnabled(w.CronEnabled)
+		SetCronEnabled(w.CronEnabled).
+		SetEnabled(w.Enabled)
 
 	if w.Description != "" {
 		c.SetDescription(w.Description)
@@ -123,6 +124,9 @@ func (r *EntWorkflowRepository) Update(ctx context.Context, id uuid.UUID, w Work
 	}
 	if w.CronEnabled != nil {
 		u.SetCronEnabled(*w.CronEnabled)
+	}
+	if w.Enabled != nil {
+		u.SetEnabled(*w.Enabled)
 	}
 	if w.KeepSessions != nil {
 		u.SetKeepSessions(*w.KeepSessions)

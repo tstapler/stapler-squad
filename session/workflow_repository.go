@@ -41,6 +41,7 @@ type WorkflowCreateInput struct {
 	AgentType         string
 	CronExpression    string
 	CronEnabled       bool
+	Enabled           bool // generic per-trigger enable gate; callers should default this to true
 	KeepSessions      *int // nil = use default (0, disabled); 0 = keep all
 	ArchiveAfterHours *int // nil = use default (0, disabled); 0 = disabled
 
@@ -68,8 +69,9 @@ type WorkflowUpdateInput struct {
 	AgentType         *string
 	CronExpression    *string
 	CronEnabled       *bool
-	KeepSessions      *int // nil = do not update; 0 = keep all (disabled)
-	ArchiveAfterHours *int // nil = do not update; 0 = disabled
+	Enabled           *bool // generic per-trigger enable gate
+	KeepSessions      *int  // nil = do not update; 0 = keep all (disabled)
+	ArchiveAfterHours *int  // nil = do not update; 0 = disabled
 
 	// Trigger fields (webhook-triggers Epic 1.1).
 	TriggerType            *string

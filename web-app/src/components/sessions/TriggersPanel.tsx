@@ -5,6 +5,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkflows, WorkflowFormData } from "@/lib/hooks/useWorkflows";
 import { WorkflowProto } from "@/gen/session/v1/session_pb";
+import { protoTimestampToDate } from "@/lib/utils/timestamp";
 import { TriggerFormModal } from "./TriggerFormModal";
 import { TriggerExecutionHistory } from "./TriggerExecutionHistory";
 import {
@@ -47,11 +48,9 @@ function typeClass(t: string): string {
   }
 }
 
-function relativeTime(iso: string | undefined): string {
-  if (!iso) return "";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const diffMs = Date.now() - then;
+function relativeTime(date: Date | null): string {
+  if (!date) return "";
+  const diffMs = Date.now() - date.getTime();
   const diffSec = Math.floor(diffMs / 1000);
   if (diffSec < 60) return "just now";
   const diffMin = Math.floor(diffSec / 60);
@@ -62,11 +61,66 @@ function relativeTime(iso: string | undefined): string {
   return `${diffDay}d ago`;
 }
 
-function timestampToIso(ts: WorkflowProto["lastFiredAt"]): string | undefined {
-  if (!ts) return undefined;
-  // Timestamp proto has seconds (bigint) + nanos.
-  const ms = Number(ts.seconds) * 1000 + Math.floor(ts.nanos / 1e6);
-  return new Date(ms).toISOString();
+/** LastFired renders a trigger's last-fired indicator — shared between the desktop
+ * table row and mobile card so both stay in sync without duplicating the ternary. */
+function LastFired({ lastFiredAt, showTitle }: { lastFiredAt: WorkflowProto["lastFiredAt"]; showTitle?: boolean }) {
+  const date = protoTimestampToDate(lastFiredAt);
+  if (!date) return <span className={neverFired}>Never fired</span>;
+  return (
+    <span className={lastFired} title={showTitle ? date.toLocaleString() : undefined}>
+      {relativeTime(date)}
+    </span>
+  );
+}
+
+/** TriggerToggle renders the enable/disable button — shared between the desktop table
+ * row and mobile card. testId is optional since only the desktop row currently exposes
+ * one (preserving each layout's existing locators exactly). */
+function TriggerToggle({
+  workflow, disabled, onToggle, testId,
+}: { workflow: WorkflowProto; disabled: boolean; onToggle: () => void; testId?: string }) {
+  return (
+    <button
+      className={`${toggle} ${workflow.enabled ? toggleOn : toggleOff}`}
+      onClick={onToggle}
+      disabled={disabled}
+      aria-label={workflow.enabled ? `Disable trigger ${workflow.name || workflow.slug}` : `Enable trigger ${workflow.name || workflow.slug}`}
+      data-testid={testId}
+    >
+      {workflow.enabled ? "ON" : "OFF"}
+    </button>
+  );
+}
+
+/** TriggerRowActions renders the Edit + History buttons — shared between the desktop
+ * table row and mobile card. ariaLabel/testId props are optional since only the desktop
+ * row currently exposes them (preserving each layout's existing locators exactly). */
+function TriggerRowActions({
+  workflow, isExpanded, onEdit, onToggleHistory, editAriaLabel, editTestId, historyTestId,
+}: {
+  workflow: WorkflowProto;
+  isExpanded: boolean;
+  onEdit: () => void;
+  onToggleHistory: () => void;
+  editAriaLabel?: string;
+  editTestId?: string;
+  historyTestId?: string;
+}) {
+  return (
+    <div className={rowActions}>
+      <button className={iconButton} onClick={onEdit} aria-label={editAriaLabel} data-testid={editTestId}>
+        Edit
+      </button>
+      <button
+        className={historyToggle}
+        onClick={onToggleHistory}
+        aria-expanded={isExpanded}
+        data-testid={historyTestId}
+      >
+        {isExpanded ? "Hide history" : "History"}
+      </button>
+    </div>
+  );
 }
 
 /**
@@ -130,11 +184,20 @@ export function TriggersPanel() {
     setTogglingId(w.id);
     setToggleErrorMsg(null);
     try {
-      await updateWorkflow(w.id, { cronEnabled: !w.cronEnabled });
-      setLiveMessage(`${w.name || w.slug} ${w.cronEnabled ? "disabled" : "enabled"}.`);
+      const nextEnabled = !w.enabled;
+      // Cron firing is gated on cronEnabled, not enabled (Scheduler never reads
+      // enabled — see workflow_service.go's validateTriggerTypeFieldConsistency doc
+      // comment). Keep the two fields in lockstep for cron-type rows so this single
+      // toggle still controls whether a cron trigger actually fires; for
+      // webhook/github_push rows only enabled matters, so cronEnabled is left alone.
+      await updateWorkflow(w.id, {
+        enabled: nextEnabled,
+        ...(w.triggerType === "cron" && { cronEnabled: nextEnabled }),
+      });
+      setLiveMessage(`${w.name || w.slug} ${w.enabled ? "disabled" : "enabled"}.`);
     } catch (e) {
       console.error("Failed to toggle trigger:", e);
-      const message = `Failed to ${w.cronEnabled ? "disable" : "enable"} ${w.name || w.slug}.`;
+      const message = `Failed to ${w.enabled ? "disable" : "enable"} ${w.name || w.slug}.`;
       setLiveMessage(message);
       // Visible (not just screen-reader-only) error for sighted users — transient,
       // clears itself after a few seconds or on the next toggle attempt.
@@ -240,11 +303,10 @@ export function TriggersPanel() {
             </thead>
             <tbody>
               {visibleTriggers.map((w) => {
-                const lastFiredIso = timestampToIso(w.lastFiredAt);
                 const isExpanded = expandedId === w.id;
                 return (
                   <Fragment key={w.id}>
-                    <tr className={`${row} ${!w.cronEnabled ? rowDisabled : ""}`}>
+                    <tr className={`${row} ${!w.enabled ? rowDisabled : ""}`}>
                       <td className={td}>
                         <span className={triggerName}>{w.name || w.slug}</span>
                         <span className={triggerSlug}>{w.slug}</span>
@@ -253,44 +315,26 @@ export function TriggersPanel() {
                         <span className={`${typeBadge} ${typeClass(w.triggerType)}`}>{typeLabel(w.triggerType)}</span>
                       </td>
                       <td className={td}>
-                        {lastFiredIso ? (
-                          <span className={lastFired} title={new Date(lastFiredIso).toLocaleString()}>
-                            {relativeTime(lastFiredIso)}
-                          </span>
-                        ) : (
-                          <span className={neverFired}>Never fired</span>
-                        )}
+                        <LastFired lastFiredAt={w.lastFiredAt} showTitle />
                       </td>
                       <td className={`${td} ${tdCenter}`}>
-                        <button
-                          className={`${toggle} ${w.cronEnabled ? toggleOn : toggleOff}`}
-                          onClick={() => void handleToggle(w)}
+                        <TriggerToggle
+                          workflow={w}
                           disabled={togglingId === w.id}
-                          aria-label={w.cronEnabled ? `Disable trigger ${w.name || w.slug}` : `Enable trigger ${w.name || w.slug}`}
-                          data-testid={`trigger-toggle-${w.id}`}
-                        >
-                          {w.cronEnabled ? "ON" : "OFF"}
-                        </button>
+                          onToggle={() => void handleToggle(w)}
+                          testId={`trigger-toggle-${w.id}`}
+                        />
                       </td>
                       <td className={td}>
-                        <div className={rowActions}>
-                          <button
-                            className={iconButton}
-                            onClick={() => openEdit(w)}
-                            aria-label={`Edit trigger ${w.name || w.slug}`}
-                            data-testid={`trigger-edit-${w.id}`}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className={historyToggle}
-                            onClick={() => setExpandedId(isExpanded ? null : w.id)}
-                            aria-expanded={isExpanded}
-                            data-testid={`trigger-history-toggle-${w.id}`}
-                          >
-                            {isExpanded ? "Hide history" : "History"}
-                          </button>
-                        </div>
+                        <TriggerRowActions
+                          workflow={w}
+                          isExpanded={isExpanded}
+                          onEdit={() => openEdit(w)}
+                          onToggleHistory={() => setExpandedId(isExpanded ? null : w.id)}
+                          editAriaLabel={`Edit trigger ${w.name || w.slug}`}
+                          editTestId={`trigger-edit-${w.id}`}
+                          historyTestId={`trigger-history-toggle-${w.id}`}
+                        />
                       </td>
                     </tr>
                     {isExpanded && (
@@ -313,7 +357,6 @@ export function TriggersPanel() {
       {/* ── Mobile card layout ── */}
       <div className={cardList}>
         {visibleTriggers.map((w) => {
-          const lastFiredIso = timestampToIso(w.lastFiredAt);
           const isExpanded = expandedId === w.id;
           return (
             <div key={w.id} className={card} data-testid={`trigger-card-${w.id}`}>
@@ -322,29 +365,18 @@ export function TriggersPanel() {
                   <span className={triggerName}>{w.name || w.slug}</span>
                   <span className={triggerSlug}>{w.slug}</span>
                 </div>
-                <button
-                  className={`${toggle} ${w.cronEnabled ? toggleOn : toggleOff}`}
-                  onClick={() => void handleToggle(w)}
-                  disabled={togglingId === w.id}
-                  aria-label={w.cronEnabled ? `Disable trigger ${w.name || w.slug}` : `Enable trigger ${w.name || w.slug}`}
-                >
-                  {w.cronEnabled ? "ON" : "OFF"}
-                </button>
+                <TriggerToggle workflow={w} disabled={togglingId === w.id} onToggle={() => void handleToggle(w)} />
               </div>
               <div className={cardMeta}>
                 <span className={`${typeBadge} ${typeClass(w.triggerType)}`}>{typeLabel(w.triggerType)}</span>
-                {lastFiredIso ? (
-                  <span className={lastFired}>{relativeTime(lastFiredIso)}</span>
-                ) : (
-                  <span className={neverFired}>Never fired</span>
-                )}
+                <LastFired lastFiredAt={w.lastFiredAt} />
               </div>
-              <div className={rowActions}>
-                <button className={iconButton} onClick={() => openEdit(w)}>Edit</button>
-                <button className={historyToggle} onClick={() => setExpandedId(isExpanded ? null : w.id)} aria-expanded={isExpanded}>
-                  {isExpanded ? "Hide history" : "History"}
-                </button>
-              </div>
+              <TriggerRowActions
+                workflow={w}
+                isExpanded={isExpanded}
+                onEdit={() => openEdit(w)}
+                onToggleHistory={() => setExpandedId(isExpanded ? null : w.id)}
+              />
               {isExpanded && (
                 <div className={historyWrapper}>
                   <TriggerExecutionHistory workflowId={w.id} />
