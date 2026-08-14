@@ -1451,18 +1451,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 					if handleErr != nil {
 						log.Error("[streamShellViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "shell", shellID, "err", handleErr)
 					} else {
-						terminalData := &sessionv1.TerminalData{
-							SessionId: sessionID,
-							ShellId:   shellID,
-							Data: &sessionv1.TerminalData_Output{
-								Output: output,
-							},
-						}
-						if respBytes, merr := proto.Marshal(terminalData); merr != nil {
-							log.Error("[streamShellViaControlMode] failed to marshal current pane response", "session", sessionID, "shell", shellID, "err", merr)
-						} else {
-							_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
-						}
+						writeCurrentPaneResponse(stream, sessionID, shellID, output)
 					}
 				}
 			}
@@ -1531,6 +1520,11 @@ type ResyncOptions struct {
 	// target.CapturePaneContentPriority()/RefreshTmuxClientPriority() instead
 	// of the plain CapturePaneContent()/RefreshTmuxClient().
 	UseFastLane bool
+	// EchoResyncID, when true, echoes the incoming request's ResyncId back on the
+	// TerminalOutput reply (Task 3.2.1.1, terminal:resync-correlation-id). When
+	// false, a request that set a resync_id gets the pre-project empty ResyncId
+	// back instead.
+	EchoResyncID bool
 }
 
 // currentResyncOptions resolves the feature flags handleCurrentPaneRequest's callers
@@ -1540,7 +1534,17 @@ func currentResyncOptions() ResyncOptions {
 	return ResyncOptions{
 		SkipStaleDimensionSlowPath: config.LoadConfig().GetFeatureFlag(terminalResyncSkipStaleDimensionSlowpathFlagName),
 		UseFastLane:                config.LoadConfig().GetFeatureFlag(terminalResyncExecGateFastLaneFlagName),
+		EchoResyncID:               config.LoadConfig().GetFeatureFlag(terminalResyncCorrelationIDFlagName),
 	}
+}
+
+// derefOr returns *p, or fallback when p is nil — used to log a *int32 request field's
+// actual value instead of its pointer address.
+func derefOr(p *int32, fallback int32) int32 {
+	if p == nil {
+		return fallback
+	}
+	return *p
 }
 
 // handleCurrentPaneRequest answers a CurrentPaneRequest against target: resizing the
@@ -1566,7 +1570,7 @@ func currentResyncOptions() ResyncOptions {
 // helper has no such fallback since control-mode callers have no streamer to fall back to.
 func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.CurrentPaneRequest, opts ResyncOptions) (*sessionv1.TerminalOutput, error) {
 	log.ForSession(sessionID).Debug("current pane request",
-		"targetCols", req.TargetCols, "targetRows", req.TargetRows)
+		"targetCols", derefOr(req.TargetCols, 0), "targetRows", derefOr(req.TargetRows, 0))
 
 	// Epic 4.1 (Task 4.1.1.1): when the client itself flags its target dimensions as
 	// stale (e.g. computed while backgrounded) and terminal:resync-skip-stale-dimension-slowpath
@@ -1580,7 +1584,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 		// delays + a 250ms post-resize settle = 450ms of gate-wait time avoided,
 		// not counting the ResizePTY/RefreshTmuxClient subprocess calls themselves.
 		log.ForSession(sessionID).Debug("skipping stale-dimension resize slow path",
-			"sessionID", sessionID, "targetCols", req.TargetCols, "targetRows", req.TargetRows,
+			"sessionID", sessionID, "targetCols", derefOr(req.TargetCols, 0), "targetRows", derefOr(req.TargetRows, 0),
 			"estimatedTimeSavedMs", 450)
 	} else if req.TargetCols != nil && req.TargetRows != nil && *req.TargetCols > 0 && *req.TargetRows > 0 {
 		targetCols := int(*req.TargetCols)
@@ -1681,10 +1685,11 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 	}
 
 	// resync_id is only echoed back when terminal:resync-correlation-id is on
-	// (Task 3.2.1.1) — off by default, so a client that never sent one (or a
-	// deployment with the flag off) gets the pre-project empty ResyncId.
+	// (Task 3.2.1.1, opts.EchoResyncID) — off by default, so a client that never
+	// sent one (or a deployment with the flag off) gets the pre-project empty
+	// ResyncId.
 	resyncID := ""
-	if config.LoadConfig().GetFeatureFlag(terminalResyncCorrelationIDFlagName) {
+	if opts.EchoResyncID {
 		resyncID = req.GetResyncId()
 	} else if req.GetResyncId() != "" {
 		// Task 7.1.1.3 (Epic 7.1 observability) — server-side equivalent of the
@@ -1900,7 +1905,7 @@ func handleCurrentPaneRequestFrame(
 		log.Error("[streamViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "err", err)
 		return
 	}
-	writeCurrentPaneResponse(stream, sessionID, output)
+	writeCurrentPaneResponse(stream, sessionID, "", output)
 }
 
 // terminalResyncCompressionThresholdBytes is the marshaled-payload size above which
@@ -1922,9 +1927,15 @@ const terminalResyncCompressionThresholdBytes = 1024
 // client's websocket-transport.ts decompresses it before proto-unmarshaling (Epic 5.1). A
 // compression failure falls back to sending the original, uncompressed payload rather than
 // dropping the reply — a resync reply is worth more than the wire-size savings.
-func writeCurrentPaneResponse(stream *connectWebSocketStream, sessionID string, output *sessionv1.TerminalOutput) {
+//
+// shellID is set on the outgoing TerminalData when the reply is for a shell tab's own
+// stream (streamShellViaControlMode); pass "" for the main session's stream, which never
+// tags ShellId (matching handleCurrentPaneRequestFrame/handleBatchedCurrentPaneRequestFrame
+// and streamViaTmuxCapturePane's pre-existing behavior).
+func writeCurrentPaneResponse(stream *connectWebSocketStream, sessionID string, shellID string, output *sessionv1.TerminalOutput) {
 	terminalData := &sessionv1.TerminalData{
 		SessionId: sessionID,
+		ShellId:   shellID,
 		Data: &sessionv1.TerminalData_Output{
 			Output: output,
 		},
@@ -2006,7 +2017,7 @@ func handleBatchedCurrentPaneRequestFrame(
 	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 ) {
 	for _, output := range handleBatchedCurrentPaneRequest(sessionID, batchReq, onCurrentPaneRequest) {
-		writeCurrentPaneResponse(stream, sessionID, output)
+		writeCurrentPaneResponse(stream, sessionID, "", output)
 	}
 }
 
@@ -2364,25 +2375,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						}
 					}
 
-					terminalData := &sessionv1.TerminalData{
-						SessionId: sessionID,
-						Data: &sessionv1.TerminalData_Output{
-							Output: output,
-						},
-					}
-
-					respBytes, err := proto.Marshal(terminalData)
-					if err != nil {
-						log.Error("[streamViaTmuxCapture] failed to marshal pane response", "err", err)
-						continue
-					}
-
-					respEnvelope := protocol.CreateEnvelope(0, respBytes)
-					if err := stream.WriteMessage(websocket.BinaryMessage, respEnvelope); err != nil {
-						log.Error("[streamViaTmuxCapture] failed to send pane response", "err", err)
-						continue
-					}
-
+					writeCurrentPaneResponse(stream, sessionID, "", output)
 					log.ForSession(sessionID).Debug("sent pane content", "bytes", len(output.Data))
 				}
 			}
