@@ -129,26 +129,47 @@ const backlogWorktreeMainBranch = "main"
 // doc comment for the sibling bug this was found alongside). Falls back to the old
 // ambient-HEAD behavior if origin can't be reached, so a spawn never hard-fails just
 // because a fetch did.
+//
+// The repair, branch resolution, worktree construction, and setup all run inside a single
+// git.WithRepoWorktreeLock critical section for resolvedRepo. RepairCorruptedGitRepo's
+// os.RemoveAll+re-clone used to run unlocked, racing a concurrent spawn's locked
+// `git worktree add` on the same repo — one process's repair could delete/recreate the repo
+// out from under another process mid-add, surfacing as git's generic "fatal: failed to
+// resolve HEAD as a valid ref". Setup runs via wt.SetupLocked() rather than wt.Setup() here
+// because this goroutine already holds the (non-reentrant) lock.
 func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 	resolvedRepo, err := ResolveSessionPath(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}
-	branchName := BacklogBranchPrefix + branchSuffix
-	var wt *git.GitWorktree
-	if baseSHA, fetchErr := git.ResolveOriginBranchSHA(resolvedRepo, backlogWorktreeMainBranch); fetchErr == nil {
-		wt, _, err = git.NewGitWorktreeFromCommitSHA(resolvedRepo, branchSuffix, branchName, baseSHA)
-	} else {
-		log.Warn("failed to resolve origin main tip, falling back to ambient HEAD", "repoPath", resolvedRepo, "branch", backlogWorktreeMainBranch, "error", fetchErr)
-		wt, _, err = git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, branchName)
-	}
+
+	var worktreePath string
+	err = git.WithRepoWorktreeLock(resolvedRepo, func() error {
+		if err := RepairCorruptedGitRepo(resolvedRepo); err != nil {
+			return err
+		}
+		branchName := BacklogBranchPrefix + branchSuffix
+		var wt *git.GitWorktree
+		var err error
+		if baseSHA, fetchErr := git.ResolveOriginBranchSHA(resolvedRepo, backlogWorktreeMainBranch); fetchErr == nil {
+			wt, _, err = git.NewGitWorktreeFromCommitSHA(resolvedRepo, branchSuffix, branchName, baseSHA)
+		} else {
+			log.Warn("failed to resolve origin main tip, falling back to ambient HEAD", "repoPath", resolvedRepo, "branch", backlogWorktreeMainBranch, "error", fetchErr)
+			wt, _, err = git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, branchName)
+		}
+		if err != nil {
+			return err
+		}
+		if err := wt.SetupLocked(); err != nil {
+			return fmt.Errorf("setup: %w", err)
+		}
+		worktreePath = wt.GetWorktreePath()
+		return nil
+	})
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}
-	if err := wt.Setup(); err != nil {
-		return "", fmt.Errorf("CreateBacklogWorktree setup: %w", err)
-	}
-	return wt.GetWorktreePath(), nil
+	return worktreePath, nil
 }
 
 // resolveStartPath returns the effective start directory, applying WorkingDir on top of basePath.
@@ -199,6 +220,13 @@ func pathEscapesRoot(root, candidate string) bool {
 // GetEffectiveRootDir returns the root directory where this session operates.
 // For worktree sessions, this is the worktree path. For directory sessions, this is Path.
 // Used for injecting configuration files (e.g., .claude/settings.local.json).
+//
+// This returns the worktree path as recorded, without checking whether it
+// still exists on disk — callers that do path-string correlation (e.g.
+// HistoryLinker matching against ~/.claude/projects/<hashed-path>) need the
+// nominal path regardless of whether the directory is currently present. For
+// callers that need to actually read from the filesystem, use Workspace(),
+// which falls back to the repo root when the worktree is gone.
 func (i *Instance) GetEffectiveRootDir() string {
 	if i.gitManager.HasWorktree() {
 		if p := i.gitManager.GetWorktreePath(); p != "" {
@@ -211,10 +239,24 @@ func (i *Instance) GetEffectiveRootDir() string {
 // Workspace returns where this session is operating.
 // Use this as the single source of truth for path resolution instead of
 // accessing inst.Path directly, which is wrong for worktree sessions.
+//
+// Falls back to RepoRoot if the worktree path no longer exists on disk (e.g.
+// a paused session's worktree was removed while its branch/metadata
+// persisted) — otherwise filesystem-reading callers like ListFiles would try
+// to read a directory that's gone and surface a bare "directory not found: ."
+// with no indication why.
 func (i *Instance) Workspace() Workspace {
+	repoRoot := i.Path
+	effectivePath := i.GetEffectiveRootDir()
+	if effectivePath != repoRoot {
+		if _, err := os.Stat(effectivePath); err != nil {
+			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.Title, "worktreePath", effectivePath)
+			effectivePath = repoRoot
+		}
+	}
 	return Workspace{
-		EffectivePath: i.GetEffectiveRootDir(),
-		RepoRoot:      i.Path,
+		EffectivePath: effectivePath,
+		RepoRoot:      repoRoot,
 	}
 }
 

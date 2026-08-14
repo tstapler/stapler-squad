@@ -110,6 +110,14 @@ type LifecycleListener interface {
 // kept in sync by comment, not by shared constant.
 const MaxNoteLength = 10000
 
+// MaxSteerMessageLength is the maximum length, in bytes, of a steer_message sent
+// via UpdateSession. No RPC in this server currently enforces a request-size cap
+// (see grep for WithReadMaxBytes across server/ — a known, pre-existing, repo-wide
+// gap), but steer_message is a new/widened free-text entry point that now reaches
+// ordinary work/review sessions, not just autonomous ones, so it gets an explicit
+// cap here rather than waiting on that broader fix. Matches MaxNoteLength's value.
+const MaxSteerMessageLength = 10000
+
 // Instance is a running instance of claude code.
 type Instance struct {
 	// ID is the stable, immutable identifier for this instance.
@@ -317,6 +325,10 @@ type Instance struct {
 	EnvVars map[string]string `json:"env_vars,omitempty"`
 	// CLIFlags are additional CLI flags appended to the program launch command.
 	CLIFlags string `json:"cli_flags,omitempty"`
+	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
+	// CLIFlags at launch time. Populated by a selected launcher preset's argv[1:]; see
+	// buildLaunchCommand in instance_tmux.go for the shell-quoting boundary.
+	ExtraArgs []string `json:"extra_args,omitempty"`
 
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
@@ -580,6 +592,9 @@ type InstanceOptions struct {
 	EnvVars map[string]string
 	// CLIFlags are additional CLI flags appended to the program launch command.
 	CLIFlags string
+	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
+	// CLIFlags at launch time.
+	ExtraArgs []string
 }
 
 // ResolveSessionPath expands a leading "~" to the current user's home directory
@@ -684,6 +699,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CreateIfMissing: opts.CreateIfMissing,
 		EnvVars:         opts.EnvVars,
 		CLIFlags:        opts.CLIFlags,
+		ExtraArgs:       opts.ExtraArgs,
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice
@@ -929,7 +945,6 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
-	i.initTmuxSession()
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -938,6 +953,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	var setupErr error
@@ -1021,6 +1043,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		i.startVNCDisplay(context.Background())
 		i.allocateCDPPort()
@@ -1113,8 +1142,6 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
-	i.initTmuxSession()
-
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
 	// the callback to fire again after the sync.Once was exhausted in the prior run.
@@ -1126,6 +1153,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	// Cleanup on error: kill session and invalidate the caller's cleanup handle.
@@ -1237,6 +1271,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 		// can be injected via ExtraEnv at new-session time. This ensures the agent

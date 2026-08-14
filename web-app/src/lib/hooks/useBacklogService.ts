@@ -64,6 +64,14 @@ export interface LinkedSession {
   role: string;
   startedAt?: string;
   endedAt?: string;
+  /** Number of commits made since this session was spawned; 0 if none yet. */
+  commitCountSinceSpawn?: number;
+  /** Timestamp of the session's most recent commit, if it has made one. */
+  lastCommitAt?: string;
+  /** Full text (possibly multi-line) of the session's most recent commit message. */
+  lastCommitMessage?: string;
+  /** Timestamp of the session's most recent file modification, if any. */
+  lastFileTouchAt?: string;
   reviewVerdict?: {
     overallOutcome?: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "UNVERIFIABLE";
     summary?: string;
@@ -89,6 +97,20 @@ export interface LinkedSession {
    * current PipelineMode.contentHash to detect content drift.
    */
   pipelineModeSnapshotHash?: string;
+  /**
+   * Set alongside endedAt for a headless (triage/review) call: a coarse
+   * failure bucket ("shutdown", "timeout", "process_error", "claude_not_found",
+   * "other"), or "" for a successful end. See classifyHeadlessCallError
+   * (server/services/backlog_service_triage.go) for the bucketing logic.
+   */
+  endReason?: string;
+  /**
+   * Absolute (server-local) path to a durable capture of the raw LLM output
+   * for a headless triage/review call that errored or failed to parse — see
+   * session.WriteHeadlessFailureCapture. "" when the call succeeded and
+   * parsed cleanly, or nothing was captured.
+   */
+  failureCapturePath?: string;
 }
 
 export interface BacklogItem {
@@ -107,6 +129,17 @@ export interface BacklogItem {
   autoCreatePR: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
+  /**
+   * Free-text reason from the most recent RejectPlan call. Cleared on
+   * ApprovePlan, on the next TriggerTriage completion (fresh or
+   * feedback-driven), and on any backward transition to idea/refining.
+   * Undefined/"" means "no outstanding rejection" — see
+   * derivePlanReviewStatus (web-app/src/lib/backlog/planReviewStatus.ts)
+   * and project_plans/plan-approval-ux/decisions/ADR-001.
+   */
+  planRejectionReason?: string;
+  /** Timestamp of the most recent RejectPlan call, paired with planRejectionReason above. */
+  planRejectedAt?: string;
   acCriteria: AcCriterion[];
   linkedSessions: LinkedSession[];
   notes?: string;
@@ -316,11 +349,17 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     role: s.sessionRole,
     startedAt: s.startedAt ? new Date(Number(s.startedAt.seconds) * 1000).toISOString() : undefined,
     endedAt: s.endedAt ? new Date(Number(s.endedAt.seconds) * 1000).toISOString() : undefined,
+    commitCountSinceSpawn: s.commitCountSinceSpawn ?? 0,
+    lastCommitAt: s.lastCommitAt ? timestampDate(s.lastCommitAt).toISOString() : undefined,
+    lastCommitMessage: s.lastCommitMessage || undefined,
+    lastFileTouchAt: s.lastFileTouchAt ? timestampDate(s.lastFileTouchAt).toISOString() : undefined,
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
     worktreeBranch: s.worktreeBranch || undefined,
     worktreePath: s.worktreePath || undefined,
     pipelineModeSnapshot: s.pipelineModeSnapshot ?? "",
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
+    endReason: s.endReason || undefined,
+    failureCapturePath: s.failureCapturePath || undefined,
   };
 
   // Map review verdict if present
@@ -470,6 +509,10 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     autoCreatePR: p.autoCreatePr,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
+    planRejectionReason: p.planRejectionReason || undefined,
+    // timestampDate, not a hand-rolled `Number(seconds) * 1000` — see the
+    // createdAt/updatedAt comment above for why.
+    planRejectedAt: p.planRejectedAt ? timestampDate(p.planRejectedAt).toISOString() : undefined,
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
     linkedSessions,
     notes: p.notes || undefined,
@@ -554,6 +597,8 @@ interface UseBacklogServiceReturn {
   listBacklogItems: (filter?: ListBacklogItemsFilter) => Promise<BacklogItem[]>;
   getBacklogItem: (id: string) => Promise<BacklogItem | null>;
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  /** One turn of chat-based backlog creation/refinement. Empty existingItemId creates a new item (delegates to createBacklogItem); a set existingItemId delegates to TriggerTriage's feedback-driven refine path. */
+  createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number }) => Promise<GitHubIssue[]>;
@@ -589,6 +634,13 @@ interface UseBacklogServiceReturn {
   triggerTriage: (id: string, feedback?: string) => Promise<{ itemSessionId: string } | null>;
   cancelTriage: (id: string) => Promise<boolean>;
   approvePlan: (id: string) => Promise<BacklogItem | null>;
+  /**
+   * Persists a rejection reason only — does not itself trigger regeneration.
+   * See project_plans/plan-approval-ux/decisions/ADR-002: the frontend
+   * closes the "feedback should be actionable" gap with a separate, explicit
+   * "Regenerate Plan with This Feedback" button that calls triggerTriage.
+   */
+  rejectPlan: (id: string, reason: string) => Promise<BacklogItem | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
   triggerReReview: (id: string) => Promise<boolean>;
   /** Self-service "Ship PR" action — runs the one-shot PR-creation prompt for an item in review with no PR yet. */
@@ -699,6 +751,27 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] createBacklogItem:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      }
+    },
+    []
+  );
+
+  const createBacklogItemFromChat = useCallback(
+    async (message: string, existingItemId?: string): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.createBacklogItemFromChat({
+          message,
+          existingItemId: existingItemId ?? "",
+        });
+        return resp.item
+          ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
+          : null;
+      } catch (err) {
+        console.error("[useBacklogService] createBacklogItemFromChat:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));
         return null;
       }
@@ -849,6 +922,18 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.item ? mapBacklogItem(resp.item) : null;
     } catch (err) {
       console.error("[useBacklogService] approvePlan:", err);
+      setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
+  const rejectPlan = useCallback(async (id: string, reason: string): Promise<BacklogItem | null> => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.rejectPlan({ itemId: id, reason });
+      return resp.item ? mapBacklogItem(resp.item) : null;
+    } catch (err) {
+      console.error("[useBacklogService] rejectPlan:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));
       throw err;
     }
@@ -1102,6 +1187,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       listBacklogItems,
       getBacklogItem,
       createBacklogItem,
+      createBacklogItemFromChat,
       importGitHubIssue,
       searchGitHubRepos,
       listGitHubIssues,
@@ -1113,6 +1199,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       triggerTriage,
       cancelTriage,
       approvePlan,
+      rejectPlan,
       overrideVerdict,
       triggerReReview,
       triggerShipPR,

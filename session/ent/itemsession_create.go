@@ -80,6 +80,20 @@ func (_c *ItemSessionCreate) SetNillableEndReason(v *string) *ItemSessionCreate 
 	return _c
 }
 
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (_c *ItemSessionCreate) SetFailureCapturePath(v string) *ItemSessionCreate {
+	_c.mutation.SetFailureCapturePath(v)
+	return _c
+}
+
+// SetNillableFailureCapturePath sets the "failure_capture_path" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableFailureCapturePath(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetFailureCapturePath(*v)
+	}
+	return _c
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (_c *ItemSessionCreate) SetAcSnapshot(v string) *ItemSessionCreate {
 	_c.mutation.SetAcSnapshot(v)
@@ -276,6 +290,20 @@ func (_c *ItemSessionCreate) SetNillableEstimatedCostUsd(v *float64) *ItemSessio
 	return _c
 }
 
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (_c *ItemSessionCreate) SetClaimantHostID(v string) *ItemSessionCreate {
+	_c.mutation.SetClaimantHostID(v)
+	return _c
+}
+
+// SetNillableClaimantHostID sets the "claimant_host_id" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableClaimantHostID(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetClaimantHostID(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *ItemSessionCreate) SetID(v uuid.UUID) *ItemSessionCreate {
 	_c.mutation.SetID(v)
@@ -359,6 +387,10 @@ func (_c *ItemSessionCreate) defaults() {
 		v := itemsession.DefaultEndReason
 		_c.mutation.SetEndReason(v)
 	}
+	if _, ok := _c.mutation.FailureCapturePath(); !ok {
+		v := itemsession.DefaultFailureCapturePath
+		_c.mutation.SetFailureCapturePath(v)
+	}
 	if _, ok := _c.mutation.PipelineModeSnapshot(); !ok {
 		v := itemsession.DefaultPipelineModeSnapshot
 		_c.mutation.SetPipelineModeSnapshot(v)
@@ -382,6 +414,10 @@ func (_c *ItemSessionCreate) defaults() {
 	if _, ok := _c.mutation.EstimatedCostUsd(); !ok {
 		v := itemsession.DefaultEstimatedCostUsd
 		_c.mutation.SetEstimatedCostUsd(v)
+	}
+	if _, ok := _c.mutation.ClaimantHostID(); !ok {
+		v := itemsession.DefaultClaimantHostID
+		_c.mutation.SetClaimantHostID(v)
 	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := itemsession.DefaultID()
@@ -468,6 +504,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 		_spec.SetField(itemsession.FieldEndReason, field.TypeString, value)
 		_node.EndReason = value
 	}
+	if value, ok := _c.mutation.FailureCapturePath(); ok {
+		_spec.SetField(itemsession.FieldFailureCapturePath, field.TypeString, value)
+		_node.FailureCapturePath = value
+	}
 	if value, ok := _c.mutation.AcSnapshot(); ok {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)
 		_node.AcSnapshot = value
@@ -523,6 +563,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.EstimatedCostUsd(); ok {
 		_spec.SetField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64, value)
 		_node.EstimatedCostUsd = value
+	}
+	if value, ok := _c.mutation.ClaimantHostID(); ok {
+		_spec.SetField(itemsession.FieldClaimantHostID, field.TypeString, value)
+		_node.ClaimantHostID = value
 	}
 	if nodes := _c.mutation.BacklogItemIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -684,6 +728,24 @@ func (u *ItemSessionUpsert) UpdateEndReason() *ItemSessionUpsert {
 // ClearEndReason clears the value of the "end_reason" field.
 func (u *ItemSessionUpsert) ClearEndReason() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldEndReason)
+	return u
+}
+
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (u *ItemSessionUpsert) SetFailureCapturePath(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldFailureCapturePath, v)
+	return u
+}
+
+// UpdateFailureCapturePath sets the "failure_capture_path" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateFailureCapturePath() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldFailureCapturePath)
+	return u
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (u *ItemSessionUpsert) ClearFailureCapturePath() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldFailureCapturePath)
 	return u
 }
 
@@ -915,6 +977,24 @@ func (u *ItemSessionUpsert) ClearEstimatedCostUsd() *ItemSessionUpsert {
 	return u
 }
 
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (u *ItemSessionUpsert) SetClaimantHostID(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldClaimantHostID, v)
+	return u
+}
+
+// UpdateClaimantHostID sets the "claimant_host_id" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateClaimantHostID() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldClaimantHostID)
+	return u
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (u *ItemSessionUpsert) ClearClaimantHostID() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldClaimantHostID)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create except the ID field.
 // Using this option is equivalent to using:
 //
@@ -1054,6 +1134,27 @@ func (u *ItemSessionUpsertOne) UpdateEndReason() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearEndReason() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEndReason()
+	})
+}
+
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (u *ItemSessionUpsertOne) SetFailureCapturePath(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetFailureCapturePath(v)
+	})
+}
+
+// UpdateFailureCapturePath sets the "failure_capture_path" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateFailureCapturePath() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateFailureCapturePath()
+	})
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (u *ItemSessionUpsertOne) ClearFailureCapturePath() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearFailureCapturePath()
 	})
 }
 
@@ -1320,6 +1421,27 @@ func (u *ItemSessionUpsertOne) UpdateEstimatedCostUsd() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearEstimatedCostUsd() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEstimatedCostUsd()
+	})
+}
+
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (u *ItemSessionUpsertOne) SetClaimantHostID(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetClaimantHostID(v)
+	})
+}
+
+// UpdateClaimantHostID sets the "claimant_host_id" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateClaimantHostID() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateClaimantHostID()
+	})
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (u *ItemSessionUpsertOne) ClearClaimantHostID() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearClaimantHostID()
 	})
 }
 
@@ -1632,6 +1754,27 @@ func (u *ItemSessionUpsertBulk) ClearEndReason() *ItemSessionUpsertBulk {
 	})
 }
 
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (u *ItemSessionUpsertBulk) SetFailureCapturePath(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetFailureCapturePath(v)
+	})
+}
+
+// UpdateFailureCapturePath sets the "failure_capture_path" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateFailureCapturePath() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateFailureCapturePath()
+	})
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (u *ItemSessionUpsertBulk) ClearFailureCapturePath() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearFailureCapturePath()
+	})
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (u *ItemSessionUpsertBulk) SetAcSnapshot(v string) *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
@@ -1895,6 +2038,27 @@ func (u *ItemSessionUpsertBulk) UpdateEstimatedCostUsd() *ItemSessionUpsertBulk 
 func (u *ItemSessionUpsertBulk) ClearEstimatedCostUsd() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEstimatedCostUsd()
+	})
+}
+
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (u *ItemSessionUpsertBulk) SetClaimantHostID(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetClaimantHostID(v)
+	})
+}
+
+// UpdateClaimantHostID sets the "claimant_host_id" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateClaimantHostID() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateClaimantHostID()
+	})
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (u *ItemSessionUpsertBulk) ClearClaimantHostID() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearClaimantHostID()
 	})
 }
 

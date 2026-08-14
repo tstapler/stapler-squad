@@ -48,7 +48,25 @@ type Workflow struct {
 	KeepSessions int `json:"keep_sessions,omitempty"`
 	// Auto-archive completed sessions after this many hours (0 = disabled).
 	ArchiveAfterHours int `json:"archive_after_hours,omitempty"`
-	selectValues      sql.SelectValues
+	// TriggerType holds the value of the "trigger_type" field.
+	TriggerType string `json:"trigger_type,omitempty"`
+	// GithubRepo holds the value of the "github_repo" field.
+	GithubRepo string `json:"github_repo,omitempty"`
+	// GithubBranch holds the value of the "github_branch" field.
+	GithubBranch string `json:"github_branch,omitempty"`
+	// WebhookSlug holds the value of the "webhook_slug" field.
+	WebhookSlug string `json:"webhook_slug,omitempty"`
+	// WebhookSecretEncrypted holds the value of the "webhook_secret_encrypted" field.
+	WebhookSecretEncrypted string `json:"webhook_secret_encrypted,omitempty"`
+	// EventFilter holds the value of the "event_filter" field.
+	EventFilter string `json:"event_filter,omitempty"`
+	// LabelFilter holds the value of the "label_filter" field.
+	LabelFilter string `json:"label_filter,omitempty"`
+	// PromptTemplate holds the value of the "prompt_template" field.
+	PromptTemplate string `json:"prompt_template,omitempty"`
+	// LastFiredAt holds the value of the "last_fired_at" field.
+	LastFiredAt  *time.Time `json:"last_fired_at,omitempty"`
+	selectValues sql.SelectValues
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -60,9 +78,9 @@ func (*Workflow) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case workflow.FieldKeepSessions, workflow.FieldArchiveAfterHours:
 			values[i] = new(sql.NullInt64)
-		case workflow.FieldSlug, workflow.FieldName, workflow.FieldDescription, workflow.FieldCommand, workflow.FieldTargetDirectory, workflow.FieldInputTemplate, workflow.FieldSessionType, workflow.FieldModel, workflow.FieldAgentType, workflow.FieldCronExpression:
+		case workflow.FieldSlug, workflow.FieldName, workflow.FieldDescription, workflow.FieldCommand, workflow.FieldTargetDirectory, workflow.FieldInputTemplate, workflow.FieldSessionType, workflow.FieldModel, workflow.FieldAgentType, workflow.FieldCronExpression, workflow.FieldTriggerType, workflow.FieldGithubRepo, workflow.FieldGithubBranch, workflow.FieldWebhookSlug, workflow.FieldWebhookSecretEncrypted, workflow.FieldEventFilter, workflow.FieldLabelFilter, workflow.FieldPromptTemplate:
 			values[i] = new(sql.NullString)
-		case workflow.FieldCreatedAt, workflow.FieldUpdatedAt:
+		case workflow.FieldCreatedAt, workflow.FieldUpdatedAt, workflow.FieldLastFiredAt:
 			values[i] = new(sql.NullTime)
 		case workflow.FieldID:
 			values[i] = new(uuid.UUID)
@@ -177,6 +195,61 @@ func (_m *Workflow) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ArchiveAfterHours = int(value.Int64)
 			}
+		case workflow.FieldTriggerType:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field trigger_type", values[i])
+			} else if value.Valid {
+				_m.TriggerType = value.String
+			}
+		case workflow.FieldGithubRepo:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field github_repo", values[i])
+			} else if value.Valid {
+				_m.GithubRepo = value.String
+			}
+		case workflow.FieldGithubBranch:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field github_branch", values[i])
+			} else if value.Valid {
+				_m.GithubBranch = value.String
+			}
+		case workflow.FieldWebhookSlug:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field webhook_slug", values[i])
+			} else if value.Valid {
+				_m.WebhookSlug = value.String
+			}
+		case workflow.FieldWebhookSecretEncrypted:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field webhook_secret_encrypted", values[i])
+			} else if value.Valid {
+				_m.WebhookSecretEncrypted = value.String
+			}
+		case workflow.FieldEventFilter:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field event_filter", values[i])
+			} else if value.Valid {
+				_m.EventFilter = value.String
+			}
+		case workflow.FieldLabelFilter:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field label_filter", values[i])
+			} else if value.Valid {
+				_m.LabelFilter = value.String
+			}
+		case workflow.FieldPromptTemplate:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field prompt_template", values[i])
+			} else if value.Valid {
+				_m.PromptTemplate = value.String
+			}
+		case workflow.FieldLastFiredAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field last_fired_at", values[i])
+			} else if value.Valid {
+				_m.LastFiredAt = new(time.Time)
+				*_m.LastFiredAt = value.Time
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -257,6 +330,35 @@ func (_m *Workflow) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("archive_after_hours=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ArchiveAfterHours))
+	builder.WriteString(", ")
+	builder.WriteString("trigger_type=")
+	builder.WriteString(_m.TriggerType)
+	builder.WriteString(", ")
+	builder.WriteString("github_repo=")
+	builder.WriteString(_m.GithubRepo)
+	builder.WriteString(", ")
+	builder.WriteString("github_branch=")
+	builder.WriteString(_m.GithubBranch)
+	builder.WriteString(", ")
+	builder.WriteString("webhook_slug=")
+	builder.WriteString(_m.WebhookSlug)
+	builder.WriteString(", ")
+	builder.WriteString("webhook_secret_encrypted=")
+	builder.WriteString(_m.WebhookSecretEncrypted)
+	builder.WriteString(", ")
+	builder.WriteString("event_filter=")
+	builder.WriteString(_m.EventFilter)
+	builder.WriteString(", ")
+	builder.WriteString("label_filter=")
+	builder.WriteString(_m.LabelFilter)
+	builder.WriteString(", ")
+	builder.WriteString("prompt_template=")
+	builder.WriteString(_m.PromptTemplate)
+	builder.WriteString(", ")
+	if v := _m.LastFiredAt; v != nil {
+		builder.WriteString("last_fired_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

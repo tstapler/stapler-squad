@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -39,6 +40,23 @@ type EntRepository struct {
 	// typically by Storage.SetItemChangePublisher's forwarding call in
 	// server/dependencies.go.
 	itemChangePublisher ItemChangePublisher
+
+	// callbackDispatcher is nil-safe — dispatchCallback nil-checks before calling
+	// it (dispatch is best-effort and never blocks or fails the underlying
+	// mutation). Wired via SetCallbackDispatcher, typically by
+	// Storage.SetCallbackDispatcher's forwarding call in server/dependencies.go.
+	// Used by TransitionBacklogItemStatus (on_session_complete, webhook-triggers
+	// Phase 5) and by BacklogLifecycleListener.reconcileStaleWorkSessions
+	// (on_session_stale), which is handed this *EntRepository directly.
+	callbackDispatcher CallbackDispatcher
+
+	// chainFirer is nil-safe — dispatchChainFire nil-checks before calling it
+	// (dispatch is best-effort and never blocks or fails the underlying
+	// mutation). Wired via SetChainFirer, typically by Storage.WireChainFirer's
+	// forwarding call in server/dependencies.go. Used by
+	// TransitionBacklogItemStatus to fire the pipeline-chain continuation
+	// (webhook-triggers Phase 6, AC5/AC9) once a "done" transition commits.
+	chainFirer *ChainFirer
 }
 
 // NewEntRepository creates a new Ent repository with the given options.
@@ -66,13 +84,23 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		expandedPath = filepath.Join(homeDir, expandedPath[2:])
 	}
 
-	// Create parent directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create database directory: %w", err)
+	// Create parent directory if it doesn't exist, unless expandedPath is a
+	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
+	// rather than a real filesystem path.
+	if !strings.HasPrefix(expandedPath, "file:") {
+		if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
+			return nil, fmt.Errorf("failed to create database directory: %w", err)
+		}
 	}
 
-	// Open database connection with WAL mode for better concurrency
+	// Open database connection. WAL mode is appended for on-disk databases for
+	// better concurrency; it's skipped for URI-style DSNs (e.g. shared-cache
+	// in-memory databases), which don't support WAL and already carry their
+	// own query string that a second "?" would corrupt.
 	dbPath := expandedPath + "?_journal_mode=WAL&_timeout=5000&_fk=1"
+	if strings.Contains(expandedPath, "?") {
+		dbPath = expandedPath + "&_timeout=5000&_fk=1"
+	}
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -713,6 +741,12 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 		return fmt.Errorf("failed to clear tags: %w", err)
 	}
 
+	// Delete shells (sibling tmux sessions) — Shell.session edge is Required(),
+	// so leaving any rows here trips a FOREIGN KEY constraint on session delete.
+	if _, err := tx.Shell.Delete().Where(entshell.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete shells: %w", err)
+	}
+
 	// Finally delete the session
 	if err := tx.Session.DeleteOne(sess).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
@@ -1262,10 +1296,38 @@ func (r *EntRepository) GetWithOptions(ctx context.Context, title string, option
 	return r.Get(ctx, title)
 }
 
-// ListWithOptions retrieves all sessions with selective child data loading.
-// EntRepository: Delegates to List with full loading.
+// ListWithOptions retrieves all sessions with selective child data loading,
+// honoring the LoadOptions fields the caller requested rather than eager-loading
+// every edge unconditionally.
 func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
-	return r.List(ctx)
+	query := r.client.Session.Query().WithProject()
+
+	if options.LoadWorktree {
+		query = query.WithWorktree()
+	}
+	if options.LoadDiffStats || options.LoadDiffContent {
+		query = query.WithDiffStats()
+	}
+	if options.LoadTags {
+		query = query.WithTags()
+	}
+	if options.LoadClaudeSession {
+		query = query.WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
+			q.WithMetadata()
+		})
+	}
+
+	sessions, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions: %w", err)
+	}
+
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+
+	return result, nil
 }
 
 // ListByStatusWithOptions retrieves sessions filtered by status with selective loading.

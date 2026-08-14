@@ -192,7 +192,7 @@ qr: ensure-tools proto-gen ## Print remote access QR codes for phone setup
 
 restart-web: build-all ## Rebuild and restart the web server
 	@echo "Stopping existing stapler-squad processes..."
-	@-pkill -f "^\./stapler-squad" 2>/dev/null || true
+	@-pkill -f "(^|/)stapler-squad([[:space:]]|$$)" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
 	@./stapler-squad $(SERVER_FLAGS) $(PROFILE_FLAGS) &
@@ -215,7 +215,7 @@ restart-web-profile: ## Rebuild and restart web server with profiling enabled
 
 web-dev: build-all ## Build web UI and server, then restart (detects file changes automatically)
 	@echo "Stopping existing stapler-squad processes..."
-	@-pkill -f "^\./stapler-squad" 2>/dev/null || true
+	@-pkill -f "(^|/)stapler-squad([[:space:]]|$$)" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
 	@./stapler-squad $(PROFILE_FLAGS) &

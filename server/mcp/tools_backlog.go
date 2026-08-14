@@ -108,6 +108,16 @@ var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
 	session.BacklogStatusPRPending:  true,
 }
 
+// reportPRCreatedAllowedSourceStatuses is the whitelist of source statuses
+// report_pr_created may act on. Consulted before any PR verification or
+// storage write so a structurally ineligible status (e.g. ready, idea, done)
+// gets a specific rejection instead of falling through to the generic
+// CAS-race message.
+var reportPRCreatedAllowedSourceStatuses = map[session.BacklogStatus]bool{
+	session.BacklogStatusReview:    true,
+	session.BacklogStatusPRPending: true,
+}
+
 // validateSelfResolveSource is the single chokepoint both request_review and
 // report_duplicate call to obtain a validated source status. Downstream code
 // must use only its returned session.BacklogStatus for a transition's
@@ -826,6 +836,134 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	)), nil
 }
 
+// --- report_blocked ---
+
+// blockedCycleThreshold caps how many times report_blocked may return the
+// same item to ready before escalating to review instead. Mirrors
+// session/stuck_decisions.go's bounceThreshold precedent (3) — an item that
+// keeps landing back in ready for the same external-blocker reason needs a
+// human/reviewer to look at it rather than looping through work sessions
+// indefinitely (the same failure shape the 78-bounce incident documented in
+// docs/tasks/backlog-feature-improvement.md motivated a breaker for).
+const blockedCycleThreshold = 3
+
+// blockedNoteMarker prefixes every note report_blocked appends to
+// BacklogItemData.Notes, so a later call can count prior blocked cycles by
+// scanning for this exact line prefix (mirrors reportDuplicate's marker-line
+// convention) without needing a dedicated DB column.
+const blockedNoteMarker = "[report_blocked]"
+
+// countBlockedCycles counts how many blockedNoteMarker-prefixed lines already
+// exist in notes.
+func countBlockedCycles(notes string) int {
+	count := 0
+	for _, line := range strings.Split(notes, "\n") {
+		if strings.HasPrefix(line, blockedNoteMarker) {
+			count++
+		}
+	}
+	return count
+}
+
+// reportBlocked lets a work-role session park its held item back to ready
+// (or, past blockedCycleThreshold, escalate it to review) when the session
+// determines the item is legitimately externally blocked — e.g. waiting on
+// an unmerged upstream PR. Unlike request_review, a normal call here never
+// routes through the review gate: there's no code to review when the reason
+// a session stopped is an external dependency, not completed work.
+//
+// Deliberately does NOT call CountReviewCyclesSince or isBouncing
+// (session/stuck_decisions.go) — those track work<->review round trips
+// looking for non-converging rework, which is a different failure shape than
+// external blocking. Escalation here is driven purely by
+// blockedNoteMarker-prefixed lines in this item's own Notes.
+func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+	args := req.GetArguments()
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+	rationale, ok := args["rationale"].(string)
+	if !ok || rationale == "" {
+		return errResult(ErrInvalidArgument, "rationale is required", ""), nil
+	}
+	if len(rationale) > 2000 {
+		return errResult(ErrInvalidArgument, "rationale must be <= 2000 characters", ""), nil
+	}
+
+	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	if linkErr != nil {
+		if errors.Is(linkErr, session.ErrNotFound) {
+			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	}
+	if itemSession.Role != session.SessionRoleWork {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a blocked item", itemSession.Role), ""), nil
+	}
+
+	item, itemErr := h.getBacklogItemFor(ctx, itemID)
+	if itemErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
+	}
+	currentStatus := session.BacklogStatus(item.Status)
+	switch currentStatus {
+	case session.BacklogStatusInProgress, session.BacklogStatusReview:
+		// allowed
+	default:
+		return errResult(ErrInvalidArgument, fmt.Sprintf("item is at status %q — report_blocked only allowed from in_progress or review", item.Status), ""), nil
+	}
+
+	priorBlockedCycles := countBlockedCycles(item.Notes)
+	escalated := priorBlockedCycles+1 >= blockedCycleThreshold
+	targetStatus := session.BacklogStatusReady
+	if escalated {
+		targetStatus = session.BacklogStatusReview
+	}
+
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
+		log.InfoLog.Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
+		if errors.Is(transErr, session.ErrPreconditionFailed) {
+			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
+	}
+
+	// Persist the blocking rationale on the item itself (not the
+	// session-scoped VerificationNotes) so it's durable/queryable across
+	// whichever session next picks the item up. Best-effort: a failure here
+	// should not undo the status transition that already succeeded.
+	noteLine := fmt.Sprintf("%s %s", blockedNoteMarker, rationale)
+	newNotes := noteLine
+	if item.Notes != "" {
+		newNotes = item.Notes + "\n" + noteLine
+	}
+	if escalated {
+		newNotes += fmt.Sprintf("\n%s escalated to review after %d blocked cycles", blockedNoteMarker, priorBlockedCycles+1)
+	}
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
+		log.WarningLog.Printf("[mcp:report_blocked] failed to persist rationale notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
+	}
+
+	log.InfoLog.Printf("[mcp:report_blocked] session=%s item=%s transitioned to %s rationale=%q escalated=%v", callerUUID, itemID, targetStatus, rationale, escalated)
+
+	if escalated {
+		return mcpgo.NewToolResultText(fmt.Sprintf("Item %s has been blocked %d times — escalated to review for a human/reviewer to look at instead of returning to ready.", itemID, priorBlockedCycles+1)), nil
+	}
+	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s reported blocked and returned to ready status.", itemID)), nil
+}
+
 // maxRejectionMessagePaths caps how many dirty paths formatDirtyPathsRejectionMessage
 // lists explicitly, so a large diff doesn't produce an unbounded message.
 const maxRejectionMessagePaths = 10
@@ -1213,6 +1351,18 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
+	}
+
+	// AC6: reject a structurally ineligible status with a message naming the
+	// item's actual status, before any PR verification or storage write is
+	// attempted — without this, an item in e.g. ready/idea/done would fall
+	// through to SetBacklogItemPRAndTransition's ErrPreconditionFailed and
+	// surface as the generic "item state changed since your last read..."
+	// CAS-race message below, indistinguishable from a genuine concurrent
+	// write race (AC7's message, which this check must not alter).
+	if !reportPRCreatedAllowedSourceStatuses[session.BacklogStatus(item.Status)] {
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"item %s is at status %q — report_pr_created is only allowed from status 'review' or 'pr_pending'", itemID, item.Status), ""), nil
 	}
 
 	// Idempotency: already pr_pending with this exact PR number is a no-op success.
@@ -2060,6 +2210,21 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.requestReview,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("report_blocked",
+			mcpgo.WithDescription("Report that this item is legitimately blocked by something external (e.g. an unmerged upstream PR, a missing credential, a dependency not yet available) and return it to ready status. Role: work only. Unlike request_review, this does NOT route through review — there's no code to review when the reason you stopped is an external dependency, not completed work. Repeated blocked reports on the same item escalate to review for a human/reviewer to look at instead of looping."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("rationale",
+				mcpgo.Description("Why this item is blocked and what it's waiting on (max 2000 chars). Persisted as a durable note on the item."),
+				mcpgo.Required(),
+			),
+		),
+		h.reportBlocked,
 	)
 
 	s.AddTool(

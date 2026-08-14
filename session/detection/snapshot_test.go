@@ -48,6 +48,12 @@ var snapshotTests = []snapshotTest{
 		program:     "claude",
 		description: "Claude at the idle prompt — '? for shortcuts' visible, waiting for user input",
 	},
+	{
+		fixture:     "claude_compacting.txt",
+		expected:    StatusCompacting,
+		program:     "claude",
+		description: "Claude actively compacting/summarizing conversation history (INFERRED fixture — see project_plans/context-compaction-detection/implementation/plan.md Story 1.1.1)",
+	},
 
 	// ── Gemini CLI ───────────────────────────────────────────────────────────
 	{

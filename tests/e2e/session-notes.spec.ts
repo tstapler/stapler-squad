@@ -30,11 +30,7 @@ test.describe("session-notes", () => {
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",
       );
-      // Exact "Create Session" (not the broader /create|start/i) to avoid matching
-      // the omnibar's own "Create new session" trigger button; `.first()` because
-      // the creation panel renders a submit button in both its mobile and desktop
-      // layouts simultaneously (see `.claude/rules/feature-testing-registry.md`).
-      await page.getByRole("button", { name: "Create Session", exact: true }).first().click();
+      await sessionsPage.createSessionSubmitButton.click();
       await createRequest;
       await page.waitForURL(/[?&]session=/, { timeout: 15000 });
 

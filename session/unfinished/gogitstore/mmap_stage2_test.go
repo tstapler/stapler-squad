@@ -153,6 +153,9 @@ func TestMmapIndex_HeapAllocation_LowerThanCopyBased(t *testing.T) {
 		// ponytail: skipped in CI — git gc --aggressive under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
 		t.Skip("skipped in CI — see PR #162")
 	}
+	if testing.Short() {
+		t.Skip("skipped under -short: too slow for make test/quick-check")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
@@ -493,26 +496,34 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	}
 
 	const numReaders = 12
-	// readerDuration (not a fixed iteration count) is what actually
-	// guarantees overlap with the repack below: a single pin/drain/unpin
-	// cycle over this fixture takes low-single-digit milliseconds, while
-	// `git gc --aggressive` (invoked from a subprocess) reliably takes
-	// tens to hundreds of milliseconds — a small, fixed iteration count
-	// could plausibly finish before the repack subprocess even starts,
-	// which would make this test pass for the wrong reason (no real
-	// overlap, retiring handled entirely in the pins==0 fast path). Running
-	// readers continuously for a fixed wall-clock window instead all but
-	// guarantees many pin/drain cycles are in flight at the exact moment
-	// refreshIndexes marks the pack retiring.
-	const readerDuration = 2 * time.Second
+	// readerGrace is how much longer readers keep pinning/draining after
+	// the repacker's post-gc refreshIndexes() call has already marked the
+	// old generation retiring (repackDone below) — the unmap itself only
+	// fires once pins drop to zero (maybeUnmapLocked), which happens on
+	// the readers' own pin/unpin cadence, so readers must still be active
+	// for a little while after retiring is set, not just during the gc
+	// subprocess itself.
+	const readerGrace = 2 * time.Second
 	var mismatch atomic.Bool
 	var mismatchDetail atomic.Value // string
 
 	stop := make(chan struct{})
+	// repackDone is closed once the repacker's first post-gc
+	// refreshIndexes() call returns, i.e. once retirement of the old
+	// generation has actually been detected. Reader lifetime used to be a
+	// fixed 2s wall-clock deadline based on an assumption that `git gc
+	// --aggressive` "reliably takes tens to hundreds of milliseconds" —
+	// on a slower machine (or one with per-file EDR/AV syscall hooking
+	// overhead, see .claude/rules/playwright-chromium-extraction-stall.md
+	// for a similar symptom) that gc call can instead take on the order
+	// of a minute, so a fixed 2s reader window reliably finished before
+	// the repack was even detected and sawEmptyRead was never observed —
+	// deterministically failing this test, not flaking it. Tying reader
+	// lifetime to the repacker's actual completion (plus a fixed grace
+	// period) removes the wall-clock guess entirely.
+	repackDone := make(chan struct{})
 	var readerWG sync.WaitGroup
 	var bgWG sync.WaitGroup
-
-	readerDeadline := time.Now().Add(readerDuration)
 
 	// sawFullRead / sawEmptyRead track whether this stress run actually
 	// exercised BOTH legitimate outcomes of re-using a long-lived
@@ -527,14 +538,20 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	var sawFullRead, sawEmptyRead atomic.Bool
 
 	// Readers: repeatedly pin, drain (with checks + scheduling jitter to
-	// widen the race window), unpin, for readerDuration. Time-bounded
-	// (not tied to `stop`) so the main goroutine knows exactly when it's
-	// safe to stop the background repacker/checker below.
+	// widen the race window), unpin, until `stop` is closed. `stop` isn't
+	// closed until repackDone has fired (plus readerGrace), so readers stay
+	// alive through the actual repack and the unmap it triggers — see the
+	// final synchronization sequence below.
 	for r := 0; r < numReaders; r++ {
 		readerWG.Add(1)
 		go func() {
 			defer readerWG.Done()
-			for time.Now().Before(readerDeadline) {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
 				it, ierr := li.Entries()
 				if ierr != nil {
 					mismatch.Store(true)
@@ -616,18 +633,23 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 			return
 		}
 		// Call refreshIndexes at least once, unconditionally, before ever
-		// checking `stop` — readers run on a wall-clock deadline (not tied
-		// to `stop`), but git gc above is a real subprocess whose duration
-		// isn't bounded by that deadline; if `stop` happened to already be
-		// closed by the time this goroutine gets here, a select-with-stop
-		// loop entered directly would risk exiting without ever calling
-		// refreshIndexes at all, and the retire this test exists to
-		// exercise would never happen.
+		// checking `stop` — git gc above is a real subprocess whose
+		// duration is unpredictable (observed anywhere from tens of
+		// milliseconds to ~90s on this fixture depending on the machine);
+		// if `stop` happened to already be closed by the time this
+		// goroutine gets here, a select-with-stop loop entered directly
+		// would risk exiting without ever calling refreshIndexes at all,
+		// and the retire this test exists to exercise would never happen.
 		if rerr := store.refreshIndexes(); rerr != nil {
 			mismatch.Store(true)
 			mismatchDetail.Store("refreshIndexes: " + rerr.Error())
 			return
 		}
+		// Signal that retirement has been detected — the main goroutine
+		// waits on this (not a wall-clock guess) before winding readers
+		// down, so readers are guaranteed to still be running through the
+		// actual repack regardless of how long `git gc` took.
+		close(repackDone)
 		for {
 			select {
 			case <-stop:
@@ -667,8 +689,81 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 		}
 	}()
 
-	readerWG.Wait()
+	// Prober: watches for the unmapped transition and immediately does one
+	// Entries() call, so the already-unmapped guard path (lockedIndex.unmappedLocked)
+	// is exercised deterministically every run rather than by scheduling luck.
+	// It ignores `stop`; the deadline covers the same 5-minute repackDone
+	// timeout plus readerGrace and slack, so a regression that breaks
+	// unmapping fails loudly instead of hanging the suite.
+	proberDeadline := time.Now().Add(5*time.Minute + readerGrace + 30*time.Second)
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		for {
+			store.mu.Lock()
+			unmapped := li.handle.unmapped
+			store.mu.Unlock()
+			if unmapped {
+				it, ierr := li.Entries()
+				if ierr != nil {
+					mismatch.Store(true)
+					mismatchDetail.Store("prober Entries() error: " + ierr.Error())
+					return
+				}
+				seen := 0
+				for {
+					_, nerr := it.Next()
+					if errors.Is(nerr, io.EOF) {
+						break
+					}
+					if nerr != nil {
+						mismatch.Store(true)
+						mismatchDetail.Store("prober Next() error: " + nerr.Error())
+						_ = it.Close()
+						return
+					}
+					seen++
+				}
+				if cerr := it.Close(); cerr != nil {
+					mismatch.Store(true)
+					mismatchDetail.Store("prober Close() error: " + cerr.Error())
+					return
+				}
+				if seen != 0 {
+					mismatch.Store(true)
+					mismatchDetail.Store(fmt.Sprintf("prober read %d entries from an already-unmapped handle, want 0", seen))
+					return
+				}
+				sawEmptyRead.Store(true)
+				return
+			}
+			if time.Now().After(proberDeadline) {
+				mismatch.Store(true)
+				mismatchDetail.Store("prober: handle was never unmapped before deadline")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	// Wait for the repacker to actually detect retirement before winding
+	// readers down — a generous safety timeout guards against the
+	// repacker goroutine dying before reaching close(repackDone) (its own
+	// mismatch/return paths above already cover expected failures, but a
+	// hang here should fail loudly rather than block until Go's test
+	// binary timeout).
+	select {
+	case <-repackDone:
+	case <-time.After(5 * time.Minute):
+		t.Fatal("repack was never detected (repackDone never closed) within 5m")
+	}
+	// Readers must still be cycling for a bit after retirement is detected
+	// so the zero-pins-triggered unmap (maybeUnmapLocked) actually fires
+	// while at least one of them is live to observe the resulting empty
+	// read.
+	time.Sleep(readerGrace)
 	close(stop)
+	readerWG.Wait()
 	bgWG.Wait()
 
 	if mismatch.Load() {

@@ -134,6 +134,7 @@ var methodToID = map[string]string{
 	"ClearConversationState": "session:clear-conversation-state",
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
+	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
@@ -144,6 +145,7 @@ var methodToID = map[string]string{
 	"TriggerTriage":               "backlog:trigger-triage",
 	"CancelTriage":                "backlog:cancel-triage",
 	"ApprovePlan":                 "backlog:approve-plan",
+	"RejectPlan":                  "backlog:reject-plan",
 	"SuggestNextItem":             "backlog:suggest-next",
 	"OverrideVerdict":             "backlog:override-verdict",
 	"TriggerReReview":             "backlog:trigger-re-review",
@@ -170,6 +172,7 @@ var methodToID = map[string]string{
 	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
+	"AddBacklogItemDependency":    "backlog:add-item-dependency",
 	// GitHub issue import RPCs (BacklogService) - mapped to the method name
 	// itself, not a kebab-case backlog:* id: origin/main already has
 	// committed registry files under docs/registry/features/backend/{method
@@ -185,6 +188,8 @@ var methodToID = map[string]string{
 	"SearchGitHubRepos": "SearchGitHubRepos",
 	"ListGitHubIssues":  "ListGitHubIssues",
 	"ImportGitHubIssue": "ImportGitHubIssue",
+	// Launcher presets RPCs
+	"GetLauncherPresets": "launcher_presets:get",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
@@ -206,6 +211,11 @@ var methodToID = map[string]string{
 	"ListWorkflows":  "workflow:list",
 	"UpdateWorkflow": "workflow:update",
 	"RunWorkflow":    "workflow:run",
+	// Trigger fire audit trail RPC (webhook-triggers Epic 1.2, Task 1.2.1d)
+	"ListTriggerFireEvents": "workflow:list-trigger-fire-events",
+	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
+	"GetCallbackConfig":    "callback-config:get",
+	"UpdateCallbackConfig": "callback-config:update",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",

@@ -25,6 +25,8 @@ const (
 	FieldEndedAt = "ended_at"
 	// FieldEndReason holds the string denoting the end_reason field in the database.
 	FieldEndReason = "end_reason"
+	// FieldFailureCapturePath holds the string denoting the failure_capture_path field in the database.
+	FieldFailureCapturePath = "failure_capture_path"
 	// FieldAcSnapshot holds the string denoting the ac_snapshot field in the database.
 	FieldAcSnapshot = "ac_snapshot"
 	// FieldPipelineModeSnapshot holds the string denoting the pipeline_mode_snapshot field in the database.
@@ -53,6 +55,8 @@ const (
 	FieldCreatedAt = "created_at"
 	// FieldEstimatedCostUsd holds the string denoting the estimated_cost_usd field in the database.
 	FieldEstimatedCostUsd = "estimated_cost_usd"
+	// FieldClaimantHostID holds the string denoting the claimant_host_id field in the database.
+	FieldClaimantHostID = "claimant_host_id"
 	// EdgeBacklogItem holds the string denoting the backlog_item edge name in mutations.
 	EdgeBacklogItem = "backlog_item"
 	// EdgeReviewVerdict holds the string denoting the review_verdict edge name in mutations.
@@ -83,6 +87,7 @@ var Columns = []string{
 	FieldStartedAt,
 	FieldEndedAt,
 	FieldEndReason,
+	FieldFailureCapturePath,
 	FieldAcSnapshot,
 	FieldPipelineModeSnapshot,
 	FieldPipelineModeSnapshotHash,
@@ -97,6 +102,7 @@ var Columns = []string{
 	FieldLastProgressAt,
 	FieldCreatedAt,
 	FieldEstimatedCostUsd,
+	FieldClaimantHostID,
 }
 
 // ForeignKeys holds the SQL foreign-keys that are owned by the "item_sessions"
@@ -123,6 +129,8 @@ func ValidColumn(column string) bool {
 var (
 	// DefaultEndReason holds the default value on creation for the "end_reason" field.
 	DefaultEndReason string
+	// DefaultFailureCapturePath holds the default value on creation for the "failure_capture_path" field.
+	DefaultFailureCapturePath string
 	// DefaultPipelineModeSnapshot holds the default value on creation for the "pipeline_mode_snapshot" field.
 	DefaultPipelineModeSnapshot string
 	// DefaultPipelineModeSnapshotHash holds the default value on creation for the "pipeline_mode_snapshot_hash" field.
@@ -135,6 +143,8 @@ var (
 	DefaultCreatedAt func() time.Time
 	// DefaultEstimatedCostUsd holds the default value on creation for the "estimated_cost_usd" field.
 	DefaultEstimatedCostUsd float64
+	// DefaultClaimantHostID holds the default value on creation for the "claimant_host_id" field.
+	DefaultClaimantHostID string
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -170,6 +180,11 @@ func ByEndedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByEndReason orders the results by the end_reason field.
 func ByEndReason(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEndReason, opts...).ToFunc()
+}
+
+// ByFailureCapturePath orders the results by the failure_capture_path field.
+func ByFailureCapturePath(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldFailureCapturePath, opts...).ToFunc()
 }
 
 // ByAcSnapshot orders the results by the ac_snapshot field.
@@ -240,6 +255,11 @@ func ByCreatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByEstimatedCostUsd orders the results by the estimated_cost_usd field.
 func ByEstimatedCostUsd(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEstimatedCostUsd, opts...).ToFunc()
+}
+
+// ByClaimantHostID orders the results by the claimant_host_id field.
+func ByClaimantHostID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldClaimantHostID, opts...).ToFunc()
 }
 
 // ByBacklogItemField orders the results by backlog_item field.

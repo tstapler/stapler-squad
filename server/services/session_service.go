@@ -131,6 +131,13 @@ type SessionService struct {
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
 
+	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
+	// (webhook-triggers Phase 5, FR7).
+	callbackConfigSvc *CallbackConfigService
+
+	// launcherPresetsSvc handles the GetLauncherPresets RPC.
+	launcherPresetsSvc *LauncherPresetsService
+
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
 
@@ -366,13 +373,13 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	capCfg = capCfg.CapacityConfigOrDefault()
 
-	var directCfg config.Config
+	directCfg := &config.Config{}
 	if dir, err := config.GetConfigDir(); err == nil {
 		if c, err := config.LoadConfigFromPath(filepath.Join(dir, "config.json")); err == nil {
-			directCfg = *c
+			directCfg = c
 		}
 	}
-	credChain := NewDefaultChain(&directCfg)
+	credChain := NewDefaultChain(directCfg)
 
 	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
@@ -387,30 +394,32 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
-		storage:           storage,
-		concStorage:       concStorage,
-		eventBus:          eventBus,
-		reviewQueueSvc:    reviewQueueSvc,
-		searchSvc:         NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
-		githubSvc:         NewGitHubService(concStorage),
-		workspaceSvc:      workspaceSvc,
-		configSvc:         NewConfigService(),
-		notificationSvc:   notificationSvc,
-		approvalSvc:       approvalSvc,
-		utilitySvc:        utilitySvc,
-		rulesSvc:          rulesSvc,
-		approvalStore:     approvalStore,
-		databaseSvc:       NewDatabaseService(),
-		fileSvc:           NewFileService(workspaceSvc),
-		pathCompletionSvc: NewPathCompletionService(),
-		slashCommandSvc:   NewSlashCommandService(),
-		defaultsSvc:       NewDefaultsService(),
-		projectSvc:        NewProjectService(concStorage),
-		checkpointSvc:     NewCheckpointService(storage, eventBus),
-		featureFlagSvc:    NewFeatureFlagService(),
-		terminalSvc:       NewTerminalService(),
-		promptStore:       newPromptStore(),
-		capacityMonitor:   capacityMonitor,
+		storage:            storage,
+		concStorage:        concStorage,
+		eventBus:           eventBus,
+		reviewQueueSvc:     reviewQueueSvc,
+		searchSvc:          NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		githubSvc:          NewGitHubService(concStorage),
+		workspaceSvc:       workspaceSvc,
+		configSvc:          NewConfigService(),
+		notificationSvc:    notificationSvc,
+		approvalSvc:        approvalSvc,
+		utilitySvc:         utilitySvc,
+		rulesSvc:           rulesSvc,
+		approvalStore:      approvalStore,
+		databaseSvc:        NewDatabaseService(),
+		fileSvc:            NewFileService(workspaceSvc),
+		pathCompletionSvc:  NewPathCompletionService(),
+		slashCommandSvc:    NewSlashCommandService(),
+		defaultsSvc:        NewDefaultsService(),
+		callbackConfigSvc:  NewCallbackConfigService(),
+		launcherPresetsSvc: NewLauncherPresetsService(),
+		projectSvc:         NewProjectService(concStorage),
+		checkpointSvc:      NewCheckpointService(storage, eventBus),
+		featureFlagSvc:     NewFeatureFlagService(),
+		terminalSvc:        NewTerminalService(),
+		promptStore:        newPromptStore(),
+		capacityMonitor:    capacityMonitor,
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
@@ -1573,6 +1582,11 @@ func (s *SessionService) CreateSession(
 		WorkflowID:       req.Msg.WorkflowId,
 		EnvVars:          instanceEnvVars,
 		CLIFlags:         instanceCLIFlags,
+		// ExtraArgs is a direct passthrough of req.Msg.ExtraArgs — unlike CLIFlags, it has no
+		// defaults-resolution concept to merge with. It composes with instanceCLIFlags at
+		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
+		// an intentional, tested ordering (see TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
+		ExtraArgs: req.Msg.ExtraArgs,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -2036,27 +2050,54 @@ func (s *SessionService) UpdateSession(
 		updatedFields = append(updatedFields, "auto_approve")
 	}
 
-	// Handle steering: inject a message into an active autonomous session.
+	// Handle steering: inject a message into an active session. Autonomous
+	// sessions keep the existing ClaudeController command-queue path (ADR-001);
+	// non-autonomous, Instance-backed sessions fall back to the same PTY send
+	// primitive the MCP steer_session tool already uses (tools_terminal.go's
+	// SendKeys fallback branch) so browser-originated steering reaches ordinary
+	// backlog work/review sessions too, not just autonomous ones.
 	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
-		if !instance.AutonomousMode {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("steer_message can only be sent to sessions with autonomous_mode enabled"))
+		if len(*req.Msg.SteerMessage) > session.MaxSteerMessageLength {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("steer_message exceeds maximum length of %d bytes", session.MaxSteerMessageLength))
 		}
-		controller := instance.GetController()
-		if controller != nil {
-			if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
-				log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
-			} else {
-				log.Info("[UpdateSession] steering message sent", "session", instance.Title)
-				s.eventBus.Publish(events.NewNotificationEvent(
-					instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
-					int32(10), // NotificationType_INFO
-					int32(2),  // NotificationPriority_MEDIUM
-					"Steering input sent",
-					fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
-					nil,
-				))
+		if instance.AutonomousMode {
+			// Unchanged: autonomous sessions keep the ClaudeController command-queue path.
+			controller := instance.GetController()
+			if controller != nil {
+				if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
+					log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
+				} else {
+					s.notifySteerSent(instance, *req.Msg.SteerMessage)
+				}
 			}
+		} else {
+			// New: non-autonomous, Instance-backed sessions get the same PTY send
+			// primitive the MCP steer_session tool already falls back to. Unlike the
+			// autonomous branch, a send failure IS returned to the caller so the UI
+			// can surface it (research/ux.md's Gap 2 error-state table).
+			//
+			// SendKeys is bounded with a timeout, mirroring terminal_service.go's
+			// WriteToSession — a browser click against a wedged/dead session must not
+			// hang this RPC handler goroutine forever.
+			text := session.BuildSubmittableInput(*req.Msg.SteerMessage, true)
+			errCh := make(chan error, 1)
+			go func() { errCh <- instance.SendKeys(text) }()
+
+			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			select {
+			case err := <-errCh:
+				if err != nil {
+					return nil, connect.NewError(connect.CodeFailedPrecondition,
+						fmt.Errorf("failed to steer session %q: %w", instance.Title, err))
+				}
+			case <-timeoutCtx.Done():
+				return nil, connect.NewError(connect.CodeDeadlineExceeded,
+					fmt.Errorf("timed out steering session %q", instance.Title))
+			}
+			s.notifySteerSent(instance, *req.Msg.SteerMessage)
 		}
 	}
 
@@ -2116,6 +2157,21 @@ func (s *SessionService) UpdateSession(
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
+}
+
+// notifySteerSent logs and publishes the "steering input sent" notification
+// shared by both the autonomous and non-autonomous steer branches in
+// UpdateSession.
+func (s *SessionService) notifySteerSent(instance *session.Instance, steerMessage string) {
+	log.Info("[UpdateSession] steering message sent", "session", instance.Title)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
+		int32(10), // NotificationType_INFO
+		int32(2),  // NotificationPriority_MEDIUM
+		"Steering input sent",
+		fmt.Sprintf("%s: %s", instance.Title, steerMessage),
+		nil,
+	))
 }
 
 // HibernateSession checkpoints the session state, kills the AI process, and
@@ -3633,6 +3689,11 @@ func (s *SessionService) GetSessionDefaults(ctx context.Context, req *connect.Re
 	return s.defaultsSvc.GetSessionDefaults(ctx, req)
 }
 
+// GetLauncherPresets returns the hand-authored launcher presets, freshly read on every call.
+func (s *SessionService) GetLauncherPresets(ctx context.Context, req *connect.Request[sessionv1.GetLauncherPresetsRequest]) (*connect.Response[sessionv1.GetLauncherPresetsResponse], error) {
+	return s.launcherPresetsSvc.GetLauncherPresets(ctx, req)
+}
+
 // ResolveDefaults merges all default layers for the given working directory and profile.
 func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Request[sessionv1.ResolveDefaultsRequest]) (*connect.Response[sessionv1.ResolveDefaultsResponse], error) {
 	return s.defaultsSvc.ResolveDefaults(ctx, req)
@@ -3660,6 +3721,15 @@ func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWM
 	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
 }
 
+// SetSharedCallbackConfig wires the *config.Config instance (and its guarding
+// mutex) CallbackDispatcher reads callback URLs from into this SessionService's
+// CallbackConfigService, so UpdateCallbackConfig can propagate a saved URL into
+// CallbackDispatcher's live view without a process restart. See
+// CallbackConfigService.SetSharedCallbackConfig.
+func (s *SessionService) SetSharedCallbackConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.callbackConfigSvc.SetSharedCallbackConfig(cfg, mu)
+}
+
 // UpsertProfile creates or updates a named profile.
 func (s *SessionService) UpsertProfile(ctx context.Context, req *connect.Request[sessionv1.UpsertProfileRequest]) (*connect.Response[sessionv1.UpsertProfileResponse], error) {
 	return s.defaultsSvc.UpsertProfile(ctx, req)
@@ -3678,6 +3748,20 @@ func (s *SessionService) UpsertDirectoryRule(ctx context.Context, req *connect.R
 // DeleteDirectoryRule removes a directory rule by path.
 func (s *SessionService) DeleteDirectoryRule(ctx context.Context, req *connect.Request[sessionv1.DeleteDirectoryRuleRequest]) (*connect.Response[sessionv1.DeleteDirectoryRuleResponse], error) {
 	return s.defaultsSvc.DeleteDirectoryRule(ctx, req)
+}
+
+// ─── Callback Config delegates (webhook-triggers Phase 5, FR7) ──────────────
+
+// +api: callback-config:get
+// GetCallbackConfig reports which outbound-callback URLs are configured.
+func (s *SessionService) GetCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.GetCallbackConfigRequest]) (*connect.Response[sessionv1.GetCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.GetCallbackConfig(ctx, req)
+}
+
+// +api: callback-config:update
+// UpdateCallbackConfig sets one or more outbound-callback URLs.
+func (s *SessionService) UpdateCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateCallbackConfigRequest]) (*connect.Response[sessionv1.UpdateCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.UpdateCallbackConfig(ctx, req)
 }
 
 // ListAliases returns all configured alias presets.
@@ -4506,6 +4590,17 @@ func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[s
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
 	}
 	return s.workflowSvc.RunWorkflow(ctx, req)
+}
+
+// +api: workflow:list-trigger-fire-events
+// ListTriggerFireEvents delegates to WorkflowService.
+func (s *SessionService) ListTriggerFireEvents(ctx context.Context, req *connect.Request[sessionv1.ListTriggerFireEventsRequest]) (*connect.Response[sessionv1.ListTriggerFireEventsResponse], error) {
+	if s.workflowSvc == nil {
+		return connect.NewResponse(&sessionv1.ListTriggerFireEventsResponse{
+			Events: []*sessionv1.TriggerFireEventProto{},
+		}), nil
+	}
+	return s.workflowSvc.ListTriggerFireEvents(ctx, req)
 }
 
 // GetDetectionEvents returns recent status-detection events for a session's Claude controller.

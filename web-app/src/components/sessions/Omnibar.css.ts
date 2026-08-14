@@ -29,6 +29,10 @@ export const overlay = style({
   alignItems: "flex-start",
   justifyContent: "center",
   paddingTop: "10vh",
+  paddingBottom: "10vh",
+  // Advanced Options can push modal content taller than the viewport; without
+  // this the footer (Cancel/Create Session) is clipped and unreachable.
+  overflowY: "auto",
   zIndex: 1000,
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
@@ -283,6 +287,7 @@ export const error = style({
   background: vars.color.errorBg,
   borderRadius: 6,
   margin: "0 16px",
+  overflowWrap: "break-word",
 });
 
 export const shortcuts = style({

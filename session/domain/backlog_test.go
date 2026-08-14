@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // TestStuckReason_IsValid_should_returnTrueForKnown_And_FalseForUnknown verifies
 // that all six StuckReason constants validate as true, and an arbitrary unknown
@@ -27,13 +30,13 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain15Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain18Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch.
-func TestAllStuckReasons_should_contain15Entries_When_Enumerated(t *testing.T) {
-	if len(AllStuckReasons) != 15 {
-		t.Errorf("len(AllStuckReasons) = %d, want 15", len(AllStuckReasons))
+func TestAllStuckReasons_should_contain18Entries_When_Enumerated(t *testing.T) {
+	if len(AllStuckReasons) != 18 {
+		t.Errorf("len(AllStuckReasons) = %d, want 18", len(AllStuckReasons))
 	}
 }
 
@@ -66,6 +69,24 @@ func TestStuckReasonRespawnBlockedActive_should_beValid_When_Checked(t *testing.
 	}
 }
 
+// TestStuckReasonMultipleReasons_should_beValid_When_Checked confirms the new
+// synthetic, aggregate reason (backlog-bounce-escalation, Epic 1.1) round-trips
+// through IsValid exactly like the other established reasons.
+func TestStuckReasonMultipleReasons_should_beValid_When_Checked(t *testing.T) {
+	if !StuckReasonMultipleReasons.IsValid() {
+		t.Errorf("StuckReasonMultipleReasons.IsValid() = false, want true")
+	}
+}
+
+// TestStuckReasonBounceCapExhausted_should_beValid_When_Checked confirms the
+// new synthetic, aggregate reason (backlog-bounce-escalation, Epic 1.1)
+// round-trips through IsValid exactly like the other established reasons.
+func TestStuckReasonBounceCapExhausted_should_beValid_When_Checked(t *testing.T) {
+	if !StuckReasonBounceCapExhausted.IsValid() {
+		t.Errorf("StuckReasonBounceCapExhausted.IsValid() = false, want true")
+	}
+}
+
 // TestBacklogCategory_IsValid_should_ReturnTrue_When_KnownOrEmpty verifies all
 // 4 category constants validate as true, AND (unlike StuckReason above) the
 // empty string also validates as true — "uncategorized" is a legitimate value
@@ -86,5 +107,57 @@ func TestBacklogCategory_IsValid_should_ReturnTrue_When_KnownOrEmpty(t *testing.
 func TestBacklogCategory_IsValid_should_ReturnFalse_When_Unknown(t *testing.T) {
 	if BacklogCategory("banana").IsValid() {
 		t.Errorf(`BacklogCategory("banana").IsValid() = true, want false`)
+	}
+}
+
+// TestTransitionGuard_should_BlockDequeue_When_ItemHasUnresolvedBlockers
+// covers the ready/queued->in_progress guard's HasUnresolvedBlockers branch:
+// an item gated on a still-unresolved blocker must never be allowed to
+// dequeue/start, regardless of its plan-approval state, and a resolved (or
+// absent) blocker must not itself block the transition.
+func TestTransitionGuard_should_BlockDequeue_When_ItemHasUnresolvedBlockers(t *testing.T) {
+	cases := []struct {
+		name    string
+		from    BacklogStatus
+		blocked bool
+		wantErr error
+	}{
+		{
+			name:    "ready to in_progress blocked by unresolved blocker",
+			from:    BacklogStatusReady,
+			blocked: true,
+			wantErr: ErrUnresolvedBlockers,
+		},
+		{
+			name:    "queued to in_progress blocked by unresolved blocker",
+			from:    BacklogStatusQueued,
+			blocked: true,
+			wantErr: ErrUnresolvedBlockers,
+		},
+		{
+			name:    "ready to in_progress allowed once blockers resolved",
+			from:    BacklogStatusReady,
+			blocked: false,
+			wantErr: nil,
+		},
+		{
+			name:    "queued to in_progress allowed with no blockers at all",
+			from:    BacklogStatusQueued,
+			blocked: false,
+			wantErr: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := BacklogItemTransitionInput{
+				Status:                tc.from,
+				HasUnresolvedBlockers: tc.blocked,
+				SkipPlanning:          true, // isolate the blocker guard from the plan guard
+			}
+			err := TransitionGuard(item, BacklogStatusInProgress)
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("TransitionGuard(%+v, in_progress) = %v, want %v", item, err, tc.wantErr)
+			}
+		})
 	}
 }

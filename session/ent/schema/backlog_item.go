@@ -66,6 +66,12 @@ func (BacklogItem) Fields() []ent.Field {
 			Comment("Preserves the Autonomous flag from the spawn request that got queued, so dequeue replays it faithfully."),
 		field.String("plan_artifacts_path").
 			Optional(),
+		field.String("plan_rejection_reason").
+			Optional().
+			Comment("Free-text reason from the most recent RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage completion, and on backward transition to idea/refining. See project_plans/plan-approval-ux/decisions/ADR-001."),
+		field.Time("plan_rejected_at").
+			Optional().
+			Nillable(),
 		field.String("user_modified_fields").
 			Optional().
 			Comment("JSON set of field names modified by the user"),
@@ -122,6 +128,20 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value."),
+		field.UUID("next_workflow_id", uuid.UUID{}).
+			Optional().
+			Nillable().
+			Comment("webhook-triggers pipeline chaining (FR10/AC5): the Workflow to fire when this item reaches BacklogStatusDone. Set at chain-configuration time, not computed reactively at completion."),
+		field.Bool("chain_fired").
+			Default(false).
+			Comment("webhook-triggers pipeline chaining: true once the NextWorkflowID chain-fire has been attempted to a terminal outcome (fired, depth-capped, or expired) — never retried again once true. Crash-consistency marker: TriggerChainReconciler scans for status=done AND next_workflow_id != nil AND chain_fired=false."),
+		field.Time("chained_at").
+			Optional().
+			Nillable().
+			Comment("webhook-triggers pipeline chaining: set atomically with the terminal status transition (same UPDATE as the done transition) when NextWorkflowID is already configured — the eligibility timestamp TriggerChainReconciler's maxChainWaitDuration ceiling measures age against, independent of whether/when the fire itself later succeeds."),
+		field.Int("triggered_by_chain_depth").
+			Default(0).
+			Comment("webhook-triggers pipeline chaining (Epic 6.3): how many chain hops produced this item, propagated session->session and hard-capped at maxChainDepth as a runaway-loop backstop independent of the WIP-limit gate."),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),
@@ -162,6 +182,25 @@ func (BacklogItem) Edges() []ent.Edge {
 		edge.From("source", ItemSource.Type).
 			Ref("backlog_items").
 			Unique(),
+		// Cascade is deliberate, not an oversight: hard-deleting a
+		// BacklogItem (in either the blocker or blocked role) removes
+		// its BacklogItemDependency rows along with it. For a deleted
+		// blocker specifically, this means any dependent it was
+		// blocking becomes eligible for dequeue on the next pass — the
+		// same "resolved" outcome as an archived blocker
+		// (UnresolvedBlockerItemIDs's StatusNotIn(Done, Archived)
+		// query), just reached via row removal instead of a status
+		// value. A hard-deleted item can never transition to `done`,
+		// so leaving the dependency row in place would permanently
+		// strand the dependent with no way to resolve it — the same
+		// rationale that treats an archived blocker as resolved.
+		// Covered by
+		// TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDeleted
+		// in session/ent_repository_backlog_test.go.
+		edge.To("blocking_dependencies", BacklogItemDependency.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("blocked_by_dependencies", BacklogItemDependency.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }
 
@@ -173,5 +212,6 @@ func (BacklogItem) Indexes() []ent.Index {
 		index.Fields("status", "queued_at"),
 		index.Fields("external_id"),
 		index.Fields("status"),
+		index.Fields("status", "chain_fired"),
 	}
 }

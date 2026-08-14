@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -119,6 +122,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		StartedAt:                is.StartedAt,
 		EndedAt:                  is.EndedAt,
 		EndReason:                is.EndReason,
+		FailureCapturePath:       is.FailureCapturePath,
 		LastCommitAt:             is.LastCommitAt,
 		LastFileTouchAt:          is.LastFileTouchAt,
 		LastProgressAt:           is.LastProgressAt,
@@ -129,6 +133,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		VerificationNotes:        is.VerificationNotes,
 		OverallOutcome:           overallOutcome,
 		ReviewVerdict:            reviewVerdictToSummary(is.Edges.ReviewVerdict),
+		ClaimantHostID:           is.ClaimantHostID,
 	}
 }
 
@@ -190,6 +195,8 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		QueuedAt:                     item.QueuedAt,
 		QueuedAutonomous:             item.QueuedAutonomous,
 		PlanArtifactsPath:            item.PlanArtifactsPath,
+		PlanRejectionReason:          item.PlanRejectionReason,
+		PlanRejectedAt:               item.PlanRejectedAt,
 		Notes:                        item.Notes,
 		ExternalID:                   item.ExternalID,
 		ExternalURL:                  item.ExternalURL,
@@ -207,6 +214,10 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:            item.ReworkCapOverride,
+		NextWorkflowID:               item.NextWorkflowID,
+		ChainFired:                   item.ChainFired,
+		ChainedAt:                    item.ChainedAt,
+		TriggeredByChainDepth:        item.TriggeredByChainDepth,
 		CreatedAt:                    item.CreatedAt,
 		UpdatedAt:                    item.UpdatedAt,
 	}
@@ -297,6 +308,8 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillableQueuedAt(data.QueuedAt).
 		SetQueuedAutonomous(data.QueuedAutonomous).
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
+		SetNillablePlanRejectionReason(&data.PlanRejectionReason).
+		SetNillablePlanRejectedAt(data.PlanRejectedAt).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
 		SetNillableExternalURL(&data.ExternalURL).
@@ -391,6 +404,187 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 	return item.RepoPath, ws.BaseCommitSha, ws.LastCommitSha, nil
 }
 
+// AddBacklogItemDependency records that edge.BlockedID may not be
+// dequeued/started until edge.BlockerID reaches a resolved status — see
+// UnresolvedBlockerItemIDs for what counts as resolved (done or archived).
+// Adding an already-existing pair is a no-op (upsert against the unique
+// (blocker_id, blocked_id) index). Returns ErrDependencyCycle if the new
+// edge would create a cycle, including the degenerate self-dependency case
+// (BlockerID == BlockedID).
+func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+	blockerID, err := uuid.Parse(edge.BlockerID)
+	if err != nil {
+		return fmt.Errorf("%w: invalid blocker id %q: %v", ErrNotFound, edge.BlockerID, err)
+	}
+	blockedID, err := uuid.Parse(edge.BlockedID)
+	if err != nil {
+		return fmt.Errorf("%w: invalid blocked id %q: %v", ErrNotFound, edge.BlockedID, err)
+	}
+	if blockerID == blockedID {
+		return ErrDependencyCycle
+	}
+
+	// The existence check, cycle check, and insert must all observe the same
+	// consistent snapshot of the dependency graph and commit atomically —
+	// otherwise two concurrent calls adding opposite-direction edges can each
+	// pass the cycle check before either commits, together closing a cycle
+	// the check was supposed to prevent (TOCTOU race). Run everything inside
+	// one transaction, following the pattern established by MarkStuck above.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("add backlog item dependency: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	existingIDs, err := tx.BacklogItem.Query().
+		Where(backlogitem.IDIn(blockerID, blockedID)).
+		IDs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to verify backlog items exist for dependency %s -> %s: %w", edge.BlockerID, edge.BlockedID, err)
+	}
+	found := make(map[uuid.UUID]bool, len(existingIDs))
+	for _, id := range existingIDs {
+		found[id] = true
+	}
+	if !found[blockerID] {
+		return fmt.Errorf("%w: blocker item %s does not exist", ErrNotFound, edge.BlockerID)
+	}
+	if !found[blockedID] {
+		return fmt.Errorf("%w: blocked item %s does not exist", ErrNotFound, edge.BlockedID)
+	}
+
+	wouldCycle, err := dependencyReachable(ctx, tx.BacklogItemDependency, blockedID, blockerID)
+	if err != nil {
+		return fmt.Errorf("failed to check backlog item dependency cycle: %w", err)
+	}
+	if wouldCycle {
+		return ErrDependencyCycle
+	}
+
+	err = tx.BacklogItemDependency.Create().
+		SetBlockerID(blockerID).
+		SetBlockedID(blockedID).
+		OnConflictColumns(backlogitemdependency.FieldBlockerID, backlogitemdependency.FieldBlockedID).
+		DoNothing().
+		Exec(ctx)
+	// On SQLite, DO NOTHING on a conflicting row leaves the RETURNING clause
+	// with no row to return, which the driver surfaces as sql.ErrNoRows
+	// rather than a constraint error — treat it the same as the no-op it is.
+	if err != nil && !ent.IsConstraintError(err) && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to add backlog item dependency %s -> %s: %w", edge.BlockerID, edge.BlockedID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("add backlog item dependency: commit: %w", err)
+	}
+	return nil
+}
+
+// dependencyReachable reports whether target is reachable from start by
+// following existing blocker->blocked edges forward (a breadth-first
+// traversal of "what does this item block, transitively"). Used to detect
+// whether adding a new blocker->blocked edge would close a cycle: the new
+// edge closes a cycle exactly when blocked (start) can already reach blocker
+// (target) through existing edges. Takes the BacklogItemDependency client
+// explicitly (rather than reading r.client) so callers can pass a
+// transaction's client and have the traversal observe that transaction's
+// consistent snapshot instead of racing concurrent commits.
+func dependencyReachable(ctx context.Context, client *ent.BacklogItemDependencyClient, start, target uuid.UUID) (bool, error) {
+	visited := map[uuid.UUID]bool{start: true}
+	frontier := []uuid.UUID{start}
+	for len(frontier) > 0 {
+		rows, err := client.Query().
+			Where(backlogitemdependency.BlockerIDIn(frontier...)).
+			All(ctx)
+		if err != nil {
+			return false, err
+		}
+		var next []uuid.UUID
+		for _, row := range rows {
+			if row.BlockedID == target {
+				return true, nil
+			}
+			if !visited[row.BlockedID] {
+				visited[row.BlockedID] = true
+				next = append(next, row.BlockedID)
+			}
+		}
+		frontier = next
+	}
+	return false, nil
+}
+
+// UnresolvedBlockerItemIDs returns, for the given candidate itemIDs, the
+// subset that have at least one dependency edge whose blocker has not yet
+// reached a resolved status. A blocker counts as resolved once it reaches
+// BacklogStatusDone (shipped) or BacklogStatusArchived (won't ship) — an
+// archived blocker is never coming back to "done", so treating it as still
+// blocking would permanently strand its dependent. Batches the check into a
+// single query (rather than one per candidate) to avoid N+1 queries in
+// dequeue paths.
+func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool)
+	if len(itemIDs) == 0 {
+		return result, nil
+	}
+
+	parsedByString := make(map[uuid.UUID]string, len(itemIDs))
+	parsedIDs := make([]uuid.UUID, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		}
+		parsedByString[parsed] = id
+		parsedIDs = append(parsedIDs, parsed)
+	}
+
+	rows, err := r.client.BacklogItemDependency.Query().
+		Where(
+			backlogitemdependency.BlockedIDIn(parsedIDs...),
+			backlogitemdependency.HasBlockerWith(
+				backlogitem.StatusNotIn(string(BacklogStatusDone), string(BacklogStatusArchived)),
+			),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query unresolved backlog item dependencies: %w", err)
+	}
+	for _, row := range rows {
+		result[parsedByString[row.BlockedID]] = true
+	}
+	return result, nil
+}
+
+// UnresolvedBlockerIDs returns the blocker item IDs still unresolved for a
+// single blocked item, for building a human-readable stuck-reason message.
+// Unlike UnresolvedBlockerItemIDs (batched presence check across many
+// candidates), this returns which specific items are doing the blocking.
+func (r *EntRepository) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
+	parsed, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	rows, err := r.client.BacklogItemDependency.Query().
+		Where(
+			backlogitemdependency.BlockedIDEQ(parsed),
+			backlogitemdependency.HasBlockerWith(
+				backlogitem.StatusNotIn(string(BacklogStatusDone), string(BacklogStatusArchived)),
+			),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query unresolved backlog item dependencies: %w", err)
+	}
+
+	blockerIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		blockerIDs = append(blockerIDs, row.BlockerID.String())
+	}
+	return blockerIDs, nil
+}
+
 // excludedTerminalStatuses returns the statuses filter.ExcludeDone/ExcludeArchived
 // ask to exclude from a default (no explicit Statuses) query, as a slice for
 // StatusNotIn. The two flags are independent — either, both, or neither may be
@@ -467,6 +661,17 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
 
+	if filter.ChainFired != nil {
+		q = q.Where(backlogitem.ChainFiredEQ(*filter.ChainFired))
+	}
+	if filter.NextWorkflowIDSet != nil {
+		if *filter.NextWorkflowIDSet {
+			q = q.Where(backlogitem.NextWorkflowIDNotNil())
+		} else {
+			q = q.Where(backlogitem.NextWorkflowIDIsNil())
+		}
+	}
+
 	switch filter.SortBy {
 	case "priority":
 		q = q.Order(ent.Asc(backlogitem.FieldPriority), ent.Desc(backlogitem.FieldUpdatedAt))
@@ -493,8 +698,38 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 	}
 
 	result := make([]BacklogItemData, len(items))
+	idIndex := make(map[string]int, len(items))
+	parsedUUIDs := make([]uuid.UUID, 0, len(items))
 	for i, item := range items {
 		result[i] = backlogItemToData(item)
+		idIndex[item.ID.String()] = i
+		parsedUUIDs = append(parsedUUIDs, item.ID)
+	}
+	if len(parsedUUIDs) == 0 {
+		return result, nil
+	}
+
+	// Eager-load item sessions via a single batched query, matching
+	// ListBacklogItemSummaries's pattern, so WatchBacklogItems' fresh-connection
+	// snapshot branch never publishes items with dropped ItemSessions.
+	sessions, err := r.client.ItemSession.Query().
+		Where(itemsession.HasBacklogItemWith(backlogitem.IDIn(parsedUUIDs...))).
+		WithBacklogItem().
+		WithReviewVerdict().
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list item sessions for backlog items: %w", err)
+	}
+	for _, s := range sessions {
+		if s.Edges.BacklogItem == nil {
+			continue
+		}
+		itemID := s.Edges.BacklogItem.ID.String()
+		idx, ok := idIndex[itemID]
+		if !ok {
+			continue
+		}
+		result[idx].ItemSessions = append(result[idx].ItemSessions, itemSessionToSummary(s))
 	}
 	return result, nil
 }
@@ -511,6 +746,16 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	}
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
+	}
+	if filter.ChainFired != nil {
+		q = q.Where(backlogitem.ChainFiredEQ(*filter.ChainFired))
+	}
+	if filter.NextWorkflowIDSet != nil {
+		if *filter.NextWorkflowIDSet {
+			q = q.Where(backlogitem.NextWorkflowIDNotNil())
+		} else {
+			q = q.Where(backlogitem.NextWorkflowIDIsNil())
+		}
 	}
 	switch filter.SortBy {
 	case "priority":
@@ -664,6 +909,14 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.PlanArtifactsPath != nil {
 		u.SetPlanArtifactsPath(*update.PlanArtifactsPath)
 	}
+	if update.PlanRejectionReason != nil {
+		u.SetPlanRejectionReason(*update.PlanRejectionReason)
+	}
+	if update.ClearPlanRejectedAt {
+		u.ClearPlanRejectedAt()
+	} else if update.PlanRejectedAt != nil {
+		u.SetPlanRejectedAt(*update.PlanRejectedAt)
+	}
 	if update.PrURL != nil {
 		u.SetPrURL(*update.PrURL)
 	}
@@ -710,6 +963,22 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.UserModifiedFields != nil {
 		u.SetUserModifiedFields(*update.UserModifiedFields)
 	}
+	if update.ClearNextWorkflowID {
+		u.ClearNextWorkflowID()
+	} else if update.NextWorkflowID != nil {
+		u.SetNextWorkflowID(*update.NextWorkflowID)
+	}
+	if update.ChainFired != nil {
+		u.SetChainFired(*update.ChainFired)
+	}
+	if update.ClearChainedAt {
+		u.ClearChainedAt()
+	} else if update.ChainedAt != nil {
+		u.SetChainedAt(*update.ChainedAt)
+	}
+	if update.TriggeredByChainDepth != nil {
+		u.SetTriggeredByChainDepth(*update.TriggeredByChainDepth)
+	}
 
 	item, err := u.Save(ctx)
 	if err != nil {
@@ -718,8 +987,7 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the update itself.
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:          ChangeItemUpdated,
 		UpdatedFields: updatedFieldsFromBacklogItemUpdate(update),
 	})
@@ -786,6 +1054,12 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	if update.PlanArtifactsPath != nil {
 		fields = append(fields, "planArtifactsPath")
 	}
+	if update.PlanRejectionReason != nil {
+		fields = append(fields, "planRejectionReason")
+	}
+	if update.PlanRejectedAt != nil || update.ClearPlanRejectedAt {
+		fields = append(fields, "planRejectedAt")
+	}
 	if update.PrURL != nil {
 		fields = append(fields, "prUrl")
 	}
@@ -828,6 +1102,18 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	if update.UserModifiedFields != nil {
 		fields = append(fields, "userModifiedFields")
 	}
+	if update.NextWorkflowID != nil || update.ClearNextWorkflowID {
+		fields = append(fields, "nextWorkflowId")
+	}
+	if update.ChainFired != nil {
+		fields = append(fields, "chainFired")
+	}
+	if update.ChainedAt != nil || update.ClearChainedAt {
+		fields = append(fields, "chainedAt")
+	}
+	if update.TriggeredByChainDepth != nil {
+		fields = append(fields, "triggeredByChainDepth")
+	}
 	return fields
 }
 
@@ -864,8 +1150,7 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the archive itself.
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:       ChangeItemArchived,
 		ArchivedAt: result.ArchivedAt,
 	})
@@ -930,8 +1215,11 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	}
 
 	// Best-effort publish: never blocks or fails the delete itself. result was
-	// built above, before the item's sessions were deleted.
-	r.publishItemChanged(&result, BacklogItemChange{
+	// built above, before the item's sessions were deleted — use
+	// publishItemChangedSnapshot directly (not publishItemChanged) so this
+	// pre-captured snapshot isn't clobbered by a re-query that would now find
+	// no sessions.
+	r.publishItemChangedSnapshot(&result, BacklogItemChange{
 		Kind: ChangeItemRemoved,
 	})
 
@@ -985,10 +1273,22 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	}
 
 	now := time.Now()
-	affected, err := update.
+	setter := update.
 		SetStatus(string(toStatus)).
-		SetUserModifiedStatusAt(now).
-		Save(ctx)
+		SetUserModifiedStatusAt(now)
+	// webhook-triggers Epic 6.1 (AC5/AC9): chained_at is persisted atomically
+	// with the terminal done transition, in the same UPDATE, whenever a chain
+	// is already configured (next_workflow_id was set at chain-configuration
+	// time — see NextWorkflowID's doc comment) — this is the crash-consistent
+	// eligibility timestamp TriggerChainReconciler's maxChainWaitDuration
+	// ceiling measures age against, independent of whether/when the fire
+	// itself later succeeds. current (fetched above, before this write) is the
+	// only place NextWorkflowID is visible before this transition's own SELECT
+	// on affected==0 below.
+	if toStatus == BacklogStatusDone && current.NextWorkflowID != nil {
+		setter = setter.SetChainedAt(now)
+	}
+	affected, err := setter.Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition backlog item %s status: %w", id, err)
 	}
@@ -1034,14 +1334,104 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the transition itself.
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:      ChangeStatusTransition,
 		OldStatus: fromStatus,
 		NewStatus: string(toStatus),
 	})
 
+	// AC4 (webhook-triggers Phase 5): fire the on_session_complete callback after
+	// the transition has already committed and this function is about to return —
+	// dispatchCallback is itself non-blocking (bounded semaphore + go), so this
+	// adds no latency to the caller and a delivery failure can never roll back or
+	// corrupt the status transition above.
+	if toStatus == BacklogStatusDone {
+		r.dispatchCallback("session_complete", map[string]any{
+			"event":       "session_complete",
+			"item_id":     result.ID,
+			"title":       result.Title,
+			"status":      string(toStatus),
+			"occurred_at": time.Now(),
+		})
+
+		// AC5/AC9 (webhook-triggers Phase 6): dispatch the pipeline-chain
+		// continuation, same non-blocking shape and same "after the write
+		// already committed, right before this function returns" placement as
+		// the on_session_complete callback dispatch above — dispatchChainFire
+		// itself launches a goroutine (bounded semaphore + go, see
+		// ChainFirer.Dispatch), so this call returns immediately and the
+		// expensive CreateSession work for the chained session happens well
+		// after TransitionBacklogItemStatus has already returned to its own
+		// caller (AC9's exact requirement).
+		if result.NextWorkflowID != nil && !result.ChainFired {
+			r.dispatchChainFire(&result)
+		}
+	}
+
 	return &result, nil
+}
+
+// ClaimChainFire atomically claims item id's pipeline chain-fire attempt by
+// flipping chain_fired from false to true, conditioned on both chain_fired
+// still being false and updated_at still matching expectedUpdatedAt — a
+// genuine SQL-level compare-and-swap folded into the UPDATE's own WHERE
+// clause, the same pattern (and for the identical reason) as
+// TransitionBacklogItemStatus's precondition handling above (see that
+// method's doc comment, BUG-026): a Get-then-check-in-Go-then-write sequence
+// (which UpdateBacklogItem's precondition parameter still is, deliberately
+// not reused here) leaves a race window wide enough for two concurrent
+// callers to both pass the check and both issue their own write. Used by
+// ChainFirer.Fire to guarantee at most one goroutine ever reaches
+// TriggerFirer.FireTriggerChained for a given item (webhook-triggers Task
+// 6.2.1d — the happy-path async dispatch and TriggerChainReconciler's
+// periodic sweep can otherwise race on the same item).
+//
+// Returns claimed=false (not an error) when another caller already won the
+// claim or the row's updated_at moved for any other reason — callers must
+// treat that as "someone else is handling this," not a failure.
+func (r *EntRepository) ClaimChainFire(ctx context.Context, id string, expectedUpdatedAt time.Time) (claimed bool, err error) {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+	}
+
+	affected, err := r.client.BacklogItem.Update().
+		Where(backlogitem.ID(parsedID), backlogitem.ChainFired(false), backlogitem.UpdatedAtEQ(expectedUpdatedAt)).
+		SetChainFired(true).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("claim chain fire for item %s: %w", id, err)
+	}
+	if affected == 0 {
+		return false, nil
+	}
+
+	// Best-effort publish: never blocks or fails the claim itself.
+	if item, getErr := r.client.BacklogItem.Get(ctx, parsedID); getErr == nil {
+		result := backlogItemToData(item)
+		r.publishItemChanged(ctx, &result, BacklogItemChange{
+			Kind:          ChangeItemUpdated,
+			UpdatedFields: []string{"chainFired"},
+		})
+	}
+	return true, nil
+}
+
+// RevertChainFireClaim unconditionally resets chain_fired back to false —
+// used by ChainFirer.Fire to release its claim after a subsequent
+// FireTriggerChained attempt fails, so TriggerChainReconciler retries on its
+// next tick. Safe to call unconditionally (no precondition): only the
+// goroutine that just won ClaimChainFire's claim for this item can ever reach
+// this call, so nothing else can be racing this specific revert.
+func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+	}
+	if _, err := r.client.BacklogItem.UpdateOneID(parsedID).SetChainFired(false).Save(ctx); err != nil {
+		return fmt.Errorf("revert chain fire claim for item %s: %w", id, err)
+	}
+	return nil
 }
 
 // TransitionBacklogItemStatusWithPRFields atomically transitions a backlog
@@ -1141,8 +1531,7 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the transition itself.
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:      ChangeStatusTransition,
 		OldStatus: fromStatus,
 		NewStatus: string(toStatus),
@@ -1151,7 +1540,18 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 	return &result, nil
 }
 
-// publishItemChanged is a defense-in-depth wrapper around
+// publishItemChanged eager-loads item's ItemSessions (see
+// attachItemSessionsForPublish) and then publishes via
+// publishItemChangedSnapshot. This is the entry point every call site should
+// use except DeleteBacklogItem, whose snapshot must be captured before the
+// item's sessions are deleted and therefore cannot be re-queried here — see
+// publishItemChangedSnapshot's doc comment.
+func (r *EntRepository) publishItemChanged(ctx context.Context, item *BacklogItemData, change BacklogItemChange) {
+	r.attachItemSessionsForPublish(ctx, item)
+	r.publishItemChangedSnapshot(item, change)
+}
+
+// publishItemChangedSnapshot is a defense-in-depth wrapper around
 // r.itemChangePublisher.PublishItemChanged: nil-checked (a publisher may not
 // be wired, e.g. in tests or before server/dependencies.go calls
 // SetItemChangePublisher) and recover()-guarded at the call site itself, so a
@@ -1161,7 +1561,13 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 // its own body per Task 1.3.2b) or some other ItemChangePublisher
 // implementation that doesn't. Task 2.1.1d's regression test proves this
 // holds end-to-end even when a raw, unwrapped test double panics.
-func (r *EntRepository) publishItemChanged(item *BacklogItemData, change BacklogItemChange) {
+//
+// Publishes item as-is, without eager-loading ItemSessions first. Only
+// DeleteBacklogItem should call this directly: it must build its publish
+// snapshot (including ItemSessions) before deleting the item's sessions and
+// the item itself, so re-querying at publish time (as publishItemChanged
+// does) would wrongly observe them as already gone.
+func (r *EntRepository) publishItemChangedSnapshot(item *BacklogItemData, change BacklogItemChange) {
 	if r.itemChangePublisher == nil {
 		return
 	}
@@ -1171,6 +1577,70 @@ func (r *EntRepository) publishItemChanged(item *BacklogItemData, change Backlog
 		}
 	}()
 	r.itemChangePublisher.PublishItemChanged(item, change)
+}
+
+// SetCallbackDispatcher wires a CallbackDispatcher into this repository so
+// TransitionBacklogItemStatus (on_session_complete) and
+// BacklogLifecycleListener.reconcileStaleWorkSessions (on_session_stale, which is
+// handed this *EntRepository directly) can fire outbound callbacks
+// (webhook-triggers Phase 5). Called via Storage.SetCallbackDispatcher's
+// forwarding method, the same pattern SetItemChangePublisher uses.
+func (r *EntRepository) SetCallbackDispatcher(d CallbackDispatcher) {
+	r.callbackDispatcher = d
+}
+
+// dispatchCallback is a defense-in-depth wrapper around
+// r.callbackDispatcher.Dispatch: nil-checked (a dispatcher may not be wired, e.g.
+// in tests or before server/dependencies.go calls SetCallbackDispatcher) and
+// recover()-guarded, mirroring publishItemChanged's shape — a panic in Dispatch
+// (or any CallbackDispatcher implementation) must never propagate into a hooked
+// repository method's return path. Dispatch itself is expected to be
+// non-blocking (bounded semaphore + go, per CallbackDispatcher's doc comment).
+func (r *EntRepository) dispatchCallback(eventType string, payload any) {
+	if r.callbackDispatcher == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.WarningLog.Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
+		}
+	}()
+	r.callbackDispatcher.Dispatch(eventType, payload)
+}
+
+// SetChainFirer wires a ChainFirer into this repository so
+// TransitionBacklogItemStatus can dispatch the pipeline-chain fire
+// immediately after a "done" transition commits (webhook-triggers Phase 6,
+// AC5/AC9). Called via Storage.WireChainFirer's forwarding call in
+// server/dependencies.go, the same pattern SetCallbackDispatcher uses.
+func (r *EntRepository) SetChainFirer(f *ChainFirer) {
+	r.chainFirer = f
+}
+
+// dispatchChainFire is a defense-in-depth wrapper around r.chainFirer.Dispatch:
+// nil-checked (a ChainFirer may not be wired, e.g. in tests or before
+// server/dependencies.go calls SetChainFirer) and recover()-guarded, mirroring
+// dispatchCallback's shape — a panic in Dispatch (which is itself already
+// non-blocking: bounded semaphore + go, see ChainFirer.Dispatch) must never
+// propagate into TransitionBacklogItemStatus's own return path.
+//
+// ChainFirer.Dispatch itself takes no ctx (see its doc comment) — it always
+// derives its own context.WithTimeout(context.Background(), chainFireTimeout)
+// for the goroutine it spawns, because by the time that goroutine's
+// CreateSession call actually runs, the caller's own ctx (e.g. an RPC
+// handler's request-scoped context) may already be cancelled — AC9 requires
+// this fire to survive past the transition call's own lifetime, not be tied
+// to it.
+func (r *EntRepository) dispatchChainFire(item *BacklogItemData) {
+	if r.chainFirer == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.WarningLog.Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
+		}
+	}()
+	r.chainFirer.Dispatch(item)
 }
 
 // attachItemSessionsForPublish best-effort loads and attaches this item's

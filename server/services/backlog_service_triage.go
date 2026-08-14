@@ -272,6 +272,38 @@ func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, c
 	}
 }
 
+// notifyBlockedByDependency writes a durable StuckReasonBlockedByDependency row
+// (session/domain/backlog.go) when DequeueNextQueuedItems finds an item still
+// has unresolved blockers (AC3) — purely informational, like notifyLikelyFlaky,
+// so the item detail view can render a BlockerChip instead of leaving the
+// operator to guess why a queued/ready item never gets claimed. A MarkStuck/
+// MarkStuckNotified failure is only logged, matching every other MarkStuck call
+// site's own convention.
+func (s *BacklogService) notifyBlockedByDependency(ctx context.Context, itemID string, currentStatus session.BacklogStatus) {
+	if s.storage == nil {
+		return
+	}
+	blockerIDs, err := s.storage.UnresolvedBlockerIDs(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("[notifyBlockedByDependency] UnresolvedBlockerIDs item=%s: %v", itemID, err)
+		return
+	}
+	if len(blockerIDs) == 0 {
+		// Blockers resolved between the batched check and here — nothing to report.
+		return
+	}
+
+	message := fmt.Sprintf("blocked by unresolved dependency: %s", strings.Join(blockerIDs, ", "))
+	applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBlockedByDependency, currentStatus, message)
+	if err != nil {
+		log.WarningLog.Printf("[notifyBlockedByDependency] MarkStuck item=%s: %v", itemID, err)
+	} else if applied {
+		if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBlockedByDependency); notifyErr != nil {
+			log.WarningLog.Printf("[notifyBlockedByDependency] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		}
+	}
+}
+
 // notifySpawnAndRollbackFailed publishes an operator-facing notification and durable
 // BacklogStuckState row (StuckReasonSpawnFailed) when AutoReopenAfterFailedReview's
 // SpawnSessionFromItem call fails AND the subsequent scoped rollback to "review" also
@@ -646,22 +678,41 @@ func (s *BacklogService) SpawnSessionFromItem(
 // site outside the generic RPC handler should route through this helper so a
 // future call site can't reintroduce the same bug class.
 //
+// hasUnresolvedBlockers is a per-item convenience wrapper around
+// storage.UnresolvedBlockerItemIDs for call sites transitioning a single item
+// (queueBacklogItem, TransitionBacklogItemStatus). DequeueNextQueuedItems
+// instead batches this lookup across all candidates up front to avoid an N+1
+// query per dequeue sweep — see its own call to UnresolvedBlockerItemIDs.
+func (s *BacklogService) hasUnresolvedBlockers(ctx context.Context, itemID string) (bool, error) {
+	unresolved, err := s.storage.UnresolvedBlockerItemIDs(ctx, []string{itemID})
+	if err != nil {
+		return false, err
+	}
+	return unresolved[itemID], nil
+}
+
 // Returns the same errors storage.TransitionBacklogItemStatus returns
 // (ErrPreconditionFailed, etc.) on success of the guard checks, or the raw
 // domain sentinel error (ErrPlanRequired, ErrACRequired, ...) if a guard
 // fails — un-wrapped in connect terms so each call site keeps doing its own
 // connect.NewError translation, matching this file's existing style.
-func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string) (*session.BacklogItemData, error) {
+//
+// hasUnresolvedBlockers is supplied by the caller rather than computed here
+// so DequeueNextQueuedItems can batch the underlying query once across all
+// candidates instead of once per claim (see its own call to
+// storage.UnresolvedBlockerItemIDs before the claim loop).
+func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
 	from := session.BacklogStatus(item.Status)
 	if !s.engine.CanTransition(from, to) {
 		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
 	}
 	guardInput := session.BacklogItemTransitionInput{
-		Status:            from,
-		AcCriteria:        item.AcceptanceCriteria,
-		PlanApproved:      item.PlanApproved,
-		SkipPlanning:      item.SkipPlanning,
-		PlanArtifactsPath: item.PlanArtifactsPath,
+		Status:                from,
+		AcCriteria:            item.AcceptanceCriteria,
+		PlanApproved:          item.PlanApproved,
+		SkipPlanning:          item.SkipPlanning,
+		PlanArtifactsPath:     item.PlanArtifactsPath,
+		HasUnresolvedBlockers: hasUnresolvedBlockers,
 	}
 	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
 		return nil, guardErr
@@ -688,7 +739,9 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.Bac
 		triggeredBy = session.TriggeredBySystem
 	}
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "WIP cap hit"}
-	updated, err := s.transitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy)
+	// Blocker guard only applies to the queued/ready -> in_progress transition, so
+	// queueing (-> Queued) always passes false rather than querying.
+	updated, err := s.transitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy, false)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("item status changed concurrently — retry the spawn: %w", err))
@@ -769,6 +822,17 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return effectiveQueueTime(candidates[i]).Before(effectiveQueueTime(candidates[j]))
 	})
 
+	candidateIDs := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		candidateIDs = append(candidateIDs, item.ID)
+	}
+	// Batched once across all candidates (not per-claim) to avoid an N+1 query in
+	// this loop — see transitionWithGuard's doc comment.
+	unresolvedBlockers, err := s.storage.UnresolvedBlockerItemIDs(ctx, candidateIDs)
+	if err != nil {
+		return fmt.Errorf("check unresolved blockers: %w", err)
+	}
+
 	spawned := 0
 	for _, item := range candidates {
 		if spawned >= freeSlots {
@@ -778,12 +842,20 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		claimed, claimErr := s.transitionWithGuard(ctx, &item,
 			session.BacklogStatusInProgress,
 			&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
-			session.TriggeredBySystem)
+			session.TriggeredBySystem,
+			unresolvedBlockers[item.ID])
 		if claimErr != nil {
 			switch {
 			case errors.Is(claimErr, session.ErrPreconditionFailed):
 				// Expected under concurrent claims (another process's dequeue
 				// sweep, or a manual un-queue) — not worth logging.
+			case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+				// Expected steady state: item is legitimately blocked and will be
+				// retried on a later sweep once its blocker reaches done — not a
+				// bug, so not worth a warning-level log every sweep. Still surface
+				// it durably (AC3) so the item detail view can render a BlockerChip
+				// instead of leaving the operator to guess why it's stalled.
+				s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
 			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
 				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
 				// now that SpawnSessionFromItem's planning gate runs before the
@@ -926,13 +998,24 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// worktree creation fails for any other reason — e.g. a bare clone, a detached
 	// HEAD, or disk quota hit).
 	// Files must be written to the session path BEFORE spawning.
-	// worktreeMu guards concurrent spawns from interleaving writes to the same path.
+	// worktreeMu guards concurrent spawns from interleaving writes to the same path. It
+	// also has to cover resolveSessionPath's check-then-create window: two concurrent
+	// spawns for the same backlog item compute the identical deterministic branch name
+	// (backlogWorkBranchSlug) and can otherwise both pass CreateBacklogWorktree's
+	// branch-existence check before either creates the branch, and the loser hits a
+	// "branch already exists" failure (session/git/worktree_ops.go's setupNewWorktree
+	// self-heals that specific error, but serializing here closes the race at the
+	// source instead of just recovering from it after the fact).
+	s.worktreeMu.Lock()
 	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
 	if resolveErr != nil {
+		s.worktreeMu.Unlock()
 		return nil, resolveErr
 	}
 
-	if wErr := s.writeSessionFiles(item, priorSessions, worktreePath); wErr != nil {
+	wErr := s.writeSessionFilesLocked(item, priorSessions, worktreePath)
+	s.worktreeMu.Unlock()
+	if wErr != nil {
 		return nil, wErr
 	}
 
@@ -1012,6 +1095,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 		AcSnapshot:               acSnapshot,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: pipelineModeSnapshotHash,
+		ClaimantHostID:           s.claimantHostID(),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
@@ -1518,6 +1602,13 @@ func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree
 	}
 
 	if git.IsGitRepo(resolvedRepo) {
+		// No special-case fallback for a zero-commit repo: findGitRepoRoot
+		// (session/git/util.go, called by both GitWorktree constructors before
+		// Setup runs) auto-creates an initial commit for exactly that case, so
+		// CreateBacklogWorktree already succeeds instead of erroring — see
+		// TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit.
+		// Any other git-managed worktree failure must hard-fail per BUG-057, not
+		// silently fall back to an unscoped directory session.
 		log.ErrorLog.Printf("[SpawnSessionFromItem] worktree creation failed for git-managed repo %s (%v)", resolvedRepo, wtErr)
 		return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create git worktree: %w", wtErr))
 	}
@@ -1529,11 +1620,11 @@ func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree
 	return resolvedRepo, false, nil
 }
 
-// writeSessionFiles writes the backlog slash-command files and context file to the session
-// directory. The write is serialized under worktreeMu to prevent concurrent write races.
-func (s *BacklogService) writeSessionFiles(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
-	s.worktreeMu.Lock()
-	defer s.worktreeMu.Unlock()
+// writeSessionFilesLocked writes the backlog slash-command files and context file to the
+// session directory. Callers must hold s.worktreeMu — see spawnSessionAfterGates, which
+// locks it around this call and the preceding resolveSessionPath to close the
+// check-then-create worktree race described there.
+func (s *BacklogService) writeSessionFilesLocked(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
 	if wErr := session.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 	}
@@ -2227,17 +2318,21 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // investigation) can answer "how often does each failure mode happen" from log history alone,
 // without re-deriving it by hand from raw error text and process timing.
 //
-//   - "timeout": ctx deadline exceeded, or elapsed is within 5s of the 30m TriggerTriage
-//     budget (covers a hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
+//   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
+//     hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
 //   - "shutdown": server shutdown context cancelled mid-call, not a call failure.
 //   - "process_error": the claude subprocess ran and exited non-zero (bad prompt, LLM
 //     refusal, usage error) — see headless.ErrLLMError/ErrUsageError/ErrInterrupted.
 //   - "claude_not_found": the claude binary itself is missing from PATH — an environment
 //     problem, not a per-call one.
 //   - "other": anything else (e.g. a storage/DB error surfaced through the same path).
-func classifyHeadlessCallError(err error, elapsed time.Duration) string {
+//
+// budget is the caller's own call timeout (e.g. triageCallBudget for TriggerTriage,
+// callTimeout for TriggerReReview) — the same classifier is shared across both headless
+// call sites, so it takes budget as a parameter rather than hardcoding one.
+func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string {
 	switch {
-	case errors.Is(err, context.DeadlineExceeded), triageCallBudget-elapsed < 5*time.Second:
+	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "shutdown"
@@ -2248,6 +2343,33 @@ func classifyHeadlessCallError(err error, elapsed time.Duration) string {
 	default:
 		return "other"
 	}
+}
+
+// captureHeadlessFailure best-effort writes raw (the accumulated stdout of a
+// headless triage/review call that errored or failed to parse) to a durable
+// file under s.cfg.HeadlessFailureCaptureDirOrDefault() and returns its
+// absolute path, or "" if there was nothing to capture or the write failed.
+// Deliberately swallow-and-log rather than propagate: a failure to persist
+// diagnostic data about a failure must never mask or block handling of the
+// original failure itself. See session.WriteHeadlessFailureCapture's doc
+// comment for why this exists (log rotation + the ~200-byte preview
+// previously logged on parse failure are not enough to diagnose a failed
+// call after the fact).
+func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string {
+	if raw == "" {
+		return ""
+	}
+	dir, dirErr := s.cfg.HeadlessFailureCaptureDirOrDefault()
+	if dirErr != nil {
+		log.WarningLog.Printf("[captureHeadlessFailure] resolve capture dir: %v", dirErr)
+		return ""
+	}
+	path, writeErr := session.WriteHeadlessFailureCapture(dir, sessionUUID, raw, session.DefaultHeadlessFailureCaptureMaxBytes)
+	if writeErr != nil {
+		log.WarningLog.Printf("[captureHeadlessFailure] write capture file session=%s: %v", sessionUUID, writeErr)
+		return ""
+	}
+	return path
 }
 
 // MaybeTriggerTriage is the single "should this newly created item get
@@ -2423,7 +2545,11 @@ func (s *BacklogService) TriggerTriage(
 	// the engine (Epic 1.5, Story 1.5.3).
 	var triagePrompt string
 	if feedback != "" {
-		triagePrompt = session.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		if req.Msg.ChatMode {
+			triagePrompt = session.BuildHeadlessChatRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		} else {
+			triagePrompt = session.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		}
 	} else {
 		triagePrompt = s.triagePromptFor(item, artifactAbsPath)
 	}
@@ -2554,19 +2680,27 @@ func (s *BacklogService) TriggerTriage(
 			// the 2026-07-24 stuck-triage incident. errType classifies the error
 			// into a few high-signal buckets so a grep over historical logs can
 			// answer "how often do we hit each failure mode" without parsing %v text.
-			errType := classifyHeadlessCallError(callErr, callElapsed)
-			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s: %v",
-				itemID, callElapsed.Round(time.Second), errType, callErr)
+			errType := classifyHeadlessCallError(callErr, callElapsed, triageCallBudget)
+			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
+			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s capture=%s: %v",
+				itemID, callElapsed.Round(time.Second), errType, capturePath, callErr)
 			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
+			if capturePath != "" {
+				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
+			}
 			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
 
 		result, parseErr := session.ParseHeadlessTriageResult(raw)
 		if parseErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d: %v",
-				itemID, callElapsed.Round(time.Second), len(raw), parseErr)
+			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
+			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d capture=%s: %v",
+				itemID, callElapsed.Round(time.Second), len(raw), capturePath, parseErr)
 			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			if capturePath != "" {
+				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
+			}
 			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
@@ -2618,7 +2752,14 @@ func (s *BacklogService) TriggerTriage(
 		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
 			pap = filepath.Join(triageWorkDir, "project_plans", result.Title, "implementation")
 		}
-		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
+		approvalReset := false
+		clearedReason := ""
+		update := session.BacklogItemUpdate{
+			PlanArtifactsPath:   &pap,
+			PlanApproved:        &approvalReset,
+			PlanRejectionReason: &clearedReason,
+			ClearPlanRejectedAt: true,
+		}
 		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
@@ -2985,6 +3126,30 @@ Do not modify the code. Only write the review verdict.
 					ItemSession: itemSessionToProto(is, s.buildCostLookup()),
 				}), nil
 			}
+			// Persist a best-effort audit record of the failed call before returning the
+			// RPC error: unlike TriggerTriage, no ItemSession exists yet for this attempt
+			// at this point (one is normally only created alongside the verdict below), so
+			// without this the failure would be visible only in the ephemeral log line —
+			// exactly the gap captureHeadlessFailure exists to close. Never blocks or
+			// changes the returned error: every step here is best-effort/log-and-continue.
+			errType := classifyHeadlessCallError(callErr, time.Since(callStart), callTimeout)
+			capturePath := s.captureHeadlessFailure(headlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
+			log.ErrorLog.Printf("[TriggerReReview] headless re-review call failed item=%s errType=%s capture=%s: %v", item.ID, errType, capturePath, callErr)
+			failCleanupCtx, failCleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if failIS, failCreateErr := s.storage.CreateItemSession(failCleanupCtx, session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: headlessReReviewUUIDPrefix + uuid.New().String(),
+				SessionRole: session.SessionRoleReview,
+				AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
+			}); failCreateErr != nil {
+				log.WarningLog.Printf("[TriggerReReview] failed to record audit ItemSession for failed call item=%s: %v", item.ID, failCreateErr)
+			} else {
+				_ = s.storage.UpdateItemSessionEndedWithReason(failCleanupCtx, failIS.ID, time.Now(), errType)
+				if capturePath != "" {
+					_ = s.storage.UpdateItemSessionFailureCapture(failCleanupCtx, failIS.ID, capturePath)
+				}
+			}
+			failCleanupCancel()
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("headless re-review call failed: %w", callErr))
 		}
 

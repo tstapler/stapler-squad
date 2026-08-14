@@ -848,6 +848,248 @@ func TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp(t *testing.T) {
 	assert.NotNil(t, approveResp.Msg.Item.PlanApprovedAt)
 }
 
+// TestApprovePlan_ClearsExistingRejectionReason is the symmetry-fix regression
+// test: approving a plan that carries a stale rejection reason (from a prior
+// RejectPlan call) must clear that reason, not leave both an approval and a
+// rejection reason coexisting. See ADR-001.
+func TestApprovePlan_ClearsExistingRejectionReason(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with a stale rejection",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	rejectResp, err := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "missing caching plan",
+	}))
+	require.NoError(t, err)
+	require.Equal(t, "missing caching plan", rejectResp.Msg.Item.PlanRejectionReason)
+	require.NotNil(t, rejectResp.Msg.Item.PlanRejectedAt)
+
+	approveResp, err := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	assert.True(t, approveResp.Msg.Item.PlanApproved)
+	assert.Empty(t, approveResp.Msg.Item.PlanRejectionReason)
+	assert.Nil(t, approveResp.Msg.Item.PlanRejectedAt, "plan_rejected_at must be cleared symmetrically with plan_rejection_reason on approval")
+}
+
+// ─── RejectPlan ───────────────────────────────────────────────────────────────
+
+// TestRejectPlan_HappyPath_SetsReasonAndTimestamp: a non-empty reason persists
+// plan_rejection_reason/plan_rejected_at and clears plan_approved.
+func TestRejectPlan_HappyPath_SetsReasonAndTimestamp(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	rejectResp, err := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "missing caching plan",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "missing caching plan", rejectResp.Msg.Item.PlanRejectionReason)
+	assert.NotNil(t, rejectResp.Msg.Item.PlanRejectedAt)
+	assert.False(t, rejectResp.Msg.Item.PlanApproved)
+}
+
+// TestRejectPlan_EmptyReason_ReturnsInvalidArgument: an empty or whitespace-only
+// reason must be rejected server-side, not just in the UI (AC4).
+func TestRejectPlan_EmptyReason_ReturnsInvalidArgument(t *testing.T) {
+	svc := newBacklogService(t)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: createResp.Msg.Item.Id,
+		Reason: "",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestRejectPlan_WhitespaceOnlyReason_ReturnsInvalidArgument: whitespace-only
+// text is trimmed and treated identically to an empty reason.
+func TestRejectPlan_WhitespaceOnlyReason_ReturnsInvalidArgument(t *testing.T) {
+	svc := newBacklogService(t)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: createResp.Msg.Item.Id,
+		Reason: "   \n\t  ",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestRejectPlan_ReasonExceedsMaxLength_ReturnsInvalidArgument verifies that a
+// reason longer than maxRejectReasonLength is rejected with InvalidArgument,
+// mirroring the empty/whitespace-only guards above.
+func TestRejectPlan_ReasonExceedsMaxLength_ReturnsInvalidArgument(t *testing.T) {
+	svc := newBacklogService(t)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+
+	tooLong := strings.Repeat("a", maxRejectReasonLength+1)
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: createResp.Msg.Item.Id,
+		Reason: tooLong,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition mirrors
+// ApprovePlan's equivalent guard: rejecting a plan that was never generated
+// makes no sense.
+func TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition(t *testing.T) {
+	svc := newBacklogService(t)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item without plan",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: createResp.Msg.Item.Id,
+		Reason: "no plan yet, but a reason anyway",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// TestRejectPlan_ClearsExistingApproval is the symmetry-fix regression test:
+// approving a plan then rejecting it must clear plan_approved (round-tripped
+// through a fresh GetBacklogItem read), and the spawn-gate precondition check
+// must still block a spawn afterward — the concrete case the symmetry fix
+// prevents, not just a field-value check.
+func TestRejectPlan_ClearsExistingApproval(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "item to approve then reject",
+		RepoPath: t.TempDir(),
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	approveResp, err := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	require.True(t, approveResp.Msg.Item.PlanApproved)
+
+	rejectResp, err := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "actually, reconsider the approach",
+	}))
+	require.NoError(t, err)
+	assert.False(t, rejectResp.Msg.Item.PlanApproved, "PlanApproved must be false in the RejectPlanResponse itself")
+
+	// Read-after-write round trip through the real repository/ent layer.
+	fetched, err := storage.GetBacklogItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.False(t, fetched.PlanApproved, "PlanApproved must be false on a fresh GetBacklogItem read")
+
+	// Move the item to ready so the spawn-gate precondition check below is the
+	// planning gate itself, not the earlier status gate.
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId: itemID,
+	}))
+	require.Error(t, err, "spawn must still be blocked after reject-following-approve")
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "approve the plan")
+}
+
+// TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason extends
+// the existing backward-transition reset block (which already clears
+// plan_approved/plan_artifacts_path) to also clear plan_rejection_reason —
+// sending a rejected item back to idea/refining must not leave a stale
+// rejection reason attached to what is now effectively a new planning round.
+// See ADR-001.
+func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "rejected item sent back to idea",
+		Status:   string(session.BacklogStatusReady),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	rejectResp, err := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: item.ID,
+		Reason: "needs a different approach entirely",
+	}))
+	require.NoError(t, err)
+	require.Equal(t, "needs a different approach entirely", rejectResp.Msg.Item.PlanRejectionReason)
+	require.NotNil(t, rejectResp.Msg.Item.PlanRejectedAt)
+
+	transResp, err := svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       item.ID,
+		TargetStatus: "idea",
+	}))
+	require.NoError(t, err)
+	assert.Empty(t, transResp.Msg.Item.PlanRejectionReason)
+	assert.Nil(t, transResp.Msg.Item.PlanRejectedAt, "plan_rejected_at must be cleared symmetrically with plan_rejection_reason on backward transition")
+	assert.False(t, transResp.Msg.Item.PlanApproved)
+
+	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Empty(t, fetched.PlanRejectionReason, "plan_rejection_reason must be cleared on a fresh read too")
+	assert.Nil(t, fetched.PlanRejectedAt, "plan_rejected_at must be cleared on a fresh read too")
+}
+
 // initGitRepoWithCommit initialises a minimal git repository with an initial commit so
 // that git worktree operations (which require at least one commit) work in tests.
 // Skips the test if git is unavailable.
@@ -1325,6 +1567,34 @@ func TestSpawnSessionFromItem_RecordsTriggeredByFromAutonomousFlag(t *testing.T)
 // testWIPCap mirrors config.Config.MaxConcurrentBacklogWorkItemsOrDefault's
 // default (cfg=nil in these tests, so the default applies).
 const testWIPCap = 2
+
+// TestBacklogService_Admit_AllowsUnderCapRejectsAtCap verifies Admit (webhook-triggers
+// Task 1.3.1b) implements the same WIP cap SpawnSessionFromItem's own gate enforces —
+// this is the method server/workflows.Scheduler consults before every trigger-fired
+// CreateSession call (Epic 1.3).
+func TestBacklogService_Admit_AllowsUnderCapRejectsAtCap(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	admitted, err := svc.Admit(t.Context())
+	require.NoError(t, err)
+	assert.True(t, admitted, "Admit should allow when no work sessions are live")
+
+	// Fill the WIP cap with successful spawns.
+	for i := 0; i < testWIPCap; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("admit item %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+	}
+
+	admitted, err = svc.Admit(t.Context())
+	require.NoError(t, err)
+	assert.False(t, admitted, "Admit should reject once the WIP cap is reached")
+}
 
 // TestSpawnSessionFromItem_WIPLimit_QueuesInsteadOfRejecting verifies that a
 // fresh spawn is queued (not rejected) once testWIPCap items are already
@@ -3028,6 +3298,28 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 // computation (via triageShortTitle picking up the stored triage result's
 // title), not just that each half compiles in isolation.
 func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *testing.T) {
+	// Force an isolated config/worktree base directory for this test invocation.
+	// Without this, config.GetConfigDirForDir's IsTestMode() branch (config/config.go)
+	// scopes the worktree base dir by OS PID only (~/.stapler-squad/test/test-<pid>/),
+	// which is shared across every repetition of `go test -count=N` in the same
+	// process. Combined with repoPath's TempDir-derived branch slug being byte-identical
+	// across repetitions (createTestStorage's internal t.TempDir() call is always #1,
+	// this test's own repoPath := t.TempDir() below is always #2, so both are always
+	// named "002" regardless of repetition), a leftover worktree directory or git
+	// worktree-admin entry from an earlier repetition could be discovered and "reused"
+	// by session/git/worktree.go's findExistingWorktreeForBranch, which matches on
+	// branch name only within git's own repo-local registry and never validates the
+	// found worktree's gitlink still resolves to a live repo. That produced the
+	// intermittent "Condition never satisfied" flake (require.Eventually never seeing
+	// status flip to "ready", because the async triage goroutine's dirty-check failed
+	// with "fatal: not a git repository: .../.git/worktrees/<stale-uuid>" against a
+	// stale sibling repetition's already-torn-down worktree admin dir). Setting
+	// STAPLER_SQUAD_TEST_DIR (config.GetConfigDirForDir's Priority 1, above the
+	// PID-scoped IsTestMode() fallback) to this test's own t.TempDir() gives every
+	// repetition a fully isolated worktree base dir, closing the collision at the
+	// test level without touching the shared worktree-reuse production code.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
 	storage := createTestStorage(t)
 	const slug = "widget-integration"
 	pool := &fakeHeadlessPool{
@@ -3058,10 +3350,17 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
 	require.NoError(t, err)
 
+	// 5s/50ms matches the sibling SDD-mode triage tests immediately above
+	// (TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
+	// et al.) rather than the tighter 2s/10ms this test previously used — under
+	// -race, observed passing runs of this exact test already take 3.5-4.2s end to
+	// end (worktree create+setup, fake headless call, commit, branch rename, DB
+	// writes), so the old 2s budget was undersized independent of the worktree
+	// test-isolation fix above.
 	require.Eventually(t, func() bool {
 		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		return getErr == nil && getResp.Msg.Item.Status == "ready"
-	}, 2*time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 
 	require.Equal(t, 1, pool.callCount())
 	triageWorktreePath := pool.firstCall().workDir
@@ -3343,6 +3642,103 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 	require.Len(t, sessions, 2)
 	assert.Contains(t, sessions[1].TriageResult, "revised summary")
 	assert.Contains(t, sessions[1].TriageResult, `"iteration":2`)
+}
+
+// TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved is the symmetry-fix
+// regression test for the TriggerTriage completion write: a freshly
+// regenerated plan must not carry forward a stale approval from before the
+// refine — the newly generated plan is pending_review, not approved. See
+// ADR-001.
+func TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved(t *testing.T) {
+	storage := createTestStorage(t)
+	secondResponse := `{"summary":"revised summary","suggestions":[],"tasks":[{"text":"revised task","estimate":"3h","category":"backend"}]}`
+	pool := &fakeHeadlessPool{responses: []string{validTriageJSON(), secondResponse}}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "refine after approval",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
+
+	approveResp, err := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, err)
+	require.True(t, approveResp.Msg.Item.PlanApproved)
+
+	_, refineErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId:   item.ID,
+		Feedback: "This missed the mobile case entirely.",
+	}))
+	require.NoError(t, refineErr)
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady) && !updated.PlanApproved
+	}, 5*time.Second, 50*time.Millisecond, "refine completion should reset plan_approved to false")
+}
+
+// TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason is the paired
+// symmetry-fix regression test: a freshly regenerated plan must not carry
+// forward a stale rejection reason from before the refine that the
+// regeneration was meant to address. See ADR-001.
+func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
+	storage := createTestStorage(t)
+	secondResponse := `{"summary":"revised summary","suggestions":[],"tasks":[{"text":"revised task","estimate":"3h","category":"backend"}]}`
+	pool := &fakeHeadlessPool{responses: []string{validTriageJSON(), secondResponse}}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "refine after rejection",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
+
+	rejectResp, err := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: item.ID,
+		Reason: "This missed the mobile case entirely.",
+	}))
+	require.NoError(t, err)
+	require.Equal(t, "This missed the mobile case entirely.", rejectResp.Msg.Item.PlanRejectionReason)
+	require.NotNil(t, rejectResp.Msg.Item.PlanRejectedAt)
+
+	_, refineErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId:   item.ID,
+		Feedback: rejectResp.Msg.Item.PlanRejectionReason,
+	}))
+	require.NoError(t, refineErr)
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady) && updated.PlanRejectionReason == ""
+	}, 5*time.Second, 50*time.Millisecond, "refine completion should clear plan_rejection_reason")
+
+	updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, loadErr)
+	assert.Nil(t, updated.PlanRejectedAt, "plan_rejected_at must be cleared symmetrically with plan_rejection_reason on refine completion")
 }
 
 // TestTriggerTriage_RefineWithFeedback_RequiresPriorResult: feedback on an item

@@ -20,7 +20,9 @@ import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { useAppSelector } from "@/lib/store";
+import { store } from "@/lib/store/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
+import { selectSessionsError } from "@/lib/store/sessionsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -32,6 +34,7 @@ import { AcCriteriaList } from "./AcCriteriaList";
 import { InlineError } from "./InlineError";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
+import { ChatRefinementPanel } from "./ChatRefinementPanel";
 import { ReviewChangesModal } from "./ReviewChangesModal";
 import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
 import { LifecycleSummary } from "./detail/LifecycleSummary";
@@ -42,9 +45,12 @@ import { PullRequestSection } from "./detail/PullRequestSection";
 import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
+import { PlanVerdictBox } from "./PlanVerdictBox";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
+import { AutonomousHealthStrip } from "./detail/AutonomousHealthStrip";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { NotesSection } from "./detail/NotesSection";
@@ -83,9 +89,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     getBacklogItem,
     transitionStatus,
     triggerTriage,
+    createBacklogItemFromChat,
     cancelTriage,
     spawnSessionFromItem,
     approvePlan,
+    rejectPlan,
     overrideVerdict,
     triggerReReview,
     triggerShipPR,
@@ -96,7 +104,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     listPipelineModes,
     lastError,
   } = useBacklogService();
-  const { deleteSession } = useSessionService();
+  const { deleteSession, updateSession } = useSessionService();
   const { showActionToast } = useNotifications();
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +113,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [steeringSessionId, setSteeringSessionId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<"id" | "link" | null>(null);
 
   // Epic 3.4 "what ran" surface: the currently-fetched mode list, used only
@@ -490,6 +499,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     [item, cancelTriage, track, deleteSession, showActionToast, load]
   );
 
+  // Epic 2.2 (Story 2.2.2, ADR-002): steers a live work/review session via
+  // the same widened UpdateSession RPC/hook the general session list's own
+  // Steer dialog uses (AC7). Mirrors handleDeleteSession's shape.
+  // updateSession() itself swallows RPC errors and returns null rather than
+  // throwing (it dispatches the real failure message to the shared
+  // session-service redux error slice instead — see useSessionService.ts's
+  // updateSession) — so failure is re-thrown here, letting SessionsSection's
+  // inline composer (which awaits onSteerSession) catch it, keep itself
+  // open, and surface the error instead of closing optimistically. Read the
+  // real message via store.getState() rather than a memoized selector value
+  // (e.g. useAppSelector) — updateSession's dispatch happens synchronously
+  // before it resolves, but a selector captured in this callback's closure
+  // would still reflect the pre-call render and lag one render behind.
+  const handleSteerSession = useCallback(
+    async (s: LinkedSession, message: string) => {
+      const toastKey = `${s.sessionId}:steer`;
+      setSteeringSessionId(s.sessionId);
+      try {
+        const result = await updateSession(s.sessionId, { steerMessage: message });
+        if (!result) {
+          throw new Error(selectSessionsError(store.getState()) ?? "Failed to steer session.");
+        }
+        showActionToast("Steering message sent.", "success", toastKey);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to steer session.";
+        showActionToast(msg, "error", toastKey);
+        throw err instanceof Error ? err : new Error(msg);
+      } finally {
+        setSteeringSessionId(null);
+      }
+    },
+    [updateSession, showActionToast]
+  );
+
   // Epic 3.4: fetch the current mode list once, for resolving each linked
   // session's frozen pipelineModeSnapshot to a name/drift state. Not
   // filtered by `enabled` — a since-disabled (but not deleted) mode is
@@ -792,6 +835,50 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     },
     [item, triggerTriage, load]
   );
+
+  // Chat-based refinement (additive to handleRefineTriage's structured-form
+  // path): delegates to CreateBacklogItemFromChat, which internally calls the
+  // same TriggerTriage/feedback path — same data shape, different front door.
+  const handleChatRefine = useCallback(
+    async (message: string) => {
+      if (!item) return;
+      const result = await createBacklogItemFromChat(message, item.id);
+      if (!result) {
+        throw new Error(lastError?.message ?? "Failed to send chat message");
+      }
+      await load();
+    },
+    [item, createBacklogItemFromChat, load, lastError]
+  );
+
+  // Story 4.3.1: RejectPlan only persists state (ADR-002) — it does not
+  // itself trigger regeneration. handleRegeneratePlanWithFeedback is the
+  // separate, explicit follow-up action PlanVerdictBox renders once an item
+  // is in the changes_requested state.
+  const handleRejectPlan = useCallback(
+    async (reason: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:reject_plan`;
+      setActionLoading("reject_plan");
+      try {
+        await rejectPlan(item.id, reason);
+        showActionToast("Revisions requested.", "success", toastKey);
+        await load();
+      } catch (e) {
+        showActionToast(e instanceof Error ? e.message : "Reject failed.", "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, rejectPlan, load, showActionToast]
+  );
+
+  const handleRegeneratePlanWithFeedback = useCallback(async () => {
+    if (!item?.planRejectionReason) return;
+    await triggerTriage(item.id, item.planRejectionReason);
+    await load();
+  }, [item, triggerTriage, load]);
 
   const handleApplyTriageSuggestions = useCallback(
     async (preApplyCriteria: AcCriterion[]) => {
@@ -1244,6 +1331,20 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 // more-current live-store state with a redundant read.
                 onSkip={() => {}}
                 onRefine={handleRefineTriage}
+                onAnswerQuestion={handleRefineTriage}
+              />
+            </div>
+          )}
+
+        {/* Chat-based refinement — additive to TriageReviewPanel's structured
+            refine-feedback form above; same visibility guard. */}
+        {item.triageStatus === "completed" &&
+          item.status === "idea" &&
+          item.triageResult && (
+            <div className={styles.section}>
+              <ChatRefinementPanel
+                clarifyingQuestions={item.triageResult.clarifyingQuestions}
+                onSend={handleChatRefine}
               />
             </div>
           )}
@@ -1314,6 +1415,28 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           </h3>
           <AcCriteriaList criteria={item.acCriteria} />
         </div>
+
+        {/* Plan Review (Story 4.3.1): rendered immediately before Actions,
+            NOT after PlanArtifactsSection's plan-artifacts display as
+            plan.md originally described — Story 3.1.3's later refactor
+            (see the CollapsibleGroup comment below) already pulled
+            ActionsSection out ahead of the collapsible group so it stays
+            reachable without expanding anything; PlanVerdictBox follows the
+            same always-visible convention and sits right above it, so
+            Approve (in ActionsSection) and Request Changes (here) are both
+            reachable without navigating away (AC3). */}
+        {(item.status === "ready" ||
+          item.status === "queued" ||
+          derivePlanReviewStatus(item) !== "no_plan") && (
+          <PlanVerdictBox
+            status={derivePlanReviewStatus(item)}
+            rejectionReason={item.planRejectionReason}
+            readOnly={terminalState !== null}
+            actionPending={actionLoading === "reject_plan"}
+            onReject={handleRejectPlan}
+            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
+          />
+        )}
 
         {/* Actions */}
         <ActionsSection
@@ -1401,6 +1524,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             onBrowseFiles={() => setShowFileBrowser(true)}
           />
 
+          <AutonomousHealthStrip item={item} />
+
           <SessionsSection
             item={item}
             pipelineModes={pipelineModes}
@@ -1408,6 +1533,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             deletingSessionId={deletingSessionId}
             defaultExpanded={sessionsExpanded}
             onDeleteSession={handleDeleteSession}
+            onSteerSession={handleSteerSession}
+            steeringSessionId={steeringSessionId}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />

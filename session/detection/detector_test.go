@@ -142,6 +142,61 @@ func TestStatusDetector_DetectWaitingForAgent_NegativeCases(t *testing.T) {
 	}
 }
 
+// TestStatusDetector_DetectCompacting verifies that the compaction-in-progress fixture
+// classifies as StatusCompacting.
+//
+// NOTE: fixture is INFERRED, not verified against a live Claude Code capture — see
+// project_plans/context-compaction-detection/implementation/plan.md Story 1.1.1. A
+// follow-up backlog item tracks live-capture verification; a temporary canary log
+// (detector.go's compactingCanary) flags any unmatched "compact" line in the interim.
+func TestStatusDetector_DetectCompacting(t *testing.T) {
+	sd := NewStatusDetector()
+
+	data, err := os.ReadFile(filepath.Join("testdata", "claude_compacting.txt"))
+	if err != nil {
+		t.Fatalf("failed to read fixture: %v", err)
+	}
+
+	status, desc := sd.DetectWithContext(data)
+	if status != StatusCompacting {
+		t.Errorf("DetectWithContext(claude_compacting.txt) status = %v, want StatusCompacting", status)
+	}
+	wantDesc := "Claude is compacting conversation history to free up context space"
+	if desc != wantDesc {
+		t.Errorf("DetectWithContext(claude_compacting.txt) desc = %q, want %q", desc, wantDesc)
+	}
+}
+
+// TestStatusDetector_DetectActive_NotCompacting_ApproachingThresholdFixtures is the AC7
+// negative-case regression guard: the three pre-existing "N% until auto-compact"
+// approaching-threshold fixtures must keep returning their pre-change expected status
+// and must NOT be classified as StatusCompacting, which is reserved for the distinct
+// in-progress compaction line.
+func TestStatusDetector_DetectActive_NotCompacting_ApproachingThresholdFixtures(t *testing.T) {
+	sd := NewStatusDetector()
+
+	fixtures := []string{
+		"claude_active.txt",
+		"claude_thinking_verb.txt",
+		"claude_asterism_active.txt",
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("testdata", fixture))
+			if err != nil {
+				t.Fatalf("failed to read fixture: %v", err)
+			}
+			status := sd.Detect(data)
+			if status != StatusExecuting {
+				t.Errorf("Detect(%s) = %v, want StatusExecuting (unchanged)", fixture, status)
+			}
+			if status == StatusCompacting {
+				t.Errorf("Detect(%s) = StatusCompacting; the approaching-threshold indicator must not match the compacting pattern", fixture)
+			}
+		})
+	}
+}
+
 func TestStatusDetector_DetectFromLines_WaitingForAgent(t *testing.T) {
 	sd := NewStatusDetector()
 	// Stale success in scrollback, current waiting line at top — waiting wins
@@ -167,6 +222,84 @@ func TestStatusDetector_DetectFromLines_MonitorsStillRunning(t *testing.T) {
 	}
 	if got := sd.DetectFromLines(lines); got != StatusWaitingForAgent {
 		t.Errorf("DetectFromLines() = %v, want StatusWaitingForAgent (monitors line must override stale Success)", got)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_returnCount_When_singleWaitingLine(t *testing.T) {
+	sd := NewStatusDetector()
+	lines := []string{"✻ Cogitated for 18m 41s · 1 monitor still running"}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Errorf("status = %v, want StatusWaitingForAgent", status)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_returnZeroCount_When_statusIsNotWaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+	lines := []string{"✻ Baked for 3s"}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Fatalf("test fixture unexpectedly matched StatusWaitingForAgent")
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_notSumAcrossLines_When_multiplePatternsMatchDifferentLines(t *testing.T) {
+	sd := NewStatusDetector()
+	// Both lines independently match a WaitingForAgent pattern. Per the "winning line wins"
+	// decision, the count must come from whichever line the reverse-scan actually returns —
+	// never the sum (3) of both lines' counts.
+	lines := []string{
+		"✻ Waiting for 2 background agents to finish",
+		"1 shell still running",
+	}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Fatalf("status = %v, want StatusWaitingForAgent", status)
+	}
+	if count == 3 {
+		t.Errorf("count = %d; counts must not be summed across matched lines", count)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1 (the winning/last-scanned line's count)", count)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_carryCount_When_lineContainsCRSegments(t *testing.T) {
+	sd := NewStatusDetector()
+	// A single terminal line with an embedded \r (spinner redraw) where the segment after
+	// the final \r is the one that matches WaitingForAgent — the count must survive the
+	// CR-segment collapsing loop in detectFromLines, not just the non-CR fast path.
+	lines := []string{"✻ Baking...\r✻ Waiting for 2 background agents to finish"}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Fatalf("status = %v, want StatusWaitingForAgent", status)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_dropCount_When_laterStatusExecutingOverridesWaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+	// An earlier (higher, i.e. more recent in reverse-scan order) StatusExecuting-candidate
+	// line overrides the WaitingForAgent match found scanning further up — bestCount must
+	// reset to 0 alongside the status override, not leak the stale WaitingForAgent count.
+	lines := []string{
+		"✻ Waiting for 3 background agents to finish",
+		"> ",
+	}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Fatalf("test fixture expected the later line to override WaitingForAgent, got status %v", status)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0 (no stale count leaking from the overridden WaitingForAgent match)", count)
 	}
 }
 
@@ -555,6 +688,17 @@ func TestStatusDetector_GetPatternNames(t *testing.T) {
 	}
 	if len(waitingNames) > 0 && waitingNames[0] != "waiting_for_background_agent" {
 		t.Errorf("GetPatternNames(StatusWaitingForAgent)[0] = %q, want %q", waitingNames[0], "waiting_for_background_agent")
+	}
+
+	compactingNames := sd.GetPatternNames(StatusCompacting)
+	if len(compactingNames) != 1 || compactingNames[0] != "compacting_conversation" {
+		t.Errorf("GetPatternNames(StatusCompacting) = %v, want [\"compacting_conversation\"]", compactingNames)
+	}
+}
+
+func TestStatusCompacting_StatusString_should_returnCompacting(t *testing.T) {
+	if got := StatusCompacting.String(); got != "Compacting" {
+		t.Errorf("StatusCompacting.String() = %q, want %q", got, "Compacting")
 	}
 }
 

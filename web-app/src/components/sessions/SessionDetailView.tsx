@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-trigger-attribution-badge
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
@@ -31,6 +32,8 @@ import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
+import { useWorkflows } from "@/lib/hooks/useWorkflows";
+import { attributionBadge } from "./TriggersPanel.css";
 import * as styles from "./SessionDetail.css";
 import {
   diffAdded,
@@ -163,6 +166,17 @@ export function SessionDetailView({
 
   // Backward-compat alias for code that still references activeTab
   const activeTab = activeTabId as SessionDetailTab;
+
+  // Trigger attribution (webhook-triggers Epic 7.4, AC6): resolve session.workflowId
+  // to its Workflow row so we can show "Triggered by: {slug} ({trigger_type})" for
+  // automated (non-"manual") trigger-created sessions, distinguishing them from a
+  // plain @slug manually-invoked Workflow session.
+  const { workflows: attributionWorkflows } = useWorkflows();
+  const triggerWorkflow = session.workflowId
+    ? attributionWorkflows.find((w) => w.id === session.workflowId)
+    : undefined;
+  const isAutomatedTrigger = !!triggerWorkflow &&
+    ["cron", "github_push", "webhook"].includes(triggerWorkflow.triggerType);
 
   // Shell tabs
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
@@ -1302,6 +1316,19 @@ export function SessionDetailView({
               {/* Workflow metadata */}
               {session.workflowId && (
                 <div className={styles.workflowSection} data-testid="workflow-metadata-section">
+                  {isAutomatedTrigger && triggerWorkflow && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Trigger:</span>
+                      <a
+                        className={attributionBadge}
+                        href="/triggers"
+                        data-testid="trigger-attribution-badge"
+                        aria-label={`Triggered by ${triggerWorkflow.slug} (${triggerWorkflow.triggerType}) — view in Triggers`}
+                      >
+                        Triggered by: {triggerWorkflow.slug} ({triggerWorkflow.triggerType})
+                      </a>
+                    </div>
+                  )}
                   <div className={styles.infoItem}>
                     <span className={styles.infoLabel}>Workflow:</span>
                     <span className={styles.infoValue}>

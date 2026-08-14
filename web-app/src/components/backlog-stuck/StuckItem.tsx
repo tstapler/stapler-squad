@@ -26,6 +26,8 @@ interface StuckItemProps {
   /** True once the underlying condition has resolved while this card was expanded (design/ux.md Surface 12). */
   justResolved?: boolean;
   resolvedMessage?: string;
+  /** Overrides the default "It will be removed from this list shortly." trailing copy — used for de-escalation, where only this card (not the whole item) is going away. */
+  resolvedTrailingMessage?: string;
   /** Imperative snooze action from useStuckBacklogItems — omitted disables the snooze control entirely. */
   onSnooze?: (itemId: string, reason: StuckReason, until: Date) => Promise<boolean>;
   /** Sets a per-item rework-cap override and immediately reopens the item — omitted disables the rework_cap override control. */
@@ -114,6 +116,7 @@ export function StuckItem({
   otherReasonLabels = [],
   justResolved = false,
   resolvedMessage,
+  resolvedTrailingMessage,
   onSnooze,
   onReworkCapOverride,
   onTriggerRemediationNow,
@@ -384,8 +387,8 @@ export function StuckItem({
 
       {justResolved && (
         <div className={styles.resolvedBanner} data-testid="stuck-item-resolved-banner">
-          ✓ {resolvedMessage || "This item was just resolved."} It will be removed from this
-          list shortly.
+          ✓ {resolvedMessage || "This item was just resolved."}{" "}
+          {resolvedTrailingMessage || "It will be removed from this list shortly."}
         </div>
       )}
 

@@ -45,6 +45,18 @@ func (f BacklogItemFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value,
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.BacklogItemMutation", m)
 }
 
+// The BacklogItemDependencyFunc type is an adapter to allow the use of ordinary
+// function as BacklogItemDependency mutator.
+type BacklogItemDependencyFunc func(context.Context, *ent.BacklogItemDependencyMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f BacklogItemDependencyFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.BacklogItemDependencyMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.BacklogItemDependencyMutation", m)
+}
+
 // The BacklogProgressNoteFunc type is an adapter to allow the use of ordinary
 // function as BacklogProgressNote mutator.
 type BacklogProgressNoteFunc func(context.Context, *ent.BacklogProgressNoteMutation) (ent.Value, error)
@@ -283,6 +295,18 @@ func (f TagFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) 
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TagMutation", m)
+}
+
+// The TriggerFireEventFunc type is an adapter to allow the use of ordinary
+// function as TriggerFireEvent mutator.
+type TriggerFireEventFunc func(context.Context, *ent.TriggerFireEventMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TriggerFireEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TriggerFireEventMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TriggerFireEventMutation", m)
 }
 
 // The WorkflowFunc type is an adapter to allow the use of ordinary
