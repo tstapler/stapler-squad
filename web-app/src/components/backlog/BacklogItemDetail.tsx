@@ -49,6 +49,7 @@ import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
+import { AutonomousHealthStrip } from "./detail/AutonomousHealthStrip";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { NotesSection } from "./detail/NotesSection";
@@ -1492,6 +1493,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             onViewDiff={() => setShowChangesModal(true)}
             onBrowseFiles={() => setShowFileBrowser(true)}
           />
+
+          <AutonomousHealthStrip item={item} />
 
           <SessionsSection
             item={item}

@@ -822,6 +822,19 @@ export const sessionTotalCost = style({
   borderTop: `1px solid ${vars.color.borderColor}`,
 });
 
+export const autonomousHealthStrip = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["4"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  marginBottom: vars.space["3"],
+  background: vars.color.surfaceSubtle,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderSubtle}`,
+});
+
 export const errorState = style({
   display: "flex",
   alignItems: "center",
