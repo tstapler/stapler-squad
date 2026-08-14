@@ -484,4 +484,76 @@ describe("SessionsSection steer control (Story 2.2.2, ADR-002)", () => {
     const inputB = screen.getByTestId("session-steer-input-work-live-b");
     expect(inputB).toHaveValue("");
   });
+
+  it("SessionsSection_should_ShowCommitCountAndLastMessage_When_SessionHasCommits", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-with-commits",
+        role: "work",
+        commitCountSinceSpawn: 3,
+        lastCommitMessage: "fix(session): handle nil pointer\n\nLonger body text here.",
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    const detail = screen.getByText("3 commits — fix(session): handle nil pointer");
+    expect(detail).toHaveAttribute(
+      "title",
+      "fix(session): handle nil pointer\n\nLonger body text here."
+    );
+  });
+
+  it("SessionsSection_should_UseSingularCommitLabel_When_ExactlyOneCommit", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-one-commit",
+        role: "work",
+        commitCountSinceSpawn: 1,
+        lastCommitMessage: "chore: bump version",
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("1 commit — chore: bump version")).toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_NotRenderCommitDetail_When_SessionHasNoCommits", () => {
+    const item = makeItem([makeSession({ sessionId: "work-no-commits", role: "work" })]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.queryByText(/\d+ commits? —/)).not.toBeInTheDocument();
+  });
 });

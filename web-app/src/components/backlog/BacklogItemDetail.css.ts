@@ -694,6 +694,16 @@ export const progressNoteMeta = style({
   color: vars.color.textMuted,
 });
 
+export const commitDetail = style({
+  marginTop: vars.space["1"],
+  fontSize: vars.fontSize.xs,
+  fontFamily: vars.font.mono,
+  color: vars.color.textMuted,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+});
+
 export const verdictDetail = style({
   marginTop: vars.space["1"],
   padding: vars.space["2"],
