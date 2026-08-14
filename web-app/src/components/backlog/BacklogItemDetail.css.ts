@@ -694,6 +694,16 @@ export const progressNoteMeta = style({
   color: vars.color.textMuted,
 });
 
+export const commitDetail = style({
+  marginTop: vars.space["1"],
+  fontSize: vars.fontSize.xs,
+  fontFamily: vars.font.mono,
+  color: vars.color.textMuted,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+});
+
 export const verdictDetail = style({
   marginTop: vars.space["1"],
   padding: vars.space["2"],
@@ -810,6 +820,19 @@ export const sessionTotalCost = style({
   marginTop: vars.space["2"],
   paddingTop: vars.space["2"],
   borderTop: `1px solid ${vars.color.borderColor}`,
+});
+
+export const autonomousHealthStrip = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["4"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  marginBottom: vars.space["3"],
+  background: vars.color.surfaceSubtle,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderSubtle}`,
 });
 
 export const errorState = style({
