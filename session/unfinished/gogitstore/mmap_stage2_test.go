@@ -419,6 +419,14 @@ func TestPackWatch_FsnotifyTriggersRefresh(t *testing.T) {
 // mismatch/mismatchDetail and reported from the main goroutine after
 // joining.
 func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
+	if testing.Short() {
+		// This test's cost is dominated by driving a REAL `git gc --aggressive`
+		// repack concurrently with many pinned readers (see the doc comment
+		// above), not by the now-cached fixture build — fixture caching does
+		// not fix that. See session/unfinished/gogitstore/soak_test.go for the
+		// established -short convention in this package.
+		t.Skip("skipped under -short: too slow for make test/quick-check")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
