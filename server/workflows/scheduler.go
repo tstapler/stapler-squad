@@ -162,6 +162,8 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 	// One-time backfill of trigger_type on rows that predate the field (Task 1.1.1d).
 	backfillTriggerTypes(ctx, s.repo)
+	// One-time backfill of the enabled field on rows that predate it (verify follow-ups AC0-3).
+	backfillEnabledField(ctx, s.repo)
 
 	wfs, err := s.repo.ListEnabled(ctx)
 	if err != nil {

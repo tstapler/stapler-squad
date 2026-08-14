@@ -3,8 +3,28 @@ package session
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestWorkflow_EnabledField_DefaultsTrue verifies the ent schema default for the new
+// enabled field (webhook-triggers verify follow-ups AC0-3): a row inserted without
+// explicitly setting enabled (bypassing EntWorkflowRepository.Create, which always sets
+// it explicitly) picks up the schema's Default(true) at the SQL layer.
+func TestWorkflow_EnabledField_DefaultsTrue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	wf, err := storage.GetEntClient().Workflow.Create().
+		SetSlug("schema-default-wf").
+		SetName("Schema Default WF").
+		SetCommand("cmd").
+		SetTargetDirectory("/tmp/test").
+		Save(t.Context())
+	require.NoError(t, err)
+
+	assert.True(t, wf.Enabled, "enabled must default to true for a row that never explicitly sets it")
+}
 
 // TestEntWorkflowRepository_Update_should_ClearWebhookSlugWithoutUniqueConstraintViolation_When_TwoWorkflowsBothClearedInSequence
 // covers the sdd:6-verify finding: Update previously called

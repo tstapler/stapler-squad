@@ -27,6 +27,14 @@ func (Workflow) Fields() []ent.Field {
 		field.String("agent_type").Optional(),
 		field.String("cron_expression").Optional(),
 		field.Bool("cron_enabled").Default(false),
+		// enabled is the generic per-trigger-type "is this trigger active" gate, read by
+		// both webhook handlers and written by TriggersPanel.tsx's toggle — distinct from
+		// cron_enabled, which is now the literal cron-schedule flag only (see
+		// validateTriggerTypeFieldConsistency's doc comment in workflow_service.go for
+		// the history of why these were conflated). Additive field; existing rows are
+		// backfilled by backfillEnabledField (server/workflows/migrate.go) since
+		// pre-migration rows only had cron_enabled to express "disabled."
+		field.Bool("enabled").Default(true),
 		field.Time("created_at").Default(time.Now).Immutable(),
 		field.Time("updated_at").Default(time.Now).UpdateDefault(time.Now),
 		field.Int("keep_sessions").Optional().Default(0).
@@ -57,6 +65,7 @@ func (Workflow) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("slug"),
 		index.Fields("cron_enabled"),
+		index.Fields("enabled"),
 		index.Fields("created_at"),
 		index.Fields("webhook_slug"),
 		index.Fields("trigger_type"),
