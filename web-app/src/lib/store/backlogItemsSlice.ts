@@ -60,7 +60,9 @@ const backlogItemsSlice = createSlice({
         // data from a call site that *did* eager-load, so this only masks the
         // known-bad partial-load case, not real removals.
         const nextItem =
-          existing && existing.itemSessions.length > 0 && incoming.itemSessions.length === 0
+          existing &&
+          (existing.itemSessions?.length ?? 0) > 0 &&
+          (incoming.itemSessions?.length ?? 0) === 0
             ? { ...incoming, itemSessions: existing.itemSessions }
             : incoming;
         state.items[incoming.id] = nextItem;
