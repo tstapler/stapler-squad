@@ -60,6 +60,17 @@ message TriageResult {
   // feedback is the free-text feedback that produced this iteration, empty
   // for the initial (non-refined) triage run.
   string feedback = 6;
+  // chat_history is the running transcript for chat-originated creation/
+  // refinement (CreateBacklogItemFromChat). Empty for triage runs triggered
+  // via the structured form/refine-feedback path.
+  repeated ChatTriageTurn chat_history = 7;
+}
+
+// ChatTriageTurn is a single message in a chat-originated triage conversation.
+message ChatTriageTurn {
+  string role = 1; // "user" or "assistant"
+  string text = 2;
+  google.protobuf.Timestamp created_at = 3;
 }
 
 // ItemSession records a session that was spawned or attached to a backlog item.
@@ -269,6 +280,21 @@ message CreateBacklogItemRequest {
 }
 
 message CreateBacklogItemResponse {
+  BacklogItem item = 1;
+  bool triage_triggered = 2;
+}
+
+// CreateBacklogItemFromChatRequest carries a single free-text chat turn.
+// When existing_item_id is empty, this is the first turn of a new
+// chat-originated item (delegates to CreateBacklogItem internally). When
+// existing_item_id is set, this is a refinement turn on an existing item
+// (delegates to TriggerTriage with feedback = message).
+message CreateBacklogItemFromChatRequest {
+  string existing_item_id = 1;
+  string message = 2;
+}
+
+message CreateBacklogItemFromChatResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
 }
@@ -499,6 +525,12 @@ message TriggerTriageRequest {
   // completed triage result instead of a fresh triage run. Requires a prior
   // completed triage result to exist.
   string feedback = 2;
+  // chat_mode, when true alongside a non-empty feedback, tightens the
+  // refinement prompt to ask at most one clarifying question per turn
+  // instead of a batch of questions — set by CreateBacklogItemFromChat for
+  // chat-originated refinement turns. Ignored for a fresh triage run
+  // (feedback empty).
+  bool chat_mode = 3;
 }
 
 message TriggerTriageResponse {
@@ -827,6 +859,12 @@ message WatchBacklogItemsRequest {
 service BacklogService {
   // CreateBacklogItem adds a new item to the backlog.
   rpc CreateBacklogItem(CreateBacklogItemRequest) returns (CreateBacklogItemResponse) {}
+
+  // CreateBacklogItemFromChat handles one turn of a natural-language chat
+  // conversation for creating or refining a backlog item. First turn (no
+  // existing_item_id) creates a minimal item via CreateBacklogItem; later
+  // turns delegate to TriggerTriage with feedback = message.
+  rpc CreateBacklogItemFromChat(CreateBacklogItemFromChatRequest) returns (CreateBacklogItemFromChatResponse) {}
 
   // GetBacklogItem retrieves a single backlog item by ID.
   rpc GetBacklogItem(GetBacklogItemRequest) returns (GetBacklogItemResponse) {}
