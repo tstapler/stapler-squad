@@ -1,180 +1,248 @@
-# Architecture Research: MCP search/list/filter tool exposure
+# Architecture Research: MCP tools for ListBacklogItems, GetNotificationHistory, SearchClaudeHistory
 
-No prior `server/mcp/` hotspot/architecture research exists elsewhere in `project_plans/`
-(grepped for "server/mcp" across all `project_plans/*/research/*.md` — the only hit besides
-this project is `project_plans/mcp-search-list-tools/requirements.md` itself, and unrelated
-docs referencing "MCP" generically like `stapler-squad-mcp-server`, `agent-protocol-architecture`).
-This doc is derived fresh from reading `server/mcp/*.go` and `server/services/*.go` directly.
+Scope: Agent 3 of the mcp-search-list-tools SDD research phase. No prior architecture doc
+covered `server/mcp/`; this is from-scratch research, not a delta on existing notes.
 
-## 1. Call path: MCP tool handler → ??? → ConnectRPC / storage
+## 1. Wiring pattern: in-process Go calls, never a wire hop
 
-There are **two distinct patterns already in production** in `server/mcp/`, not one:
+`server/mcp/server.go`'s `NewCore` / `NewHTTPHandler` / `RunServer` all take the *same live
+Go objects* the HTTP/ConnectRPC server uses — `session.InstanceStore`, `*services.SessionService`,
+`*session.Storage`, `*events.EventBus`, `*services.BacklogService` — as constructor parameters,
+and store them on small per-resource handler structs (`discoveryHandlers`, `backlogHandlers`,
+`workflowHandlers`, `rulesHandlers`, ...). `server/server.go:564` proves this concretely:
 
-**Pattern A — bypass ConnectRPC entirely, call storage/domain layer directly.**
-`search_sessions` (`server/mcp/tools_discovery.go:183`, registered at `server/mcp/server.go:151`)
-does **not** call any ConnectRPC service method. `discoveryHandlers` (`server/mcp/tools_discovery.go:15`)
-holds only `store session.InstanceStore`. The handler calls `d.store.LoadInstances()` directly
-and reimplements filtering/matching itself (`matchesSearch`, `server/mcp/tools_discovery.go:240`) —
-there is no `SessionService.SearchSessions` ConnectRPC method at all; the web UI's session
-search is client-side over the same `LoadInstances()`/`SessionSummary` data, so there was
-nothing to share. `get_backlog_item` (`server/mcp/tools_backlog.go:194`) follows the same
-pattern: `h.storage.GetBacklogItem(ctx, itemID)` called directly, with the MCP handler doing
-its own JSON marshaling — not reusing the ConnectRPC `BacklogService.GetBacklogItem`
-proto-conversion path.
+```go
+mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager,
+    deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService)
+```
 
-**Pattern B — call the ConnectRPC service method in-process, as a plain Go function call.**
-Several MCP tools already hold a live `*services.SessionService` or `*services.BacklogService`
-and call its exported RPC methods directly, constructing a `connect.Request[T]` and unwrapping
-`connect.Response[R].Msg`. Evidence: `backlogHandlers` (`server/mcp/tools_backlog.go:118`) holds
-`backlogSvc *services.BacklogService` specifically so `createBacklogItem`/`importGitHubIssue`
-can call `h.backlogSvc.MaybeTriggerTriage(...)` — a plain (non-RPC) method on the same service
-struct that the RPC handler `BacklogService.CreateBacklogItem` also calls, so the MCP path and
-the HTTP path share triage-trigger behavior (this was BUG-061: before the fix, the MCP tool
-called `h.storage.CreateBacklogItem` directly and *skipped* triage, diverging from the RPC
-handler — the comment at `server/mcp/tools_backlog.go:126-134` documents this explicitly).
-`workflowHandlers`/`rulesHandlers` (`server/mcp/tools_workflow.go:19`, `server/mcp/tools_rules.go:17`)
-hold `svc *services.SessionService` and call its RPC methods (`ListWorkflows`, `RunWorkflow`,
-etc.) directly — no HTTP, no separate interface, just an in-process Go method call against the
-same struct the ConnectRPC HTTP handler is registered with in `server/server.go:429`
-(`sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, ...)`).
+`deps.SessionService` is the literal same `*services.SessionService` instance registered as the
+ConnectRPC handler elsewhere in `server/server.go`. MCP tool handlers call methods on it directly
+(`h.svc.CreateWorkflow(ctx, connect.NewRequest(...))` in `tools_workflow.go:215`) — `connect.NewRequest`
+just wraps the proto struct; there is no HTTP round trip, no serialization boundary, no auth
+interceptor in between (grepped for an auth/permission Connect interceptor across `server/*.go` —
+none exists; this app has no per-request auth layer to bypass in the first place).
 
-**Conclusion for this task:** there is no separate "thin shared internal function" layer
-distinct from the RPC handler — `*services.SessionService` and `*services.BacklogService` are
-themselves plain Go structs with exported methods matching the ConnectRPC signature
-(`func(ctx, *connect.Request[T]) (*connect.Response[R], error)`); MCP calls that method
-in-process, HTTP calls it via the generated ConnectRPC transport, same code. For the three
-target RPCs, follow **Pattern B** (call the service method directly, plain Go call, wrap/unwrap
-`connect.Request`/`connect.Response`) rather than Pattern A — see rationale in §2.
+**Two coexisting sub-patterns**, both in-process, differing in what layer they call:
 
-## 2. Per-RPC mapping
+| Pattern | Example | What it calls |
+|---|---|---|
+| **A. Call the ConnectRPC handler method directly** | `workflowHandlers.createWorkflow` → `h.svc.CreateWorkflow(ctx, connect.NewRequest(protoReq))` (`tools_workflow.go:215`); `rulesHandlers.listApprovalRules` → `h.svc.ListApprovalRules(...)` (`tools_rules.go:142`) | The exact same Go method the ConnectRPC transport invokes — full proto request/response types, gets any service-layer logic embedded in that handler for free. |
+| **B. Call the storage/session layer directly, bypassing the RPC handler** | `discoveryHandlers.listSessions` → `d.store.LoadInstances()` + hand-rolled status filter/pagination (`tools_discovery.go:97-160`), reimplementing what a `ListSessions` RPC would do rather than calling one; `backlogHandlers.getBacklogItem` → `h.storage.GetBacklogItem(ctx, itemID)` (`tools_backlog.go:200`), not `BacklogService.GetBacklogItem` | The underlying storage/store type, with filtering/formatting logic duplicated in the MCP handler (and typically reshaped into human-readable text, not proto passthrough — see `get_backlog_item`'s markdown-style output). |
 
-| RPC | Implementing file | Struct | Accessible from MCP via | Extra ctx/scoping needed |
-|---|---|---|---|---|
-| `GetNotificationHistory` | `server/services/notification_service.go:137` (impl); forwarded by `server/services/session_service.go:3280` | `*NotificationService` (impl), `*SessionService` (forwarder) | `svc.GetNotificationHistory(ctx, connect.NewRequest(&sessionv1.GetNotificationHistoryRequest{...}))` — `svc` already threaded into `NewCore` | None. Params (`limit`, `offset`, `type_filter`, `session_id`, `unread_only`) are all explicit request fields, not derived from context. |
-| `ListBacklogItems` | `server/services/backlog_service_query.go:107` | `*BacklogService` | `backlogSvc.ListBacklogItems(ctx, connect.NewRequest(&sessionv1.ListBacklogItemsRequest{...}))` — `backlogSvc` already threaded into `backlogHandlers` (`server/mcp/tools_backlog.go:118`) | None beyond the existing `h.enabledCheck` feature-flag guard every other backlog tool already applies via `featureDisabledResult(h.enabledCheck)` (`server/mcp/tools_backlog.go:69`). |
-| `SearchClaudeHistory` | `server/services/search_service.go:459` (impl); forwarded by `server/services/session_service.go:3038` | `*SearchService` (impl), `*SessionService` (forwarder) | `svc.SearchClaudeHistory(ctx, connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{...}))` | None. Fields: `query` (required), `project`, `model`, `start_time`/`end_time` (proto), `limit`/`offset`. |
+Pattern B is used where the MCP tool's output shape diverges heavily from the RPC's proto
+response (e.g. `get_backlog_item` builds a markdown-ish summary with acceptance-criteria
+checkboxes and the latest review verdict inlined — not a JSON dump of `GetBacklogItemResponse`),
+or where the storage call is trivial enough that reimplementing it costs less than plumbing a
+service reference through. Pattern A is used where the RPC handler does something the MCP tool
+would otherwise have to duplicate (workflow CRUD validation, approval-rule upsert semantics).
 
-`ListBacklogItems`' RPC handler does non-trivial work beyond the raw storage call —
-`filter := session.BacklogItemFilter{...}` construction from proto fields, then
-`s.storage.ListBacklogItemSummaries(ctx, filter)`, then `backlogItemSummaryToProto(&summaries[i], costFor)`
-where `costFor := s.buildCostLookup()` is an **unexported** `*BacklogService` method. This is a
-concrete reason Pattern A (reimplement in MCP against `h.storage` directly) is *worse* here
-than for `get_backlog_item`: the cost-lookup logic isn't reachable from the MCP package without
-either exporting `buildCostLookup` (adds surface area for one caller) or duplicating cost
-computation — calling `h.backlogSvc.ListBacklogItems` in-process avoids both.
+**Consequence for this feature**: which pattern to use is not a style choice, it's forced by
+how much non-trivial logic sits in the service layer above the storage call — see §2 and §5.
 
-`SearchClaudeHistory` and `GetNotificationHistory` are both accessible as `SessionService`
-methods since `SessionService` already forwards to `searchSvc`/`notificationSvc` — no new
-field is needed if the new MCP handler(s) hold `svc *services.SessionService`, matching
-`workflowHandlers`/`rulesHandlers`' existing field.
+## 2. Data flow per target RPC
 
-## 3. Data flow / consistency
+### ListBacklogItems
+`proto/session/v1/backlog.proto:780` (request at :336) → Go handler
+`BacklogService.ListBacklogItems` (`server/services/backlog_service_query.go:107`):
 
-Both `SearchClaudeHistory` and `GetNotificationHistory` are **safe to call from any goroutine
-with just a `context.Context`** — neither depends on HTTP-request-scoped state:
+```go
+func (s *BacklogService) ListBacklogItems(ctx, req) (*connect.Response[...], error) {
+    filter := session.BacklogItemFilter{ SortBy: ..., ExcludeDone: ..., ExcludeArchived: ... }
+    // Statuses/Priorities filter overrides ...
+    summaries, err := s.storage.ListBacklogItemSummaries(ctx, filter)   // session/storage.go:732
+    costFor := s.buildCostLookup()                                      // unexported, backlog_service.go:431
+    for i := range summaries {
+        protoItems[i] = backlogItemSummaryToProto(&summaries[i], costFor) // unexported, backlog_service.go:590
+    }
+    return ...
+}
+```
 
-- `SearchClaudeHistory` → `ss.getOrRefreshHistoryCache(ctx)` (`server/services/search_service.go:172`)
-  uses an atomic-pointer cache (`ss.historySnap.Load()`) with TTL, refreshed via
-  `singleflight.Group.Do("refresh", ...)` to coalesce concurrent refreshes — this is exactly the
-  double-checked-locking pattern this repo's own
-  `.claude/rules/go-double-checked-locking.md` documents (returns the locally-computed value on
-  the coalesce race, not a stale re-read). The cache loads from disk
-  (`session.NewClaudeSessionHistoryFromClaudeDir()`), not from any per-request state. `ctx` is
-  used only for OpenTelemetry span propagation (`trace.SpanFromContext(ctx)`,
-  `telemetry.StartSpan(ctx, ...)`), which degrades gracefully to a no-op span if the context
-  carries none (i.e. calling from an MCP goroutine's plain `context.Background()`-derived ctx
-  works fine, no span parent required).
-- `GetNotificationHistory` reads from `ns.notificationStore.List(opts)`, a persistent
-  `*notifications.NotificationHistoryStore` — a nil-guarded struct field, not populated per-HTTP-request.
-- `ListBacklogItems` reads from `s.storage.ListBacklogItemSummaries(ctx, filter)` — the same
-  `*session.Storage` every other backlog MCP tool already reads from directly.
+`buildCostLookup` and `backlogItemSummaryToProto` are **unexported** functions in
+`server/services` — an MCP handler in package `mcp` cannot call `session.Storage.ListBacklogItemSummaries`
+and reimplement the same cost-annotated proto conversion without either exporting those two
+symbols or duplicating their logic. This pushes `list_backlog_items` toward **Pattern A** (call
+`BacklogService.ListBacklogItems` directly), not Pattern B.
 
-No consistency concern was found (no in-memory cache requiring an active HTTP request to
-populate, no auth-context requirement, no workspace-scoping requirement). The one existing
-guard that *does* need threading through is the `backlogEnabled`/`enabledCheck` feature flag —
-`ListBacklogItems` should apply `featureDisabledResult(h.enabledCheck)` like every other backlog
-tool; `GetNotificationHistory`/`SearchClaudeHistory` have no equivalent flag today (they're
-unconditionally registered whenever `svc != nil`, matching `registerWorkflowTools`/`registerRulesTools`).
+`backlogHandlers` (`tools_backlog.go:138`) already carries a `backlogSvc *services.BacklogService`
+field, wired for `create_backlog_item`/`import_github_issue`'s post-create auto-triage trigger
+(`MaybeTriggerTriage`). **That field is optional/nilable** — per `server/mcp/server.go:96-103`,
+the stdio fallback path (`buildMCPDeps` in `main.go`, Phase-1-only deps) constructs `NewCore`/`RunServer`
+with `backlogSvc: nil`. Existing nil-`backlogSvc` call sites degrade gracefully (skip triage
+silently, item still created). `list_backlog_items` has no equivalent degrade-gracefully option —
+without `backlogSvc` it cannot get cost-annotated results at all. **Integration point to resolve in
+planning**: either (a) require `backlogSvc != nil` and return an internal/unavailable error on the
+Phase-1 stdio path (accepting the tool is only usable when the full server wiring is present), or
+(b) fall back to `h.storage.ListBacklogItemSummaries` + a locally-reimplemented (nil-cost) proto
+conversion when `backlogSvc` is nil. Recommend (a) — it matches the existing `enabledCheck`/
+`backlogSvc` optionality doc comments' precedent of "some capability quietly narrows on the Phase-1
+path" rather than introducing a second, cost-less code path for a field the rest of the file
+already treats as service-owned.
 
-## 4. Interface-pollution / primitive-obsession risk check
+### GetNotificationHistory
+`proto/session/v1/session.proto:135` (request at :1367) → `SessionService.GetNotificationHistory`
+(`server/services/session_service.go:3280`), a one-line delegate to
+`NotificationService.GetNotificationHistory` (`server/services/notification_service.go:137`):
 
-Against `.claude/rules/interface-pollution-checklist.md` and
-`.claude/rules/primitive-obsession-checklist.md`:
+```go
+func (ns *NotificationService) GetNotificationHistory(ctx, req) (*connect.Response[...], error) {
+    if ns.notificationStore == nil { return empty, nil }
+    opts := notifications.ListOptions{ Limit, Offset, TypeFilter, SessionID, UnreadOnly }
+    records, totalCount, err := ns.notificationStore.List(opts)
+    // convert records -> proto, compute HasMore
+}
+```
 
-- **No new interface needed.** `search_sessions`'s pattern already establishes: MCP handler
-  structs hold the *concrete* service type (`*services.SessionService`, `*services.BacklogService`,
-  `session.InstanceStore` — the last one is a pre-existing interface, not new). Do **not**
-  introduce a speculative `SearchService`/`ListService`/`HistoryService` MCP-facing interface
-  with a single implementation — that would be exactly smell #1 (speculative interface) and #2
-  (interface defined next to nothing, since there's no second implementation on the horizon).
-  Reuse the existing `svc *services.SessionService` / `backlogSvc *services.BacklogService`
-  fields (or add them to whichever handler struct ends up owning the new tools) as plain
-  concrete-type fields, exactly like `workflowHandlers`/`rulesHandlers`/`backlogHandlers` do.
-- **No forwarding-only wrapper type risk.** The three target RPC calls are single Go
-  method calls (`svc.GetNotificationHistory(ctx, req)`, etc.) inline in the tool handler
-  function — there's no reason to wrap them in a `NotificationManager`/`SearchHandler` type.
-  Follow `discoveryHandlers.searchSessions`'s shape: a plain method on the existing handler
-  struct, argument extraction → request construction → call → result marshaling, no
-  intermediate object.
-- **Watch primitive-obsession on request construction, not signatures.** These MCP tool
-  handlers don't define new function signatures with multiple same-typed params — they extract
-  `args["x"].(string)`/`.(float64)` from `req.GetArguments()` (a `map[string]any`), matching every
-  existing tool. This is idiomatic for the `mcpgo` handler shape used throughout the file and
-  isn't a checklist violation (the target type, `sessionv1.SearchClaudeHistoryRequest` etc., is
-  already a proper named struct on the proto side — not a pile of interchangeable primitive
-  params in a Go function signature).
-- One thing to actively avoid when writing the new handler(s): don't add a per-tool
-  bespoke "SessionUUID + Query + Limit + Offset" struct as a new named MCP-only type when
-  the target already has one (the generated `sessionv1.SearchClaudeHistoryRequest` proto struct)
-  — construct that struct directly via `connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{...})`
-  rather than inventing a parallel plain-Go args struct first and mapping it over.
+Nothing here is unexported/inaccessible from `mcp` — it's a thin proto→options→store-call→proto
+round trip. Both patterns are viable mechanically, but **Pattern A** (`svc.GetNotificationHistory(ctx,
+connect.NewRequest(...))`, using the same `svc *services.SessionService` already threaded into
+`NewCore`) is simpler: it reuses the request/response proto types verbatim (this data is naturally
+tabular/filterable, unlike `get_backlog_item`'s markdown reshaping) and needs zero new plumbing —
+`svc` is already a required-ish param on `NewCore` (nilable only in edge-case test paths, unlike
+`backlogSvc`).
 
-## 5. Resource-scoped tools vs. unified `search` tool — recommendation
+### SearchClaudeHistory
+`proto/session/v1/session.proto:80` (request at :972) → `SessionService.SearchClaudeHistory`
+(`server/services/session_service.go:3039`), delegating to `SearchService.SearchClaudeHistory`
+(`server/services/search_service.go:459`). This one is **not** a thin wrapper:
 
-**Recommendation: resource-scoped tools, one per RPC** (`list_backlog_items`,
-`get_notification_history`, `search_claude_history`), matching the `search_sessions` precedent.
-Rationale, grounded in what's actually in the 55×-tool (39 literal `mcpgo.NewTool(` call sites
-across `server/mcp/*.go`, per `grep -c`; some of that gap from the 55-count in requirements.md
-vs. 39 counted here is likely tools registered via loop/table rather than a literal call site,
-not re-derived here) registration set:
+```go
+func (ss *SearchService) SearchClaudeHistory(ctx, req) (*connect.Response[...], error) {
+    hist, err := ss.getOrRefreshHistoryCache(ctx)                 // singleflight-guarded cache
+    syncResult, err := ss.searchEngine.IncrementalSync(hist)      // session/search/ inverted index
+    // ... telemetry spans, limit/offset clamping (limit default 20, max 100) ...
+    // search.SearchOptions{Limit, Offset} -> ss.searchEngine.Search(...)
+}
+```
 
-1. **Every existing tool in this file is resource-scoped already**, with distinct, differently-shaped
-   parameter sets per tool (`list_sessions` vs `search_sessions` vs `get_session`; `get_backlog_item`
-   vs the not-yet-existing `list_backlog_items`). A unified `search` tool spanning three RPCs with
-   non-overlapping filter vocabularies (`status`/`priority`/`sort_by` for backlog;
-   `type_filter`/`session_id`/`unread_only` for notifications; `project`/`model`/`start_time`/`end_time`
-   for Claude history) would need either a large discriminated-union-shaped input schema (one
-   tool description covering three unrelated filter sets — worse tool-selection accuracy for the
-   calling LLM, which is the opposite of MCP tool design goals) or a resource-type dispatch
-   parameter that just re-implements what three separate tool names already give the LLM for free
-   via tool selection.
-2. **The proto request shapes for these three RPCs share almost no fields** — `query` (string,
-   full-text) only applies to `SearchClaudeHistory`; `status`/`priority` only to
-   `ListBacklogItems`; `type_filter`/`unread_only` only to `GetNotificationHistory`. There is no
-   natural "one struct fits all three" the way `list_sessions`/`search_sessions`/`get_session`
-   at least share a `SessionSummary` output shape. Unifying would produce a request struct that
-   is mostly-optional/mutually-irrelevant fields per resource — a primitive-obsession-adjacent
-   smell in the request shape itself.
-3. **`server/mcp/tools_backlog.go:204`'s existing hint text already names `list_backlog_items`**
-   as the expected tool name (dangling reference target from acceptance criterion 4) — the
-   resource-scoped name is already the de facto contract other tools' error messages point to.
-4. Precedent tool-naming convention in this file is uniformly `<verb>_<resource>`
-   (`list_sessions`, `get_session`, `search_sessions`, `get_backlog_item`,
-   `create_backlog_item`, `list_workflows`, `run_workflow`) — never a single verb-only tool
-   spanning multiple resource types. Introducing the first exception here has no
-   requirements-driven justification (the "Out of scope" section explicitly defers
-   `SearchFiles`/`SearchGitHubRepos` prioritization, i.e. this is scoped as three independent
-   wiring tasks, not one cross-resource search feature).
+It owns an in-memory inverted index (`session/search/`) rebuilt incrementally on each call via
+`singleflight` (`golang.org/x/sync/singleflight`) to coalesce concurrent rebuild attempts, plus
+OpenTelemetry span instrumentation. Reimplementing this in an MCP handler (Pattern B) would mean
+duplicating cache/index lifecycle management — a clear case for **Pattern A**: call
+`svc.SearchClaudeHistory(ctx, connect.NewRequest(...))` directly and let the existing service own
+the index. This confirms requirements.md's characterization of `SearchClaudeHistory` as "backed by
+`session/search/` (inverted index)."
 
-Suggested tool names, following the `<verb>_<resource>` convention and the "default limit 10"
-convention `list_sessions`/`search_sessions` already establish:
-- `list_backlog_items` (mirrors `ListBacklogItemsRequest`; default limit convention n/a — the
-  RPC itself has no limit/pagination field, returns full filtered set)
-- `get_notification_history` (mirrors `GetNotificationHistoryRequest`; already has
-  `limit`/`offset` — apply the same default-10-if-unset guard `list_sessions` uses at
-  `server/mcp/tools_discovery.go:93-96`, since the proto default is `50` per
-  `server/services/notification_service.go:182`, which is above the LLM-context-safe convention
-  this project has already chosen for `list_sessions`)
-- `search_claude_history` (mirrors `SearchClaudeHistoryRequest`; proto-side default is `20`
-  per `server/services/search_service.go:498-500` — same "apply the repo's chosen default,
-  not the proto's" consideration applies)
+**Summary**: all three target RPCs favor **Pattern A** (call the existing ConnectRPC handler
+method in-process) — `list_backlog_items` because the proto-conversion/cost-lookup helpers are
+unexported, `get_notification_history` because it's a trivial reuse-as-is win, and
+`search_claude_history` because the service owns non-trivial cached/indexed state an MCP handler
+has no business reimplementing. This is a partial departure from `get_backlog_item`/`list_sessions`
+Pattern-B precedent — justified per-RPC above, not a blanket "always use Pattern A" rule.
+
+## 3. File placement
+
+Existing convention confirmed via `ls server/mcp/`: one `tools_<resource>.go` (+ matching
+`tools_<resource>_test.go`) per resource area — `tools_backlog.go`, `tools_discovery.go`,
+`tools_github.go`, `tools_goal.go`, `tools_lifecycle.go`, `tools_rules.go`, `tools_terminal.go`,
+`tools_vcs.go`, `tools_workflow.go`. Each file defines a `register<Resource>Tools(s, h)` function
+called from `NewCore`.
+
+- **`list_backlog_items`** → `server/mcp/tools_backlog.go`, added to `registerBacklogTools`
+  (`tools_backlog.go:1716`), reusing the existing `backlogHandlers` struct (already carries
+  `storage`, `backlogSvc`, `enabledCheck`). This directly resolves the dangling reference at
+  `tools_backlog.go:204` (`get_backlog_item`'s remediation text already says "Provide a valid UUID
+  (e.g. from list_backlog_items or get_backlog_item)" for a tool that doesn't exist yet).
+
+- **`get_notification_history`** → new file, `server/mcp/tools_notifications.go` (+
+  `tools_notifications_test.go`). No notification-resource file exists today; a new
+  `notificationHandlers{svc *services.SessionService}` struct (mirroring `workflowHandlers`'s
+  single-field, svc-only shape in `tools_workflow.go`) is the right size — don't fold this into
+  `tools_discovery.go` (session-resource-only today) or `tools_backlog.go` (unrelated resource;
+  would violate the one-file-per-resource-area convention this repo already enforces).
+
+- **`search_claude_history`** → new file, `server/mcp/tools_history.go` (+ matching test file),
+  again with a small `historyHandlers{svc *services.SessionService}` struct. Naming rationale:
+  the underlying resource is "Claude conversation history" (`session/search/`, `GetClaudeHistoryMessages`
+  lives in the same `SearchService`), distinct from both `tools_discovery.go` (live session
+  metadata) and any future `SearchFiles`/`SearchGitHubRepos` tools (explicitly out of scope here,
+  but would plausibly land in `tools_history.go` too or their own files later — not this pass's
+  call).
+
+  Registration for both new files' `register*Tools` calls belongs inside the existing
+  `if svc != nil { ... }` block in `server/mcp/server.go:59-62` (alongside
+  `registerWorkflowTools`/`registerRulesTools`), since both new tools require `svc` and have no
+  meaningful degraded-but-functional mode without it — matching how workflow/rules tools are
+  already gated.
+
+## 4. Resource-scoped tools vs. one unified `search` tool
+
+**Recommendation: resource-scoped**, confirming (not just defaulting to) the requirements.md lean.
+
+Reasoning:
+
+- **Schema clarity per call.** The four candidate "resources" — sessions, backlog items,
+  notifications, Claude history — have almost no overlapping filter shape:
+  `search_sessions` takes `query` + `tag_filter`; `ListBacklogItems` takes `status`/`priority`
+  (repeated enums) + `sort_by` + two include-booleans; `GetNotificationHistory` takes
+  `type_filter`/`session_id`/`unread_only` + offset-based pagination; `SearchClaudeHistory` takes
+  `project`/`model`/`start_time`/`end_time` + cursor-based pagination. A unified tool with a
+  `resource` enum parameter would need a near-union of all these fields, most marked "only valid
+  when resource=X" in prose (MCP tool schemas have no conditional-field-visibility primitive) —
+  worse for an LLM caller than four tools whose name alone scopes which fields exist.
+- **No dispatch logic actually saved.** A unified tool's handler still needs an internal
+  switch-on-resource to call the right backend method — the branching moves from
+  `NewCore`'s tool registration into one handler function; total code doesn't shrink, and the
+  per-resource error/remediation text (`errResult` messages) gets harder to keep resource-specific.
+- **Precedent consistency.** All 55+ existing tools in this codebase are resource-scoped
+  (`search_sessions`, `get_backlog_item`, `list_sessions`, ...). Introducing one unified `search`
+  tool now would be the only multi-resource tool in the file, an inconsistency future maintainers
+  would have to explain, not a pattern this pass has any mandate to establish (requirements.md
+  explicitly scopes `SearchFiles`/`SearchGitHubRepos` out — a unified tool would need to
+  anticipate their eventual inclusion to be worth the schema complexity, which is speculative
+  design for RPCs not in scope here).
+- **Tool-list discoverability cost is real but small and asymmetric.** Adding 3 more tools grows
+  the MCP `tools/list` payload the client sees at session start — a real cost — but it's linear
+  and already large (55+ tools). A unified tool doesn't eliminate that cost so much as trade
+  "more tool names, simpler each" for "fewer tool names, each with a wider and partially-invalid
+  parameter surface" — worse for the model's ability to pick correct arguments on the first try,
+  which is the more expensive failure mode (a wrong/malformed call + error-result round trip costs
+  more context than one extra line in the tool list).
+
+Net: resource-scoped wins on both schema-correctness and precedent grounds; the "many small tools"
+downside is real but smaller than the downside of a multiplexed schema for this specific
+low-field-overlap set of resources.
+
+## 5. Consistency/staleness: what does bypassing the RPC layer skip?
+
+- **No auth/permission interceptor exists to skip.** Grepped `server/*.go` and
+  `server/services/*.go` for an auth/permission Connect interceptor — none found. This is a
+  single-user, localhost-bound app; there is no per-request identity/authorization check at the
+  ConnectRPC layer for any of these three RPCs to accidentally bypass by calling the Go method
+  in-process instead of over HTTP.
+- **The one real gate is the `backlog` feature flag**, and it's opt-in per-resource, not blanket
+  middleware: `FeatureFlagService` (`server/services/feature_flag_service.go:50`) registers exactly
+  one controllable feature named `"backlog"` — there is no equivalent registered flag for
+  notifications or Claude-history search. `backlogHandlers.enabledCheck` /
+  `featureDisabledResult(h.enabledCheck)` (`tools_backlog.go:71`) exists specifically because a
+  `backlogEnabled func() bool` is threaded through `NewCore`/`server.go` for that one subsystem.
+  **Consequence**: `list_backlog_items` must call `featureDisabledResult(h.enabledCheck)` like
+  every other tool in `tools_backlog.go` (AC5 applies as written). `get_notification_history` and
+  `search_claude_history` have **no corresponding flag to gate on today** — AC5's "feature-flag
+  gate (`featureDisabledResult`)" requirement is only satisfiable for these two if the plan phase
+  decides to introduce new flags for notifications/search (not currently in scope per
+  requirements.md's "no new backend search capability"); otherwise these two tools should register
+  unconditionally, same as `search_sessions`/`list_sessions` today (also ungated).
+- **Nil-store degrade-gracefully patterns already exist and should be preserved.**
+  `NotificationService.GetNotificationHistory` returns an empty response when
+  `ns.notificationStore == nil` rather than erroring; `BacklogService.ListBacklogItems` returns an
+  empty response when `s.storage == nil`. Calling these methods in-process (Pattern A) means the
+  MCP tool inherits these safe defaults for free — another point in favor of Pattern A over
+  reimplementing storage calls directly, which would require re-deriving the same nil-guards.
+- **Staleness/caching**: `SearchClaudeHistory`'s `IncrementalSync` runs synchronously per-call
+  (singleflight-coalesced across concurrent callers), so an MCP tool calling `svc.SearchClaudeHistory`
+  gets the same freshness guarantee the web UI gets — no additional staleness risk introduced by
+  the MCP path specifically.
+
+## Summary of concrete file/integration targets
+
+| Tool | File | Handler struct | Calls |
+|---|---|---|---|
+| `list_backlog_items` | `server/mcp/tools_backlog.go` (existing) | `backlogHandlers` (existing) | `h.backlogSvc.ListBacklogItems(ctx, connect.NewRequest(...))` — resolve nil-`backlogSvc` fallback in planning |
+| `get_notification_history` | `server/mcp/tools_notifications.go` (new) | `notificationHandlers{svc}` (new) | `h.svc.GetNotificationHistory(ctx, connect.NewRequest(...))` |
+| `search_claude_history` | `server/mcp/tools_history.go` (new) | `historyHandlers{svc}` (new) | `h.svc.SearchClaudeHistory(ctx, connect.NewRequest(...))`, default `limit` clamp mirroring `list_sessions`'s LLM-context-safe default |
+
+All three registrations belong inside `server/mcp/server.go`'s existing `if svc != nil { ... }`
+block (list_backlog_items also needs the existing `storage != nil && backlogEnabled` gate it's
+already under).

@@ -1,84 +1,88 @@
 # Architecture Review: mcp-search-list-tools
-**Date**: 2026-08-12
-**Verdict**: CONCERNS (1 concern, non-blocking; plan is otherwise clean)
+**Date**: 2026-08-13
+**Verdict**: CONCERNS
 
-## Constitution Check
+No `docs/adr/ADR-000-architecture-constitution.md` exists in this repo — no constitution check applies.
 
-No `docs/adr/ADR-000-architecture-constitution.md` found in the repository (`docs/adr/`
-contains ADR-001 through ADR-026 plus several un-prefixed numbered ADRs, but no ADR-000) —
-skipped.
-
-## Summary
-
-This is a small, mechanical infra task — three thin MCP presentation-adapter handlers
-wrapping three already-existing ConnectRPC service methods, with no new domain model and no
-persistence layer. Verified against the actual code (not just the plan's own claims):
-
-- `workflowHandlers`/`rulesHandlers` really do have the single-field `{svc
-  *services.SessionService}` shape the plan says `notificationHandlers`/`searchHandlers`
-  should mirror (`server/mcp/tools_workflow.go:18-20`, `server/mcp/tools_rules.go:16-18`).
-- `okResult`/`errResult`/`workflowServiceErrResult` exist exactly as described
-  (`server/mcp/tools_discovery.go:73-85`, `server/mcp/tools_workflow.go:375-388`) and are
-  legitimately reused, not duplicated.
-- `ListBacklogItemsResponse` genuinely has no `total_count`/`has_more`/limit fields
-  (`proto/session/v1/backlog.proto:355-357`) — the plan's client-side
-  truncate-and-count-before-truncating design (Task 1.1.1b) is the correct adapter response
-  to that RPC gap, not an invented workaround.
-- `GetNotificationHistoryRequest`/`SearchClaudeHistoryRequest`/proto message field lists
-  (`session.proto:972-993,1344-1381`) match the plan's field-by-field mapping exactly,
-  including the `BacklogItem.category` field the plan cites (`backlog.proto:147`).
-- `build-vs-buy.md`'s verdict ("hand-write, do not adopt codegen") matches the plan's Pattern
-  Decisions table's stated rationale verbatim — no drift between research and plan.
-- An unrecognized `sort_by` degrades safely to the default ordering
-  (`session/ent_repository_backlog.go:424-430`, a `default:` case, not silent
-  zero-results) — confirming the plan's asymmetric decision to validate `status` (whose
-  failure mode actually is silent-empty-results) but not `sort_by` is correct, not an
-  inconsistency.
-
-No SOLID, layering, DDD-boundary, sum-type, or GoF/PoEAA mismatch findings survived
-verification. The Pattern Decisions table (lines 39-46) already pre-empts and correctly
-resolves the primitive-obsession, interface-pollution, and pattern-selection questions this
-review would otherwise raise — treat that table as evidence review already happened once
-during planning, not merely as assertions.
+## Constitution Violations
+N/A — no constitution file present.
 
 ## Blockers
-
 None.
 
-## Concerns
+The three specifically-flagged risk areas were re-verified against live source and are all
+correctly handled in the current plan revision:
 
-- [ ] **Task 1.1.1a** (`server/mcp/tools_backlog.go`) — `validBacklogStatuses` is a
-  hand-typed `[]string{"idea", "refining", ..., "archived"}` literal that duplicates, rather
-  than derives from, the typed `session/domain.BacklogStatus*` constants
-  (`session/domain/backlog.go:16-24`) it's meant to mirror. No exported `AllBacklogStatuses`
-  slice exists yet to source from (confirmed — grepped `session/domain/*.go` and
-  `session/*.go`), so today's 9-entry list is accurate, but it's a second, independent
-  source of truth: if a future change adds a 10th `BacklogStatus*` constant and forgets this
-  list, `list_backlog_items` will reject a status value that's actually valid — silently,
-  since the handler's own explicit purpose (per pitfalls.md §4, cited in the plan) is to
-  catch exactly this class of mismatch for the *inverse* case (unknown value from the
-  caller), not to guard itself against drifting out of sync with its own source enum. This
-  is the "Parse, Don't Validate" boundary done partially: the handler validates a raw string
-  against a copy of the domain enum instead of either (a) building the copy from the enum,
-  or (b) parsing into the domain `BacklogStatus` type before use.
-  **Remediation**: change Task 1.1.1a to build the var from the constants —
-  `var validBacklogStatuses = []string{string(domain.BacklogStatusIdea),
-  string(domain.BacklogStatusRefining), string(domain.BacklogStatusReady), ...}` — so the
-  two lists cannot silently diverge. (A full parse-to-`BacklogStatus`-then-back-to-string
-  round trip isn't warranted: `ListBacklogItemsRequest.Status` is `repeated string` with no
-  proto enum counterpart, so the value has to cross the RPC boundary as a string regardless
-  — deriving the literal list from the constants captures the whole benefit at near-zero
-  cost.) This is a one-line change to Task 1.1.1a's bullet, not a restructure.
+- **Pagination on `list_backlog_items`**: `ListBacklogItemsRequest` (proto/session/v1/backlog.proto:336-350)
+  has no `limit`/`offset` fields at the wire level — confirmed by reading the proto directly.
+  Task 1.1.1d's schema now includes `mcpgo.WithNumber("offset", mcpgo.DefaultNumber(0), mcpgo.Min(0))`
+  alongside `limit`, and Task 1.1.1c's handler explicitly "slice[s] the response by `limit`/`offset`,
+  compute[s] `TotalCount`/`HasMore`" after calling `ListBacklogItems`. This matches the Pattern
+  Decisions table's stated rationale (no wire-level offset to pass through, so MCP-layer
+  post-fetch slicing is correct, and `BacklogItemFilter`'s backing query is DB-capped at 1000 per
+  `defaultSafetyLimit`, so the full-fetch-then-slice approach is bounded). Fixed from any earlier
+  limit-only version.
+
+- **`validateBacklogPriority` wiring**: Task 1.1.1c's handler description reads "parse
+  `status`/`priority`/.../ from `req.GetArguments()`; validate via **the Task 1.1.1a helpers**"
+  (plural) — Task 1.1.1a introduces both `validateBacklogStatus` and `validateBacklogPriority`.
+  Story 1.1.2's test list also includes `TestListBacklogItems_ValidatesPriorityRange` (Task 1.1.2c)
+  as a required test, confirming both validators are intended to be exercised from the handler, not
+  just declared. (Minor: Story 1.1.1's formal Given/When/Then acceptance criteria only cover the
+  status-typo case, not the priority-range case — see Nitpicks.)
+
+- **`SessionService` facade methods actually exist**: verified `SessionService.SearchClaudeHistory`
+  (`server/services/session_service.go:3039`) and `SessionService.GetNotificationHistory`
+  (`server/services/session_service.go:3280`) are real forwarding methods on `*SessionService`
+  (delegating to the embedded `searchSvc`/`notificationSvc` sub-services), so `historyHandlers`'s
+  and `notificationHandlers`'s planned `svc *services.SessionService` field genuinely has the
+  methods the plan calls — matches the existing `workflowHandlers.svc` convention exactly.
+
+## Concerns
+- [ ] **Tasks 1.1.1b / 1.2.1b / 1.3.1b (Domain Glossary, result-type naming)** — `SearchClaudeHistoryResult.TotalMatches`
+  is still inconsistently named vs. `ListBacklogItemsResult.TotalCount` and
+  `GetNotificationHistoryResult.TotalCount` — same "how many things matched before pagination"
+  concept, three tools, two different JSON field names. This partially inherits the backend's own
+  wire-naming split (`SearchClaudeHistoryResponse.total_matches` vs.
+  `GetNotificationHistoryResponse.total_count`, proto/session/v1/session.proto:991 vs. :1377), but
+  `ListBacklogItemsResponse` has **no** wire-level total-count field at all (proto/session/v1/backlog.proto:353-355
+  only returns `items`) — its `TotalCount` is synthesized entirely at the MCP layer, so the plan had
+  a free choice there and picked `TotalCount`, matching the existing `ListSessionsResult.TotalCount`
+  MCP-layer precedent (`server/mcp/types.go:43`). That leaves `search_claude_history` as the one
+  outlier for no MCP-layer reason, only an inherited wire-naming accident. Since this is a
+  client-facing JSON contract being introduced for the first time (cheapest point to fix), recommend
+  renaming `SearchClaudeHistoryResult.TotalMatches` → `TotalCount` for consistency across all three
+  new envelopes and with the existing `list_sessions` precedent — or, if the divergence is kept
+  deliberately (e.g. to mirror the RPC's own field name), add a one-line Domain Glossary note saying
+  so, so a future reader sees a decision rather than an oversight.
 
 ## Nitpicks
-
-- The plan's `type_filter` handling (Task 1.2.1c, `notificationTypeByName`) does the
-  string→enum parse-at-boundary correctly, including leaving the proto `optional
-  NotificationType` field genuinely nil (not a pointer to the zero value) when the caller
-  omits it — worth calling out as the pattern to imitate if the `validBacklogStatuses`
-  concern above is ever revisited for a case where a real proto enum exists.
-- Task 1.3.1f's explicit, PR-flagged fallback (test argument-mapping only if the FTS content
-  fixture proves too heavy, deferring content-match coverage to `session/search`'s existing
-  engine-level tests) is the right way to handle a testability gap under this rule set — it
-  names the gap rather than silently skipping it. No action needed; noted as a positive
-  pattern, not a finding.
+- **ADR-002's Context section** describes `buildCostLookup` as one of "two unexported package-level
+  functions in `server/services`" alongside `backlogItemSummaryToProto`. Verified:
+  `backlogItemSummaryToProto` (`server/services/backlog_service.go:590`) is indeed an unexported
+  package-level function, but `buildCostLookup` (`server/services/backlog_service.go:431`) is
+  actually an unexported **method** on `*BacklogService` (called as `s.buildCostLookup()`). Doesn't
+  change the ADR's conclusion (an MCP handler still can't call either without exporting them or
+  duplicating logic), but the citation should say "an unexported method and an unexported
+  package-level function" for precision.
+- **Task 1.1.1a's prose** lists the status constant as `PrPending` (lowercase r); the real Go
+  constant is `BacklogStatusPRPending` (capital R, `session/backlog.go:23`, re-exported from
+  `session/domain/backlog.go`). Harmless as descriptive plan text, but worth fixing before an
+  implementer copy-pastes the wrong casing into an identifier.
+- **Validation-helper shape asymmetry** (Domain Glossary): `validateBacklogStatus`/`validateBacklogPriority`
+  are validate-only (`(...) error`, pass the original primitive through unchanged), while
+  `parseNotificationTypeFilter` is parse-into-a-type (`(sessionv1.NotificationType, error)`). The
+  Domain Glossary calls the notification helper "a proto-enum-backed sibling of
+  `validateBacklogStatus` — same trap, different mechanism," which is accurate but slightly
+  undersells the structural difference. Not a bug — the task-level signatures are already spelled
+  out correctly in 1.1.1a vs. 1.2.1b, and the asymmetry is justified (`BacklogStatus` is genuinely
+  wire-typed as a raw `string` on `ListBacklogItemsRequest`, so there's nothing to parse into; the
+  proto's own `NotificationType` is a real enum, so parsing is the correct move there — see
+  `type-driven-design`'s "parse, don't validate" only applies where a proven type is available
+  downstream). Worth a one-line Domain Glossary clarification so a future contributor doesn't try to
+  force one shape onto the other.
+- **Story 1.1.1's acceptance criteria** cover the `status` typo-validation case (AC2) but have no
+  matching Given/When/Then for the `priority` out-of-range case, even though Task 1.1.2c
+  (`TestListBacklogItems_ValidatesPriorityRange`) is planned and required. Low severity — the test
+  task exists and will catch a regression either way — but the story's AC section is the part a
+  reviewer reads first, and it under-documents behavior the plan otherwise clearly intends to ship.

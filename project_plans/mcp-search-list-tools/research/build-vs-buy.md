@@ -1,129 +1,140 @@
-# Build vs. Buy — MCP search/list tool exposure
+# Research: Build vs. Buy — MCP exposure for ListBacklogItems / GetNotificationHistory / SearchClaudeHistory
 
-Scope: wrap `GetNotificationHistory`, `ListBacklogItems`, `SearchClaudeHistory` (existing
-ConnectRPC handlers) as MCP tools, mirroring the existing 55-tool hand-written pattern in
-`server/mcp/`.
+Agent 6 output for the `mcp-search-list-tools` SDD planning cycle. Research-only — no source
+changes made.
 
-## 1. Existing OSS library/framework (proto-to-MCP codegen)
+## Question
 
-**Evidence**: a codegen path does exist —
-[`redpanda-data/protoc-gen-go-mcp`](https://github.com/redpanda-data/protoc-gen-go-mcp) is a
-protoc/buf plugin that generates `*.pb.mcp.go` files per protobuf service, deriving MCP tool
-JSON Schema from the `.proto` method/message descriptors, and is explicitly compatible with
-`mark3labs/mcp-go` (this project's library — confirmed in `go.mod:140`,
-`github.com/mark3labs/mcp-go v0.48.0`) via a thin adapter. A parallel multi-language option,
-[`the-protobuf-project/grpc-mcp-gateway`](https://github.com/the-protobuf-project/grpc-mcp-gateway),
-does the same for Go/Python/Rust/C++.
+Should the 3 target MCP tools be hand-written following the existing `server/mcp/*.go`
+`mcpgo.NewTool` pattern, or is there an existing solution (library, generator, or closer-to-done
+in-repo code) to adopt instead?
 
-**Pros**
-- Removes hand-authored schema/handler boilerplate for future RPC-to-tool wraps.
-- Schema derived from `.proto` stays in sync with the message shape automatically (no drift
-  between proto field and hand-typed `mcpgo.WithString(...)` args).
+## 1. Existing OSS library/framework — generic ConnectRPC/gRPC → MCP bridge
 
-**Cons**
-- Operates at the *service* level (generates tools for a proto service's RPCs), not a
-  hand-picked subset — this project's MCP surface is deliberately curated: 55 tools exist
-  today (`grep -c mcpgo.NewTool server/mcp/*.go`), each with custom descriptions tuned for
-  LLM consumption (e.g. `list_sessions`'s "Default limit is 10 to avoid filling LLM context"
-  hint), feature-flag gating (`featureDisabledResult`), session-UUID injection
-  (`WithSessionUUID`), rate limiting (`rate_limiter.go`), and error-shape conventions
-  (`errResult(ErrInvalidArgument, ...)`) that a generic codegen tool has no hook for.
-- Would introduce a second, structurally different code-generation pipeline
-  (`session/ent`'s `--feature sql/upsert` generate step and `make proto-gen` are already the
-  two established codegen flows in this repo — see `.claude/rules/ent-schema-generation.md`)
-  for a marginal 3-5 tools, alongside 55 hand-written ones that would not be retrofitted.
-  A hard cutover (migrate all 55) is out of scope per requirements.md ("Redesigning web UI
-  search UX" and broad re-architecture are explicitly out of scope); a partial adoption
-  (generated tools for 3, hand-written for 55) is worse — two divergent patterns for the same
-  concept in the same package is exactly the kind of unjustified complexity
-  `.claude/rules/interface-pollution-checklist.md` flags ("Unjustified generic — used at a
-  single call site that a concrete type... would express more clearly," generalized here to
-  "unjustified codegen pipeline for a handful of call sites an existing hand-written pattern
-  already covers").
+**Verdict: Not recommended (none fits; none exists in-repo).**
 
-**Verdict: do not adopt.** The tool exists and is real, but bringing in a second codegen
-dependency to save ~3-5 hand-written tool registrations, when 55 already follow the
-hand-written convention and won't be migrated, fails cost/benefit and violates this
-project's own interface-pollution discipline. Hand-write these three tools following the
-existing pattern.
+`go.mod` has exactly one MCP-related dependency:
+
+```
+github.com/mark3labs/mcp-go v0.48.0
+```
+
+This is the same low-level MCP protocol library already used for every hand-rolled tool in
+`server/mcp/*.go` (`mcpgo.NewTool`, `mcpgo.WithString`, etc.) — it is not a generator, it's the
+SDK the hand-written tools are built on. There is no second MCP-related dependency (no
+reflection-based bridge, no OpenAPI-to-MCP tool, no gRPC-to-MCP codegen plugin).
+
+`grpc-ecosystem/grpc-gateway/v2` appears in `go.mod` but only as an `// indirect` transitive
+dependency (pulled in by something else in the graph) — the codebase's actual REST/RPC surface is
+served via Connect (`bufbuild/connect-go`), not grpc-gateway, and nothing wires grpc-gateway's
+reflection/codegen into MCP tool generation.
+
+Pros of a generic bridge (hypothetical): would auto-generate 3 tools instantly, stays in sync as
+RPC schemas evolve.
+
+Cons (why it doesn't apply here): no such library exists in the current dependency graph; adding
+one for 3 RPCs is disproportionate; every other MCP tool in this repo (55+) is hand-rolled with
+per-tool argument validation, feature-flag gating (`featureDisabledResult`), and custom
+`okResult`/`errResult` response shaping (e.g. Markdown-formatted text output, `SanitizeForAgentContext`
+truncation) that a generic reflection-based bridge would not reproduce — the repo has deliberately
+chosen hand-tuned MCP-shaped output over a 1:1 RPC mirror (see `list_sessions`'s "Default limit is
+10 to avoid filling LLM context" convention, `server/mcp/server.go:121`, which is UX policy no
+generator would infer). Introducing a new dependency for 3 mechanical wrappers also violates the
+repo's existing precedent of zero MCP-generation tooling.
 
 ## 2. SaaS/managed API
 
-Not applicable. `GetNotificationHistory`, `ListBacklogItems`, and `SearchClaudeHistory` are
-in-process Go method calls into `*services.NotificationService`, `*services.BacklogService`,
-and `*services.SessionService`/`*services.SearchService` respectively (confirmed:
-`server/services/notification_service.go:137`, `server/services/backlog_service_query.go:107`,
-`server/services/session_service.go:3039` and `:3280`). No external network call or managed
-API is involved — this is wiring within the same binary.
+**Not applicable.** This feature wraps in-process ConnectRPC handlers (`server/services/*.go`)
+that already run inside the same Go binary as the MCP server (`server/mcp/server.go`'s
+`RunServer`/`NewCore`). There is no external network boundary, no third-party service, and no
+hosted API to buy — the "build" is entirely local Go code calling other local Go code via
+`connect.NewRequest`/`connect.Response`, in-process (see workflow tools below).
 
-## 3. LLM-generated implementation vs. battle-tested library (algorithmic risk)
+## 3. LLM-generated implementation vs. battle-tested library — is there a nontrivial algorithm here?
 
-No new algorithmic surface. All three RPCs are already implemented, tested, and exercised by
-the web UI's ConnectRPC handlers:
-- `ListBacklogItems` — filtering/sorting logic lives in `BacklogService`, already covered by
-  `server/services/backlog_service_test.go`.
-- `GetNotificationHistory` — pagination (`limit`/`offset`) and filters
-  (`type_filter`/`session_id`/`unread_only`) live in `NotificationService`, covered by
-  `server/services/notification_service_extra_test.go`.
-- `SearchClaudeHistory` — full-text search runs through the real inverted-index engine in
-  `session/search/`, not new code.
+**Verdict: No — the hard part (full-text search) is already a battle-tested in-repo library, and
+this feature does not touch it.**
 
-The MCP tool layer's own job is a mechanical translation: `mcpgo.CallToolRequest.Arguments`
-(untyped `map[string]any`) → typed Connect request struct → `connect.NewRequest(...)` →
-existing service method → format `*mcpgo.CallToolResult`. The only genuinely new logic is
-argument parsing/validation (type assertions, enum-string-to-proto-enum mapping, cursor
-decode/encode for pagination) — and even that isn't new *design*, it's copying the exact
-pattern already proven in `list_sessions` (`server/mcp/tools_discovery.go:87-130`): a
-`decodeCursor`/`encodeCursor` helper, a `float64`-to-`int` limit coercion with a max clamp,
-and `strings.EqualFold` enum matching. No custom data structure or algorithm needs inventing.
+Confirmed: `session/search/` exists and contains a real inverted-index/BM25 search engine —
+`engine.go`, `bm25.go`, `inverted_index.go`, `tokenizer.go`, `document_store.go`,
+`index_store.go`, `snippet.go`, each with a matching `_test.go`. `SearchClaudeHistory` is
+implemented at `server/services/search_service.go:459` (`func (ss *SearchService)
+SearchClaudeHistory`) and is exercised by tests in
+`server/services/history_service_test.go`. The MCP tool for this RPC is a pure wrapper: it
+constructs a `SearchClaudeHistoryRequest`, calls the existing service method, and maps the
+response — it does not reimplement tokenization, ranking, or indexing. Same for
+`ListBacklogItems` (`server/services/backlog_service_query.go:107`, pagination/filter logic
+already exists) and `GetNotificationHistory` (`server/services/notification_service.go:137`,
+called through `server/services/session_service.go:3280`'s thin passthrough).
 
-**Verdict**: straight mechanical wrap, zero algorithmic risk. LLM-generated implementation
-following the in-repo template is appropriate; no need to reach for a battle-tested library.
+There is no case here for "should we use a library instead of hand-writing this" — the
+nontrivial logic (search ranking, backlog filter semantics, notification pagination) is already a
+library, already used by the web UI, and this feature's only job is to expose it through another
+transport (MCP tool call → ConnectRPC in-process call), which is inherently thin, mechanical
+per-RPC glue code, not an algorithm.
 
-## 4. Fork or adapt — closest in-repo template
+## 4. Fork or adapt — closest existing in-repo template per target RPC
 
-`search_sessions` (`server/mcp/server.go:151-168`) is a valid
-reference for the tool-registration shape (`mcpgo.NewTool` + `WithDescription` +
-`WithString`/`WithArray`/`WithNumber` + handler function + `d.searchSessions`), but its
-argument shape (single free-text query + tag array, no cursor) is simpler than what
-`ListBacklogItems`/`GetNotificationHistory` need.
+**Verdict: Recommended.** The repo already has two flavors of MCP tool, and the right template
+differs depending on whether the target RPC is reached through an in-process ConnectRPC handler
+call (the common case here) or through local field-matching (the `search_sessions` case, which
+does *not* apply to these 3 targets since all 3 already have real backend RPCs, unlike
+`search_sessions` which has no corresponding `SessionService.SearchSessions` RPC at all — it
+operates directly on `session.Instance` loaded from `d.store.LoadInstances()`,
+`server/mcp/tools_discovery.go:210`).
 
-**Better template found**: `list_sessions`, registered immediately above `search_sessions` in
-the same file (`server/mcp/server.go:118-137`, handler at
-`server/mcp/tools_discovery.go:87-130+`), is a closer match on every axis that matters for
-this task:
+The actual best template is **`tools_workflow.go`'s `listWorkflows`** handler
+(`server/mcp/tools_workflow.go:291-306`), because it is the only existing MCP tool that does
+exactly what all 3 new tools need to do: call an existing ConnectRPC service method in-process via
+`connect.NewRequest`, then map the typed proto response into a small MCP result struct:
 
-| Need | `list_sessions` already has it |
-|---|---|
-| Enum-style string filter | `status_filter` with `mcpgo.Enum(...)` — same shape as `ListBacklogItems`'s `status`/`priority` or `GetNotificationHistory`'s `type_filter` |
-| Bounded/defaulted numeric limit | `limit` with `DefaultNumber(10)`, `Min(1)`, `Max(100)` — matches the "default limit 10" convention `requirements.md` (acceptance criterion 3) explicitly asks `SearchClaudeHistory` to follow |
-| Pagination | opaque `cursor` string, `decodeCursor`/next-cursor round trip — directly reusable shape for `GetNotificationHistory`'s `limit`/`offset` and any cursoring `SearchClaudeHistory` needs |
-| Error convention | `errResult(ErrInternalError, ...)`/`errResult(ErrInvalidArgument, ...)` | 
+```go
+func (h *workflowHandlers) listWorkflows(ctx context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	resp, err := h.svc.ListWorkflows(ctx, connect.NewRequest(&sessionv1.ListWorkflowsRequest{}))
+	if err != nil {
+		return workflowServiceErrResult(err)
+	}
+	out := make([]WorkflowResult, 0, len(resp.Msg.GetWorkflows()))
+	for _, w := range resp.Msg.GetWorkflows() {
+		out = append(out, workflowToResult(w))
+	}
+	return okResult(ListWorkflowsResult{MCPResult: MCPResult{Success: true}, Workflows: out}), nil
+}
+```
 
-For the ConnectRPC-call plumbing specifically (calling into a `*services.XxxService` method
-via `connect.NewRequest`, not just reading from `InstanceStore` the way `list_sessions`
-does), `tools_workflow.go`'s `create_workflow`/`run_workflow` and `tools_backlog.go`'s
-existing 22 tools (e.g. `get_backlog_item`, read at `server/mcp/tools_backlog.go:195-213`)
-are the closer plumbing template — they already show the `connect.NewRequest(...)` →
-`h.svc.Method(ctx, req)` → `errors.Is`/`connect.CodeOf` error-mapping pattern needed for
-`ListBacklogItems` (`BacklogService`) and `GetNotificationHistory`/`SearchClaudeHistory`
-(`SessionService`/`SearchService`).
+Per-target mapping:
 
-**Verdict**: combine two in-repo templates, don't copy `search_sessions` alone —
-`list_sessions` for the input-schema shape (enum filter + bounded limit + cursor), and
-`tools_backlog.go`'s existing handlers for the Connect-call/error-wrapping plumbing. This is
-also the fix for requirements.md's acceptance criterion 4:
-`server/mcp/tools_backlog.go:204`'s error-hint text already says
-`"from list_backlog_items or get_backlog_item"` — the new tool's registered name should be
-literally `list_backlog_items` to make that existing hint correct rather than requiring a
-text edit.
+| Target RPC | Best template | Why |
+|---|---|---|
+| `ListBacklogItems` | `tools_workflow.go`'s `listWorkflows` (call shape) + `tools_backlog.go`'s existing `backlogHandlers` struct (already holds `storage`, `backlogSvc *services.BacklogService`, `enabledCheck`) for feature-flag gating and error-result conventions. `ListBacklogItems` itself lives at `server/services/backlog_service_query.go:107`. | Same package/struct as `get_backlog_item` et al. — the new tool's handler is a peer method on `backlogHandlers`, not a new struct. Also resolves the dangling `list_backlog_items` reference at `server/mcp/tools_backlog.go:204`. |
+| `GetNotificationHistory` | `tools_workflow.go`'s `listWorkflows` (call shape) — reached via `SessionService.GetNotificationHistory` (`server/services/session_service.go:3280`, thin passthrough to `NotificationService.GetNotificationHistory`, `server/services/notification_service.go:137`). | `SessionService` is already held as `svc *services.SessionService` on `workflowHandlers`/`lifecycleHandlers`/etc. — same in-process call pattern, same field name convention. |
+| `SearchClaudeHistory` | `tools_workflow.go`'s `listWorkflows` (call shape, for the RPC call itself) + `list_sessions`'s tool-definition conventions (`server/mcp/server.go:120-135`, default-limit-10 pagination doc string) for the MCP argument schema/UX. Backing RPC at `server/services/search_service.go:459`. | Needs a `*services.SearchService` reference on whatever handler struct hosts it (new or existing) — same `h.svc.Method(ctx, connect.NewRequest(...))` shape as `listWorkflows`, but the *tool description and default-limit UX* should copy `list_sessions`'s explicit "avoid filling LLM context" convention since this is the one target RPC that returns full-text search results (highest token-blowup risk of the three). |
 
-## Overall verdict
+Every one of the 3 new tools additionally must follow the shared conventions already
+demonstrated across `server/mcp/*.go`: `featureDisabledResult` gate, `errResult`/`okResult`
+helpers, argument extraction via `req.GetArguments()` with manual type assertions (no reflection),
+and a colocated `*_test.go` (every existing `tools_*.go` file has one, per acceptance criterion 5
+in `requirements.md`).
 
-Build, following the existing in-repo hand-written pattern — specifically
-`list_sessions` (schema) + `tools_backlog.go` (Connect-call plumbing) as templates, not
-`search_sessions` alone. No SaaS applicable. No algorithmic risk requiring a battle-tested
-library. A proto-to-MCP codegen tool (`protoc-gen-go-mcp`) exists and is real, but adopting
-it for 3-5 tools while 55 hand-written ones remain would add a second, unjustified codegen
-pipeline for marginal benefit — reject per this project's own interface-pollution
-discipline.
+## Summary table
+
+| Option | Pros | Cons | Verdict |
+|---|---|---|---|
+| 1. Generic OSS gRPC/ConnectRPC → MCP bridge | Instant generation, stays in sync with schema | Doesn't exist in this dependency graph; would bypass the repo's deliberate hand-tuned MCP UX (context-safe limits, feature gating, formatted text output); new dependency for 3 mechanical wrappers | **Not recommended** |
+| 2. SaaS/managed API | — | Not applicable — everything is in-process Go | **N/A** |
+| 3. Reimplement search/filter logic vs. use library | — | Not needed — `session/search/` (BM25 inverted index) and the backlog/notification filter logic already exist, tested, and used by the web UI; these tools only add a transport-layer wrapper | **N/A (already using the library)** |
+| 4. Fork/adapt closest in-repo template | Mechanical, ~30-60 lines/tool, matches 55+ existing tools' conventions exactly, no new dependency, satisfies acceptance criteria 4-6 by construction | Still 3x hand-written handler + test files (no shortcut) | **Recommended** |
+
+## Confirmed conclusion
+
+The requirements doc's suggested entry point ("each tool is a mechanical RPC→MCP-tool wrap
+following the `search_sessions` template") is **directionally correct but the more precise
+template is `tools_workflow.go`'s `listWorkflows`**, not `search_sessions` itself —
+`search_sessions` is the odd one out among existing tools because it has no backing RPC and
+matches locally over `session.Instance`, whereas all 3 new targets (`ListBacklogItems`,
+`GetNotificationHistory`, `SearchClaudeHistory`) already have real ConnectRPC handlers to call
+in-process, making `listWorkflows`'s `h.svc.Method(ctx, connect.NewRequest(...))` → map-response
+shape the closer structural match. `search_sessions`/`list_sessions` remain the right reference
+for MCP-facing *UX conventions* (default limit, pagination doc strings) but not for the Go-level
+call pattern. Overall verdict: **hand-write all 3 tools following the in-repo
+`listWorkflows`-style RPC-wrapping pattern, no new dependency.**
