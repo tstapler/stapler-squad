@@ -5,6 +5,29 @@
 const { TextEncoder, TextDecoder } = require("util");
 Object.assign(globalThis, { TextEncoder, TextDecoder });
 
+// ReadableStream/TransformStream/CompressionStream/DecompressionStream are not available in
+// jsdom. node:stream/web provides spec-compliant implementations of all four — used here so
+// websocket-transport.ts's gzip decompression path (Task 5.1.1.0, terminal-resync-reliability
+// Epic 5.1) can run under Jest the same way it runs in a real browser.
+const {
+  ReadableStream,
+  TransformStream,
+  CompressionStream,
+  DecompressionStream,
+} = require("node:stream/web");
+if (typeof globalThis.ReadableStream === "undefined") {
+  globalThis.ReadableStream = ReadableStream;
+}
+if (typeof globalThis.TransformStream === "undefined") {
+  globalThis.TransformStream = TransformStream;
+}
+if (typeof globalThis.CompressionStream === "undefined") {
+  globalThis.CompressionStream = CompressionStream;
+}
+if (typeof globalThis.DecompressionStream === "undefined") {
+  globalThis.DecompressionStream = DecompressionStream;
+}
+
 // jest-dom matchers (toBeInTheDocument, etc.)
 require("@testing-library/jest-dom");
 

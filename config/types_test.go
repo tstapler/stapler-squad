@@ -36,6 +36,26 @@ func TestQuotaConfigOrDefault_should_FillAllDefaults_When_ZeroValueStruct(t *tes
 	}
 }
 
+func TestResyncFastLaneSlotsOrDefault_should_ReturnFour_When_Unset(t *testing.T) {
+	cfg := TmuxExecGateConfig{}
+
+	out := cfg.ResyncFastLaneSlotsOrDefault()
+
+	if out != 4 {
+		t.Errorf("ResyncFastLaneSlotsOrDefault() = %v, want 4", out)
+	}
+}
+
+func TestResyncFastLaneSlotsOrDefault_should_PreserveExplicitValue_When_FieldAlreadySet(t *testing.T) {
+	cfg := TmuxExecGateConfig{ResyncFastLaneSlots: 12}
+
+	out := cfg.ResyncFastLaneSlotsOrDefault()
+
+	if out != 12 {
+		t.Errorf("ResyncFastLaneSlotsOrDefault() = %v, want 12 (explicit value must survive defaulting)", out)
+	}
+}
+
 func TestQuotaConfigOrDefault_should_PreserveExplicitValue_When_FieldAlreadySet(t *testing.T) {
 	cfg := QuotaConfig{PauseBelowHeadroomPct: 35.0}
 

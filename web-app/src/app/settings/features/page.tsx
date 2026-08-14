@@ -25,6 +25,15 @@ const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
   "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },
+  "terminal:resync-visibility-scope": { label: "Terminal resync: scope to visible terminal" },
+  "terminal:resync-correlation-id": { label: "Terminal resync: correlation IDs" },
+  "terminal:resync-skip-stale-dimension-slowpath": {
+    label: "Terminal resync: skip slow path for backgrounded terminals",
+  },
+  "terminal:resync-exec-gate-fast-lane": { label: "Terminal resync: exec-gate fast lane" },
+  "terminal:resync-stagger": { label: "Terminal resync: stagger bursts" },
+  "terminal:resync-compression": { label: "Terminal resync: wire compression" },
+  "terminal:resync-batching": { label: "Terminal resync: batch requests" },
 };
 
 export default function FeaturesPage() {
