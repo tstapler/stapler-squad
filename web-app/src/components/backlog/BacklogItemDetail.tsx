@@ -34,6 +34,7 @@ import { AcCriteriaList } from "./AcCriteriaList";
 import { InlineError } from "./InlineError";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
+import { ChatRefinementPanel } from "./ChatRefinementPanel";
 import { ReviewChangesModal } from "./ReviewChangesModal";
 import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
 import { LifecycleSummary } from "./detail/LifecycleSummary";
@@ -87,6 +88,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     getBacklogItem,
     transitionStatus,
     triggerTriage,
+    createBacklogItemFromChat,
     cancelTriage,
     spawnSessionFromItem,
     approvePlan,
@@ -833,6 +835,21 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     [item, triggerTriage, load]
   );
 
+  // Chat-based refinement (additive to handleRefineTriage's structured-form
+  // path): delegates to CreateBacklogItemFromChat, which internally calls the
+  // same TriggerTriage/feedback path — same data shape, different front door.
+  const handleChatRefine = useCallback(
+    async (message: string) => {
+      if (!item) return;
+      const result = await createBacklogItemFromChat(message, item.id);
+      if (!result) {
+        throw new Error(lastError?.message ?? "Failed to send chat message");
+      }
+      await load();
+    },
+    [item, createBacklogItemFromChat, load, lastError]
+  );
+
   // Story 4.3.1: RejectPlan only persists state (ADR-002) — it does not
   // itself trigger regeneration. handleRegeneratePlanWithFeedback is the
   // separate, explicit follow-up action PlanVerdictBox renders once an item
@@ -1314,6 +1331,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 onSkip={() => {}}
                 onRefine={handleRefineTriage}
                 onAnswerQuestion={handleRefineTriage}
+              />
+            </div>
+          )}
+
+        {/* Chat-based refinement — additive to TriageReviewPanel's structured
+            refine-feedback form above; same visibility guard. */}
+        {item.triageStatus === "completed" &&
+          item.status === "idea" &&
+          item.triageResult && (
+            <div className={styles.section}>
+              <ChatRefinementPanel
+                clarifyingQuestions={item.triageResult.clarifyingQuestions}
+                onSend={handleChatRefine}
               />
             </div>
           )}
