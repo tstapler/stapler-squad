@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/git"
 )
+
+// testDBCounter guarantees each createTestStorage call gets a uniquely-named
+// in-memory database, so unrelated tests running in parallel never share state.
+var testDBCounter atomic.Int64
 
 // createTestStorage creates a Storage backed by an in-memory Ent repository.
 // The caller should defer cleanup().
@@ -22,9 +27,17 @@ import (
 // backing it with an in-memory SQLite database (rather than a temp-dir file)
 // removes the disk I/O and WAL fsync overhead that made the full package
 // suite take ~650s and occasionally exceed `go test`'s 10m timeout.
+//
+// The DSN uses a named, shared-cache in-memory database (rather than the bare
+// ":memory:" literal) because some tests (e.g. forceEmptyBranchNameViaRawSQL in
+// review_gate_test.go) open a second, independent *sql.DB against the same
+// repo.dbPath to reach the database with raw SQL. A bare ":memory:" gives every
+// independent sql.Open call its own private, unmigrated database; "cache=shared"
+// makes repeated opens of the same "file:" name attach to the same in-memory DB.
 func createTestStorage(t *testing.T) (*Storage, func()) {
 	t.Helper()
-	repo, err := NewEntRepository(WithDatabasePath(":memory:"))
+	dsn := fmt.Sprintf("file:testdb_%d?mode=memory&cache=shared", testDBCounter.Add(1))
+	repo, err := NewEntRepository(WithDatabasePath(dsn))
 	require.NoError(t, err)
 
 	storage, err := NewStorageWithRepository(repo)
