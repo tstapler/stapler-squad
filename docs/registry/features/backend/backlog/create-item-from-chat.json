@@ -11,6 +11,7 @@
     "TestCreateBacklogItemFromChat_should_CreateItemViaCreateBacklogItem_When_NoExistingItemId",
     "TestCreateBacklogItemFromChat_should_RejectEmptyMessage_When_MessageIsWhitespaceOnly",
     "TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_When_ExistingItemIdSet",
+    "TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_RefiningExistingItem",
     "TestCreateBacklogItemFromChat_should_RejectRefinement_When_ItemNotInIdeaOrReadyStatus"
   ],
   "lastModified": "2026-08-13T21:24:31.779060385-07:00"

@@ -1,4 +1,4 @@
-// +feature: chat-refinement-panel
+// +feature: backlog:chat-refinement-panel
 
 import { useState, useCallback } from "react";
 import * as styles from "./ChatRefinementPanel.css";
