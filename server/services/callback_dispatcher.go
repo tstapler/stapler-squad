@@ -219,6 +219,14 @@ func (d *CallbackDispatcher) deliver(eventType, url string, payload any) {
 // the exact address this attempt connects to, with no re-resolution gap in between. A
 // fresh Transport per attempt (not one shared on d) means a pinned IP for one host can
 // never leak onto a different host's connection via pooled keep-alives.
+//
+// The pin only applies when d.client is using the real network Transport (nil, or an
+// explicit *http.Transport) — a custom http.RoundTripper (as this package's own tests
+// inject to intercept requests before any DNS/dial happens, e.g.
+// callback_config_service_test.go's recordingRoundTripper) has no dial step to pin in
+// the first place, so it's used unmodified. The real pinned-dial path is exercised
+// directly against a live server by
+// TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost.
 func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byte, validIP net.IP) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -226,17 +234,20 @@ func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byt
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	dialer := &net.Dialer{}
-	pinnedTransport := &http.Transport{
-		DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
-			_, port, splitErr := net.SplitHostPort(addr)
-			if splitErr != nil {
-				return nil, splitErr
-			}
-			return dialer.DialContext(dialCtx, network, net.JoinHostPort(validIP.String(), port))
-		},
+	client := d.client
+	if _, usesRealTransport := d.client.Transport.(*http.Transport); usesRealTransport || d.client.Transport == nil {
+		dialer := &net.Dialer{}
+		pinnedTransport := &http.Transport{
+			DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+				_, port, splitErr := net.SplitHostPort(addr)
+				if splitErr != nil {
+					return nil, splitErr
+				}
+				return dialer.DialContext(dialCtx, network, net.JoinHostPort(validIP.String(), port))
+			},
+		}
+		client = &http.Client{Transport: pinnedTransport, CheckRedirect: d.client.CheckRedirect}
 	}
-	client := &http.Client{Transport: pinnedTransport, CheckRedirect: d.client.CheckRedirect}
 
 	resp, err := client.Do(req)
 	if err != nil {

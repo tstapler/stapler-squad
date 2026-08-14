@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,21 +17,23 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 )
 
-// permissiveValidator is a validateURL stub that always accepts and resolves to the
-// URL's own literal IP host, so tests can exercise real HTTP delivery (including the
-// real DialContext pinning path) against an httptest.Server, whose address is
-// necessarily loopback and would otherwise always fail the real SSRF check —
-// ValidateCallbackURL itself is exercised directly in webhook_ssrf_test.go.
+// permissiveValidator is a validateURL stub that always accepts, so tests can exercise
+// real HTTP delivery against an httptest.Server (necessarily loopback, which the real
+// ValidateCallbackURL — exercised directly in webhook_ssrf_test.go — would always
+// reject). When the URL's host is a literal IP (the httptest.Server case), that exact
+// IP is returned so tests also exercise the real DialContext pinning path (attempt
+// only pins when d.client uses the real Transport — see its doc comment — so this
+// placeholder is otherwise unused by tests injecting a custom RoundTripper, e.g.
+// callback_config_service_test.go's recordingRoundTripper).
 func permissiveValidator(ctx context.Context, rawURL string) (net.IP, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
 	}
-	ip := net.ParseIP(parsed.Hostname())
-	if ip == nil {
-		return nil, fmt.Errorf("permissiveValidator: host %q is not a literal IP", parsed.Hostname())
+	if ip := net.ParseIP(parsed.Hostname()); ip != nil {
+		return ip, nil
 	}
-	return ip, nil
+	return net.IPv4zero, nil
 }
 
 // testDispatcher builds a CallbackDispatcher with the webhook_triggers flag on,
