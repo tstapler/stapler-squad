@@ -56,6 +56,8 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
+  /** Creates a backlog item from a free-text chat message (the "backlog: <message>" trigger). */
+  onCreateBacklogItemFromChat?: (text: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
   initialTitle?: string;
@@ -181,7 +183,7 @@ function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessio
   }
 }
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS, launcherPresets = EMPTY_PRESETS, launcherPresetsLoading = false, launcherPresetsLoadError = null }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, onCreateBacklogItemFromChat, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS, launcherPresets = EMPTY_PRESETS, launcherPresetsLoading = false, launcherPresetsLoadError = null }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -1049,6 +1051,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     // Recognized commands (>theme ..., >go ...) and spawn_shell are always submittable
     if (detection?.type === InputType.Command && detection.confidence === 1.0) return true;
     if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) return true;
+    // Chat backlog item creation (backlog: <message>) needs no sessionName/path.
+    if (detection?.type === InputType.ChatBacklogItem) return true;
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
@@ -1096,6 +1100,23 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         router.push(commandArg);
       }
       onClose();
+      return;
+    }
+
+    // Chat backlog item creation (backlog: <message>) — no session-creation flow, just
+    // hands the free-text message off to the backlog RPC and closes the omnibar.
+    if (detection?.type === InputType.ChatBacklogItem) {
+      const message = detection.parsedValue;
+      setIsSubmitting(true);
+      setError(null);
+      try {
+        await onCreateBacklogItemFromChat?.(message);
+        onClose();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create backlog item");
+      } finally {
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -1302,6 +1323,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     onCreateSession,
     onClose,
     onRunWorkflow,
+    onCreateBacklogItemFromChat,
     formState.firstPrompt,
     formState.autonomousMode,
     formState.extraArgs,
