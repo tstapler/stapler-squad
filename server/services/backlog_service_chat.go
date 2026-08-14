@@ -1,13 +1,8 @@
 package services
 
-// backlog_service_chat.go — CreateBacklogItemFromChat: a thin front door that
-// lets a single free-text chat message either create a new backlog item or
-// refine an existing one. It intentionally duplicates none of
-// CreateBacklogItem's or TriggerTriage's guards/semantics — it delegates to
-// them verbatim so chat-originated items go through the exact same
-// triageInFlight single-flight guard, headless pool budget, and orphan-sweep
-// reconciliation as form-originated ones (see backlog_service_lifecycle.go's
-// CreateBacklogItem and backlog_service_triage.go's TriggerTriage).
+// backlog_service_chat.go — CreateBacklogItemFromChat: a thin front door onto
+// the existing CreateBacklogItem/TriggerTriage handlers for chat-originated
+// creation and refinement turns.
 
 import (
 	"context"
@@ -63,9 +58,8 @@ func (s *BacklogService) CreateBacklogItemFromChat(
 			return nil, err
 		}
 
-		if s.storage == nil {
-			return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
-		}
+		// s.storage is guaranteed non-nil here: TriggerTriage above already
+		// returns CodeUnavailable as its first check when storage is nil.
 		updated, err := s.storage.GetBacklogItem(ctx, existingItemID)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item: %w", err))

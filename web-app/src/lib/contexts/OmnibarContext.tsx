@@ -59,7 +59,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const { createSession, runWorkflow: runWorkflowRPC } = useSessionService({
     enabled: !authLoading && (!authEnabled || authenticated),
   });
-  const { createBacklogItem } = useBacklogService();
+  const { createBacklogItemFromChat } = useBacklogService();
   const { workflows } = useWorkflows();
 
   // Lean WorkflowEntry[] for the detector and @ autocomplete dropdown.
@@ -304,12 +304,12 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // normal auto-triage pipeline (skipTriage defaults to false) takes it from there.
   const handleCreateBacklogItemFromChat = useCallback(
     async (text: string) => {
-      const result = await createBacklogItem({ title: text, description: text });
+      const result = await createBacklogItemFromChat(text);
       if (result) {
         router.push(`/backlog?item=${result.item.id}`);
       }
     },
-    [createBacklogItem, router]
+    [createBacklogItemFromChat, router]
   );
 
   const value: OmnibarContextValue = {

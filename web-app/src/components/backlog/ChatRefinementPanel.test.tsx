@@ -31,7 +31,7 @@ describe("ChatRefinementPanel", () => {
     expect(screen.getByTestId("chat-refinement-send")).toBeDisabled();
   });
 
-  it("ChatRefinementPanel_should_ShowOneClarifyingQuestionAtATime_When_MultipleQuestionsPending", async () => {
+  it("ChatRefinementPanel_should_ShowOnlyFirstClarifyingQuestion_When_MultipleQuestionsPending", () => {
     const onSend = jest.fn().mockResolvedValue(undefined);
     render(
       <ChatRefinementPanel
@@ -42,13 +42,23 @@ describe("ChatRefinementPanel", () => {
 
     expect(screen.getByTestId("chat-refinement-question")).toHaveTextContent("What repo does this target?");
     expect(screen.queryByText("Should this include tests?")).not.toBeInTheDocument();
+  });
 
-    fireEvent.change(screen.getByTestId("chat-refinement-input"), { target: { value: "stapler-squad" } });
-    fireEvent.click(screen.getByTestId("chat-refinement-send"));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("chat-refinement-question")).toHaveTextContent("Should this include tests?")
+  it("ChatRefinementPanel_should_ShowNewQuestion_When_ParentReplacesClarifyingQuestionsPropAfterTriageCompletes", () => {
+    // clarifyingQuestions is fully replaced (not appended to) by the parent once
+    // a triage run completes via the page's live item subscription — the panel
+    // must always reflect the current prop value, not a stale local index.
+    const onSend = jest.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <ChatRefinementPanel clarifyingQuestions={["What repo does this target?"]} onSend={onSend} />
     );
+    expect(screen.getByTestId("chat-refinement-question")).toHaveTextContent("What repo does this target?");
+
+    rerender(<ChatRefinementPanel clarifyingQuestions={["Should this include tests?"]} onSend={onSend} />);
+    expect(screen.getByTestId("chat-refinement-question")).toHaveTextContent("Should this include tests?");
+
+    rerender(<ChatRefinementPanel clarifyingQuestions={[]} onSend={onSend} />);
+    expect(screen.queryByTestId("chat-refinement-question")).not.toBeInTheDocument();
   });
 
   it("ChatRefinementPanel_should_ShowErrorMessage_When_OnSendRejects", async () => {

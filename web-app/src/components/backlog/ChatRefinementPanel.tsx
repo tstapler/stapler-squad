@@ -1,6 +1,6 @@
 // +feature: chat-refinement-panel
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback } from "react";
 import * as styles from "./ChatRefinementPanel.css";
 
 export interface ChatTurn {
@@ -9,11 +9,16 @@ export interface ChatTurn {
 }
 
 export interface ChatRefinementPanelProps {
-  /** Pending clarifying questions from the most recent triage result, surfaced
-   * one at a time rather than as a batch dump. */
+  /** Pending clarifying questions from the most recent triage result. This
+   * array is fully replaced (not appended to) each time a triage run
+   * completes, so only the first entry — the current outstanding question —
+   * is surfaced, rather than paginating through a fixed local snapshot. */
   clarifyingQuestions: string[];
-  /** Sends one chat turn (a free-text message) and returns once the
-   * resulting triage run has completed and the item has been refreshed. */
+  /** Sends one chat turn (a free-text message). Resolves once the turn has
+   * been accepted and a new triage run queued — TriggerTriage runs
+   * asynchronously, so the item's own triage state (and this component's
+   * clarifyingQuestions prop) updates live via the page's existing item
+   * subscription once that run actually completes, not synchronously here. */
   onSend: (message: string) => Promise<void>;
 }
 
@@ -25,14 +30,10 @@ export interface ChatRefinementPanelProps {
 export function ChatRefinementPanel({ clarifyingQuestions, onSend }: ChatRefinementPanelProps) {
   const [transcript, setTranscript] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
-  const [questionIndex, setQuestionIndex] = useState(0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const currentQuestion = useMemo(
-    () => (questionIndex < clarifyingQuestions.length ? clarifyingQuestions[questionIndex] : null),
-    [clarifyingQuestions, questionIndex]
-  );
+  const currentQuestion = clarifyingQuestions.length > 0 ? clarifyingQuestions[0] : null;
 
   const handleSend = useCallback(async () => {
     const message = input.trim();
@@ -44,12 +45,15 @@ export function ChatRefinementPanel({ clarifyingQuestions, onSend }: ChatRefinem
     setInput("");
     try {
       await onSend(message);
-      if (answeringQuestion) {
-        setQuestionIndex((i) => i + 1);
-        setTranscript((prev) => [...prev, { role: "assistant", text: "Got it — thanks for clarifying." }]);
-      } else {
-        setTranscript((prev) => [...prev, { role: "assistant", text: "Refined the item based on your message." }]);
-      }
+      setTranscript((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: answeringQuestion
+            ? "Thanks — re-running triage with your answer. This item will update once it's done."
+            : "Got it — re-running triage with your message. This item will update once it's done.",
+        },
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
     } finally {
@@ -74,7 +78,9 @@ export function ChatRefinementPanel({ clarifyingQuestions, onSend }: ChatRefinem
       {currentQuestion && (
         <div className={styles.questionBanner} data-testid="chat-refinement-question">
           <p className={styles.questionMeta}>
-            Clarifying question {questionIndex + 1} of {clarifyingQuestions.length}
+            {clarifyingQuestions.length > 1
+              ? `Clarifying question (${clarifyingQuestions.length} pending)`
+              : "Clarifying question"}
           </p>
           <p className={styles.questionText}>{currentQuestion}</p>
         </div>

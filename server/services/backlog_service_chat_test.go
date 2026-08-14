@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -9,6 +10,24 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 )
+
+func TestDeriveChatItemTitle(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{"short single line", "Add dark mode", "Add dark mode"},
+		{"multiline keeps only first line", "Add dark mode\nAlso fix the toggle", "Add dark mode"},
+		{"truncates beyond max length", strings.Repeat("a", 100), strings.Repeat("a", chatDerivedTitleMaxLen)},
+		{"trims surrounding whitespace on first line", "  Add dark mode  \nrest", "Add dark mode"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, deriveChatItemTitle(tt.message))
+		})
+	}
+}
 
 // TestCreateBacklogItemFromChat_should_CreateItemViaCreateBacklogItem_When_NoExistingItemId
 // is the AC2 data-shape-parity regression guard: the first turn of a chat
