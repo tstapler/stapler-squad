@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -361,6 +362,86 @@ func TestDeleteSession_DestroyFailureIsNonFatal(t *testing.T) {
 	for _, d := range data {
 		assert.NotEqual(t, "stubborn-session", d.Title)
 	}
+}
+
+// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil verifies that
+// Shutdown blocks until DeleteSession's background cleanup goroutine (the
+// KillTmuxSessionByTitle fallback used when FindLiveInstance returns nil) has
+// actually finished, rather than returning while it is still running. Because
+// deleteCleanupWG.Done() is deferred as the very first statement inside the
+// cleanup goroutine, Shutdown returning implies that goroutine has already
+// exited — so the goroutine count must be back to its pre-delete baseline by
+// the time Shutdown returns, with no sleep/poll needed.
+func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "no-live-instance",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	// No ReviewQueuePoller wired: FindLiveInstance returns nil, so DeleteSession
+	// takes the KillTmuxSessionByTitle fallback branch.
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "no-live-instance",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	before := runtime.NumGoroutine()
+	svc.Shutdown()
+	after := runtime.NumGoroutine()
+
+	assert.LessOrEqualf(t, after, before,
+		"Shutdown must block until DeleteSession's cleanup goroutine exits; goroutine count went from %d to %d",
+		before, after)
+}
+
+// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent is the
+// liveInst-present counterpart to TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil:
+// it wires a ReviewQueuePoller with a live instance so FindLiveInstance returns
+// non-nil and DeleteSession takes the destroyWithTimeout(liveInst, ...) branch,
+// then verifies Shutdown still blocks until that cleanup goroutine exits.
+func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	testInst := &session.Instance{
+		Title:     "live-instance",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInst))
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	poller.SetInstances([]*session.Instance{testInst})
+	svc.SetReviewQueuePoller(poller)
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "live-instance",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	before := runtime.NumGoroutine()
+	svc.Shutdown()
+	after := runtime.NumGoroutine()
+
+	assert.LessOrEqualf(t, after, before,
+		"Shutdown must block until DeleteSession's cleanup goroutine exits; goroutine count went from %d to %d",
+		before, after)
 }
 
 // TestDeleteSession_StorageDeletedBeforeResponse verifies that storage is fully

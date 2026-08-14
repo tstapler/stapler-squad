@@ -195,6 +195,11 @@ const (
 	sessionExistsNoCacheTimeout = 5 * time.Second
 	existsCacheDefaultTTL       = 5 * time.Second // registry fast-path is push-based; this is only the subprocess fallback
 	sessionCreateTimeoutDefault = 10 * time.Second
+	// killSessionTimeout bounds Close()'s "tmux kill-session" subprocess so a
+	// hung tmux server can't block callers (e.g. Instance.Destroy(), and in
+	// turn SessionService.DeleteSession's cleanup goroutine) indefinitely.
+	// Matches KillTmuxSessionByTitle's existing 5s cap in server/services.
+	killSessionTimeout = 5 * time.Second
 	sessionPollInitialDelay     = 5 * time.Millisecond
 	// sessionPollMaxDelay bounds the poll loop's exponential backoff below.
 	// Previously capped at 50ms, which -- once ramped up after ~4 doublings
@@ -1892,8 +1897,16 @@ func (t *TmuxSession) Close() error {
 	// Check if session exists before trying to kill it
 	if t.DoesSessionExist() {
 		cmd := t.buildTmuxCommand("kill-session", "-t", t.sanitizedName)
+		// buildTmuxCommand binds cmd to context.Background(), so runGatedErr's
+		// ctx only bounds the exec-gate slot acquisition, not the subprocess
+		// itself. Run through a TimeoutExecutor here so a hung tmux server
+		// genuinely gets killed after killSessionTimeout, matching
+		// KillTmuxSessionByTitle's non-cosmetic 5s cap, instead of leaving
+		// Close() (and its callers, e.g. DeleteSession's cleanup goroutine)
+		// blocked indefinitely.
+		killExec := executor.MakeTimeoutExecutor(killSessionTimeout)
 		gatedErr := runGatedErr(context.Background(), t.serverSocket, func() error {
-			return t.cmdExec.Run(cmd)
+			return killExec.Run(cmd)
 		})
 		if err := gatedErr; err != nil {
 			// Check if this is the common "session not found" error

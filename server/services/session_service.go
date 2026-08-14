@@ -220,6 +220,37 @@ type SessionService struct {
 	// registry is the live-handle map for all running sessions. Wired after construction
 	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
 	registry *session.Registry
+
+	// deleteCleanupWG tracks DeleteSession's background tmux/worktree cleanup
+	// goroutines so Shutdown can await them instead of letting them outlive the
+	// process (or, in tests, outlive the test that spawned them).
+	deleteCleanupWG sync.WaitGroup
+}
+
+// deleteSessionCleanupTimeout bounds how long DeleteSession's background
+// liveInst.Destroy() cleanup is awaited before Shutdown/deleteCleanupWG.Wait()
+// gives up on it, matching KillTmuxSessionByTitle's existing 5s cap. Destroy()
+// takes no context and cannot be forcibly cancelled, so a timed-out cleanup
+// keeps running in its own goroutine (untracked by the WaitGroup) after this
+// deadline — only the *wait* is bounded, not the underlying tmux/worktree work.
+const deleteSessionCleanupTimeout = 5 * time.Second
+
+// destroyWithTimeout runs inst.Destroy() and waits up to timeout for it to
+// finish. If it doesn't finish in time, this returns a timeout error immediately
+// while Destroy() continues running in the background goroutine it was started
+// in — see deleteSessionCleanupTimeout's doc comment for why the bound is on
+// the wait, not the work itself.
+func destroyWithTimeout(inst *session.Instance, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- inst.Destroy()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("timed out after %s waiting for session cleanup to finish (still running in background)", timeout)
+	}
 }
 
 // workflowMeta holds cached metadata about a workflow used at session-list time.
@@ -725,6 +756,9 @@ func (s *SessionService) Shutdown() {
 	if store := s.GetAnalyticsStore(); store != nil {
 		store.Stop()
 	}
+	// Await DeleteSession's background cleanup goroutines so they don't
+	// outlive this process (or, in tests, outlive the test that spawned them).
+	s.deleteCleanupWG.Wait()
 }
 
 // SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
@@ -2376,10 +2410,14 @@ func (s *SessionService) DeleteSession(
 
 	// Destroy tmux/git resources asynchronously so the RPC returns immediately
 	// after storage deletion. Cleanup errors are non-fatal — they are logged and
-	// do not affect the success response the caller receives.
+	// do not affect the success response the caller receives. Both goroutines are
+	// tracked via deleteCleanupWG so Shutdown (and tests) can await them instead
+	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
+		s.deleteCleanupWG.Add(1)
 		go func() {
-			if err := liveInst.Destroy(); err != nil {
+			defer s.deleteCleanupWG.Done()
+			if err := destroyWithTimeout(liveInst, deleteSessionCleanupTimeout); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		}()
@@ -2388,7 +2426,9 @@ func (s *SessionService) DeleteSession(
 		// since this session was created). Fall back to killing the tmux session by
 		// its deterministic name so the Claude process inside it doesn't survive as
 		// an orphan after the DB record is gone.
+		s.deleteCleanupWG.Add(1)
 		go func() {
+			defer s.deleteCleanupWG.Done()
 			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
