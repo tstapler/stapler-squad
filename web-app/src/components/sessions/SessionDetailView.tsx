@@ -93,7 +93,23 @@ export class ResyncStaggerQueue {
    * are byte-for-byte unaffected — see
    * `staggerCoordinator_should_SendNSeparateRequests_When_BatchingFlagOff`.
    */
-  constructor(private readonly batchingEnabled: boolean = false) {}
+  constructor(private batchingEnabled: boolean = false) {}
+
+  /**
+   * Reconfigures batching on a live queue instead of requiring a fresh
+   * instance. `terminal:resync-batching` is a `useFeatureFlag` value (see
+   * `FeatureFlagsContext.tsx`), which can flip while a `SessionDetailView` is
+   * already mounted (e.g. toggled from `/settings/features` without a
+   * remount) — `useResyncStaggerQueue` used to bake `batchingEnabled` into
+   * the constructor only, so a live toggle was silently ignored for the rest
+   * of that view's lifetime. `schedule()`/`scheduleBatched()` read
+   * `this.batchingEnabled` fresh on every call, so flipping this field takes
+   * effect on the next `schedule()` call — it never touches entries already
+   * queued under the old mode, so nothing in flight is dropped or
+   * duplicated. */
+  setBatchingEnabled(batchingEnabled: boolean): void {
+    this.batchingEnabled = batchingEnabled;
+  }
 
   /** Enqueues `fire` with a random 0-300ms jitter delay, unless `preempt` is
    * set — in which case it fires immediately (Task 6.1.1.3: "newly-focused
@@ -226,6 +242,16 @@ export function useResyncStaggerQueue(
   if (enabled && !queueRef.current) {
     queueRef.current = new ResyncStaggerQueue(batchingEnabled);
   }
+
+  // `batchingEnabled` comes from `useFeatureFlag("terminal:resync-batching")`,
+  // which can change while this component stays mounted (e.g. toggled live
+  // from /settings/features) — the lazy construction above only reads it
+  // once, at first-enable time. Keep the live queue's batching mode in sync
+  // on every render where the flag value has changed, instead of silently
+  // running with whatever `batchingEnabled` happened to be at construction.
+  useEffect(() => {
+    queueRef.current?.setBatchingEnabled(batchingEnabled);
+  }, [batchingEnabled]);
 
   // Task 6.1.1.6 — clear every pending stagger timeout on unmount (and when
   // the flag flips off), so no queued resync fires after the component
