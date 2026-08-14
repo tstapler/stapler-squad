@@ -145,7 +145,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   // surface the underlying domain condition's reason on top of those, even
   // if it's also unmet.
   const disabledReason =
-    isTriageRunning || isActionPending ? undefined : actionSpec.disabled ? actionSpec.disabledReason : undefined;
+    isTriageRunning || pendingAction !== null ? undefined : actionSpec.disabled ? actionSpec.disabledReason : undefined;
   const disabledReasonId = `${item.id}-disabled-reason`;
 
   // `item.liveVersion` only advances for a genuine live (non-snapshot)
