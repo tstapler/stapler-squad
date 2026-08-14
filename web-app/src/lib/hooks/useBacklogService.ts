@@ -64,6 +64,14 @@ export interface LinkedSession {
   role: string;
   startedAt?: string;
   endedAt?: string;
+  /** Number of commits made since this session was spawned; 0 if none yet. */
+  commitCountSinceSpawn?: number;
+  /** Timestamp of the session's most recent commit, if it has made one. */
+  lastCommitAt?: string;
+  /** Full text (possibly multi-line) of the session's most recent commit message. */
+  lastCommitMessage?: string;
+  /** Timestamp of the session's most recent file modification, if any. */
+  lastFileTouchAt?: string;
   reviewVerdict?: {
     overallOutcome?: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "UNVERIFIABLE";
     summary?: string;
@@ -341,6 +349,12 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     role: s.sessionRole,
     startedAt: s.startedAt ? new Date(Number(s.startedAt.seconds) * 1000).toISOString() : undefined,
     endedAt: s.endedAt ? new Date(Number(s.endedAt.seconds) * 1000).toISOString() : undefined,
+    commitCountSinceSpawn: s.commitCountSinceSpawn ?? 0,
+    lastCommitAt: s.lastCommitAt ? new Date(Number(s.lastCommitAt.seconds) * 1000).toISOString() : undefined,
+    lastCommitMessage: s.lastCommitMessage || undefined,
+    lastFileTouchAt: s.lastFileTouchAt
+      ? new Date(Number(s.lastFileTouchAt.seconds) * 1000).toISOString()
+      : undefined,
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
     worktreeBranch: s.worktreeBranch || undefined,
     worktreePath: s.worktreePath || undefined,
