@@ -55,6 +55,8 @@ const (
 	FieldCreatedAt = "created_at"
 	// FieldEstimatedCostUsd holds the string denoting the estimated_cost_usd field in the database.
 	FieldEstimatedCostUsd = "estimated_cost_usd"
+	// FieldClaimantHostID holds the string denoting the claimant_host_id field in the database.
+	FieldClaimantHostID = "claimant_host_id"
 	// EdgeBacklogItem holds the string denoting the backlog_item edge name in mutations.
 	EdgeBacklogItem = "backlog_item"
 	// EdgeReviewVerdict holds the string denoting the review_verdict edge name in mutations.
@@ -100,6 +102,7 @@ var Columns = []string{
 	FieldLastProgressAt,
 	FieldCreatedAt,
 	FieldEstimatedCostUsd,
+	FieldClaimantHostID,
 }
 
 // ForeignKeys holds the SQL foreign-keys that are owned by the "item_sessions"
@@ -140,6 +143,8 @@ var (
 	DefaultCreatedAt func() time.Time
 	// DefaultEstimatedCostUsd holds the default value on creation for the "estimated_cost_usd" field.
 	DefaultEstimatedCostUsd float64
+	// DefaultClaimantHostID holds the default value on creation for the "claimant_host_id" field.
+	DefaultClaimantHostID string
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -250,6 +255,11 @@ func ByCreatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByEstimatedCostUsd orders the results by the estimated_cost_usd field.
 func ByEstimatedCostUsd(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEstimatedCostUsd, opts...).ToFunc()
+}
+
+// ByClaimantHostID orders the results by the claimant_host_id field.
+func ByClaimantHostID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldClaimantHostID, opts...).ToFunc()
 }
 
 // ByBacklogItemField orders the results by backlog_item field.

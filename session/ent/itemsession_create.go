@@ -290,6 +290,20 @@ func (_c *ItemSessionCreate) SetNillableEstimatedCostUsd(v *float64) *ItemSessio
 	return _c
 }
 
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (_c *ItemSessionCreate) SetClaimantHostID(v string) *ItemSessionCreate {
+	_c.mutation.SetClaimantHostID(v)
+	return _c
+}
+
+// SetNillableClaimantHostID sets the "claimant_host_id" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableClaimantHostID(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetClaimantHostID(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *ItemSessionCreate) SetID(v uuid.UUID) *ItemSessionCreate {
 	_c.mutation.SetID(v)
@@ -400,6 +414,10 @@ func (_c *ItemSessionCreate) defaults() {
 	if _, ok := _c.mutation.EstimatedCostUsd(); !ok {
 		v := itemsession.DefaultEstimatedCostUsd
 		_c.mutation.SetEstimatedCostUsd(v)
+	}
+	if _, ok := _c.mutation.ClaimantHostID(); !ok {
+		v := itemsession.DefaultClaimantHostID
+		_c.mutation.SetClaimantHostID(v)
 	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := itemsession.DefaultID()
@@ -545,6 +563,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.EstimatedCostUsd(); ok {
 		_spec.SetField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64, value)
 		_node.EstimatedCostUsd = value
+	}
+	if value, ok := _c.mutation.ClaimantHostID(); ok {
+		_spec.SetField(itemsession.FieldClaimantHostID, field.TypeString, value)
+		_node.ClaimantHostID = value
 	}
 	if nodes := _c.mutation.BacklogItemIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -952,6 +974,24 @@ func (u *ItemSessionUpsert) AddEstimatedCostUsd(v float64) *ItemSessionUpsert {
 // ClearEstimatedCostUsd clears the value of the "estimated_cost_usd" field.
 func (u *ItemSessionUpsert) ClearEstimatedCostUsd() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldEstimatedCostUsd)
+	return u
+}
+
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (u *ItemSessionUpsert) SetClaimantHostID(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldClaimantHostID, v)
+	return u
+}
+
+// UpdateClaimantHostID sets the "claimant_host_id" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateClaimantHostID() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldClaimantHostID)
+	return u
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (u *ItemSessionUpsert) ClearClaimantHostID() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldClaimantHostID)
 	return u
 }
 
@@ -1381,6 +1421,27 @@ func (u *ItemSessionUpsertOne) UpdateEstimatedCostUsd() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearEstimatedCostUsd() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEstimatedCostUsd()
+	})
+}
+
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (u *ItemSessionUpsertOne) SetClaimantHostID(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetClaimantHostID(v)
+	})
+}
+
+// UpdateClaimantHostID sets the "claimant_host_id" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateClaimantHostID() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateClaimantHostID()
+	})
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (u *ItemSessionUpsertOne) ClearClaimantHostID() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearClaimantHostID()
 	})
 }
 
@@ -1977,6 +2038,27 @@ func (u *ItemSessionUpsertBulk) UpdateEstimatedCostUsd() *ItemSessionUpsertBulk 
 func (u *ItemSessionUpsertBulk) ClearEstimatedCostUsd() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEstimatedCostUsd()
+	})
+}
+
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (u *ItemSessionUpsertBulk) SetClaimantHostID(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetClaimantHostID(v)
+	})
+}
+
+// UpdateClaimantHostID sets the "claimant_host_id" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateClaimantHostID() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateClaimantHostID()
+	})
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (u *ItemSessionUpsertBulk) ClearClaimantHostID() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearClaimantHostID()
 	})
 }
 

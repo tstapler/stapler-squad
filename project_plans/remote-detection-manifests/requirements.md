@@ -3,6 +3,43 @@
 Source: backlog item `a43694c6-184f-46ff-a35a-930dfdeec632`, migrated from
 `TylerStaplerAtFanatics/stapler-squad#178`.
 
+## Status update (2026-08-13)
+
+This item's Phase 1 "Unblock" prerequisite — re-landing `detector-plugins`' local TOML
+plugin loader (`session/detection/plugins.go`, `detector_snapshot.go`, `plugin_watcher.go`)
+that this document's "Critical prior-art finding" section (below) flagged as missing from
+`main` on 2026-08-06 — **is now resolved**, not by this item, but by
+[PR #376](https://github.com/tstapler/stapler-squad/pull/376), merged 2026-08-08. #376's own
+description documents and corrects PR #307's inaccurate closure rationale directly, satisfying
+the "re-land PR documents the correction" requirement without any new PR from this item.
+
+Because of that, the backlog item's acceptance criteria (as of this date) no longer ask this
+session to redo the `research`/`plan`/`validate` phases below — they're still accurate and
+load-bearing for Phase 2 (the actual remote-fetch layer), which remains gated on the 90-day
+demand checkpoint exactly as this document already concludes. Redoing them would have
+duplicated ~2400 lines of already-committed, still-valid analysis for no benefit. What this
+session (2026-08-13) actually did:
+
+- Verified Phase 1 is complete: `go build`/`go test ./session/detection/...` pass on a
+  current-`main`-based branch.
+- Replaced the "prose-only" 90-day-checkpoint reference (this document's Open Question #1,
+  and `project_plans/detector-plugins/requirements.md`'s Success Metric section) with a
+  durable, dated tracking artifact: backlog item `3a6206c4-fe06-4ef3-b605-43d0f8f355cf`
+  ("Re-evaluate detector-plugins 90-day demand checkpoint (~2026-10-31)"), which also adds a
+  second demand signal (whether any built-in detector needed an out-of-band `binaries/*.go`
+  hotfix release in the window) alongside the original new-agent-onboarding signal.
+- Documented §3's "lower-friction built-in-detector PR review process" recommendation (below,
+  and in `research/build-vs-buy.md` §3) as an actual `CONTRIBUTING.md` section, rather than
+  leaving it as a described-but-unwritten near-term action.
+- Made no changes to Phase 2 scope, design, or code — it remains not-implemented, gated on the
+  checkpoint above, exactly as `implementation/plan.md`'s Phase 1/Phase 2 split already
+  specifies. AC6-AC8 of the current backlog item (precedence order, fallback-on-failure,
+  Never-Downgrade Rule) are satisfied by that existing, unmodified plan documentation — they
+  describe what Phase 2 must do *if/when* it proceeds, not something to build now.
+
+The rest of this document (below) is unmodified from 2026-08-06 and remains the operative
+requirements doc for Phase 2, if/when the checkpoint resolves toward proceeding.
+
 **Date**: 2026-08-06
 **Type**: feature addition (remote distribution layer for agent-detection patterns)
 **Complexity**: unresolved — see Gating Decision below; if it proceeds, ~2 (small extension) since it builds directly on `detector-plugins`' existing TOML schema and loader.
