@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -919,6 +920,53 @@ func TestCapturePaneSemaphore(t *testing.T) {
 	require.LessOrEqual(t, maxSeen, maxConcurrent,
 		"concurrent capture-pane subprocesses (%d) exceeded semaphore limit (%d)", maxSeen, maxConcurrent)
 	require.Greater(t, maxSeen, 0, "at least one subprocess should have executed")
+}
+
+// TestCapturePaneContentPriority_should_UseFastLaneGate_When_ExecGateFastLaneFlagOn proves
+// CapturePaneContentPriority routes through the resync fast-lane gate pool (runGatedFastLane)
+// rather than the default pool (runGated) that CapturePaneContent uses. It saturates only the
+// fast-lane pool (size 1) and shows CapturePaneContentPriority blocks on it, while the default
+// pool (size 8, left empty) would not have blocked -- proving the two calls consult different
+// gate state for the same serverSocket.
+func TestCapturePaneContentPriority_should_UseFastLaneGate_When_ExecGateFastLaneFlagOn(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 8, 1)
+
+	cmdExec := MockCmdExec{
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte("captured"), nil
+		},
+		RunFunc:            func(cmd *exec.Cmd) error { return nil },
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket)
+
+	releaseFastLane, err := AcquireResyncExecSlot(context.Background(), serverSocket)
+	require.NoError(t, err)
+
+	// The default pool is unsaturated, so a plain CapturePaneContent must return immediately
+	// even while the fast lane's single slot is held.
+	start := time.Now()
+	content, err := session.CapturePaneContent()
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	assert.Equal(t, "captured", content)
+	assert.Less(t, elapsed, 100*time.Millisecond, "CapturePaneContent should use the default pool and not be blocked by the held fast lane slot")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(150 * time.Millisecond)
+		releaseFastLane()
+	}()
+
+	start = time.Now()
+	content, err = session.CapturePaneContentPriority()
+	elapsed = time.Since(start)
+	<-done
+
+	require.NoError(t, err)
+	assert.Equal(t, "captured", content)
+	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond, "CapturePaneContentPriority should have waited for the saturated fast lane pool, proving it uses the fast lane gate rather than the (unsaturated) default pool")
 }
 
 // ---------------------------------------------------------------------------
