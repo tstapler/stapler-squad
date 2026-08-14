@@ -135,6 +135,15 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
 	}
 
+	// Same fix, same reason, for Workflow.updated_at — see
+	// workflow_updated_at_utc_migration.go. UpdateWorkflowRequest.expected_updated_at
+	// (webhook-triggers verify follow-ups AC9) is the same protobuf-Timestamp-derived
+	// CAS precondition class as TransitionBacklogItemStatusRequest's.
+	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
+	}
+
 	// Populate github_pr_url for pre-existing sessions that have a known PR
 	// number/owner/repo but were created before CreateSession started
 	// building the URL itself (idempotent) — see

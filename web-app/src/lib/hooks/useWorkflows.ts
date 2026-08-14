@@ -13,6 +13,7 @@ import {
   DeleteWorkflowFailedSessionsRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
+import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
 
 export interface WorkflowFormData {
@@ -53,6 +54,14 @@ export interface WorkflowFormData {
    * populated when reading a WorkflowProto back (it has no such field).
    */
   webhookSecret?: string;
+  /**
+   * Optimistic-concurrency CAS precondition (webhook-triggers verify follow-ups AC9):
+   * when set on an update, the write is rejected (CodeAborted) unless the row's
+   * current updatedAt still matches this value — closes the two-tabs-both-save race
+   * a blind Get-then-write previously had. Omitted means no precondition, matching
+   * pre-CAS behavior. Never meaningful on create.
+   */
+  expectedUpdatedAt?: Timestamp;
 }
 
 interface UseWorkflowsReturn {
@@ -166,6 +175,7 @@ export function useWorkflows(): UseWorkflowsReturn {
         ...(data.eventFilter !== undefined && { eventFilter: data.eventFilter }),
         ...(data.labelFilter !== undefined && { labelFilter: data.labelFilter }),
         ...(data.promptTemplate !== undefined && { promptTemplate: data.promptTemplate }),
+        ...(data.expectedUpdatedAt !== undefined && { expectedUpdatedAt: data.expectedUpdatedAt }),
         // Not `optional` on the wire (see WorkflowFormData.webhookSecret) — "" is
         // always a safe no-op ("leave unchanged"), so always include it rather than
         // conditionally spreading like the optional fields above.

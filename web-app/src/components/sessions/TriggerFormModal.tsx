@@ -72,6 +72,7 @@ function protoToFormData(w: WorkflowProto): WorkflowFormData {
     eventFilter: w.eventFilter,
     labelFilter: w.labelFilter,
     promptTemplate: w.promptTemplate,
+    expectedUpdatedAt: w.updatedAt,
   };
 }
 

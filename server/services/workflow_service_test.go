@@ -238,6 +238,68 @@ func TestUpdateWorkflow(t *testing.T) {
 	assert.Equal(t, "Updated", updateResp.Msg.Workflow.Name)
 }
 
+// TestUpdateWorkflow_ConcurrentWrites_SecondCallerGetsConflict verifies the
+// optimistic-concurrency CAS (webhook-triggers verify follow-ups AC9): two
+// UpdateWorkflow calls built from the same expected_updated_at — the shape of two
+// browser tabs both loading the same row, then both saving — must not both silently
+// apply. The first succeeds; the second, still holding the pre-first-write
+// updated_at, is rejected with CodeAborted rather than overwriting the first caller's
+// change.
+func TestUpdateWorkflow_ConcurrentWrites_SecondCallerGetsConflict(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	created, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug: "cas-rpc-wf", Name: "Original", Command: "cmd", TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := created.Msg.Workflow.Id
+	staleUpdatedAt := created.Msg.Workflow.UpdatedAt
+
+	first, err := svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Name: proto.String("First Writer"), ExpectedUpdatedAt: staleUpdatedAt,
+	}))
+	require.NoError(t, err, "the first caller, whose expected_updated_at matches, must succeed")
+	assert.Equal(t, "First Writer", first.Msg.Workflow.Name)
+
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Name: proto.String("Second Writer"), ExpectedUpdatedAt: staleUpdatedAt,
+	}))
+	require.Error(t, err, "the second caller, still holding the pre-first-write updated_at, must be rejected")
+	assert.Equal(t, connect.CodeAborted, connect.CodeOf(err))
+
+	// The row must reflect the first (accepted) write only.
+	final, err := svc.repo.GetByID(ctx, uuid.MustParse(id))
+	require.NoError(t, err)
+	assert.Equal(t, "First Writer", final.Name)
+}
+
+// TestUpdateWorkflow_NoExpectedUpdatedAt_AlwaysWrites_LikeBeforeCAS proves an existing
+// single-writer caller that never sends expected_updated_at keeps working exactly as
+// before AC9 — no precondition, always writes, including twice in a row against the
+// same original snapshot.
+func TestUpdateWorkflow_NoExpectedUpdatedAt_AlwaysWrites_LikeBeforeCAS(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	created, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug: "no-cas-wf", Name: "Original", Command: "cmd", TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := created.Msg.Workflow.Id
+
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Name: proto.String("First"),
+	}))
+	require.NoError(t, err)
+
+	second, err := svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Name: proto.String("Second"),
+	}))
+	require.NoError(t, err, "omitting expected_updated_at must apply no precondition, matching pre-CAS behavior")
+	assert.Equal(t, "Second", second.Msg.Workflow.Name)
+}
+
 // TestCreateWorkflow_MissingCommand verifies validation catches empty command.
 func TestCreateWorkflow_MissingCommand(t *testing.T) {
 	_, svc := createTestWorkflowService(t)
