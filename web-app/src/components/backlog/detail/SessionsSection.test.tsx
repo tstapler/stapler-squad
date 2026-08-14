@@ -118,9 +118,9 @@ describe("SessionsSection", () => {
     expect(screen.queryByTestId("sessions-show-more")).not.toBeInTheDocument();
   });
 
-  it("renders nothing when there are no linked sessions", () => {
+  it("SessionsSection_should_RenderExplicitEmptyState_When_ThereAreNoLinkedSessions", () => {
     const item = makeItem([]);
-    const { container } = render(
+    render(
       <SessionsSection
         item={item}
         pipelineModes={[]}
@@ -133,7 +133,47 @@ describe("SessionsSection", () => {
       />
     );
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByRole("status")).toHaveTextContent("No sessions yet for this item.");
+  });
+
+  it("SessionsSection_should_ReplaceListWithEmptyState_When_LinkedSessionsTransitionFromPopulatedToEmpty", () => {
+    // Simulates a live event overwriting a previously-populated item with an
+    // empty itemSessions snapshot (the WatchBacklogItems root cause this bug
+    // report is about) — the empty state must cleanly replace the list, with
+    // no crash or stale leftover session rows.
+    const session = makeSession({ sessionId: "work-live-transition", role: "work" });
+    const populatedItem = makeItem([session]);
+    const { rerender } = render(
+      <SessionsSection
+        item={populatedItem}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("work-live-transition")).toBeInTheDocument();
+
+    const emptiedItem = makeItem([]);
+    rerender(
+      <SessionsSection
+        item={emptiedItem}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.queryByText("work-live-transition")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("No sessions yet for this item.");
   });
 
   it("SessionsSection_should_RenderAnchorLinkUnchanged_When_SessionKindIsWork", () => {
