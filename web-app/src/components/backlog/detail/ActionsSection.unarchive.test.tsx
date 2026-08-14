@@ -3,21 +3,8 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { ActionsSection } from "./ActionsSection";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 
-/**
- * Coverage for the two independent Unarchive button render paths
- * (ActionsSection.tsx:104-115 and :369-379), added alongside the
- * UnarchiveBacklogItem RPC (PR #499 code review, MODERATE finding).
- *
- * The two paths are mutually exclusive:
- *  - terminalState === "archived": a live BacklogItemArchivedEvent arrived
- *    via the watch stream, independent of item.status.
- *  - actions.has("unarchive"): item.status === "archived" was already the
- *    case on initial load (see itemActions.ts's `case "archived":`).
- *
- * Both buttons share the same data-testid ("backlog-action-unarchive") by
- * design (tracked NIT, out of scope to dedupe here) — never rendered
- * simultaneously since one requires terminalState truthy, the other falsy.
- */
+// Covers the two mutually-exclusive Unarchive render paths (ActionsSection.tsx:104-115,
+// :369-379) — live terminalState vs. item.status on load — which share one testid by design.
 function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
   return {
     id: "item-1",
