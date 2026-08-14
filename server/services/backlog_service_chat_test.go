@@ -84,6 +84,45 @@ func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_Wh
 	require.Eventually(t, func() bool { return pool.callCount() == 2 }, 5e9, 5e7, "refinement turn must trigger a second headless call")
 }
 
+// TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_RefiningExistingItem
+// is the AC3 regression guard: a chat-originated refinement turn must use the
+// tightened one-question-per-turn retriage prompt (session.
+// BuildHeadlessChatRetriagePrompt), not the plain BuildHeadlessRetriagePrompt
+// the structured refine-feedback form uses — clarifying questions should be
+// surfaced one at a time in a live conversation rather than as a batch dump.
+func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_RefiningExistingItem(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item awaiting chat refinement",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, trigErr)
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5e9, 5e7, "initial triage must complete before refinement")
+
+	_, chatErr := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
+		ExistingItemId: item.ID,
+		Message:        "please tighten the acceptance criteria",
+	}))
+	require.NoError(t, chatErr)
+
+	require.Eventually(t, func() bool { return pool.callCount() == 2 }, 5e9, 5e7, "refinement turn must trigger a second headless call")
+	gotPrompt := pool.callAt(1).userPrompt
+	assert.Contains(t, gotPrompt, "AT MOST ONE",
+		"chat-originated refinement must use the tightened one-question-per-turn prompt, got: %s", gotPrompt)
+}
+
 // TestCreateBacklogItemFromChat_should_RejectRefinement_When_ItemNotInIdeaOrReadyStatus
 // is the edge-case guard from validation.md: TriggerTriage's existing status
 // guard must not be bypassed by the chat front door.

@@ -58,6 +58,7 @@ func (s *BacklogService) CreateBacklogItemFromChat(
 		if _, err := s.TriggerTriage(ctx, connect.NewRequest(&sessionv1.TriggerTriageRequest{
 			ItemId:   existingItemID,
 			Feedback: message,
+			ChatMode: true,
 		})); err != nil {
 			return nil, err
 		}

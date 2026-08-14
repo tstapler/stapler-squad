@@ -510,6 +510,12 @@ message TriggerTriageRequest {
   // completed triage result instead of a fresh triage run. Requires a prior
   // completed triage result to exist.
   string feedback = 2;
+  // chat_mode, when true alongside a non-empty feedback, tightens the
+  // refinement prompt to ask at most one clarifying question per turn
+  // instead of a batch of questions — set by CreateBacklogItemFromChat for
+  // chat-originated refinement turns. Ignored for a fresh triage run
+  // (feedback empty).
+  bool chat_mode = 3;
 }
 
 message TriggerTriageResponse {
