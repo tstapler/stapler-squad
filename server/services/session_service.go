@@ -138,7 +138,6 @@ type SessionService struct {
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
 	launcherPresetsSvc *LauncherPresetsService
 
-
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
 
