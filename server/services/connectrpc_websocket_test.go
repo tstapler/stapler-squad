@@ -899,7 +899,7 @@ func TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_Reque
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt(
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -1455,7 +1455,7 @@ func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedRespo
 	}
 
 	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
 	}
 
 	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
@@ -1497,7 +1497,7 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 			return nil, fmt.Errorf("simulated capture failure")
 		}
 		target := &fakePanePTY{captureContent: req.GetResyncId() + "-content", cols: 80, rows: 24}
-		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
 	}
 
 	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
@@ -1516,21 +1516,20 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 // allTerminalResyncFlagNames lists every terminal-resync feature flag added across this
 // project (Epics 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 8.3). Epic 8.1's job is to prove all seven
 // compose correctly, so the round-trip and spot-check tests below need the complete set in
-// one place rather than each hand-rolling its own (partial, driftable) list. Four of the
-// seven have named Go constants (terminalResyncCorrelationIDFlagName,
-// terminalResyncSkipStaleDimensionSlowpathFlagName, terminalResyncExecGateFastLaneFlagName,
-// terminalResyncCompressionFlagName — see feature_flag_service.go) because those four are
-// read from Go production code; the other three (visibility-scope, stagger, batching) are
-// pure client-side concerns and only exist as the raw string literal registered in
-// knownFeatureFlags.
+// one place rather than each hand-rolling its own (partial, driftable) list. All seven have
+// named Go constants (see feature_flag_service.go); three of them
+// (terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName,
+// terminalResyncBatchingFlagName) are pure client-side concerns with no Go production call
+// site to share the constant with, but are still named for consistency and so this list and
+// knownFeatureFlags can't drift on the string value.
 var allTerminalResyncFlagNames = []string{
-	"terminal:resync-visibility-scope",
+	terminalResyncVisibilityScopeFlagName,
 	terminalResyncCorrelationIDFlagName,
 	terminalResyncSkipStaleDimensionSlowpathFlagName,
 	terminalResyncExecGateFastLaneFlagName,
-	"terminal:resync-stagger",
+	terminalResyncStaggerFlagName,
 	terminalResyncCompressionFlagName,
-	"terminal:resync-batching",
+	terminalResyncBatchingFlagName,
 }
 
 // setAllTerminalResyncFlags sets every flag in allTerminalResyncFlagNames to on, restoring
@@ -1799,12 +1798,10 @@ func TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElaps
 	require.NoError(t, err)
 	require.Contains(t, logOutput, "skipping stale-dimension resize slow path")
 	require.Contains(t, logOutput, "sessionID=skip-log-session")
-	// targetCols/targetRows are logged as the *int32 pointers passed on CurrentPaneRequest
-	// (req.TargetCols/req.TargetRows), so slog's text handler renders them as "key=0x<addr>"
-	// rather than the dereferenced integer — assert the keys are present rather than a
-	// specific value, which would be nondeterministic across runs.
-	require.Contains(t, logOutput, "targetCols=0x")
-	require.Contains(t, logOutput, "targetRows=0x")
+	// targetCols/targetRows are dereferenced via derefOr before logging, so they render as
+	// the actual request values (120/40) rather than *int32 pointer addresses.
+	require.Contains(t, logOutput, "targetCols=120")
+	require.Contains(t, logOutput, "targetRows=40")
 	require.Contains(t, logOutput, "estimatedTimeSavedMs=450")
 }
 

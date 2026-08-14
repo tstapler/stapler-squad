@@ -29,10 +29,9 @@ var compressionPool = sync.Pool{
 // unmodified with wasCompressed=false so callers can decide whether to set the envelope's
 // CompressedFlag (see CompressedFlag, above) before writing the frame.
 //
-// This is a standalone helper rather than a call site wired into connectrpc_websocket.go: the
-// shared envelope-writing helper that call site depends on (Task 3.2.1.2) doesn't exist yet, so
-// wiring it in now would conflict with Epic 3.2/4.1/4.2's in-flight work on that file. A future
-// epic wires this into that shared helper once it lands.
+// server/services/connectrpc_websocket.go's writeCurrentPaneResponse is the shared
+// envelope-writing helper that calls this; all CurrentPaneRequest response paths route through
+// it so compression is applied uniformly.
 func CompressEnvelopeIfLarge(payload []byte, threshold int) (compressed []byte, wasCompressed bool, err error) {
 	if len(payload) <= threshold {
 		return payload, false, nil
