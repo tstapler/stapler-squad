@@ -1,9 +1,6 @@
 package services
 
 import (
-	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strings"
 
@@ -49,27 +46,8 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	deliveryID := r.Header.Get("X-GitHub-Delivery")
 	sigHeader := r.Header.Get("X-Hub-Signature-256")
 
-	r.Body = http.MaxBytesReader(w, r.Body, MaxWebhookBodyBytes)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
-			Outcome: "rejected", DeliveryID: deliveryID, ErrorMessage: "failed to read request body",
-		})
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
-		return
-	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
-			Outcome: "rejected", DeliveryID: deliveryID, ErrorMessage: "malformed JSON",
-		})
-		http.Error(w, "malformed JSON", http.StatusBadRequest)
+	payload, body, ok := readAndDecodeWebhookBody(w, r, h.fireEvents, deliveryID, nil)
+	if !ok {
 		return
 	}
 
@@ -94,7 +72,7 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// system).
 	var repoCandidates []*ent.Workflow
 	for _, wf := range candidates {
-		if wf.CronEnabled && wf.GithubRepo == fullName {
+		if wf.Enabled && wf.GithubRepo == fullName {
 			repoCandidates = append(repoCandidates, wf)
 		}
 	}
