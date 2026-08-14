@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -231,6 +232,10 @@ type Config struct {
 	// executor is the command executor used for shell command discovery.
 	// Set via NewConfigWithExecutor; defaults to a 5-second timeout executor.
 	executor CommandExecutor
+	// lazyMu guards the generate-on-first-use fields below (MachineEncryptionKey,
+	// ClaimantHostID) against concurrent first-callers racing to generate and
+	// persist their own value — see GetOrCreateEncryptionKey/GetOrCreateClaimantHostID.
+	lazyMu sync.Mutex
 	// ListenAddress is the address the HTTP server listens on.
 	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
 	ListenAddress string `json:"listen_address"`
@@ -1020,6 +1025,9 @@ func (c *Config) RemoveKeyCategory(key string) {
 // GetOrCreateEncryptionKey returns the 32-byte AES-256-GCM key for local data encryption.
 // Generates and persists a new key on first call. Non-fatal errors during save are logged.
 func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
+	c.lazyMu.Lock()
+	defer c.lazyMu.Unlock()
+
 	if c.MachineEncryptionKey != "" {
 		data, err := base64.StdEncoding.DecodeString(c.MachineEncryptionKey)
 		if err == nil && len(data) == 32 {
@@ -1049,6 +1057,9 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 // generating and persisting a new random UUID on first call. See the ClaimantHostID field
 // doc comment for what this identifier is (and is not) used for.
 func (c *Config) GetOrCreateClaimantHostID() (string, error) {
+	c.lazyMu.Lock()
+	defer c.lazyMu.Unlock()
+
 	if c.ClaimantHostID != "" {
 		return c.ClaimantHostID, nil
 	}
