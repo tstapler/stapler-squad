@@ -585,6 +585,8 @@ interface UseBacklogServiceReturn {
   listBacklogItems: (filter?: ListBacklogItemsFilter) => Promise<BacklogItem[]>;
   getBacklogItem: (id: string) => Promise<BacklogItem | null>;
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  /** One turn of chat-based backlog creation/refinement. Empty existingItemId creates a new item (delegates to createBacklogItem); a set existingItemId delegates to TriggerTriage's feedback-driven refine path. */
+  createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number }) => Promise<GitHubIssue[]>;
@@ -737,6 +739,27 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] createBacklogItem:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      }
+    },
+    []
+  );
+
+  const createBacklogItemFromChat = useCallback(
+    async (message: string, existingItemId?: string): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.createBacklogItemFromChat({
+          message,
+          existingItemId: existingItemId ?? "",
+        });
+        return resp.item
+          ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
+          : null;
+      } catch (err) {
+        console.error("[useBacklogService] createBacklogItemFromChat:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));
         return null;
       }
@@ -1152,6 +1175,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       listBacklogItems,
       getBacklogItem,
       createBacklogItem,
+      createBacklogItemFromChat,
       importGitHubIssue,
       searchGitHubRepos,
       listGitHubIssues,

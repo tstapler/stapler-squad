@@ -168,6 +168,23 @@ after):
 	return sb.String()
 }
 
+// BuildHeadlessChatRetriagePrompt wraps BuildHeadlessRetriagePrompt with an
+// instruction to ask at most one clarifying question per turn — used for
+// chat-originated refinement (CreateBacklogItemFromChat's existing_item_id
+// path), where a tightened one-question-at-a-time round trip is expected
+// instead of a batch dump of questions.
+func BuildHeadlessChatRetriagePrompt(item *BacklogItemData, artifactAbsPath string, prior HeadlessTriageResult, feedback string) string {
+	base := BuildHeadlessRetriagePrompt(item, artifactAbsPath, prior, feedback)
+	return base + `
+
+## Chat mode
+This is a live back-and-forth chat conversation, not a batch review. If you
+have any open questions, include AT MOST ONE in suggestions (rationale=
+"question") — never more than one question in a single response. Save any
+other questions for a later turn.
+`
+}
+
 // extractTopLevelJSONObjects returns every complete JSON object found in raw, in
 // the order they appear, by attempting a real JSON decode starting at each `{`.
 //

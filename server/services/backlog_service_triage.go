@@ -2545,7 +2545,11 @@ func (s *BacklogService) TriggerTriage(
 	// the engine (Epic 1.5, Story 1.5.3).
 	var triagePrompt string
 	if feedback != "" {
-		triagePrompt = session.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		if req.Msg.ChatMode {
+			triagePrompt = session.BuildHeadlessChatRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		} else {
+			triagePrompt = session.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		}
 	} else {
 		triagePrompt = s.triagePromptFor(item, artifactAbsPath)
 	}
