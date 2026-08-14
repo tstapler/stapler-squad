@@ -419,6 +419,15 @@ func (s *Storage) ListInstanceData() ([]InstanceData, error) {
 	return s.repo.ListWithOptions(context.Background(), LoadMinimal)
 }
 
+// ListInstanceDataWithWorktree returns raw InstanceData with the Worktree edge eager-loaded.
+// Use this instead of ListInstanceData whenever a read-only pass needs Worktree.WorktreePath/
+// RepoPath/BranchName/BaseCommitSHA (e.g. to stat the worktree or check dirty status) — plain
+// ListInstanceData uses LoadMinimal, which never populates Worktree, so any such field will
+// silently read as its zero value under that call.
+func (s *Storage) ListInstanceDataWithWorktree() ([]InstanceData, error) {
+	return s.repo.ListWithOptions(context.Background(), LoadOptions{LoadWorktree: true})
+}
+
 // GetStableID mirrors Instance.GetStableID for InstanceData: returns UUID when set,
 // Title otherwise. Used by Registry.AcquireAll and ListInstanceIDs to produce stable
 // per-session keys without constructing live Instance objects.
