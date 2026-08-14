@@ -689,18 +689,12 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 		}
 	}()
 
-	// Prober: deterministically forces the sawEmptyRead outcome instead of
-	// relying on incidental scheduling luck across the free-running readers
-	// above. It polls for handle.unmapped (same store.mu-guarded read as the
-	// pins checker above) and, the instant it observes the transition,
-	// performs one guaranteed Entries() call — proving the already-unmapped
-	// guard path (lockedIndex.unmappedLocked) is exercised on every run, not
-	// just when scheduling happens to line up. Not tied to `stop`: the unmap
-	// can only happen after repackDone fires and readers drain past
-	// readerGrace, so the deadline below is generous enough to cover the same
-	// 5-minute repackDone timeout plus readerGrace and slack — bounded so a
-	// future regression that breaks unmapping fails loudly with a clear
-	// message instead of hanging the suite.
+	// Prober: watches for the unmapped transition and immediately does one
+	// Entries() call, so the already-unmapped guard path (lockedIndex.unmappedLocked)
+	// is exercised deterministically every run rather than by scheduling luck.
+	// It ignores `stop`; the deadline covers the same 5-minute repackDone
+	// timeout plus readerGrace and slack, so a regression that breaks
+	// unmapping fails loudly instead of hanging the suite.
 	proberDeadline := time.Now().Add(5*time.Minute + readerGrace + 30*time.Second)
 	bgWG.Add(1)
 	go func() {
