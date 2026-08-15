@@ -12,7 +12,13 @@
     "BacklogBoard_should_SettleInDestinationColumn_When_ItemFlapsBackToOriginDuringExitTransition",
     "Backlog item ID + deep link > visiting /backlog/board?item=<id> restores the detail pane on the board itself",
     "Backlog item ID + deep link > an invalid item ID shows the not-found state on both /backlog and /backlog/board without crashing",
-    "Backlog item ID + deep link > the board page still opens via the list page deep link after a board round-trip (regression: no full-page redirect)"
+    "Backlog item ID + deep link > the board page still opens via the list page deep link after a board round-trip (regression: no full-page redirect)",
+    "BacklogBoard_should_HideNonMatchingStatusItems_When_StatusFilterIsSet",
+    "BacklogBoard_should_HideNonMatchingPriorityItems_When_PriorityFilterIsSet",
+    "BacklogBoard_should_ShowNoItemsMatchFilterMessage_When_FilterEmptiesAColumnWithItems",
+    "BacklogBoard_should_ShowGenericEmptyMessage_When_ColumnHasNoItemsRegardlessOfFilter",
+    "BacklogBoard_should_HideArchivedItems_When_ShowArchivedIsFalse",
+    "BacklogBoard_should_StillHideArchivedItems_When_ShowArchivedIsTrue"
   ],
-  "lastModified": "2026-07-24T00:00:00Z"
+  "lastModified": "2026-08-14T00:00:00Z"
 }
