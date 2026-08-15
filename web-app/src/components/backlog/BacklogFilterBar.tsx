@@ -97,6 +97,12 @@ export interface BacklogFilterBarProps {
   showSortGroupControls: boolean;
   groupBy?: BacklogGroupBy;
   onGroupByChange?: (v: BacklogGroupBy) => void;
+  /**
+   * The board view excludes archived items unconditionally (stageOf() always
+   * returns null for them), so the "Show Archived" checkbox does nothing
+   * there — default true (list view keeps it), board passes false.
+   */
+  showArchivedControl?: boolean;
 }
 
 export function BacklogFilterBar({
@@ -112,6 +118,7 @@ export function BacklogFilterBar({
   showSortGroupControls,
   groupBy,
   onGroupByChange,
+  showArchivedControl = true,
 }: BacklogFilterBarProps) {
   return (
     <div className={styles.filterBar} role="search" aria-label="Filter backlog items">
@@ -128,16 +135,18 @@ export function BacklogFilterBar({
       <PriorityFilterChips selected={priorityFilter} onChange={onPriorityFilterChange} />
       {/* Archived items are excluded from the default view client-side
           (Epic 5.1); enabling this re-includes them from the live store. */}
-      <label className={styles.showArchivedLabel}>
-        <input
-          type="checkbox"
-          checked={showArchived}
-          onChange={(e) => onShowArchivedChange(e.target.checked)}
-          aria-label="Show archived items"
-          data-testid="backlog-show-archived-toggle"
-        />
-        Show Archived
-      </label>
+      {showArchivedControl && (
+        <label className={styles.showArchivedLabel}>
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => onShowArchivedChange(e.target.checked)}
+            aria-label="Show archived items"
+            data-testid="backlog-show-archived-toggle"
+          />
+          Show Archived
+        </label>
+      )}
       {showSortGroupControls && groupBy !== undefined && onGroupByChange && (
         <label className={styles.groupByLabel}>
           Group by:{" "}

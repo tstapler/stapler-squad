@@ -32,7 +32,7 @@ import { useAppDispatch } from "@/lib/store";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
-import { ALL_STATUSES, filterBacklogItems } from "@/lib/hooks/useBacklogFilters";
+import { ALL_STATUSES, BACKLOG_FILTER_FIELDS, filterBacklogItems } from "@/lib/hooks/useBacklogFilters";
 import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
 import * as styles from "./backlog.css";
 
@@ -57,24 +57,13 @@ interface BacklogViewState {
 }
 
 // Persisted under stapler-squad-backlog-* keys (see usePersistedViewState) —
-// namespaced separately from SessionList's stapler-squad-* keys.
+// namespaced separately from SessionList's stapler-squad-* keys. The
+// search/statusFilter/priorityFilter/showArchived fields are spread in from
+// BACKLOG_FILTER_FIELDS (useBacklogFilters.ts) — the single source of truth
+// shared with the board view — so the two views can't silently diverge on
+// keys/validators. sortCol/sortAsc/groupBy are list-view-only extras.
 const BACKLOG_VIEW_FIELDS: PersistedFieldsConfig<BacklogViewState> = {
-  search: { key: "stapler-squad-backlog-search", defaultValue: "" },
-  statusFilter: {
-    key: "stapler-squad-backlog-status-filter",
-    defaultValue: [],
-    isValid: (v) => Array.isArray(v) && v.every((s) => ALL_STATUSES.includes(s as BacklogItemStatus)),
-  },
-  priorityFilter: {
-    key: "stapler-squad-backlog-priority-filter",
-    defaultValue: [],
-    isValid: (v) => Array.isArray(v) && v.every((n) => typeof n === "number"),
-  },
-  showArchived: {
-    key: "stapler-squad-backlog-show-archived",
-    defaultValue: false,
-    isValid: (v) => typeof v === "boolean",
-  },
+  ...BACKLOG_FILTER_FIELDS,
   sortCol: {
     key: "stapler-squad-backlog-sort-col",
     defaultValue: "updatedAt",

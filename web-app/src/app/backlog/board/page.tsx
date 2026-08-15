@@ -132,6 +132,7 @@ function BacklogBoardPageInner() {
         onShowArchivedChange={setShowArchived}
         onResetView={resetView}
         showSortGroupControls={false}
+        showArchivedControl={false}
       />
       <div className={styles.contentArea}>
         <BacklogBoard
