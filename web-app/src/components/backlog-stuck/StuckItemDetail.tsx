@@ -12,6 +12,13 @@ interface StuckItemDetailProps {
   /** Sets a per-item rework-cap override and immediately reopens the item — omitted disables the rework_cap override control. */
   onReworkCapOverride?: (itemId: string, override: number) => Promise<boolean>;
   /**
+   * This item's current reworkCapOverride value (tri-state: undefined = no
+   * override set / using global default, 0 = unlimited, >0 = this item's own
+   * cap), fetched by the parent via getBacklogItem since StuckBacklogItem
+   * (this component's `item` prop type) doesn't carry the field.
+   */
+  currentReworkCapOverride?: number;
+  /**
    * Approves the item's plan (ApprovePlan RPC) — omitted disables the
    * approve control entirely. Rejects (throws) on failure so this component
    * can surface the actual backend message (e.g. "no plan artifacts found")
@@ -29,10 +36,28 @@ function autoMergeLine(allowAutoMerge: boolean | undefined): string {
 }
 
 /**
+ * Read-only "current rework cap override" line. `reworkCapOverride` is
+ * tri-state — undefined means no override is set (global default applies),
+ * 0 explicitly means unlimited retries for this item, and any other value is
+ * this item's own cap — so this must use `=== undefined` / `=== 0` checks,
+ * never `||`/truthy coercion (which would misreport an explicit 0 as unset).
+ */
+function formatReworkCapOverride(value: number | undefined): string {
+  if (value === undefined) return "No override set (using global default)";
+  if (value === 0) return "Unlimited";
+  return `${value} rounds`;
+}
+
+/**
  * Expanded accordion detail panel for a StuckItem. Renders inline beneath the
  * card (no portal/modal), mirroring UnfinishedItemDetail.tsx.
  */
-export function StuckItemDetail({ item, onReworkCapOverride, onApprovePlan }: StuckItemDetailProps) {
+export function StuckItemDetail({
+  item,
+  onReworkCapOverride,
+  currentReworkCapOverride,
+  onApprovePlan,
+}: StuckItemDetailProps) {
   const unknown = isPrStatusUnknown(item);
   const isPrReady = item.reason === StuckReason.PR_READY_UNMERGED;
   const isReworkCap = item.reason === StuckReason.REWORK_CAP;
@@ -46,7 +71,15 @@ export function StuckItemDetail({ item, onReworkCapOverride, onApprovePlan }: St
   const isPlanNotApproved = isPlanNotApprovedReason && hasPlan;
   const why = item.context?.trim() ? item.context : "No additional context recorded";
 
-  const [moreRounds, setMoreRounds] = useState("3");
+  // Pre-fill with this item's existing explicit cap (>0) so the input
+  // reflects reality instead of a generic default; 0 (unlimited) and
+  // undefined (no override) have no positive number to show in this
+  // min=1 numeric field, so both fall back to the "3" starting suggestion.
+  const [moreRounds, setMoreRounds] = useState(
+    currentReworkCapOverride !== undefined && currentReworkCapOverride > 0
+      ? String(currentReworkCapOverride)
+      : "3"
+  );
   const [overrideState, setOverrideState] = useState<"idle" | "pending" | "error">("idle");
   const [approveState, setApproveState] = useState<"idle" | "pending" | "error">("idle");
   const [approveError, setApproveError] = useState<string | null>(null);
@@ -99,6 +132,12 @@ export function StuckItemDetail({ item, onReworkCapOverride, onApprovePlan }: St
             own cap below to let it keep retrying automatically, or click &quot;Reopen for
             Revision&quot; on the item to try one more round manually.
           </p>
+          <div className={styles.row}>
+            <span className={styles.label}>Current override:</span>
+            <span className={styles.value} data-testid="stuck-item-rework-cap-current">
+              {formatReworkCapOverride(currentReworkCapOverride)}
+            </span>
+          </div>
           {onReworkCapOverride && (
             <div className={styles.overrideForm} data-testid="stuck-item-rework-cap-override-form">
               <input

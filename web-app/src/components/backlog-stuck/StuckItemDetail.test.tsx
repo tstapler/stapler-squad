@@ -127,6 +127,73 @@ describe("StuckItemDetail", () => {
     });
   });
 
+  describe("StuckItemDetail_should_showCurrentReworkCapOverride_When_ReasonIsReworkCap", () => {
+    it("shows 'No override set (using global default)' when currentReworkCapOverride is undefined", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          currentReworkCapOverride={undefined}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe(
+        "No override set (using global default)"
+      );
+    });
+
+    it("shows 'Unlimited' when currentReworkCapOverride is explicitly 0", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          currentReworkCapOverride={0}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe("Unlimited");
+    });
+
+    it("shows the explicit cap value when currentReworkCapOverride is a positive number", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          currentReworkCapOverride={5}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe("5 rounds");
+    });
+
+    it("pre-fills the rounds input with the current override when one is set", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={5}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(5);
+    });
+
+    it("falls back to the default '3' pre-fill when currentReworkCapOverride is 0 (unlimited)", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={0}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
+    });
+
+    it("falls back to the default '3' pre-fill when currentReworkCapOverride is undefined", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={undefined}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
+    });
+  });
+
   describe("StuckItemDetail_should_offerOverrideControl_When_ReasonIsReworkCapAndHandlerProvided", () => {
     it("does not render the override form when no handler is provided", () => {
       render(<StuckItemDetail item={makeItem({ reason: StuckReason.REWORK_CAP })} />);

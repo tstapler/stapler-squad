@@ -56,6 +56,11 @@ export function LifecycleSummary({ item, pipelineDisplay, stuckItem }: Lifecycle
           Pipeline: {pipelineDisplay.name}
         </span>
       )}
+      {item.reworkCapOverride !== undefined && (
+        <span className={styles.pipelineBadge} data-testid="lifecycle-rework-cap-badge">
+          Rework cap: {item.reworkCapOverride === 0 ? "unlimited" : item.reworkCapOverride}
+        </span>
+      )}
       <LivenessLine item={item} />
     </div>
   );

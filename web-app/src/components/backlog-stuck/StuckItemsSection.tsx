@@ -94,10 +94,15 @@ export function StuckItemsSection() {
     bulkResetParkedRemediation,
     triggerRemediationNow,
   } = useStuckBacklogItems();
-  const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan } = useBacklogService();
+  const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
+    useBacklogService();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [resolvedGhosts, setResolvedGhosts] = useState<Map<string, ResolvedGhost>>(new Map());
+  // Populated lazily on expand for REWORK_CAP items only — StuckBacklogItem
+  // (the list-fetch shape) doesn't carry reworkCapOverride, so the current
+  // value has to be fetched via getBacklogItem (full BacklogItem) on demand.
+  const [reworkCapOverrides, setReworkCapOverrides] = useState<Map<string, number | undefined>>(new Map());
   const [bulkResetState, setBulkResetState] = useState<"idle" | "pending" | "error">("idle");
   const [bulkResetMessage, setBulkResetMessage] = useState<string | null>(null);
 
@@ -198,6 +203,36 @@ export function StuckItemsSection() {
       return next;
     });
   }, []);
+
+  // Fetches the current reworkCapOverride for newly-expanded REWORK_CAP items
+  // so StuckItemDetail can show it instead of guessing blind. Skips items
+  // already present in the map (including a resolved `undefined`) so
+  // re-expanding doesn't re-fetch.
+  useEffect(() => {
+    const toFetch = items.filter(
+      (item) =>
+        item.reason === StuckReason.REWORK_CAP &&
+        expandedKeys.has(itemKey(item)) &&
+        !reworkCapOverrides.has(item.itemId)
+    );
+    if (toFetch.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const item of toFetch) {
+        const full = await getBacklogItem(item.itemId);
+        if (cancelled) return;
+        setReworkCapOverrides((prev) => {
+          if (prev.has(item.itemId)) return prev;
+          const next = new Map(prev);
+          next.set(item.itemId, full?.reworkCapOverride);
+          return next;
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [items, expandedKeys, reworkCapOverrides, getBacklogItem]);
 
   const handleClearFilter = useCallback(() => setFilter("all"), []);
 
@@ -415,6 +450,7 @@ export function StuckItemsSection() {
                       resolvedTrailingMessage={ghost?.trailingMessage}
                       onSnooze={snooze}
                       onReworkCapOverride={handleReworkCapOverride}
+                      currentReworkCapOverride={reworkCapOverrides.get(item.itemId)}
                       onTriggerRemediationNow={triggerRemediationNow}
                       onApprovePlan={handleApprovePlan}
                     />

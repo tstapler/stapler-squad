@@ -4,9 +4,23 @@ import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
 const mockUseStuckBacklogItems = jest.fn();
+const mockGetBacklogItem = jest.fn();
 
 jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: () => mockUseStuckBacklogItems(),
+}));
+
+// Only getBacklogItem is exercised by this file's tests (the fetch-on-expand
+// mechanism that resolves currentReworkCapOverride) — the other methods are
+// stubbed no-ops since no existing test path invokes them.
+jest.mock("@/lib/hooks/useBacklogService", () => ({
+  useBacklogService: () => ({
+    getBacklogItem: mockGetBacklogItem,
+    updateBacklogItem: jest.fn(),
+    approvePlan: jest.fn(),
+    spawnSessionFromItem: jest.fn(),
+    transitionStatus: jest.fn(),
+  }),
 }));
 
 import { StuckItemsSection } from "./StuckItemsSection";
@@ -375,6 +389,55 @@ describe("StuckItemsSection", () => {
       fireEvent.click(screen.getByTestId("stuck-items-reset-parked"));
       const message = await screen.findByTestId("stuck-items-reset-parked-message");
       expect(message.textContent).toMatch(/network down/);
+    });
+  });
+
+  // reworkCapOverride-current-value-display: StuckBacklogItem (this file's
+  // makeItem()) doesn't carry reworkCapOverride, so on expand the section
+  // fetches the full BacklogItem via getBacklogItem() and threads the result
+  // down as StuckItemDetail's currentReworkCapOverride prop.
+  describe("StuckItemsSection_should_FetchAndDisplayCurrentReworkCapOverride_When_ReworkCapItemIsExpanded", () => {
+    beforeEach(() => {
+      mockGetBacklogItem.mockReset();
+    });
+
+    it("fetches the item and displays its current override once expanded", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-1", reworkCapOverride: 7 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-1", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-1");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(current.textContent).toBe("7 rounds");
+    });
+
+    it("shows 'No override set' when the fetched item has no override", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-2", reworkCapOverride: undefined });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-2", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-2");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(current.textContent).toBe("No override set (using global default)");
     });
   });
 });
