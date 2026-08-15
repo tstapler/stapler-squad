@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -54,6 +55,11 @@ var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 const createSessionTimeout = 150 * time.Second
 
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// testTmuxServerSocketCounter gives each SessionService created within a test binary run a
+// unique tmux -L socket suffix (combined with os.Getpid() for cross-process uniqueness), so
+// concurrent tests never contend on the same isolated socket. See SessionService.testTmuxServerSocket.
+var testTmuxServerSocketCounter uint64
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
 // The actual implementation is in server/review_queue_manager.go
@@ -244,6 +250,15 @@ type SessionService struct {
 	// runs the cleanup untracked instead, which is fine because Shutdown no
 	// longer needs to wait for it.
 	deleteCleanupClosed bool
+
+	// testTmuxServerSocket, when non-empty, is applied to every Instance this
+	// service creates via TmuxServerSocket, isolating the tmux -L socket used
+	// by test runs from the shared production default. Set automatically by
+	// NewSessionServiceWithSearchEngine under config.IsTestMode() — see
+	// docs/bugs/fixed/BUG-075 for why this is a service-wide test hook rather
+	// than a per-call-site change across the package's ~90 NewSessionService
+	// test call sites.
+	testTmuxServerSocket string
 }
 
 // trackCleanup runs fn in a goroutine tracked by deleteCleanupWG so Shutdown
@@ -500,6 +515,10 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
+
+	if config.IsTestMode() {
+		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))
+	}
 
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
@@ -1001,17 +1020,18 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
 	opts := session.InstanceOptions{
-		Title:           title,
-		Path:            path,
-		Program:         resolved.Program,
-		PermissionMode:  session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
-		SessionType:     session.SessionTypeDirectory,
-		Prompt:          prompt,
-		Tags:            tags,
-		OneShot:         oneShot,
-		Hidden:          hidden,
-		MCPServerURL:    s.resolveMCPServerURL(),
-		CreateIfMissing: true,
+		Title:            title,
+		Path:             path,
+		Program:          resolved.Program,
+		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
+		SessionType:      session.SessionTypeDirectory,
+		Prompt:           prompt,
+		Tags:             tags,
+		OneShot:          oneShot,
+		Hidden:           hidden,
+		MCPServerURL:     s.resolveMCPServerURL(),
+		CreateIfMissing:  true,
+		TmuxServerSocket: s.testTmuxServerSocket,
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -1064,6 +1084,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 		Hidden:           hidden,
 		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  false,
+		TmuxServerSocket: s.testTmuxServerSocket,
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -1672,6 +1693,7 @@ func (s *SessionService) CreateSession(
 		WorkflowID:       req.Msg.WorkflowId,
 		EnvVars:          instanceEnvVars,
 		CLIFlags:         instanceCLIFlags,
+		TmuxServerSocket: s.testTmuxServerSocket,
 		// ExtraArgs is a direct passthrough of req.Msg.ExtraArgs — unlike CLIFlags, it has no
 		// defaults-resolution concept to merge with. It composes with instanceCLIFlags at
 		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
