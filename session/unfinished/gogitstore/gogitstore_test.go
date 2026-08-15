@@ -39,7 +39,7 @@ import (
 // produce a real multi-hundred-object packfile, which is all that's needed
 // to prove the sharing behavior; it doesn't need to be huge to be real.
 
-func gitRun(t *testing.T, dir string, args ...string) {
+func gitRun(t testing.TB, dir string, args ...string) {
 	t.Helper()
 	if err := gitRunErr(t.Logf, dir, args...); err != nil {
 		t.Fatalf("%v", err)
@@ -108,7 +108,7 @@ func gitRunErr(logf func(format string, args ...any), dir string, args ...string
 	var lastOut []byte
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
-		cmd := safeexec.CommandContext(ctx, "git", args...)
+		cmd := safeexec.CommandContextPG(ctx, "git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",
@@ -718,38 +718,60 @@ func strconvItoaPadded(i int) string {
 	return string(out)
 }
 
-func addWorktree(t *testing.T, mainRepo, dst, branch string) {
+func addWorktree(t testing.TB, mainRepo, dst, branch string) {
 	t.Helper()
 	gitRun(t, mainRepo, "worktree", "add", "-q", "-b", branch, dst, "main")
 }
 
 // --- the actual proof-of-design test --------------------------------------
 
-// TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst is this
-// prototype's central claim, proven empirically rather than asserted by
-// design alone: opening worktree #2..#N of the SAME repository through one
-// shared Registry parses the packfile index and populates the decoded
-// object cache exactly ONCE (IndexBuildCount stays at 1), and the
-// heap-allocation cost of opening each subsequent worktree is dramatically
-// smaller than the first.
-//
-// It also runs a CONTROL loop using stock git.PlainOpenWithOptions (today's
-// behavior — a fresh cache.NewObjectLRUDefault() and a fresh idx parse on
-// every open, no sharing at all) against an identical fixture, so the
-// reported numbers show shared-vs-unshared side by side rather than only
-// the shared number in isolation.
-func TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst(t *testing.T) {
+// sharedIndexFixture builds a single main repo + numWorktrees worktrees and
+// opens them all through a shared Registry, returning the resulting
+// SharedObjectStore and the opened repos (kept alive by the caller so their
+// caches/objects aren't GC'd mid-measurement). Both
+// TestSharedIndex_ParsesPackfileIndexExactlyOnce and
+// BenchmarkSharedIndex_WorktreeOpen build on this same setup so the
+// correctness check and the cost measurement can't drift apart.
+func sharedIndexFixture(t testing.TB, dir string, numWorktrees, numCommits int) (*Registry, *SharedObjectStore, []*git.Repository) {
+	t.Helper()
+	mainRepo := filepath.Join(dir, "main")
+	buildPackedFixture(t, mainRepo, numCommits)
+
+	reg := &Registry{CacheMaxSize: 12 * 1024 * 1024} // matches the parallel cache-shrink fix's target size
+	repos := make([]*git.Repository, 0, numWorktrees)
+	for i := 0; i < numWorktrees; i++ {
+		wtPath := filepath.Join(dir, "wt"+strconv.Itoa(i))
+		addWorktree(t, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
+
+		repo, err := Open(wtPath, reg)
+		if err != nil {
+			t.Fatalf("gogitstore.Open(%s) failed: %v", wtPath, err)
+		}
+		exerciseRepo(t, repo)
+		repos = append(repos, repo)
+	}
+
+	commonDirAbs := canonicalizeDir(filepath.Join(mainRepo, ".git"))
+	store, ok := reg.stores[commonDirAbs]
+	if !ok {
+		t.Fatalf("no SharedObjectStore registered for commondir %s; registered keys: %v", commonDirAbs, reg.Stats())
+	}
+	return reg, store, repos
+}
+
+// TestSharedIndex_ParsesPackfileIndexExactlyOnce is this prototype's central
+// correctness claim: opening worktree #2..#N of the SAME repository through
+// one shared Registry parses the packfile index and populates the decoded
+// object cache exactly ONCE (IndexBuildCount stays at 1), regardless of how
+// many worktrees are opened. The relative cost of a shared vs. unshared open
+// is a benchmark concern, not a pass/fail correctness one — see
+// BenchmarkSharedIndex_WorktreeOpen and BenchmarkUnsharedIndex_WorktreeOpen.
+func TestSharedIndex_ParsesPackfileIndexExactlyOnce(t *testing.T) {
 	if os.Getenv("CI") != "" {
 		// ponytail: skipped in CI — git gc --aggressive under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
 		t.Skip("skipped in CI — see PR #162")
 	}
 	if testing.Short() {
-		// The fixture builds 5 worktrees x 250 commits (~2500 sequential git
-		// subprocess calls total) plus a git gc --aggressive per worktree —
-		// this alone can exceed Go's 10-minute default test timeout under
-		// load, independent of the CI-specific corruption this file already
-		// guards against above. See session/unfinished/gogitstore/soak_test.go
-		// for the established -short convention in this package.
 		t.Skip("skipped under -short: too slow for make test/quick-check")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
@@ -759,116 +781,102 @@ func TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst(t *testing.T) {
 	const numWorktrees = 5
 	const numCommits = 250
 
-	// ---- Shared-storer measurement ----
-	sharedDir := t.TempDir()
-	mainRepo := filepath.Join(sharedDir, "main")
-	buildPackedFixture(t, mainRepo, numCommits)
+	_, store, repos := sharedIndexFixture(t, t.TempDir(), numWorktrees, numCommits)
 
-	reg := &Registry{CacheMaxSize: 12 * 1024 * 1024} // matches the parallel cache-shrink fix's target size
-
-	var sharedDeltas []uint64
-	var repos []*git.Repository // keep references alive so the cache/objects aren't GC'd mid-measurement
-	for i := 0; i < numWorktrees; i++ {
-		wtPath := filepath.Join(sharedDir, "wt"+strconv.Itoa(i))
-		addWorktree(t, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
-
-		before := heapAllocNow()
-		repo, err := Open(wtPath, reg)
-		if err != nil {
-			t.Fatalf("gogitstore.Open(%s) failed: %v", wtPath, err)
-		}
-		exerciseRepo(t, repo)
-		after := heapAllocNow()
-
-		repos = append(repos, repo)
-		sharedDeltas = append(sharedDeltas, deltaOrZero(before, after))
-		t.Logf("shared: worktree #%d open+read heap delta = %d bytes", i, sharedDeltas[i])
-	}
-
-	commonDirAbs := canonicalizeDir(filepath.Join(mainRepo, ".git"))
-	store, ok := reg.stores[commonDirAbs]
-	if !ok {
-		t.Fatalf("no SharedObjectStore registered for commondir %s; registered keys: %v", commonDirAbs, reg.Stats())
-	}
 	if got := store.IndexBuildCount; got != 1 {
 		t.Errorf("IndexBuildCount = %d, want exactly 1 — the whole point of sharing is that only the FIRST worktree open parses the .idx files", got)
 	}
 	if store.IndexEntryCount == 0 {
 		t.Errorf("IndexEntryCount = 0, want > 0 — fixture's `git gc` should have produced a non-empty packfile")
 	}
-	t.Logf("shared: SharedObjectStore parsed %d index entries exactly once across %d worktree opens", store.IndexEntryCount, numWorktrees)
+	t.Logf("SharedObjectStore parsed %d index entries exactly once across %d worktree opens", store.IndexEntryCount, numWorktrees)
 
-	// The first worktree pays to parse every .idx file into a fresh
-	// SharedObjectStore; every later worktree should be cheap by
-	// comparison. This is the core empirical claim of this prototype.
-	first := sharedDeltas[0]
-	var laterSum uint64
-	for _, d := range sharedDeltas[1:] {
-		laterSum += d
-	}
-	avgLater := laterSum / uint64(len(sharedDeltas)-1)
-	t.Logf("shared: worktree #0 (pays idx-parse cost) = %d bytes; worktrees #1..#%d average = %d bytes", first, numWorktrees-1, avgLater)
+	runtime.KeepAlive(repos)
+}
 
-	// Tolerance rationale: a strict `avgLater >= first` comparison flaked
-	// under CI load with no code changes across reruns (see heapAllocNow's
-	// doc comment for why — HeapAlloc is process-wide and this is a single
-	// sample per worktree). The real effect size here is enormous: later
-	// worktrees locally measure at roughly 1-2% of the first worktree's
-	// cost (shared index/cache means only the first open ever parses the
-	// packfile). A generous half-of-first ceiling absorbs plausible
-	// measurement noise while still failing on any regression that erodes
-	// most of the sharing win, which is the only thing this assertion
-	// exists to catch.
-	const laterWorktreeToleranceRatio = 0.5
-	if maxAllowed := uint64(float64(first) * laterWorktreeToleranceRatio); avgLater >= maxAllowed {
-		t.Errorf("expected later worktrees to be meaningfully cheaper than the first (shared index/cache should absorb their cost); first=%d avgLater=%d (must be under %.0f%% = %d bytes)", first, avgLater, laterWorktreeToleranceRatio*100, maxAllowed)
+// BenchmarkSharedIndex_WorktreeOpen measures the steady-state cost of
+// opening one of numWorktrees worktrees of the same repo through a shared
+// Registry — i.e. the "later worktree" case sharedIndexFixture's index-build
+// invariant is meant to make cheap. Only the very first b.N iteration (and
+// only when it lands on worktree #0) pays the one-time idx-parse cost; every
+// other iteration reopens an already-warmed worktree, which is the
+// comparison point against BenchmarkUnsharedIndex_WorktreeOpen. Run with
+// -benchmem to see the win in allocs/op and B/op directly instead of a
+// hand-rolled heap-delta tolerance ratio.
+func BenchmarkSharedIndex_WorktreeOpen(b *testing.B) {
+	if _, err := exec.LookPath("git"); err != nil {
+		b.Skip("git binary not available")
 	}
 
-	// ---- Control measurement: stock go-git, no sharing at all ----
-	controlDir := t.TempDir()
-	controlMain := filepath.Join(controlDir, "main")
-	buildPackedFixture(t, controlMain, numCommits)
+	const numWorktrees = 5
+	const numCommits = 250
 
-	var controlDeltas []uint64
-	var controlRepos []*git.Repository
+	reg, _, repos := sharedIndexFixture(b, b.TempDir(), numWorktrees, numCommits)
+	runtime.KeepAlive(repos)
+	wtPaths := make([]string, numWorktrees)
+	for i, r := range repos {
+		wt, err := r.Worktree()
+		if err != nil {
+			b.Fatalf("repo.Worktree(): %v", err)
+		}
+		wtPaths[i] = wt.Filesystem.Root()
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		repo, err := Open(wtPaths[i%numWorktrees], reg)
+		if err != nil {
+			b.Fatalf("gogitstore.Open(%s) failed: %v", wtPaths[i%numWorktrees], err)
+		}
+		exerciseRepo(b, repo)
+	}
+}
+
+// BenchmarkUnsharedIndex_WorktreeOpen is BenchmarkSharedIndex_WorktreeOpen's
+// control: stock git.PlainOpenWithOptions, no Registry/SharedObjectStore
+// involved, so every open re-parses the idx and gets its own fresh
+// cache.NewObjectLRUDefault(). Comparing this benchmark's B/op and allocs/op
+// against BenchmarkSharedIndex_WorktreeOpen's is the actual "is sharing
+// cheaper" proof.
+func BenchmarkUnsharedIndex_WorktreeOpen(b *testing.B) {
+	if _, err := exec.LookPath("git"); err != nil {
+		b.Skip("git binary not available")
+	}
+
+	const numWorktrees = 5
+	const numCommits = 250
+
+	dir := b.TempDir()
+	mainRepo := filepath.Join(dir, "main")
+	buildPackedFixture(b, mainRepo, numCommits)
+
+	wtPaths := make([]string, numWorktrees)
 	for i := 0; i < numWorktrees; i++ {
-		wtPath := filepath.Join(controlDir, "wt"+strconv.Itoa(i))
-		addWorktree(t, controlMain, wtPath, "branch-"+strconv.Itoa(i))
+		wtPath := filepath.Join(dir, "wt"+strconv.Itoa(i))
+		addWorktree(b, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
+		wtPaths[i] = wtPath
+	}
 
-		before := heapAllocNow()
-		repo, err := git.PlainOpenWithOptions(wtPath, &git.PlainOpenOptions{
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		repo, err := git.PlainOpenWithOptions(wtPaths[i%numWorktrees], &git.PlainOpenOptions{
 			DetectDotGit:          true,
 			EnableDotGitCommonDir: true,
 		})
 		if err != nil {
-			t.Fatalf("git.PlainOpenWithOptions(%s) failed: %v", wtPath, err)
+			b.Fatalf("git.PlainOpenWithOptions(%s) failed: %v", wtPaths[i%numWorktrees], err)
 		}
-		exerciseRepo(t, repo)
-		after := heapAllocNow()
-
-		controlRepos = append(controlRepos, repo)
-		controlDeltas = append(controlDeltas, deltaOrZero(before, after))
-		t.Logf("control (stock go-git, unshared): worktree #%d open+read heap delta = %d bytes", i, controlDeltas[i])
+		exerciseRepo(b, repo)
 	}
-
-	var controlLaterSum uint64
-	for _, d := range controlDeltas[1:] {
-		controlLaterSum += d
-	}
-	controlAvgLater := controlLaterSum / uint64(len(controlDeltas)-1)
-	t.Logf("control: worktree #0 = %d bytes; worktrees #1..#%d average = %d bytes (no sharing — every worktree re-parses the idx and gets its own 96MB-budget LRU cache)", controlDeltas[0], numWorktrees-1, controlAvgLater)
-
-	t.Logf("SUMMARY: shared design's later-worktree average = %d bytes; stock go-git's later-worktree average = %d bytes", avgLater, controlAvgLater)
-
-	runtime.KeepAlive(repos)
-	runtime.KeepAlive(controlRepos)
 }
 
 // exerciseRepo forces real object materialization (not just Reference()
 // lookups) so the heap delta reflects genuine decode work, matching what
 // HasUncommitted/DiffShortstat/AheadBehind actually do: resolve HEAD, load
 // its commit, and load its tree.
-func exerciseRepo(t *testing.T, repo *git.Repository) {
+func exerciseRepo(t testing.TB, repo *git.Repository) {
 	t.Helper()
 	head, err := repo.Head()
 	if err != nil {
