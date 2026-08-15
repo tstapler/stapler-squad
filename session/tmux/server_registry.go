@@ -196,6 +196,18 @@ func (r *TmuxServerRegistry) NotifySessionCreated(name string) {
 	r.mu.Unlock()
 }
 
+// NotifySessionClosed proactively marks a session as gone in the registry.
+// Called by TmuxSession.Close() right after a synchronous "kill-session"
+// subprocess confirms the session is dead, so DoesSessionExist()'s registry
+// fast path returns false immediately instead of trusting a stale "exists"
+// entry until the async %session-closed control-mode event is processed --
+// the symmetric counterpart of NotifySessionCreated's create-side fast path.
+func (r *TmuxServerRegistry) NotifySessionClosed(name string) {
+	r.mu.Lock()
+	delete(r.sessions, name)
+	r.mu.Unlock()
+}
+
 // SubscribePaneExit implements PaneExitSubscriber. The returned channel is
 // closed when the named session/pane exits or when ctx is cancelled.
 func (r *TmuxServerRegistry) SubscribePaneExit(ctx context.Context, sessionName string) <-chan struct{} {

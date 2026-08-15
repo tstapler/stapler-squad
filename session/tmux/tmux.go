@@ -1897,6 +1897,8 @@ func (t *TmuxSession) Close() error {
 	// Check if session exists before trying to kill it
 	if t.DoesSessionExist() {
 		cmd := t.buildTmuxCommand("kill-session", "-t", t.sanitizedName)
+		var stderrBuf bytes.Buffer
+		cmd.Stderr = &stderrBuf
 		// buildTmuxCommand binds cmd to context.Background(), so runGatedErr's
 		// ctx only bounds the exec-gate slot acquisition, not the subprocess
 		// itself. Run through a TimeoutExecutor here so a hung tmux server
@@ -1909,6 +1911,7 @@ func (t *TmuxSession) Close() error {
 			return killExec.Run(cmd)
 		})
 		if err := gatedErr; err != nil {
+			log.Warn("DEBUGTMP Close: kill-session failed", "session", t.sanitizedName, "err", err, "stderr", stderrBuf.String())
 			// Check if this is the common "session not found" error
 			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 				// Exit code 1 usually means session doesn't exist or was already killed
@@ -1920,6 +1923,14 @@ func (t *TmuxSession) Close() error {
 			log.Info("successfully killed tmux session", "session", t.sanitizedName)
 		}
 		t.invalidateExistsCache() // Session was killed, invalidate cache
+		// Proactively clear the registry too -- DoesSessionExist()'s registry
+		// fast path is checked before the cache, so leaving a stale "exists"
+		// entry there would still report the session alive until the async
+		// %session-closed control-mode event arrives (see NotifySessionCreated
+		// for the symmetric create-side problem this mirrors).
+		if notifier, ok := t.registry.(interface{ NotifySessionClosed(string) }); ok {
+			notifier.NotifySessionClosed(t.sanitizedName)
+		}
 	} else {
 		log.Info("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
 	}
@@ -2099,15 +2110,19 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	// so fall through to the cache/subprocess path for an authoritative answer.
 	if t.registry != nil && t.registry.IsHealthy() {
 		if t.registry.SessionExists(t.sanitizedName) {
+			log.Warn("DEBUGTMP DoesSessionExist: registry fast path true", "session", t.sanitizedName)
 			return true
 		}
 		// Registry returned false — do not trust it blindly; fall through.
+	} else {
+		log.Warn("DEBUGTMP DoesSessionExist: registry nil or unhealthy", "session", t.sanitizedName, "registryNil", t.registry == nil)
 	}
 
 	// Fast path: lock-free atomic load.
 	if v := t.existsCache.Load(); v != nil {
 		state := v.(existsCacheState)
 		if !state.time.IsZero() && time.Since(state.time) < t.existsCacheTTL {
+			log.Warn("DEBUGTMP DoesSessionExist: cache fast path", "session", t.sanitizedName, "exists", state.exists)
 			return state.exists
 		}
 	}
@@ -2115,10 +2130,13 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	// Slow path: coalesce concurrent misses via singleflight.
 	// No lock is held during the subprocess — fixes the previous anti-pattern
 	// of holding existsCacheMutex across listSessionsRaw (a subprocess call).
+	log.Warn("DEBUGTMP DoesSessionExist: entering slow path", "session", t.sanitizedName)
 	v, _, _ := t.existsSF.Do("", func() (interface{}, error) {
+		log.Warn("DEBUGTMP DoesSessionExist: slow path singleflight fn running", "session", t.sanitizedName)
 		ctx, cancel := context.WithTimeout(context.Background(), sessionExistsTimeout)
 		defer cancel()
 		output, err := t.listSessionsRaw(ctx)
+		log.Warn("DEBUGTMP DoesSessionExist: listSessionsRaw returned", "session", t.sanitizedName, "output", string(output), "err", err)
 
 		if ctx.Err() == context.DeadlineExceeded {
 			log.Warn("timeout checking if tmux session exists", "session", t.sanitizedName)
@@ -2143,9 +2161,11 @@ func (t *TmuxSession) DoesSessionExist() bool {
 				break
 			}
 		}
+		log.Warn("DEBUGTMP DoesSessionExist: slow path result", "session", t.sanitizedName, "exists", exists, "sessions", sessions)
 		t.existsCache.Store(existsCacheState{exists: exists, time: time.Now()})
 		return exists, nil
 	})
+	log.Warn("DEBUGTMP DoesSessionExist: slow path final return", "session", t.sanitizedName, "result", v.(bool))
 	return v.(bool)
 }
 
