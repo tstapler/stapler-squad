@@ -180,7 +180,7 @@ func TestPool_CallBlocking_WorkDirPath_ContextTimeout_ReturnsError_NotEmptySucce
 	scriptPath := writeSleepForeverFakeClaudeScript(t, scriptDir)
 	workDir := t.TempDir()
 
-	runner := NewProcessRunnerForTesting(scriptPath)
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
@@ -693,7 +693,7 @@ func TestPool_CallBlocking_WithWorkDir_ReturnsCostAndUsesWorkDir(t *testing.T) {
 	workDir, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 
-	runner := &ProcessRunner{claudeBin: scriptPath}
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 25, MaxConcurrentSessions: 2}, runner)
 
 	result, cost, err := pool.CallBlocking(context.Background(), "feat-workdir", "sys", "prompt", CallOptions{WorkDir: workDir})

@@ -97,6 +97,13 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   const actionSpec = getPrimaryCardAction(item);
   const isTriageRunning = item.triageStatus === "running";
   const isActionPending = pendingAction === actionSpec.action;
+  // Transient disable reasons (spinner + "Running…"/"Triage in progress") are
+  // already explained via the button label/TriageLoadingIndicator — never
+  // surface the underlying domain condition's reason on top of those, even
+  // if it's also unmet.
+  const disabledReason =
+    isTriageRunning || pendingAction !== null ? undefined : actionSpec.disabled ? actionSpec.disabledReason : undefined;
+  const disabledReasonId = `${item.id}-disabled-reason`;
 
   // `item.liveVersion` only advances for a genuine live (non-snapshot)
   // BacklogItemEvent (see useWatchBacklogItems.ts / backlogItemsSlice.ts) —
@@ -202,6 +209,8 @@ export const BacklogItemCard = memo(function BacklogItemCard({
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
           disabled={actionSpec.disabled || actionSpec.isDone || isTriageRunning || pendingAction !== null}
           aria-label={isActionPending ? "Running…" : isTriageRunning ? "Triage in progress" : actionSpec.label}
+          aria-describedby={disabledReason ? disabledReasonId : undefined}
+          title={disabledReason}
           data-action-button="true"
           data-testid={`backlog-action-${actionSpec.action}`}
           onClick={(e) => {
@@ -222,6 +231,11 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         </button>
         {stuckItem && <BlockerChip variant="compact" item={stuckItem} />}
       </div>
+      {disabledReason && (
+        <span id={disabledReasonId} className={styles.disabledReason} data-testid="backlog-action-disabled-reason">
+          {disabledReason}
+        </span>
+      )}
     </div>
   );
 });

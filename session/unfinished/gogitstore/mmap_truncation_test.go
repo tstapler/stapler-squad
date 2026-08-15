@@ -124,7 +124,17 @@ func TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection(t *testing
 	out, err := result.Output, result.Err
 
 	if err != nil {
-		t.Logf("subprocess did not exit cleanly (expected — this IS the point of the test): err=%v\noutput:\n%s", err, out)
+		matched, detail := isExpectedFaultSignal(out)
+		if matched {
+			t.Logf("subprocess crashed with a Go runtime-confirmed %s (expected — this IS the point of the test)", detail)
+			return
+		}
+		// Deliberately still passes (does not t.Fatalf) here: the crash
+		// signature was verified stable across every GOTRACEBACK mode (see
+		// isExpectedFaultSignal's doc comment), so adding a t.Fatalf would
+		// introduce a new failure mode with no evidence it's reachable (see
+		// research/pitfalls.md §2-3 and AC5's no-regression requirement).
+		t.Logf("subprocess did not exit cleanly (expected but signal not confirmed as SIGBUS/SIGSEGV: %s): err=%v\noutput:\n%s", detail, err, out)
 		return
 	}
 	t.Logf("subprocess exited cleanly; full output:\n%s", out)

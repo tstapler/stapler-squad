@@ -45,6 +45,11 @@ type BacklogItemChange struct {
 	UpdatedFields []string
 	// SessionID identifies the session for ChangeSessionAttached.
 	SessionID string
+	// ClaimantHostID is the claiming/attaching process's own stable host
+	// identifier for ChangeSessionAttached, mirrored from
+	// ItemSessionData.ClaimantHostID — never derived from the session being
+	// attached. See ItemSession.claimant_host_id's schema comment.
+	ClaimantHostID string
 	// ArchivedAt is the archival timestamp for ChangeItemArchived.
 	ArchivedAt *time.Time
 	// RemovedReason describes why an item was removed for ChangeItemRemoved.
