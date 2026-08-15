@@ -193,6 +193,11 @@ jobs:
       # a reintroduced race in a timing-sensitive test. Run them amplified here so
       # CI keeps the same confidence level the fix was originally verified with.
       - name: PTY-triple race regression (amplified repetitions)
+        # Same tmux-under-CPU-contention rationale as the "Run tests with coverage" step
+        # above (see its comment) -- -count=20 spawns real tmux servers 20x over, so it
+        # needs the same widened create-timeout headroom.
+        env:
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           TMUX_BIN="$(pwd)/bin/tmux" go test -race ./server/... \
             -run 'TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort|TestSessionService_CreateThenImmediateDelete_NoDataRace' \
@@ -339,6 +344,11 @@ jobs:
       # BenchmarkNavigation (a non-existent benchmark) for 15 min per PR.
 
       - name: Integration coverage (advisory)
+        # Same tmux-under-CPU-contention rationale as the "Run tests with coverage" step
+        # above (see its comment) -- this step's `-tags integration` run spawns real tmux
+        # servers under the same contention.
+        env:
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           mkdir -p /tmp/covdata
           go build -cover -o stapler-squad-cov .

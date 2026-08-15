@@ -1,8 +1,11 @@
 package services
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,10 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
 
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -736,12 +741,15 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 	onScrollbackRequest := func(startLine, endLine string) (string, error) {
 		return "", nil
 	}
+	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return &sessionv1.TerminalOutput{}, nil
+	}
 
 	doneChan := make(chan struct{})
 	errChan := make(chan error, 2)
 	done := make(chan struct{})
 	go func() {
-		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest)
+		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest)
 		close(done)
 	}()
 
@@ -812,6 +820,408 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 	defer mu.Unlock()
 	if len(recordedInput) != 1 {
 		t.Fatalf("expected recorded input length to stay at 1 after connection close, got %d: %v", len(recordedInput), recordedInput)
+	}
+}
+
+// fakePanePTY is a minimal panePTY test double: no tmux subprocess, no
+// dimension mismatches by default, so it exercises handleCurrentPaneRequest's
+// capture/response-construction logic without the resize/SIGWINCH-workaround
+// branch (covered separately via the dimension fields below when needed).
+type fakePanePTY struct {
+	captureContent            string
+	captureErr                error
+	cols, rows                int
+	dimensionsErr             error
+	resizePTYErr              error
+	refreshTmuxErr            error
+	capturePaneCalled         int
+	resizePTYCalled           int
+	refreshTmuxCalled         int
+	capturePanePriorityCalled int
+	refreshTmuxPriorityCalled int
+}
+
+func (f *fakePanePTY) CapturePaneContent() (string, error) {
+	f.capturePaneCalled++
+	return f.captureContent, f.captureErr
+}
+
+// CapturePaneContentPriority mirrors CapturePaneContent for this fake: it shares the same
+// content/error fields since the fake has no real exec-gate fast lane to distinguish, but
+// tracks its own call count so tests can assert which of the two methods was invoked (i.e.
+// that ResyncOptions.UseFastLane routed the call here instead of to CapturePaneContent).
+func (f *fakePanePTY) CapturePaneContentPriority() (string, error) {
+	f.capturePanePriorityCalled++
+	return f.captureContent, f.captureErr
+}
+
+func (f *fakePanePTY) CapturePaneContentRaw() (string, error) {
+	return f.captureContent, f.captureErr
+}
+
+func (f *fakePanePTY) GetPaneDimensions() (int, int, error) {
+	return f.cols, f.rows, f.dimensionsErr
+}
+
+func (f *fakePanePTY) ResizePTY(cols, rows int) error {
+	f.resizePTYCalled++
+	f.cols, f.rows = cols, rows
+	return f.resizePTYErr
+}
+
+func (f *fakePanePTY) RefreshTmuxClient() error {
+	f.refreshTmuxCalled++
+	return f.refreshTmuxErr
+}
+
+// RefreshTmuxClientPriority mirrors RefreshTmuxClient for this fake, tracking its own call
+// count so tests can assert the fast-lane path (ResyncOptions.UseFastLane) was used.
+func (f *fakePanePTY) RefreshTmuxClientPriority() error {
+	f.refreshTmuxPriorityCalled++
+	return f.refreshTmuxErr
+}
+
+func (f *fakePanePTY) GetPaneCursorPosition() (int, int, error) {
+	return 0, 0, nil
+}
+
+// TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_RequestCarriesResyncId
+// is validation.md's AC2 server-side test for Epic 3.2 / Story 3.2.1 (name per that row,
+// prefixed with "Test" so `go test` actually runs it): a CurrentPaneRequest carrying a
+// resync_id must produce a TerminalOutput whose ResyncId echoes it verbatim. Exercises
+// handleCurrentPaneRequest directly — the shared helper streamViaTmuxCapturePane's
+// CurrentPaneRequest branch (and both control-mode call sites) delegate to, so this covers
+// all three integration points at once.
+func TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_RequestCarriesResyncId(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
+
+	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
+
+	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+	if output.ResyncId != "abc-123" {
+		t.Errorf("expected TerminalOutput.ResyncId %q, got %q", "abc-123", output.ResyncId)
+	}
+	if !strings.Contains(string(output.Data), "hello") {
+		t.Errorf("expected captured content %q in output data, got %q", "hello", string(output.Data))
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt verifies
+// the "never invent an ID server-side" requirement: a request with no resync_id set
+// must produce a TerminalOutput with an empty ResyncId, not a generated one.
+func TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
+
+	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{}
+
+	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+	if output.ResyncId != "" {
+		t.Errorf("expected empty ResyncId when request omits one, got %q", output.ResyncId)
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_NotEchoResyncId_When_CorrelationIdFlagIsOff verifies
+// Task 3.2.1.1's gating requirement: the resync_id echo is only live behind
+// terminal:resync-correlation-id. With the flag off (its default), a request carrying a
+// resync_id must still get back an empty ResyncId, matching pre-project behavior exactly.
+func TestHandleCurrentPaneRequest_should_NotEchoResyncId_When_CorrelationIdFlagIsOff(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, false))
+
+	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
+
+	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+	if output.ResyncId != "" {
+		t.Errorf("expected empty ResyncId when correlation-id flag is off, got %q", output.ResyncId)
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_LogDebugWhenResyncIdNotEchoed_When_CorrelationIdFlagIsOff
+// covers Task 7.1.1.3 (Epic 7.1 observability) server-side half: the client-side
+// notifyResyncOutputReceived mismatch log has no visibility into a request whose resync_id
+// was silently dropped because terminal:resync-correlation-id was off on the server (the
+// client never receives an ID to compare against at all in that case) — this is the only
+// place that specific gap is observable, so it must be logged here.
+func TestHandleCurrentPaneRequest_should_LogDebugWhenResyncIdNotEchoed_When_CorrelationIdFlagIsOff(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, false))
+
+	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
+
+	restore := captureInfoLog()
+	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+	logOutput := restore()
+
+	require.NoError(t, err)
+	require.Equal(t, "", output.ResyncId)
+	require.Contains(t, logOutput, "resync_id not echoed")
+	require.Contains(t, logOutput, "abc-123")
+}
+
+// int32Ptr is a small test helper for building *int32 request fields (TargetCols/TargetRows)
+// without a throwaway local variable at every call site.
+func int32Ptr(v int32) *int32 { return &v }
+
+// TestHandleCurrentPaneRequest_should_SkipResizeAndSigwinchLoop_When_StaleDimensionsTrueAndFlagOn
+// is validation.md's AC3 test for Epic 4.1 / Task 4.1.1.1: when the request flags its own
+// target dimensions as stale and terminal:resync-skip-stale-dimension-slowpath is on (via
+// opts.SkipStaleDimensionSlowPath, resolved by the real caller from that flag), the entire
+// resize-through-verify block must be skipped — ResizePTY and RefreshTmuxClient must each be
+// called 0 times — and the response must capture at the pane's pre-existing dimensions even
+// though they differ from the request's target_cols/target_rows.
+func TestHandleCurrentPaneRequest_should_SkipResizeAndSigwinchLoop_When_StaleDimensionsTrueAndFlagOn(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		TargetCols:      int32Ptr(120),
+		TargetRows:      int32Ptr(40),
+		StaleDimensions: true,
+	}
+
+	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+
+	if target.resizePTYCalled != 0 {
+		t.Errorf("expected ResizePTY to be called 0 times, got %d", target.resizePTYCalled)
+	}
+	if target.refreshTmuxCalled != 0 {
+		t.Errorf("expected RefreshTmuxClient to be called 0 times, got %d", target.refreshTmuxCalled)
+	}
+	// Dimensions must be untouched (still the pane's pre-existing 80x24), not resized to
+	// the request's stale 120x40 target.
+	if target.cols != 80 || target.rows != 24 {
+		t.Errorf("expected pane dimensions to remain 80x24, got %dx%d", target.cols, target.rows)
+	}
+	if !strings.Contains(string(output.Data), "hello") {
+		t.Errorf("expected captured content %q in output data, got %q", "hello", string(output.Data))
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_RunFullSlowPath_When_StaleDimensionsFalseOrFlagOff is
+// validation.md's AC3 negative-case test for Epic 4.1 / Task 4.1.1.1: the resize+SIGWINCH+verify
+// slow path must run unchanged (ResizePTY once, RefreshTmuxClient 3 times) whenever either
+// StaleDimensions is false or the skip option is off — the skip must never fire on its own.
+func TestHandleCurrentPaneRequest_should_RunFullSlowPath_When_StaleDimensionsFalseOrFlagOff(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	testCases := []struct {
+		name            string
+		staleDimensions bool
+		opts            ResyncOptions
+	}{
+		{
+			name:            "stale dimensions false, flag on",
+			staleDimensions: false,
+			opts:            ResyncOptions{SkipStaleDimensionSlowPath: true},
+		},
+		{
+			name:            "stale dimensions true, flag off",
+			staleDimensions: true,
+			opts:            ResyncOptions{SkipStaleDimensionSlowPath: false},
+		},
+		{
+			name:            "stale dimensions false, flag off",
+			staleDimensions: false,
+			opts:            ResyncOptions{SkipStaleDimensionSlowPath: false},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
+			req := &sessionv1.CurrentPaneRequest{
+				TargetCols:      int32Ptr(120),
+				TargetRows:      int32Ptr(40),
+				StaleDimensions: tc.staleDimensions,
+			}
+
+			_, err := handleCurrentPaneRequest("test-session", target, req, tc.opts)
+			if err != nil {
+				t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+			}
+
+			if target.resizePTYCalled != 1 {
+				t.Errorf("expected ResizePTY to be called once, got %d", target.resizePTYCalled)
+			}
+			if target.refreshTmuxCalled != 3 {
+				t.Errorf("expected RefreshTmuxClient to be called 3 times, got %d", target.refreshTmuxCalled)
+			}
+			if target.cols != 120 || target.rows != 40 {
+				t.Errorf("expected pane resized to 120x40, got %dx%d", target.cols, target.rows)
+			}
+		})
+	}
+}
+
+// TestStreamViaTmuxCapturePane_should_CaptureAtExistingPaneDimensions_When_StaleDimensionsTrueAndFlagOn
+// is validation.md's AC3 integration-point test for Epic 4.1: streamViaTmuxCapturePane's
+// mid-stream CurrentPaneRequest handling delegates entirely to handleCurrentPaneRequest (see
+// TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_RequestCarriesResyncId's
+// doc comment for why exercising the shared helper covers all three call sites), so this
+// confirms the skip path leaves the pane captured at its existing dimensions rather than the
+// request's (stale, per the client) target dimensions.
+func TestStreamViaTmuxCapturePane_should_CaptureAtExistingPaneDimensions_When_StaleDimensionsTrueAndFlagOn(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	target := &fakePanePTY{captureContent: "existing-dimension-content", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		TargetCols:      int32Ptr(200),
+		TargetRows:      int32Ptr(50),
+		StaleDimensions: true,
+	}
+
+	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+
+	if target.resizePTYCalled != 0 {
+		t.Errorf("expected ResizePTY to be called 0 times, got %d", target.resizePTYCalled)
+	}
+	if target.cols != 80 || target.rows != 24 {
+		t.Errorf("expected capture at pre-existing 80x24 dimensions, got %dx%d", target.cols, target.rows)
+	}
+	if !strings.Contains(string(output.Data), "existing-dimension-content") {
+		t.Errorf("expected captured content in output data, got %q", string(output.Data))
+	}
+}
+
+// TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPaneRequestFrameArrives
+// is the server-side test for Story 3.2.2 / AC2: a CurrentPaneRequest frame arriving
+// mid-stream on runInputReadLoop must invoke onCurrentPaneRequest exactly once, and its
+// returned TerminalOutput (with ResyncId echoed) must be written back on the stream —
+// while other frame types (Input, Resize, ScrollbackRequest — Task 3.2.2.3's explicit
+// negative cases) must not trigger it.
+func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPaneRequestFrameArrives(t *testing.T) {
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	var mu sync.Mutex
+	var invocations int
+	var lastReq *sessionv1.CurrentPaneRequest
+	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		invocations++
+		lastReq = req
+		return &sessionv1.TerminalOutput{ResyncId: req.GetResyncId(), Data: []byte("snapshot")}, nil
+	}
+	onInput := func(data []byte) {}
+	onResize := func(cols, rows int) {}
+	onScrollbackRequest := func(startLine, endLine string) (string, error) { return "", nil }
+
+	doneChan := make(chan struct{})
+	errChan := make(chan error, 2)
+	done := make(chan struct{})
+	go func() {
+		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest)
+		close(done)
+	}()
+	defer func() {
+		_ = clientConn.Close()
+		<-done
+	}()
+
+	// A non-CurrentPaneRequest frame (plain input) must not trigger the callback.
+	sendFrame := func(td *sessionv1.TerminalData) {
+		t.Helper()
+		dataBytes, err := proto.Marshal(td)
+		if err != nil {
+			t.Fatalf("failed to marshal TerminalData: %v", err)
+		}
+		envelope := protocol.CreateEnvelope(0, dataBytes)
+		if err := clientConn.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+			t.Fatalf("failed to write envelope: %v", err)
+		}
+	}
+	sendFrame(&sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_Input{Input: &sessionv1.TerminalInput{Data: []byte("hi")}},
+	})
+
+	// A resize frame must not trigger the callback either.
+	sendFrame(&sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_Resize{Resize: &sessionv1.TerminalResize{Cols: 80, Rows: 24}},
+	})
+
+	// Nor must a ScrollbackRequest frame — it has its own dedicated callback.
+	sendFrame(&sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_ScrollbackRequest{ScrollbackRequest: &sessionv1.ScrollbackRequest{}},
+	})
+
+	sendFrame(&sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_CurrentPaneRequest{
+			CurrentPaneRequest: &sessionv1.CurrentPaneRequest{ResyncId: "xyz"},
+		},
+	})
+
+	if err := clientConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
+
+	// The ScrollbackRequest frame gets its own response first (its own dedicated
+	// callback/branch) — drain it before reading the CurrentPaneRequest's response.
+	_, scrollbackRespMsg, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read scrollback response from server: %v", err)
+	}
+	scrollbackEnvelope, _, err := protocol.ParseEnvelope(scrollbackRespMsg)
+	if err != nil {
+		t.Fatalf("failed to parse scrollback response envelope: %v", err)
+	}
+	var scrollbackRespData sessionv1.TerminalData
+	if err := proto.Unmarshal(scrollbackEnvelope.Data, &scrollbackRespData); err != nil {
+		t.Fatalf("failed to unmarshal scrollback response TerminalData: %v", err)
+	}
+	if scrollbackRespData.GetScrollbackResponse() == nil {
+		t.Fatalf("expected a ScrollbackResponse, got %+v", &scrollbackRespData)
+	}
+
+	// Read the response the server wrote back for the CurrentPaneRequest frame.
+	_, respMsg, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read response from server: %v", err)
+	}
+	envelope, _, err := protocol.ParseEnvelope(respMsg)
+	if err != nil {
+		t.Fatalf("failed to parse response envelope: %v", err)
+	}
+	var respData sessionv1.TerminalData
+	if err := proto.Unmarshal(envelope.Data, &respData); err != nil {
+		t.Fatalf("failed to unmarshal response TerminalData: %v", err)
+	}
+	output := respData.GetOutput()
+	if output == nil {
+		t.Fatalf("expected an Output response, got %+v", &respData)
+	}
+	if output.ResyncId != "xyz" {
+		t.Errorf("expected response ResyncId %q, got %q", "xyz", output.ResyncId)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if invocations != 1 {
+		t.Fatalf("expected onCurrentPaneRequest to be invoked exactly once, got %d", invocations)
+	}
+	if lastReq == nil || lastReq.GetResyncId() != "xyz" {
+		t.Fatalf("expected onCurrentPaneRequest to receive resync_id %q, got %+v", "xyz", lastReq)
 	}
 }
 
@@ -1022,5 +1432,489 @@ func TestAllSnapshotSendsUseCursorSync(t *testing.T) {
 		if !strings.Contains(trimmed, "withCursorSync(") {
 			t.Errorf("connectrpc_websocket.go:%d composes a snapshot without withCursorSync:\n\t%s", i+1, trimmed)
 		}
+	}
+}
+
+// TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedResponses_When_BatchingFlagOn
+// is validation.md's AC6b happy-path test for Epic 5.2 / Story 5.2.1: a
+// BatchedCurrentPaneRequest coalescing N CurrentPaneRequests (as the client's stagger
+// coordinator produces when terminal:resync-batching is on) must produce N TerminalOutput
+// replies, each still carrying its own request's resync_id — batching must not collapse
+// or merge the individual responses.
+func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedResponses_When_BatchingFlagOn(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
+
+	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
+	batch := &sessionv1.BatchedCurrentPaneRequest{
+		Requests: []*sessionv1.CurrentPaneRequest{
+			{ResyncId: "resync-1"},
+			{ResyncId: "resync-2"},
+			{ResyncId: "resync-3"},
+		},
+	}
+
+	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	}
+
+	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
+
+	if len(outputs) != 3 {
+		t.Fatalf("expected 3 outputs, got %d", len(outputs))
+	}
+	for i, wantID := range []string{"resync-1", "resync-2", "resync-3"} {
+		if outputs[i].ResyncId != wantID {
+			t.Errorf("output[%d]: expected ResyncId %q, got %q", i, wantID, outputs[i].ResyncId)
+		}
+		if !strings.Contains(string(outputs[i].Data), "hello") {
+			t.Errorf("output[%d]: expected captured content %q in output data, got %q", i, "hello", string(outputs[i].Data))
+		}
+	}
+}
+
+// TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_When_ThreeCoalescedRequestsHaveDistinctResyncIds
+// is validation.md's AC6b integration test: three coalesced requests with distinct
+// resync_ids must map 1:1 to three outputs in the same order, even when one of the
+// coalesced requests' captures fails — the failure must be skipped (logged), not corrupt
+// or misattribute another sibling's resync_id.
+func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_When_ThreeCoalescedRequestsHaveDistinctResyncIds(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
+
+	batch := &sessionv1.BatchedCurrentPaneRequest{
+		Requests: []*sessionv1.CurrentPaneRequest{
+			{ResyncId: "alpha"},
+			{ResyncId: "bravo"},
+			{ResyncId: "charlie"},
+		},
+	}
+
+	// bravo's underlying capture fails; alpha and charlie must still come back correctly
+	// correlated to their own resync_id, with bravo simply absent from the results.
+	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		if req.GetResyncId() == "bravo" {
+			return nil, fmt.Errorf("simulated capture failure")
+		}
+		target := &fakePanePTY{captureContent: req.GetResyncId() + "-content", cols: 80, rows: 24}
+		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	}
+
+	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
+
+	if len(outputs) != 2 {
+		t.Fatalf("expected 2 outputs (bravo skipped), got %d", len(outputs))
+	}
+	if outputs[0].ResyncId != "alpha" || !strings.Contains(string(outputs[0].Data), "alpha-content") {
+		t.Errorf("outputs[0]: expected alpha's tagged content, got ResyncId=%q Data=%q", outputs[0].ResyncId, outputs[0].Data)
+	}
+	if outputs[1].ResyncId != "charlie" || !strings.Contains(string(outputs[1].Data), "charlie-content") {
+		t.Errorf("outputs[1]: expected charlie's tagged content, got ResyncId=%q Data=%q", outputs[1].ResyncId, outputs[1].Data)
+	}
+}
+
+// allTerminalResyncFlagNames lists every terminal-resync feature flag added across this
+// project (Epics 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 8.3). Epic 8.1's job is to prove all seven
+// compose correctly, so the round-trip and spot-check tests below need the complete set in
+// one place rather than each hand-rolling its own (partial, driftable) list. All seven have
+// named Go constants (see feature_flag_service.go); three of them
+// (terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName,
+// terminalResyncBatchingFlagName) are pure client-side concerns with no Go production call
+// site to share the constant with, but are still named for consistency and so this list and
+// knownFeatureFlags can't drift on the string value.
+var allTerminalResyncFlagNames = []string{
+	terminalResyncVisibilityScopeFlagName,
+	terminalResyncCorrelationIDFlagName,
+	terminalResyncSkipStaleDimensionSlowpathFlagName,
+	terminalResyncExecGateFastLaneFlagName,
+	terminalResyncStaggerFlagName,
+	terminalResyncCompressionFlagName,
+	terminalResyncBatchingFlagName,
+}
+
+// setAllTerminalResyncFlags sets every flag in allTerminalResyncFlagNames to on, restoring
+// all of them to false via t.Cleanup so a later test in the package doesn't inherit
+// leftover true state.
+func setAllTerminalResyncFlags(t *testing.T, on bool) {
+	t.Helper()
+	for _, name := range allTerminalResyncFlagNames {
+		require.NoError(t, config.LoadConfig().SetFeatureFlag(name, on))
+	}
+	t.Cleanup(func() {
+		for _, name := range allTerminalResyncFlagNames {
+			_ = config.LoadConfig().SetFeatureFlag(name, false)
+		}
+	})
+}
+
+// setOnlyResyncFlag sets flagName on and every other terminal-resync flag off, so a spot
+// check can attribute any observed behavior change to that one flag alone. Restores every
+// flag to false via t.Cleanup.
+func setOnlyResyncFlag(t *testing.T, flagName string) {
+	t.Helper()
+	for _, name := range allTerminalResyncFlagNames {
+		require.NoError(t, config.LoadConfig().SetFeatureFlag(name, name == flagName))
+	}
+	t.Cleanup(func() {
+		for _, name := range allTerminalResyncFlagNames {
+			_ = config.LoadConfig().SetFeatureFlag(name, false)
+		}
+	})
+}
+
+// TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOff is Epic 8.1 /
+// Task 8.1.1.1 (validation.md AC7 row: resyncFlow_should_BeByteForByteIdenticalToBaseline_
+// When_AllSevenFlagsOff, Test-prefixed here since Go requires it to actually run). It drives
+// a full mid-stream CurrentPaneRequest through handleCurrentPaneRequestFrame — the same
+// frame-handling entry point streamViaControlMode's runInputReadLoop uses — over a real
+// WebSocket pair, and asserts the wire-level TerminalOutput matches pre-project behavior on
+// every axis this project touched: no resync_id echoed, the full resize+SIGWINCH+verify slow
+// path always runs (never skipped), the default (non-fast-lane) capture/refresh methods are
+// used, and the response envelope carries no compression flag.
+func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOff(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	setAllTerminalResyncFlags(t, false)
+
+	stream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	target := &fakePanePTY{captureContent: "baseline-content", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		ResyncId:   "should-not-be-echoed",
+		TargetCols: int32Ptr(120),
+		TargetRows: int32Ptr(40),
+	}
+
+	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	}
+	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest)
+
+	env := readEnvelopeFromClient(t, clientConn)
+	if env.Flags != 0 {
+		t.Errorf("expected envelope flags 0x00 (no compression, not end-of-stream), got 0x%02x", env.Flags)
+	}
+
+	var terminalData sessionv1.TerminalData
+	if err := proto.Unmarshal(env.Data, &terminalData); err != nil {
+		t.Fatalf("failed to unmarshal TerminalData: %v", err)
+	}
+	output := terminalData.GetOutput()
+
+	if output.ResyncId != "" {
+		t.Errorf("expected empty ResyncId (correlation-id flag off), got %q", output.ResyncId)
+	}
+	if target.resizePTYCalled != 1 {
+		t.Errorf("expected ResizePTY called once (full slow path), got %d", target.resizePTYCalled)
+	}
+	if target.refreshTmuxCalled != 3 {
+		t.Errorf("expected RefreshTmuxClient called 3 times (full slow path), got %d", target.refreshTmuxCalled)
+	}
+	if target.capturePaneCalled != 1 {
+		t.Errorf("expected default CapturePaneContent called once, got %d", target.capturePaneCalled)
+	}
+	if target.capturePanePriorityCalled != 0 || target.refreshTmuxPriorityCalled != 0 {
+		t.Errorf("expected no fast-lane calls, got capturePriority=%d refreshPriority=%d",
+			target.capturePanePriorityCalled, target.refreshTmuxPriorityCalled)
+	}
+	if !strings.Contains(string(output.Data), "baseline-content") {
+		t.Errorf("expected captured content in output data, got %q", output.Data)
+	}
+}
+
+// TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsOn is Epic 8.1 /
+// Task 8.1.1.2, the "kitchen sink" test: every one of the seven flags on at once, asserting
+// each fix's server-observable behavior fires simultaneously and none suppresses another
+// (the cross-flag-coupling risk this epic exists to catch).
+//
+// terminal:resync-visibility-scope and terminal:resync-stagger have no server-side code path
+// at all (both are pure client-side concerns — see this project's validation.md, which marks
+// their integration-test cells "N/A — client-only"), so there is nothing for a Go test to
+// observe for either; their behavior is covered client-side (e.g.
+// web-app/src/components/sessions/__tests__/ResyncStaggerQueue.test.ts).
+//
+// terminal:resync-compression is now wired into writeCurrentPaneResponse
+// (connectrpc_websocket.go), which gzip-compresses the marshaled reply and sets the
+// envelope's CompressedFlag bit when the flag is on and the payload exceeds
+// terminalResyncCompressionThresholdBytes (1024 bytes) — see
+// TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_PayloadExceedsSizeThresholdAndCompressionFlagOn
+// for the dedicated round-trip test. This kitchen-sink request's captured content
+// ("kitchen-sink-content", well under the threshold) intentionally stays below it, so
+// CompressedFlag must still be unset here — this assertion documents the "flag on but
+// payload too small" case, not the compression primitive's absence.
+func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsOn(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	setAllTerminalResyncFlags(t, true)
+
+	stream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	target := &fakePanePTY{captureContent: "kitchen-sink-content", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		ResyncId:        "resync-kitchen-sink",
+		TargetCols:      int32Ptr(120),
+		TargetRows:      int32Ptr(40),
+		StaleDimensions: true,
+	}
+
+	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	}
+	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest)
+
+	env := readEnvelopeFromClient(t, clientConn)
+	var terminalData sessionv1.TerminalData
+	if err := proto.Unmarshal(env.Data, &terminalData); err != nil {
+		t.Fatalf("failed to unmarshal TerminalData: %v", err)
+	}
+	output := terminalData.GetOutput()
+
+	// terminal:resync-correlation-id: resync_id echoed verbatim.
+	if output.ResyncId != "resync-kitchen-sink" {
+		t.Errorf("expected ResyncId echoed, got %q", output.ResyncId)
+	}
+	// terminal:resync-skip-stale-dimension-slowpath: the resize+SIGWINCH+verify block must
+	// not run at all (request set StaleDimensions true).
+	if target.resizePTYCalled != 0 || target.refreshTmuxCalled != 0 || target.refreshTmuxPriorityCalled != 0 {
+		t.Errorf("expected slow path fully skipped, got resize=%d refresh=%d refreshPriority=%d",
+			target.resizePTYCalled, target.refreshTmuxCalled, target.refreshTmuxPriorityCalled)
+	}
+	// terminal:resync-exec-gate-fast-lane: capture routed through the priority method.
+	if target.capturePanePriorityCalled != 1 || target.capturePaneCalled != 0 {
+		t.Errorf("expected fast-lane capture used, got priority=%d default=%d",
+			target.capturePanePriorityCalled, target.capturePaneCalled)
+	}
+	if !strings.Contains(string(output.Data), "kitchen-sink-content") {
+		t.Errorf("expected captured content in output data, got %q", output.Data)
+	}
+
+	// terminal:resync-compression: this kitchen-sink payload stays under
+	// terminalResyncCompressionThresholdBytes, so CompressedFlag must not be set even with
+	// the flag on — see the doc comment above and
+	// TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_PayloadExceedsSizeThresholdAndCompressionFlagOn
+	// for the over-threshold case.
+	if env.Flags&protocol.CompressedFlag != 0 {
+		t.Errorf("expected CompressedFlag unset for a payload under the compression threshold, got env.Flags=0x%02x", env.Flags)
+	}
+
+	// terminal:resync-batching: server-side effect is answering each coalesced request
+	// individually and correctly tagged — see
+	// TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedResponses_When_BatchingFlagOn
+	// for the dedicated test. Exercised here too so "all seven simultaneously" actually
+	// covers it in this same all-flags-on context, not only in isolation.
+	batchTarget := &fakePanePTY{captureContent: "batch-content", cols: 80, rows: 24}
+	batchOnCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest("test-session", batchTarget, r, currentResyncOptions())
+	}
+	batch := &sessionv1.BatchedCurrentPaneRequest{
+		Requests: []*sessionv1.CurrentPaneRequest{{ResyncId: "batch-1"}, {ResyncId: "batch-2"}},
+	}
+	outputs := handleBatchedCurrentPaneRequest("test-session", batch, batchOnCurrentPaneRequest)
+	if len(outputs) != 2 || outputs[0].ResyncId != "batch-1" || outputs[1].ResyncId != "batch-2" {
+		t.Errorf("expected 2 individually-tagged batched outputs, got %+v", outputs)
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_PayloadExceedsSizeThresholdAndCompressionFlagOn
+// is validation.md's AC6a integration test (Epic 5.1, Task 5.1.1.4): with
+// terminal:resync-compression on and a captured pane content large enough to push the
+// marshaled TerminalData reply over terminalResyncCompressionThresholdBytes,
+// writeCurrentPaneResponse must set the envelope's CompressedFlag bit and gzip-compress the
+// payload — decompressing and unmarshaling it back (mirroring the client's
+// parseResponseBody/DecompressionStream('gzip') path in websocket-transport.ts) must recover
+// the exact same ResyncId/Data the pre-compression TerminalOutput had.
+func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_PayloadExceedsSizeThresholdAndCompressionFlagOn(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	setOnlyResyncFlag(t, terminalResyncCompressionFlagName)
+	// ResyncId is only echoed back when terminal:resync-correlation-id is on (see
+	// handleCurrentPaneRequest's doc comment) — enable it alongside compression so this
+	// test can assert the full TerminalOutput (ResyncId and Data) round-trips through
+	// compression, not just Data.
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
+	t.Cleanup(func() {
+		_ = config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, false)
+	})
+
+	// Large enough that the marshaled TerminalData exceeds terminalResyncCompressionThresholdBytes.
+	largeContent := strings.Repeat("resync-payload-filler-", 100)
+	target := &fakePanePTY{captureContent: largeContent, cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{ResyncId: "compress-me"}
+
+	stream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	}
+	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest)
+
+	env := readEnvelopeFromClient(t, clientConn)
+	if env.Flags&protocol.CompressedFlag == 0 {
+		t.Fatalf("expected CompressedFlag set for an over-threshold payload, got env.Flags=0x%02x", env.Flags)
+	}
+
+	gz, err := gzip.NewReader(bytes.NewReader(env.Data))
+	if err != nil {
+		t.Fatalf("failed to open gzip reader on compressed envelope payload: %v", err)
+	}
+	decompressed, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatalf("failed to decompress envelope payload: %v", err)
+	}
+
+	var terminalData sessionv1.TerminalData
+	if err := proto.Unmarshal(decompressed, &terminalData); err != nil {
+		t.Fatalf("failed to unmarshal decompressed TerminalData: %v", err)
+	}
+	output := terminalData.GetOutput()
+	if output.ResyncId != "compress-me" {
+		t.Errorf("expected ResyncId %q round-tripped through compression, got %q", "compress-me", output.ResyncId)
+	}
+	if !strings.Contains(string(output.Data), largeContent) {
+		t.Errorf("expected captured content round-tripped through compression, got %d bytes of data", len(output.Data))
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElapsedMs_When_StaleDimensionSkipFires
+// is validation.md's AC8 unit test: when the stale-dimension skip fires (Epic 4.1), the debug
+// log line it emits must carry sessionID, targetCols/targetRows, and estimatedTimeSavedMs —
+// the fields Epic 7.1's observability plan assigns to this fix — so an operator can attribute
+// a skip event to a specific session and quantify the time saved without instrumenting a
+// separate metric.
+func TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElapsedMs_When_StaleDimensionSkipFires(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		TargetCols:      int32Ptr(120),
+		TargetRows:      int32Ptr(40),
+		StaleDimensions: true,
+	}
+
+	restore := captureInfoLog()
+	_, err := handleCurrentPaneRequest("skip-log-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	logOutput := restore()
+
+	require.NoError(t, err)
+	require.Contains(t, logOutput, "skipping stale-dimension resize slow path")
+	require.Contains(t, logOutput, "sessionID=skip-log-session")
+	// targetCols/targetRows are dereferenced via derefOr before logging, so they render as
+	// the actual request values (120/40) rather than *int32 pointer addresses.
+	require.Contains(t, logOutput, "targetCols=120")
+	require.Contains(t, logOutput, "targetRows=40")
+	require.Contains(t, logOutput, "estimatedTimeSavedMs=450")
+}
+
+// The following three tests are Epic 8.1 / Task 8.1.1.3's spot checks: with every flag
+// except one held off, only that one flag's behavior must change. This is the check that
+// would catch a cross-flag coupling bug — e.g. the fast-lane flag accidentally also
+// suppressing the correlation-id echo, or vice versa.
+
+// TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFastLaneFlagOn spot
+// checks terminal:resync-exec-gate-fast-lane in isolation.
+func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFastLaneFlagOn(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	setOnlyResyncFlag(t, terminalResyncExecGateFastLaneFlagName)
+
+	target := &fakePanePTY{captureContent: "fast-lane-content", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		ResyncId:   "should-not-be-echoed",
+		TargetCols: int32Ptr(120),
+		TargetRows: int32Ptr(40),
+	}
+
+	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+
+	// Changed: fast-lane capture/refresh used instead of the default methods.
+	if target.capturePanePriorityCalled != 1 || target.capturePaneCalled != 0 {
+		t.Errorf("expected fast-lane capture used, got priority=%d default=%d",
+			target.capturePanePriorityCalled, target.capturePaneCalled)
+	}
+	if target.refreshTmuxPriorityCalled != 3 || target.refreshTmuxCalled != 0 {
+		t.Errorf("expected fast-lane refresh used 3x, got priority=%d default=%d",
+			target.refreshTmuxPriorityCalled, target.refreshTmuxCalled)
+	}
+	// Unchanged: the slow path still runs in full — fast lane only changes which method
+	// variant is called, not whether the resize block runs at all.
+	if target.resizePTYCalled != 1 {
+		t.Errorf("expected ResizePTY still called once, got %d", target.resizePTYCalled)
+	}
+	// Unchanged: correlation-id flag is off, so resync_id must still not be echoed.
+	if output.ResyncId != "" {
+		t.Errorf("expected ResyncId to remain unechoed (correlation-id flag off), got %q", output.ResyncId)
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationIdFlagOn spot
+// checks terminal:resync-correlation-id in isolation.
+func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationIdFlagOn(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	setOnlyResyncFlag(t, terminalResyncCorrelationIDFlagName)
+
+	target := &fakePanePTY{captureContent: "correlation-content", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		ResyncId:   "abc-123",
+		TargetCols: int32Ptr(120),
+		TargetRows: int32Ptr(40),
+	}
+
+	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+
+	// Changed: resync_id now echoed.
+	if output.ResyncId != "abc-123" {
+		t.Errorf("expected ResyncId echoed, got %q", output.ResyncId)
+	}
+	// Unchanged: default (non-fast-lane) capture/refresh still used.
+	if target.capturePaneCalled != 1 || target.capturePanePriorityCalled != 0 {
+		t.Errorf("expected default capture still used, got default=%d priority=%d",
+			target.capturePaneCalled, target.capturePanePriorityCalled)
+	}
+	if target.refreshTmuxCalled != 3 || target.refreshTmuxPriorityCalled != 0 {
+		t.Errorf("expected default refresh still used 3x, got default=%d priority=%d",
+			target.refreshTmuxCalled, target.refreshTmuxPriorityCalled)
+	}
+	if target.resizePTYCalled != 1 {
+		t.Errorf("expected ResizePTY still called once, got %d", target.resizePTYCalled)
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDimensionFlagOn spot
+// checks terminal:resync-skip-stale-dimension-slowpath in isolation.
+func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDimensionFlagOn(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	setOnlyResyncFlag(t, terminalResyncSkipStaleDimensionSlowpathFlagName)
+
+	target := &fakePanePTY{captureContent: "skip-content", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		ResyncId:        "should-not-be-echoed",
+		TargetCols:      int32Ptr(120),
+		TargetRows:      int32Ptr(40),
+		StaleDimensions: true,
+	}
+
+	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+
+	// Changed: slow path skipped entirely.
+	if target.resizePTYCalled != 0 || target.refreshTmuxCalled != 0 {
+		t.Errorf("expected slow path skipped, got resize=%d refresh=%d",
+			target.resizePTYCalled, target.refreshTmuxCalled)
+	}
+	// Unchanged: default (non-fast-lane) capture still used.
+	if target.capturePaneCalled != 1 || target.capturePanePriorityCalled != 0 {
+		t.Errorf("expected default capture still used, got default=%d priority=%d",
+			target.capturePaneCalled, target.capturePanePriorityCalled)
+	}
+	// Unchanged: correlation-id flag off, so resync_id must still not be echoed.
+	if output.ResyncId != "" {
+		t.Errorf("expected ResyncId to remain unechoed, got %q", output.ResyncId)
 	}
 }

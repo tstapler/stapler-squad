@@ -59,6 +59,8 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 	if svc != nil {
 		registerWorkflowTools(s, &workflowHandlers{svc: svc})
 		registerRulesTools(s, &rulesHandlers{svc: svc})
+		registerNotificationTools(s, &notificationHandlers{svc: svc})
+		registerHistoryTools(s, &historyHandlers{svc: svc})
 	}
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
 		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc})
