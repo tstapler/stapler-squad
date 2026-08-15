@@ -11,6 +11,8 @@ import (
 // --no-optional-locks is always injected so the command never acquires
 // index.lock, preventing contention with concurrent git operations in the
 // same repo.
+//
+//nolint:unused // false positive under golangci-lint v2.11.4 go1.26 toolchain skew; see .golangci.yml concurrency:1 comment (commit 6a5feb533)
 func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	all := make([]string, 0, 2+len(args))
 	all = append(all, "--no-optional-locks", "-C", dir)
