@@ -210,7 +210,7 @@ turnLoop:
 		}
 
 		tail, _ := d.inst.Preview()
-		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns, lastSentNudge.text, lastSentNudge.at)
+		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns, lastSentNudge)
 
 		keyLen := 8
 		if len(sessionID) < keyLen {
@@ -514,34 +514,43 @@ No other text.`
 // buildOrchestrationPrompt constructs the user prompt for the orchestrator LLM call.
 // Goal and session output are wrapped in XML-style delimiters so that user-controlled
 // content (e.g., GitHub PR body embedded in the goal) cannot escape its section and
-// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text. lastNudgeText/
-// lastNudgeAt describe the most recent nudge actually delivered (both SendKeys calls
-// succeeded); lastNudgeAt.IsZero() means none has been sent yet. lastNudgeText is
-// LLM-generated content from a prior turn, so it's wrapped in its own <last_nudge> tag
-// (same anti-spoofing rationale as <goal>/<session_output>) rather than interpolated
-// directly into the instruction text.
+// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text. lastSent describes
+// the most recent nudge actually delivered (both SendKeys calls succeeded); a zero
+// lastSent (lastSent.at.IsZero()) means none has been sent yet. Bundled into one
+// struct param (rather than two same-shaped text/time.Time args) per
+// .claude/rules/primitive-obsession-checklist.md — the two values are always read
+// and passed together, so a struct removes the chance of them being supplied out of
+// order at a call site. lastSent.text is LLM-generated content from a prior turn, so
+// it's wrapped in its own <last_nudge> tag (same anti-spoofing rationale as
+// <goal>/<session_output>) rather than interpolated directly into the instruction text.
 // lastNudgeTagEscaper neutralizes the two characters that could otherwise let
-// lastNudgeText close its <last_nudge> block early.
+// lastSent.text close its <last_nudge> block early.
 var lastNudgeTagEscaper = strings.NewReplacer("<", "&lt;", ">", "&gt;")
 
-func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int, lastNudgeText string, lastNudgeAt time.Time) string {
+func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int, lastSent lastNudge) string {
 	const maxTailBytes = 80 * 120 // ~80 lines × 120 chars
 	if len(tail) > maxTailBytes {
 		tail = tail[len(tail)-maxTailBytes:]
 	}
-	lastNudgeBlock := "None sent yet."
-	if lastNudgeText != "" && !lastNudgeAt.IsZero() {
-		// Escape "<"/">" before interpolating: lastNudgeText is the system's own
+	// The whole <last_nudge> section is omitted (not just given placeholder
+	// content) on turn 1 / whenever no nudge has been delivered yet — an
+	// absent section is unambiguous to the orchestrator LLM, whereas a
+	// present-but-empty tag risks being mistaken for "a nudge with empty
+	// text was sent".
+	lastNudgeSection := ""
+	if lastSent.text != "" && !lastSent.at.IsZero() {
+		// Escape "<"/">" before interpolating: lastSent.text is the system's own
 		// prior LLM output being round-tripped back into the prompt, so a nudge
 		// containing "</last_nudge>" (or another tag) could otherwise close the
 		// block early and spoof content into the surrounding instruction text —
 		// the same anti-spoofing rationale as the <goal>/<session_output> wrapping.
-		escapedNudgeText := lastNudgeTagEscaper.Replace(lastNudgeText)
-		lastNudgeBlock = fmt.Sprintf("%s\n(sent %s ago)", escapedNudgeText, time.Since(lastNudgeAt).Round(time.Second))
+		escapedNudgeText := lastNudgeTagEscaper.Replace(lastSent.text)
+		lastNudgeSection = fmt.Sprintf("\n\n<last_nudge>\n%s\n(sent %s ago)\n</last_nudge>",
+			escapedNudgeText, time.Since(lastSent.at).Round(time.Second))
 	}
 	return fmt.Sprintf(
-		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>\n\n<last_nudge>\n%s\n</last_nudge>\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text>, DONE: <reason>, or WAIT: <reason>.",
-		goal, tail, lastNudgeBlock, turnCount, maxTurns)
+		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>%s\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text>, DONE: <reason>, or WAIT: <reason>.",
+		goal, tail, lastNudgeSection, turnCount, maxTurns)
 }
 
 // orchestrationDirectiveMarker matches "DONE:", "NEXT_MESSAGE:", or "WAIT:"
