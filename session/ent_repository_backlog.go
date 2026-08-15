@@ -1158,6 +1158,57 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 	return &result, nil
 }
 
+// UnarchiveBacklogItem clears archived_at and restores the item to the
+// "idea" status — the sole valid archived-> reopen transition. It does not
+// attempt to restore whatever status the item held before archiving (no
+// history-based restoration): the item simply re-enters the idea column
+// needing a fresh session, matching UnarchiveSession's identical
+// unconditional-flip precedent (server/services/session_service.go) rather
+// than erroring or no-op'ing on an already-non-archived item.
+func (r *EntRepository) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+	}
+
+	current, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
+	}
+
+	now := time.Now()
+	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+		ClearArchivedAt().
+		SetStatus(string(BacklogStatusIdea)).
+		SetUserModifiedStatusAt(now).
+		Save(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("failed to unarchive backlog item %s: %w", id, err)
+	}
+
+	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusIdea), TriggeredByUser, "")
+
+	result := backlogItemToData(item)
+
+	// Best-effort publish: never blocks or fails the unarchive itself. A full
+	// status-transition event (not a lightweight archived-only shape) so
+	// "Show Archived" list views in other open tabs live-update.
+	r.attachItemSessionsForPublish(ctx, &result)
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
+		Kind:      ChangeStatusTransition,
+		OldStatus: current.Status,
+		NewStatus: string(BacklogStatusIdea),
+	})
+
+	return &result, nil
+}
+
 // DeleteBacklogItem permanently removes an item and all its child records.
 func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error {
 	parsedID, err := uuid.Parse(id)

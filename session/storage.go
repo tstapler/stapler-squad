@@ -798,6 +798,11 @@ func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogIt
 	return s.repo.ArchiveBacklogItem(ctx, id)
 }
 
+// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+func (s *Storage) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+	return s.repo.UnarchiveBacklogItem(ctx, id)
+}
+
 // DeleteBacklogItem permanently removes an item and all its child records.
 func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 	return s.repo.DeleteBacklogItem(ctx, id)

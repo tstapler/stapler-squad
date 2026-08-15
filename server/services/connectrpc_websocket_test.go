@@ -353,7 +353,13 @@ func TestWaitForQuiescenceReturnsOnTimeout(t *testing.T) {
 	if elapsed < timeout {
 		t.Errorf("waitForQuiescence returned before timeout (%v < %v)", elapsed, timeout)
 	}
-	if elapsed > timeout+50*time.Millisecond {
+	// Tolerance is generous (150ms, vs. a 60ms timeout) because this only needs to
+	// prove waitForQuiescence returned at the deadline rather than blocking for the
+	// full 500ms quietFor window — not that scheduling is sub-50ms precise. A tight
+	// 50ms margin flaked under CPU contention from concurrent test/build load on a
+	// shared machine (goroutine wasn't scheduled promptly after the deadline fired),
+	// even though 5 isolated re-runs of this test alone all passed comfortably.
+	if elapsed > timeout+150*time.Millisecond {
 		t.Errorf("waitForQuiescence took too long after timeout (%v)", elapsed)
 	}
 }
