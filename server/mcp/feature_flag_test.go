@@ -31,6 +31,14 @@ func TestBacklogHandlers_FeatureDisabled(t *testing.T) {
 		require.Equal(t, ErrFeatureDisabled, m["error"].(map[string]interface{})["code"])
 	})
 
+	t.Run("list_backlog_items", func(t *testing.T) {
+		result, err := h.listBacklogItems(ctx, req)
+		require.NoError(t, err)
+		m := parseResult(t, result)
+		require.False(t, m["success"].(bool))
+		require.Equal(t, ErrFeatureDisabled, m["error"].(map[string]interface{})["code"])
+	})
+
 	t.Run("report_progress", func(t *testing.T) {
 		result, err := h.reportProgress(ctx, req)
 		require.NoError(t, err)
