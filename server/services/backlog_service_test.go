@@ -602,6 +602,57 @@ func TestListBacklogItems_DefaultFilterHidesTerminalStatuses(t *testing.T) {
 	assert.Contains(t, returnedTitles, "done item")
 }
 
+// ─── UnarchiveBacklogItem ───────────────────────────────────────────────────
+
+// PR #499 code review, MODERATE finding: no RPC-level test existed for the
+// UnarchiveBacklogItem handler (server/services/backlog_service_lifecycle.go).
+// Mirrors ArchiveBacklogItem's coverage shape: a success path that restores an
+// archived item to "idea" and reappears in the default list, plus a not-found
+// error path mapped to connect.CodeNotFound.
+func TestUnarchiveBacklogItem_Success(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item to unarchive",
+	}))
+	require.NoError(t, err)
+	itemID := created.Msg.Item.Id
+
+	archiveResp, err := svc.ArchiveBacklogItem(t.Context(), connect.NewRequest(&sessionv1.ArchiveBacklogItemRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, "archived", archiveResp.Msg.Item.Status, "item should be archived before testing unarchive")
+
+	unarchiveResp, err := svc.UnarchiveBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UnarchiveBacklogItemRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, itemID, unarchiveResp.Msg.Item.Id)
+	assert.Equal(t, "idea", unarchiveResp.Msg.Item.Status)
+
+	// The unarchived item should reappear in the default (non-terminal) list.
+	listDefault, err := svc.ListBacklogItems(t.Context(), connect.NewRequest(&sessionv1.ListBacklogItemsRequest{}))
+	require.NoError(t, err)
+	returnedTitles := make([]string, 0, len(listDefault.Msg.Items))
+	for _, it := range listDefault.Msg.Items {
+		returnedTitles = append(returnedTitles, it.Title)
+	}
+	assert.Contains(t, returnedTitles, "item to unarchive")
+}
+
+func TestUnarchiveBacklogItem_ReturnsNotFoundForMissingItem(t *testing.T) {
+	svc := newBacklogService(t)
+
+	_, err := svc.UnarchiveBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UnarchiveBacklogItemRequest{
+		ItemId: "00000000-0000-0000-0000-000000000000",
+	}))
+	require.Error(t, err)
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeNotFound, connErr.Code())
+}
+
 // TestListBacklogItems_DoneStatusIsTerminal verifies that an item actually in
 // "done" status is hidden by the default list (includeTerminal=false) and visible
 // with includeTerminal=true.

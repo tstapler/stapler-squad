@@ -122,6 +122,12 @@ const triggerTriage = jest.fn().mockResolvedValue(undefined);
 // integration test can assert on the exact call made when PlanVerdictBox's
 // Request Changes form is submitted.
 const rejectPlan = jest.fn();
+// Hoisted (PR #499 code review follow-up) so the archive-confirm-guard and
+// unarchive-button-click tests can assert on the exact call made — an
+// inline `jest.fn()` in the mock factory below would be a fresh instance
+// per render, unobservable from the test body.
+const archiveBacklogItem = jest.fn().mockResolvedValue(undefined);
+const unarchiveBacklogItem = jest.fn().mockResolvedValue(undefined);
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   // mapBacklogItem is a real (unmocked) named export — BacklogItemDetail's
@@ -140,7 +146,8 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
     triggerReReview: jest.fn(),
     triggerShipPR: jest.fn(),
     submitManualReview: jest.fn(),
-    archiveBacklogItem: jest.fn(),
+    archiveBacklogItem,
+    unarchiveBacklogItem,
     deleteBacklogItem: jest.fn(),
     updateBacklogItem,
     listPipelineModes,
@@ -203,6 +210,8 @@ beforeEach(() => {
   overrideVerdict.mockReset();
   triggerTriage.mockClear().mockResolvedValue(undefined);
   rejectPlan.mockReset().mockResolvedValue(null);
+  archiveBacklogItem.mockClear().mockResolvedValue(undefined);
+  unarchiveBacklogItem.mockClear().mockResolvedValue(undefined);
   // Story 3.1.4's per-section expand state (useSectionExpandState) and
   // "Show N more" state (useShowMore) both persist to localStorage keyed
   // by itemId — clear between tests so one test's expand/collapse
@@ -1370,5 +1379,92 @@ describe("BacklogItemDetail — Epic 4.3: plan review wiring", () => {
     });
     expect(screen.getByText("Please split this into two smaller tasks.")).toBeInTheDocument();
     expect(screen.getByTestId("backlog-action-regenerate-plan")).toBeInTheDocument();
+  });
+});
+
+// PR #499 code review, CRITICAL finding: the useBacklogService() mock above
+// used to omit unarchiveBacklogItem entirely, so any test that reached the
+// Unarchive button's onClick would throw `unarchiveBacklogItem is not a
+// function` (BacklogItemDetail.tsx destructures it at the top of the
+// component and calls it from the "unarchive" case in handleAction).
+describe("BacklogItemDetail — Unarchive action", () => {
+  function makeArchivedItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
+    return {
+      ...makeItem([]),
+      status: "archived",
+      ...overrides,
+    };
+  }
+
+  it("BacklogItemDetail_should_CallUnarchiveBacklogItemWithItemId_When_UnarchiveButtonClicked", async () => {
+    getBacklogItem.mockReset().mockResolvedValue(makeArchivedItem());
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-unarchive"));
+
+    await waitFor(() => {
+      expect(unarchiveBacklogItem).toHaveBeenCalledWith("item-1");
+    });
+  });
+});
+
+// PR #499 code review, MAJOR finding: the confirm() guard added around the
+// archive action (BacklogItemDetail.tsx's handleAction "archive" case) had
+// zero test coverage of either branch. `status: "done"` is used because
+// itemActions.ts only exposes the "archive" action for a done item.
+describe("BacklogItemDetail — Archive action confirm() guard", () => {
+  function makeDoneItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
+    return {
+      ...makeItem([]),
+      status: "done",
+      ...overrides,
+    };
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("BacklogItemDetail_should_CallArchiveBacklogItem_When_ConfirmReturnsTrue", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    getBacklogItem.mockReset().mockResolvedValue(makeDoneItem());
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-archive"));
+
+    await waitFor(() => {
+      expect(archiveBacklogItem).toHaveBeenCalledWith("item-1");
+    });
+  });
+
+  it("BacklogItemDetail_should_NotCallArchiveBacklogItem_When_ConfirmReturnsFalse", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(false);
+    getBacklogItem.mockReset().mockResolvedValue(makeDoneItem());
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-archive"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(archiveBacklogItem).not.toHaveBeenCalled();
   });
 });

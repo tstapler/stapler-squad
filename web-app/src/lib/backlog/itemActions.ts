@@ -35,6 +35,7 @@ export type BacklogActionId =
   | "re_review"
   | "manual_review"
   | "archive"
+  | "unarchive"
   | "reopen"
   | "send_back_idea"
   | "send_back_ready"
@@ -197,9 +198,14 @@ export function getAvailableActions(item: ItemActionabilityInput): AvailableActi
       actions.add("reopen");
       break;
     case "archived":
-      // Terminal — ActionsSection replaces everything with an informational
-      // notice once terminalState is set, but an item can also simply BE
-      // archived without that watch having fired; no actions apply either way.
+      // ActionsSection replaces everything with an informational notice once
+      // terminalState fires from a *live* archive event, but an item can also
+      // simply BE archived on first load (e.g. opened directly from a "Show
+      // Archived" list) without that watch ever having fired. Exposing
+      // "unarchive" here — checked in ActionsSection's non-terminal branch —
+      // covers that case; the terminal branch has its own Unarchive button
+      // for the live-event path.
+      actions.add("unarchive");
       break;
     case undefined:
       // Unknown/forward-compatible status string — no actions assumed.
