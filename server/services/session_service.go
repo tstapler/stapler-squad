@@ -285,11 +285,10 @@ func (s *SessionService) trackCleanup(fn func()) {
 // up on it. Destroy() takes no context and cannot be forcibly cancelled, so a
 // timed-out cleanup keeps running in its own goroutine (untracked by the
 // WaitGroup) after this deadline — only the *wait* is bounded, not the
-// underlying work. Set well above KillTmuxSessionByTitle's 5s cap (which
-// bounds a single subprocess call) because this timeout spans that same kill
-// plus git-diff and worktree cleanup on the same instance, which can
-// legitimately take longer on large repos under normal (non-hung) load.
-const deleteSessionCleanupTimeout = 30 * time.Second
+// underlying work (see BUG-072 for threading a real context.Context through
+// the cleanup chain so the timeout can cancel the work itself). Matches
+// KillTmuxSessionByTitle's 5s cap on the same kill-session subprocess.
+const deleteSessionCleanupTimeout = 5 * time.Second
 
 // destroyWithTimeout runs destroy() (normally inst.Destroy) and waits up to
 // timeout for it to finish. If it doesn't finish in time, this returns a
