@@ -200,7 +200,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         )}
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
-          disabled={actionSpec.disabled || isTriageRunning || pendingAction !== null}
+          disabled={actionSpec.disabled || actionSpec.isDone || isTriageRunning || pendingAction !== null}
           aria-label={isActionPending ? "Running…" : isTriageRunning ? "Triage in progress" : actionSpec.label}
           data-action-button="true"
           data-testid={`backlog-action-${actionSpec.action}`}

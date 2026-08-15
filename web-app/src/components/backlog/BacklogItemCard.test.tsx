@@ -86,6 +86,101 @@ describe("BacklogItemCard — per-card pending state", () => {
 
 });
 
+describe("BacklogItemCard — action button click dispatch", () => {
+  it("BacklogItemCard_should_CallOnActionWithActionAndItemId_When_EnabledActionButtonClicked", () => {
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ id: "item-42", status: "idea" })}
+        onAction={onAction}
+        onClick={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("backlog-action-mark_ready"));
+
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onAction).toHaveBeenCalledWith("mark_ready", "item-42");
+  });
+
+  it("BacklogItemCard_should_NotCallOnAction_When_ActionSpecIsDone", () => {
+    // "done" status renders an isDone-only placeholder action ("Done ✓")
+    // with no disabled flag set explicitly — the button's disabled attribute
+    // (fixed alongside this test) and the onClick handler's own isDone guard
+    // must both prevent a dispatch.
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "done" })}
+        onAction={onAction}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-done");
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_NotCallOnAction_When_ActionSpecDisabled", () => {
+    // "idea" with no AC criteria yet disables "Mark Ready" via actionSpec.disabled.
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "idea", acCriteria: [] })}
+        onAction={onAction}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-mark_ready");
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_NotCallOnAction_When_AnotherActionIsPending", () => {
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "idea" })}
+        onAction={onAction}
+        onClick={jest.fn()}
+        pendingAction="mark_ready"
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("backlog-action-mark_ready"));
+
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_NotCallOnAction_When_TriageIsRunning", () => {
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: true,
+          planApproved: false,
+          triageStatus: "running",
+        })}
+        onAction={onAction}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-spawn_session");
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+
+    expect(onAction).not.toHaveBeenCalled();
+  });
+});
+
 describe("BacklogItemCard — last-review verdict badge", () => {
   it("shows a FAIL badge when the item's most recent review verdict is FAIL", () => {
     render(
