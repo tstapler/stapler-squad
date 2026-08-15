@@ -16,7 +16,14 @@
     "LifecycleSummary_should_RenderReworkCapBadge_When_OverrideIsSet",
     "LifecycleSummary_should_RenderUnlimitedReworkCapBadge_When_OverrideIsExplicitlyZero",
     "LifecycleSummary_should_OmitReworkCapBadge_When_OverrideIsUndefined",
-    "backlog item detail redesign > shows the Lifecycle Summary with zero prior clicks"
+    "backlog item detail redesign > shows the Lifecycle Summary with zero prior clicks",
+    "BlockerChip_should_renderAsButton_When_OnTriggerRemediationNowProvidedAndNotParked",
+    "BlockerChip_should_callOnTriggerRemediationNow_When_Clicked",
+    "BlockerChip_should_disableAndShowPending_When_RetryInFlight",
+    "BlockerChip_should_showInlineError_When_OnTriggerRemediationNowRejects",
+    "BlockerChip_should_disableWithParkedLabel_When_ItemIsParked",
+    "BlockerChip_should_renderReadOnlySpan_When_VariantCompactOrHandlerOmitted",
+    "retries a stuck item from the BlockerChip on the backlog detail page"
   ],
-  "lastModified": "2026-08-14T00:00:00Z"
+  "lastModified": "2026-08-15T00:00:00Z"
 }
