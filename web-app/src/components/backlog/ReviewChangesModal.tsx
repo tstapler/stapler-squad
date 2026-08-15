@@ -8,6 +8,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { DiffRenderer } from "@/components/shared/DiffRenderer";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
   backdrop,
   modal,
@@ -28,6 +29,7 @@ interface ReviewChangesModalProps {
 
 export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose }: ReviewChangesModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, true);
   const [diff, setDiff] = useState<{ content: string; added: number; removed: number } | null>(null);
   const [loading, setLoading] = useState(true);
   // Distinct from a genuinely empty diff — a fetch failure must not render as
@@ -66,10 +68,6 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose }:
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [onClose]);
-
-  useEffect(() => {
-    modalRef.current?.focus();
-  }, []);
 
   if (typeof document === "undefined") return null;
 
