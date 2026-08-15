@@ -212,7 +212,7 @@ const (
 	// runs showing a fresh, uncached list-sessions subprocess still
 	// returning the session immediately after kill-session completed).
 	killSessionConfirmTimeout = 2 * time.Second
-	sessionPollInitialDelay = 5 * time.Millisecond
+	sessionPollInitialDelay   = 5 * time.Millisecond
 	// sessionPollMaxDelay bounds the poll loop's exponential backoff below.
 	// Previously capped at 50ms, which -- once ramped up after ~4 doublings
 	// (~75ms) -- spawns a real `tmux list-sessions` subprocess (via
