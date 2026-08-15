@@ -18,7 +18,8 @@
     "BacklogBoard_should_ShowNoItemsMatchFilterMessage_When_FilterEmptiesAColumnWithItems",
     "BacklogBoard_should_ShowGenericEmptyMessage_When_ColumnHasNoItemsRegardlessOfFilter",
     "BacklogBoard_should_HideArchivedItems_When_ShowArchivedIsFalse",
-    "BacklogBoard_should_StillHideArchivedItems_When_ShowArchivedIsTrue"
+    "BacklogBoard_should_StillHideArchivedItems_When_ShowArchivedIsTrue",
+    "BacklogBoard_should_FoldRawStatusIntoMappedColumnWithCorrectBadge_When_StatusHasNoLiteralColumn"
   ],
-  "lastModified": "2026-08-14T00:00:00Z"
+  "lastModified": "2026-08-15T00:00:00Z"
 }

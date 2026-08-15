@@ -115,4 +115,29 @@ describe("BacklogBoard shared filter state (board view filter/sort parity)", () 
     });
     expect(screen.queryByText("Archived item")).not.toBeInTheDocument();
   });
+
+  it("BacklogBoard_should_FoldRawStatusIntoMappedColumnWithCorrectBadge_When_StatusHasNoLiteralColumn", () => {
+    // "queued" and "pr_pending" have no column of their own (BUG-037) —
+    // stageOf() folds them into In Progress / Review respectively (same
+    // mapping StageTracker uses on item detail), and the card still renders
+    // its own raw-status badge via getStatusLabel(), independent of which
+    // column it landed in.
+    renderBoard(
+      [
+        makeItem({ id: "1", status: "queued", title: "Queued item" }),
+        makeItem({ id: "2", status: "pr_pending", title: "PR pending item" }),
+      ],
+      NO_OP_FILTERS
+    );
+
+    const inProgressColumn = screen.getByTestId("backlog-column-in_progress");
+    expect(inProgressColumn).toContainElement(screen.getByText("Queued item"));
+    const reviewColumn = screen.getByTestId("backlog-column-review");
+    expect(reviewColumn).toContainElement(screen.getByText("PR pending item"));
+
+    const queuedCard = screen.getByText("Queued item").closest('[role="listitem"]');
+    expect(queuedCard?.querySelector('[data-testid="backlog-item-card-status"]')).toHaveTextContent("Queued");
+    const prPendingCard = screen.getByText("PR pending item").closest('[role="listitem"]');
+    expect(prPendingCard?.querySelector('[data-testid="backlog-item-card-status"]')).toHaveTextContent("pr pending");
+  });
 });
