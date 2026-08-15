@@ -114,6 +114,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
   // (the list-fetch shape) doesn't carry reworkCapOverride, so the current
   // value has to be fetched via getBacklogItem (full BacklogItem) on demand.
   const [reworkCapOverrides, setReworkCapOverrides] = useState<Map<string, number | undefined>>(new Map());
+  const appliedFocusItemIdRef = useRef<string | undefined>(undefined);
   // Mirrors reworkCapOverrides synchronously so the fetch-on-expand effect's
   // cleanup (below) can check "was this item actually committed?" without
   // depending on a stale closure over the state value — the effect
@@ -310,10 +311,19 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
   // composite keys, since one item can appear under several reasons), and
   // fall back to the "all" filter if the currently active reason filter
   // would otherwise hide every matching card.
+  //
+  // Applied at most once per focusItemId (tracked via appliedFocusItemIdRef),
+  // not on every `items` change: useStuckBacklogItems() hands back a fresh
+  // array reference on every ~60s poll tick regardless of whether the data
+  // actually changed, and focusItemId never clears itself from the URL. An
+  // unguarded effect would re-run on each poll and silently re-expand a card
+  // the user had just manually collapsed, or re-reset a filter they'd since
+  // changed away from "all".
   useEffect(() => {
-    if (!focusItemId) return;
+    if (!focusItemId || appliedFocusItemIdRef.current === focusItemId) return;
     const matches = items.filter((i) => i.itemId === focusItemId);
     if (matches.length === 0) return;
+    appliedFocusItemIdRef.current = focusItemId;
 
     setExpandedKeys((prev) => {
       const next = new Set(prev);
