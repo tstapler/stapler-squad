@@ -248,7 +248,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// still counts against maxTurns (bounds a runaway/looping orchestrator, same
 		// as a malformed response burning a turn) but skips SendKeys/fireTurnCallback
 		// entirely, and lastSentNudge is left unchanged since nothing new was sent.
-		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now())
+		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now(), tail)
 		if suppressed {
 			log.Info("AutonomousDriver: suppressed nudge", "session", sessionName, "turn", turnCount+1, "directive", directive)
 			if ctx.Err() != nil {
@@ -298,7 +298,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// nextLastNudge (a pure function) so this invariant is directly unit
 		// testable without needing a tmux-backed Instance to force a partial
 		// SendKeys failure.
-		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true)
+		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true, tail)
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
 		d.fireTurnCallback(turnCount+1, d.maxTurns, nextMsg)
 
