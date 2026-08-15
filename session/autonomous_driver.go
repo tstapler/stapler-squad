@@ -293,12 +293,20 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
+		// Re-capture the pane AFTER delivery completes, rather than reusing the
+		// pre-call `tail` captured before the blocking LLM call and both SendKeys
+		// writes. Real pane activity (agent output, prompt redraw) almost always
+		// occurs during that round-trip, so recording the stale pre-call snapshot
+		// as if it reflected delivery-time state made the next turn's
+		// isDuplicateNudge re-arm check fire on ordinary pane movement, defeating
+		// the suppression cooldown this feature exists to provide.
+		deliveryPane, _ := d.inst.Preview()
 		// Only recorded once both writes above have succeeded — a failed send must
 		// not be treated as delivered for future dedup checks. Isolated into
 		// nextLastNudge (a pure function) so this invariant is directly unit
 		// testable without needing a tmux-backed Instance to force a partial
 		// SendKeys failure.
-		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true, tail)
+		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true, deliveryPane)
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
 		d.fireTurnCallback(turnCount+1, d.maxTurns, nextMsg)
 
