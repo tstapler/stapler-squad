@@ -1200,7 +1200,7 @@ func (r *EntRepository) UnarchiveBacklogItem(ctx context.Context, id string) (*B
 	// status-transition event (not a lightweight archived-only shape) so
 	// "Show Archived" list views in other open tabs live-update.
 	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:      ChangeStatusTransition,
 		OldStatus: current.Status,
 		NewStatus: string(BacklogStatusIdea),
