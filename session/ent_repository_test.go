@@ -246,6 +246,138 @@ func TestEntRepository_Worktree(t *testing.T) {
 	assert.Equal(t, session.Worktree.BranchName, retrieved.Worktree.BranchName)
 }
 
+// TestEntRepository_ListWithOptions_RespectsLoadWorktree verifies that
+// ListWithOptions honors LoadOptions.LoadWorktree instead of always
+// eager-loading every edge regardless of the requested options.
+func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-worktree")
+	session.Worktree = GitWorktreeData{
+		RepoPath:      "/path/to/repo",
+		WorktreePath:  "/path/to/worktree",
+		SessionName:   "test-session",
+		BranchName:    "feature-branch",
+		BaseCommitSHA: "abc123",
+	}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	// LoadMinimal should skip worktree loading entirely.
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Equal(t, GitWorktreeData{}, minimal[0].Worktree)
+
+	// LoadOptions{LoadWorktree: true} should load it.
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadWorktree: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.Equal(t, session.Worktree.RepoPath, full[0].Worktree.RepoPath)
+	assert.Equal(t, session.Worktree.WorktreePath, full[0].Worktree.WorktreePath)
+	assert.Equal(t, session.Worktree.BranchName, full[0].Worktree.BranchName)
+}
+
+// TestEntRepository_ListWithOptions_RespectsLoadTags verifies that
+// ListWithOptions only loads session tags when LoadOptions.LoadTags is set.
+func TestEntRepository_ListWithOptions_RespectsLoadTags(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-tags")
+	session.Tags = []string{"backend", "urgent"}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Empty(t, minimal[0].Tags)
+
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadTags: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.ElementsMatch(t, session.Tags, full[0].Tags)
+}
+
+// TestEntRepository_ListWithOptions_RespectsLoadDiffStats verifies that
+// ListWithOptions only loads diff stats when LoadOptions.LoadDiffStats (or
+// LoadDiffContent) is set.
+func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-diffstats")
+	session.DiffStats = DiffStatsData{
+		Added:   100,
+		Removed: 50,
+		Content: "diff content here",
+	}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Equal(t, DiffStatsData{}, minimal[0].DiffStats)
+
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadDiffStats: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.Equal(t, session.DiffStats.Added, full[0].DiffStats.Added)
+	assert.Equal(t, session.DiffStats.Removed, full[0].DiffStats.Removed)
+	assert.Equal(t, session.DiffStats.Content, full[0].DiffStats.Content)
+}
+
+// TestEntRepository_ListWithOptions_RespectsLoadClaudeSession verifies that
+// ListWithOptions only loads Claude session data (and its metadata) when
+// LoadOptions.LoadClaudeSession is set.
+func TestEntRepository_ListWithOptions_RespectsLoadClaudeSession(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-claude-session")
+	session.ClaudeSession = ClaudeSessionData{
+		ConversationUUID: "claude-123",
+		SquadSessionID:   "conv-456",
+		ProjectName:      "test-project",
+		LastAttached:     time.Now(),
+		Settings: ClaudeSettings{
+			AutoReattach: true,
+		},
+		Metadata: map[string]string{
+			"key1": "value1",
+		},
+	}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Empty(t, minimal[0].ClaudeSession.ConversationUUID)
+
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadClaudeSession: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.Equal(t, session.ClaudeSession.ConversationUUID, full[0].ClaudeSession.ConversationUUID)
+	assert.Equal(t, session.ClaudeSession.SquadSessionID, full[0].ClaudeSession.SquadSessionID)
+	assert.Equal(t, session.ClaudeSession.Metadata["key1"], full[0].ClaudeSession.Metadata["key1"])
+}
+
 // TestEntRepository_DiffStats tests diff stats persistence
 func TestEntRepository_DiffStats(t *testing.T) {
 	repo, cleanup := createTestEntRepository(t)

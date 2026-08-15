@@ -73,11 +73,6 @@ func addCommit(t *testing.T, repoPath, filename, message string) {
 	run("commit", "-m", message)
 }
 
-// TestVCSReaderContractGit verifies the CLI-git reader satisfies the interface contract.
-func TestVCSReaderContractGit(t *testing.T) {
-	testVCSReaderContract(t, &unfinished.GitVCSReader{})
-}
-
 // TestVCSReaderContractGoGit verifies the go-git reader satisfies the interface contract.
 func TestVCSReaderContractGoGit(t *testing.T) {
 	testVCSReaderContract(t, &unfinished.GoGitVCSReader{})

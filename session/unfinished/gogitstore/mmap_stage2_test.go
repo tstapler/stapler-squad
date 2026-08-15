@@ -419,6 +419,14 @@ func TestPackWatch_FsnotifyTriggersRefresh(t *testing.T) {
 // mismatch/mismatchDetail and reported from the main goroutine after
 // joining.
 func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
+	if testing.Short() {
+		// This test's cost is dominated by driving a REAL `git gc --aggressive`
+		// repack concurrently with many pinned readers (see the doc comment
+		// above), not by the now-cached fixture build — fixture caching does
+		// not fix that. See session/unfinished/gogitstore/soak_test.go for the
+		// established -short convention in this package.
+		t.Skip("skipped under -short: too slow for make test/quick-check")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
@@ -683,6 +691,63 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 			if pins < 0 {
 				mismatch.Store(true)
 				mismatchDetail.Store("handle.pins went negative — double-release bug")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	// Prober: watches for the unmapped transition and immediately does one
+	// Entries() call, so the already-unmapped guard path (lockedIndex.unmappedLocked)
+	// is exercised deterministically every run rather than by scheduling luck.
+	// It ignores `stop`; the deadline covers the same 5-minute repackDone
+	// timeout plus readerGrace and slack, so a regression that breaks
+	// unmapping fails loudly instead of hanging the suite.
+	proberDeadline := time.Now().Add(5*time.Minute + readerGrace + 30*time.Second)
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		for {
+			store.mu.Lock()
+			unmapped := li.handle.unmapped
+			store.mu.Unlock()
+			if unmapped {
+				it, ierr := li.Entries()
+				if ierr != nil {
+					mismatch.Store(true)
+					mismatchDetail.Store("prober Entries() error: " + ierr.Error())
+					return
+				}
+				seen := 0
+				for {
+					_, nerr := it.Next()
+					if errors.Is(nerr, io.EOF) {
+						break
+					}
+					if nerr != nil {
+						mismatch.Store(true)
+						mismatchDetail.Store("prober Next() error: " + nerr.Error())
+						_ = it.Close()
+						return
+					}
+					seen++
+				}
+				if cerr := it.Close(); cerr != nil {
+					mismatch.Store(true)
+					mismatchDetail.Store("prober Close() error: " + cerr.Error())
+					return
+				}
+				if seen != 0 {
+					mismatch.Store(true)
+					mismatchDetail.Store(fmt.Sprintf("prober read %d entries from an already-unmapped handle, want 0", seen))
+					return
+				}
+				sawEmptyRead.Store(true)
+				return
+			}
+			if time.Now().After(proberDeadline) {
+				mismatch.Store(true)
+				mismatchDetail.Store("prober: handle was never unmapped before deadline")
 				return
 			}
 			time.Sleep(time.Millisecond)

@@ -176,4 +176,22 @@ describe("LifecycleSummary", () => {
 
     expect(screen.queryByTestId("lifecycle-unfinished-link")).not.toBeInTheDocument();
   });
+
+  it("LifecycleSummary_should_RenderReworkCapBadge_When_OverrideIsSet", () => {
+    render(<LifecycleSummary item={makeItem({ id: "itm_a1b2c3", reworkCapOverride: 5 })} />);
+
+    expect(screen.getByTestId("lifecycle-rework-cap-badge")).toHaveTextContent("Rework cap: 5");
+  });
+
+  it("LifecycleSummary_should_RenderUnlimitedReworkCapBadge_When_OverrideIsExplicitlyZero", () => {
+    render(<LifecycleSummary item={makeItem({ id: "itm_a1b2c3", reworkCapOverride: 0 })} />);
+
+    expect(screen.getByTestId("lifecycle-rework-cap-badge")).toHaveTextContent("Rework cap: unlimited");
+  });
+
+  it("LifecycleSummary_should_OmitReworkCapBadge_When_OverrideIsUndefined", () => {
+    render(<LifecycleSummary item={makeItem({ id: "itm_a1b2c3", reworkCapOverride: undefined })} />);
+
+    expect(screen.queryByTestId("lifecycle-rework-cap-badge")).not.toBeInTheDocument();
+  });
 });

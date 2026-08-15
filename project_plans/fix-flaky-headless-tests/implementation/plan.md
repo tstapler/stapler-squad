@@ -11,6 +11,33 @@ documentation of the parts already correct and not touched.
 
 ---
 
+## Deviation from backlog AC4's literal wording (read this first)
+
+Backlog item `04e6841f-ff53-44bb-b737-04e8b52fe1c3`'s AC4 asks for cluster 3's
+signal check to be a "portable, **build-tag-gated** signal-check helper."
+The shipped `isExpectedFaultSignal` (`session/unfinished/gogitstore/
+trunc_fault_signal_test.go`) is deliberately **not** build-tag-gated — it has
+zero `//go:build` directives and zero `syscall`/platform-specific imports.
+
+This is not an unmet requirement; it's a corrected assumption. AC4's
+"build-tag-gated" phrasing assumed the originally-planned implementation
+(`syscall.WaitStatus`-based signal checking, which genuinely does need a
+`!windows`/`windows` split). That plan was found, empirically, during
+implementation, not to work at all for this specific fault
+(`WaitStatus.Signal()` can never equal `SIGBUS`/`SIGSEGV` for a Go-runtime
+crash — see the full reasoning and verification steps in Story 3.1.1's
+**"IMPLEMENTATION DEVIATION"** block below, ~line 351, and its **"As-built"**
+block, ~line 476). The replacement design (parsing Go's own crash-dump text)
+needs no build tag at all — confirmed via `GOOS=windows go vet
+./session/unfinished/gogitstore/...`, clean — which is a **stronger**
+portability result than build-tag-gating would have given, not a weaker one.
+Per this same backlog item's own AC7/AC8 philosophy ("findings that a change
+isn't needed are documented, not forced through anyway"), no build tag was
+added to satisfy AC4's literal implementation-detail wording once the
+underlying assumption behind that wording was shown not to hold.
+
+---
+
 ## Step 0.5 — Creative pass: alternatives for the clusters 1+2 fix
 
 Three distinct approaches were considered for making the fake-claude fixture
@@ -265,6 +292,17 @@ in Story 2.1.1 actually covers every affected call site, not just some.
 **Files**: `session/headless/capability_check_test.go`,
 `session/headless/pool_test.go`
 
+**Scope note (architecture-review concern, resolved by documentation):**
+`requirements.md`'s AC1 wording also names `caller_test.go` as sharing "the
+same pattern," but this plan deliberately does not migrate it.
+`caller_test.go`'s `TestFindClaudeBinary_*` tests write fixture scripts to
+disk only to exercise `findClaudeBinary`'s executable-bit discovery
+(`os.Stat`) — none of them ever fork/exec the written file (confirmed via
+`grep -n "WriteFile\|ProcessRunner{\|exec\.\|StartProcess\|\.Run(" caller_test.go`:
+only `os.WriteFile` hits, no exec calls), so they cannot hit the
+Gatekeeper/TCC exec-refusal this plan targets and are correctly out of
+scope.
+
 ##### Task 2.1.2a: Migrate capability_check_test.go's 4 call sites + fix stale doc comment (~4 min)
 - In `session/headless/capability_check_test.go`, change all 4 occurrences of
   `NewProcessRunnerForTesting(scriptPath)` (lines 55, 86, 106, 142) to
@@ -336,11 +374,45 @@ branches, per AC3/AC4.
 **As a** test maintainer, **I want** a helper that confirms a subprocess died
 from `SIGBUS`/`SIGSEGV` specifically, **so that** the test's "expected crash"
 branch is no longer just "any non-nil error."
+
+**IMPLEMENTATION DEVIATION (root-cause finding made during Task 3.1.1a, supersedes
+the design below):** the `syscall.WaitStatus.Signaled()`/`.Signal()` design this
+story specifies does not work — verified empirically, not assumed. Built the test
+binary and ran the actual crash helper directly
+(`GOGITSTORE_TRUNC_HELPER=1 ./gogitstore.test -test.run=...`): with the default
+`GOTRACEBACK`, the process exits via a controlled `os.Exit(2)` — `$?` is `2`, not
+a signal-death exit — after printing `fatal error: fault` +
+`[signal SIGBUS: bus error ...]`. Testing `GOTRACEBACK=crash` (the mode the Go
+docs describe as re-raising a fatal signal) instead exits via `SIGABRT` (`$?`=134),
+never the original `SIGBUS`/`SIGSEGV`. **In neither mode does
+`syscall.WaitStatus.Signal()` ever equal `SIGBUS`/`SIGSEGV`** — Go's own runtime
+signal handler intercepts the hardware fault before the OS can report it as the
+process's death signal, so a `WaitStatus`-based check can never match a genuine
+crash from this fault and would always fall through to the "not confirmed"
+branch. The only place the signal is actually recorded is Go's own crash-dump
+text, whose `[signal SIGBUS: ...]`/`[signal SIGSEGV: ...]` line format is stable
+across `GOTRACEBACK` modes (confirmed identical in both captured runs above).
+**Implemented instead:** `isExpectedFaultSignal(output []byte) (bool, string)`
+parses the subprocess's captured stdout+stderr for that line — no `syscall`
+import, no `*exec.ExitError`/`WaitStatus` type assertion, no build-tag split.
+This also **resolves** the architecture-review's Windows-CI-justification concern
+by elimination: since the helper does no syscall-package type assertion at all,
+it compiles identically on `windows` (verified: `GOOS=windows go vet
+./session/unfinished/gogitstore/...` clean) — `trunc_fault_signal_windows_test.go`
+was deleted as dead scaffolding rather than kept.
 **Acceptance Criteria**:
 - AC3 (infrastructure half): a structural signal check is available and
-  portable across the platforms this repo's CI actually builds for
-  (`linux`, `darwin`, `windows` — confirmed via `.github/workflows/build.yml`
-  matrix).
+  portable across `linux`/`darwin`/`windows`. **Correction (architecture-review
+  concern):** this is precedent-following scaffolding (mirrors
+  `zombie_reaper.go`/`zombie_reaper_windows.go`), not a CI-driven requirement —
+  verified that no CI job in this repo ever compiles, vets, or runs this
+  package's `_test.go` files on Windows (`build.yml`'s `windows` leg only
+  `go build`s the root main package; `go test -race ./...` and
+  `golangci-lint` both run exclusively on `ubuntu-latest`, confirmed via
+  `grep -rn "runs-on" .github/workflows/*.yml`). The stub exists so a
+  hypothetical native-Windows `go vet ./...` run wouldn't break this
+  currently-zero-`syscall`-import package, not because CI would catch its
+  absence.
   - *Given* an `*exec.ExitError` from a process killed by `SIGBUS` on Linux,
     *When* `isExpectedFaultSignal(err)` is called from
     `trunc_fault_signal_test.go` (built on `!windows`), *Then* it returns
@@ -428,6 +500,27 @@ branch is no longer just "any non-nil error."
   ```
 - Files: `session/unfinished/gogitstore/trunc_fault_signal_windows_test.go`
 
+##### As-built (supersedes Tasks 3.1.1a/b/c per the deviation note above)
+- `trunc_fault_signal_test.go` has no build tag, no `syscall`/`errors`/`os/exec`
+  import for the helper itself (only `bytes` + `testing`, plus `os/exec` in one
+  test for a synthetic negative-case error). `isExpectedFaultSignal(output
+  []byte) (bool, string)` matches Go's crash-dump `[signal SIGBUS:`/`[signal
+  SIGSEGV:` text.
+- Three direct unit tests (not two): SIGBUS-line match, SIGSEGV-line match, and
+  no-fault-signature-present. The SIGBUS fixture is a byte-for-byte excerpt of
+  this package's own genuine crash dump (captured via the same
+  `GOGITSTORE_TRUNC_HELPER=1` re-exec `mmap_truncation_test.go` already uses),
+  not a hand-guessed format.
+- `trunc_fault_signal_windows_test.go` (Task 3.1.1b) was not created —
+  deleted after being briefly written, since the portable text-parsing
+  implementation compiles identically on `windows` with no stub needed
+  (verified: `GOOS=windows go vet ./session/unfinished/gogitstore/...` clean).
+- Verified 5/5 passing (`-count=5`) for both the new direct tests and the full
+  `TestMmapIndexHandle_TruncateWhileMapped_*` cluster, with the wired-in
+  signal-confirmed log line (`"subprocess crashed with a Go runtime-confirmed
+  bus error"`) appearing in all 5 crash-branch runs — not just the unconfirmed
+  fallback text.
+
 #### Story 3.1.2: Wire the helper into the err != nil branch
 **As a** future maintainer debugging a red `gogitstore` CI run, **I want**
 the test's "expected crash" log to say whether the signal was actually
@@ -443,10 +536,12 @@ silently accepted as if the fault had been proven.
   - *Given* `mmap_truncation_test.go`'s `err != nil` branch (currently lines
     127-130) after this task's change, *When* the subprocess is killed by
     `SIGBUS` (the common real-world case, confirmed 5/5 on this Linux
-    machine per `requirements.md`), *Then* the test logs `"subprocess killed
-    by bus error (expected — this IS the point of the test)"` and returns
-    without failing — identical externally-observable pass/fail outcome to
-    today, strictly better diagnostic text.
+    machine per `requirements.md`), *Then* the test logs `"subprocess crashed
+    with a Go runtime-confirmed bus error (expected — this IS the point of
+    the test)"` and returns without failing — identical externally-observable
+    pass/fail outcome to today, strictly better diagnostic text. (As-built:
+    "Go runtime-confirmed" — see the As-built note under Story 3.1.1 for why
+    this is text-parsed from Go's crash dump rather than a WaitStatus check.)
   - *Given* the same branch, *When* the subprocess instead fails for an
     unrelated reason (e.g. `-test.run` regex matched nothing, produces a
     non-signal exit), *Then* the test logs `"subprocess did not exit cleanly
@@ -563,6 +658,10 @@ under `-race`), **so that** "done" is backed by evidence, not a claim.
 
 ## Phase 5: macOS Follow-Up Tracking
 
+**As-built**: filed as backlog item `44b7d757-753c-4be3-b9a4-6fbd3831a039`
+("Confirm fix-flaky-headless-tests clusters 1+2 fix on macOS"), created before
+PR-open time per Task 5.1.1b.
+
 ### Epic 5.1: Explicit post-merge verification task (AC6)
 **Goal**: Ensure the parts of this fix that cannot be verified on Linux are
 tracked as an explicit task, not silently assumed fixed, per AC6 and
@@ -619,4 +718,61 @@ the platform it occurs on.
   its ID in the PR description. Resolves pre-mortem.md Failure #2 (P1): the
   macOS caveat must be a durable, separately-trackable artifact, not only
   prose in a PR that automation doesn't read.
+- **As-built**: filed as backlog item `44b7d757-753c-4be3-b9a4-6fbd3831a039`.
+
+---
+
+## sdd:6-verify Report
+
+### Technology Surface
+| Technology | Files | Review approach |
+|---|---|---|
+| Go | runner.go, fake_runner.go, capability_check_test.go, pool_test.go, mmap_truncation_test.go, trunc_fault_signal_test.go | 3 parallel review agents (Go idioms, architecture, refactor-candidates) — `golang-development` skill's checklist applied inline/by-proxy since it has no matching Agent-tool `subagent_type` in this environment |
+
+### Layer 1 — Idioms
+| Finding | Severity | Action |
+|---|---|---|
+| `if matched {...; return} else {...; return}` redundant else in mmap_truncation_test.go | MUST FIX (unanimous across all 3 agents) | Fixed — flattened, `detail` hoisted out of the `if` init to keep it in scope |
+| 3 near-identical `isExpectedFaultSignal` tests could be table-driven | SUGGEST | Not applied — 3 cases is below the threshold where table-driven pays for itself (YAGNI); noted, not blocking |
+| Doc comments on `NewShellWrappedProcessRunnerForTesting`/`isExpectedFaultSignal` lead with investigation narrative before the one-line contract | NITPICK | Not applied — the narrative *is* the load-bearing, non-obvious root-cause evidence this repo's CLAUDE.md requires ("no fix without root cause"); shrinking it would remove the reasoning a future reader needs to trust the fix |
+| `interpreter` field comment style differs from its sibling fields (block vs trailing `//`) | NITPICK | Not applied — cosmetic |
+
+### Layer 2 — Architecture
+| Finding | Severity | Action |
+|---|---|---|
+| Design-intent match (plan.md's deviation note vs. actual code) | VERIFIED by architecture-review agent | No action needed |
+| `interpreter` field production-isolation (zero-value-safe, sole production call site `caller.go:118` confirmed unaffected) | VERIFIED | No action needed |
+| No BLOCKER, no CONCERN found | — | — |
+
+### Refactor-candidates findings (folded into Layer 1/2 triage)
+| Finding | Severity | Action |
+|---|---|---|
+| Unconfirmed-signal branch doesn't fail the test (`t.Logf`+`return` in both branches) | HIGH | **Investigated, not changed** — see in-code comment added to `mmap_truncation_test.go`'s `err != nil` branch. Deliberate: the crash signature was verified stable across every `GOTRACEBACK` mode during this implementation (default, `crash`, `none` all print the `[signal SIGxxx: ...]` line), so an unconfirmed case is far more likely to be a genuinely different subprocess condition than a missed real crash. Turning this into `t.Fatalf` would add a brand-new failure mode to an inherently platform/kernel-dependent subprocess test with no live evidence such a case is reachable — exactly what AC5 ("no regression from current passing state") and `research/pitfalls.md` §2-3 caution against. The judgment call pitfalls.md asked to be made explicitly (not silently skipped) is now recorded both here and in the source itself. |
+| Redundant else (duplicate of Layer 1 finding) | MEDIUM | Fixed (same fix as above) |
+| `NewProcessRunnerForTesting` now has zero call sites repo-wide | MEDIUM | Not removed — still valid public API for the "already-trusted binary" case its doc comment describes (a real, distinct scenario from `NewShellWrappedProcessRunnerForTesting`'s), not dead code |
+| Subprocess spawn in `isExpectedFaultSignal`'s negative-case unit test | LOW | Fixed — replaced with a string literal, `os/exec` import removed |
+| Dual-meaning `detail` return value | LOW | Not applied — only 2 call sites, both handle it correctly; revisit if a 3rd caller appears |
+| `WithWorkDir`/`WithToolAccess` copy-constructor field duplication | LOW | Not applied — pre-existing pattern, predates this diff, out of scope |
+
+### Layer 3 — Correctness
+All 8 acceptance criteria verified pass (see `report_progress` calls, criteria_index 0-7). `make build && make test` — full suite green, re-run after all Layer 1/2 fixes applied. Targeted repeated runs: cluster 1 `-race -count=10` (10/10), clusters 1+2 combined `-race -count=5` (5/5), cluster 3 `-count=5` (10/10 subtests, signal-confirmed message present in all 5 crash-branch runs), `isExpectedFaultSignal` direct unit tests `-count=5` (15/15).
+
+### Tests
+Tests: full `make test` suite — 0 failed, 0 unexpected skips.
+
+### Security
+No security-sensitive surface touched (no auth, no external HTTP, no user-supplied input reaching a DB/shell/file-path boundary, no secrets). Not applicable.
+
+### Layer 4 — UX & Behavioral
+Skipped — pure test-infrastructure change, no `project_plans/fix-flaky-headless-tests/design/ux.md` exists, no user-facing surface.
+
+### Fix Loop Summary
+| Layer | Iterations used | Items resolved | Items remaining |
+|---|---|---|---|
+| L1+L2 | 1 / 5 | 3 (else-flatten, subprocess-in-test, unconfirmed-signal documented) | 0 |
+| L3 | 0 / 5 (clean on first check) | — | 0 |
+| L4 | N/A | — | — |
+
+### Verdict
+✅ PASS — all layers clean after one fix iteration — ready for `/backlog/review`.
 - Files: none — output is a backlog item, not a repo file.

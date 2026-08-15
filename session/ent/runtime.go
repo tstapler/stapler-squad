@@ -420,6 +420,10 @@ func init() {
 	itemsessionDescEstimatedCostUsd := itemsessionFields[20].Descriptor()
 	// itemsession.DefaultEstimatedCostUsd holds the default value on creation for the estimated_cost_usd field.
 	itemsession.DefaultEstimatedCostUsd = itemsessionDescEstimatedCostUsd.Default.(float64)
+	// itemsessionDescClaimantHostID is the schema descriptor for claimant_host_id field.
+	itemsessionDescClaimantHostID := itemsessionFields[21].Descriptor()
+	// itemsession.DefaultClaimantHostID holds the default value on creation for the claimant_host_id field.
+	itemsession.DefaultClaimantHostID = itemsessionDescClaimantHostID.Default.(string)
 	// itemsessionDescID is the schema descriptor for id field.
 	itemsessionDescID := itemsessionFields[0].Descriptor()
 	// itemsession.DefaultID holds the default value on creation for the id field.

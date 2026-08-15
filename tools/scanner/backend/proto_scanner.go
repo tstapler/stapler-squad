@@ -134,10 +134,12 @@ var methodToID = map[string]string{
 	"ClearConversationState": "session:clear-conversation-state",
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
+	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
 	"ArchiveBacklogItem":          "backlog:archive-item",
+	"UnarchiveBacklogItem":        "backlog:unarchive-item",
 	"TransitionBacklogItemStatus": "backlog:transition-status",
 	"SpawnSessionFromItem":        "backlog:spawn-session",
 	"AttachSessionToItem":         "backlog:attach-session",

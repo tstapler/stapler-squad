@@ -220,6 +220,8 @@ type Repository interface {
 	UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error)
 	// ArchiveBacklogItem sets the archived_at timestamp on a backlog item.
 	ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
+	// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+	UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
 	// DeleteBacklogItem permanently removes an item and all its child records.
 	DeleteBacklogItem(ctx context.Context, id string) error
 	// TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
@@ -386,6 +388,10 @@ type ItemSessionSummary struct {
 	VerificationNotes     string // freeform verification evidence reported via request_review
 	OverallOutcome        string // from linked review_verdict (empty if none)
 	ReviewVerdict         *ReviewVerdictSummary
+	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
+	// attached this session. See ItemSession.claimant_host_id's schema comment for the
+	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.
+	ClaimantHostID string
 }
 
 // BacklogStatusEventData is the domain DTO replacing *ent.BacklogStatusEvent in Storage returns.

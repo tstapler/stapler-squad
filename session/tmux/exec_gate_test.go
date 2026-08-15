@@ -1,7 +1,10 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +17,153 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// captureDebugLog temporarily redirects the slog default logger to a buffer
+// (mirrors server/services/session_service_client_log_test.go's
+// captureInfoLog) and returns a function that restores it and returns the
+// captured output.
+func captureDebugLog(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	original := slog.Default()
+	slog.SetDefault(slog.New(h))
+	return func() string {
+		slog.SetDefault(original)
+		return buf.String()
+	}
+}
+
+// setupExecGateTestConfig points STAPLER_SQUAD_TEST_DIR at a fresh t.TempDir()
+// and writes a minimal config.json setting TmuxExecGate.Slots/ResyncFastLaneSlots,
+// isolating this test's gate directories (and slot counts) from any other test
+// or from a real ~/.stapler-squad/config.json on the machine running the suite.
+// Returns a unique-per-test serverSocket key so parallel (sub)tests never share
+// a gate directory even under the same STAPLER_SQUAD_TEST_DIR.
+func setupExecGateTestConfig(t *testing.T, defaultSlots, resyncSlots int) (serverSocket string) {
+	t.Helper()
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+	cfg := map[string]any{
+		"tmux_exec_gate": map[string]any{
+			"slots":               defaultSlots,
+			"resyncFastLaneSlots": resyncSlots,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), data, 0o600))
+
+	return "exec-gate-test-" + t.Name()
+}
+
+func TestAcquireResyncExecSlot_should_AcquireFromSeparatePool_When_DefaultPoolSaturated(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 1, 1)
+
+	releaseDefault, err := AcquireExecSlot(context.Background(), serverSocket)
+	require.NoError(t, err)
+	defer releaseDefault()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	releaseFastLane, err := AcquireResyncExecSlot(ctx, serverSocket)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	defer releaseFastLane()
+	assert.Less(t, elapsed, 100*time.Millisecond, "fast lane acquire should not wait behind the saturated default pool")
+}
+
+func TestAcquireResyncExecSlot_should_BlockUntilSlotAvailable_When_FastLanePoolExhausted(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 4, 1)
+
+	releaseFirst, err := AcquireResyncExecSlot(context.Background(), serverSocket)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = AcquireResyncExecSlot(ctx, serverSocket)
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	assert.GreaterOrEqual(t, elapsed, 90*time.Millisecond, "should have blocked for close to the full timeout, not returned immediately")
+
+	releaseFirst()
+	release2, err := AcquireResyncExecSlot(context.Background(), serverSocket)
+	require.NoError(t, err)
+	release2()
+}
+
+// TestAcquireResyncExecSlot_should_LogWaitTimeInMilliseconds_When_SlotAcquiredAfterContention
+// covers Task 7.1.1.2 (Epic 7.1 observability): the fast-lane wait time must
+// actually be logged, not just measured and discarded, so operators can
+// distinguish "usually instant" from "usually near the 3s ceiling" without
+// reproducing contention interactively.
+func TestAcquireResyncExecSlot_should_LogWaitTimeInMilliseconds_When_SlotAcquiredAfterContention(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 4, 1)
+	restore := captureDebugLog(t)
+
+	releaseFirst, err := AcquireResyncExecSlot(context.Background(), serverSocket)
+	require.NoError(t, err)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		releaseFirst()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	release2, err := AcquireResyncExecSlot(ctx, serverSocket)
+	require.NoError(t, err)
+	defer release2()
+
+	logOutput := restore()
+	assert.Contains(t, logOutput, "acquired fast-lane slot")
+	assert.Regexp(t, `waitMs=[1-9]\d*`, logOutput, "should record a nonzero wait after contention, not a zero placeholder")
+}
+
+// TestAcquireResyncExecSlot_should_NotConsumeDefaultPoolCapacity_When_FastLanePoolIsFull is an
+// integration test: it drives both pools concurrently against real flock-backed gate files (no
+// mocking of acquireSlot/flock) to prove the fast lane pool and default pool are truly
+// independent -- saturating the fast lane pool must have zero effect on default pool capacity.
+func TestAcquireResyncExecSlot_should_NotConsumeDefaultPoolCapacity_When_FastLanePoolIsFull(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 2, 2)
+
+	var fastLaneReleases []func()
+	for i := 0; i < 2; i++ {
+		release, err := AcquireResyncExecSlot(context.Background(), serverSocket)
+		require.NoError(t, err)
+		fastLaneReleases = append(fastLaneReleases, release)
+	}
+	defer func() {
+		for _, release := range fastLaneReleases {
+			release()
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	releases := make([]func(), 2)
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			release, err := AcquireExecSlot(ctx, serverSocket)
+			errs[i] = err
+			releases[i] = release
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "default pool acquire %d should succeed despite fast lane pool being fully saturated", i)
+		releases[i]()
+	}
+}
 
 func TestExecGate_BoundsPeakConcurrency(t *testing.T) {
 	dir := t.TempDir()
