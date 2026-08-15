@@ -96,7 +96,7 @@ New omnibar feature
         │         └── YES → New Detector class + createDefaultRegistry() + detector test
         │
         ├─ New session creation mode?
-        │         └── YES → also see .claude/rules/session-creation-registry.md (7 touchpoints)
+        │         └── YES → also see .claude/docs/session-creation-registry.md (7 touchpoints)
         │
         └─ None of the above?
                   └── May only need changes to OmnibarCreationPanel + Omnibar form state

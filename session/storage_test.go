@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,15 +15,29 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
-// createTestStorage creates a temporary Storage backed by an Ent repository.
+// testDBCounter guarantees each createTestStorage call gets a uniquely-named
+// in-memory database, so unrelated tests running in parallel never share state.
+var testDBCounter atomic.Int64
+
+// createTestStorage creates a Storage backed by an in-memory Ent repository.
 // The caller should defer cleanup().
+//
+// This package's fixtures are called 300+ times across its test files; each
+// call still pays the full Ent schema-creation + backfill-migration cost, but
+// backing it with an in-memory SQLite database (rather than a temp-dir file)
+// removes the disk I/O and WAL fsync overhead that made the full package
+// suite take ~650s and occasionally exceed `go test`'s 10m timeout.
+//
+// The DSN uses a named, shared-cache in-memory database (rather than the bare
+// ":memory:" literal) because some tests (e.g. forceEmptyBranchNameViaRawSQL in
+// review_gate_test.go) open a second, independent *sql.DB against the same
+// repo.dbPath to reach the database with raw SQL. A bare ":memory:" gives every
+// independent sql.Open call its own private, unmigrated database; "cache=shared"
+// makes repeated opens of the same "file:" name attach to the same in-memory DB.
 func createTestStorage(t *testing.T) (*Storage, func()) {
 	t.Helper()
-	tmpDir, err := os.MkdirTemp("", "storage-test-*")
-	require.NoError(t, err)
-
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-	repo, err := NewEntRepository(WithDatabasePath(dbPath))
+	dsn := fmt.Sprintf("file:testdb_%d?mode=memory&cache=shared", testDBCounter.Add(1))
+	repo, err := NewEntRepository(WithDatabasePath(dsn))
 	require.NoError(t, err)
 
 	storage, err := NewStorageWithRepository(repo)
@@ -30,7 +45,6 @@ func createTestStorage(t *testing.T) (*Storage, func()) {
 
 	cleanup := func() {
 		repo.Close()
-		os.RemoveAll(tmpDir)
 	}
 	return storage, cleanup
 }
@@ -514,11 +528,14 @@ func TestStorage_UpdateInstance(t *testing.T) {
 	err := storage.UpdateInstance(inst)
 	require.NoError(t, err)
 
-	rows, err := storage.ListInstanceData()
+	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
+	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// instead, which eager-loads tags, to verify persistence.
+	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"alpha", "beta"}, rows[0].Tags, "Tags should be persisted by UpdateInstance")
-	assert.Equal(t, "refactor-tests", rows[0].Category, "Category should be persisted by UpdateInstance")
+	require.Len(t, instances, 1)
+	assert.Equal(t, []string{"alpha", "beta"}, instances[0].Tags, "Tags should be persisted by UpdateInstance")
+	assert.Equal(t, "refactor-tests", instances[0].Category, "Category should be persisted by UpdateInstance")
 }
 
 // TestStorage_ListInstanceData verifies that ListInstanceData returns raw
@@ -580,11 +597,14 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	err := storage.SaveInstancesSync([]*Instance{inst})
 	require.NoError(t, err)
 
-	rows, err := storage.ListInstanceData()
+	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
+	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// instead, which eager-loads tags, to verify persistence.
+	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"sync-tag"}, rows[0].Tags, "Tags should be persisted by SaveInstancesSync")
-	assert.Equal(t, "sync-category", rows[0].Category, "Category should be persisted by SaveInstancesSync")
+	require.Len(t, instances, 1)
+	assert.Equal(t, []string{"sync-tag"}, instances[0].Tags, "Tags should be persisted by SaveInstancesSync")
+	assert.Equal(t, "sync-category", instances[0].Category, "Category should be persisted by SaveInstancesSync")
 }
 
 // TestSaveInstances_WorktreeDataQueryableImmediately is a regression test for the

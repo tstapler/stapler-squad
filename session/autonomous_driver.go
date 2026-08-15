@@ -192,6 +192,11 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 
 	outcome := AutonomousDriverOutcome{}
 	malformedResponseCount := 0
+	// lastSentNudge tracks the most recent nudge actually delivered (both SendKeys
+	// writes succeeded). It's a run()-local, not a struct field: every caller
+	// constructs a fresh *AutonomousDriver per Start(), so no cross-restart
+	// persistence is needed and a local avoids any d.mu entanglement.
+	var lastSentNudge lastNudge
 
 	for turnCount := 0; turnCount < d.maxTurns; turnCount++ {
 		if ctx.Err() != nil {
@@ -204,7 +209,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		}
 
 		tail, _ := d.inst.Preview()
-		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns)
+		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns, lastSentNudge.text, lastSentNudge.at)
 
 		keyLen := 8
 		if len(sessionID) < keyLen {
@@ -217,25 +222,40 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			break
 		}
 
-		nextMsg, done, reason, parseErr := parseOrchestrationResponse(resp)
+		directive, payload, parseErr := parseOrchestrationResponse(resp)
 		if parseErr != nil {
 			malformedResponseCount++
 			log.Warn("AutonomousDriver: malformed LLM response, retrying", "session", sessionName, "turn", turnCount+1, "resp", resp)
 			continue
 		}
 
-		if done {
+		if directive == directiveDone {
 			sessionOutput, _ := d.inst.Preview()
 			outcome = AutonomousDriverOutcome{
 				Done:   true,
-				Reason: reason,
+				Reason: payload,
 				PRUrl:  ExtractPRURL(sessionOutput),
 				Turns:  turnCount + 1,
 			}
-			log.Info("AutonomousDriver: DONE signal received", "session", sessionName, "turn", turnCount+1, "reason", reason)
+			log.Info("AutonomousDriver: DONE signal received", "session", sessionName, "turn", turnCount+1, "reason", payload)
 			d.fireCompletion(sessionName, outcome)
 			return
 		}
+
+		// A WAIT directive or an exact-repeat of the last delivered nudge both mean
+		// "don't inject anything this turn" — the orchestrator (or the deterministic
+		// backstop) has recognized the agent already has this guidance. The turn
+		// still counts against maxTurns (bounds a runaway/looping orchestrator, same
+		// as a malformed response burning a turn) but skips SendKeys/fireTurnCallback
+		// entirely, and lastSentNudge is left unchanged since nothing new was sent.
+		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now())
+		if suppressed {
+			log.Info("AutonomousDriver: suppressed nudge", "session", sessionName, "turn", turnCount+1, "directive", directive)
+			time.Sleep(nudgeCooldown)
+			continue
+		}
+
+		nextMsg := payload
 
 		// Use SendKeys (raw PTY write) instead of SendCommandImmediate so that only
 		// "\r" is sent. SendCommandImmediate goes through the command executor which
@@ -259,6 +279,9 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
+		// Only recorded once both writes above have succeeded (criterion 7) — a
+		// failed send must not be treated as delivered for future dedup checks.
+		lastSentNudge = lastNudge{text: nextMsg, at: time.Now()}
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
 		d.fireTurnCallback(turnCount+1, d.maxTurns, nextMsg)
 
@@ -471,54 +494,88 @@ const autonomousSystemPrompt = `You are an orchestrator directing a Claude Code 
 Reply with exactly one of:
   NEXT_MESSAGE: <message to inject into the session>
   DONE: <reason the goal is complete>
+  WAIT: <reason the agent already has a plan and needs no new nudge>
+Use WAIT when the <last_nudge> shows the agent already acknowledged the same guidance and
+stated a plan to act on it (e.g. "I'll wait for CI") — do not repeat NEXT_MESSAGE with the
+same content just because the session still looks idle.
 No other text.`
 
 // buildOrchestrationPrompt constructs the user prompt for the orchestrator LLM call.
 // Goal and session output are wrapped in XML-style delimiters so that user-controlled
 // content (e.g., GitHub PR body embedded in the goal) cannot escape its section and
-// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text.
-func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int) string {
+// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text. lastNudgeText/
+// lastNudgeAt describe the most recent nudge actually delivered (both SendKeys calls
+// succeeded); lastNudgeAt.IsZero() means none has been sent yet. lastNudgeText is
+// LLM-generated content from a prior turn, so it's wrapped in its own <last_nudge> tag
+// (same anti-spoofing rationale as <goal>/<session_output>) rather than interpolated
+// directly into the instruction text.
+func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int, lastNudgeText string, lastNudgeAt time.Time) string {
 	const maxTailBytes = 80 * 120 // ~80 lines × 120 chars
 	if len(tail) > maxTailBytes {
 		tail = tail[len(tail)-maxTailBytes:]
 	}
+	lastNudgeBlock := "None sent yet."
+	if lastNudgeText != "" && !lastNudgeAt.IsZero() {
+		lastNudgeBlock = fmt.Sprintf("%s\n(sent %s ago)", lastNudgeText, time.Since(lastNudgeAt).Round(time.Second))
+	}
 	return fmt.Sprintf(
-		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text> or DONE: <reason>.",
-		goal, tail, turnCount, maxTurns)
+		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>\n\n<last_nudge>\n%s\n</last_nudge>\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text>, DONE: <reason>, or WAIT: <reason>.",
+		goal, tail, lastNudgeBlock, turnCount, maxTurns)
 }
 
-// orchestrationDirectiveMarker matches "DONE:" or "NEXT_MESSAGE:" case-insensitively,
-// anywhere in the response — not just as an exact prefix of the whole string. Confirmed
-// live (2026-08-01, BUG-056): despite the system prompt's "no other text" instruction,
-// the orchestrator model routinely writes a full free-text explanation and appends the
-// directive directly onto the end of its last sentence with no separating newline at
-// all (e.g. "...reflecting real findings rather than guesswork.DONE: Reached the
-// 20-turn limit..."), which the old exact-prefix match rejected outright, burning the
-// turn (see AutonomousDriver's malformedResponseCount — 8 of 20 turns wasted this way
-// on one live item). Matching case-insensitively anywhere handles this plus markdown
-// fencing and preamble-before-the-directive without needing separate handling for each.
-var orchestrationDirectiveMarker = regexp.MustCompile(`(?i)(DONE|NEXT_MESSAGE)\s*:`)
+// orchestrationDirectiveMarker matches "DONE:", "NEXT_MESSAGE:", or "WAIT:"
+// case-insensitively, anywhere in the response — not just as an exact prefix of the
+// whole string. Confirmed live (2026-08-01, BUG-056): despite the system prompt's "no
+// other text" instruction, the orchestrator model routinely writes a full free-text
+// explanation and appends the directive directly onto the end of its last sentence with
+// no separating newline at all (e.g. "...reflecting real findings rather than
+// guesswork.DONE: Reached the 20-turn limit..."), which the old exact-prefix match
+// rejected outright, burning the turn (see AutonomousDriver's malformedResponseCount —
+// 8 of 20 turns wasted this way on one live item). Matching case-insensitively anywhere
+// handles this plus markdown fencing and preamble-before-the-directive without needing
+// separate handling for each.
+var orchestrationDirectiveMarker = regexp.MustCompile(`(?i)(DONE|NEXT_MESSAGE|WAIT)\s*:`)
 
-// parseOrchestrationResponse parses the LLM's reply into a next message or done signal.
+// orchestrationDirective is the 3-way outcome of parsing an orchestrator reply. A
+// dedicated enum (rather than a second bool alongside nextMsg/reason strings) avoids
+// the same same-typed-parameter ambiguity flagged by
+// .claude/rules/primitive-obsession-checklist.md for function parameters — here applied
+// to a return value that would otherwise need a second bool to distinguish WAIT from
+// DONE.
+type orchestrationDirective int
+
+const (
+	directiveNextMessage orchestrationDirective = iota
+	directiveDone
+	directiveWait
+)
+
+// parseOrchestrationResponse parses the LLM's reply into a directive plus its payload.
 // Finds the LAST occurrence of a directive marker in the response (not the first): the
 // model's authoritative final answer consistently comes after any preamble/reasoning it
 // writes first, so preferring the last occurrence picks the real directive over an
 // earlier echo of the instructions or an incidental mention. Everything after that
 // marker, to the end of the response, is the payload — preserving a multi-line
-// NEXT_MESSAGE body.
-func parseOrchestrationResponse(resp string) (nextMsg string, done bool, reason string, err error) {
+// NEXT_MESSAGE body. This only ever inspects the model's own reply text, never the
+// prompt it was given, so a <last_nudge> block containing a literal "NEXT_MESSAGE:"-like
+// string in a prior nudge cannot be misparsed as a directive here.
+func parseOrchestrationResponse(resp string) (directive orchestrationDirective, payload string, err error) {
 	trimmed := strings.TrimSpace(resp)
 	matches := orchestrationDirectiveMarker.FindAllStringSubmatchIndex(trimmed, -1)
 	if len(matches) == 0 {
-		return "", false, "", fmt.Errorf("unrecognized orchestration response: %q", resp)
+		return directiveNextMessage, "", fmt.Errorf("unrecognized orchestration response: %q", resp)
 	}
 	last := matches[len(matches)-1]
 	keyword := strings.ToUpper(trimmed[last[2]:last[3]])
-	payload := strings.TrimSpace(trimmed[last[1]:])
-	if keyword == "DONE" {
-		return "", true, payload, nil
+	body := strings.TrimSpace(trimmed[last[1]:])
+	switch keyword {
+	case "DONE":
+		return directiveDone, body, nil
+	case "WAIT":
+		return directiveWait, body, nil
+	default:
+		return directiveNextMessage, body, nil
 	}
-	return payload, false, "", nil
 }
 
 var prURLRegex = regexp.MustCompile(`https://github\.com/[^/\s]+/[^/\s]+/pull/\d+`)

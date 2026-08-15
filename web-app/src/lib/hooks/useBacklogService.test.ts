@@ -173,3 +173,81 @@ describe("mapBacklogItem triageStatus derivation", () => {
     expect(item.triageResult?.summary).toBe("Retried and succeeded.");
   });
 });
+
+describe("mapItemSession telemetry field mapping (mapBacklogItem.linkedSessions)", () => {
+  it("mapItemSession_should_MapCommitAndFileTouchFields_When_PresentOnProto", () => {
+    const lastCommitAt = new Date("2026-08-01T12:00:00.000Z");
+    const lastFileTouchAt = new Date("2026-08-01T12:05:00.000Z");
+    const proto = create(BacklogItemSchema, {
+      id: "item-8",
+      title: "Test item",
+      status: "queued",
+      itemSessions: [
+        create(ItemSessionSchema, {
+          id: "session-entity-8",
+          sessionUuid: "uuid-8",
+          sessionRole: "work",
+          commitCountSinceSpawn: 3,
+          lastCommitAt: timestampFromDate(lastCommitAt),
+          lastCommitMessage: "fix: foo\n\nBody text",
+          lastFileTouchAt: timestampFromDate(lastFileTouchAt),
+        }),
+      ],
+    });
+
+    const item = mapBacklogItem(proto);
+    const session = item.linkedSessions[0];
+
+    expect(session.commitCountSinceSpawn).toBe(3);
+    expect(session.lastCommitAt).toBe(lastCommitAt.toISOString());
+    expect(session.lastCommitMessage).toBe("fix: foo\n\nBody text");
+    expect(session.lastFileTouchAt).toBe(lastFileTouchAt.toISOString());
+  });
+
+  it("mapItemSession_should_LeaveFieldsUndefinedOrZero_When_SessionHasNoCommitsYet", () => {
+    const proto = create(BacklogItemSchema, {
+      id: "item-9",
+      title: "Test item",
+      status: "queued",
+      itemSessions: [
+        create(ItemSessionSchema, {
+          id: "session-entity-9",
+          sessionUuid: "uuid-9",
+          sessionRole: "work",
+          // no commitCountSinceSpawn/lastCommitAt/lastCommitMessage/lastFileTouchAt set
+        }),
+      ],
+    });
+
+    const item = mapBacklogItem(proto);
+    const session = item.linkedSessions[0];
+
+    expect(session.commitCountSinceSpawn).toBe(0);
+    expect(session.lastCommitAt).toBeUndefined();
+    expect(session.lastCommitMessage).toBeUndefined();
+    expect(session.lastFileTouchAt).toBeUndefined();
+  });
+
+  it("mapItemSession_should_SetFileTouchButNotCommit_When_SessionHasEditsButNoCommitYet", () => {
+    const lastFileTouchAt = new Date("2026-08-01T12:05:00.000Z");
+    const proto = create(BacklogItemSchema, {
+      id: "item-10",
+      title: "Test item",
+      status: "queued",
+      itemSessions: [
+        create(ItemSessionSchema, {
+          id: "session-entity-10",
+          sessionUuid: "uuid-10",
+          sessionRole: "work",
+          lastFileTouchAt: timestampFromDate(lastFileTouchAt),
+        }),
+      ],
+    });
+
+    const item = mapBacklogItem(proto);
+    const session = item.linkedSessions[0];
+
+    expect(session.lastCommitAt).toBeUndefined();
+    expect(session.lastFileTouchAt).toBe(lastFileTouchAt.toISOString());
+  });
+});

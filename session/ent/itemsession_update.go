@@ -395,6 +395,26 @@ func (_u *ItemSessionUpdate) ClearEstimatedCostUsd() *ItemSessionUpdate {
 	return _u
 }
 
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (_u *ItemSessionUpdate) SetClaimantHostID(v string) *ItemSessionUpdate {
+	_u.mutation.SetClaimantHostID(v)
+	return _u
+}
+
+// SetNillableClaimantHostID sets the "claimant_host_id" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillableClaimantHostID(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetClaimantHostID(*v)
+	}
+	return _u
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (_u *ItemSessionUpdate) ClearClaimantHostID() *ItemSessionUpdate {
+	_u.mutation.ClearClaimantHostID()
+	return _u
+}
+
 // SetBacklogItemID sets the "backlog_item" edge to the BacklogItem entity by ID.
 func (_u *ItemSessionUpdate) SetBacklogItemID(id uuid.UUID) *ItemSessionUpdate {
 	_u.mutation.SetBacklogItemID(id)
@@ -593,6 +613,12 @@ func (_u *ItemSessionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.EstimatedCostUsdCleared() {
 		_spec.ClearField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.ClaimantHostID(); ok {
+		_spec.SetField(itemsession.FieldClaimantHostID, field.TypeString, value)
+	}
+	if _u.mutation.ClaimantHostIDCleared() {
+		_spec.ClearField(itemsession.FieldClaimantHostID, field.TypeString)
 	}
 	if _u.mutation.BacklogItemCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1036,6 +1062,26 @@ func (_u *ItemSessionUpdateOne) ClearEstimatedCostUsd() *ItemSessionUpdateOne {
 	return _u
 }
 
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (_u *ItemSessionUpdateOne) SetClaimantHostID(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetClaimantHostID(v)
+	return _u
+}
+
+// SetNillableClaimantHostID sets the "claimant_host_id" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillableClaimantHostID(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetClaimantHostID(*v)
+	}
+	return _u
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (_u *ItemSessionUpdateOne) ClearClaimantHostID() *ItemSessionUpdateOne {
+	_u.mutation.ClearClaimantHostID()
+	return _u
+}
+
 // SetBacklogItemID sets the "backlog_item" edge to the BacklogItem entity by ID.
 func (_u *ItemSessionUpdateOne) SetBacklogItemID(id uuid.UUID) *ItemSessionUpdateOne {
 	_u.mutation.SetBacklogItemID(id)
@@ -1264,6 +1310,12 @@ func (_u *ItemSessionUpdateOne) sqlSave(ctx context.Context) (_node *ItemSession
 	}
 	if _u.mutation.EstimatedCostUsdCleared() {
 		_spec.ClearField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.ClaimantHostID(); ok {
+		_spec.SetField(itemsession.FieldClaimantHostID, field.TypeString, value)
+	}
+	if _u.mutation.ClaimantHostIDCleared() {
+		_spec.ClearField(itemsession.FieldClaimantHostID, field.TypeString)
 	}
 	if _u.mutation.BacklogItemCleared() {
 		edge := &sqlgraph.EdgeSpec{

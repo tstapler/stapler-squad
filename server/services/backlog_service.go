@@ -359,6 +359,24 @@ func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
 }
 
+// claimantHostID returns the stable per-host/per-instance identifier for the
+// process performing a backlog claim or attach, for cross-host provenance on
+// ItemSession rows. It is distinct from STAPLER_SQUAD_INSTANCE (a config
+// namespace, not an identity) and from session/contexts.go's cloud InstanceID
+// (cloud-only, not populated for local/dev). Returns "" on any failure so a
+// claim/attach never fails just because host-identity persistence did.
+func (s *BacklogService) claimantHostID() string {
+	if s.cfg == nil {
+		return ""
+	}
+	id, err := s.cfg.GetOrCreateClaimantHostID()
+	if err != nil {
+		log.WarningLog.Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
+		return ""
+	}
+	return id
+}
+
 // SetScrollbackManager wires in the scrollback manager used to write a searchable
 // session transcript file on the empty-diff codebase-read re-review path. Optional —
 // nil (the default) simply omits the "## Session Transcript" prompt section. Safe to
@@ -503,6 +521,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
 		EndReason:                is.EndReason,
 		FailureCapturePath:       is.FailureCapturePath,
+		ClaimantHostId:           is.ClaimantHostID,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)

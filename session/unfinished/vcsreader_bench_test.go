@@ -76,7 +76,6 @@ type namedReader struct {
 
 func readers() []namedReader {
 	return []namedReader{
-		{"GitVCSReader", &unfinished.GitVCSReader{}},
 		{"GoGitVCSReader", &unfinished.GoGitVCSReader{}},
 	}
 }

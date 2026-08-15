@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -638,4 +639,48 @@ func TestDiffHashBetween_ShouldNotPanic_WhenDiffContainsSymlinkChange(t *testing
 	hash, err := DiffHashBetween(work, baseSHA, headSHA)
 	require.NoError(t, err, "a symlink in the diff must not cause an error or panic")
 	assert.NotEmpty(t, hash)
+}
+
+// fakeChunk is a minimal fdiff.Chunk used to drive diffHashFromFilePatches
+// without a real git repository.
+type fakeChunk struct {
+	op      fdiff.Operation
+	content string
+}
+
+func (c fakeChunk) Content() string       { return c.content }
+func (c fakeChunk) Type() fdiff.Operation { return c.op }
+
+// fakeFilePatch is a minimal fdiff.FilePatch whose Files() returns (nil, nil)
+// while Chunks() is non-empty — the combination that panicked in production
+// (see markAbandonedReview -> AutoRespawnReview -> TriggerReReview ->
+// ComputeCurrentDiffHash -> DiffHashBetween) before the from==nil&&to==nil
+// case above existed. go-git's own Files() implementations return nil
+// interface values (not typed nils) for non-regular-file tree entries, so
+// this fake reproduces that exact shape rather than a typed-nil pointer.
+type fakeFilePatch struct {
+	chunks []fdiff.Chunk
+}
+
+func (p fakeFilePatch) IsBinary() bool                  { return false }
+func (p fakeFilePatch) Files() (fdiff.File, fdiff.File) { return nil, nil }
+func (p fakeFilePatch) Chunks() []fdiff.Chunk           { return p.chunks }
+
+// TestDiffHashFromFilePatches_ShouldSkipEntry_WhenFilesAreNilButChunksNonEmpty
+// guards against the SIGSEGV observed in production: go-git can return
+// (nil, nil) from FilePatch.Files() even when Chunks() is non-empty (a
+// symlink/gitlink type-change entry whose textual content still diffs to
+// produce chunks). Before the from==nil&&to==nil case existed, this fell
+// through to "case from == nil" and dereferenced the also-nil "to" via
+// to.Path(), panicking. Without that case, this test panics; with it, the
+// entry is skipped and the function returns cleanly.
+func TestDiffHashFromFilePatches_ShouldSkipEntry_WhenFilesAreNilButChunksNonEmpty(t *testing.T) {
+	patches := []fdiff.FilePatch{
+		fakeFilePatch{chunks: []fdiff.Chunk{fakeChunk{op: fdiff.Equal, content: ""}}},
+	}
+
+	require.NotPanics(t, func() {
+		hash := diffHashFromFilePatches(patches)
+		assert.NotEmpty(t, hash)
+	})
 }

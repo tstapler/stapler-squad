@@ -406,6 +406,17 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 			releaseGogitstoreRef(e.entry)
 		}
 	}
+
+	// matcherCache uses its own, longer TTL (see matcherCacheTTL's doc
+	// comment) — deliberately not tied to repoCache's TTL/LRU pass above,
+	// since decoupling those two lifetimes is the whole point of this cache.
+	matcherCutoff := time.Now().Add(-matcherCacheTTL).UnixNano()
+	g.matcherCache.Range(func(k, v any) bool {
+		if mc, ok := v.(*matcherCacheEntry); ok && atomic.LoadInt64(&mc.accessedAtNs) < matcherCutoff {
+			g.matcherCache.Delete(k)
+		}
+		return true
+	})
 }
 
 // PruneToMemoryBudget runs a gentle, budget-respecting prune pass: evicts
@@ -518,6 +529,62 @@ type GoGitVCSReader struct {
 	blobCacheHits      int64
 	blobCacheMisses    int64
 	blobCacheMissNanos int64
+
+	// gitignoreMatcherInvalidations/gitignoreMatcherRebuilds back
+	// GitignoreMatcherStats: PerfFix-6's instrumentation step, added to
+	// measure how often HEAD moves force a gitignore matcher rebuild before
+	// deciding whether a debounce is actually warranted (see that fix's
+	// doc comment on entry.untrackedMatcherBuilt for the invalidation
+	// trigger). Invalidations increment in resolveHeadTreeHashes whenever
+	// HEAD changes; rebuilds increment in getOrBuildUntrackedMatcher
+	// whenever the matcher is actually recompiled from disk. If rebuilds
+	// tracks invalidations 1:1, every HEAD move is paying the full
+	// ReadPatterns cost even when nothing untracked-related changed —
+	// that's the signal a debounce would need to justify itself.
+	gitignoreMatcherInvalidations int64
+	gitignoreMatcherRebuilds      int64
+
+	// matcherCache decouples the compiled gitignore matcher's lifetime from
+	// cachedRepo's lifetime. pruneRepoCache evicts *cachedRepo entries purely
+	// for memory pressure (TTL/LRU), independent of whether HEAD or
+	// .gitignore actually moved; without this cache, every re-open after such
+	// an eviction paid gitignore.ReadPatterns' full recursive directory walk
+	// again even though the repo's ignore rules hadn't changed — confirmed as
+	// 14.03% of all allocations app-wide. Keyed by worktreePath; validated
+	// against the entry's headTreeHash so a real HEAD move (which can change
+	// .gitignore) still forces a rebuild. Values are *matcherCacheEntry.
+	matcherCache sync.Map
+}
+
+// matcherCacheEntry is the value type stored in GoGitVCSReader.matcherCache.
+type matcherCacheEntry struct {
+	matcher      gitignore.Matcher
+	headTreeHash plumbing.Hash
+	accessedAtNs int64
+}
+
+// matcherCacheTTL controls how long an unused matcherCache entry survives.
+// Set well above repoCacheTTL: a compiled gitignore.Matcher is orders of
+// magnitude cheaper to hold in memory than a full cachedRepo (the object this
+// cache is deliberately decoupled from), so there is no memory-pressure
+// reason to evict it as aggressively.
+const matcherCacheTTL = 2 * time.Hour
+
+// GitignoreMatcherStats reports how often the cached gitignore matcher (see
+// getOrBuildUntrackedMatcher) is invalidated by a HEAD move versus actually
+// rebuilt from disk. Instrumentation for PerfFix-6 — added to measure
+// invalidation frequency before implementing any debounce/coalescing, per
+// "no fix without root cause."
+type GitignoreMatcherStats struct {
+	Invalidations int64
+	Rebuilds      int64
+}
+
+func (g *GoGitVCSReader) GitignoreMatcherStats() GitignoreMatcherStats {
+	return GitignoreMatcherStats{
+		Invalidations: atomic.LoadInt64(&g.gitignoreMatcherInvalidations),
+		Rebuilds:      atomic.LoadInt64(&g.gitignoreMatcherRebuilds),
+	}
 }
 
 // BlobCacheStats reports blobCache effectiveness across every repo this
@@ -745,7 +812,7 @@ func (g *GoGitVCSReader) ResolveDefaultBranch(repoPath string) string {
 // Callers must already hold entry.mu. Returns (nil, nil) if there is no HEAD
 // yet (unborn branch / empty repo) — callers should treat that the same as
 // an empty tree, not as an error.
-func resolveHeadTreeHashes(entry *cachedRepo, repo *git.Repository) (map[string]plumbing.Hash, error) {
+func resolveHeadTreeHashes(g *GoGitVCSReader, entry *cachedRepo, repo *git.Repository) (map[string]plumbing.Hash, error) {
 	headRef, headErr := repo.Head()
 	if headErr != nil {
 		if errors.Is(headErr, plumbing.ErrReferenceNotFound) {
@@ -791,10 +858,54 @@ func resolveHeadTreeHashes(entry *cachedRepo, repo *git.Repository) (map[string]
 		// by name/HEAD, so it stays valid and is intentionally left alone
 		// (see the blobCache field comment — PerfFix-1).
 		entry.untrackedMatcherBuilt = false // F6: force a gitignore matcher rebuild too.
+		if entry.headTreeCache != nil {
+			// Only count an invalidation once the matcher has actually been
+			// built at least once (headTreeCache != nil implies a prior
+			// populate) — the first-ever build below isn't "invalidated by
+			// a HEAD move," it's just startup.
+			atomic.AddInt64(&g.gitignoreMatcherInvalidations, 1)
+		}
 	}
 	entry.headTreeHash = headHash
 	entry.headTreeCache = headHashes
 	return headHashes, nil
+}
+
+// getOrBuildUntrackedMatcher returns the cached gitignore matcher for entry,
+// rebuilding it if resolveHeadTreeHashes invalidated it since the last build.
+// MUST be called with entry.mu already held (mirrors the caching contract of
+// entry.headTreeCache above — both are entry-scoped fields protected by entry.mu).
+func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreePath string) gitignore.Matcher {
+	if entry.untrackedMatcherBuilt {
+		return entry.untrackedMatcher
+	}
+
+	// Check the decoupled cache before paying for a rebuild: entry may be a
+	// freshly (re)opened cachedRepo whose predecessor was evicted from
+	// repoCache purely for memory pressure, with HEAD never having moved.
+	if cached, ok := g.matcherCache.Load(worktreePath); ok {
+		mc, _ := cached.(*matcherCacheEntry)
+		if mc != nil && mc.headTreeHash == entry.headTreeHash {
+			atomic.StoreInt64(&mc.accessedAtNs, time.Now().UnixNano())
+			entry.untrackedMatcher = mc.matcher
+			entry.untrackedMatcherBuilt = true
+			return entry.untrackedMatcher
+		}
+	}
+
+	atomic.AddInt64(&g.gitignoreMatcherRebuilds, 1)
+	var m gitignore.Matcher
+	if patterns, ignErr := gitignore.ReadPatterns(osfs.New(worktreePath), nil); ignErr == nil {
+		m = gitignore.NewMatcher(patterns)
+	}
+	entry.untrackedMatcher = m
+	entry.untrackedMatcherBuilt = true
+	g.matcherCache.Store(worktreePath, &matcherCacheEntry{
+		matcher:      m,
+		headTreeHash: entry.headTreeHash,
+		accessedAtNs: time.Now().UnixNano(),
+	})
+	return m
 }
 
 // hasUncommittedGoGitPhase runs the go-git index phase of HasUncommitted.
@@ -805,8 +916,10 @@ func resolveHeadTreeHashes(entry *cachedRepo, repo *git.Repository) (map[string]
 //   - tracked: slice of index entries needed for the OS stat phase (lock released before caller uses these)
 //   - dirty: true if dirty was determined from go-git alone
 //   - dirtyKnown: true if dirty result is definitive (caller should skip OS phase)
+//   - matcher: cached gitignore matcher, built under entry.mu here since Phase 3
+//     (the untracked-files walk) runs without the lock held
 //   - err: any error encountered
-func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePath string) (tracked []trackedFile, dirty bool, dirtyKnown bool, err error) {
+func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePath string) (tracked []trackedFile, dirty bool, dirtyKnown bool, matcher gitignore.Matcher, err error) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
@@ -814,28 +927,29 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 
 	idx, idxErr := repo.Storer.Index()
 	if idxErr != nil {
-		return nil, false, false, fmt.Errorf("read index: %w", idxErr)
+		return nil, false, false, nil, fmt.Errorf("read index: %w", idxErr)
 	}
 
 	// --- staged changes: index vs HEAD (go-git, needs lock) ---
-	headHashes, headErr := resolveHeadTreeHashes(entry, repo)
+	headHashes, headErr := resolveHeadTreeHashes(g, entry, repo)
 	if headErr != nil {
-		return nil, false, false, headErr
+		return nil, false, false, nil, headErr
 	}
+	matcher = g.getOrBuildUntrackedMatcher(entry, worktreePath)
 	if headHashes != nil { // nil means no HEAD yet (unborn branch) — nothing staged to compare
 		indexNames := make(map[string]bool, len(idx.Entries))
 		for _, idxEntry := range idx.Entries {
 			if idxEntry.Stage != 0 { // merge conflict stage → dirty
-				return nil, true, true, nil
+				return nil, true, true, matcher, nil
 			}
 			indexNames[idxEntry.Name] = true
 			if h, ok := headHashes[idxEntry.Name]; !ok || h != idxEntry.Hash {
-				return nil, true, true, nil // new or modified staged file
+				return nil, true, true, matcher, nil // new or modified staged file
 			}
 		}
 		for name := range headHashes {
 			if !indexNames[name] {
-				return nil, true, true, nil // staged deletion
+				return nil, true, true, matcher, nil // staged deletion
 			}
 		}
 	}
@@ -847,7 +961,7 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 	for i, idxEntry := range idx.Entries {
 		result[i] = trackedFile{idxEntry.Name, idxEntry.Size, idxEntry.ModifiedAt}
 	}
-	return result, false, false, nil
+	return result, false, false, matcher, nil
 }
 
 // HasUncommitted reports whether the worktree has any staged or unstaged changes.
@@ -875,7 +989,9 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 		}
 
 		// Phase 1: go-git index phase — entry.mu is held only inside this call.
-		tracked, dirty, dirtyKnown, err := g.hasUncommittedGoGitPhase(entry, worktreePath)
+		// The gitignore matcher is also built/cached here (under entry.mu) so
+		// Phase 3 below can consume it without needing the lock itself.
+		tracked, dirty, dirtyKnown, matcher, err := g.hasUncommittedGoGitPhase(entry, worktreePath)
 		if err != nil {
 			return false, err
 		}
@@ -911,8 +1027,9 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 			}
 		}
 
-		// Phase 3: untracked files walk — no lock held
-		r, err := hasUntrackedFiles(worktreePath, indexedMap)
+		// Phase 3: untracked files walk — no lock held. matcher was built under
+		// entry.mu in Phase 1 above and is safe to read here (a plain local copy).
+		r, err := hasUntrackedFiles(worktreePath, indexedMap, matcher)
 		if err != nil {
 			return false, err
 		}
@@ -928,14 +1045,15 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 }
 
 // hasUntrackedFiles reports whether any file under root is absent from the indexed set.
-// It skips the .git directory and respects the .gitignore convention by not reading
-// .gitignore files (callers that need full .gitignore support should use wt.Status()).
+// It skips the .git directory and, when matcher is non-nil, skips gitignored files and
+// whole subtrees (matcher is built from the worktree's .gitignore files by
+// getOrBuildUntrackedMatcher — pass nil to disable gitignore filtering).
 // For the mtime-stat approach this is a best-effort check sufficient for typical use.
-func hasUntrackedFiles(root string, indexed map[string]struct{}) (bool, error) {
-	return hasUntrackedFilesRec(root, root, indexed)
+func hasUntrackedFiles(root string, indexed map[string]struct{}, matcher gitignore.Matcher) (bool, error) {
+	return hasUntrackedFilesRec(root, root, indexed, matcher)
 }
 
-func hasUntrackedFilesRec(root, dir string, indexed map[string]struct{}) (bool, error) {
+func hasUntrackedFilesRec(root, dir string, indexed map[string]struct{}, matcher gitignore.Matcher) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false, err
@@ -951,8 +1069,11 @@ func hasUntrackedFilesRec(root, dir string, indexed map[string]struct{}) (bool, 
 			continue
 		}
 		rel = filepath.ToSlash(rel)
+		if matcher != nil && matcher.Match(strings.Split(rel, "/"), de.IsDir()) {
+			continue // gitignored — for a dir this skips the whole subtree
+		}
 		if de.IsDir() {
-			found, err := hasUntrackedFilesRec(root, full, indexed)
+			found, err := hasUntrackedFilesRec(root, full, indexed, matcher)
 			if err != nil {
 				return false, err
 			}
@@ -1191,7 +1312,7 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	// hasUncommittedGoGitPhase's existing behavior and is intentional — no
 	// test in this package or server/services relies on the old swallow
 	// behavior (verified via `go test ./session/unfinished/... ./server/services/...`).
-	headHashes, headErr := resolveHeadTreeHashes(entry, repo)
+	headHashes, headErr := resolveHeadTreeHashes(g, entry, repo)
 	if headErr != nil {
 		entry.mu.Unlock()
 		return DiffStat{}, headErr
@@ -1204,15 +1325,7 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	// clears untrackedMatcherBuilt whenever HEAD moves, so a stale matcher can
 	// only persist for at most one HEAD move's worth of polls — an acceptable
 	// trade-off for skipping a redundant .gitignore walk every 30s poll.
-	if !entry.untrackedMatcherBuilt {
-		var m gitignore.Matcher
-		if patterns, ignErr := gitignore.ReadPatterns(osfs.New(worktreePath), nil); ignErr == nil {
-			m = gitignore.NewMatcher(patterns)
-		}
-		entry.untrackedMatcher = m
-		entry.untrackedMatcherBuilt = true
-	}
-	untrackedMatcher := entry.untrackedMatcher
+	untrackedMatcher := g.getOrBuildUntrackedMatcher(entry, worktreePath)
 
 	// Classify index entries: staged-changed (index hash ≠ HEAD hash) vs stable.
 	type indexMeta struct {

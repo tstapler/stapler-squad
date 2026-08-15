@@ -52,7 +52,20 @@ const backlogItemsSlice = createSlice({
         if (existing && timestampMs(incoming.updatedAt) < timestampMs(existing.updatedAt)) {
           return;
         }
-        state.items[incoming.id] = incoming;
+        // Backstop for a partially-loaded event push (item_sessions dropped by a
+        // publishItemChanged call site or a non-eager-loaded snapshot query) racing
+        // a fully-loaded one: never let an empty itemSessions clobber sessions we
+        // already have for this item. A genuine all-sessions-removed update would
+        // still arrive with a newer updatedAt and populated (even if empty-by-intent)
+        // data from a call site that *did* eager-load, so this only masks the
+        // known-bad partial-load case, not real removals.
+        const nextItem =
+          existing &&
+          (existing.itemSessions?.length ?? 0) > 0 &&
+          (incoming.itemSessions?.length ?? 0) === 0
+            ? { ...incoming, itemSessions: existing.itemSessions }
+            : incoming;
+        state.items[incoming.id] = nextItem;
         if (!isSnapshot) {
           state.liveVersion[incoming.id] = (state.liveVersion[incoming.id] ?? 0) + 1;
         }

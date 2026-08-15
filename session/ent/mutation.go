@@ -15530,6 +15530,7 @@ type ItemSessionMutation struct {
 	created_at                  *time.Time
 	estimated_cost_usd          *float64
 	addestimated_cost_usd       *float64
+	claimant_host_id            *string
 	clearedFields               map[string]struct{}
 	backlog_item                *uuid.UUID
 	clearedbacklog_item         bool
@@ -16587,6 +16588,55 @@ func (m *ItemSessionMutation) ResetEstimatedCostUsd() {
 	delete(m.clearedFields, itemsession.FieldEstimatedCostUsd)
 }
 
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (m *ItemSessionMutation) SetClaimantHostID(s string) {
+	m.claimant_host_id = &s
+}
+
+// ClaimantHostID returns the value of the "claimant_host_id" field in the mutation.
+func (m *ItemSessionMutation) ClaimantHostID() (r string, exists bool) {
+	v := m.claimant_host_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClaimantHostID returns the old "claimant_host_id" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldClaimantHostID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClaimantHostID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClaimantHostID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClaimantHostID: %w", err)
+	}
+	return oldValue.ClaimantHostID, nil
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (m *ItemSessionMutation) ClearClaimantHostID() {
+	m.claimant_host_id = nil
+	m.clearedFields[itemsession.FieldClaimantHostID] = struct{}{}
+}
+
+// ClaimantHostIDCleared returns if the "claimant_host_id" field was cleared in this mutation.
+func (m *ItemSessionMutation) ClaimantHostIDCleared() bool {
+	_, ok := m.clearedFields[itemsession.FieldClaimantHostID]
+	return ok
+}
+
+// ResetClaimantHostID resets all changes to the "claimant_host_id" field.
+func (m *ItemSessionMutation) ResetClaimantHostID() {
+	m.claimant_host_id = nil
+	delete(m.clearedFields, itemsession.FieldClaimantHostID)
+}
+
 // SetBacklogItemID sets the "backlog_item" edge to the BacklogItem entity by id.
 func (m *ItemSessionMutation) SetBacklogItemID(id uuid.UUID) {
 	m.backlog_item = &id
@@ -16699,7 +16749,7 @@ func (m *ItemSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSessionMutation) Fields() []string {
-	fields := make([]string, 0, 20)
+	fields := make([]string, 0, 21)
 	if m.session_uuid != nil {
 		fields = append(fields, itemsession.FieldSessionUUID)
 	}
@@ -16760,6 +16810,9 @@ func (m *ItemSessionMutation) Fields() []string {
 	if m.estimated_cost_usd != nil {
 		fields = append(fields, itemsession.FieldEstimatedCostUsd)
 	}
+	if m.claimant_host_id != nil {
+		fields = append(fields, itemsession.FieldClaimantHostID)
+	}
 	return fields
 }
 
@@ -16808,6 +16861,8 @@ func (m *ItemSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.CreatedAt()
 	case itemsession.FieldEstimatedCostUsd:
 		return m.EstimatedCostUsd()
+	case itemsession.FieldClaimantHostID:
+		return m.ClaimantHostID()
 	}
 	return nil, false
 }
@@ -16857,6 +16912,8 @@ func (m *ItemSessionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldCreatedAt(ctx)
 	case itemsession.FieldEstimatedCostUsd:
 		return m.OldEstimatedCostUsd(ctx)
+	case itemsession.FieldClaimantHostID:
+		return m.OldClaimantHostID(ctx)
 	}
 	return nil, fmt.Errorf("unknown ItemSession field %s", name)
 }
@@ -17006,6 +17063,13 @@ func (m *ItemSessionMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetEstimatedCostUsd(v)
 		return nil
+	case itemsession.FieldClaimantHostID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClaimantHostID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown ItemSession field %s", name)
 }
@@ -17105,6 +17169,9 @@ func (m *ItemSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsession.FieldEstimatedCostUsd) {
 		fields = append(fields, itemsession.FieldEstimatedCostUsd)
 	}
+	if m.FieldCleared(itemsession.FieldClaimantHostID) {
+		fields = append(fields, itemsession.FieldClaimantHostID)
+	}
 	return fields
 }
 
@@ -17160,6 +17227,9 @@ func (m *ItemSessionMutation) ClearField(name string) error {
 		return nil
 	case itemsession.FieldEstimatedCostUsd:
 		m.ClearEstimatedCostUsd()
+		return nil
+	case itemsession.FieldClaimantHostID:
+		m.ClearClaimantHostID()
 		return nil
 	}
 	return fmt.Errorf("unknown ItemSession nullable field %s", name)
@@ -17228,6 +17298,9 @@ func (m *ItemSessionMutation) ResetField(name string) error {
 		return nil
 	case itemsession.FieldEstimatedCostUsd:
 		m.ResetEstimatedCostUsd()
+		return nil
+	case itemsession.FieldClaimantHostID:
+		m.ResetClaimantHostID()
 		return nil
 	}
 	return fmt.Errorf("unknown ItemSession field %s", name)
