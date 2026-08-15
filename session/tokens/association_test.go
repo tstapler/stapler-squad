@@ -68,3 +68,52 @@ func TestAssociator_WhenTimestampProximityMatch_ExpectSessionIDReturned(t *testi
 	assert.Equal(t, "sess-789", sessionID)
 	assert.False(t, isOrphan)
 }
+
+// countingStorage counts ListSessionRecords calls, so a test can assert a
+// caller resolving many results only pays for one storage round-trip.
+type countingStorage struct {
+	records []SessionRecord
+	calls   int
+}
+
+func (s *countingStorage) ListSessionRecords() []SessionRecord {
+	s.calls++
+	return s.records
+}
+
+// TestAssociator_WhenAssociatingManyResultsViaSnapshot_ExpectStorageQueriedOnce
+// is the PerfFix-3 regression test: insights_service.go's per-result loops
+// previously called Associate for every ParseResult, each paying a fresh
+// ListSessionRecords() -> Storage.ListInstanceData() full-repository query.
+// Snapshot + AssociateWithSnapshot must resolve N results from one query.
+func TestAssociator_WhenAssociatingManyResultsViaSnapshot_ExpectStorageQueriedOnce(t *testing.T) {
+	storage := &countingStorage{
+		records: []SessionRecord{
+			{SessionID: "sess-1", ConversationID: "conv-1"},
+			{SessionID: "sess-2", ConversationID: "conv-2"},
+		},
+	}
+	a := NewAssociator(storage)
+	results := []*ParseResult{
+		{SessionUUID: "conv-1"},
+		{SessionUUID: "conv-2"},
+		{SessionUUID: "no-match"},
+	}
+
+	snapshot := a.Snapshot()
+	for i, r := range results {
+		sessionID, isOrphan := a.AssociateWithSnapshot(r, snapshot)
+		switch i {
+		case 0:
+			assert.Equal(t, "sess-1", sessionID)
+			assert.False(t, isOrphan)
+		case 1:
+			assert.Equal(t, "sess-2", sessionID)
+			assert.False(t, isOrphan)
+		case 2:
+			assert.True(t, isOrphan)
+		}
+	}
+
+	assert.Equal(t, 1, storage.calls, "expected exactly one ListSessionRecords call for %d results", len(results))
+}

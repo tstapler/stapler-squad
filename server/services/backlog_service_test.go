@@ -3298,6 +3298,28 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 // computation (via triageShortTitle picking up the stored triage result's
 // title), not just that each half compiles in isolation.
 func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *testing.T) {
+	// Force an isolated config/worktree base directory for this test invocation.
+	// Without this, config.GetConfigDirForDir's IsTestMode() branch (config/config.go)
+	// scopes the worktree base dir by OS PID only (~/.stapler-squad/test/test-<pid>/),
+	// which is shared across every repetition of `go test -count=N` in the same
+	// process. Combined with repoPath's TempDir-derived branch slug being byte-identical
+	// across repetitions (createTestStorage's internal t.TempDir() call is always #1,
+	// this test's own repoPath := t.TempDir() below is always #2, so both are always
+	// named "002" regardless of repetition), a leftover worktree directory or git
+	// worktree-admin entry from an earlier repetition could be discovered and "reused"
+	// by session/git/worktree.go's findExistingWorktreeForBranch, which matches on
+	// branch name only within git's own repo-local registry and never validates the
+	// found worktree's gitlink still resolves to a live repo. That produced the
+	// intermittent "Condition never satisfied" flake (require.Eventually never seeing
+	// status flip to "ready", because the async triage goroutine's dirty-check failed
+	// with "fatal: not a git repository: .../.git/worktrees/<stale-uuid>" against a
+	// stale sibling repetition's already-torn-down worktree admin dir). Setting
+	// STAPLER_SQUAD_TEST_DIR (config.GetConfigDirForDir's Priority 1, above the
+	// PID-scoped IsTestMode() fallback) to this test's own t.TempDir() gives every
+	// repetition a fully isolated worktree base dir, closing the collision at the
+	// test level without touching the shared worktree-reuse production code.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
 	storage := createTestStorage(t)
 	const slug = "widget-integration"
 	pool := &fakeHeadlessPool{
@@ -3328,10 +3350,17 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
 	require.NoError(t, err)
 
+	// 5s/50ms matches the sibling SDD-mode triage tests immediately above
+	// (TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
+	// et al.) rather than the tighter 2s/10ms this test previously used — under
+	// -race, observed passing runs of this exact test already take 3.5-4.2s end to
+	// end (worktree create+setup, fake headless call, commit, branch rename, DB
+	// writes), so the old 2s budget was undersized independent of the worktree
+	// test-isolation fix above.
 	require.Eventually(t, func() bool {
 		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		return getErr == nil && getResp.Msg.Item.Status == "ready"
-	}, 2*time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 
 	require.Equal(t, 1, pool.callCount())
 	triageWorktreePath := pool.firstCall().workDir

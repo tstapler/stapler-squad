@@ -89,11 +89,23 @@ type TmuxExecGateConfig struct {
 	// Slots is the number of concurrent tmux subprocess execution slots.
 	// Zero or unset means "use the default" — see SlotsOrDefault. Default: 8.
 	Slots int `json:"slots"`
+
+	// ResyncFastLaneSlots is the number of concurrent tmux subprocess execution
+	// slots reserved for terminal-resync traffic when the
+	// "terminal:resync-exec-gate-fast-lane" feature flag is on, so resync calls
+	// don't contend with other tmux exec traffic for the shared Slots pool.
+	// Zero or unset means "use the default" — see ResyncFastLaneSlotsOrDefault.
+	// Default: 4.
+	ResyncFastLaneSlots int `json:"resyncFastLaneSlots"`
 }
 
 // defaultTmuxExecGateSlots is used whenever Slots is unset (zero), including
 // for configs saved before this field existed.
 const defaultTmuxExecGateSlots = 8
+
+// defaultResyncFastLaneSlots is used whenever ResyncFastLaneSlots is unset
+// (zero), including for configs saved before this field existed.
+const defaultResyncFastLaneSlots = 4
 
 // SlotsOrDefault returns Slots, falling back to defaultTmuxExecGateSlots when
 // unset (covers both a fresh zero-value struct and a config.json saved before
@@ -103,6 +115,17 @@ func (c TmuxExecGateConfig) SlotsOrDefault() int {
 		return defaultTmuxExecGateSlots
 	}
 	return c.Slots
+}
+
+// ResyncFastLaneSlotsOrDefault returns ResyncFastLaneSlots, falling back to
+// defaultResyncFastLaneSlots when unset (covers both a fresh zero-value
+// struct and a config.json saved before this field existed, which unmarshals
+// the same way).
+func (c TmuxExecGateConfig) ResyncFastLaneSlotsOrDefault() int {
+	if c.ResyncFastLaneSlots <= 0 {
+		return defaultResyncFastLaneSlots
+	}
+	return c.ResyncFastLaneSlots
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools

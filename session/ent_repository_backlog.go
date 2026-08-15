@@ -133,6 +133,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		VerificationNotes:        is.VerificationNotes,
 		OverallOutcome:           overallOutcome,
 		ReviewVerdict:            reviewVerdictToSummary(is.Edges.ReviewVerdict),
+		ClaimantHostID:           is.ClaimantHostID,
 	}
 }
 
@@ -697,8 +698,38 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 	}
 
 	result := make([]BacklogItemData, len(items))
+	idIndex := make(map[string]int, len(items))
+	parsedUUIDs := make([]uuid.UUID, 0, len(items))
 	for i, item := range items {
 		result[i] = backlogItemToData(item)
+		idIndex[item.ID.String()] = i
+		parsedUUIDs = append(parsedUUIDs, item.ID)
+	}
+	if len(parsedUUIDs) == 0 {
+		return result, nil
+	}
+
+	// Eager-load item sessions via a single batched query, matching
+	// ListBacklogItemSummaries's pattern, so WatchBacklogItems' fresh-connection
+	// snapshot branch never publishes items with dropped ItemSessions.
+	sessions, err := r.client.ItemSession.Query().
+		Where(itemsession.HasBacklogItemWith(backlogitem.IDIn(parsedUUIDs...))).
+		WithBacklogItem().
+		WithReviewVerdict().
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list item sessions for backlog items: %w", err)
+	}
+	for _, s := range sessions {
+		if s.Edges.BacklogItem == nil {
+			continue
+		}
+		itemID := s.Edges.BacklogItem.ID.String()
+		idx, ok := idIndex[itemID]
+		if !ok {
+			continue
+		}
+		result[idx].ItemSessions = append(result[idx].ItemSessions, itemSessionToSummary(s))
 	}
 	return result, nil
 }
@@ -956,8 +987,7 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the update itself.
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:          ChangeItemUpdated,
 		UpdatedFields: updatedFieldsFromBacklogItemUpdate(update),
 	})
@@ -1120,8 +1150,7 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the archive itself.
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:       ChangeItemArchived,
 		ArchivedAt: result.ArchivedAt,
 	})
@@ -1186,8 +1215,11 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	}
 
 	// Best-effort publish: never blocks or fails the delete itself. result was
-	// built above, before the item's sessions were deleted.
-	r.publishItemChanged(&result, BacklogItemChange{
+	// built above, before the item's sessions were deleted — use
+	// publishItemChangedSnapshot directly (not publishItemChanged) so this
+	// pre-captured snapshot isn't clobbered by a re-query that would now find
+	// no sessions.
+	r.publishItemChangedSnapshot(&result, BacklogItemChange{
 		Kind: ChangeItemRemoved,
 	})
 
@@ -1302,8 +1334,7 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the transition itself.
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:      ChangeStatusTransition,
 		OldStatus: fromStatus,
 		NewStatus: string(toStatus),
@@ -1378,8 +1409,7 @@ func (r *EntRepository) ClaimChainFire(ctx context.Context, id string, expectedU
 	// Best-effort publish: never blocks or fails the claim itself.
 	if item, getErr := r.client.BacklogItem.Get(ctx, parsedID); getErr == nil {
 		result := backlogItemToData(item)
-		r.attachItemSessionsForPublish(ctx, &result)
-		r.publishItemChanged(&result, BacklogItemChange{
+		r.publishItemChanged(ctx, &result, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
 			UpdatedFields: []string{"chainFired"},
 		})
@@ -1501,8 +1531,7 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the transition itself.
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:      ChangeStatusTransition,
 		OldStatus: fromStatus,
 		NewStatus: string(toStatus),
@@ -1511,7 +1540,18 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 	return &result, nil
 }
 
-// publishItemChanged is a defense-in-depth wrapper around
+// publishItemChanged eager-loads item's ItemSessions (see
+// attachItemSessionsForPublish) and then publishes via
+// publishItemChangedSnapshot. This is the entry point every call site should
+// use except DeleteBacklogItem, whose snapshot must be captured before the
+// item's sessions are deleted and therefore cannot be re-queried here — see
+// publishItemChangedSnapshot's doc comment.
+func (r *EntRepository) publishItemChanged(ctx context.Context, item *BacklogItemData, change BacklogItemChange) {
+	r.attachItemSessionsForPublish(ctx, item)
+	r.publishItemChangedSnapshot(item, change)
+}
+
+// publishItemChangedSnapshot is a defense-in-depth wrapper around
 // r.itemChangePublisher.PublishItemChanged: nil-checked (a publisher may not
 // be wired, e.g. in tests or before server/dependencies.go calls
 // SetItemChangePublisher) and recover()-guarded at the call site itself, so a
@@ -1521,7 +1561,13 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 // its own body per Task 1.3.2b) or some other ItemChangePublisher
 // implementation that doesn't. Task 2.1.1d's regression test proves this
 // holds end-to-end even when a raw, unwrapped test double panics.
-func (r *EntRepository) publishItemChanged(item *BacklogItemData, change BacklogItemChange) {
+//
+// Publishes item as-is, without eager-loading ItemSessions first. Only
+// DeleteBacklogItem should call this directly: it must build its publish
+// snapshot (including ItemSessions) before deleting the item's sessions and
+// the item itself, so re-querying at publish time (as publishItemChanged
+// does) would wrongly observe them as already gone.
+func (r *EntRepository) publishItemChangedSnapshot(item *BacklogItemData, change BacklogItemChange) {
 	if r.itemChangePublisher == nil {
 		return
 	}

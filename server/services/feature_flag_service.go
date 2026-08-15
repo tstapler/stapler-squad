@@ -28,6 +28,40 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// terminalResyncCorrelationIDFlagName is shared between knownFeatureFlags below and
+// handleCurrentPaneRequest's resync_id echo (connectrpc_websocket.go) so the flag name
+// can't drift between where it's declared and where it's read.
+const terminalResyncCorrelationIDFlagName = "terminal:resync-correlation-id"
+
+// terminalResyncSkipStaleDimensionSlowpathFlagName is shared between knownFeatureFlags
+// below and handleCurrentPaneRequest's stale-dimension skip branch (connectrpc_websocket.go)
+// so the flag name can't drift between where it's declared and where it's read.
+const terminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-stale-dimension-slowpath"
+
+// terminalResyncExecGateFastLaneFlagName is shared between knownFeatureFlags below and
+// currentResyncOptions' UseFastLane field (connectrpc_websocket.go) so the flag name can't
+// drift between where it's declared and where it's read. session/instance_tmux.go duplicates
+// this literal (as terminalResyncExecGateFastLaneFlagName there too) rather than importing it,
+// since session cannot import server/services without creating an import cycle — keep both
+// in sync if this flag is ever renamed.
+const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-lane"
+
+// terminalResyncCompressionFlagName is shared between knownFeatureFlags below and
+// writeCurrentPaneResponse's envelope-compression branch (connectrpc_websocket.go) so the
+// flag name can't drift between where it's declared and where it's read.
+const terminalResyncCompressionFlagName = "terminal:resync-compression"
+
+// terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName, and
+// terminalResyncBatchingFlagName are pure client-side concerns (see
+// connectrpc_websocket_test.go's allTerminalResyncFlagNames doc comment) with no Go
+// production call site to share a constant with — they're named here purely for
+// consistency with the other four terminal:resync-* flags above, and so
+// knownFeatureFlags/allTerminalResyncFlagNames reference one declaration instead of a
+// raw string literal.
+const terminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
+const terminalResyncStaggerFlagName = "terminal:resync-stagger"
+const terminalResyncBatchingFlagName = "terminal:resync-batching"
+
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
@@ -73,6 +107,34 @@ var knownFeatureFlags = []struct {
 	{
 		name:        workspacePeersNudgeFlagName,
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
+	},
+	{
+		name:        terminalResyncVisibilityScopeFlagName,
+		description: "Scope terminal resync-on-visibility-change to only the terminal instance actually in the foreground, instead of every mounted terminal. Applies to newly-focused terminals only — already-open tabs need a reload to pick up the change. Default: off.",
+	},
+	{
+		name:        terminalResyncCorrelationIDFlagName,
+		description: "Tag each terminal resync request/reply pair with a correlation ID so a stale reply from an earlier resync can't be misapplied to a later one. Not live-updated on already-open tabs. Default: off.",
+	},
+	{
+		name:        terminalResyncSkipStaleDimensionSlowpathFlagName,
+		description: "Skip the stale-dimension slow path for backgrounded terminals during resync, avoiding unnecessary pane-size recalculation for terminals not currently visible. Not live-updated on already-open tabs. Default: off.",
+	},
+	{
+		name:        terminalResyncExecGateFastLaneFlagName,
+		description: "Route resync's tmux subprocess calls through a dedicated fast-lane slot pool (see TmuxExecGateConfig.ResyncFastLaneSlots) instead of contending with other tmux exec traffic for the shared gate. Default: off.",
+	},
+	{
+		name:        terminalResyncStaggerFlagName,
+		description: "Stagger resync bursts across multiple terminals instead of firing them all simultaneously, reducing thundering-herd load on the tmux server. Default: off.",
+	},
+	{
+		name:        terminalResyncCompressionFlagName,
+		description: "Compress terminal resync payloads on the wire to reduce bandwidth for large scrollback resyncs. Default: off.",
+	},
+	{
+		name:        terminalResyncBatchingFlagName,
+		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
 	},
 }
 

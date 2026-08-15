@@ -47,6 +47,232 @@ import {
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import type { SessionDetailTab } from "./SessionDetail";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+
+// Epic 6.1 (terminal:resync-stagger), Task 6.1.1.1/6.1.1.5 — stagger queue
+// spreading simultaneous multi-instance visibility/focus resyncs (e.g. a
+// pooled tmux session with several `TerminalOutput` instances all becoming
+// visible within the same tick) across a small jitter window instead of
+// firing every `CurrentPaneRequest` in the same event-loop turn.
+//
+// Deliberately scoped *per-SessionDetailView instance*, not cross-session —
+// resolved engineering-triad decision (plan.md Task 6.1.1.5): (1) the
+// primary reported failure mode is single-session multi-instance resync,
+// which this queue fixes; (2) a cross-session synchronized burst is a
+// narrower/rarer case requiring multiple sessions open, sharing a tmux
+// socket, AND becoming visible at the same tab-focus instant; (3) a
+// cross-session coordinator would need a materially different architecture
+// (global mutable scheduling state instead of a component-local queue).
+// See `staggerCoordinator_should_NotCoordinateAcrossMultipleSessionDetailViews_When_TwoSessionsBecomeVisibleSimultaneously`
+// in the test file for a passing regression test documenting this known gap
+// — it should be filed as its own tracked backlog follow-up, not silently
+// left undocumented.
+//
+// Interface Pollution checklist #4 (forwarding-only wrapper): kept as a
+// plain class co-located here rather than split into its own file, since
+// its only consumer is this component.
+const RESYNC_STAGGER_JITTER_MAX_MS = 300;
+
+interface StaggerEntry {
+  instanceId: string;
+  fire: () => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+export class ResyncStaggerQueue {
+  private entries = new Map<string, StaggerEntry>();
+
+  /**
+   * Epic 5.2 (`terminal:resync-batching`, default off — go/no-go
+   * deliberately deferred, see the doc comment above `schedule()`'s batching
+   * branch below). When true, entries scheduled without `preempt` share one
+   * timer per coalescing window instead of each getting its own independent
+   * jittered timer, so simultaneously-queued resyncs fire together in one
+   * synchronous batch rather than spread across the jitter window. Defaults
+   * to false so `terminal:resync-stagger`-only callers (batching flag off)
+   * are byte-for-byte unaffected — see
+   * `staggerCoordinator_should_SendNSeparateRequests_When_BatchingFlagOff`.
+   */
+  constructor(private batchingEnabled: boolean = false) {}
+
+  /**
+   * Reconfigures batching on a live queue instead of requiring a fresh
+   * instance. `terminal:resync-batching` is a `useFeatureFlag` value (see
+   * `FeatureFlagsContext.tsx`), which can flip while a `SessionDetailView` is
+   * already mounted (e.g. toggled from `/settings/features` without a
+   * remount) — `useResyncStaggerQueue` used to bake `batchingEnabled` into
+   * the constructor only, so a live toggle was silently ignored for the rest
+   * of that view's lifetime. `schedule()`/`scheduleBatched()` read
+   * `this.batchingEnabled` fresh on every call, so flipping this field takes
+   * effect on the next `schedule()` call — it never touches entries already
+   * queued under the old mode, so nothing in flight is dropped or
+   * duplicated. */
+  setBatchingEnabled(batchingEnabled: boolean): void {
+    this.batchingEnabled = batchingEnabled;
+  }
+
+  /** Enqueues `fire` with a random 0-300ms jitter delay, unless `preempt` is
+   * set — in which case it fires immediately (Task 6.1.1.3: "newly-focused
+   * preempts queued"), without clearing other already-queued entries. */
+  schedule(instanceId: string, fire: () => void, opts: { preempt: boolean }): void {
+    this.clear(instanceId);
+    if (opts.preempt) {
+      fire();
+      return;
+    }
+    if (this.batchingEnabled) {
+      this.scheduleBatched(instanceId, fire);
+      return;
+    }
+    const delay = Math.random() * RESYNC_STAGGER_JITTER_MAX_MS;
+    const timer = setTimeout(() => {
+      this.entries.delete(instanceId);
+      fire();
+    }, delay);
+    this.entries.set(instanceId, { instanceId, fire, timer });
+    // Task 7.1.1.1 (Epic 7.1 observability) — this.entries.size right after
+    // insertion is the current burst size: how many resync requests are
+    // queued together (across every instance sharing this per-view queue) at
+    // the moment a new one joins. Logged on every enqueue rather than only
+    // once per burst so the size is visible mid-burst, not just at its start.
+    console.debug(`[resync-stagger] burst size=${this.entries.size} instanceId=${instanceId}`);
+  }
+
+  /**
+   * Task 5.2.1.3 — client-side half of the `terminal:resync-batching` go/no-go
+   * (ADR-006; requirements.md Unresolved Question #1). All non-preempt
+   * entries scheduled while a coalescing window is open share that window's
+   * single timer, so they fire together in one synchronous pass instead of
+   * being spread across independent per-instance jitter delays — the
+   * "coalesce same-tick resync requests" behavior Story 5.2.1 asks for.
+   *
+   * Known limitation, intentionally left for a follow-up: `fire` here is
+   * still the same opaque `() => void` used by the non-batching path, and
+   * each instance's `fire` independently constructs and sends its own
+   * `CurrentPaneRequest` deep inside `useTerminalFlowControl`/
+   * `useTerminalStream` (outside Epic 5.2's file scope, which is limited to
+   * this stagger coordinator plus the proto/server-side dispatch in
+   * `connectrpc_websocket.go`). So today this coalesces *when* sibling
+   * resyncs fire, not yet *how many wire messages* go out — turning a batch
+   * into one actual `BatchedCurrentPaneRequest` send requires those hooks to
+   * expose a non-side-effecting "build the request, don't send it" path that
+   * this queue can collect into a single batched send. That wiring, and the
+   * decision to default this flag on, are both deferred pending Epic 5.1's
+   * compression benchmark numbers, per ADR-006 and requirements.md's
+   * Unresolved Question #1 — not resolved by this story.
+   */
+  private scheduleBatched(instanceId: string, fire: () => void): void {
+    if (this.batchTimer === null) {
+      this.batchTimer = setTimeout(() => {
+        const fires = Array.from(this.batchEntries.values());
+        this.batchEntries.clear();
+        this.batchTimer = null;
+        for (const pending of fires) {
+          this.entries.delete(pending.instanceId);
+          pending.fire();
+        }
+      }, Math.random() * RESYNC_STAGGER_JITTER_MAX_MS);
+    }
+    const entry: StaggerEntry = { instanceId, fire, timer: this.batchTimer };
+    this.entries.set(instanceId, entry);
+    this.batchEntries.set(instanceId, entry);
+    // Task 7.1.1.1 (Epic 7.1 observability) — batching-path counterpart to the
+    // non-batching log in schedule() above: this.batchEntries.size is the
+    // burst that will actually fire together in one synchronous pass once the
+    // shared coalescing timer elapses.
+    console.debug(`[resync-stagger] burst size=${this.batchEntries.size} instanceId=${instanceId} batched=true`);
+  }
+
+  private batchTimer: ReturnType<typeof setTimeout> | null = null;
+  private batchEntries = new Map<string, StaggerEntry>();
+
+  /** Cancels a single instance's pending entry, if any (e.g. re-scheduling,
+   * or that instance unmounting while still queued). A batched entry's timer
+   * is shared with its whole coalescing window, so it's only cleared once
+   * every sibling in that window has also been removed — clearing one
+   * instance's entry must never cancel its still-pending siblings' fire. */
+  clear(instanceId: string): void {
+    const existing = this.entries.get(instanceId);
+    if (!existing) return;
+    this.entries.delete(instanceId);
+    const wasBatched = this.batchEntries.delete(instanceId);
+    if (wasBatched) {
+      // Only cancel the shared timer once every sibling sharing it has also
+      // been cleared — otherwise the remaining siblings would never fire.
+      if (this.batchEntries.size === 0) {
+        clearTimeout(existing.timer);
+        this.batchTimer = null;
+      }
+    } else {
+      clearTimeout(existing.timer);
+    }
+  }
+
+  /** Task 6.1.1.6 — cancels every pending entry, e.g. on SessionDetailView
+   * unmount, so no stagger callback fires after the component is gone. */
+  clearAll(): void {
+    for (const entry of this.entries.values()) {
+      clearTimeout(entry.timer);
+    }
+    this.entries.clear();
+    this.batchEntries.clear();
+    this.batchTimer = null;
+  }
+}
+
+/**
+ * Task 6.1.1.1/6.1.1.2 — builds a per-instance `scheduleResync` callback
+ * factory, gated by the `terminal:resync-stagger` flag. Flag off returns
+ * `undefined` for every instance, so `TerminalOutput`/`useVisibilityResync`
+ * see no `scheduleResync` at all and fall back to their pre-Epic-6.1
+ * synchronous-fire behavior (AC7 flag-off parity).
+ *
+ * `batchingEnabled` (Task 5.2.1.3, `terminal:resync-batching`, default off)
+ * additionally coalesces same-tick entries onto one shared timer instead of
+ * independent per-instance jitter timers — see `ResyncStaggerQueue`'s
+ * constructor and `scheduleBatched` doc comments for exactly what this does
+ * and does not yet cover, and `staggerCoordinator_should_SendNSeparateRequests_When_BatchingFlagOff`
+ * for the flag-off parity this must never regress (AC6b).
+ */
+export function useResyncStaggerQueue(
+  enabled: boolean,
+  batchingEnabled: boolean = false,
+): (instanceId: string) => ((fire: () => void, opts: { preempt: boolean }) => void) | undefined {
+  const queueRef = useRef<ResyncStaggerQueue | null>(null);
+  if (enabled && !queueRef.current) {
+    queueRef.current = new ResyncStaggerQueue(batchingEnabled);
+  }
+
+  // `batchingEnabled` comes from `useFeatureFlag("terminal:resync-batching")`,
+  // which can change while this component stays mounted (e.g. toggled live
+  // from /settings/features) — the lazy construction above only reads it
+  // once, at first-enable time. Keep the live queue's batching mode in sync
+  // on every render where the flag value has changed, instead of silently
+  // running with whatever `batchingEnabled` happened to be at construction.
+  useEffect(() => {
+    queueRef.current?.setBatchingEnabled(batchingEnabled);
+  }, [batchingEnabled]);
+
+  // Task 6.1.1.6 — clear every pending stagger timeout on unmount (and when
+  // the flag flips off), so no queued resync fires after the component
+  // holding the queue is gone.
+  useEffect(() => {
+    return () => {
+      queueRef.current?.clearAll();
+    };
+  }, []);
+
+  return useCallback(
+    (instanceId: string) => {
+      if (!enabled || !queueRef.current) return undefined;
+      const queue = queueRef.current;
+      return (fire: () => void, opts: { preempt: boolean }) => {
+        queue.schedule(instanceId, fire, opts);
+      };
+    },
+    [enabled],
+  );
+}
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
 const TerminalOutput = dynamic(
@@ -144,6 +370,14 @@ export function SessionDetailView({
 }: SessionDetailViewProps) {
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
+
+  // Epic 6.1 (terminal:resync-stagger), Task 6.1.1.1/6.1.1.2 — per-view
+  // stagger queue for this SessionDetailView's pooled TerminalOutput
+  // instances. See ResyncStaggerQueue above for why this is scoped
+  // per-instance rather than cross-session.
+  const resyncStaggerEnabled = useFeatureFlag("terminal:resync-stagger");
+  const resyncBatchingEnabled = useFeatureFlag("terminal:resync-batching");
+  const getScheduleResync = useResyncStaggerQueue(resyncStaggerEnabled, resyncBatchingEnabled);
 
   // Reason text for a disabled tab, surfaced on tap since touch devices have no
   // hover to reveal the `title` attribute. Cleared after a few seconds or on next tap.
@@ -739,6 +973,7 @@ export function SessionDetailView({
                       isExternal={true}
                       tmuxSessionName={session.externalMetadata?.tmuxSessionName}
                       isVisible={poolPath === session.externalMetadata?.muxSocketPath}
+                      scheduleResync={getScheduleResync(poolPath)}
                     />
                   </div>
                 ))}
@@ -758,6 +993,7 @@ export function SessionDetailView({
                       sessionId={poolId}
                       baseUrl={getApiBaseUrl()}
                       isVisible={poolId === session.id}
+                      scheduleResync={getScheduleResync(poolId)}
                     />
                   </div>
                 ))}
@@ -866,6 +1102,7 @@ export function SessionDetailView({
                 baseUrl={getApiBaseUrl()}
                 shellId={shellId}
                 isVisible={activeTabId === shellKey}
+                scheduleResync={getScheduleResync(shellKey)}
                 onShellStatusChange={(status, exitCode) => {
                   updateShellStatus(shellId, status, exitCode);
                 }}

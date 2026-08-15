@@ -44,7 +44,20 @@ interface UseTerminalStreamOptions {
   scrollbackLines?: number; // Number of lines to request from scrollback
   onError?: (error: Error) => void;
   onScrollbackReceived?: (scrollback: string, metadata?: ScrollbackMetadata) => void; // Callback when scrollback is received
-  onOutput?: (output: string) => void; // Callback when new output is received (bypass React state)
+  /**
+   * Callback when new output is received (bypass React state). `resyncId`
+   * echoes CurrentPaneRequest.resync_id (Epic 3.1, AC2) when this output is
+   * the reply to a correlation-ID-tagged resync request; empty/undefined
+   * otherwise.
+   */
+  onOutput?: (output: string, resyncId?: string) => void;
+  /**
+   * Shared with useVisibilityResync.ts (Epic 3.1, Task 3.1.2.1) — forwarded
+   * to useTerminalFlowControl so both visibility- and resize-triggered
+   * resync requests register their resync_id here, letting either flow's
+   * stall watchdog be reset when a match arrives on ANY tracked request.
+   */
+  outstandingResyncIdsRef?: React.MutableRefObject<Map<string, number>>;
   autoConnect?: boolean; // If false, requires manual connect() call (default: true)
   initialCols?: number; // Initial terminal columns (prevents size mismatch on first load)
   initialRows?: number; // Initial terminal rows (prevents size mismatch on first load)
@@ -78,7 +91,7 @@ interface TerminalStreamResult {
   terminalState: TerminalState;
   isHardFailed: boolean;
   handleManualReconnect: () => void;
-  requestFullResync: (urgent?: boolean) => void;
+  requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
 }
@@ -98,6 +111,7 @@ export function useTerminalStream({
   initialRows,
   onInputDropped,
   foreground = false,
+  outstandingResyncIdsRef,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
   const [isConnected, setIsConnected] = useState(false);
@@ -222,6 +236,7 @@ export function useTerminalStream({
     pushMessageRef,
     isConnectedRef,
     onError,
+    outstandingResyncIdsRef,
   });
 
   const metrics = useTerminalMetrics({ onOutput });
@@ -235,6 +250,12 @@ export function useTerminalStream({
 
   // ---- Connect ----
   const connect = useCallback(async (overrideCols?: number, overrideRows?: number) => {
+    // Refuse to reconnect through a hard failure. The only sanctioned way back
+    // in is handleManualReconnect below, which clears isHardFailedRef.current
+    // to false *before* calling connect() — so this check never blocks Retry,
+    // only callers (resize handlers, visibility/focus fallbacks, stale mount
+    // effects) that invoke connect() directly without going through Retry.
+    if (isHardFailedRef.current) return;
     if (isConnectedRef.current || isConnectingRef.current || !sessionId) return;
     isConnectingRef.current = true;
     shouldReconnectRef.current = true;
@@ -395,7 +416,7 @@ export function useTerminalStream({
 
               // Use callback if provided, otherwise batch via RAF
               if (onOutput) {
-                onOutput(text);
+                onOutput(text, msg.data.value.resyncId);
               } else {
                 metrics.scheduleOutputUpdate(text);
               }

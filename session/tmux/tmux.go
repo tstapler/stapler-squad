@@ -2291,6 +2291,47 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 	return sanitizeUTF8String(output), nil
 }
 
+// CapturePaneContentPriority mirrors CapturePaneContent but routes the
+// subprocess call through the resync exec-gate fast lane (runGatedFastLane)
+// instead of the default pool (runGated), so resync-triggered captures don't
+// queue behind ordinary tmux exec traffic on the same server socket
+// (Epic 4.2, terminal:resync-exec-gate-fast-lane). It does not use the
+// control-mode path, unlike CapturePaneContent — resync callers need the
+// isolation the subprocess gate provides, and control mode has no gate to
+// isolate against.
+func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
+	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
+	recordSpawn(time.Now())
+	output, err := runGatedFastLane(context.Background(), t.serverSocket, func() ([]byte, error) {
+		return t.cmdExec.Output(cmd)
+	})
+	if err != nil {
+		recordFailure(time.Now())
+		t.invalidateExistsCache()
+		logArgs := []any{"session", t.sanitizedName, "err", err}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		log.Warn("failed to capture pane content for session (fast lane)", logArgs...)
+		return "", fmt.Errorf("error capturing pane content for session '%s': %v", t.sanitizedName, err)
+	}
+	return sanitizeUTF8String(output), nil
+}
+
+// RefreshClientPriority mirrors RefreshClient's Method 1 subprocess path but
+// routes through the resync exec-gate fast lane (runGatedFastLane) instead of
+// the default pool (Epic 4.2). Unlike RefreshClient, it does not attempt the
+// control-mode path or the SIGWINCH fallback (Method 2) — resync's priority
+// caller wants a bounded, fast-lane-only refresh, not the full fallback
+// chain.
+func (t *TmuxSession) RefreshClientPriority() error {
+	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
+	return runGatedErrFastLane(context.Background(), t.serverSocket, func() error {
+		return t.cmdExec.Run(cmd)
+	})
+}
+
 // CapturePaneContentRaw captures the pane content with ANSI codes preserved and WITHOUT joining wrapped lines.
 // This is essential for hybrid streaming where we need to preserve exact cursor positioning.
 // The -J flag (join wrapped lines) strips cursor positioning codes, breaking TUI rendering.

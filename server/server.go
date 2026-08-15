@@ -777,6 +777,34 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered backlog attachment upload handler at POST /api/v1/upload-backlog-attachment", "dir", backlogAttachmentDir)
 	}
 
+	// One-time best-effort sweep of the launch-prompt temp-file cache
+	// (session/instance_tmux.go's promptArg). Instance.Destroy() and
+	// promptFileCleanupDelay's timer both clean up individual files during
+	// normal operation; this sweep catches orphans left behind by a crash or
+	// an unclean shutdown.
+	if promptCacheDir, err := cfg.PromptCacheDirOrDefault(); err != nil {
+		log.Error("[Server] cannot resolve prompt cache dir", "err", err)
+	} else if entries, err := os.ReadDir(promptCacheDir); err != nil {
+		if !os.IsNotExist(err) {
+			log.Warn("[Server] cannot read prompt cache dir for startup sweep", "dir", promptCacheDir, "err", err)
+		}
+	} else {
+		removed := 0
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if err := os.Remove(filepath.Join(promptCacheDir, entry.Name())); err != nil {
+				log.Warn("[Server] failed to remove orphaned prompt cache file", "path", entry.Name(), "err", err)
+				continue
+			}
+			removed++
+		}
+		if removed > 0 {
+			log.Info("Swept orphaned prompt cache files at startup", "dir", promptCacheDir, "count", removed)
+		}
+	}
+
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
 		sweeper := session.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
