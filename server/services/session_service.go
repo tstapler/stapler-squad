@@ -276,15 +276,20 @@ func (s *SessionService) trackCleanup(fn func()) {
 // legitimately take longer on large repos under normal (non-hung) load.
 const deleteSessionCleanupTimeout = 30 * time.Second
 
-// destroyWithTimeout runs inst.Destroy() and waits up to timeout for it to
-// finish. If it doesn't finish in time, this returns a timeout error immediately
-// while Destroy() continues running in the background goroutine it was started
-// in — see deleteSessionCleanupTimeout's doc comment for why the bound is on
-// the wait, not the work itself.
-func destroyWithTimeout(inst *session.Instance, timeout time.Duration) error {
+// destroyWithTimeout runs destroy() (normally inst.Destroy) and waits up to
+// timeout for it to finish. If it doesn't finish in time, this returns a
+// timeout error immediately while destroy() continues running in the
+// background goroutine it was started in — see deleteSessionCleanupTimeout's
+// doc comment for why the bound is on the wait, not the work itself.
+//
+// destroy is a func() error rather than a *session.Instance so the
+// timeout-exceeded branch can be exercised directly in tests with a
+// deliberately slow callback, without needing a real Instance whose Destroy()
+// can be made to hang on demand.
+func destroyWithTimeout(destroy func() error, timeout time.Duration) error {
 	done := make(chan error, 1)
 	go func() {
-		done <- inst.Destroy()
+		done <- destroy()
 	}()
 	select {
 	case err := <-done:
@@ -2462,7 +2467,7 @@ func (s *SessionService) DeleteSession(
 	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
 		s.trackCleanup(func() {
-			if err := destroyWithTimeout(liveInst, deleteSessionCleanupTimeout); err != nil {
+			if err := destroyWithTimeout(liveInst.Destroy, deleteSessionCleanupTimeout); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		})
