@@ -1,12 +1,26 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
 const mockUseStuckBacklogItems = jest.fn();
+const mockGetBacklogItem = jest.fn();
 
 jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: () => mockUseStuckBacklogItems(),
+}));
+
+// Only getBacklogItem is exercised by this file's tests (the fetch-on-expand
+// mechanism that resolves currentReworkCapOverride) — the other methods are
+// stubbed no-ops since no existing test path invokes them.
+jest.mock("@/lib/hooks/useBacklogService", () => ({
+  useBacklogService: () => ({
+    getBacklogItem: mockGetBacklogItem,
+    updateBacklogItem: jest.fn(),
+    approvePlan: jest.fn(),
+    spawnSessionFromItem: jest.fn(),
+    transitionStatus: jest.fn(),
+  }),
 }));
 
 import { StuckItemsSection } from "./StuckItemsSection";
@@ -375,6 +389,147 @@ describe("StuckItemsSection", () => {
       fireEvent.click(screen.getByTestId("stuck-items-reset-parked"));
       const message = await screen.findByTestId("stuck-items-reset-parked-message");
       expect(message.textContent).toMatch(/network down/);
+    });
+  });
+
+  // reworkCapOverride-current-value-display: StuckBacklogItem (this file's
+  // makeItem()) doesn't carry reworkCapOverride, so on expand the section
+  // fetches the full BacklogItem via getBacklogItem() and threads the result
+  // down as StuckItemDetail's currentReworkCapOverride prop.
+  describe("StuckItemsSection_should_FetchAndDisplayCurrentReworkCapOverride_When_ReworkCapItemIsExpanded", () => {
+    beforeEach(() => {
+      mockGetBacklogItem.mockReset();
+    });
+
+    it("fetches the item and displays its current override once expanded", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-1", reworkCapOverride: 7 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-1", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-1");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(current.textContent).toBe("7 rounds");
+    });
+
+    it("shows 'No override set' when the fetched item has no override", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-2", reworkCapOverride: undefined });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-2", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-2");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(current.textContent).toBe("No override set (using global default)");
+    });
+
+    it("shows 'Unlimited' when the fetched item has an explicit override of 0", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-2", reworkCapOverride: 0 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-2", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-2");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      await waitFor(() => expect(current.textContent).toBe("Unlimited"));
+    });
+
+    // Regression test for issue 2: getBacklogItem swallows RPC errors and
+    // resolves to null (useBacklogService.ts's getBacklogItem) — a failed
+    // fetch must not be permanently cached as "confirmed no override", or a
+    // transient network blip would forever render the confident-but-false
+    // "No override set" line. Asserting the retry (not a distinct loading
+    // string, since StuckItemDetail renders the same fallback copy for
+    // "not yet fetched" as for "confirmed unset") is what actually proves
+    // the failure wasn't cached as a resolved value.
+    it("does not permanently cache a failed fetch as 'no override' — retries on re-expand", async () => {
+      mockGetBacklogItem.mockResolvedValueOnce(null);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-3", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+
+      // Expand: fetch fails (resolves null). A failed fetch must not be
+      // permanently cached as a resolved value — the retry-count assertions
+      // below are what actually prove that (the loading-state copy shown
+      // meanwhile is identical to the pre-fetch state, so asserting it here
+      // would be tautological).
+      fireEvent.click(card!);
+      await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalledTimes(1));
+
+      // Collapse and re-expand: a genuinely-cached "no override" would never
+      // call getBacklogItem again (see the caching test above) — a failed
+      // fetch must retry instead.
+      mockGetBacklogItem.mockResolvedValueOnce({ id: "item-3", reworkCapOverride: 9 });
+      fireEvent.click(card!);
+      fireEvent.click(card!);
+
+      await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalledTimes(2));
+      const retried = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(retried.textContent).toBe("9 rounds");
+    });
+  });
+
+  // Regression test for issue 4: StuckItemsSection.tsx:207-210 documents that
+  // an already-fetched item must not be re-fetched on collapse/re-expand.
+  describe("StuckItemsSection_should_NotRefetchReworkCapOverride_When_ItemIsCollapsedThenReExpanded", () => {
+    beforeEach(() => {
+      mockGetBacklogItem.mockReset();
+    });
+
+    it("fetches getBacklogItem exactly once across collapse + re-expand", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-4", reworkCapOverride: 4 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-4", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+
+      fireEvent.click(card!); // expand — fetches
+      await screen.findByTestId("stuck-item-rework-cap-current");
+      fireEvent.click(card!); // collapse
+      fireEvent.click(card!); // re-expand — must not re-fetch
+
+      await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(mockGetBacklogItem).toHaveBeenCalledTimes(1);
     });
   });
 });
