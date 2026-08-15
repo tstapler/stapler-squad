@@ -935,6 +935,43 @@ describe("BacklogItemDetail — Story 2.1.4: LifecycleSummary replaces the old s
 
     expect(screen.queryByTestId("blocker-chip")).not.toBeInTheDocument();
   });
+
+  it("BacklogItemDetail_should_InvokeTriggerRemediationNowFromUseStuckBacklogItems_When_RetryButtonClicked", async () => {
+    // Regression guard: BacklogItemDetail must thread the actual
+    // triggerRemediationNow returned by its own useStuckBacklogItems() call
+    // into LifecycleSummary's onTriggerRemediationNow prop, not a stub —
+    // LifecycleSummary.test.tsx only verifies the prop is invoked when
+    // directly supplied, it can't catch a wiring regression at this level.
+    const stuckItem: StuckBacklogItem = {
+      itemId: "item-1",
+      title: "Refactor auth middleware",
+      status: "in_progress",
+      reason: StuckReason.STALE_WORK,
+      firstDetectedAt: timestampFromDate(new Date(Date.now() - 4 * 60 * 60 * 1000)),
+      lastCheckedAt: timestampFromDate(new Date()),
+      prNumber: 0,
+      prUrl: "",
+      context: "",
+    } as StuckBacklogItem;
+    const triggerRemediationNow = jest.fn().mockResolvedValue(undefined);
+    useStuckBacklogItemsMock.mockReturnValue({ items: [stuckItem], isLoading: false, error: null, triggerRemediationNow });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("blocker-chip-retry"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(triggerRemediationNow).toHaveBeenCalledTimes(1);
+    expect(triggerRemediationNow).toHaveBeenCalledWith("item-1", StuckReason.STALE_WORK);
+  });
 });
 
 describe("BacklogItemDetail — Story 3.1.3: polling suspends for manual-review + in-flight actions", () => {

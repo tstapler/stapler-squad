@@ -532,4 +532,49 @@ describe("StuckItemsSection", () => {
       expect(mockGetBacklogItem).toHaveBeenCalledTimes(1);
     });
   });
+
+  // Regression guard for a bug caught by adversarial review of PR #510:
+  // useStuckBacklogItems() hands back a new `items` array reference on every
+  // ~60s poll tick regardless of whether the data changed, and `focusItemId`
+  // never clears itself from the URL. An effect keyed on `items` (rather than
+  // gated by an "already applied for this focusItemId" ref) would re-run on
+  // every poll and silently re-expand a card the user had just manually
+  // collapsed.
+  describe("focusItemId deep link (apply once per id)", () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+    beforeEach(() => {
+      // jsdom doesn't implement scrollIntoView; the auto-expand-on-focus effect calls it.
+      Element.prototype.scrollIntoView = jest.fn();
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    it("expands the matching card once, and does not re-expand it after the user collapses it and a poll tick returns a new items array", async () => {
+      const target = makeItem({ itemId: "target-item", reason: StuckReason.STALE_WORK });
+      const firstItems = [target];
+      mockUseStuckBacklogItems.mockReturnValue(baseHookReturn({ items: firstItems }));
+
+      const { rerender } = render(<StuckItemsSection focusItemId="target-item" />);
+
+      const findTargetCard = () =>
+        screen.getAllByTestId("stuck-item").find((c) => c.getAttribute("data-item-id") === "target-item")!;
+
+      await waitFor(() => expect(findTargetCard()).toHaveAttribute("aria-expanded", "true"));
+
+      // User manually collapses the deep-linked card.
+      fireEvent.click(findTargetCard());
+      expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
+
+      // Simulate a poll tick: same data, but a fresh array reference and a
+      // fresh item object, and focusItemId is still on the URL.
+      const polledItems = [makeItem({ itemId: "target-item", reason: StuckReason.STALE_WORK })];
+      mockUseStuckBacklogItems.mockReturnValue(baseHookReturn({ items: polledItems }));
+      rerender(<StuckItemsSection focusItemId="target-item" />);
+
+      expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
+    });
+  });
 });
