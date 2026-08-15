@@ -122,6 +122,19 @@ export function isPrStatusUnknown(
 }
 
 /**
+ * Mirrors session.MaxRemediationAttempts (session/backlog_remediation.go) —
+ * the backoff schedule has 5 entries (30m/2h/8h/24h/72h), so a row with
+ * remediation_attempts >= 5 is "parked". Not sourced from the proto response
+ * itself since the cap is a backend policy constant, not per-item data.
+ */
+export const MAX_REMEDIATION_ATTEMPTS = 5;
+
+/** Whether automated retries are exhausted and only a manual Reset can unstick this item. */
+export function isRemediationParked(item: Pick<StuckBacklogItem, "remediationAttempts">): boolean {
+  return item.remediationAttempts >= MAX_REMEDIATION_ATTEMPTS;
+}
+
+/**
  * Compact "stuck Nd"/"stuck Nh"/"stuck Nm" duration string (no "ago" suffix —
  * distinct from the "last checked Nm ago" phrasing used elsewhere), sourced
  * from a persisted timestamp (first_detected_at) so it survives restarts and

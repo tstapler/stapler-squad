@@ -191,7 +191,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // than LifecycleSummary standing up its own transport/client and 60s poll
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
-  const { items: stuckItems } = useStuckBacklogItems();
+  const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
   const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
 
   // Version control state for the most recent work session's worktree.
@@ -1295,7 +1295,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
         {/* Always-visible lifecycle summary — the single authoritative
             status display, replacing the old standalone status badge (D1). */}
-        <LifecycleSummary item={item} pipelineDisplay={pipelineDisplay} stuckItem={stuckItem} />
+        <LifecycleSummary
+          item={item}
+          pipelineDisplay={pipelineDisplay}
+          stuckItem={stuckItem}
+          onTriggerRemediationNow={triggerRemediationNow}
+        />
       </div>
 
       <div className={styles.scrollArea}>

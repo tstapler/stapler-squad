@@ -11,3 +11,18 @@ export const duration = style({
   fontWeight: vars.fontWeight.normal,
   marginLeft: vars.space["1"],
 });
+
+// Interactive retry states — the button reuses getStuckReasonClass()'s color
+// styling verbatim (see BlockerChip.tsx); these only add affordance/feedback
+// on top of it, mirroring StuckItem.css.ts's retry button conventions.
+export const wrapper = style({
+  display: "inline-flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: vars.space["1"],
+});
+
+export const errorText = style({
+  color: vars.color.errorText,
+  fontSize: vars.fontSize.sm,
+});
