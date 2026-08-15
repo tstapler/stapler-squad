@@ -439,5 +439,76 @@ describe("StuckItemsSection", () => {
       const current = await screen.findByTestId("stuck-item-rework-cap-current");
       expect(current.textContent).toBe("No override set (using global default)");
     });
+
+    // Regression test for issue 2: getBacklogItem swallows RPC errors and
+    // resolves to null (useBacklogService.ts's getBacklogItem) — a failed
+    // fetch must not be permanently cached as "confirmed no override", or a
+    // transient network blip would forever render the confident-but-false
+    // "No override set" line. Asserting the retry (not a distinct loading
+    // string, since StuckItemDetail renders the same fallback copy for
+    // "not yet fetched" as for "confirmed unset") is what actually proves
+    // the failure wasn't cached as a resolved value.
+    it("does not permanently cache a failed fetch as 'no override' — retries on re-expand", async () => {
+      mockGetBacklogItem.mockResolvedValueOnce(null);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-3", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+
+      // Expand: fetch fails (resolves null).
+      fireEvent.click(card!);
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(current.textContent).toBe("No override set (using global default)");
+      expect(mockGetBacklogItem).toHaveBeenCalledTimes(1);
+
+      // Collapse and re-expand: a genuinely-cached "no override" would never
+      // call getBacklogItem again (see the caching test above) — a failed
+      // fetch must retry instead.
+      mockGetBacklogItem.mockResolvedValueOnce({ id: "item-3", reworkCapOverride: 9 });
+      fireEvent.click(card!);
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledTimes(2);
+      const retried = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(retried.textContent).toBe("9 rounds");
+    });
+  });
+
+  // Regression test for issue 4: StuckItemsSection.tsx:207-210 documents that
+  // an already-fetched item must not be re-fetched on collapse/re-expand.
+  describe("StuckItemsSection_should_NotRefetchRewordCapOverride_When_ItemIsCollapsedThenReExpanded", () => {
+    beforeEach(() => {
+      mockGetBacklogItem.mockReset();
+    });
+
+    it("fetches getBacklogItem exactly once across collapse + re-expand", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-4", reworkCapOverride: 4 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-4", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+
+      fireEvent.click(card!); // expand — fetches
+      await screen.findByTestId("stuck-item-rework-cap-current");
+      fireEvent.click(card!); // collapse
+      fireEvent.click(card!); // re-expand — must not re-fetch
+
+      await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(mockGetBacklogItem).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { routes } from "@/lib/routes";
@@ -80,6 +80,23 @@ export function StuckItemDetail({
       ? String(currentReworkCapOverride)
       : "3"
   );
+  // currentReworkCapOverride is fetched by the parent (StuckItemsSection)
+  // *after* this component has already mounted with it `undefined` (the
+  // panel expands, then the getBacklogItem fetch resolves later) — so the
+  // useState initializer above almost always runs against the unresolved
+  // value and the input is stuck showing "3". This ref-guarded one-time sync
+  // re-applies the real value once it arrives, without fighting the user if
+  // they've already started typing a different number by then (it only ever
+  // fires on the first undefined -> resolved transition).
+  const hasSyncedOverride = useRef(false);
+  useEffect(() => {
+    if (!hasSyncedOverride.current && currentReworkCapOverride !== undefined) {
+      hasSyncedOverride.current = true;
+      if (currentReworkCapOverride > 0) {
+        setMoreRounds(String(currentReworkCapOverride));
+      }
+    }
+  }, [currentReworkCapOverride]);
   const [overrideState, setOverrideState] = useState<"idle" | "pending" | "error">("idle");
   const [approveState, setApproveState] = useState<"idle" | "pending" | "error">("idle");
   const [approveError, setApproveError] = useState<string | null>(null);
