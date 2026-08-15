@@ -1911,7 +1911,6 @@ func (t *TmuxSession) Close() error {
 			return killExec.Run(cmd)
 		})
 		if err := gatedErr; err != nil {
-			log.Warn("DEBUGTMP Close: kill-session failed", "session", t.sanitizedName, "err", err, "stderr", stderrBuf.String())
 			// Check if this is the common "session not found" error
 			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 				// Exit code 1 usually means session doesn't exist or was already killed
@@ -2110,19 +2109,15 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	// so fall through to the cache/subprocess path for an authoritative answer.
 	if t.registry != nil && t.registry.IsHealthy() {
 		if t.registry.SessionExists(t.sanitizedName) {
-			log.Warn("DEBUGTMP DoesSessionExist: registry fast path true", "session", t.sanitizedName)
 			return true
 		}
 		// Registry returned false — do not trust it blindly; fall through.
-	} else {
-		log.Warn("DEBUGTMP DoesSessionExist: registry nil or unhealthy", "session", t.sanitizedName, "registryNil", t.registry == nil)
 	}
 
 	// Fast path: lock-free atomic load.
 	if v := t.existsCache.Load(); v != nil {
 		state := v.(existsCacheState)
 		if !state.time.IsZero() && time.Since(state.time) < t.existsCacheTTL {
-			log.Warn("DEBUGTMP DoesSessionExist: cache fast path", "session", t.sanitizedName, "exists", state.exists)
 			return state.exists
 		}
 	}
@@ -2130,13 +2125,10 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	// Slow path: coalesce concurrent misses via singleflight.
 	// No lock is held during the subprocess — fixes the previous anti-pattern
 	// of holding existsCacheMutex across listSessionsRaw (a subprocess call).
-	log.Warn("DEBUGTMP DoesSessionExist: entering slow path", "session", t.sanitizedName)
 	v, _, _ := t.existsSF.Do("", func() (interface{}, error) {
-		log.Warn("DEBUGTMP DoesSessionExist: slow path singleflight fn running", "session", t.sanitizedName)
 		ctx, cancel := context.WithTimeout(context.Background(), sessionExistsTimeout)
 		defer cancel()
 		output, err := t.listSessionsRaw(ctx)
-		log.Warn("DEBUGTMP DoesSessionExist: listSessionsRaw returned", "session", t.sanitizedName, "output", string(output), "err", err)
 
 		if ctx.Err() == context.DeadlineExceeded {
 			log.Warn("timeout checking if tmux session exists", "session", t.sanitizedName)
@@ -2161,11 +2153,9 @@ func (t *TmuxSession) DoesSessionExist() bool {
 				break
 			}
 		}
-		log.Warn("DEBUGTMP DoesSessionExist: slow path result", "session", t.sanitizedName, "exists", exists, "sessions", sessions)
 		t.existsCache.Store(existsCacheState{exists: exists, time: time.Now()})
 		return exists, nil
 	})
-	log.Warn("DEBUGTMP DoesSessionExist: slow path final return", "session", t.sanitizedName, "result", v.(bool))
 	return v.(bool)
 }
 
