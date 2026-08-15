@@ -509,6 +509,7 @@ export function StuckItemsSection() {
                       onSnooze={snooze}
                       onReworkCapOverride={handleReworkCapOverride}
                       currentReworkCapOverride={reworkCapOverrides.get(item.itemId)}
+                      reworkCapOverrideLoaded={reworkCapOverrides.has(item.itemId)}
                       onTriggerRemediationNow={triggerRemediationNow}
                       onApprovePlan={handleApprovePlan}
                     />

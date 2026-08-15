@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
@@ -440,6 +440,25 @@ describe("StuckItemsSection", () => {
       expect(current.textContent).toBe("No override set (using global default)");
     });
 
+    it("shows 'Unlimited' when the fetched item has an explicit override of 0", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-2", reworkCapOverride: 0 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-2", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-2");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      await waitFor(() => expect(current.textContent).toBe("Unlimited"));
+    });
+
     // Regression test for issue 2: getBacklogItem swallows RPC errors and
     // resolves to null (useBacklogService.ts's getBacklogItem) — a failed
     // fetch must not be permanently cached as "confirmed no override", or a
@@ -462,11 +481,13 @@ describe("StuckItemsSection", () => {
         .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
       expect(card).toBeDefined();
 
-      // Expand: fetch fails (resolves null).
+      // Expand: fetch fails (resolves null). A failed fetch must not be
+      // permanently cached as a resolved value — the retry-count assertions
+      // below are what actually prove that (the loading-state copy shown
+      // meanwhile is identical to the pre-fetch state, so asserting it here
+      // would be tautological).
       fireEvent.click(card!);
-      const current = await screen.findByTestId("stuck-item-rework-cap-current");
-      expect(current.textContent).toBe("No override set (using global default)");
-      expect(mockGetBacklogItem).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalledTimes(1));
 
       // Collapse and re-expand: a genuinely-cached "no override" would never
       // call getBacklogItem again (see the caching test above) — a failed
@@ -475,7 +496,7 @@ describe("StuckItemsSection", () => {
       fireEvent.click(card!);
       fireEvent.click(card!);
 
-      expect(mockGetBacklogItem).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalledTimes(2));
       const retried = await screen.findByTestId("stuck-item-rework-cap-current");
       expect(retried.textContent).toBe("9 rounds");
     });

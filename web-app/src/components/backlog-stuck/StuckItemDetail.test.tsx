@@ -128,11 +128,25 @@ describe("StuckItemDetail", () => {
   });
 
   describe("StuckItemDetail_should_showCurrentReworkCapOverride_When_ReasonIsReworkCap", () => {
-    it("shows 'No override set (using global default)' when currentReworkCapOverride is undefined", () => {
+    it("shows 'Checking current override…' when reworkCapOverrideLoaded is false, even though currentReworkCapOverride is undefined", () => {
       render(
         <StuckItemDetail
           item={makeItem({ reason: StuckReason.REWORK_CAP })}
           currentReworkCapOverride={undefined}
+          reworkCapOverrideLoaded={false}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe(
+        "Checking current override…"
+      );
+    });
+
+    it("shows 'No override set (using global default)' when currentReworkCapOverride is undefined and reworkCapOverrideLoaded is true", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          currentReworkCapOverride={undefined}
+          reworkCapOverrideLoaded={true}
         />
       );
       expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe(
@@ -140,21 +154,23 @@ describe("StuckItemDetail", () => {
       );
     });
 
-    it("shows 'Unlimited' when currentReworkCapOverride is explicitly 0", () => {
+    it("shows 'Unlimited' when currentReworkCapOverride is explicitly 0 and loaded", () => {
       render(
         <StuckItemDetail
           item={makeItem({ reason: StuckReason.REWORK_CAP })}
           currentReworkCapOverride={0}
+          reworkCapOverrideLoaded={true}
         />
       );
       expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe("Unlimited");
     });
 
-    it("shows the explicit cap value when currentReworkCapOverride is a positive number", () => {
+    it("shows the explicit cap value when currentReworkCapOverride is a positive number and loaded", () => {
       render(
         <StuckItemDetail
           item={makeItem({ reason: StuckReason.REWORK_CAP })}
           currentReworkCapOverride={5}
+          reworkCapOverrideLoaded={true}
         />
       );
       expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe("5 rounds");
@@ -239,6 +255,59 @@ describe("StuckItemDetail", () => {
       fireEvent.click(screen.getByTestId("stuck-item-rework-cap-unlimited"));
 
       await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    });
+  });
+
+  // CRITICAL #2 regression: currentReworkCapOverride is fetched by the
+  // parent (StuckItemsSection) *after* this component has already mounted —
+  // it resolves via a `rerender` with a new prop value, not at mount time.
+  // None of the tests above exercise that transition (they all mount with
+  // the value already resolved), so they never actually ran the sync effect
+  // in StuckItemDetail.tsx.
+  describe("StuckItemDetail_should_syncInputToResolvedOverride_When_ParentFetchResolvesAfterMount", () => {
+    it("re-syncs the input when currentReworkCapOverride transitions from undefined to a resolved positive value", () => {
+      const { rerender } = render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={undefined}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
+
+      rerender(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={5}
+        />
+      );
+
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(5);
+    });
+
+    it("does not clobber a value the user already typed before the fetch resolves", () => {
+      const { rerender } = render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={undefined}
+        />
+      );
+      const input = screen.getByTestId("stuck-item-rework-cap-rounds-input");
+      fireEvent.change(input, { target: { value: "10" } });
+      expect(input).toHaveValue(10);
+
+      // The parent's fetch resolves after the user has already edited the field.
+      rerender(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={5}
+        />
+      );
+
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(10);
     });
   });
 

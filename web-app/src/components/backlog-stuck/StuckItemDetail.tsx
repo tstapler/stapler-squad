@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { routes } from "@/lib/routes";
+import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { formatAgo, formatSinceUTC, isPrStatusUnknown } from "./stuckReason";
 import * as styles from "./StuckItemDetail.css";
 
@@ -18,6 +19,15 @@ interface StuckItemDetailProps {
    * (this component's `item` prop type) doesn't carry the field.
    */
   currentReworkCapOverride?: number;
+  /**
+   * True once the parent (StuckItemsSection) has resolved
+   * `currentReworkCapOverride` for this item — either to a value or to
+   * confirmed-unset. Before this is true, `currentReworkCapOverride` being
+   * `undefined` is indistinguishable from "confirmed no override", so the
+   * read-only display line below must not render "No override set" until
+   * this flips true (see `formatReworkCapOverride`'s doc comment).
+   */
+  reworkCapOverrideLoaded?: boolean;
   /**
    * Approves the item's plan (ApprovePlan RPC) — omitted disables the
    * approve control entirely. Rejects (throws) on failure so this component
@@ -36,16 +46,19 @@ function autoMergeLine(allowAutoMerge: boolean | undefined): string {
 }
 
 /**
- * Read-only "current rework cap override" line. `reworkCapOverride` is
- * tri-state — undefined means no override is set (global default applies),
- * 0 explicitly means unlimited retries for this item, and any other value is
- * this item's own cap — so this must use `=== undefined` / `=== 0` checks,
- * never `||`/truthy coercion (which would misreport an explicit 0 as unset).
+ * Read-only "current rework cap override" line. `currentReworkCapOverride`
+ * is `undefined` both before the parent's fetch-on-expand has resolved and
+ * when it resolves to a genuinely-unset override — those two states are
+ * otherwise visually indistinguishable, so `loaded` (StuckItemsSection's
+ * `reworkCapOverrides.has(item.itemId)`) must gate the "No override set"
+ * copy specifically, rather than being inferred from `value`.
  */
-function formatReworkCapOverride(value: number | undefined): string {
-  if (value === undefined) return "No override set (using global default)";
-  if (value === 0) return "Unlimited";
-  return `${value} rounds`;
+function formatReworkCapOverride(value: number | undefined, loaded: boolean): string {
+  if (!loaded) return "Checking current override…";
+  const resolved = resolveReworkCapOverride(value);
+  if (resolved.kind === "unset") return "No override set (using global default)";
+  if (resolved.kind === "unlimited") return "Unlimited";
+  return `${resolved.rounds} rounds`;
 }
 
 /**
@@ -56,6 +69,7 @@ export function StuckItemDetail({
   item,
   onReworkCapOverride,
   currentReworkCapOverride,
+  reworkCapOverrideLoaded = false,
   onApprovePlan,
 }: StuckItemDetailProps) {
   const unknown = isPrStatusUnknown(item);
@@ -85,12 +99,24 @@ export function StuckItemDetail({
   // panel expands, then the getBacklogItem fetch resolves later) — so the
   // useState initializer above almost always runs against the unresolved
   // value and the input is stuck showing "3". This ref-guarded one-time sync
-  // re-applies the real value once it arrives, without fighting the user if
-  // they've already started typing a different number by then (it only ever
-  // fires on the first undefined -> resolved transition).
+  // re-applies the real value once it arrives.
+  //
+  // hasSyncedOverride alone only tracks "has the sync fired once" — it does
+  // NOT track "has the user already edited the field since mount". Without
+  // userEditedRounds, a user who types into the field before the parent's
+  // fetch resolves would have their input silently clobbered the moment the
+  // fetch lands (the effect's guard was still false, so it fires and
+  // overwrites whatever they typed). userEditedRounds, set in the input's
+  // onChange handler, makes the sync a no-op once the user has started
+  // typing, regardless of fetch timing.
   const hasSyncedOverride = useRef(false);
+  const userEditedRounds = useRef(false);
   useEffect(() => {
-    if (!hasSyncedOverride.current && currentReworkCapOverride !== undefined) {
+    if (
+      !hasSyncedOverride.current &&
+      !userEditedRounds.current &&
+      currentReworkCapOverride !== undefined
+    ) {
       hasSyncedOverride.current = true;
       if (currentReworkCapOverride > 0) {
         setMoreRounds(String(currentReworkCapOverride));
@@ -152,7 +178,7 @@ export function StuckItemDetail({
           <div className={styles.row}>
             <span className={styles.label}>Current override:</span>
             <span className={styles.value} data-testid="stuck-item-rework-cap-current">
-              {formatReworkCapOverride(currentReworkCapOverride)}
+              {formatReworkCapOverride(currentReworkCapOverride, reworkCapOverrideLoaded)}
             </span>
           </div>
           {onReworkCapOverride && (
@@ -161,7 +187,10 @@ export function StuckItemDetail({
                 type="number"
                 min={1}
                 value={moreRounds}
-                onChange={(e) => setMoreRounds(e.target.value)}
+                onChange={(e) => {
+                  userEditedRounds.current = true;
+                  setMoreRounds(e.target.value);
+                }}
                 className={styles.overrideInput}
                 aria-label="This item's new rework cap"
                 data-testid="stuck-item-rework-cap-rounds-input"

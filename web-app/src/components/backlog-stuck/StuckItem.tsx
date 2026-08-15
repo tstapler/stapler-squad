@@ -42,6 +42,13 @@ interface StuckItemProps {
    */
   currentReworkCapOverride?: number;
   /**
+   * True once the parent has resolved `currentReworkCapOverride` for this
+   * item (see StuckItemDetail.tsx's identically-named prop doc comment for
+   * why this can't be inferred from `currentReworkCapOverride` alone).
+   * Passed straight through to StuckItemDetail.
+   */
+  reworkCapOverrideLoaded?: boolean;
+  /**
    * Operator "Retry now" escape hatch (TriggerRemediationNow RPC) — omitted
    * disables the retry control entirely. Rejects (throws) when the row is
    * already parked or has no wired remediation action; the caller (this
@@ -129,6 +136,7 @@ export function StuckItem({
   onSnooze,
   onReworkCapOverride,
   currentReworkCapOverride,
+  reworkCapOverrideLoaded = false,
   onTriggerRemediationNow,
   onApprovePlan,
 }: StuckItemProps) {
@@ -407,6 +415,7 @@ export function StuckItem({
           item={item}
           onReworkCapOverride={onReworkCapOverride}
           currentReworkCapOverride={currentReworkCapOverride}
+          reworkCapOverrideLoaded={reworkCapOverrideLoaded}
           onApprovePlan={onApprovePlan}
         />
       )}
