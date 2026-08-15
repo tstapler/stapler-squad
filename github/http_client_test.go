@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,6 +140,41 @@ func TestGetGHTokenForAccount(t *testing.T) {
 			t.Errorf("getGHTokenForAccount() = %q, want empty string", got)
 		}
 	})
+}
+
+// TestGetGHToken_SingleflightCollapsesParallelCacheMissCallers verifies concurrent
+// getGHToken calls that all miss the TTL cache at once (e.g. right after cache
+// expiry) coalesce onto ghTokenSF instead of each independently locking
+// keychainMu (github/keychain.go). There's no invocation-count hook on the mock
+// keyring to assert exactly-one-call, so — mirroring the existing precedent in
+// TestGoGitVCSReader_AheadBehind_SingleflightCollapsesParallelCallers — this
+// relies on `go test -race` to prove the coalescing path has no data race, plus
+// asserting every goroutine observes the same seeded token.
+func TestGetGHToken_SingleflightCollapsesParallelCacheMissCallers(t *testing.T) {
+	keyring.MockInit()
+	resetGHTokenCache()
+	if err := SetKeychainToken("shared-token"); err != nil {
+		t.Fatalf("SetKeychainToken failed: %v", err)
+	}
+
+	ctx := context.Background()
+	const goroutines = 20
+	results := make([]string, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := range goroutines {
+		go func(i int) {
+			defer wg.Done()
+			results[i] = getGHToken(ctx)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, got := range results {
+		if got != "shared-token" {
+			t.Errorf("goroutine %d: getGHToken() = %q, want %q", i, got, "shared-token")
+		}
+	}
 }
 
 // TestGhHTTPClient_UpdatesDefaultRateLimiter verifies ghHTTPClient's Transport
