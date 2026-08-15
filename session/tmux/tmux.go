@@ -199,8 +199,8 @@ const (
 	// hung tmux server can't block callers (e.g. Instance.Destroy(), and in
 	// turn SessionService.DeleteSession's cleanup goroutine) indefinitely.
 	// Matches KillTmuxSessionByTitle's existing 5s cap in server/services.
-	killSessionTimeout = 5 * time.Second
-	sessionPollInitialDelay     = 5 * time.Millisecond
+	killSessionTimeout      = 5 * time.Second
+	sessionPollInitialDelay = 5 * time.Millisecond
 	// sessionPollMaxDelay bounds the poll loop's exponential backoff below.
 	// Previously capped at 50ms, which -- once ramped up after ~4 doublings
 	// (~75ms) -- spawns a real `tmux list-sessions` subprocess (via
