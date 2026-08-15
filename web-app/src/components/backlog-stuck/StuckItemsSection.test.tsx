@@ -483,7 +483,7 @@ describe("StuckItemsSection", () => {
 
   // Regression test for issue 4: StuckItemsSection.tsx:207-210 documents that
   // an already-fetched item must not be re-fetched on collapse/re-expand.
-  describe("StuckItemsSection_should_NotRefetchRewordCapOverride_When_ItemIsCollapsedThenReExpanded", () => {
+  describe("StuckItemsSection_should_NotRefetchReworkCapOverride_When_ItemIsCollapsedThenReExpanded", () => {
     beforeEach(() => {
       mockGetBacklogItem.mockReset();
     });

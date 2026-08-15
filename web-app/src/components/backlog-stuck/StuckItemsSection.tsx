@@ -288,8 +288,8 @@ export function StuckItemsSection() {
         }
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reworkCapOverrides
-    // is deliberately excluded; see the doc comment above this effect.
+    // reworkCapOverrides is deliberately excluded; see the doc comment above this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, expandedKeys, getBacklogItem]);
 
   const handleClearFilter = useCallback(() => setFilter("all"), []);
