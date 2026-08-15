@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -431,7 +431,7 @@ func forceEmptyBranchNameViaRawSQL(t *testing.T, storage *Storage, sessionName s
 	er, ok := storage.repo.(*EntRepository)
 	require.True(t, ok, "forceEmptyBranchNameViaRawSQL requires an EntRepository-backed Storage")
 
-	db, err := sql.Open("sqlite3", er.dbPath)
+	db, err := sql.Open("sqlite", er.dbPath)
 	require.NoError(t, err)
 	defer db.Close()
 

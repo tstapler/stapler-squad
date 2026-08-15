@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 type CapacityMonitor struct {
@@ -323,7 +323,7 @@ func (m *CapacityMonitor) queryGeminiUsageFromDB(uuid string) (input, output int
 		return 0, 0, 0, nil
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return 0, 0, 0, err
 	}

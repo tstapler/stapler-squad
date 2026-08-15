@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
 	"github.com/tstapler/stapler-squad/session/ent"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 // OpenAnalyticsDB opens (or creates) the dedicated analytics.db SQLite database
@@ -26,9 +26,9 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	}
 
 	dbPath := filepath.Join(dataDir, "analytics.db")
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on&_wal_autocheckpoint=1000", dbPath)
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on&_pragma=wal_autocheckpoint(1000)", dbPath)
 
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("analytics db: open sqlite: %w", err)
 	}

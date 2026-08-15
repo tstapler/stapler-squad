@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 // TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel verifies that a program pair
@@ -195,7 +195,7 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 		t.Fatalf("sqlite database file does not exist")
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("failed to open sqlite DB: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 		t.Fatalf("target SQLite DB was not created at %s", dbPath)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("failed to open SQLite DB: %v", err)
 	}
@@ -591,7 +591,7 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 
 	// Open the produced DB and inspect sqlite_master.
 	dbPath := filepath.Join(tempHome, ".gemini", "antigravity-cli", "conversations", uuid+".db")
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

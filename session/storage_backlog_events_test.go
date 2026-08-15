@@ -383,7 +383,7 @@ func TestUpdateItemSessionTriageResult_should_stillSucceed_When_OwningItemLookup
 		t.Fatal("timed out waiting for CreateItemSession's BacklogItemChanged event")
 	}
 
-	rawDB, err := sql.Open("sqlite3", dbPath)
+	rawDB, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
 	defer rawDB.Close()
 	_, err = rawDB.Exec("PRAGMA foreign_keys = OFF")
