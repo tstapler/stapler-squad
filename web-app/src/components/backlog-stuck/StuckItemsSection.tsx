@@ -83,7 +83,18 @@ interface ResolvedGhost {
 /** Mirrors StuckItem.tsx's MAX_REMEDIATION_ATTEMPTS — see that constant's doc comment. */
 const MAX_REMEDIATION_ATTEMPTS = 5;
 
-export function StuckItemsSection() {
+export interface StuckItemsSectionProps {
+  /**
+   * itemId from the `/unfinished?item=<itemId>` deep link (routes.unfinishedItem).
+   * When set, pre-expands every card matching this itemId (a bare itemId can
+   * match multiple composite keys — one item can appear under several
+   * reasons) and, if the active reason filter would hide all of them,
+   * resets the filter to "all" so the deep link always surfaces a match.
+   */
+  focusItemId?: string;
+}
+
+export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) {
   const {
     items,
     isLoading,
@@ -200,6 +211,29 @@ export function StuckItemsSection() {
   }, []);
 
   const handleClearFilter = useCallback(() => setFilter("all"), []);
+
+  // /unfinished?item=<itemId> deep link (routes.unfinishedItem): pre-expand
+  // every card matching this itemId (a bare itemId can match multiple
+  // composite keys, since one item can appear under several reasons), and
+  // fall back to the "all" filter if the currently active reason filter
+  // would otherwise hide every matching card.
+  useEffect(() => {
+    if (!focusItemId) return;
+    const matches = items.filter((i) => i.itemId === focusItemId);
+    if (matches.length === 0) return;
+
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      for (const item of matches) next.add(itemKey(item));
+      return next;
+    });
+
+    setFilter((prevFilter) => {
+      if (prevFilter === "all") return prevFilter;
+      const stillVisible = matches.some((i) => i.reason === prevFilter);
+      return stillVisible ? prevFilter : "all";
+    });
+  }, [focusItemId, items]);
 
   // rework_cap "continue automatically" action: sets the item's per-item
   // override then immediately reopens it — mirrors BacklogItemDetail.tsx's
@@ -417,6 +451,7 @@ export function StuckItemsSection() {
                       onReworkCapOverride={handleReworkCapOverride}
                       onTriggerRemediationNow={triggerRemediationNow}
                       onApprovePlan={handleApprovePlan}
+                      focusItemId={focusItemId}
                     />
                   );
                 })}

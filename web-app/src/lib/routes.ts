@@ -36,6 +36,7 @@ export const routes = {
     if (title) params.set("title", title);
     return `/?${params.toString()}`;
   },
+  unfinishedItem: (itemId: string) => `/unfinished?item=${itemId}`,
 } as const;
 
 export type Route = typeof routes;
