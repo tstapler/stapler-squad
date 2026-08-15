@@ -143,6 +143,23 @@ func validateBacklogPriority(priorities []int) error {
 	return nil
 }
 
+// paginateBacklogItems applies list_backlog_items' MCP-layer offset/limit
+// pagination to the full result set ListBacklogItems returns (the RPC has no
+// server-side pagination of its own — see plan.md's Pattern Decisions).
+// Extracted as its own function so this slicing logic is independently
+// unit-testable rather than only reachable through the full handler.
+func paginateBacklogItems(items []*sessionv1.BacklogItem, limit, offset int) (page []*sessionv1.BacklogItem, hasMore bool) {
+	if offset > len(items) {
+		offset = len(items)
+	}
+	items = items[offset:]
+
+	if len(items) > limit {
+		return items[:limit], true
+	}
+	return items, false
+}
+
 // --- Self-resolve source-status validation ---
 //
 // allowedSelfResolveSourceStatuses is the whitelist of source statuses a
@@ -718,19 +735,8 @@ func (h *backlogHandlers) listBacklogItems(ctx context.Context, req mcpgo.CallTo
 		return errResult(ErrInternalError, fmt.Sprintf("failed to list backlog items: %v", err), ""), nil
 	}
 
-	items := resp.Msg.Items
-	totalCount := len(items)
-
-	if offset > len(items) {
-		offset = len(items)
-	}
-	items = items[offset:]
-
-	hasMore := false
-	if len(items) > limit {
-		hasMore = true
-		items = items[:limit]
-	}
+	totalCount := len(resp.Msg.Items)
+	items, hasMore := paginateBacklogItems(resp.Msg.Items, limit, offset)
 
 	summaries := make([]BacklogItemSummaryResult, len(items))
 	for i, item := range items {

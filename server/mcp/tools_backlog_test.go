@@ -20,6 +20,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -5377,4 +5378,27 @@ func TestListBacklogItems_OffsetPagesPastFirstLimit(t *testing.T) {
 		id := raw.(map[string]interface{})["id"].(string)
 		require.False(t, firstIDs[id], "second page must not repeat an item already returned on the first page")
 	}
+}
+
+// TestPaginateBacklogItems_SlicesAndReportsHasMore exercises the extracted
+// pagination helper directly, independent of the RPC/handler plumbing.
+func TestPaginateBacklogItems_SlicesAndReportsHasMore(t *testing.T) {
+	items := make([]*sessionv1.BacklogItem, 15)
+	for i := range items {
+		items[i] = &sessionv1.BacklogItem{Id: fmt.Sprintf("item-%d", i)}
+	}
+
+	page, hasMore := paginateBacklogItems(items, 10, 0)
+	require.Len(t, page, 10)
+	require.True(t, hasMore)
+	require.Equal(t, "item-0", page[0].Id)
+
+	page, hasMore = paginateBacklogItems(items, 10, 10)
+	require.Len(t, page, 5)
+	require.False(t, hasMore)
+	require.Equal(t, "item-10", page[0].Id)
+
+	page, hasMore = paginateBacklogItems(items, 10, 100)
+	require.Empty(t, page)
+	require.False(t, hasMore)
 }

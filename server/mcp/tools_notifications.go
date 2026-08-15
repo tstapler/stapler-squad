@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,13 +18,33 @@ type notificationHandlers struct {
 	svc *services.SessionService
 }
 
+const (
+	notificationTypePrefix     = "NOTIFICATION_TYPE_"
+	notificationPriorityPrefix = "NOTIFICATION_PRIORITY_"
+)
+
 // notificationTypeNames is the enum surface get_notification_history's
 // type_filter argument accepts, without the NOTIFICATION_TYPE_ prefix.
-var notificationTypeNames = []string{
-	"APPROVAL_NEEDED", "INPUT_REQUIRED", "CONFIRMATION_NEEDED",
-	"TASK_COMPLETE", "PROCESS_STARTED", "PROCESS_FINISHED",
-	"ERROR", "WARNING", "FAILURE",
-	"INFO", "DEBUG", "STATUS_CHANGE", "AUTO_APPROVED", "CUSTOM",
+// Derived from the generated NotificationType_name map (skipping the
+// UNSPECIFIED sentinel) rather than hand-maintained, so it can't silently
+// drift out of sync when the proto enum gains a new value.
+var notificationTypeNames = enumNamesWithoutPrefix(
+	sessionv1.NotificationType_name, notificationTypePrefix,
+	sessionv1.NotificationType_NOTIFICATION_TYPE_UNSPECIFIED.String())
+
+// enumNamesWithoutPrefix strips prefix from every value in names except
+// excludeFull (typically the enum's UNSPECIFIED sentinel), sorted for
+// deterministic schema/error-message output — map iteration order is random.
+func enumNamesWithoutPrefix(names map[int32]string, prefix, excludeFull string) []string {
+	out := make([]string, 0, len(names))
+	for _, full := range names {
+		if full == excludeFull {
+			continue
+		}
+		out = append(out, strings.TrimPrefix(full, prefix))
+	}
+	sort.Strings(out)
+	return out
 }
 
 // parseNotificationTypeFilter maps a friendly type-filter string (with or
@@ -32,8 +53,8 @@ var notificationTypeNames = []string{
 // fast instead of silently resolving to NOTIFICATION_TYPE_UNSPECIFIED.
 func parseNotificationTypeFilter(s string) (sessionv1.NotificationType, error) {
 	name := s
-	if !strings.HasPrefix(name, "NOTIFICATION_TYPE_") {
-		name = "NOTIFICATION_TYPE_" + name
+	if !strings.HasPrefix(name, notificationTypePrefix) {
+		name = notificationTypePrefix + name
 	}
 	v, ok := sessionv1.NotificationType_value[name]
 	if !ok || sessionv1.NotificationType(v) == sessionv1.NotificationType_NOTIFICATION_TYPE_UNSPECIFIED {
@@ -104,8 +125,8 @@ func (h *notificationHandlers) getNotificationHistory(ctx context.Context, req m
 		records[i] = NotificationRecordResult{
 			ID:        n.Id,
 			SessionID: n.SessionId,
-			Type:      n.NotificationType.String(),
-			Priority:  n.Priority.String(),
+			Type:      strings.TrimPrefix(n.NotificationType.String(), notificationTypePrefix),
+			Priority:  strings.TrimPrefix(n.Priority.String(), notificationPriorityPrefix),
 			Title:     n.Title,
 			Message:   n.Message,
 			CreatedAt: createdAt,
