@@ -665,7 +665,6 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 	}
 }
 
-
 // --- list_backlog_items ---
 
 // listBacklogItems lists/filters backlog items via the existing
