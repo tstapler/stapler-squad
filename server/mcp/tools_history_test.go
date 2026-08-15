@@ -20,7 +20,7 @@ import (
 // a temp $HOME so SearchClaudeHistory's real disk-scan + full-text pipeline
 // runs end to end without touching the actual user's ~/.claude directory.
 // Every seeded conversation contains queryTerm in its single message.
-func newTestHistoryHandlers(t *testing.T, count int, queryTerm string) *historyHandlers {
+func newTestHistoryHandlers(t *testing.T, count int, queryTerm string) (*historyHandlers, []string) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -30,8 +30,10 @@ func newTestHistoryHandlers(t *testing.T, count int, queryTerm string) *historyH
 	require.NoError(t, os.MkdirAll(projectsDir, 0755))
 
 	var historyLines []string
+	var ids []string
 	for i := 0; i < count; i++ {
 		id := uuid.New().String()
+		ids = append(ids, id)
 		historyLines = append(historyLines, fmt.Sprintf(
 			`{"display":"session %d","timestamp":%d,"project":"/tmp/test-project","sessionId":"%s"}`,
 			i, 1700000000000+int64(i), id))
@@ -49,11 +51,11 @@ func newTestHistoryHandlers(t *testing.T, count int, queryTerm string) *historyH
 
 	storage := newTestBacklogStorage(t)
 	svc := services.NewSessionService(storage, events.NewEventBus(100))
-	return &historyHandlers{svc: svc}
+	return &historyHandlers{svc: svc}, ids
 }
 
 func TestSearchClaudeHistory_ReturnsMatchingResults_When_QueryProvided(t *testing.T) {
-	h := newTestHistoryHandlers(t, 3, "widget")
+	h, ids := newTestHistoryHandlers(t, 3, "widget")
 
 	res, err := h.searchClaudeHistory(context.Background(), makeToolReq(map[string]interface{}{
 		"query": "widget",
@@ -63,6 +65,23 @@ func TestSearchClaudeHistory_ReturnsMatchingResults_When_QueryProvided(t *testin
 	require.True(t, out["success"].(bool))
 	results := out["results"].([]interface{})
 	require.NotEmpty(t, results)
+
+	first := results[0].(map[string]interface{})
+	require.Contains(t, ids, first["session_id"], "session_id must match one of the seeded fixture sessions, not be swapped/mismapped")
+	require.Equal(t, "/tmp/test-project", first["project"])
+}
+
+func TestSearchClaudeHistory_ClampsLimitAboveMax(t *testing.T) {
+	h, _ := newTestHistoryHandlers(t, 150, "sprocket")
+
+	res, err := h.searchClaudeHistory(context.Background(), makeToolReq(map[string]interface{}{
+		"query": "sprocket",
+		"limit": float64(1000),
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	results := out["results"].([]interface{})
+	require.Len(t, results, 100, "limit must be clamped to the tool's max of 100")
 }
 
 func TestSearchClaudeHistory_ReturnsInvalidArgument_When_QueryMissing(t *testing.T) {
@@ -77,7 +96,7 @@ func TestSearchClaudeHistory_ReturnsInvalidArgument_When_QueryMissing(t *testing
 }
 
 func TestSearchClaudeHistory_ReturnsDefaultLimitOf10_When_NoLimitArgGiven(t *testing.T) {
-	h := newTestHistoryHandlers(t, 50, "gizmo")
+	h, _ := newTestHistoryHandlers(t, 50, "gizmo")
 
 	res, err := h.searchClaudeHistory(context.Background(), makeToolReq(map[string]interface{}{
 		"query": "gizmo",

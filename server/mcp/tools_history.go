@@ -107,12 +107,9 @@ func (h *historyHandlers) searchClaudeHistory(ctx context.Context, req mcpgo.Cal
 
 // --- Registration ---
 
-// registerHistoryTools registers the Claude/session-history full-text search
-// MCP tool. Not feature-flag-gated, same rationale as registerNotificationTools.
-// project/model/start_time/end_time are deliberately omitted from the schema
-// (ADR-001): SearchClaudeHistory declares these fields on the wire but never
-// reads them, so exposing them would create a tool that looks filtered but
-// silently isn't.
+// registerHistoryTools registers the Claude/session-history search tool.
+// Not feature-flag-gated (see registerNotificationTools). project/model/
+// start_time/end_time are omitted from the schema — see ADR-001.
 func registerHistoryTools(s *mcpserver.MCPServer, h *historyHandlers) {
 	s.AddTool(
 		mcpgo.NewTool("search_claude_history",

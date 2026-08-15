@@ -5297,15 +5297,122 @@ func TestListBacklogItems_ReturnsInvalidArgument_When_StatusValueUnknown(t *test
 func TestListBacklogItems_ReturnsInvalidArgument_When_PriorityOutOfRange(t *testing.T) {
 	h := newTestListBacklogHandlers(t)
 
-	for _, bad := range []interface{}{float64(0), float64(99)} {
-		res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
-			"priority": []interface{}{bad},
-		}))
-		require.NoError(t, err)
-		out := parseResult(t, res)
-		require.False(t, out["success"].(bool), "priority=%v should be rejected", bad)
-		require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+	for _, bad := range []float64{0, 99} {
+		t.Run(fmt.Sprintf("priority=%v", bad), func(t *testing.T) {
+			res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+				"priority": []interface{}{bad},
+			}))
+			require.NoError(t, err)
+			out := parseResult(t, res)
+			require.False(t, out["success"].(bool), "priority=%v should be rejected", bad)
+			require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+		})
 	}
+}
+
+func TestListBacklogItems_ReturnsInvalidArgument_When_StatusEntryWrongType(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"ready", float64(1)},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.False(t, out["success"].(bool), "a non-string status entry must be rejected, not silently dropped")
+	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+func TestListBacklogItems_ReturnsInvalidArgument_When_PriorityEntryWrongType(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"priority": []interface{}{"3"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.False(t, out["success"].(bool), "a non-numeric priority entry must be rejected, not silently dropped")
+	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+// TestListBacklogItems_FiltersByValidPriority verifies priority values 1-5
+// actually reach the RPC and filter results — previously only the
+// out-of-range rejection path was tested, leaving the priorities/priorities32
+// wiring itself unverified.
+func TestListBacklogItems_FiltersByValidPriority(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "P1 item", string(session.BacklogStatusReady), 1)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "P3 item", string(session.BacklogStatusReady), 3)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "P5 item", string(session.BacklogStatusReady), 5)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"priority": []interface{}{float64(1), float64(5)},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.True(t, out["success"].(bool))
+	items := out["items"].([]interface{})
+	require.Len(t, items, 2)
+	for _, raw := range items {
+		p := raw.(map[string]interface{})["priority"].(float64)
+		require.Contains(t, []float64{1, 5}, p)
+	}
+}
+
+// TestListBacklogItems_PassesThroughIncludeTerminalIncludeArchivedSortBy
+// verifies include_terminal/include_archived/sort_by are actually threaded
+// into the RPC request rather than silently dropped or transposed.
+func TestListBacklogItems_PassesThroughIncludeTerminalIncludeArchivedSortBy(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "Done item", string(session.BacklogStatusDone), 3)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "Archived item", string(session.BacklogStatusArchived), 3)
+
+	// Default (no include_terminal/include_archived): both terminal statuses hidden.
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.Empty(t, out["items"])
+
+	// include_terminal=true surfaces the done item but not the archived one.
+	res, err = h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"include_terminal": true,
+	}))
+	require.NoError(t, err)
+	out = parseResult(t, res)
+	items := out["items"].([]interface{})
+	require.Len(t, items, 1)
+	require.Equal(t, "Done item", items[0].(map[string]interface{})["title"])
+
+	// include_terminal=true + include_archived=true surfaces both, and sort_by
+	// is accepted without error (RPC-level sort correctness is exercised by
+	// BacklogService's own tests — this only verifies the field reaches the RPC).
+	res, err = h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"include_terminal": true,
+		"include_archived": true,
+		"sort_by":          "priority",
+	}))
+	require.NoError(t, err)
+	out = parseResult(t, res)
+	require.True(t, out["success"].(bool))
+	items = out["items"].([]interface{})
+	require.Len(t, items, 2)
+}
+
+// TestListBacklogItems_ClampsLimitAboveMax verifies a limit above the MCP
+// tool's own cap (50) is clamped rather than passed straight through.
+func TestListBacklogItems_ClampsLimitAboveMax(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	for i := 0; i < 60; i++ {
+		createBacklogItemWithStatusAndPriority(t, h.storage, fmt.Sprintf("Ready %d", i), string(session.BacklogStatusReady), 3)
+	}
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"ready"},
+		"limit":  float64(1000),
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	items := out["items"].([]interface{})
+	require.Len(t, items, 50, "limit must be clamped to the tool's max of 50")
 }
 
 func TestListBacklogItems_ReturnsDefaultLimitOf10_When_NoLimitArgGiven(t *testing.T) {

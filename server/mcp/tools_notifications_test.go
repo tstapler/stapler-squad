@@ -120,6 +120,40 @@ func TestGetNotificationHistory_ReturnsDefaultLimitOf10_When_NoLimitArgGiven(t *
 	require.True(t, out["has_more"].(bool))
 }
 
+func TestGetNotificationHistory_ReturnsFilteredRecords_When_SessionIDFilterApplied(t *testing.T) {
+	h := newTestNotificationHandlers(t)
+	store := h.svc.GetNotificationStore()
+
+	appendNotification(t, store, "sess-a", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
+	appendNotification(t, store, "sess-b", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
+
+	res, err := h.getNotificationHistory(context.Background(), makeToolReq(map[string]interface{}{
+		"session_id": "sess-a",
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.True(t, out["success"].(bool))
+	notifs := out["notifications"].([]interface{})
+	require.Len(t, notifs, 1)
+	require.Equal(t, "sess-a", notifs[0].(map[string]interface{})["session_id"])
+}
+
+func TestGetNotificationHistory_ClampsLimitAboveMax(t *testing.T) {
+	h := newTestNotificationHandlers(t)
+	store := h.svc.GetNotificationStore()
+	for i := 0; i < 60; i++ {
+		appendNotification(t, store, uuid.New().String(), int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
+	}
+
+	res, err := h.getNotificationHistory(context.Background(), makeToolReq(map[string]interface{}{
+		"limit": float64(1000),
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	notifs := out["notifications"].([]interface{})
+	require.Len(t, notifs, 50, "limit must be clamped to the tool's max of 50")
+}
+
 func TestGetNotificationHistory_ReturnsEmptySuccess_When_NotificationStoreNil(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	svc := services.NewSessionService(storage, events.NewEventBus(100))

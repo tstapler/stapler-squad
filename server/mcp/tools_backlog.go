@@ -134,7 +134,7 @@ func validateBacklogStatus(statuses []string) error {
 
 // validateBacklogPriority rejects an out-of-range priority value fast, same
 // rationale as validateBacklogStatus.
-func validateBacklogPriority(priorities []int) error {
+func validateBacklogPriority(priorities []int32) error {
 	for _, p := range priorities {
 		if p < 1 || p > 5 {
 			return fmt.Errorf("invalid priority %d — must be between 1 and 5", p)
@@ -681,23 +681,25 @@ func (h *backlogHandlers) listBacklogItems(ctx context.Context, req mcpgo.CallTo
 	var statuses []string
 	if raw, ok := args["status"].([]interface{}); ok {
 		for _, v := range raw {
-			if s, ok := v.(string); ok {
-				statuses = append(statuses, s)
+			s, ok := v.(string)
+			if !ok {
+				return errResult(ErrInvalidArgument, fmt.Sprintf("status entries must be strings, got %T", v), ""), nil
 			}
+			statuses = append(statuses, s)
 		}
 	}
 	if err := validateBacklogStatus(statuses); err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), ""), nil
 	}
 
-	var priorities []int
-	var priorities32 []int32
+	var priorities []int32
 	if raw, ok := args["priority"].([]interface{}); ok {
 		for _, v := range raw {
-			if f, ok := v.(float64); ok {
-				priorities = append(priorities, int(f))
-				priorities32 = append(priorities32, int32(f))
+			f, ok := v.(float64)
+			if !ok {
+				return errResult(ErrInvalidArgument, fmt.Sprintf("priority entries must be numbers, got %T", v), ""), nil
 			}
+			priorities = append(priorities, int32(f))
 		}
 	}
 	if err := validateBacklogPriority(priorities); err != nil {
@@ -726,7 +728,7 @@ func (h *backlogHandlers) listBacklogItems(ctx context.Context, req mcpgo.CallTo
 
 	resp, err := h.backlogSvc.ListBacklogItems(ctx, connect.NewRequest(&sessionv1.ListBacklogItemsRequest{
 		Status:          statuses,
-		Priority:        priorities32,
+		Priority:        priorities,
 		SortBy:          sortBy,
 		IncludeTerminal: includeTerminal,
 		IncludeArchived: includeArchived,
