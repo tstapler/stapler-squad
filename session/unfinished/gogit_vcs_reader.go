@@ -192,9 +192,11 @@ type trackedFile struct {
 }
 
 type aheadBehindEntry struct {
-	ahead  int
-	behind int
-	expiry time.Time
+	ahead    int
+	behind   int
+	headHash plumbing.Hash
+	baseHash plumbing.Hash
+	expiry   time.Time
 }
 
 type commitMessagesEntry struct {
@@ -1121,8 +1123,20 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 			return abResult{}, fmt.Errorf("resolve base %q: %w", base, baseErr)
 		}
 		if headRef.Hash() == baseHash {
-			g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{expiry: time.Now().Add(diffStatCacheTTL)})
+			g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{headHash: headRef.Hash(), baseHash: baseHash, expiry: time.Now().Add(diffStatCacheTTL)})
 			return abResult{0, 0}, nil
+		}
+		// A TTL-expired entry whose head/base hashes still match the current
+		// ones means neither ref moved since the last computation — the BFS
+		// result can't have changed, so reuse it instead of re-running
+		// findMergeBase + two countCommitsTo walks (the actual expensive work;
+		// resolving HEAD/base above is cheap by comparison).
+		if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
+			if e := v.(aheadBehindEntry); e.headHash == headRef.Hash() && e.baseHash == baseHash {
+				e.expiry = time.Now().Add(diffStatCacheTTL)
+				g.aheadBehindCache.Store(cacheKey, e)
+				return abResult{e.ahead, e.behind}, nil
+			}
 		}
 		mb, mbErr := findMergeBase(repo, headRef.Hash(), baseHash)
 		if mbErr != nil {
@@ -1136,7 +1150,7 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 		if behindErr != nil {
 			return abResult{}, behindErr
 		}
-		g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{ahead: ahead, behind: behind, expiry: time.Now().Add(diffStatCacheTTL)})
+		g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{ahead: ahead, behind: behind, headHash: headRef.Hash(), baseHash: baseHash, expiry: time.Now().Add(diffStatCacheTTL)})
 		return abResult{ahead, behind}, nil
 	})
 	if err != nil {
@@ -1960,10 +1974,12 @@ func firstLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// mergeBaseBFSLimit caps the number of commits visited per side in findMergeBase.
-// For a 10K-commit repo the unbounded walk allocates ~640 KB; bounding at 2000
-// limits that to ~128 KB while still covering typical branch divergences.
-const mergeBaseBFSLimit = 2000
+// mergeBaseBFSLimit caps the number of commits visited per side in findMergeBase
+// and countCommitsTo. For a 10K-commit repo the unbounded walk allocates ~640 KB;
+// bounding at 2000 limits that to ~128 KB while still covering typical branch
+// divergences. A var (not const) so tests can shrink it instead of building a
+// repo with thousands of real commits to exercise the cap.
+var mergeBaseBFSLimit = 2000
 
 // findMergeBase returns the most-recent common ancestor of h1 and h2 using BFS.
 // It first marks ancestors of h1 (up to mergeBaseBFSLimit), then walks ancestors
@@ -2024,12 +2040,17 @@ func findMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumbing.Hash, e
 }
 
 // countCommitsTo counts commits reachable from start that are not reachable from
-// stop (i.e. the number of commits between start and stop exclusive).
+// stop (i.e. the number of commits between start and stop exclusive). Bounded at
+// mergeBaseBFSLimit for the same reason findMergeBase is: an unbounded walk on a
+// long-lived branch that never merged into base would otherwise decode every
+// commit back to the repo root. When the bound is hit the count is capped rather
+// than exact — callers display it as "mergeBaseBFSLimit+" ahead/behind, which is
+// the correct signal for "diverged a lot" without paying for an exact count.
 func countCommitsTo(repo *git.Repository, start, stop plumbing.Hash) (int, error) {
 	seen := make(map[plumbing.Hash]bool, 32)
 	q := []plumbing.Hash{start}
 	n := 0
-	for len(q) > 0 {
+	for len(q) > 0 && n < mergeBaseBFSLimit {
 		h := q[len(q)-1]
 		q = q[:len(q)-1]
 		if seen[h] || h == stop {
