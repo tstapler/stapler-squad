@@ -10,6 +10,7 @@ import { CircleDot } from "lucide-react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
+import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import * as styles from "./BacklogItemCard.css";
@@ -38,50 +39,6 @@ interface BacklogItemCardProps {
    * page level (not per-card) and passed down — see board/page.tsx.
    */
   stuckItem?: StuckBacklogItem;
-}
-
-interface ActionSpec {
-  label: string;
-  action: string;
-  disabled?: boolean;
-  disabledReason?: string;
-  isDone?: boolean;
-}
-
-function getActionSpec(item: BacklogItem): ActionSpec {
-  switch (item.status) {
-    case "idea":
-      return {
-        label: "Mark Ready",
-        action: "mark_ready",
-        disabled: item.acCriteria.length === 0,
-        disabledReason: item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined,
-      };
-    case "refining":
-      return { label: "Refining…", action: "refining", isDone: true };
-    case "ready":
-      return {
-        label: "Trigger Triage",
-        action: "trigger_triage",
-        disabled: !item.repoPath,
-        disabledReason: !item.repoPath ? "Set repository path first" : undefined,
-      };
-    case "in_progress":
-      return {
-        label: "View Session",
-        action: "view_session",
-        disabled: item.linkedSessions.length === 0,
-        disabledReason: item.linkedSessions.length === 0 ? "No linked session yet" : undefined,
-      };
-    case "review":
-      return { label: "View Review", action: "view_review" };
-    case "done":
-      return { label: "Done ✓", action: "done", isDone: true };
-    case "archived":
-      return { label: "Archived", action: "archived", isDone: true };
-    default:
-      return { label: item.status, action: item.status, isDone: true };
-  }
 }
 
 function AcSummary({ item }: { item: BacklogItem }) {
@@ -137,7 +94,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   forceJustChanged = false,
   stuckItem,
 }: BacklogItemCardProps) {
-  const actionSpec = getActionSpec(item);
+  const actionSpec = getPrimaryCardAction(item);
   const isTriageRunning = item.triageStatus === "running";
   const isActionPending = pendingAction === actionSpec.action;
   // Transient disable reasons (spinner + "Running…"/"Triage in progress") are
@@ -250,7 +207,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         )}
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
-          disabled={actionSpec.disabled || isTriageRunning || pendingAction !== null}
+          disabled={actionSpec.disabled || actionSpec.isDone || isTriageRunning || pendingAction !== null}
           aria-label={isActionPending ? "Running…" : isTriageRunning ? "Triage in progress" : actionSpec.label}
           aria-describedby={disabledReason ? disabledReasonId : undefined}
           title={disabledReason}
