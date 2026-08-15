@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // ghHTTPClient is the shared HTTP client used for all native GitHub REST and
@@ -51,6 +53,7 @@ var GhBaseURL = "https://api.github.com/"
 var (
 	ghTokenCacheVal atomic.Value // stores string
 	ghTokenCacheAt  atomic.Int64 // unix-nanosecond timestamp of last fetch
+	ghTokenSF       singleflight.Group
 )
 
 const ghTokenCacheTTL = time.Minute
@@ -58,7 +61,11 @@ const ghTokenCacheTTL = time.Minute
 // getGHToken returns a GitHub personal access token for native HTTP calls.
 // Precedence: GITHUB_TOKEN env → GH_TOKEN env → OS keychain (cached 1 min).
 // Returns an empty string (not an error) when no token source is available so
-// callers can decide whether to degrade gracefully.
+// callers can decide whether to degrade gracefully. Cache-miss keychain reads
+// are coalesced via ghTokenSF: concurrent callers that miss the TTL cache at
+// the same time (e.g. a burst of parallel API calls right after the 1-minute
+// cache expires) share one keychain round-trip instead of each serializing on
+// keychainMu (github/keychain.go) for their own redundant read.
 func getGHToken(_ context.Context) string {
 	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
 		return tok
@@ -72,7 +79,10 @@ func getGHToken(_ context.Context) string {
 			return tok
 		}
 	}
-	tok := GetKeychainToken()
+	tokVal, _, _ := ghTokenSF.Do("keychain-token", func() (any, error) {
+		return GetKeychainToken(), nil
+	})
+	tok := tokVal.(string)
 	if tok != "" {
 		ghTokenCacheVal.Store(tok)
 		ghTokenCacheAt.Store(now)
