@@ -81,6 +81,10 @@ func (ItemSession) Fields() []ent.Field {
 			Default(0).
 			Optional().
 			Comment("Cost in USD; populated for headless sessions from claude -p output"),
+		field.String("claimant_host_id").
+			Optional().
+			Default("").
+			Comment("Identifies the physical stapler-squad process/host that claimed this item (SpawnSessionFromItem) or attached this session (AttachSessionToItem, using the attaching process's own identity). A random UUID generated once and persisted via Config.GetOrCreateClaimantHostID, stable across restarts of the same process/config dir. Not STAPLER_SQUAD_INSTANCE (namespaces state on one machine) and not session/contexts.go's CloudContext.InstanceID (a cloud provider instance id, unpopulated locally). Purely descriptive; empty for rows created before this field existed."),
 	}
 }
 

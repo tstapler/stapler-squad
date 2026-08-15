@@ -18,6 +18,7 @@
 // new status is a compile error here (see the `never` check in the
 // `default` arm) rather than a silently-missing branch.
 import type { BacklogItem, KnownBacklogStatus } from "@/lib/hooks/useBacklogService";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 
 export type BacklogActionId =
   | "mark_ready"
@@ -27,6 +28,7 @@ export type BacklogActionId =
   | "approve_plan"
   | "retry_triage"
   | "view_session"
+  | "view_review"
   | "restart_session"
   | "ship_pr"
   | "override_done"
@@ -224,4 +226,105 @@ export function getAvailableActions(item: ItemActionabilityInput): AvailableActi
   actions.add("delete");
 
   return { actions, isGatedOnPlanApproval, hasPlan };
+}
+
+export interface PrimaryCardAction {
+  label: string;
+  action: string;
+  disabled?: boolean;
+  disabledReason?: string;
+  isDone?: boolean;
+}
+
+export interface PrimaryCardActionInput
+  extends ItemActionabilityInput,
+    Pick<BacklogItem, "acCriteria" | "repoPath" | "planRejectionReason"> {}
+
+/**
+ * getPrimaryCardAction picks the single action a board card's action button
+ * should surface, built on `getAvailableActions` and `derivePlanReviewStatus`
+ * rather than a second, independently-maintained status->action mapping (see
+ * this module's header comment for the class of bug that divergence causes).
+ *
+ * For `ready`/`queued`, the candidate action set from `getAvailableActions`
+ * can contain more than one entry (e.g. `trigger_triage` and `retry_triage`
+ * both present), so precedence is an explicit if/else chain rather than a
+ * read off `Set` iteration order, which is not guaranteed to match desired
+ * priority.
+ *
+ * Exhaustive over `KnownBacklogStatus` via `asKnownStatus` + a switch with a
+ * `never` check in `default`, mirroring `getAvailableActions` above — adding
+ * a new status without a case here is a compile error, not a silent
+ * fallthrough to the generic `{ label: item.status, ... }` placeholder.
+ */
+export function getPrimaryCardAction(item: PrimaryCardActionInput): PrimaryCardAction {
+  const status = asKnownStatus(item.status);
+
+  switch (status) {
+    case "idea":
+      return {
+        label: "Mark Ready",
+        action: "mark_ready",
+        disabled: item.acCriteria.length === 0,
+        disabledReason: item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined,
+      };
+    case "refining":
+      return { label: "Refining…", action: "refining", isDone: true };
+    case "ready":
+    case "queued": {
+      const { actions } = getAvailableActions(item);
+      const planStatus = derivePlanReviewStatus(item);
+      const canSpawnSession =
+        actions.has("spawn_session") && (planStatus === "approved" || planStatus === "skipped");
+
+      if (actions.has("approve_plan")) {
+        return { label: "Approve Plan", action: "approve_plan" };
+      }
+      if (actions.has("retry_triage")) {
+        return { label: "Retry Triage", action: "retry_triage" };
+      }
+      if (canSpawnSession) {
+        return { label: "Spawn Session", action: "spawn_session" };
+      }
+      if (status === "ready") {
+        return {
+          label: "Trigger Triage",
+          action: "trigger_triage",
+          disabled: !item.repoPath,
+          disabledReason: !item.repoPath ? "Set repository path first" : undefined,
+        };
+      }
+      return { label: "Queued", action: "queued", isDone: true, disabled: true };
+    }
+    case "in_progress":
+      return {
+        label: "View Session",
+        action: "view_session",
+        disabled: item.linkedSessions.length === 0,
+        disabledReason: item.linkedSessions.length === 0 ? "No linked session yet" : undefined,
+      };
+    case "review":
+      // "view_review" is a deliberate BacklogActionId (see that type's
+      // definition above) distinct from ActionsSection's review-status
+      // actions (ship_pr/override_done/re_review/manual_review) — it's a
+      // pure navigation shim, mirroring "view_session", that board/page.tsx's
+      // handleAction special-cases identically to "view_session".
+      return { label: "View Review", action: "view_review" };
+    case "pr_pending":
+      // No status-specific primary action today, same as getAvailableActions'
+      // "pr_pending" case — preserves the pre-existing fallback rendering.
+      return { label: item.status, action: item.status, isDone: true };
+    case "done":
+      return { label: "Done ✓", action: "done", isDone: true };
+    case "archived":
+      return { label: "Archived", action: "archived", isDone: true };
+    case undefined:
+      // Unknown/forward-compatible status string — same generic fallback
+      // getAvailableActions uses for a status outside KnownBacklogStatus.
+      return { label: item.status, action: item.status, isDone: true };
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
 }

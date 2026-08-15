@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -230,6 +232,10 @@ type Config struct {
 	// executor is the command executor used for shell command discovery.
 	// Set via NewConfigWithExecutor; defaults to a 5-second timeout executor.
 	executor CommandExecutor
+	// lazyMu guards the generate-on-first-use fields below (MachineEncryptionKey,
+	// ClaimantHostID) against concurrent first-callers racing to generate and
+	// persist their own value — see GetOrCreateEncryptionKey/GetOrCreateClaimantHostID.
+	lazyMu sync.Mutex
 	// ListenAddress is the address the HTTP server listens on.
 	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
 	ListenAddress string `json:"listen_address"`
@@ -299,6 +305,16 @@ type Config struct {
 	// MachineEncryptionKey is a base64-encoded 32-byte AES-256-GCM key for local data encryption.
 	// Generated on first run and persisted here. Used to encrypt sensitive token data in ItemSource configs.
 	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
+	// ClaimantHostID is a randomly generated identifier for THIS physical process/config
+	// directory, generated on first use and persisted here. Recorded on backlog ItemSession
+	// rows to show which host/process claimed or attached a session (see
+	// GetOrCreateClaimantHostID). Stable across restarts of this same process/config dir;
+	// distinct across different hosts and across different STAPLER_SQUAD_INSTANCE-namespaced
+	// config dirs on the same machine, since each gets its own config.json. Unrelated to
+	// STAPLER_SQUAD_INSTANCE (which only namespaces config/state directories on a single
+	// machine) and unrelated to session/contexts.go's CloudContext.InstanceID (a cloud
+	// provider's instance identifier, not populated for local/dev sessions).
+	ClaimantHostID string `json:"claimant_host_id,omitempty"`
 	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
 	// loop will spawn for a single item before leaving it for manual review. 0 = use the
 	// default (20). Individual items can also override this via
@@ -1009,6 +1025,9 @@ func (c *Config) RemoveKeyCategory(key string) {
 // GetOrCreateEncryptionKey returns the 32-byte AES-256-GCM key for local data encryption.
 // Generates and persists a new key on first call. Non-fatal errors during save are logged.
 func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
+	c.lazyMu.Lock()
+	defer c.lazyMu.Unlock()
+
 	if c.MachineEncryptionKey != "" {
 		data, err := base64.StdEncoding.DecodeString(c.MachineEncryptionKey)
 		if err == nil && len(data) == 32 {
@@ -1032,6 +1051,27 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 	}
 
 	return key, nil
+}
+
+// GetOrCreateClaimantHostID returns this process/config directory's stable ClaimantHostID,
+// generating and persisting a new random UUID on first call. See the ClaimantHostID field
+// doc comment for what this identifier is (and is not) used for.
+func (c *Config) GetOrCreateClaimantHostID() (string, error) {
+	c.lazyMu.Lock()
+	defer c.lazyMu.Unlock()
+
+	if c.ClaimantHostID != "" {
+		return c.ClaimantHostID, nil
+	}
+
+	c.ClaimantHostID = uuid.New().String()
+
+	// Persist to disk; non-fatal if it fails
+	if err := SaveConfig(c); err != nil {
+		log.WarningLog.Printf("[Config] failed to persist claimant host id: %v", err)
+	}
+
+	return c.ClaimantHostID, nil
 }
 
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.

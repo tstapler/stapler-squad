@@ -18,6 +18,8 @@ export interface ActionDeps {
   runWorkflow?: (slug: string, arg: string) => void;
   /** Optional analytics provider — tracking is best-effort; missing it never blocks the action */
   analytics?: Pick<AnalyticsProvider, "track">;
+  /** Creates a backlog item from a free-text chat message, then navigates to the Backlog page */
+  createBacklogItemFromChat: (text: string) => Promise<void>;
 }
 
 export function dispatchOmnibarAction(
@@ -108,6 +110,11 @@ export function dispatchOmnibarAction(
         aliasName: action.aliasName,
         branch: action.branch,
       });
+      deps.close();
+      return;
+    case "chat_backlog_item":
+      if (track) track({ name: "omnibar.chat_backlog_item", category: "user_action" });
+      void deps.createBacklogItemFromChat(action.text);
       deps.close();
       return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅

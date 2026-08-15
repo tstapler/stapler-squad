@@ -52,19 +52,29 @@ type ProcessRunner struct {
 	allowedTools    string // optional --allowedTools value; empty = not passed
 	permissionMode  string // optional --permission-mode value; empty = not passed
 	disallowedTools string // optional --disallowedTools value; empty = not passed
+	// interpreter, when non-empty, is exec'd instead of claudeBin, with claudeBin
+	// prepended to argv. Opt-in, test-only — see NewShellWrappedProcessRunnerForTesting
+	// in fake_runner.go. Zero value for every production ProcessRunner.
+	interpreter string
 }
 
 // WithWorkDir returns a copy of this ProcessRunner that sets the subprocess working
 // directory to workDir, preserving any existing allowedTools/permissionMode/
 // disallowedTools. Used by CallBlocking for per-call directory override.
 func (r *ProcessRunner) WithWorkDir(workDir string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir, allowedTools: r.allowedTools, permissionMode: r.permissionMode, disallowedTools: r.disallowedTools}
+	cp := *r
+	cp.workDir = workDir
+	return &cp
 }
 
 // WithToolAccess returns a copy of this ProcessRunner with allowedTools/permissionMode/
 // disallowedTools set, preserving any existing workDir.
 func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode, disallowedTools string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: r.workDir, allowedTools: allowedTools, permissionMode: permissionMode, disallowedTools: disallowedTools}
+	cp := *r
+	cp.allowedTools = allowedTools
+	cp.permissionMode = permissionMode
+	cp.disallowedTools = disallowedTools
+	return &cp
 }
 
 // toolAccessArgs returns the --allowedTools/--permission-mode/--disallowedTools flag
@@ -126,7 +136,12 @@ func (r *ProcessRunner) Run(ctx context.Context, args []string, stdin io.Reader)
 	if stdin != nil {
 		opts = append(opts, executor.WithProcessStdin(stdin))
 	}
-	proc, err := executor.StartProcess(ctx, r.claudeBin, args, opts...)
+	name := r.claudeBin
+	if r.interpreter != "" {
+		name = r.interpreter
+		args = append([]string{r.claudeBin}, args...)
+	}
+	proc, err := executor.StartProcess(ctx, name, args, opts...)
 	if err != nil {
 		return nil, nil, err
 	}

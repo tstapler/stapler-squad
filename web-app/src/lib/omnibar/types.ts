@@ -21,6 +21,7 @@ export enum InputType {
   AliasBrowse = "alias_browse",
   Preset = "preset",
   PresetNotFound = "preset_not_found",
+  ChatBacklogItem = "chat_backlog_item",
 }
 
 export interface InputTypeInfo {
@@ -114,6 +115,11 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
     label: "Preset Not Found",
     icon: "🚀",
     description: "No preset with that id",
+  },
+  [InputType.ChatBacklogItem]: {
+    label: "Backlog Item",
+    icon: "📝",
+    description: "Create a backlog item from a free-text message (backlog: <message>)",
   },
 };
 

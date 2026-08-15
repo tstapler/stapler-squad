@@ -388,6 +388,10 @@ type ItemSessionSummary struct {
 	VerificationNotes     string // freeform verification evidence reported via request_review
 	OverallOutcome        string // from linked review_verdict (empty if none)
 	ReviewVerdict         *ReviewVerdictSummary
+	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
+	// attached this session. See ItemSession.claimant_host_id's schema comment for the
+	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.
+	ClaimantHostID string
 }
 
 // BacklogStatusEventData is the domain DTO replacing *ent.BacklogStatusEvent in Storage returns.
