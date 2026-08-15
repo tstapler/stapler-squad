@@ -199,7 +199,19 @@ const (
 	// hung tmux server can't block callers (e.g. Instance.Destroy(), and in
 	// turn SessionService.DeleteSession's cleanup goroutine) indefinitely.
 	// Matches KillTmuxSessionByTitle's existing 5s cap in server/services.
-	killSessionTimeout      = 5 * time.Second
+	killSessionTimeout = 5 * time.Second
+	// killSessionConfirmTimeout bounds Close()'s post-kill poll for the
+	// tmux server to actually stop reporting the session in `list-sessions`.
+	// `tmux kill-session` returning (even with exit code 1, "already gone")
+	// is not synchronous with the server's own session-table update -- a
+	// `list-sessions` issued immediately after can still report the session
+	// for a few milliseconds. Without this wait, TmuxAlive() checked right
+	// after KillSession() returns can observe a stale "true" (see
+	// session_restart_test.go's HealthCheckerAutoRestart, which failed
+	// deterministically until this was added -- confirmed via instrumented
+	// runs showing a fresh, uncached list-sessions subprocess still
+	// returning the session immediately after kill-session completed).
+	killSessionConfirmTimeout = 2 * time.Second
 	sessionPollInitialDelay = 5 * time.Millisecond
 	// sessionPollMaxDelay bounds the poll loop's exponential backoff below.
 	// Previously capped at 50ms, which -- once ramped up after ~4 doublings
@@ -945,6 +957,23 @@ func (t *TmuxSession) SetExtraEnv(env []string) {
 // The returned command has no context; callers that need timeout protection
 // should use exec.CommandContext directly or wrap with a TimeoutExecutor.
 func (t *TmuxSession) buildTmuxCommand(args ...string) *exec.Cmd {
+	return t.buildTmuxCommandContext(context.Background(), args...)
+}
+
+// buildTmuxCommandContext is buildTmuxCommand with a caller-supplied context,
+// for call sites that need timeout protection WITHOUT bypassing t.cmdExec --
+// see Close()'s kill-session call, which used to construct its own
+// executor.MakeTimeoutExecutor and ran the real subprocess directly, skipping
+// any injected test executor entirely. That divergence (kill-session hitting
+// a real, nonexistent tmux socket while every other check -- DoesSessionExist,
+// listSessionsRaw -- went through the mock) is what made
+// TestSessionRestartWithConversationContinuity/HealthCheckerAutoRestart flake:
+// the mock's in-memory session map was never updated by the real kill, so
+// subsequent existence checks kept reporting the session alive. Binding the
+// timeout into the command's context (consumed by t.cmdExec.Run, same as
+// every other tmux invocation in this file) gets the same bounded-hang
+// protection without a second, uninjectable executor.
+func (t *TmuxSession) buildTmuxCommandContext(ctx context.Context, args ...string) *exec.Cmd {
 	var cmdArgs []string
 
 	// Add server socket isolation if specified
@@ -955,8 +984,7 @@ func (t *TmuxSession) buildTmuxCommand(args ...string) *exec.Cmd {
 	// Add the actual tmux command arguments
 	cmdArgs = append(cmdArgs, args...)
 
-	// Use background context; callers supply their own timeout via the executor layer.
-	return safeexec.CommandContext(context.Background(), Binary(), cmdArgs...)
+	return safeexec.CommandContext(ctx, Binary(), cmdArgs...)
 }
 
 // buildAttachCommand creates a tmux attach-session command for PTY operations.
@@ -1896,25 +1924,29 @@ func (t *TmuxSession) Close() error {
 
 	// Check if session exists before trying to kill it
 	if t.DoesSessionExist() {
-		cmd := t.buildTmuxCommand("kill-session", "-t", t.sanitizedName)
+		killCtx, killCancel := context.WithTimeout(context.Background(), killSessionTimeout)
+		defer killCancel()
+		cmd := t.buildTmuxCommandContext(killCtx, "kill-session", "-t", t.sanitizedName)
 		var stderrBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
-		// buildTmuxCommand binds cmd to context.Background(), so runGatedErr's
-		// ctx only bounds the exec-gate slot acquisition, not the subprocess
-		// itself. Run through a TimeoutExecutor here so a hung tmux server
+		// The subprocess is bounded by killCtx above (so a hung tmux server
 		// genuinely gets killed after killSessionTimeout, matching
-		// KillTmuxSessionByTitle's non-cosmetic 5s cap, instead of leaving
-		// Close() (and its callers, e.g. DeleteSession's cleanup goroutine)
-		// blocked indefinitely.
-		killExec := executor.MakeTimeoutExecutor(killSessionTimeout)
+		// KillTmuxSessionByTitle's non-cosmetic 5s cap) and run through
+		// t.cmdExec -- NOT a standalone executor.MakeTimeoutExecutor, which
+		// always shells out to the real OS binary and ignores any executor
+		// injected via NewTmuxSessionWithDeps. That bypass previously made
+		// Close() kill a real (often nonexistent) tmux socket while a
+		// mock-executor-backed test's own liveness checks kept consulting the
+		// untouched mock, which never learned the session was killed --
+		// see TestSessionRestartWithConversationContinuity/HealthCheckerAutoRestart.
 		gatedErr := runGatedErr(context.Background(), t.serverSocket, func() error {
-			return killExec.Run(cmd)
+			return t.cmdExec.Run(cmd)
 		})
 		if err := gatedErr; err != nil {
 			// Check if this is the common "session not found" error
 			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 				// Exit code 1 usually means session doesn't exist or was already killed
-				log.Info("tmux session was already killed or doesn't exist", "session", t.sanitizedName)
+				log.Info("tmux session was already killed or doesn't exist", "session", t.sanitizedName, "stderr", stderrBuf.String())
 			} else {
 				errs = append(errs, fmt.Errorf("error killing tmux session: %w", err))
 			}
@@ -1930,6 +1962,7 @@ func (t *TmuxSession) Close() error {
 		if notifier, ok := t.registry.(interface{ NotifySessionClosed(string) }); ok {
 			notifier.NotifySessionClosed(t.sanitizedName)
 		}
+		t.waitForSessionGone(killSessionConfirmTimeout)
 	} else {
 		log.Info("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
 	}
@@ -1952,6 +1985,26 @@ func (t *TmuxSession) Close() error {
 		errMsg += "\n  - " + err.Error()
 	}
 	return errors.New(errMsg)
+}
+
+// waitForSessionGone polls the tmux server (uncached) until it stops
+// reporting the session, up to timeout. `kill-session` returning is not
+// synchronous with the server's own session-table update, so a caller that
+// checks liveness (e.g. TmuxAlive()) immediately after Close() returns can
+// otherwise observe a stale "true" for a few milliseconds.
+func (t *TmuxSession) waitForSessionGone(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	sleepDuration := sessionPollInitialDelay
+	for t.DoesSessionExistNoCache() {
+		if time.Now().After(deadline) {
+			log.Warn("tmux server still reports session after kill-session; giving up wait", "session", t.sanitizedName)
+			return
+		}
+		time.Sleep(sleepDuration)
+		if sleepDuration < sessionPollMaxDelay {
+			sleepDuration *= 2
+		}
+	}
 }
 
 // SetDetachedSize set the width and height of the session while detached. This makes the
@@ -2102,7 +2155,6 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	if t == nil {
 		return false
 	}
-
 	// Fast path: use the push-based registry when it is healthy and it confirms
 	// the session exists. If the registry returns false, it may be lagging behind
 	// tmux reality (e.g. the %session-created event has not been delivered yet),
