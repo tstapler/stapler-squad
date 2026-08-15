@@ -252,6 +252,16 @@ export const tableHeaderCell = style({
   whiteSpace: "nowrap",
 });
 
+export const tableHeaderCellSortable = style({
+  cursor: "pointer",
+  selectors: {
+    "&:focus-visible": {
+      outline: `2px solid ${vars.color.primary}`,
+      outlineOffset: "-2px",
+    },
+  },
+});
+
 export const tableRow = style({
   cursor: "pointer",
   borderBottom: `1px solid ${vars.color.borderSubtle}`,
