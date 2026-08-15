@@ -198,7 +198,6 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	// persistence is needed and a local avoids any d.mu entanglement.
 	var lastSentNudge lastNudge
 
-turnLoop:
 	for turnCount := 0; turnCount < d.maxTurns; turnCount++ {
 		if ctx.Err() != nil {
 			break
@@ -252,13 +251,20 @@ turnLoop:
 		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now())
 		if suppressed {
 			log.Info("AutonomousDriver: suppressed nudge", "session", sessionName, "turn", turnCount+1, "directive", directive)
-			// ctx-aware wait (not a bare time.Sleep) so Stop() can cancel this
-			// near-immediately instead of blocking the full nudgeCooldown — mirrors
-			// waitForPaneSettle/waitForRateLimitClear's select pattern above.
-			select {
-			case <-ctx.Done():
-				break turnLoop
-			case <-time.After(nudgeCooldown):
+			if ctx.Err() != nil {
+				break
+			}
+			// Proceed on the same idle-settle cadence a real send uses, instead of
+			// blocking the full nudgeCooldown (3min production default): a
+			// suppressed turn means the agent is still working, so waiting for it
+			// to go idle again is what re-arms the dedup guard (isDuplicateNudge
+			// re-checks the cooldown next turn) and lets the orchestrator re-poll
+			// promptly rather than stalling on an arbitrary fixed timer.
+			turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
+			idleReached := waitForIdle(turnCtx, statusCh, d.controller, idleSettleWindow)
+			turnCancel()
+			if !idleReached {
+				log.Warn("AutonomousDriver: session did not become idle after suppressed turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
 			}
 			continue
 		}
