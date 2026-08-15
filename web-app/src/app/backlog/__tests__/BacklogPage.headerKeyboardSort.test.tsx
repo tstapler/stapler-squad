@@ -83,6 +83,11 @@ function itemFixture(overrides: Record<string, unknown>) {
 
 describe("BacklogPage sortable header keyboard accessibility", () => {
   beforeEach(() => {
+    // Sort state is persisted to localStorage (see usePersistedViewState /
+    // BACKLOG_VIEW_FIELDS in page.tsx) — clear it so each test starts from
+    // the same default ("updatedAt", descending) regardless of what a
+    // previous test in this file left behind.
+    localStorage.clear();
     mockUseWatchBacklogItems.mockReturnValue({
       items: [itemFixture({})],
       connectionState: "live",
@@ -119,6 +124,20 @@ describe("BacklogPage sortable header keyboard accessibility", () => {
     expect(header).toHaveAttribute("aria-sort", "descending");
 
     fireEvent.keyDown(button, { key: "Enter" });
+    expect(header).toHaveAttribute("aria-sort", "ascending");
+  });
+
+  it("BacklogPage_should_SortAndToggleDirection_When_HeaderButtonIsClicked", () => {
+    render(<BacklogPage />);
+    const header = screen.getByRole("columnheader", { name: /^Title/ });
+    const button = within(header).getByRole("button");
+
+    expect(header).toHaveAttribute("aria-sort", "none");
+
+    fireEvent.click(button);
+    expect(header).toHaveAttribute("aria-sort", "descending");
+
+    fireEvent.click(button);
     expect(header).toHaveAttribute("aria-sort", "ascending");
   });
 
