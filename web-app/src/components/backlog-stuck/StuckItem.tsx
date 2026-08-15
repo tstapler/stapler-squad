@@ -33,6 +33,22 @@ interface StuckItemProps {
   /** Sets a per-item rework-cap override and immediately reopens the item — omitted disables the rework_cap override control. */
   onReworkCapOverride?: (itemId: string, override: number) => Promise<boolean>;
   /**
+   * This item's current reworkCapOverride value, fetched by the parent via
+   * getBacklogItem since StuckBacklogItem (this component's `item` prop type)
+   * doesn't carry the field. undefined = not fetched yet / no override set,
+   * 0 = unlimited, >0 = this item's own cap. Passed straight through to
+   * StuckItemDetail for display — see StuckItemsSection.tsx's
+   * `reworkCapOverrides` map for the fetch.
+   */
+  currentReworkCapOverride?: number;
+  /**
+   * True once the parent has resolved `currentReworkCapOverride` for this
+   * item (see StuckItemDetail.tsx's identically-named prop doc comment for
+   * why this can't be inferred from `currentReworkCapOverride` alone).
+   * Passed straight through to StuckItemDetail.
+   */
+  reworkCapOverrideLoaded?: boolean;
+  /**
    * Operator "Retry now" escape hatch (TriggerRemediationNow RPC) — omitted
    * disables the retry control entirely. Rejects (throws) when the row is
    * already parked or has no wired remediation action; the caller (this
@@ -119,6 +135,8 @@ export function StuckItem({
   resolvedTrailingMessage,
   onSnooze,
   onReworkCapOverride,
+  currentReworkCapOverride,
+  reworkCapOverrideLoaded = false,
   onTriggerRemediationNow,
   onApprovePlan,
 }: StuckItemProps) {
@@ -396,6 +414,8 @@ export function StuckItem({
         <StuckItemDetail
           item={item}
           onReworkCapOverride={onReworkCapOverride}
+          currentReworkCapOverride={currentReworkCapOverride}
+          reworkCapOverrideLoaded={reworkCapOverrideLoaded}
           onApprovePlan={onApprovePlan}
         />
       )}

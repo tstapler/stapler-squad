@@ -4,6 +4,7 @@
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import type { PipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
+import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { BlockerChip } from "../BlockerChip";
 import { StageTracker } from "./StageTracker";
 import { LivenessLine } from "./LivenessLine";
@@ -56,6 +57,15 @@ export function LifecycleSummary({ item, pipelineDisplay, stuckItem }: Lifecycle
           Pipeline: {pipelineDisplay.name}
         </span>
       )}
+      {(() => {
+        const reworkCap = resolveReworkCapOverride(item.reworkCapOverride);
+        if (reworkCap.kind === "unset") return null;
+        return (
+          <span className={styles.pipelineBadge} data-testid="lifecycle-rework-cap-badge">
+            Rework cap: {reworkCap.kind === "unlimited" ? "unlimited" : reworkCap.rounds}
+          </span>
+        );
+      })()}
       <LivenessLine item={item} />
     </div>
   );
