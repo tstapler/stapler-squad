@@ -576,6 +576,13 @@ function BacklogPageInner() {
     }
   };
 
+  const handleHeaderKeyDown = (e: React.KeyboardEvent, col: SortColumn) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleSortClick(col);
+    }
+  };
+
   const handleRowClick = (itemId: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("item", itemId);
@@ -806,52 +813,77 @@ function BacklogPageInner() {
                 <tr>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("title")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "title" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Title{sortIndicator("title")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("title")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "title")}
+                    >
+                      Title{sortIndicator("title")}
+                    </button>
                   </th>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("status")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "status" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Status{sortIndicator("status")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("status")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "status")}
+                    >
+                      Status{sortIndicator("status")}
+                    </button>
                   </th>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("priority")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "priority" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Priority{sortIndicator("priority")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("priority")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "priority")}
+                    >
+                      Priority{sortIndicator("priority")}
+                    </button>
                   </th>
                   <th scope="col" className={styles.tableHeaderCell}>
                     AC
                   </th>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("updatedAt")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "updatedAt" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Updated{sortIndicator("updatedAt")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("updatedAt")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "updatedAt")}
+                    >
+                      Updated{sortIndicator("updatedAt")}
+                    </button>
                   </th>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("repoPath")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "repoPath" ? (sortAsc ? "ascending" : "descending") : "none"}
                     data-testid="backlog-col-repo-path"
                   >
-                    Repository{sortIndicator("repoPath")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("repoPath")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "repoPath")}
+                    >
+                      Repository{sortIndicator("repoPath")}
+                    </button>
                   </th>
                 </tr>
               </thead>
