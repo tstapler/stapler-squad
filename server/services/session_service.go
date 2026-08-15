@@ -225,15 +225,56 @@ type SessionService struct {
 	// goroutines so Shutdown can await them instead of letting them outlive the
 	// process (or, in tests, outlive the test that spawned them).
 	deleteCleanupWG sync.WaitGroup
+
+	// deleteCleanupMu guards deleteCleanupClosed and serializes it against
+	// deleteCleanupWG.Add via trackCleanup, so Add never races Shutdown's Wait —
+	// see deleteCleanupClosed's doc comment.
+	deleteCleanupMu sync.Mutex
+
+	// deleteCleanupClosed is set once Shutdown begins draining deleteCleanupWG.
+	// sync.WaitGroup requires that any Add with a positive delta happen before
+	// the matching Wait call is invoked (or after a prior Wait returns) —
+	// calling Add concurrently with Wait when the counter may be zero is a
+	// documented misuse that can panic or let Wait return before the new work
+	// finishes. trackCleanup checks this flag under deleteCleanupMu before
+	// calling Add; Shutdown sets it under the same mutex before calling Wait.
+	// That makes the two mutually exclusive: any Add() that wins the lock race
+	// happens-before closed is set true (and thus happens-before Wait()), and
+	// any Add() that loses sees closed=true and never calls Add at all — it
+	// runs the cleanup untracked instead, which is fine because Shutdown no
+	// longer needs to wait for it.
+	deleteCleanupClosed bool
+}
+
+// trackCleanup runs fn in a goroutine tracked by deleteCleanupWG so Shutdown
+// can await it, unless Shutdown has already begun draining the WaitGroup — see
+// deleteCleanupClosed's doc comment for why Add can't be allowed to race Wait.
+func (s *SessionService) trackCleanup(fn func()) {
+	s.deleteCleanupMu.Lock()
+	if s.deleteCleanupClosed {
+		s.deleteCleanupMu.Unlock()
+		go fn()
+		return
+	}
+	s.deleteCleanupWG.Add(1)
+	s.deleteCleanupMu.Unlock()
+	go func() {
+		defer s.deleteCleanupWG.Done()
+		fn()
+	}()
 }
 
 // deleteSessionCleanupTimeout bounds how long DeleteSession's background
-// liveInst.Destroy() cleanup is awaited before Shutdown/deleteCleanupWG.Wait()
-// gives up on it, matching KillTmuxSessionByTitle's existing 5s cap. Destroy()
-// takes no context and cannot be forcibly cancelled, so a timed-out cleanup
-// keeps running in its own goroutine (untracked by the WaitGroup) after this
-// deadline — only the *wait* is bounded, not the underlying tmux/worktree work.
-const deleteSessionCleanupTimeout = 5 * time.Second
+// liveInst.Destroy() cleanup (tmux kill, git diff stats, and worktree
+// filesystem cleanup) is awaited before Shutdown/deleteCleanupWG.Wait() gives
+// up on it. Destroy() takes no context and cannot be forcibly cancelled, so a
+// timed-out cleanup keeps running in its own goroutine (untracked by the
+// WaitGroup) after this deadline — only the *wait* is bounded, not the
+// underlying work. Set well above KillTmuxSessionByTitle's 5s cap (which
+// bounds a single subprocess call) because this timeout spans that same kill
+// plus git-diff and worktree cleanup on the same instance, which can
+// legitimately take longer on large repos under normal (non-hung) load.
+const deleteSessionCleanupTimeout = 30 * time.Second
 
 // destroyWithTimeout runs inst.Destroy() and waits up to timeout for it to
 // finish. If it doesn't finish in time, this returns a timeout error immediately
@@ -756,6 +797,12 @@ func (s *SessionService) Shutdown() {
 	if store := s.GetAnalyticsStore(); store != nil {
 		store.Stop()
 	}
+	// Stop accepting new tracked cleanup work before draining what's already
+	// tracked — see deleteCleanupClosed's doc comment for why this ordering
+	// (under deleteCleanupMu, before Wait) is what makes Add/Wait race-free.
+	s.deleteCleanupMu.Lock()
+	s.deleteCleanupClosed = true
+	s.deleteCleanupMu.Unlock()
 	// Await DeleteSession's background cleanup goroutines so they don't
 	// outlive this process (or, in tests, outlive the test that spawned them).
 	s.deleteCleanupWG.Wait()
@@ -2414,25 +2461,21 @@ func (s *SessionService) DeleteSession(
 	// tracked via deleteCleanupWG so Shutdown (and tests) can await them instead
 	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
-		s.deleteCleanupWG.Add(1)
-		go func() {
-			defer s.deleteCleanupWG.Done()
+		s.trackCleanup(func() {
 			if err := destroyWithTimeout(liveInst, deleteSessionCleanupTimeout); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
-		}()
+		})
 	} else {
 		// Instance is not in the live in-memory poller (e.g. the server restarted
 		// since this session was created). Fall back to killing the tmux session by
 		// its deterministic name so the Claude process inside it doesn't survive as
 		// an orphan after the DB record is gone.
-		s.deleteCleanupWG.Add(1)
-		go func() {
-			defer s.deleteCleanupWG.Done()
+		s.trackCleanup(func() {
 			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
-		}()
+		})
 	}
 
 	// Cancel any pending approvals BEFORE deleting from storage, so blocked

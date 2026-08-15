@@ -444,6 +444,36 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T)
 		before, after)
 }
 
+// TestShutdown_BlocksUntilTrackedCleanupCompletes proves Shutdown's blocking
+// contract directly: it tracks a cleanup goroutine that sleeps for a fixed
+// duration before recording completion, then asserts that completion is
+// already recorded by the time Shutdown returns. Unlike the goroutine-count
+// comparisons above (which pass identically whether or not Shutdown actually
+// blocks, since a fast-finishing goroutine looks the same either way — see
+// the deleteCleanupWG.Wait() removal check in git history for this repo's own
+// confirmation of that gap), this test fails if deleteCleanupWG.Wait() is
+// ever removed or short-circuited from Shutdown.
+func TestShutdown_BlocksUntilTrackedCleanupCompletes(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	var mu sync.Mutex
+	finished := false
+	svc.trackCleanup(func() {
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+
+	svc.Shutdown()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.True(t, finished, "Shutdown returned before the tracked cleanup goroutine finished")
+}
+
 // TestDeleteSession_StorageDeletedBeforeResponse verifies that storage is fully
 // committed before the RPC response is returned, so any immediate listSessions
 // call from a reconnecting client sees the session as gone. This is the core
