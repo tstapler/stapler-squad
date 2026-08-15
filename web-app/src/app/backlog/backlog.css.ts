@@ -252,8 +252,31 @@ export const tableHeaderCell = style({
   whiteSpace: "nowrap",
 });
 
+// Sortable header cells delegate padding/sizing to tableHeaderSortButton so the
+// entire cell stays clickable (not just the text) while the interactive
+// control is a real <button> nested inside the <th> — see the WAI-ARIA APG
+// "sortable table" pattern: aria-sort stays on the columnheader, and the
+// operable control is a child with button semantics so screen readers
+// announce it as clickable, not just as a column header.
 export const tableHeaderCellSortable = style({
+  padding: 0,
+});
+
+export const tableHeaderSortButton = style({
+  all: "unset",
+  boxSizing: "border-box",
+  display: "block",
+  width: "100%",
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
   cursor: "pointer",
+  fontFamily: "inherit",
+  fontSize: "inherit",
+  fontWeight: "inherit",
+  color: "inherit",
+  textTransform: "inherit",
+  letterSpacing: "inherit",
+  textAlign: "left",
+  whiteSpace: "inherit",
   selectors: {
     "&:focus-visible": {
       outline: `2px solid ${vars.color.primary}`,

@@ -814,32 +814,44 @@ function BacklogPageInner() {
                   <th
                     scope="col"
                     className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
-                    onClick={() => handleSortClick("title")}
-                    onKeyDown={(e) => handleHeaderKeyDown(e, "title")}
-                    tabIndex={0}
                     aria-sort={sortCol === "title" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Title{sortIndicator("title")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("title")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "title")}
+                    >
+                      Title{sortIndicator("title")}
+                    </button>
                   </th>
                   <th
                     scope="col"
                     className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
-                    onClick={() => handleSortClick("status")}
-                    onKeyDown={(e) => handleHeaderKeyDown(e, "status")}
-                    tabIndex={0}
                     aria-sort={sortCol === "status" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Status{sortIndicator("status")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("status")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "status")}
+                    >
+                      Status{sortIndicator("status")}
+                    </button>
                   </th>
                   <th
                     scope="col"
                     className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
-                    onClick={() => handleSortClick("priority")}
-                    onKeyDown={(e) => handleHeaderKeyDown(e, "priority")}
-                    tabIndex={0}
                     aria-sort={sortCol === "priority" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Priority{sortIndicator("priority")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("priority")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "priority")}
+                    >
+                      Priority{sortIndicator("priority")}
+                    </button>
                   </th>
                   <th scope="col" className={styles.tableHeaderCell}>
                     AC
@@ -847,23 +859,31 @@ function BacklogPageInner() {
                   <th
                     scope="col"
                     className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
-                    onClick={() => handleSortClick("updatedAt")}
-                    onKeyDown={(e) => handleHeaderKeyDown(e, "updatedAt")}
-                    tabIndex={0}
                     aria-sort={sortCol === "updatedAt" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Updated{sortIndicator("updatedAt")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("updatedAt")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "updatedAt")}
+                    >
+                      Updated{sortIndicator("updatedAt")}
+                    </button>
                   </th>
                   <th
                     scope="col"
                     className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
-                    onClick={() => handleSortClick("repoPath")}
-                    onKeyDown={(e) => handleHeaderKeyDown(e, "repoPath")}
-                    tabIndex={0}
                     aria-sort={sortCol === "repoPath" ? (sortAsc ? "ascending" : "descending") : "none"}
                     data-testid="backlog-col-repo-path"
                   >
-                    Repository{sortIndicator("repoPath")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("repoPath")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "repoPath")}
+                    >
+                      Repository{sortIndicator("repoPath")}
+                    </button>
                   </th>
                 </tr>
               </thead>
