@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { FileTree } from "@/components/sessions/FileTree";
 import { FileContentViewer } from "@/components/sessions/FileContentViewer";
 import { getApiBaseUrl } from "@/lib/config";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useSessionVcs } from "@/lib/hooks/useSessionVcs";
 import { buildGitStatusMap } from "@/lib/utils/gitStatus";
 import {
@@ -36,6 +37,7 @@ interface BacklogFileBrowserModalProps {
  */
 export function BacklogFileBrowserModal({ sessionId, sessionTitle, onClose }: BacklogFileBrowserModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, true);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const baseUrl = getApiBaseUrl();
 
@@ -57,10 +59,6 @@ export function BacklogFileBrowserModal({ sessionId, sessionTitle, onClose }: Ba
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [onClose]);
-
-  useEffect(() => {
-    modalRef.current?.focus();
-  }, []);
 
   if (typeof document === "undefined") return null;
 
