@@ -336,7 +336,12 @@ describe("getPrimaryCardAction", () => {
           repoPath: undefined,
         })
       );
-      expect(result).toEqual({ label: "Trigger Triage", action: "trigger_triage", disabled: true });
+      expect(result).toEqual({
+        label: "Trigger Triage",
+        action: "trigger_triage",
+        disabled: true,
+        disabledReason: "Set repository path first",
+      });
     });
 
     it("getPrimaryCardAction_should_ReturnApprovePlan_When_ReadyWithPlanPendingApproval", () => {
@@ -485,6 +490,7 @@ describe("getPrimaryCardAction", () => {
         label: "Mark Ready",
         action: "mark_ready",
         disabled: true,
+        disabledReason: "Add at least one AC criterion first",
       });
       expect(
         getPrimaryCardAction(
@@ -508,7 +514,12 @@ describe("getPrimaryCardAction", () => {
     it("in_progress: View Session, disabled without a linked session", () => {
       expect(
         getPrimaryCardAction(makeItem({ id: "a", status: "in_progress", linkedSessions: [] }))
-      ).toEqual({ label: "View Session", action: "view_session", disabled: true });
+      ).toEqual({
+        label: "View Session",
+        action: "view_session",
+        disabled: true,
+        disabledReason: "No linked session yet",
+      });
       expect(
         getPrimaryCardAction(
           makeItem({

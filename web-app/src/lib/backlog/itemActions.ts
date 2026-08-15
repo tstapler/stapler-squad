@@ -226,6 +226,7 @@ export interface PrimaryCardAction {
   label: string;
   action: string;
   disabled?: boolean;
+  disabledReason?: string;
   isDone?: boolean;
 }
 
@@ -259,6 +260,7 @@ export function getPrimaryCardAction(item: PrimaryCardActionInput): PrimaryCardA
         label: "Mark Ready",
         action: "mark_ready",
         disabled: item.acCriteria.length === 0,
+        disabledReason: item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined,
       };
     case "refining":
       return { label: "Refining…", action: "refining", isDone: true };
@@ -279,7 +281,12 @@ export function getPrimaryCardAction(item: PrimaryCardActionInput): PrimaryCardA
         return { label: "Spawn Session", action: "spawn_session" };
       }
       if (status === "ready") {
-        return { label: "Trigger Triage", action: "trigger_triage", disabled: !item.repoPath };
+        return {
+          label: "Trigger Triage",
+          action: "trigger_triage",
+          disabled: !item.repoPath,
+          disabledReason: !item.repoPath ? "Set repository path first" : undefined,
+        };
       }
       return { label: "Queued", action: "queued", isDone: true, disabled: true };
     }
@@ -288,6 +295,7 @@ export function getPrimaryCardAction(item: PrimaryCardActionInput): PrimaryCardA
         label: "View Session",
         action: "view_session",
         disabled: item.linkedSessions.length === 0,
+        disabledReason: item.linkedSessions.length === 0 ? "No linked session yet" : undefined,
       };
     case "review":
       // "view_review" is a deliberate BacklogActionId (see that type's
