@@ -1,0 +1,12 @@
+{
+  "id": "launcher_presets:get",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetLauncherPresets",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/launcher_presets_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-08-13T22:17:23.965685139-07:00"
+}
