@@ -15,13 +15,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite" // Pure Go SQLite driver
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 // TestReviewGateRunner_SkipReviewGate verifies that Run returns immediately
