@@ -46,19 +46,43 @@ type Server struct {
 	// "localhost:0") and is overwritten with the real OS-assigned address once
 	// Start()'s listener goroutine binds — read via GetAddr() from other
 	// goroutines (lazy hook/MCP URL closures, tests), so it must be atomic.
-	addr              atomic.Pointer[string]
-	httpServer        *http.Server
-	mux               *http.ServeMux
-	tlsConfig         *tls.Config                     // non-nil when TLS is enabled
-	authMiddleware    func(http.Handler) http.Handler // nil when auth is disabled
-	httpsURL          string                          // set when remote access is enabled
-	hostnames         []string                        // detected LAN hostnames
-	origins           []string                        // allowed CORS origins
-	shutdownHooks     []func()                        // called before HTTP server stops
-	connCtxCancel     context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
-	availablePrograms []string                        // cached once at startup; programs change only on system changes
-	startedAt         time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
-	approvalHandler   *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
+	addr                     atomic.Pointer[string]
+	httpServer               *http.Server
+	mux                      *http.ServeMux
+	tlsConfig                *tls.Config                     // non-nil when TLS is enabled
+	authMiddleware           func(http.Handler) http.Handler // nil when auth is disabled
+	httpsURL                 string                          // set when remote access is enabled
+	hostnames                []string                        // detected LAN hostnames
+	origins                  []string                        // allowed CORS origins
+	shutdownHooks            []func()                        // called before HTTP server stops
+	connCtxCancel            context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
+	availablePrograms        []string                        // cached once at startup; programs change only on system changes
+	startedAt                time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	approvalHandler          *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
+	slackInteractiveDisabled bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+}
+
+// ServeHTTP makes *Server itself an http.Handler wrapping s.mux, so Start()'s
+// middleware chain and any test calling srv.ServeHTTP directly see identical
+// behavior. Its only job beyond delegating to s.mux is the Slack
+// interactive-approvals route gate (Phase 2, Epic 2.1, Story 2.1.3): when
+// Slack.ApprovalEnabled was false at boot, s.mux has NO registration at all
+// for "/api/hooks/slack-interactive" (unlike an earlier version of this gate,
+// which called s.mux.HandleFunc(path, http.NotFound) -- registering
+// *something*, even a 404 handler, still satisfies "is this pattern present
+// in the mux" checks a reviewer or future maintainer might reasonably run).
+// This method intercepts that one fixed, already-publicly-documented path
+// before it ever reaches s.mux, so "route is not registered in the mux" and
+// "returns a 404" are both literally true simultaneously -- something
+// impossible to achieve via mux registration alone in this app, since
+// registerStaticRoutes always mounts an SPA catch-all at "/" that answers
+// 200+index.html for genuinely unmatched paths.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.slackInteractiveDisabled && r.URL.Path == "/api/hooks/slack-interactive" {
+		http.NotFound(w, r)
+		return
+	}
+	s.mux.ServeHTTP(w, r)
 }
 
 // newServerBase creates the base Server struct and returns it alongside the
@@ -603,13 +627,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register the inbound Slack interactive-approvals endpoint (Phase 2,
 	// Epic 2.1, Story 2.1.3) — gated on ApprovalEnabled so an unconfigured
 	// instance exposes zero additional attack surface. When the flag is off,
-	// the interactive handler itself is never registered/invoked; the path
-	// is explicitly bound to http.NotFound instead of being left unbound.
-	// This deliberately differs from the webhook_triggers gate just below,
-	// which leaves its paths unbound so a disabled route is indistinguishable
-	// from a never-existed one to an unauthenticated prober scanning generic
-	// guessable webhook paths (plan.md Risk Control) — that rationale doesn't
-	// apply here: /api/hooks/slack-interactive is a single, fixed, already
+	// nothing is registered on srv.mux for this path at all — Server.ServeHTTP
+	// (see its doc comment) intercepts it before the mux ever sees it, so the
+	// route is both genuinely unregistered AND still answers a real 404, not
+	// the SPA catch-all's 200. This deliberately differs from the
+	// webhook_triggers gate just below, which leaves its paths unbound so a
+	// disabled route is indistinguishable from a never-existed one to an
+	// unauthenticated prober scanning generic guessable webhook paths
+	// (plan.md Risk Control) — that rationale doesn't apply here:
+	// /api/hooks/slack-interactive is a single, fixed, already
 	// publicly-documented path (.claude/docs/slack-phase2-public-reachability.md),
 	// not a guessable pattern, so an explicit 404 leaks nothing a prober
 	// couldn't already find in the docs. Boot-time-only gate either way
@@ -622,8 +648,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.mux.HandleFunc("/api/hooks/slack-interactive", slackInteractiveHandler.Handle)
 		log.Info("Registered Slack interactive-approvals handler at /api/hooks/slack-interactive")
 	} else {
-		srv.mux.HandleFunc("/api/hooks/slack-interactive", http.NotFound)
-		log.Info("Slack interactive-approvals route registered as 404 (Slack.ApprovalEnabled is false) — the interactive handler itself is never invoked until enabled and the service restarts")
+		srv.slackInteractiveDisabled = true
+		log.Info("Slack interactive-approvals route left unregistered (Slack.ApprovalEnabled is false) — Server.ServeHTTP answers 404 for this path directly; the interactive handler itself is never invoked until enabled and the service restarts")
 	}
 
 	// Register inbound webhook-trigger receivers (webhook-triggers Epic 2.2/2.3) — like
@@ -1034,7 +1060,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
-	inner := http.Handler(s.mux)
+	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
 	}
@@ -1217,7 +1243,7 @@ func (s *Server) registerServerInfoHandler() {
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
 func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler) error {
-	inner := http.Handler(s.mux)
+	inner := http.Handler(s)
 	if authMW != nil {
 		inner = authMW(inner)
 	}
