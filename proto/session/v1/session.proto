@@ -2664,6 +2664,10 @@ message WorkflowProto {
   string prompt_template = 23;
   // Last time this trigger successfully fired a session. Unset if never fired.
   optional google.protobuf.Timestamp last_fired_at = 24;
+  // enabled is the generic per-trigger-type "is this trigger active" gate, read by
+  // both webhook handlers and written by TriggersPanel.tsx's toggle — distinct from
+  // cron_enabled, which is the literal cron-schedule flag only.
+  bool enabled = 25;
 }
 
 message CreateWorkflowRequest {
@@ -2702,6 +2706,10 @@ message CreateWorkflowRequest {
   // reject every delivery until one is set. Never echoed back by any RPC, matching
   // WorkflowProto.trigger_type's doc comment on webhook_secret_encrypted above.
   string webhook_secret = 21;
+  // enabled gates whether this trigger fires (see WorkflowProto.enabled). optional so
+  // an unset request defaults to the schema default (true), matching the create-time
+  // "enabled unless explicitly disabled" convention.
+  optional bool enabled = 22;
 }
 
 message CreateWorkflowResponse {
@@ -2743,6 +2751,14 @@ message UpdateWorkflowRequest {
   // never-cleared-implicitly fields). Only a non-empty value rotates the stored
   // secret. See CreateWorkflowRequest.webhook_secret's doc comment.
   string webhook_secret = 21;
+  // enabled gates whether this trigger fires (see WorkflowProto.enabled).
+  optional bool enabled = 22;
+  // Optimistic-concurrency precondition (CAS): when set, the update is rejected with
+  // CodeAborted unless the row's current updated_at exactly matches this value —
+  // mirrors ClaimChainFire's SQL-level CAS (ent_repository_backlog.go). Left unset,
+  // there is no precondition and the write always applies, preserving prior
+  // single-writer callers' behavior during rollout.
+  optional google.protobuf.Timestamp expected_updated_at = 23;
 }
 
 message UpdateWorkflowResponse {
