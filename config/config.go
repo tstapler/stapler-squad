@@ -918,10 +918,35 @@ func saveConfig(config *Config, paths ...string) error {
 	pathLock.Lock()
 	defer pathLock.Unlock()
 
-	// Write to a temp file in the same directory, then rename for atomicity.
-	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp config: %w", err)
+	// Write to a uniquely-named temp file in the same directory, then rename
+	// for atomicity. The name must be unique per call (os.CreateTemp's random
+	// suffix) rather than a fixed "config.json.tmp": two concurrent saveConfig
+	// calls targeting the same directory previously raced on that shared name,
+	// each truncating the other's in-progress write via O_TRUNC, corrupting the
+	// JSON, and racing os.Rename against a tmpPath the other had already moved.
+	// The pathLock above still serializes callers so the final rename order
+	// matches call order instead of being left to goroutine scheduling.
+	tmpFile, err := os.CreateTemp(filepath.Dir(configPath), filepath.Base(configPath)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp config file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	// os.CreateTemp creates the file 0600; match the previous os.WriteFile mode
+	// so the renamed config.json keeps its historical permissions.
+	chmodErr := tmpFile.Chmod(0644)
+	_, writeErr := tmpFile.Write(data)
+	closeErr := tmpFile.Close()
+	if chmodErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to chmod temp config: %w", chmodErr)
+	}
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", closeErr)
 	}
 	if err := os.Rename(tmpPath, configPath); err != nil {
 		_ = os.Remove(tmpPath) // best-effort cleanup

@@ -1785,9 +1785,10 @@ func (s *SessionService) CreateSession(
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
 	// Tracked via trackCleanup (not a bare `go func()`) so Shutdown blocks until this
 	// goroutine finishes — otherwise it can outlive the test that spawned it and touch a
-	// later test's STAPLER_SQUAD_TEST_DIR/tmux-exec-gate directory after that later test's
-	// t.TempDir() has already started tearing itself down (the cross-iteration
-	// "directory not empty" flake in TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
+	// later test's tempdirs/STAPLER_SQUAD_TEST_DIR/tmux-exec-gate directory after that
+	// later test's t.Cleanup has already torn them down, producing "sql: database is
+	// closed" errors and the cross-iteration "directory not empty" flake in
+	// TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent.
 	s.trackCleanup(func() {
 		// Wire callbacks before starting so rate-limit and status-change events fire.
 		s.wireCallbacks(instance)

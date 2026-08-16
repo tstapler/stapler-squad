@@ -242,6 +242,17 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			return
 		}
 
+		// inst.destroyed is set by Destroy() (session/instance.go). Checking it
+		// here bounds how long this goroutine can outlive its own instance's
+		// teardown to a single driverPollInterval tick, instead of continuing
+		// until totalDeadline and racing subsequent tmux/config calls
+		// (AcquireExecSlot's gateDir/LoadConfig, both keyed off the
+		// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
+		// or session happens to be using that env var's value next.
+		if inst.destroyed.Load() {
+			return
+		}
+
 		// GetEffectiveStatus for lifecycle decisions (Paused, Stopped).
 		// GetDetectedStatus for fine-grained terminal-content signals (Idle = readline prompt).
 		st := inst.GetEffectiveStatus()

@@ -433,6 +433,16 @@ type Instance struct {
 	// See JoinHibernation.
 	hibernateWG sync.WaitGroup
 
+	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
+	// its own teardown (session_driver.go's loop only self-terminates on a
+	// 25-minute wall-clock deadline or a detected terminal status, both of
+	// which can lag well behind Destroy() returning) notices on its very next
+	// driverPollInterval tick and exits immediately instead of continuing to
+	// call SendKeys/AcquireExecSlot against a torn-down session. Zero-value
+	// safe (false) so the many `&Instance{}` construction sites that bypass
+	// NewInstance need no changes.
+	destroyed atomic.Bool
+
 	// sessionGoal is the cached goal state for this session.
 	// Always use GetSessionGoal/SetSessionGoalCached accessors.
 	sessionGoal Locked[*SessionGoalData]
@@ -1397,6 +1407,11 @@ const destroyChainTimeout = 5 * time.Second
 // so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
 // ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
+	// Set first, before anything else: a leftover SessionDriver goroutine
+	// (session_driver.go) polls this every driverPollInterval and exits on
+	// seeing it, rather than continuing until its own 25-minute deadline.
+	i.destroyed.Store(true)
+
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
 
