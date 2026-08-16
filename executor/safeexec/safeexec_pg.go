@@ -7,6 +7,7 @@ package safeexec
 
 import (
 	"context"
+	"log/slog"
 	"os/exec"
 	"syscall"
 	"time"
@@ -21,7 +22,10 @@ import (
 // Process.Wait blocks forever regardless of the caller's context deadline
 // or WaitDelay. SIGKILL cannot be caught or blocked, so escalating to it
 // bounds that wait to sigkillGrace instead of indefinitely.
-const sigkillGrace = 5 * time.Second
+//
+// A package-level var (not a const) purely so tests can shorten it — see
+// safeexec_pg_test.go — without changing CommandContextPG's signature.
+var sigkillGrace = 5 * time.Second
 
 // CommandContextPG returns an exec.Cmd with WaitDelay pre-set AND Setpgid: true.
 //
@@ -51,11 +55,32 @@ func CommandContextPG(ctx context.Context, name string, arg ...string) *exec.Cmd
 	// past both the context deadline and WaitDelay. Killing the negative PID
 	// signals the whole process group instead of just the direct child.
 	cmd.Cancel = func() error {
-		pgid := -cmd.Process.Pid
-		err := syscall.Kill(pgid, syscall.SIGTERM)
-		time.AfterFunc(sigkillGrace, func() {
-			// ESRCH here just means the group already exited; ignore it.
-			_ = syscall.Kill(pgid, syscall.SIGKILL)
+		// Setpgid: true with no explicit Pgid makes the child its own group
+		// leader, so its pgid equals its pid; negating it below targets the
+		// whole group rather than just this one process.
+		leaderPid := cmd.Process.Pid
+		err := syscall.Kill(-leaderPid, syscall.SIGTERM)
+		slog.Debug("safeexec: sent SIGTERM to process group", "pgid", leaderPid, "err", err)
+		// Captured once here, not re-read from the package var inside the
+		// AfterFunc closure below: sigkillGrace is test-overridable (see its
+		// doc comment) and a test that restores it on cleanup while this
+		// timer is still pending would otherwise race with that write.
+		grace := sigkillGrace
+		time.AfterFunc(grace, func() {
+			killErr := syscall.Kill(-leaderPid, syscall.SIGKILL)
+			if killErr == syscall.ESRCH {
+				// The group already exited on its own within the grace
+				// period (the common/normal-exit path) — not an
+				// escalation, so no Warn log or counter increment.
+				return
+			}
+			sigkillEscalations.Add(context.Background(), 1)
+			slog.Warn("safeexec: process group ignored SIGTERM, escalated to SIGKILL",
+				"pgid", leaderPid,
+				"grace", grace,
+				"proc_state", procStateSnapshot(leaderPid),
+				"err", killErr,
+			)
 		})
 		return err
 	}
