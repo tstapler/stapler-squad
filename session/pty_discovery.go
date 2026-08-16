@@ -376,8 +376,9 @@ func (pd *PTYDiscovery) Stop() {
 	pd.stopOnce.Do(func() {
 		close(pd.stopCh)
 	})
-	// TEMP REVERT FOR REGRESSION VERIFICATION ONLY
-	_ = stopJoinTimeout
+	if !waitGroupWithTimeout(&pd.monitorWG, stopJoinTimeout) {
+		log.Warn("PTYDiscovery.Stop: monitorLoop did not exit within timeout; it may still be running", "timeout", stopJoinTimeout)
+	}
 }
 
 // waitGroupWithTimeout waits for wg to complete, returning true if it did so
