@@ -597,11 +597,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Register the inbound Slack interactive-approvals endpoint (Phase 2,
 	// Epic 2.1, Story 2.1.3) — gated on ApprovalEnabled so an unconfigured
-	// instance exposes zero additional attack surface: when the flag is off,
-	// srv.mux.HandleFunc is never called for this path at all, so the request
-	// falls through to the SPA catch-all route (middleware.StaticFileServer,
-	// see below) and gets a 200 + index.html, not a custom handler. Same
-	// boot-time-only limitation as the webhook_triggers gate just below
+	// instance exposes zero additional attack surface. When the flag is off,
+	// the interactive handler itself is never registered/invoked; the path
+	// is explicitly bound to http.NotFound instead of being left unbound.
+	// This deliberately differs from the webhook_triggers gate just below,
+	// which leaves its paths unbound so a disabled route is indistinguishable
+	// from a never-existed one to an unauthenticated prober scanning generic
+	// guessable webhook paths (plan.md Risk Control) — that rationale doesn't
+	// apply here: /api/hooks/slack-interactive is a single, fixed, already
+	// publicly-documented path (.claude/docs/slack-phase2-public-reachability.md),
+	// not a guessable pattern, so an explicit 404 leaks nothing a prober
+	// couldn't already find in the docs. Boot-time-only gate either way
 	// (flipping the flag requires a restart to take effect).
 	// SlackInteractiveHandler resolves the signing secret live from
 	// config.LoadConfig() on every request (see its constructor doc comment),
@@ -611,7 +617,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.mux.HandleFunc("/api/hooks/slack-interactive", slackInteractiveHandler.Handle)
 		log.Info("Registered Slack interactive-approvals handler at /api/hooks/slack-interactive")
 	} else {
-		log.Info("Slack interactive-approvals route NOT registered (Slack.ApprovalEnabled is false) — /api/hooks/slack-interactive falls through to the SPA catch-all (200 + index.html) instead of the interactive handler, until enabled and the service restarts")
+		srv.mux.HandleFunc("/api/hooks/slack-interactive", http.NotFound)
+		log.Info("Slack interactive-approvals route registered as 404 (Slack.ApprovalEnabled is false) — the interactive handler itself is never invoked until enabled and the service restarts")
 	}
 
 	// Register inbound webhook-trigger receivers (webhook-triggers Epic 2.2/2.3) — like

@@ -88,21 +88,15 @@ func TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignature
 
 // TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled is the REQ-21
 // error-path test (Story 2.1.3 AC): with ApprovalEnabled: false at boot, the
-// route is never registered via srv.mux.HandleFunc.
-//
-// This app's mux is not a bare http.ServeMux, though: registerStaticRoutes
-// (server.go) always mounts an SPA static-file catch-all at "/"
-// (middleware.StaticFileServer), which serves index.html with 200 for *any*
-// unmatched path -- true for every unregistered /api/* route in this app,
-// not something specific to this endpoint (confirmed by running this exact
-// test unmodified: it originally asserted http.StatusNotFound per the plan's
-// literal wording and failed with "expected: 404, actual: 200"). So "the
-// standard mux 'not registered' response" for this app *is* the SPA
-// fallback, not a bare net/http 404. What this test asserts instead is the
-// property that actually matters for REQ-21: SlackInteractiveHandler.Handle
-// never runs when the flag is off -- proven by (a) the response being the
-// SPA fallback (text/html), not the handler's own plain-text bodies, and (b)
-// a pending approval targeted by a validly-formed request is left untouched.
+// interactive handler is never registered -- the path is explicitly bound to
+// http.NotFound instead (server.go), so the request genuinely 404s rather
+// than falling through to this app's SPA static-file catch-all (which would
+// otherwise serve index.html with 200 for any unmatched path -- confirmed by
+// an earlier version of this test that asserted 200 before the explicit
+// http.NotFound binding was added). This also proves the property that
+// actually matters for REQ-21: SlackInteractiveHandler.Handle never runs when
+// the flag is off -- a pending approval targeted by a validly-formed request
+// is left untouched.
 func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 	setSlackInteractiveTestConfig(t, false)
 
@@ -131,8 +125,7 @@ func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code, "unregistered path falls through to the SPA catch-all, which always answers 200")
-	assert.Contains(t, w.Header().Get("Content-Type"), "text/html", "expected the SPA index.html fallback, not a response from SlackInteractiveHandler")
+	assert.Equal(t, http.StatusNotFound, w.Code, "disabled route is explicitly bound to http.NotFound, not left to fall through to the SPA catch-all")
 
 	_, stillPending := approvalStore.Get("appr-int-2")
 	assert.True(t, stillPending, "expected the approval to be untouched -- the interactive handler must never run when the route isn't registered")
