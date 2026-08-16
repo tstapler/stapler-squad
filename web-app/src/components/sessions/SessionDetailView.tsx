@@ -461,6 +461,12 @@ export function SessionDetailView({
     setFilesSelectedPath(null);
   }, [session.id]);
   const [showWorkspaceSwitchModal, setShowWorkspaceSwitchModal] = useState(false);
+  // The action sheet's own opener buttons unmount when the sheet closes, so
+  // any modal launched from the sheet restores focus to the persistent
+  // "More actions" button instead of the transient sheet item.
+  const moreActionsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const workspaceSwitchTriggerRef = useRef<HTMLElement | null>(null);
+  const tagEditorTriggerRef = useRef<HTMLElement | null>(null);
   const availablePrograms = useAvailablePrograms();
   const [isEditingProgram, setIsEditingProgram] = useState(false);
   const [programValue, setProgramValue] = useState(session.program || "");
@@ -474,6 +480,7 @@ export function SessionDetailView({
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showResumeModal, setShowResumeModal] = useState(false);
+  const resumeTriggerRef = useRef<HTMLElement | null>(null);
   // Rename state
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [renameValue, setRenameValue] = useState(session.title);
@@ -675,8 +682,14 @@ export function SessionDetailView({
   };
 
   // Action sheet handlers
-  const handlePauseResume = async () => {
+  const handlePauseResume = async (triggerEl: HTMLElement) => {
     if (session.status === SessionStatus.PAUSED) {
+      // The action sheet's own opener buttons unmount when the sheet closes, so
+      // fall back to the persistent "More actions" button in that case (see
+      // tagEditorTriggerRef/workspaceSwitchTriggerRef below for the same pattern).
+      resumeTriggerRef.current = actionSheetOpen
+        ? moreActionsButtonRef.current
+        : triggerEl;
       setActionSheetOpen(false);
       setShowResumeModal(true);
     } else {
@@ -802,7 +815,10 @@ export function SessionDetailView({
           {session.instanceType !== InstanceType.EXTERNAL && (
             <button
               className={styles.switchWorkspaceButton}
-              onClick={() => setShowWorkspaceSwitchModal(true)}
+              onClick={(event) => {
+                workspaceSwitchTriggerRef.current = event.currentTarget;
+                setShowWorkspaceSwitchModal(true);
+              }}
               aria-label="Switch workspace"
               title="Switch branch, bookmark, or worktree"
             >
@@ -811,6 +827,7 @@ export function SessionDetailView({
           )}
           {/* More actions — opens action sheet */}
           <button
+            ref={moreActionsButtonRef}
             className={styles.moreActionsButton}
             onClick={() => setActionSheetOpen(true)}
             aria-label="Session actions"
@@ -1017,7 +1034,7 @@ export function SessionDetailView({
                       className={pausedOverlayButton}
                       onClick={(e) => {
                         e.stopPropagation();
-                        handlePauseResume();
+                        handlePauseResume(e.currentTarget);
                       }}
                       aria-label="Resume this session"
                     >
@@ -1625,6 +1642,7 @@ export function SessionDetailView({
             // The session will be updated via the event bus
             setShowWorkspaceSwitchModal(false);
           }}
+          triggerRef={workspaceSwitchTriggerRef}
         />
       )}
 
@@ -1637,7 +1655,7 @@ export function SessionDetailView({
             {session.instanceType !== InstanceType.EXTERNAL && (
               <button
                 className={styles.actionSheetItem}
-                onClick={handlePauseResume}
+                onClick={(e) => handlePauseResume(e.currentTarget)}
                 data-testid="action-pause"
               >
                 {session.status === SessionStatus.PAUSED ? '▶ Resume' : '⏸ Pause'}
@@ -1652,7 +1670,11 @@ export function SessionDetailView({
             </button>
             <button
               className={styles.actionSheetItem}
-              onClick={() => { setActionSheetOpen(false); setShowTagEditor(true); }}
+              onClick={() => {
+                setActionSheetOpen(false);
+                tagEditorTriggerRef.current = moreActionsButtonRef.current;
+                setShowTagEditor(true);
+              }}
               data-testid="action-edit-tags"
             >
               🏷 Edit Tags
@@ -1670,7 +1692,11 @@ export function SessionDetailView({
             {session.instanceType !== InstanceType.EXTERNAL && (
               <button
                 className={styles.actionSheetItem}
-                onClick={() => { setActionSheetOpen(false); setShowWorkspaceSwitchModal(true); }}
+                onClick={() => {
+                  setActionSheetOpen(false);
+                  workspaceSwitchTriggerRef.current = moreActionsButtonRef.current;
+                  setShowWorkspaceSwitchModal(true);
+                }}
               >
                 ⎇ Switch Workspace
               </button>
@@ -1823,6 +1849,7 @@ export function SessionDetailView({
           sessionTitle={session.title}
           onSave={(tags) => { actions.updateTags(tags); setShowTagEditor(false); }}
           onCancel={() => setShowTagEditor(false)}
+          triggerRef={tagEditorTriggerRef}
         />
       )}
 
@@ -1836,6 +1863,7 @@ export function SessionDetailView({
             setShowResumeModal(false);
           }}
           onCancel={() => setShowResumeModal(false)}
+          triggerRef={resumeTriggerRef}
         />
       )}
     </div>
