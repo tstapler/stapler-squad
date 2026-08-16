@@ -195,14 +195,12 @@ function InsightsDashboardInner() {
                   <TopNTable
                     title="Top Skills"
                     entries={summary.topSkills}
-                    valueLabel="Tokens"
                   />
                 )}
                 {summary.topTools.length > 0 && (
                   <TopNTable
                     title="Top Tools"
                     entries={summary.topTools}
-                    valueLabel="Tokens"
                   />
                 )}
               </div>

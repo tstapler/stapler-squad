@@ -28,6 +28,7 @@ import {
   virtualContainer,
   clickableRow,
   sortableTh,
+  sortOrderHint,
 } from "./SessionsTable.css";
 import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
 
@@ -232,7 +233,9 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
         <td className={td} title={s.projectPath}>{pathBasename(s.projectPath) || "—"}</td>
         <td className={tdRight}>{fmtTokens(s.totalInputTokens)}</td>
         <td className={tdRight}>{fmtTokens(s.totalOutputTokens)}</td>
-        <td className={tdRight}>{fmtPct(s.cacheHitRate)}</td>
+        <td className={tdRight} title={`${fmtTokens(s.cacheReadTokens)} read, ${fmtTokens(s.cacheCreationTokens)} written`}>
+          {fmtPct(s.cacheHitRate)}
+        </td>
         <td className={tdRight}>
           {fmtCost(s.estimatedCostUsd)}
           {s.unpricedModels.length > 0 && <span className={unpricedBadge}>unpriced</span>}
@@ -245,7 +248,10 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     Table: ({ style: s, ...props }: React.ComponentPropsWithRef<"table">) => (
       <table className={table} style={s} {...props} />
     ),
-    TableHead: (props: React.ComponentPropsWithRef<"thead">) => <thead {...props} />,
+    // eslint-disable-next-line react/display-name
+    TableHead: React.forwardRef<HTMLTableSectionElement, React.ComponentPropsWithRef<"thead">>(
+      (props, ref) => <thead ref={ref} {...props} />
+    ),
     // eslint-disable-next-line react/display-name
     TableBody: React.forwardRef<HTMLTableSectionElement, React.ComponentPropsWithRef<"tbody">>(
       (props, ref) => <tbody ref={ref} {...props} />
@@ -254,6 +260,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
       const s = displayed[dataIndex];
       return (
         <tr
+          data-index={dataIndex}
           {...props}
           className={onSessionClick ? clickableRow : undefined}
           onClick={onSessionClick && s ? () => onSessionClick(s) : undefined}
@@ -272,7 +279,12 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
   return (
     <div className={tableCard}>
       <div className={tableHeader}>
-        <div className={tableTitle}>{titleText}</div>
+        <div className={tableTitle}>
+          {titleText}
+          {sortCol === null && (
+            <span className={sortOrderHint}> — sorted by most recently active</span>
+          )}
+        </div>
         <div className={filterBar}>
           <input
             type="search"
