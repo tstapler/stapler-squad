@@ -32,6 +32,7 @@ otlp_config:
 - All ConnectRPC endpoints (via otelconnect interceptor)
 - History cache operations (cache hit/miss, load duration)
 - Search engine operations (sync, search duration, result count)
+- `safeexec.sigkill_escalations` (counter) — increments once per confirmed SIGKILL escalation in `CommandContextPG` (i.e. the process group ignored SIGTERM within `sigkillGrace`); not incremented on ESRCH/already-exited
 
 ## Trace Attributes
 

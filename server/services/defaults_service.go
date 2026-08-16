@@ -129,6 +129,9 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.NewProjectBaseDir = req.Msg.NewProjectBaseDir
 	cfg.MaxAutoReworkIterations = int(req.Msg.MaxAutoReworkIterations)
 	cfg.MaxConcurrentBacklogWorkItems = int(req.Msg.MaxConcurrentBacklogWorkItems)
+	cfg.StaleSession.ThresholdMinutes = int(req.Msg.StaleSessionThresholdMinutes)
+	notifyEnabled := req.Msg.StaleSessionNotifyEnabled
+	cfg.StaleSession.NotifyEnabled = &notifyEnabled
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars
 	} else {
@@ -506,6 +509,8 @@ func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig
 		OneOffBaseDir:                 cfg.OneOffBaseDir,
 		MaxAutoReworkIterations:       int32(cfg.MaxAutoReworkIterationsOrDefault()),
 		MaxConcurrentBacklogWorkItems: int32(cfg.MaxConcurrentBacklogWorkItemsOrDefault()),
+		StaleSessionThresholdMinutes:  int32(cfg.StaleSession.ThresholdMinutesOrDefault()),
+		StaleSessionNotifyEnabled:     cfg.StaleSession.NotifyEnabledOrDefault(),
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
 	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {

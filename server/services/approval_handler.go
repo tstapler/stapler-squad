@@ -331,6 +331,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 						classCtx.CIStatus = ""
 					}
 				}
+				// Independent of PR/CI state — populate whenever a live instance is
+				// found so MinSessionIdleMinutes rules can evaluate. Left at the Go
+				// zero value (0) when no live instance is found (fail-closed contract,
+				// see ClassificationContext.SessionIdleMinutes's doc comment).
+				classCtx.SessionIdleMinutes = int(inst.GetTimeSinceLastMeaningfulOutput().Minutes())
 			}
 		}
 		result := h.classifier.Classify(payload, classCtx)
