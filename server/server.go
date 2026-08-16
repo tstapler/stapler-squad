@@ -557,6 +557,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// deps.SlackNotifier constructed and wired into ReactiveQueueMgr, so
 	// GetDeliveryStatus() reflects sends from both trigger points.
 	approvalHandler.SetSlackNotifier(deps.SlackNotifier)
+	// Wire the same shared instance into SessionService's SlackConfigService so
+	// GetSlackConfig's last_delivery reflects real review-queue/approval sends,
+	// not just TestSlackWebhook calls against SessionService's own private notifier.
+	deps.SessionService.SetSlackNotifier(deps.SlackNotifier)
 	// Wire the notification stamper so approval outcomes persist across page refreshes
 	if notifStore != nil {
 		approvalHandler.SetNotificationStamper(notifStore)
