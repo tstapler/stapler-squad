@@ -76,6 +76,10 @@ func ScanZombies() ([]ZombieInfo, error) {
 // appear after the baseline (i.e. growth over time) are recorded and counted toward the
 // alert threshold. This prevents a burst of spurious critical alerts on service restart
 // when a stable set of zombie children already exists.
+// Audited 2026-08-15 for the same signal-vs-join gap fixed in PTYDiscovery.Stop()
+// (session/pty_discovery.go): see the note on StartForkPressureLogger in
+// fork_metrics.go — same pattern, same conclusion (production-only, doesn't touch
+// gateDir()/STAPLER_SQUAD_TEST_DIR, follow-up filed rather than fixed here).
 func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any)) {
 	go func() {
 		ticker := time.NewTicker(interval)

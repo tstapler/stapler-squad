@@ -166,6 +166,16 @@ func ForkPressureSnapshot() ForkPressureStats {
 }
 
 // StartForkPressureLogger starts a background goroutine that logs fork pressure stats periodically.
+//
+// Audited 2026-08-15 for the same signal-vs-join gap fixed in PTYDiscovery.Stop()
+// (session/pty_discovery.go): this goroutine is signaled via ctx.Done() but never
+// joined by server.Server.Shutdown(). It reads only in-memory ring buffers — it
+// never touches gateDir()/TryAcquireExecSlot or STAPLER_SQUAD_TEST_DIR-derived
+// paths — and is only started from server.go with the long-lived serverCtx, never
+// from a test's per-test setup, so it cannot reproduce the exec-gate TempDir race
+// this fix targets. Adding a real join belongs in server.Shutdown() alongside the
+// other two goroutines below and is filed as a follow-up rather than fixed here to
+// avoid expanding this change's blast radius into process shutdown ordering.
 func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any)) {
 	go func() {
 		ticker := time.NewTicker(interval)
