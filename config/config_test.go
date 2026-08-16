@@ -945,3 +945,71 @@ func TestIsIsolatedInstance_should_ReturnTrue_When_NamedInstanceSet(t *testing.T
 
 	assert.True(t, IsIsolatedInstance())
 }
+
+// ─── SlackConfig ────────────────────────────────────────────────────────────
+
+// TestLoadConfig_SlackConfig_DefaultsToZeroValue_When_NoSlackKeyPresent verifies
+// REQ-1's happy path: a config.json predating the Slack feature (no "slack" key)
+// loads to a zero-value SlackConfig, not an error.
+func TestLoadConfig_SlackConfig_DefaultsToZeroValue_When_NoSlackKeyPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, SlackConfig{}, cfg.Slack)
+}
+
+// TestLoadConfig_SlackConfig_PopulatesFields_When_SlackKeyPresent verifies REQ-1:
+// a stored "slack" block populates the corresponding SlackConfig fields.
+func TestLoadConfig_SlackConfig_PopulatesFields_When_SlackKeyPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"slack": {"notify_on_queue_item": true, "queue_depth_threshold": 5}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.Slack.NotifyOnQueueItem)
+	assert.Equal(t, 5, cfg.Slack.QueueDepthThreshold)
+}
+
+// TestLoadConfig_SlackEnvOverride_TakesPrecedenceOverStoredValue verifies REQ-2:
+// SLACK_WEBHOOK_URL, when set, wins over a stored (ciphertext) value —
+// mirroring ANTHROPIC_API_KEY's env-override precedence, per ADR-001.
+func TestLoadConfig_SlackEnvOverride_TakesPrecedenceOverStoredValue(t *testing.T) {
+	t.Setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/TEST")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"slack": {"webhook_url_encrypted": "dummy-ciphertext"}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, "https://hooks.slack.com/services/T0/B0/TEST", cfg.SlackWebhookURLOverride())
+	// The stored ciphertext is left untouched by the env override.
+	assert.Equal(t, "dummy-ciphertext", cfg.Slack.WebhookURLEncrypted)
+}
+
+// TestSlackWebhookURLOverride_ReturnsEmptyString_When_EnvVarUnset verifies REQ-2's
+// edge path: with no SLACK_WEBHOOK_URL in the environment, the override getter
+// returns "" rather than some stale/default value.
+func TestSlackWebhookURLOverride_ReturnsEmptyString_When_EnvVarUnset(t *testing.T) {
+	original, wasSet := os.LookupEnv("SLACK_WEBHOOK_URL")
+	os.Unsetenv("SLACK_WEBHOOK_URL")
+	defer func() {
+		if wasSet {
+			os.Setenv("SLACK_WEBHOOK_URL", original)
+		}
+	}()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, "", cfg.SlackWebhookURLOverride())
+}

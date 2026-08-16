@@ -236,6 +236,14 @@ type Config struct {
 	// ClaimantHostID) against concurrent first-callers racing to generate and
 	// persist their own value — see GetOrCreateEncryptionKey/GetOrCreateClaimantHostID.
 	lazyMu sync.Mutex
+	// slackWebhookURLOverride holds the SLACK_WEBHOOK_URL env var value, if
+	// set at load time. Never persisted to config.json — see ADR-001. Not
+	// serialized since the field is unexported; read via SlackWebhookURLOverride().
+	slackWebhookURLOverride string
+	// slackSigningSecretOverride holds the SLACK_SIGNING_SECRET env var value,
+	// if set at load time. Never persisted to config.json — see ADR-001. Not
+	// serialized since the field is unexported; read via SlackSigningSecretOverride().
+	slackSigningSecretOverride string
 	// ListenAddress is the address the HTTP server listens on.
 	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
 	ListenAddress string `json:"listen_address"`
@@ -367,6 +375,9 @@ type Config struct {
 	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
 	// queue-item-created lifecycle events.
 	Callbacks CallbackConfig `json:"callbacks,omitempty"`
+	// Slack holds configuration for the Slack review-queue notification
+	// feature. Secret fields are ciphertext only — see ADR-001.
+	Slack SlackConfig `json:"slack,omitempty"`
 
 	// Escape analytics configuration
 
@@ -507,6 +518,12 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
+	}
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		cfg.slackWebhookURLOverride = v
+	}
+	if v := os.Getenv("SLACK_SIGNING_SECRET"); v != "" {
+		cfg.slackSigningSecretOverride = v
 	}
 	return cfg
 }
@@ -970,6 +987,12 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
 	}
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		cfg.slackWebhookURLOverride = v
+	}
+	if v := os.Getenv("SLACK_SIGNING_SECRET"); v != "" {
+		cfg.slackSigningSecretOverride = v
+	}
 
 	return &cfg, nil
 }
@@ -1086,6 +1109,22 @@ func (c *Config) GetOrCreateClaimantHostID() (string, error) {
 	}
 
 	return c.ClaimantHostID, nil
+}
+
+// SlackWebhookURLOverride returns the SLACK_WEBHOOK_URL environment variable
+// value captured at load time, or "" if it was unset. Exported because
+// server/services (which resolves the effective Slack webhook URL per
+// ADR-001: env override first, else decrypt the stored ciphertext) cannot
+// read the unexported slackWebhookURLOverride field directly.
+func (c *Config) SlackWebhookURLOverride() string {
+	return c.slackWebhookURLOverride
+}
+
+// SlackSigningSecretOverride returns the SLACK_SIGNING_SECRET environment
+// variable value captured at load time, or "" if it was unset. See
+// SlackWebhookURLOverride for why this getter exists.
+func (c *Config) SlackSigningSecretOverride() string {
+	return c.slackSigningSecretOverride
 }
 
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.

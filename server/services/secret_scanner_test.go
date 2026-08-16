@@ -97,6 +97,11 @@ func TestScanForSecrets_TruePositives(t *testing.T) {
 			cmd:         `myapp --password=mysecretpassword123`,
 			wantPattern: "Inline secret env var",
 		},
+		{
+			name:        "Slack Incoming Webhook URL",
+			cmd:         `curl -X POST -H 'Content-type: application/json' --data '{"text":"hi"}' https://hooks.slack.com/services/T0/B0/XXXXXXXXXXXXXXXXXXXXXXXX`,
+			wantPattern: "Slack Incoming Webhook URL",
+		},
 	}
 
 	for _, tc := range secretCommands {
