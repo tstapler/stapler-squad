@@ -966,6 +966,8 @@ type ApprovalRuleMutation struct {
 	appendpython_modes           []string
 	safe_python_imports_only     *bool
 	require_ci_passing           *bool
+	min_session_idle_minutes     *int32
+	addmin_session_idle_minutes  *int32
 	clearedFields                map[string]struct{}
 	done                         bool
 	oldValue                     func(context.Context) (*ApprovalRule, error)
@@ -2324,6 +2326,76 @@ func (m *ApprovalRuleMutation) ResetRequireCiPassing() {
 	m.require_ci_passing = nil
 }
 
+// SetMinSessionIdleMinutes sets the "min_session_idle_minutes" field.
+func (m *ApprovalRuleMutation) SetMinSessionIdleMinutes(i int32) {
+	m.min_session_idle_minutes = &i
+	m.addmin_session_idle_minutes = nil
+}
+
+// MinSessionIdleMinutes returns the value of the "min_session_idle_minutes" field in the mutation.
+func (m *ApprovalRuleMutation) MinSessionIdleMinutes() (r int32, exists bool) {
+	v := m.min_session_idle_minutes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMinSessionIdleMinutes returns the old "min_session_idle_minutes" field's value of the ApprovalRule entity.
+// If the ApprovalRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ApprovalRuleMutation) OldMinSessionIdleMinutes(ctx context.Context) (v int32, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMinSessionIdleMinutes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMinSessionIdleMinutes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMinSessionIdleMinutes: %w", err)
+	}
+	return oldValue.MinSessionIdleMinutes, nil
+}
+
+// AddMinSessionIdleMinutes adds i to the "min_session_idle_minutes" field.
+func (m *ApprovalRuleMutation) AddMinSessionIdleMinutes(i int32) {
+	if m.addmin_session_idle_minutes != nil {
+		*m.addmin_session_idle_minutes += i
+	} else {
+		m.addmin_session_idle_minutes = &i
+	}
+}
+
+// AddedMinSessionIdleMinutes returns the value that was added to the "min_session_idle_minutes" field in this mutation.
+func (m *ApprovalRuleMutation) AddedMinSessionIdleMinutes() (r int32, exists bool) {
+	v := m.addmin_session_idle_minutes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearMinSessionIdleMinutes clears the value of the "min_session_idle_minutes" field.
+func (m *ApprovalRuleMutation) ClearMinSessionIdleMinutes() {
+	m.min_session_idle_minutes = nil
+	m.addmin_session_idle_minutes = nil
+	m.clearedFields[approvalrule.FieldMinSessionIdleMinutes] = struct{}{}
+}
+
+// MinSessionIdleMinutesCleared returns if the "min_session_idle_minutes" field was cleared in this mutation.
+func (m *ApprovalRuleMutation) MinSessionIdleMinutesCleared() bool {
+	_, ok := m.clearedFields[approvalrule.FieldMinSessionIdleMinutes]
+	return ok
+}
+
+// ResetMinSessionIdleMinutes resets all changes to the "min_session_idle_minutes" field.
+func (m *ApprovalRuleMutation) ResetMinSessionIdleMinutes() {
+	m.min_session_idle_minutes = nil
+	m.addmin_session_idle_minutes = nil
+	delete(m.clearedFields, approvalrule.FieldMinSessionIdleMinutes)
+}
+
 // Where appends a list predicates to the ApprovalRuleMutation builder.
 func (m *ApprovalRuleMutation) Where(ps ...predicate.ApprovalRule) {
 	m.predicates = append(m.predicates, ps...)
@@ -2358,7 +2430,7 @@ func (m *ApprovalRuleMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ApprovalRuleMutation) Fields() []string {
-	fields := make([]string, 0, 25)
+	fields := make([]string, 0, 26)
 	if m.rule_id != nil {
 		fields = append(fields, approvalrule.FieldRuleID)
 	}
@@ -2434,6 +2506,9 @@ func (m *ApprovalRuleMutation) Fields() []string {
 	if m.require_ci_passing != nil {
 		fields = append(fields, approvalrule.FieldRequireCiPassing)
 	}
+	if m.min_session_idle_minutes != nil {
+		fields = append(fields, approvalrule.FieldMinSessionIdleMinutes)
+	}
 	return fields
 }
 
@@ -2492,6 +2567,8 @@ func (m *ApprovalRuleMutation) Field(name string) (ent.Value, bool) {
 		return m.SafePythonImportsOnly()
 	case approvalrule.FieldRequireCiPassing:
 		return m.RequireCiPassing()
+	case approvalrule.FieldMinSessionIdleMinutes:
+		return m.MinSessionIdleMinutes()
 	}
 	return nil, false
 }
@@ -2551,6 +2628,8 @@ func (m *ApprovalRuleMutation) OldField(ctx context.Context, name string) (ent.V
 		return m.OldSafePythonImportsOnly(ctx)
 	case approvalrule.FieldRequireCiPassing:
 		return m.OldRequireCiPassing(ctx)
+	case approvalrule.FieldMinSessionIdleMinutes:
+		return m.OldMinSessionIdleMinutes(ctx)
 	}
 	return nil, fmt.Errorf("unknown ApprovalRule field %s", name)
 }
@@ -2735,6 +2814,13 @@ func (m *ApprovalRuleMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetRequireCiPassing(v)
 		return nil
+	case approvalrule.FieldMinSessionIdleMinutes:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMinSessionIdleMinutes(v)
+		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule field %s", name)
 }
@@ -2752,6 +2838,9 @@ func (m *ApprovalRuleMutation) AddedFields() []string {
 	if m.addpriority != nil {
 		fields = append(fields, approvalrule.FieldPriority)
 	}
+	if m.addmin_session_idle_minutes != nil {
+		fields = append(fields, approvalrule.FieldMinSessionIdleMinutes)
+	}
 	return fields
 }
 
@@ -2766,6 +2855,8 @@ func (m *ApprovalRuleMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedRiskLevel()
 	case approvalrule.FieldPriority:
 		return m.AddedPriority()
+	case approvalrule.FieldMinSessionIdleMinutes:
+		return m.AddedMinSessionIdleMinutes()
 	}
 	return nil, false
 }
@@ -2795,6 +2886,13 @@ func (m *ApprovalRuleMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPriority(v)
+		return nil
+	case approvalrule.FieldMinSessionIdleMinutes:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMinSessionIdleMinutes(v)
 		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule numeric field %s", name)
@@ -2845,6 +2943,9 @@ func (m *ApprovalRuleMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(approvalrule.FieldPythonModes) {
 		fields = append(fields, approvalrule.FieldPythonModes)
+	}
+	if m.FieldCleared(approvalrule.FieldMinSessionIdleMinutes) {
+		fields = append(fields, approvalrule.FieldMinSessionIdleMinutes)
 	}
 	return fields
 }
@@ -2901,6 +3002,9 @@ func (m *ApprovalRuleMutation) ClearField(name string) error {
 		return nil
 	case approvalrule.FieldPythonModes:
 		m.ClearPythonModes()
+		return nil
+	case approvalrule.FieldMinSessionIdleMinutes:
+		m.ClearMinSessionIdleMinutes()
 		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule nullable field %s", name)
@@ -2984,6 +3088,9 @@ func (m *ApprovalRuleMutation) ResetField(name string) error {
 		return nil
 	case approvalrule.FieldRequireCiPassing:
 		m.ResetRequireCiPassing()
+		return nil
+	case approvalrule.FieldMinSessionIdleMinutes:
+		m.ResetMinSessionIdleMinutes()
 		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule field %s", name)

@@ -408,6 +408,11 @@ type Instance struct {
 	// commands through the mailbox without holding any other lock.
 	liveInstance atomic.Pointer[LiveInstance]
 
+	// promptFilePath tracks the most recently created temp-file-backed launch
+	// prompt (see promptArg), so Destroy can remove it immediately instead of
+	// relying solely on promptFileCleanupDelay's background timer.
+	promptFilePath atomic.Pointer[string]
+
 	// mu protects Instance's mutable data fields (Status, started, Tags,
 	// Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts, etc.).
 	// Use sendSyncErr / send for writes and Snapshot() for reads.
@@ -1367,12 +1372,25 @@ func (i *Instance) Kill() error {
 	return i.Destroy()
 }
 
+// destroyChainTimeout bounds Destroy()'s stopVNC/stopCDP/KillSession/
+// CleanupWorktree chain so a hung subsystem (e.g. a wedged x11vnc/CDP
+// process, or a git worktree removal stuck on a locked index) can't block
+// Destroy() indefinitely. KillSession's own tmux subprocess is already
+// independently bounded by killSessionTimeout in session/tmux/tmux.go — this
+// is the equivalent cap on the chain as a whole, matching that same 5s value
+// so no single Destroy() caller (e.g. SessionService.DeleteSession's
+// trackCleanup goroutine) can wait longer than the tmux-kill path already
+// tolerates. The chain keeps running in its goroutine after the timeout
+// fires — this bounds the wait, not the work.
+const destroyChainTimeout = 5 * time.Second
+
 // Destroy completely destroys the instance - both tmux session and worktree.
 // Fires EventStopped unconditionally (even if the instance was never started)
 // so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
 // ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
+	defer i.cleanupPromptFile()
 
 	if !i.started.Load() {
 		// If instance was never started, just return success
@@ -1382,6 +1400,22 @@ func (i *Instance) Destroy() error {
 	// Stop the controller first
 	i.StopController()
 
+	done := make(chan error, 1)
+	go func() {
+		done <- i.destroyChain()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(destroyChainTimeout):
+		return fmt.Errorf("timed out after %s waiting for session %q cleanup chain (stopVNC/stopCDP/KillSession/CleanupWorktree) to finish (still running in background)", destroyChainTimeout, i.Title)
+	}
+}
+
+// destroyChain runs the actual stopVNC/stopCDP/KillSession/CleanupWorktree
+// teardown sequence. Split out of Destroy() so it can be bounded by
+// destroyChainTimeout without losing track of the goroutine it runs in.
+func (i *Instance) destroyChain() error {
 	// Stop VNC before killing tmux (x11vnc must stop before Xvfb).
 	i.stopVNC()
 	// Stop CDP screencast goroutines and clean up wrapper scripts.

@@ -1169,7 +1169,18 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// reached via its timedOut fallback once driverReadyTimeout (30s)
 	// elapses — the deadline below must clear that, not just the dialog
 	// latch's own ~6s give-up window.
-	deadline := time.After(driverReadyTimeout + driverPollInterval*3 + time.Second)
+	//
+	// The extra driverReadyTimeout term (doubling the base budget) is
+	// deliberate slack, not just the ~6s dialog-latch window plus a token
+	// second: this goroutine genuinely blocks on the real 30s
+	// driverReadyTimeout wall-clock wait, so under `go test -race -p 1` for
+	// the full suite (thousands of tests, heavy scheduler/CPU contention)
+	// that wait alone can occasionally overrun a razor-thin margin — this
+	// test was seen to pass in 34s of a 37s budget in an isolated run, a
+	// margin that intermittently failed when run alongside the rest of the
+	// package under -race. Widening the margin (not retrying) is the fix,
+	// since the 30s block is inherent to the code path under test.
+	deadline := time.After(2*driverReadyTimeout + driverPollInterval*3 + time.Second)
 	for fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
 		select {
 		case <-deadline:

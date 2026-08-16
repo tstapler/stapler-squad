@@ -31,10 +31,23 @@ export const countRegion = style({
   fontWeight: 500,
 });
 
+// Horizontal scroll strip (matches LevelFilterChips.css.ts) rather than
+// flexWrap — with 19+ category chips, flexWrap depends on every ancestor
+// flex box correctly shrinking to viewport width, which broke down on
+// mobile (chips got cut off at the screen edge instead of wrapping).
+// overflowX:auto contains the row's width regardless of ancestor sizing.
 export const filterRow = style({
   display: "flex",
   gap: vars.space["2"],
-  flexWrap: "wrap",
+  flexWrap: "nowrap",
+  overflowX: "auto",
+  scrollbarWidth: "none",
+  WebkitOverflowScrolling: "touch",
+  selectors: {
+    "&::-webkit-scrollbar": {
+      display: "none",
+    },
+  },
 });
 
 export const chip = style({
@@ -46,6 +59,8 @@ export const chip = style({
   background: "transparent",
   color: vars.color.textSecondary,
   transition: "background 0.12s, color 0.12s",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
   ":hover": {
     background: vars.color.hoverBackground,
     color: vars.color.textPrimary,

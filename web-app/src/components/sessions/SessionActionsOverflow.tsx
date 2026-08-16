@@ -155,20 +155,25 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const autoApproveConfirmDialogRef = useRef<HTMLDivElement>(null);
   const steerDialogRef = useRef<HTMLDivElement>(null);
   const clearConversationDialogRef = useRef<HTMLDivElement>(null);
+  const programPickerDialogRef = useRef<HTMLDivElement>(null);
   const programConfirmDialogRef = useRef<HTMLDivElement>(null);
-  const restartTriggerRef = useRef<HTMLButtonElement>(null);
-  const checkpointTriggerRef = useRef<HTMLButtonElement>(null);
-  const clearConversationTriggerRef = useRef<HTMLButtonElement>(null);
 
-  useFocusTrap(overflowMenuRef, showOverflow);
-  useFocusTrap(restartDialogRef, isRestartConfirmOpen, restartTriggerRef);
-  useFocusTrap(deleteDialogRef, isDeleteConfirmOpen);
-  useFocusTrap(checkpointDialogRef, isCheckpointOpen, checkpointTriggerRef);
-  useFocusTrap(autonomousConfirmDialogRef, isAutonomousConfirmOpen);
-  useFocusTrap(autoApproveConfirmDialogRef, isAutoApproveConfirmOpen);
-  useFocusTrap(steerDialogRef, isSteerOpen);
-  useFocusTrap(clearConversationDialogRef, isClearConversationConfirmOpen, clearConversationTriggerRef);
-  useFocusTrap(programConfirmDialogRef, isProgramRestartConfirmOpen);
+  // All dialogs/menus spawned from this component return focus to overflowButtonRef
+  // ("···") rather than the menu-item button that opened them — menu items unmount
+  // when the overflow menu closes (close() flips showOverflow before the dialog's
+  // state flips in the same batch), so a ref on the menu item itself is nulled by
+  // React before useFocusTrap's cleanup can read it. overflowButtonRef stays mounted
+  // for the component's whole lifetime.
+  useFocusTrap(overflowMenuRef, showOverflow, overflowButtonRef);
+  useFocusTrap(restartDialogRef, isRestartConfirmOpen, overflowButtonRef);
+  useFocusTrap(deleteDialogRef, isDeleteConfirmOpen, overflowButtonRef);
+  useFocusTrap(checkpointDialogRef, isCheckpointOpen, overflowButtonRef);
+  useFocusTrap(autonomousConfirmDialogRef, isAutonomousConfirmOpen, overflowButtonRef);
+  useFocusTrap(autoApproveConfirmDialogRef, isAutoApproveConfirmOpen, overflowButtonRef);
+  useFocusTrap(steerDialogRef, isSteerOpen, overflowButtonRef);
+  useFocusTrap(clearConversationDialogRef, isClearConversationConfirmOpen, overflowButtonRef);
+  useFocusTrap(programPickerDialogRef, isProgramPickerOpen, overflowButtonRef);
+  useFocusTrap(programConfirmDialogRef, isProgramRestartConfirmOpen, overflowButtonRef);
 
   useEffect(() => {
     if (showOverflow && overflowMenuRef.current) {
@@ -293,6 +298,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
           onSave={(newTags) => { onUpdateTags(session.id, newTags); setIsTagEditorOpen(false); }}
           onCancel={() => setIsTagEditorOpen(false)}
           sessionTitle={session.title}
+          triggerRef={overflowButtonRef}
         />
       )}
 
@@ -677,7 +683,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               )}
               {onCreateCheckpoint && (
                 <button
-                  ref={checkpointTriggerRef}
                   role="menuitem"
                   className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); setCheckpointLabel(""); setIsCheckpointOpen(true); }}
@@ -824,7 +829,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               {/* UX-003: Clear Conversation — calls handler directly without confirmation dialog */}
               {onClearConversationState && (
                 <button
-                  ref={clearConversationTriggerRef}
                   role="menuitem"
                   className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
                   onClick={(e) => { e.stopPropagation(); close(); void onClearConversationState(session.id); }}
@@ -836,7 +840,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               {/* UX-009: Restart moved to Group 5 (destructive group), before Delete */}
               {onRestart && !isCreating && (
                 <button
-                  ref={restartTriggerRef}
                   role="menuitem"
                   className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); setIsRestartConfirmOpen(true); }}
@@ -863,6 +866,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
       {/* ── Program picker dialog ── */}
       {isProgramPickerOpen && createPortal(
         <div
+          ref={programPickerDialogRef}
           role="dialog"
           aria-modal="true"
           aria-label="Change program"

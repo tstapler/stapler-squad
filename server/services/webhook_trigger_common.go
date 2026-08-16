@@ -2,8 +2,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
@@ -49,6 +52,40 @@ func persistTriggerFireEvent(ctx context.Context, repo session.TriggerFireEventR
 		log.Warn("[WebhookReceiver] failed to record trigger fire event",
 			"outcome", input.Outcome, "delivery_id", input.DeliveryID, "err", err)
 	}
+}
+
+// readAndDecodeWebhookBody reads r.Body (capped at MaxWebhookBodyBytes) and decodes it
+// as JSON, shared by GitHubWebhookHandler and GenericWebhookHandler — both handlers ran
+// an identical read-then-decode prologue before this extraction. On any failure, it
+// writes the HTTP error response and persists the "rejected" TriggerFireEvent itself;
+// callers just check ok and return without any further handling. workflowID is nil for
+// GitHub's pre-match call (no Workflow resolved yet) and non-nil for generic webhooks'
+// post-slug-resolution call, matching this file's existing parameter idiom.
+func readAndDecodeWebhookBody(w http.ResponseWriter, r *http.Request, fireEvents session.TriggerFireEventRepository, deliveryID string, workflowID *uuid.UUID) (payload map[string]interface{}, body []byte, ok bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, MaxWebhookBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return nil, nil, false
+		}
+		persistTriggerFireEvent(r.Context(), fireEvents, session.TriggerFireEventInput{
+			WorkflowID: workflowID, Outcome: "rejected", DeliveryID: deliveryID, ErrorMessage: "failed to read request body",
+		})
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		return nil, nil, false
+	}
+
+	if err := json.Unmarshal(body, &payload); err != nil {
+		persistTriggerFireEvent(r.Context(), fireEvents, session.TriggerFireEventInput{
+			WorkflowID: workflowID, Outcome: "rejected", DeliveryID: deliveryID, ErrorMessage: "malformed JSON",
+		})
+		http.Error(w, "malformed JSON", http.StatusBadRequest)
+		return nil, nil, false
+	}
+
+	return payload, body, true
 }
 
 // claimTriggerFireEvent atomically claims (workflow_id, delivery_id) via

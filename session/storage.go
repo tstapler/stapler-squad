@@ -416,7 +416,16 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 // Instance objects. This avoids the side effect of FromInstanceData() calling Start()
 // (which spawns PTY processes). Use for read-only existence and title checks.
 func (s *Storage) ListInstanceData() ([]InstanceData, error) {
-	return s.repo.List(context.Background())
+	return s.repo.ListWithOptions(context.Background(), LoadMinimal)
+}
+
+// ListInstanceDataWithWorktree returns raw InstanceData with the Worktree edge eager-loaded.
+// Use this instead of ListInstanceData whenever a read-only pass needs Worktree.WorktreePath/
+// RepoPath/BranchName/BaseCommitSHA (e.g. to stat the worktree or check dirty status) — plain
+// ListInstanceData uses LoadMinimal, which never populates Worktree, so any such field will
+// silently read as its zero value under that call.
+func (s *Storage) ListInstanceDataWithWorktree() ([]InstanceData, error) {
+	return s.repo.ListWithOptions(context.Background(), LoadOptions{LoadWorktree: true})
 }
 
 // GetStableID mirrors Instance.GetStableID for InstanceData: returns UUID when set,
@@ -787,6 +796,11 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 // ArchiveBacklogItem sets the archived_at timestamp.
 func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
 	return s.repo.ArchiveBacklogItem(ctx, id)
+}
+
+// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+func (s *Storage) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+	return s.repo.UnarchiveBacklogItem(ctx, id)
 }
 
 // DeleteBacklogItem permanently removes an item and all its child records.

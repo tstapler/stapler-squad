@@ -117,6 +117,7 @@ type UserPRCache struct {
 	cachedLogins atomic.Value       // stores []string (all connected logins)
 	loginState   atomic.Value       // stores loginResult (single-account; backward compat)
 	multiLogin   atomic.Value       // stores *multiLoginState (multi-account)
+	loginGen     atomic.Uint64      // bumped by InvalidateLoginCache; see its doc comment
 	loginGroup   singleflight.Group //nolint:exhaustruct
 	refreshGroup singleflight.Group //nolint:exhaustruct
 	ctx          context.Context
@@ -205,7 +206,19 @@ func (c *UserPRCache) Unsubscribe(id string) {
 // re-fetches the authenticated user from the GitHub API. Call this after
 // storing a new token (e.g. after a successful Device Flow auth) so the
 // cache picks up the new credentials immediately.
+//
+// Bumping loginGen (not just clearing multiLogin) matters because a stale
+// resolveAllLogins call from before the invalidation may still be in flight
+// (e.g. loop()'s unconditional first fetch, started with zero tokens before a
+// caller adds one) — the static singleflight key "login" would otherwise
+// coalesce a Refresh arriving right after this call into that stale call's
+// empty result. Including the generation in the key forces a genuinely new
+// call instead. Confirmed live via go test -race: TestListGitHubAccounts_
+// AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts saw
+// EnterpriseHosts come back empty because its Refresh() joined the
+// just-started cache's own stale zero-token fetch.
 func (c *UserPRCache) InvalidateLoginCache() {
+	c.loginGen.Add(1)
 	c.loginState.Store(loginResult{})
 	c.cachedLogin.Store("")
 	c.multiLogin.Store((*multiLoginState)(nil))
@@ -411,7 +424,8 @@ func (c *UserPRCache) resolveAllLogins() ([]connectedAccount, error) {
 		}
 	}
 
-	res, err, _ := c.loginGroup.Do("login", func() (interface{}, error) {
+	genKey := "login-" + strconv.FormatUint(c.loginGen.Load(), 10)
+	res, err, _ := c.loginGroup.Do(genKey, func() (interface{}, error) {
 		tokens := collectAllTokens()
 		if len(tokens) == 0 {
 			s := &multiLoginState{accounts: nil, checkedAt: time.Now()}

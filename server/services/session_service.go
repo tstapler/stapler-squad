@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -54,6 +55,11 @@ var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 const createSessionTimeout = 150 * time.Second
 
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// testTmuxServerSocketCounter gives each SessionService created within a test binary run a
+// unique tmux -L socket suffix (combined with os.Getpid() for cross-process uniqueness), so
+// concurrent tests never contend on the same isolated socket. See SessionService.testTmuxServerSocket.
+var testTmuxServerSocketCounter uint64
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
 // The actual implementation is in server/review_queue_manager.go
@@ -130,6 +136,9 @@ type SessionService struct {
 
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
+
+	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
+	slackConfigSvc *SlackConfigService
 
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
@@ -220,6 +229,91 @@ type SessionService struct {
 	// registry is the live-handle map for all running sessions. Wired after construction
 	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
 	registry *session.Registry
+
+	// deleteCleanupWG tracks DeleteSession's background tmux/worktree cleanup
+	// goroutines so Shutdown can await them instead of letting them outlive the
+	// process (or, in tests, outlive the test that spawned them).
+	deleteCleanupWG sync.WaitGroup
+
+	// deleteCleanupMu guards deleteCleanupClosed and serializes it against
+	// deleteCleanupWG.Add via trackCleanup, so Add never races Shutdown's Wait —
+	// see deleteCleanupClosed's doc comment.
+	deleteCleanupMu sync.Mutex
+
+	// deleteCleanupClosed is set once Shutdown begins draining deleteCleanupWG.
+	// sync.WaitGroup requires that any Add with a positive delta happen before
+	// the matching Wait call is invoked (or after a prior Wait returns) —
+	// calling Add concurrently with Wait when the counter may be zero is a
+	// documented misuse that can panic or let Wait return before the new work
+	// finishes. trackCleanup checks this flag under deleteCleanupMu before
+	// calling Add; Shutdown sets it under the same mutex before calling Wait.
+	// That makes the two mutually exclusive: any Add() that wins the lock race
+	// happens-before closed is set true (and thus happens-before Wait()), and
+	// any Add() that loses sees closed=true and never calls Add at all — it
+	// runs the cleanup untracked instead, which is fine because Shutdown no
+	// longer needs to wait for it.
+	deleteCleanupClosed bool
+
+	// testTmuxServerSocket, when non-empty, is applied to every Instance this
+	// service creates via TmuxServerSocket, isolating the tmux -L socket used
+	// by test runs from the shared production default. Set automatically by
+	// NewSessionServiceWithSearchEngine under config.IsTestMode() — see
+	// docs/bugs/fixed/BUG-075 for why this is a service-wide test hook rather
+	// than a per-call-site change across the package's ~90 NewSessionService
+	// test call sites.
+	testTmuxServerSocket string
+}
+
+// trackCleanup runs fn in a goroutine tracked by deleteCleanupWG so Shutdown
+// can await it, unless Shutdown has already begun draining the WaitGroup — see
+// deleteCleanupClosed's doc comment for why Add can't be allowed to race Wait.
+func (s *SessionService) trackCleanup(fn func()) {
+	s.deleteCleanupMu.Lock()
+	if s.deleteCleanupClosed {
+		s.deleteCleanupMu.Unlock()
+		go fn()
+		return
+	}
+	s.deleteCleanupWG.Add(1)
+	s.deleteCleanupMu.Unlock()
+	go func() {
+		defer s.deleteCleanupWG.Done()
+		fn()
+	}()
+}
+
+// deleteSessionCleanupTimeout bounds how long DeleteSession's background
+// liveInst.Destroy() cleanup (tmux kill, git diff stats, and worktree
+// filesystem cleanup) is awaited before Shutdown/deleteCleanupWG.Wait() gives
+// up on it. Destroy() takes no context and cannot be forcibly cancelled, so a
+// timed-out cleanup keeps running in its own goroutine (untracked by the
+// WaitGroup) after this deadline — only the *wait* is bounded, not the
+// underlying work (see BUG-072 for threading a real context.Context through
+// the cleanup chain so the timeout can cancel the work itself). Matches
+// KillTmuxSessionByTitle's 5s cap on the same kill-session subprocess.
+const deleteSessionCleanupTimeout = 5 * time.Second
+
+// destroyWithTimeout runs destroy() (normally inst.Destroy) and waits up to
+// timeout for it to finish. If it doesn't finish in time, this returns a
+// timeout error immediately while destroy() continues running in the
+// background goroutine it was started in — see deleteSessionCleanupTimeout's
+// doc comment for why the bound is on the wait, not the work itself.
+//
+// destroy is a func() error rather than a *session.Instance so the
+// timeout-exceeded branch can be exercised directly in tests with a
+// deliberately slow callback, without needing a real Instance whose Destroy()
+// can be made to hang on demand.
+func destroyWithTimeout(destroy func() error, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- destroy()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("timed out after %s waiting for session cleanup to finish (still running in background)", timeout)
+	}
 }
 
 // workflowMeta holds cached metadata about a workflow used at session-list time.
@@ -412,6 +506,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		pathCompletionSvc:  NewPathCompletionService(),
 		slashCommandSvc:    NewSlashCommandService(),
 		defaultsSvc:        NewDefaultsService(),
+		slackConfigSvc:     NewSlackConfigService(NewSlackNotifier()),
 		callbackConfigSvc:  NewCallbackConfigService(),
 		launcherPresetsSvc: NewLauncherPresetsService(),
 		projectSvc:         NewProjectService(concStorage),
@@ -423,6 +518,10 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
+
+	if config.IsTestMode() {
+		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))
+	}
 
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
@@ -725,6 +824,15 @@ func (s *SessionService) Shutdown() {
 	if store := s.GetAnalyticsStore(); store != nil {
 		store.Stop()
 	}
+	// Stop accepting new tracked cleanup work before draining what's already
+	// tracked — see deleteCleanupClosed's doc comment for why this ordering
+	// (under deleteCleanupMu, before Wait) is what makes Add/Wait race-free.
+	s.deleteCleanupMu.Lock()
+	s.deleteCleanupClosed = true
+	s.deleteCleanupMu.Unlock()
+	// Await DeleteSession's background cleanup goroutines so they don't
+	// outlive this process (or, in tests, outlive the test that spawned them).
+	s.deleteCleanupWG.Wait()
 }
 
 // SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
@@ -915,17 +1023,18 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
 	opts := session.InstanceOptions{
-		Title:           title,
-		Path:            path,
-		Program:         resolved.Program,
-		PermissionMode:  session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
-		SessionType:     session.SessionTypeDirectory,
-		Prompt:          prompt,
-		Tags:            tags,
-		OneShot:         oneShot,
-		Hidden:          hidden,
-		MCPServerURL:    s.resolveMCPServerURL(),
-		CreateIfMissing: true,
+		Title:            title,
+		Path:             path,
+		Program:          resolved.Program,
+		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
+		SessionType:      session.SessionTypeDirectory,
+		Prompt:           prompt,
+		Tags:             tags,
+		OneShot:          oneShot,
+		Hidden:           hidden,
+		MCPServerURL:     s.resolveMCPServerURL(),
+		CreateIfMissing:  true,
+		TmuxServerSocket: s.testTmuxServerSocket,
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -978,6 +1087,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 		Hidden:           hidden,
 		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  false,
+		TmuxServerSocket: s.testTmuxServerSocket,
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -1144,6 +1254,26 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 	s.configSvc = svc
 }
 
+// SetSlackNotifier rewires slackConfigSvc onto the given SlackNotifier
+// instance — intended for server/dependencies.go to call with the SAME
+// *services.SlackNotifier wired into ReactiveQueueManager/ApprovalHandler,
+// so GetSlackConfig's last_delivery reflects real production sends from
+// those trigger points, not only sends made via TestSlackWebhook. Optional:
+// if never called, slackConfigSvc keeps the private SlackNotifier instance
+// NewSessionService constructed for it.
+func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
+	s.slackConfigSvc = NewSlackConfigService(n)
+}
+
+// SlackNotifierForTest returns the SlackNotifier instance currently wired
+// into slackConfigSvc. Exported only so cross-package wiring regression
+// tests (server package) can assert pointer identity against the other
+// consumers (ReactiveQueueManager, ApprovalHandler) without restructuring
+// production code — not intended for any non-test caller.
+func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
+	return s.slackConfigSvc.slackNotifier
+}
+
 // SetFeatureController wires a runtime controller for the named feature flag.
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {
@@ -1179,10 +1309,14 @@ func (s *SessionService) ListSessions(
 	// Convert instances to proto messages
 	sessions := make([]*sessionv1.Session, 0, len(instances))
 	for _, inst := range instances {
-		// Apply optional status filter
+		// Apply optional status filter. Read the status directly off the instance
+		// instead of building the full proto just to inspect one field — building it
+		// runs the full GetEffectiveStatus/GetStatusAndIdleInfo/DetectStateFromContent
+		// chain, which is expensive enough that doing it twice per instance (once here,
+		// once for the real output below) roughly doubles ListSessions' allocation cost
+		// whenever a status filter is applied.
 		if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-			protoStatus := adapters.InstanceToProto(inst, nil).Status
-			if protoStatus != *req.Msg.Status {
+			if adapters.StatusToProto(inst.GetEffectiveStatus()) != *req.Msg.Status {
 				continue
 			}
 		}
@@ -1582,6 +1716,7 @@ func (s *SessionService) CreateSession(
 		WorkflowID:       req.Msg.WorkflowId,
 		EnvVars:          instanceEnvVars,
 		CLIFlags:         instanceCLIFlags,
+		TmuxServerSocket: s.testTmuxServerSocket,
 		// ExtraArgs is a direct passthrough of req.Msg.ExtraArgs — unlike CLIFlags, it has no
 		// defaults-resolution concept to merge with. It composes with instanceCLIFlags at
 		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
@@ -1648,7 +1783,12 @@ func (s *SessionService) CreateSession(
 	creatingProto := adapters.InstanceToProto(instance, s.workflowNames())
 
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
-	go func() {
+	// Tracked via trackCleanup (not a bare `go func()`) so Shutdown blocks until this
+	// goroutine finishes — otherwise it can outlive the test that spawned it and touch a
+	// later test's STAPLER_SQUAD_TEST_DIR/tmux-exec-gate directory after that later test's
+	// t.TempDir() has already started tearing itself down (the cross-iteration
+	// "directory not empty" flake in TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
+	s.trackCleanup(func() {
 		// Wire callbacks before starting so rate-limit and status-change events fire.
 		s.wireCallbacks(instance)
 
@@ -1714,7 +1854,7 @@ func (s *SessionService) CreateSession(
 		_ = s.storage.SaveInstances([]*session.Instance{instance})
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
 		log.Info("[CreateSession] async start complete", "session", instanceTitle)
-	}()
+	})
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: creatingProto,
@@ -2372,23 +2512,25 @@ func (s *SessionService) DeleteSession(
 
 	// Destroy tmux/git resources asynchronously so the RPC returns immediately
 	// after storage deletion. Cleanup errors are non-fatal — they are logged and
-	// do not affect the success response the caller receives.
+	// do not affect the success response the caller receives. Both goroutines are
+	// tracked via deleteCleanupWG so Shutdown (and tests) can await them instead
+	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
-		go func() {
-			if err := liveInst.Destroy(); err != nil {
+		s.trackCleanup(func() {
+			if err := destroyWithTimeout(liveInst.Destroy, deleteSessionCleanupTimeout); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
-		}()
+		})
 	} else {
 		// Instance is not in the live in-memory poller (e.g. the server restarted
 		// since this session was created). Fall back to killing the tmux session by
 		// its deterministic name so the Claude process inside it doesn't survive as
 		// an orphan after the DB record is gone.
-		go func() {
+		s.trackCleanup(func() {
 			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
-		}()
+		})
 	}
 
 	// Cancel any pending approvals BEFORE deleting from storage, so blocked
@@ -3702,6 +3844,21 @@ func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Reque
 // UpdateGlobalDefaults replaces the global default fields.
 func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.Request[sessionv1.UpdateGlobalDefaultsRequest]) (*connect.Response[sessionv1.UpdateGlobalDefaultsResponse], error) {
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
+}
+
+// GetSlackConfig returns the current Slack notification configuration.
+func (s *SessionService) GetSlackConfig(ctx context.Context, req *connect.Request[sessionv1.GetSlackConfigRequest]) (*connect.Response[sessionv1.GetSlackConfigResponse], error) {
+	return s.slackConfigSvc.GetSlackConfig(ctx, req)
+}
+
+// UpdateSlackConfig updates the Slack notification configuration.
+func (s *SessionService) UpdateSlackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateSlackConfigRequest]) (*connect.Response[sessionv1.UpdateSlackConfigResponse], error) {
+	return s.slackConfigSvc.UpdateSlackConfig(ctx, req)
+}
+
+// TestSlackWebhook sends a synchronous test message and reports the outcome.
+func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Request[sessionv1.TestSlackWebhookRequest]) (*connect.Response[sessionv1.TestSlackWebhookResponse], error) {
+	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
 }
 
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every

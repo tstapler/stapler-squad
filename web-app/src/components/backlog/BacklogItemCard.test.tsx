@@ -86,6 +86,101 @@ describe("BacklogItemCard — per-card pending state", () => {
 
 });
 
+describe("BacklogItemCard — action button click dispatch", () => {
+  it("BacklogItemCard_should_CallOnActionWithActionAndItemId_When_EnabledActionButtonClicked", () => {
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ id: "item-42", status: "idea" })}
+        onAction={onAction}
+        onClick={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("backlog-action-mark_ready"));
+
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onAction).toHaveBeenCalledWith("mark_ready", "item-42");
+  });
+
+  it("BacklogItemCard_should_NotCallOnAction_When_ActionSpecIsDone", () => {
+    // "done" status renders an isDone-only placeholder action ("Done ✓")
+    // with no disabled flag set explicitly — the button's disabled attribute
+    // (fixed alongside this test) and the onClick handler's own isDone guard
+    // must both prevent a dispatch.
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "done" })}
+        onAction={onAction}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-done");
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_NotCallOnAction_When_ActionSpecDisabled", () => {
+    // "idea" with no AC criteria yet disables "Mark Ready" via actionSpec.disabled.
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "idea", acCriteria: [] })}
+        onAction={onAction}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-mark_ready");
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_NotCallOnAction_When_AnotherActionIsPending", () => {
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "idea" })}
+        onAction={onAction}
+        onClick={jest.fn()}
+        pendingAction="mark_ready"
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("backlog-action-mark_ready"));
+
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("BacklogItemCard_should_NotCallOnAction_When_TriageIsRunning", () => {
+    const onAction = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: true,
+          planApproved: false,
+          triageStatus: "running",
+        })}
+        onAction={onAction}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-spawn_session");
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+
+    expect(onAction).not.toHaveBeenCalled();
+  });
+});
+
 describe("BacklogItemCard — disabled action hints (tstapler/stapler-squad#487)", () => {
   it("BacklogItemCard_should_ShowNoAcceptanceCriteriaHint_When_IdeaStatusHasNoAcCriteria", () => {
     render(
@@ -360,15 +455,269 @@ describe("BacklogItemCard — canonical status label (Story 5.1.0)", () => {
     expect(button).toHaveTextContent("View Review");
   });
 
-  it("BacklogItemCard_should_RenderQueuedStatusLabelIndependently_When_GetActionSpecFallsThroughToDefaultBranch", () => {
+  it("BacklogItemCard_should_RenderQueuedStatusLabelIndependently_When_GetPrimaryCardActionFallsThroughToDisabledFallback", () => {
     render(
-      <BacklogItemCard item={makeItem({ status: "queued" })} onAction={jest.fn()} onClick={jest.fn()} />
+      <BacklogItemCard
+        item={makeItem({
+          status: "queued",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: undefined,
+          triageStatus: undefined,
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
     );
 
-    // getActionSpec() has no explicit "queued" case — it falls to the default
-    // branch (raw status as button label) — but the status label still
-    // reads the canonical "Queued" from getStatusLabel(), independently.
+    // getPrimaryCardAction() has no actionable next step for a gated queued
+    // item with no plan and no failed-triage evidence — it falls to the
+    // disabled "Queued" fallback — but the status label still reads the
+    // canonical "Queued" from getStatusLabel(), independently.
     expect(screen.getByTestId("backlog-item-card-status")).toHaveTextContent("Queued");
+    const button = screen.getByTestId("backlog-action-queued");
+    expect(button).toHaveTextContent("Queued");
+    expect(button).toBeDisabled();
+  });
+
+  it("BacklogItemCard_should_ShowApprovePlan_When_QueuedItemIsGatedWithAPlan", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "queued",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: "/plans/queued-item",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.getByTestId("backlog-action-approve_plan")).toHaveTextContent("Approve Plan");
+    expect(screen.queryByTestId("backlog-action-queued")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_ShowRetryTriage_When_QueuedItemIsGatedWithFailedTriageAndNoPlan", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "queued",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: undefined,
+          triageStatus: "failed",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.getByTestId("backlog-action-retry_triage")).toHaveTextContent("Retry Triage");
+  });
+
+  it("BacklogItemCard_should_ShowDisabledQueuedFallback_When_QueuedItemPlanIsApprovedOrSkipped", () => {
+    // getAvailableActions never grants spawn_session for "queued" — even
+    // once the plan is approved/skipped, a queued item has no button to
+    // press until it's dequeued into "ready" (or another status).
+    const approved = render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "queued",
+          skipPlanning: false,
+          planApproved: true,
+          planArtifactsPath: "/plans/queued-item",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(approved.getByTestId("backlog-action-queued")).toHaveTextContent("Queued");
+    approved.unmount();
+
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "queued", skipPlanning: true, planApproved: false })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByTestId("backlog-action-queued")).toHaveTextContent("Queued");
+  });
+});
+
+describe("BacklogItemCard — ready-status primary action gating (plan approval gate fix)", () => {
+  it("BacklogItemCard_should_ShowTriggerTriage_When_ReadyWithNoPlanAndNoFailedTriage", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: undefined,
+          triageStatus: undefined,
+          repoPath: "/repo",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-trigger_triage");
+    expect(button).toHaveTextContent("Trigger Triage");
+    expect(button).not.toBeDisabled();
+  });
+
+  it("BacklogItemCard_should_ShowApprovePlan_When_ReadyWithPlanAwaitingApproval", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: "/plans/ready-item",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.getByTestId("backlog-action-approve_plan")).toHaveTextContent("Approve Plan");
+    expect(screen.queryByTestId("backlog-action-trigger_triage")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_ShowSpawnSession_When_ReadyWithApprovedPlan", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: false,
+          planApproved: true,
+          planArtifactsPath: "/plans/ready-item",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.getByTestId("backlog-action-spawn_session")).toHaveTextContent("Spawn Session");
+  });
+
+  it("BacklogItemCard_should_ShowSpawnSession_When_ReadyWithPlanningSkipped", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ status: "ready", skipPlanning: true, planApproved: false })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.getByTestId("backlog-action-spawn_session")).toHaveTextContent("Spawn Session");
+  });
+
+  it("BacklogItemCard_should_ShowRetryTriage_When_ReadyWithFailedTriageAndNoPlan", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: undefined,
+          triageStatus: "failed",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-retry_triage");
+    expect(button).toHaveTextContent("Retry Triage");
+    expect(screen.queryByTestId("backlog-action-trigger_triage")).not.toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemCard — pending/triage disabling against a derived action", () => {
+  it("BacklogItemCard_should_DisableAndShowRunning_When_PendingActionMatchesTheDerivedApprovePlanAction", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: "/plans/ready-item",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+        pendingAction="approve_plan"
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-approve_plan");
+    expect(button).toHaveTextContent("Running…");
+    expect(button).toBeDisabled();
+  });
+
+  it("BacklogItemCard_should_DisableButtonRegardlessOfDerivedAction_When_TriageIsRunning", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: false,
+          planApproved: true,
+          planArtifactsPath: "/plans/ready-item",
+          triageStatus: "running",
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.getByTestId("backlog-action-spawn_session")).toBeDisabled();
+  });
+
+  it("BacklogItemCard_should_StopShowingRunning_When_ALiveUpdateChangesTheDerivedActionWhilePendingActionStillReflectsThePriorOne", () => {
+    // Simulates the plan being approved server-side (a live update bumps
+    // item.liveVersion and flips planApproved) while `pendingAction` is
+    // still "approve_plan" from before that update resolved. The new
+    // derived action is "spawn_session" — isActionPending must correctly
+    // become false rather than falsely showing "Running…" on a button
+    // whose action no longer matches the in-flight one.
+    const { rerender } = render(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: "/plans/ready-item",
+          liveVersion: 1,
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+        pendingAction="approve_plan"
+      />
+    );
+    expect(screen.getByTestId("backlog-action-approve_plan")).toHaveTextContent("Running…");
+
+    rerender(
+      <BacklogItemCard
+        item={makeItem({
+          status: "ready",
+          skipPlanning: false,
+          planApproved: true,
+          planArtifactsPath: "/plans/ready-item",
+          liveVersion: 2,
+        })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+        pendingAction="approve_plan"
+      />
+    );
+
+    const button = screen.getByTestId("backlog-action-spawn_session");
+    expect(button).toHaveTextContent("Spawn Session");
+    // Still disabled — pendingAction !== null guards the button regardless
+    // of which action is currently the primary one.
+    expect(button).toBeDisabled();
   });
 });
 

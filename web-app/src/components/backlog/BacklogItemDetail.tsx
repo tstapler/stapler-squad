@@ -2,6 +2,7 @@
 // +feature: backlog:item-detail
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import type { MouseEvent } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -77,6 +78,7 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   re_review: "Re-review triggered.",
   ship_pr: "PR created.",
   archive: "Archived.",
+  unarchive: "Unarchived — back in the idea column. Needs a fresh session.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
   send_back_refining: "Sent back to refining.",
@@ -99,6 +101,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     triggerShipPR,
     submitManualReview,
     archiveBacklogItem,
+    unarchiveBacklogItem,
     deleteBacklogItem,
     updateBacklogItem,
     listPipelineModes,
@@ -167,9 +170,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
   // Review changes modal
   const [showChangesModal, setShowChangesModal] = useState(false);
+  const changesModalTriggerRef = useRef<HTMLElement | null>(null);
 
   // File browser modal
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const fileBrowserTriggerRef = useRef<HTMLElement | null>(null);
 
   // Manual review form
   const [showManualReview, setShowManualReview] = useState(false);
@@ -189,7 +194,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // than LifecycleSummary standing up its own transport/client and 60s poll
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
-  const { items: stuckItems } = useStuckBacklogItems();
+  const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
   const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
 
   // Version control state for the most recent work session's worktree.
@@ -646,7 +651,16 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             setShowManualReview(true);
             return;
           case "archive":
+            if (
+              !confirm(
+                "Archive this item? It will be hidden from the default view. Its git worktree (if any) will be deleted from disk and cannot be recreated by unarchiving.",
+              )
+            )
+              return;
             await archiveBacklogItem(item.id);
+            break;
+          case "unarchive":
+            await unarchiveBacklogItem(item.id);
             break;
           case "delete":
             if (!confirm("Permanently delete this item and all its history? This cannot be undone.")) return;
@@ -678,7 +692,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, transitionStatus, triggerTriage, retriggerTriageCore, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
+    [item, transitionStatus, triggerTriage, retriggerTriageCore, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, unarchiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
   // Extracted verbatim from the inline manual-review-submit onClick handler
@@ -1284,7 +1298,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
         {/* Always-visible lifecycle summary — the single authoritative
             status display, replacing the old standalone status badge (D1). */}
-        <LifecycleSummary item={item} pipelineDisplay={pipelineDisplay} stuckItem={stuckItem} />
+        <LifecycleSummary
+          item={item}
+          pipelineDisplay={pipelineDisplay}
+          stuckItem={stuckItem}
+          onTriggerRemediationNow={triggerRemediationNow}
+        />
       </div>
 
       <div className={styles.scrollArea}>
@@ -1397,6 +1416,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             sessionId={latestWorkSession?.sessionId}
             sessionTitle={item.title}
             onClose={() => setShowChangesModal(false)}
+            triggerRef={changesModalTriggerRef}
           />
         )}
 
@@ -1405,6 +1425,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             sessionId={latestWorkSession.sessionId}
             sessionTitle={item.title}
             onClose={() => setShowFileBrowser(false)}
+            triggerRef={fileBrowserTriggerRef}
           />
         )}
 
@@ -1476,7 +1497,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               workSession={latestWorkSession}
               actionLoading={actionLoading}
               defaultExpanded={reviewingExpanded}
-              onViewChanges={() => setShowChangesModal(true)}
+              onViewChanges={(event: MouseEvent<HTMLButtonElement>) => {
+                changesModalTriggerRef.current = event.currentTarget;
+                setShowChangesModal(true);
+              }}
               onGateApprove={handleGateApprove}
               onGateReopen={handleGateReopen}
               onGateOverride={handleGateOverride}
@@ -1520,8 +1544,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             activeSessionCount={activeWorkSessionCount}
             worktreePath={latestWorkSession?.worktreePath}
             defaultExpanded={versionControlExpanded}
-            onViewDiff={() => setShowChangesModal(true)}
-            onBrowseFiles={() => setShowFileBrowser(true)}
+            onViewDiff={(event: MouseEvent<HTMLButtonElement>) => {
+              changesModalTriggerRef.current = event.currentTarget;
+              setShowChangesModal(true);
+            }}
+            onBrowseFiles={(event: MouseEvent<HTMLButtonElement>) => {
+              fileBrowserTriggerRef.current = event.currentTarget;
+              setShowFileBrowser(true);
+            }}
           />
 
           <AutonomousHealthStrip item={item} />

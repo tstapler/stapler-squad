@@ -46,6 +46,7 @@ type RuleSpec struct {
 	PythonModes           []string `json:"python_modes,omitempty"`
 	SafePythonImportsOnly bool     `json:"safe_python_imports_only,omitempty"`
 	RequireCIPassing      bool     `json:"require_ci_passing,omitempty"`
+	MinSessionIdleMinutes int32    `json:"min_session_idle_minutes,omitempty"`
 }
 
 // RulesFile is the top-level structure of auto_approve_rules.json.
@@ -145,6 +146,7 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 		PythonModes:           spec.PythonModes,
 		SafePythonImportsOnly: spec.SafePythonImportsOnly,
 		RequireCIPassing:      spec.RequireCIPassing,
+		MinSessionIdleMinutes: spec.MinSessionIdleMinutes,
 	}
 
 	s.mu.Lock()
@@ -233,6 +235,7 @@ func (s *RulesStore) reload() error {
 			PythonModes:           r.PythonModes,
 			SafePythonImportsOnly: r.SafePythonImportsOnly,
 			RequireCIPassing:      r.RequireCIPassing,
+			MinSessionIdleMinutes: r.MinSessionIdleMinutes,
 		}
 	}
 
@@ -276,17 +279,18 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 	rules := make([]classifier.Rule, 0, len(specs))
 	for _, spec := range specs {
 		r := classifier.Rule{
-			ID:               spec.ID,
-			Name:             spec.Name,
-			ToolName:         spec.ToolName,
-			Decision:         parseDecision(spec.Decision),
-			RiskLevel:        parseRiskLevel(spec.RiskLevel),
-			Reason:           spec.Reason,
-			Alternative:      spec.Alternative,
-			Priority:         spec.Priority,
-			Enabled:          spec.Enabled,
-			Source:           spec.Source,
-			RequireCIPassing: spec.RequireCIPassing,
+			ID:                    spec.ID,
+			Name:                  spec.Name,
+			ToolName:              spec.ToolName,
+			Decision:              parseDecision(spec.Decision),
+			RiskLevel:             parseRiskLevel(spec.RiskLevel),
+			Reason:                spec.Reason,
+			Alternative:           spec.Alternative,
+			Priority:              spec.Priority,
+			Enabled:               spec.Enabled,
+			Source:                spec.Source,
+			RequireCIPassing:      spec.RequireCIPassing,
+			MinSessionIdleMinutes: spec.MinSessionIdleMinutes,
 		}
 		if spec.ToolPattern != "" {
 			re, err := regexp.Compile(spec.ToolPattern)

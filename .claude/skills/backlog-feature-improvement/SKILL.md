@@ -102,11 +102,11 @@ Don't hand-implement fixes directly off the audit — route each bucket through 
 |---|---|---|
 | 1. Reconciliation bugs (isolated, no architecture change — e.g. the unguarded `*Instance` mutation, the magic-int notification constants) | `sdd:fix-bug`, one run per bug | Root cause → targeted fix → regression test; independent bugs can run as parallel sessions |
 | 2. Manual gates (UX/workflow friction, no data-model change) | `sdd:quick` | Fits in one context window, skips heavyweight artifacts |
-| 3. Non-configurable pipeline steps (the core software-factory gap — new `BacklogItemData` field, proto changes, `WorkflowEngine` wiring, UI to surface/select it) | `sdd:full`, seeded with a hand-written `requirements.md` | Touches data model + proto + backend + UI together — the same "many touchpoints must move in lockstep" shape as `.claude/rules/session-creation-registry.md`; deserves an architecture review and ADR before code |
+| 3. Non-configurable pipeline steps (the core software-factory gap — new `BacklogItemData` field, proto changes, `WorkflowEngine` wiring, UI to surface/select it) | `sdd:full`, seeded with a hand-written `requirements.md` | Touches data model + proto + backend + UI together — the same "many touchpoints must move in lockstep" shape as `.claude/docs/session-creation-registry.md`; deserves an architecture review and ADR before code |
 
 For bucket 3, write `project_plans/backlog-configurable-pipeline/requirements.md` directly from the Phase 4 findings — skip the `sdd:1-ideate` interview, since the audit already answered *what* and *why* — then start SDD at `sdd:2-research`. Keep each requirement traceable back to the specific hotspot/UI/architecture finding that motivated it.
 
-Per `.claude/rules/sdd-planning-artifacts-commit.md`: commit `project_plans/backlog-configurable-pipeline/` before the session ends, even if implementation hasn't started yet.
+Per `.claude/docs/sdd-planning-artifacts-commit.md`: commit `project_plans/backlog-configurable-pipeline/` before the session ends, even if implementation hasn't started yet.
 
 ### Prefer systemic fixes over instance patches
 

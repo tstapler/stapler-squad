@@ -17,13 +17,30 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// getWorktreeDirectory returns the base directory fresh worktree paths are computed
+// under. It must return a symlink-resolved path: git itself resolves symlinks when it
+// records a worktree's path in .git/worktrees/<id>/gitdir, so findExistingWorktreeForBranch
+// (which reads that path back via `git worktree list`) sees the resolved form. If this
+// function returned an unresolved path (e.g. macOS's /tmp -> /private/tmp, or any
+// symlinked/NFS-automounted config dir), a freshly-computed path and the same worktree's
+// git-reported path would differ as strings despite naming the identical directory --
+// exactly the mismatch that broke worktree-reuse identity checks (see
+// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession).
 func getWorktreeDirectory() (string, error) {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return "", err
 	}
 
-	return filepath.Join(configDir, "worktrees"), nil
+	dir := filepath.Join(configDir, "worktrees")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create worktree base directory %s: %w", dir, err)
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve worktree base directory %s: %w", dir, err)
+	}
+	return resolved, nil
 }
 
 // IsDirtyCacheTTL is the duration for which a dirty (has changes) result is considered fresh.

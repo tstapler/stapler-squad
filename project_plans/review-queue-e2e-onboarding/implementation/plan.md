@@ -1,5 +1,16 @@
 # Implementation Plan: review-queue-e2e-onboarding
 
+> **Corrected post-implementation (2026-08-03)**: the onboarding-modal
+> dismissal below was implemented as planned but, verified live, did not fix
+> any of the 10 failing tests — the modal was never the actual cause. The
+> real causes were two unrelated bugs found during implementation: see
+> `requirements.md`'s "Root cause (corrected)" section. This plan's Story
+> 1.1.1/1.1.2 execution steps stayed accurate for the dismissal-helper work;
+> they just weren't sufficient on their own. The additional fix (a
+> `ReviewQueuePanel.tsx` sentinel change) and test rewrite (the two
+> `SessionWizard`-targeting tests) aren't reflected in the task breakdown
+> below — see the commit diff for their actual scope.
+
 **Feature**: Dismiss the first-run onboarding modal in `review-queue.spec.ts` so its
 8 active tests stop racing/timing out against the modal overlay, via a shared plain-function
 helper also reused by `escalation-reasoning.spec.ts`.
