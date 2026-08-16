@@ -1,7 +1,8 @@
 # BUG-069: `TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst` hangs past a 2-minute timeout when run locally (non-CI) [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: ✅ Fixed
 **Discovered**: 2026-08-12
+**Fixed**: 2026-08-16
 **Impact**: Fails/times out `go test ./session/...` locally whenever this prototype package's test binary runs outside CI (the test explicitly skips itself under `CI=1`, so this cannot fire in GitHub Actions). Makes `go test ./session/...` unreliable as a local pre-push gate — a developer running the full suite locally sees a spurious `FAIL` in an unrelated package after 600s+.
 
 ## Problem Description
@@ -49,15 +50,15 @@ Confirmed **unrelated** to the concurrent `RepairCorruptedGitRepo` fix (`session
 
 ## Fix Approach
 
-Not attempted in this session (out of scope — this package is an unfinished prototype unrelated to the change being verified). Candidates, cheapest first:
-- (a) Reduce `numCommits`/`numWorktrees` for the non-CI path too, since the test's own doc comment (`:474-486`) states its claim only needs *some* multi-worktree amortization to be provable, not 250 commits specifically.
-- (b) Add a `-timeout`-aware guard or add this test to a `-short`-skippable/slow-test tag so `go test ./session/...` (no explicit timeout override) doesn't hang the whole suite.
-- (c) Add an explicit `context.WithTimeout` to each `gitRunErr` subprocess call so a genuine hang fails fast with a clear "subprocess exceeded N seconds" error instead of relying on the outer `go test -timeout` to eventually panic the whole binary.
-- (d) If candidate 2 (residual auto-gc race) is confirmed via profiling/strace, close that specific new trigger surface the same way PR #190 and the `maintenance.auto` fix did.
+Implemented candidate (c): `gitRunErr` (`gogitstore_test.go`) now wires each subprocess through `context.WithTimeout(context.Background(), gitCommandTimeout(args))` instead of the previous unbounded `context.Background()`. `gitCommandTimeout(args []string) time.Duration` returns 90s for `gc` subcommands (which can legitimately run longer under contention) and 30s otherwise — see commit `da52d9c8`. A wedged git subprocess now fails fast with a clear timeout error instead of relying on `go test -timeout` to eventually panic the whole binary 2+ minutes later. `mmap_stage2_test.go`'s `runGitCmd` is a thin pass-through wrapper over `gitRunErr` and inherits the fix with no separate change needed (verified via a targeted run of its callers — all 6 passed). `mmap_adversarial_test.go`'s own inline fuzz-seed-builder call site was also updated to use `gitCommandTimeout(args)` (commit `9a7fd788`) — it had been missed in the initial pass.
+
+Candidates (a)/(b)/(d) were not needed once (c) closed the actual hang.
 
 ## Verification
 
-`go test ./session/unfinished/gogitstore/... -v -run TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst -timeout 120s` completes well under the timeout, repeatably (run 3+ times).
+- `go test ./session/unfinished/gogitstore/... -v -run TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst -timeout 120s`, CI unset: 5 consecutive passing runs, each well under the timeout.
+- `gc.auto=0`/`maintenance.auto=false` behavior unchanged; `countPacks()==1` still passes.
+- Targeted runs covering the fix's surface area all pass cleanly: the above 5x, plus `TestPackWatch_FsnotifyTriggersRefresh` and `TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack` (the only test exercising `runGitCmd`, the other `gitRunErr` call site) in isolation. A single unbroken full-package run under one `-timeout` was not obtained this session — bundled runs across multiple fixture-heavy tests hit the outer `-timeout` while inside legitimate (documented above) fixture-construction work, not a subprocess hang. An earlier draft of this note cited a specific full-suite pass/fail count and a "BUG-077" tracking bug for `TestGogitstore_SoakUnderSustainedLoad`; no `BUG-077` file exists in `docs/bugs/`, so that citation is retracted as unverified rather than restated.
 
 ## Related Tasks
 
