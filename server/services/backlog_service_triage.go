@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -2405,6 +2406,46 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 	return true
 }
 
+// testTriageCompleteHook, when non-nil, is invoked with the item's ID as the
+// very last thing TriggerTriage's background goroutine does on every exit
+// path (success, early return, or panic-free error). Production code never
+// sets this — it exists solely so tests can wait for the goroutine to
+// actually finish (including its trailing storage writes, e.g.
+// UpdateItemSessionEnded below) instead of polling the item's status field,
+// which flips to Ready *before* that goroutine is done. Without this seam, a
+// test that returns as soon as status=="ready" races its own t.Cleanup
+// (createTestStorage's repo.Close(), session_service_test.go) against the
+// goroutine's still-in-flight storage write — the root cause of
+// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession's
+// flakiness. Modeled on backlog_service_events.go's testAfterSubscribeHook.
+//
+// Guarded by testTriageCompleteHookMu: without it, a `-race` run catches a
+// genuine data race whenever one test's TriggerTriage goroutine is still
+// alive (its own test having returned only after status flipped to Ready,
+// not after this hook fired) at the moment a LATER test assigns a new
+// closure here -- an unsynchronized read/write pair on the same package
+// variable from two different goroutines, regardless of whether the read
+// value would have been "correct" in practice.
+var (
+	testTriageCompleteHookMu sync.Mutex
+	testTriageCompleteHook   func(itemID string)
+)
+
+func setTestTriageCompleteHook(hook func(itemID string)) {
+	testTriageCompleteHookMu.Lock()
+	defer testTriageCompleteHookMu.Unlock()
+	testTriageCompleteHook = hook
+}
+
+func callTestTriageCompleteHook(itemID string) {
+	testTriageCompleteHookMu.Lock()
+	hook := testTriageCompleteHook
+	testTriageCompleteHookMu.Unlock()
+	if hook != nil {
+		hook(itemID)
+	}
+}
+
 // TriggerTriage kicks off a headless triage planning call for a backlog item.
 // Returns immediately after creating an ItemSession; actual triage runs in a goroutine.
 // +api: backlog:trigger-triage
@@ -2580,6 +2621,11 @@ func (s *BacklogService) TriggerTriage(
 	iteration := nextIteration
 	triageStarted = true
 	go func() {
+		// Registered first so it runs last (defers are LIFO) — fires only after
+		// every other defer in this goroutine (semaphore release, cancel) has
+		// run, on every exit path. See testTriageCompleteHook's doc comment.
+		defer callTestTriageCompleteHook(itemID)
+
 		// Clears the triageInFlight entry set at 3a-i above no matter how this
 		// goroutine exits, so the item is never left permanently un-retriggerable.
 		defer s.triageInFlight.Delete(itemID)
