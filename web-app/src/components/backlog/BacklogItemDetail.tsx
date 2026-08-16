@@ -2,6 +2,7 @@
 // +feature: backlog:item-detail
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import type { MouseEvent } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -169,9 +170,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
   // Review changes modal
   const [showChangesModal, setShowChangesModal] = useState(false);
+  const changesModalTriggerRef = useRef<HTMLElement | null>(null);
 
   // File browser modal
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const fileBrowserTriggerRef = useRef<HTMLElement | null>(null);
 
   // Manual review form
   const [showManualReview, setShowManualReview] = useState(false);
@@ -1413,6 +1416,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             sessionId={latestWorkSession?.sessionId}
             sessionTitle={item.title}
             onClose={() => setShowChangesModal(false)}
+            triggerRef={changesModalTriggerRef}
           />
         )}
 
@@ -1421,6 +1425,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             sessionId={latestWorkSession.sessionId}
             sessionTitle={item.title}
             onClose={() => setShowFileBrowser(false)}
+            triggerRef={fileBrowserTriggerRef}
           />
         )}
 
@@ -1492,7 +1497,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               workSession={latestWorkSession}
               actionLoading={actionLoading}
               defaultExpanded={reviewingExpanded}
-              onViewChanges={() => setShowChangesModal(true)}
+              onViewChanges={(event: MouseEvent<HTMLButtonElement>) => {
+                changesModalTriggerRef.current = event.currentTarget;
+                setShowChangesModal(true);
+              }}
               onGateApprove={handleGateApprove}
               onGateReopen={handleGateReopen}
               onGateOverride={handleGateOverride}
@@ -1536,8 +1544,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             activeSessionCount={activeWorkSessionCount}
             worktreePath={latestWorkSession?.worktreePath}
             defaultExpanded={versionControlExpanded}
-            onViewDiff={() => setShowChangesModal(true)}
-            onBrowseFiles={() => setShowFileBrowser(true)}
+            onViewDiff={(event: MouseEvent<HTMLButtonElement>) => {
+              changesModalTriggerRef.current = event.currentTarget;
+              setShowChangesModal(true);
+            }}
+            onBrowseFiles={(event: MouseEvent<HTMLButtonElement>) => {
+              fileBrowserTriggerRef.current = event.currentTarget;
+              setShowFileBrowser(true);
+            }}
           />
 
           <AutonomousHealthStrip item={item} />
