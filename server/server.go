@@ -525,6 +525,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// pattern below (srv.GetAddr(), Task 1.1.1c).
 	hookBaseURLFn := func() string { return "http://" + srv.GetAddr() }
 
+	// Wire the same lazy base-URL resolver into ReactiveQueueManager as the
+	// dashboard-link fallback for Slack review-queue notifications (Epic 1.3,
+	// Story 1.3.1, Task 1.3.1c) — only used when cfg.Slack.DashboardBaseURL is
+	// unset. ReactiveQueueManager is built before Server in the dependency
+	// graph (server/dependencies.go), so this is a late-bound setter here
+	// rather than a constructor argument, exactly like hookBaseURLFn's own
+	// wiring above.
+	if deps.ReactiveQueueMgr != nil {
+		deps.ReactiveQueueMgr.SetDashboardBaseURLFn(hookBaseURLFn)
+	}
+
 	// Register Claude Code HTTP hook approval endpoint
 	approvalHandler := services.NewApprovalHandler(
 		deps.SessionService.GetApprovalStore(),
@@ -542,6 +553,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	approvalHandler.SetAnalyticsStore(deps.SessionService.GetAnalyticsStore())
 	// Wire the domain age checker (enabled by default) for newly-registered domain escalation
 	approvalHandler.SetDomainChecker(services.NewDomainAgeChecker(true))
+	// Wire the shared Slack notifier (Epic 1.3, Story 1.3.2) — the same instance
+	// deps.SlackNotifier constructed and wired into ReactiveQueueMgr, so
+	// GetDeliveryStatus() reflects sends from both trigger points.
+	approvalHandler.SetSlackNotifier(deps.SlackNotifier)
 	// Wire the notification stamper so approval outcomes persist across page refreshes
 	if notifStore != nil {
 		approvalHandler.SetNotificationStamper(notifStore)
