@@ -82,6 +82,7 @@ type ApprovalHandler struct {
 	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
 	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
 	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
+	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
@@ -181,6 +182,15 @@ func (h *ApprovalHandler) SetHeadlessPool(pool headlessPoolApprover) {
 // dependency in this file.
 func (h *ApprovalHandler) SetSlackNotifier(n *SlackNotifier) {
 	h.slackNotifier = n
+}
+
+// SetDashboardBaseURLFn wires the lazily-read dashboard-base-URL fallback
+// (see dashboardBaseURLFn's doc comment) used when building Slack "view in
+// dashboard" links for approval-pending notifications. nil-safe: when never
+// called, broadcastApprovalNotification falls back to whatever
+// cfg.Slack.DashboardBaseURL is (possibly empty, omitting the link).
+func (h *ApprovalHandler) SetDashboardBaseURLFn(fn func() string) {
+	h.dashboardBaseURLFn = fn
 }
 
 // SlackNotifierForTest returns the wired SlackNotifier instance. Exported
@@ -582,7 +592,10 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 	// ownership model) — no separate goroutine needed at this call site.
 	if h.slackNotifier != nil {
 		cfg := config.LoadConfig()
-		dashboardURL := cfg.Slack.DashboardBaseURL // fallback handled inside the notifier
+		dashboardURL := cfg.Slack.DashboardBaseURL
+		if dashboardURL == "" && h.dashboardBaseURLFn != nil {
+			dashboardURL = h.dashboardBaseURLFn()
+		}
 		h.slackNotifier.NotifyApprovalPending(context.Background(), cfg, approval, h.resolveSessionName(sessionID), dashboardURL)
 	}
 }

@@ -279,9 +279,7 @@ func (n *SlackNotifier) NotifyReviewQueueItem(ctx context.Context, cfg *config.C
 		}
 
 		payload := slackWebhookPayload{Text: primary, Blocks: blocks}
-		if err := n.postToSlack(ctx, webhookURL, payload); err != nil {
-			log.Warn("SlackNotifier: NotifyReviewQueueItem send failed", "error", err)
-		}
+		_ = n.postToSlack(ctx, webhookURL, payload) // failure already logged by postToSlack
 	})
 }
 
@@ -354,9 +352,7 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 		}
 
 		payload := slackWebhookPayload{Text: primary, Blocks: blocks}
-		if err := n.postToSlack(ctx, webhookURL, payload); err != nil {
-			log.Warn("SlackNotifier: NotifyApprovalPending send failed", "error", err)
-		}
+		_ = n.postToSlack(ctx, webhookURL, payload) // failure already logged by postToSlack
 	})
 }
 
@@ -417,9 +413,7 @@ func (n *SlackNotifier) MaybeNotifyQueueDepthThreshold(ctx context.Context, cfg 
 		}
 
 		payload := slackWebhookPayload{Text: primary, Blocks: blocks}
-		if err := n.postToSlack(ctx, webhookURL, payload); err != nil {
-			log.Warn("SlackNotifier: queue-depth digest send failed", "error", err)
-		}
+		_ = n.postToSlack(ctx, webhookURL, payload) // failure already logged by postToSlack
 	})
 
 	return true

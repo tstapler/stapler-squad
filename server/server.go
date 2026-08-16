@@ -558,6 +558,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// deps.SlackNotifier constructed and wired into ReactiveQueueMgr, so
 	// GetDeliveryStatus() reflects sends from both trigger points.
 	approvalHandler.SetSlackNotifier(deps.SlackNotifier)
+	// Same dashboard-link fallback as ReactiveQueueMgr above (Task 1.3.1c) —
+	// approval-pending Slack messages were silently dropping their "View X"
+	// link whenever cfg.Slack.DashboardBaseURL was unset, since ApprovalHandler
+	// never got this wired despite ReactiveQueueManager getting it.
+	approvalHandler.SetDashboardBaseURLFn(hookBaseURLFn)
 	// Wire the same shared instance into SessionService's SlackConfigService so
 	// GetSlackConfig's last_delivery reflects real review-queue/approval sends,
 	// not just TestSlackWebhook calls against SessionService's own private notifier.

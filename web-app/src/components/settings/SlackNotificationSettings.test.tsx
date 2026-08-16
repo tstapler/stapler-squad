@@ -92,6 +92,11 @@ describe("SlackNotificationSettings", () => {
       "Notify on new review-queue item",
     );
     expect(checkbox).toBeDisabled();
+
+    const approvalCheckbox = screen.getByLabelText(
+      "Allow Approve/Deny from Slack",
+    );
+    expect(approvalCheckbox).toBeDisabled();
   });
 
   it("SlackNotificationSettings_should_ShowEdgeTriggeredDigestHint_NextToThresholdInput", async () => {

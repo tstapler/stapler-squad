@@ -23,6 +23,7 @@ import {
   hint,
   errorText,
   removeBtn,
+  confirmRemoveBtn,
   toggleRow,
   toggleLabel,
   betaNote,
@@ -54,8 +55,10 @@ export function SlackNotificationSettings() {
   const [webhookConfigured, setWebhookConfigured] = useState(false);
   const [webhookInput, setWebhookInput] = useState("");
   const [webhookError, setWebhookError] = useState<string | null>(null);
+  const [removeConfirming, setRemoveConfirming] = useState(false);
 
   const [notifyOnQueueItem, setNotifyOnQueueItem] = useState(false);
+  const [approvalEnabled, setApprovalEnabled] = useState(false);
   const [queueDepthThreshold, setQueueDepthThreshold] = useState(0);
   const [dashboardBaseUrl, setDashboardBaseUrl] = useState("");
   const [dashboardWarningDismissed, setDashboardWarningDismissed] =
@@ -86,6 +89,7 @@ export function SlackNotificationSettings() {
       if (cfg) {
         setWebhookConfigured(cfg.webhookConfigured);
         setNotifyOnQueueItem(cfg.notifyOnQueueItem);
+        setApprovalEnabled(cfg.approvalEnabled);
         setQueueDepthThreshold(cfg.queueDepthThreshold);
         setDashboardBaseUrl(cfg.dashboardBaseUrl);
         if (cfg.lastDelivery) {
@@ -185,6 +189,7 @@ export function SlackNotificationSettings() {
       });
       setWebhookInput("");
       setTestResult(null);
+      setRemoveConfirming(false);
       await loadConfig();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
@@ -202,9 +207,7 @@ export function SlackNotificationSettings() {
         webhookUrl: trimmedWebhook,
         notifyOnQueueItem,
         queueDepthThreshold,
-        // Phase 2 ("Allow Approve/Deny from Slack") is not shipped yet — the
-        // checkbox is always disabled, so this is always sent false.
-        approvalEnabled: false,
+        approvalEnabled,
         dashboardBaseUrl: dashboardBaseUrl.trim(),
       });
       setWebhookInput("");
@@ -282,16 +285,27 @@ export function SlackNotificationSettings() {
               }
               aria-invalid={webhookError ? "true" : "false"}
             />
-            {webhookConfigured && (
+            {webhookConfigured && (removeConfirming ? (
+              <button
+                type="button"
+                className={confirmRemoveBtn}
+                onClick={handleRemoveWebhook}
+                disabled={saving}
+                data-testid="slack-webhook-confirm-remove"
+              >
+                Confirm remove?
+              </button>
+            ) : (
               <button
                 type="button"
                 className={removeBtn}
-                onClick={handleRemoveWebhook}
+                onClick={() => setRemoveConfirming(true)}
                 disabled={saving}
+                data-testid="slack-webhook-remove"
               >
                 Remove
               </button>
-            )}
+            ))}
           </div>
           <p id="slack-webhook-hint" className={hint}>
             Paste your Slack Incoming Webhook URL
@@ -372,17 +386,20 @@ export function SlackNotificationSettings() {
           <input
             id="slack-approval-enabled"
             type="checkbox"
-            checked={false}
-            onChange={() => {}}
-            disabled
+            checked={approvalEnabled}
+            onChange={(e) => setApprovalEnabled(e.target.checked)}
+            disabled={!togglesEnabled}
+            aria-describedby="slack-approval-enabled-hint"
           />
           <label htmlFor="slack-approval-enabled" className={toggleLabel}>
             Allow Approve/Deny from Slack
-            <span className={betaNote}>
-              Beta — requires public reachability; see docs
-            </span>
           </label>
         </div>
+        <p id="slack-approval-enabled-hint" className={betaNote}>
+          Beta — requires public reachability (stapler-squad must be reachable
+          from Slack&apos;s servers); see
+          .claude/docs/slack-phase2-public-reachability.md
+        </p>
 
         <div className={field}>
           <label htmlFor="slack-dashboard-base-url" className={labelClass}>

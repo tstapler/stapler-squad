@@ -101,6 +101,18 @@ export const removeBtn = style({
   },
 });
 
+export const confirmRemoveBtn = style({
+  padding: "0.375rem 0.75rem",
+  backgroundColor: vars.color.errorDark,
+  border: `2px solid ${vars.color.errorDark}`,
+  borderRadius: "4px",
+  color: vars.color.textInverse,
+  fontSize: "0.8125rem",
+  fontWeight: vars.fontWeight.bold,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+});
+
 export const toggleRow = style({
   display: "flex",
   alignItems: "flex-start",

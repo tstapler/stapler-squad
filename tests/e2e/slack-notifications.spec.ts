@@ -201,10 +201,13 @@ test.describe("slack-notifications", () => {
 
   test("toggle disabled until webhook configured", async ({ page }) => {
     const checkbox = page.getByLabel("Notify on new review-queue item");
+    const approvalCheckbox = page.getByLabel("Allow Approve/Deny from Slack");
     await expect(checkbox).toBeDisabled();
+    await expect(approvalCheckbox).toBeDisabled();
 
     await page.getByLabel("Webhook URL").fill(TEST_WEBHOOK_URL);
     await expect(checkbox).toBeEnabled();
+    await expect(approvalCheckbox).toBeEnabled();
   });
 
   test("shows dismissable warning when notify toggle is on and dashboard base URL is empty", async ({
@@ -277,6 +280,7 @@ test.describe("slack-notifications", () => {
     const testBtn = page.getByRole("button", { name: "Send test message" });
     const notifyCheckbox = page.getByLabel("Notify on new review-queue item");
     const thresholdInput = page.getByLabel(/Queue-depth digest threshold/);
+    const approvalCheckbox = page.getByLabel("Allow Approve/Deny from Slack");
     const dashboardInput = page.getByLabel("Dashboard URL");
     const saveBtn = page.getByRole("button", { name: "Save" });
 
@@ -300,8 +304,14 @@ test.describe("slack-notifications", () => {
     await page.keyboard.press("Tab");
     await expect(thresholdInput).toBeFocused();
 
-    // The disabled "Allow Approve/Deny from Slack" checkbox is unfocusable,
-    // so Tab skips straight past it to the next enabled control.
+    // With a webhook configured, the "Allow Approve/Deny from Slack" (Beta)
+    // checkbox is enabled like the other toggle and sits next in tab order.
+    await page.keyboard.press("Tab");
+    await expect(approvalCheckbox).toBeFocused();
+    await expect(approvalCheckbox).not.toBeChecked();
+    await page.keyboard.press("Space");
+    await expect(approvalCheckbox).toBeChecked();
+
     await page.keyboard.press("Tab");
     await expect(dashboardInput).toBeFocused();
 
