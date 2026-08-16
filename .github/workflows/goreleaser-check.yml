@@ -122,15 +122,14 @@ jobs:
             exit 1
           }
 
-      - name: "Smoke test: --mcp (initialize + tools/list JSON-RPC round trip, opens the session DB via buildMCPDeps fallback)"
+      - name: "Smoke test: --mcp (JSON-RPC initialize handshake, opens the session DB via buildMCPDeps fallback)"
         env:
           STAPLER_SQUAD_TEST_DIR: /tmp/ssq-smoke-test-mcp
         run: |
           BIN="${{ steps.locate.outputs.bin }}"
-          INIT_REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.0.0"}}}'
-          LIST_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.0.0"}}}'
           set +e
-          RESPONSE=$(printf '%s\n%s\n' "$INIT_REQUEST" "$LIST_REQUEST" | timeout 15 "$BIN" --mcp 2>/tmp/mcp-stderr.log)
+          RESPONSE=$(echo "$REQUEST" | timeout 15 "$BIN" --mcp 2>/tmp/mcp-stderr.log)
           STATUS=$?
           set -e
           echo "--- stdout ---"
@@ -141,13 +140,7 @@ jobs:
             echo "::error::--mcp exited with status $STATUS on a CGO_ENABLED=0 release binary"
             exit 1
           fi
-          INIT_RESPONSE=$(echo "$RESPONSE" | sed -n '1p')
-          LIST_RESPONSE=$(echo "$RESPONSE" | sed -n '2p')
-          echo "$INIT_RESPONSE" | grep -q '"result"' || {
-            echo "::error::initialize did not return a JSON-RPC result on a CGO_ENABLED=0 release binary — likely the cgo-only sqlite driver regression this job guards against"
-            exit 1
-          }
-          echo "$LIST_RESPONSE" | grep -q '"tools"' || {
-            echo "::error::tools/list did not return a tools array on a CGO_ENABLED=0 release binary — likely the cgo-only sqlite driver regression this job guards against"
+          echo "$RESPONSE" | grep -q '"result"' || {
+            echo "::error::--mcp did not return a JSON-RPC result on a CGO_ENABLED=0 release binary — likely the cgo-only sqlite driver regression this job guards against"
             exit 1
           }

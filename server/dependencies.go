@@ -254,7 +254,7 @@ func syncOrphanedApprovalsToQueue(
 			item.Branch = inst.Branch
 			item.Path = inst.Path
 			item.WorkingDir = inst.WorkingDir
-			item.Status = inst.Status.String()
+			item.Status = inst.GetLifecycleStatus().String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category
 			item.DiffStats = inst.GetDiffStats()
@@ -734,7 +734,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// RecoverFromStopped resets the status to Ready (bypassing the terminal-state
 		// guard) so Start(false) can hot-attach to the existing tmux session.
 		for _, inst := range instances {
-			if inst.Status == session.Stopped && inst.TmuxSessionExists() {
+			if inst.GetLifecycleStatus() == session.Stopped && inst.TmuxSessionExists() {
 				log.Info("Reconcile: session is Stopped in DB but tmux is alive — restoring", "session", inst.Title)
 				inst.RecoverFromStopped()
 				if err := inst.Start(false); err != nil {
@@ -802,7 +802,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		for _, inst := range instances {
 			started := inst.Started()
 			paused := inst.Paused()
-			if started && !paused && inst.Status != session.Stopped {
+			if started && !paused && inst.GetLifecycleStatus() != session.Stopped {
 				if inst.GetController() == nil {
 					if err := inst.StartController(); err != nil {
 						log.Warn("failed to start controller", "session", inst.Title, "err", err)
@@ -823,7 +823,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst.InitialPrompt == "" {
 				continue
 			}
-			if inst.Status == session.Paused || inst.Status == session.Stopped || inst.Status == session.Hibernated {
+			status := inst.GetLifecycleStatus()
+			if status == session.Paused || status == session.Stopped || status == session.Hibernated {
 				continue
 			}
 			session.StartSessionDriver(inst, inst.GetEffectiveRootDir())
@@ -952,7 +953,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			item.Branch = inst.Branch
 			item.Path = inst.Path
 			item.WorkingDir = inst.WorkingDir
-			item.Status = inst.Status.String()
+			item.Status = inst.GetLifecycleStatus().String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category
 			item.DiffStats = inst.GetDiffStats()
