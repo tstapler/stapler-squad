@@ -55,6 +55,17 @@ func TestGogitstore_Close_BoundedEvenWithStalledRead(t *testing.T) {
 	}
 	defer func() { debugStallHeldPackHandleRead = nil }()
 
+	// hedgeDone fires once closeHandleBounded's hedged-off background
+	// goroutine finishes closing the stalled handle — see
+	// debugHedgedPackHandleCloseDone's doc comment (store.go). Buffered so
+	// the hook never blocks the goroutine that calls it, even if this test
+	// doesn't drain it (e.g. hedging never triggers).
+	hedgeDone := make(chan struct{}, 1)
+	debugHedgedPackHandleCloseDone = func() {
+		hedgeDone <- struct{}{}
+	}
+	defer func() { debugHedgedPackHandleCloseDone = nil }()
+
 	head, err := gr.Head()
 	if err != nil {
 		t.Fatalf("Head: %v", err)
@@ -111,6 +122,16 @@ func TestGogitstore_Close_BoundedEvenWithStalledRead(t *testing.T) {
 	case <-readDone:
 	case <-time.After(10 * time.Second):
 		t.Fatal("stalled read did not complete after being released")
+	}
+
+	// Wait for closeHandleBounded's hedged-off background goroutine to
+	// actually finish closing the stalled handle before returning — an
+	// untracked goroutine here would let the test (and goleak in
+	// soak_test.go) miss a real hang/leak in that code path.
+	select {
+	case <-hedgeDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("hedged-off background close of the stalled handle did not complete after the read was released")
 	}
 }
 

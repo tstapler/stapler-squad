@@ -664,10 +664,6 @@ func (c *packHandleCache) get(pack plumbing.Hash, open func() (billy.File, error
 	return h, nil
 }
 
-// closeAll closes every handle this cache has opened and clears the map.
-// Must be called exactly once, when the owning WorktreeStorer is evicted
-// (see storer.go's WorktreeStorer.Close) — otherwise every cached handle
-// leaks a file descriptor for the life of the process.
 // packHandleCloseTimeout bounds how long closeAll waits for any single
 // handle's h.mu before giving up on that handle and moving on — see
 // closeAll's doc comment for why a concurrent reader can legitimately hold
@@ -732,9 +728,19 @@ func closeHandleBounded(pack plumbing.Hash, h *cachedPackHandle) {
 			defer h.mu.Unlock()
 			_ = h.f.Close()
 			log.Warn("gogitstore: slow pack handle close completed", "pack", pack.String())
+			if debugHedgedPackHandleCloseDone != nil {
+				debugHedgedPackHandleCloseDone()
+			}
 		}()
 	}
 }
+
+// debugHedgedPackHandleCloseDone is a test-only injection point (nil in
+// production) letting a test observe when closeHandleBounded's hedged-off
+// background goroutine has finished closing a handle, so a test can wait
+// for that goroutine to complete instead of returning while it is still
+// running — see closeHandleBounded's timeout branch.
+var debugHedgedPackHandleCloseDone func()
 
 // cachedPackHandle wraps one long-lived billy.File open on a pack, plus a
 // mutex serializing reads through it — packfile.Packfile/Scanner hold a seek
