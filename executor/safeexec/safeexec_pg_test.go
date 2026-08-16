@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -50,6 +51,39 @@ func captureLogs(t *testing.T, level slog.Level) *syncBuffer {
 	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: level})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return buf
+}
+
+// captureLogsJSON is captureLogs's JSON-handler counterpart: it lets a test
+// parse individual log records and assert on attribute *values* (not just
+// key substrings), which a text-format buffer can't do reliably.
+func captureLogsJSON(t *testing.T, level slog.Level) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: level})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+// findJSONLogRecord scans buf's newline-delimited JSON log records for one
+// whose "msg" field contains msgSubstring, returning its fields decoded as a
+// map (numbers as float64, per encoding/json's default). Returns nil if no
+// matching record is found.
+func findJSONLogRecord(t *testing.T, buf *syncBuffer, msgSubstring string) map[string]any {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("failed to parse JSON log line %q: %v", line, err)
+		}
+		if msg, _ := record["msg"].(string); strings.Contains(msg, msgSubstring) {
+			return record
+		}
+	}
+	return nil
 }
 
 // testMetricReader backs the single real MeterProvider installed for this
@@ -218,11 +252,17 @@ func Test_CommandContextPG_SigtermSucceeds_NoEscalationSignal(t *testing.T) {
 }
 
 func Test_CommandContextPG_EscalatesToSigkill_LogsWarnWithSnapshot(t *testing.T) {
-	withSigkillGrace(t, 200*time.Millisecond)
-	logs := captureLogs(t, slog.LevelDebug)
+	grace := 200 * time.Millisecond
+	withSigkillGrace(t, grace)
+	logs := captureLogsJSON(t, slog.LevelDebug)
 	before := sigkillEscalationsSum(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := startSigtermIgnoringChild(t, ctx)
+	// Captured now, not read from cmd.Process.Pid after cmd.Wait() below:
+	// Wait reaps the process, and cmd.Process's Pid field can no longer be
+	// trusted to reflect the process this test actually started once that
+	// happens.
+	pid := cmd.Process.Pid
 
 	cancel()
 	_ = cmd.Wait()
@@ -237,17 +277,30 @@ func Test_CommandContextPG_EscalatesToSigkill_LogsWarnWithSnapshot(t *testing.T)
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	out := logs.String()
-	if !strings.Contains(out, "escalated to SIGKILL") {
-		t.Fatalf("expected Warn escalation log, got: %s", out)
+	record := findJSONLogRecord(t, logs, "escalated to SIGKILL")
+	if record == nil {
+		t.Fatalf("expected Warn escalation log, got: %s", logs.String())
 	}
-	if !strings.Contains(out, "level=WARN") {
-		t.Fatalf("expected escalation log at Warn level, got: %s", out)
+	if level, _ := record["level"].(string); level != slog.LevelWarn.String() {
+		t.Fatalf("expected escalation log at Warn level, got level=%v (record: %v)", record["level"], record)
 	}
-	for _, field := range []string{"pgid", "grace", "proc_state"} {
-		if !strings.Contains(out, field+"=") {
-			t.Fatalf("expected %q attribute in escalation log, got: %s", field, out)
-		}
+
+	gotPgid, ok := record["pgid"].(float64)
+	if !ok || int(gotPgid) != pid {
+		t.Fatalf("expected pgid=%d in escalation log, got %v (record: %v)", pid, record["pgid"], record)
+	}
+
+	// grace is logged as a time.Duration, which slog's JSON handler encodes
+	// as an int64 count of nanoseconds (see log/slog's json_handler.go) — so
+	// this must equal the exact configured grace, not merely "present".
+	gotGrace, ok := record["grace"].(float64)
+	if !ok || time.Duration(gotGrace) != grace {
+		t.Fatalf("expected grace=%s in escalation log, got %v (record: %v)", grace, record["grace"], record)
+	}
+
+	gotProcState, ok := record["proc_state"].(string)
+	if !ok || gotProcState == "" || gotProcState == "unknown" {
+		t.Fatalf("expected a live/zombie proc_state snapshot (not \"unknown\"/empty) in escalation log, got %v (record: %v)", record["proc_state"], record)
 	}
 
 	if delta := sigkillEscalationsDelta(t, before); delta != 1 {
