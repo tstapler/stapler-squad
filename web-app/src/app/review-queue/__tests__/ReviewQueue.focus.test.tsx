@@ -212,4 +212,21 @@ describe("Review queue session-detail modal focus restoration", () => {
 
     await waitFor(() => expect(document.activeElement).toBe(opener));
   });
+
+  it("SessionDetailModal_should_openWithoutCrashing_When_openedViaDeepLinkWithNoPriorClick", async () => {
+    // Deep-linking (?session=s1) opens the modal with no click at all, so
+    // sessionTriggerRef.current stays null -- page.tsx documents this as
+    // deliberate. useFocusTrap must no-op restoring focus rather than throw.
+    mockSessionParam = sessionOne.id;
+    try {
+      render(<Harness />);
+      await waitFor(() => expect(screen.getByRole("dialog")).not.toBeNull());
+
+      fireEvent.click(screen.getByText("Close"));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    } finally {
+      mockSessionParam = null;
+    }
+  });
 });
