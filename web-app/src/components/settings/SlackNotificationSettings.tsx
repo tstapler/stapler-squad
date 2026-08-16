@@ -181,7 +181,7 @@ export function SlackNotificationSettings() {
         notifyOnQueueItem: false,
         queueDepthThreshold,
         approvalEnabled: false,
-        dashboardBaseUrl,
+        dashboardBaseUrl: dashboardBaseUrl.trim(),
       });
       setWebhookInput("");
       setTestResult(null);
