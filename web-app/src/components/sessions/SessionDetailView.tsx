@@ -684,7 +684,12 @@ export function SessionDetailView({
   // Action sheet handlers
   const handlePauseResume = async () => {
     if (session.status === SessionStatus.PAUSED) {
-      resumeTriggerRef.current = document.activeElement as HTMLElement;
+      // The action sheet's own opener buttons unmount when the sheet closes, so
+      // fall back to the persistent "More actions" button in that case (see
+      // tagEditorTriggerRef/workspaceSwitchTriggerRef below for the same pattern).
+      resumeTriggerRef.current = actionSheetOpen
+        ? moreActionsButtonRef.current
+        : (document.activeElement as HTMLElement);
       setActionSheetOpen(false);
       setShowResumeModal(true);
     } else {
