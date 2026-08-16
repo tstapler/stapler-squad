@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -947,4 +949,87 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()
+}
+
+// recordingClassifier delegates classification to a real classifier.Classifier while
+// capturing the last ClassificationResult. hookDecisionResponse (the HTTP-level response
+// body) only carries behavior + message, not RuleID, so a test asserting which rule drove
+// a decision needs this seam instead.
+type recordingClassifier struct {
+	inner   classifier.Classifier
+	lastRes classifier.ClassificationResult
+}
+
+func (r *recordingClassifier) Classify(payload classifier.PermissionRequestPayload, ctx classifier.ClassificationContext) classifier.ClassificationResult {
+	res := r.inner.Classify(payload, ctx)
+	r.lastRes = res
+	return res
+}
+
+func (r *recordingClassifier) BuildContext(cwd string) classifier.ClassificationContext {
+	return r.inner.BuildContext(cwd)
+}
+
+// TestHandlePermissionRequest_DeniesBasedOnSessionIdleTime_EndToEnd is the full-chain
+// regression test for the MinSessionIdleMinutes feature: it upserts a real rule through
+// RulesService (proto -> RuleSpec -> ent storage -> classifier.Rule, the same path
+// TestMinSessionIdleMinutes_SurvivesRoundTrip verifies in isolation), wires the SAME
+// *classifier.RuleBasedClassifier instance RulesService rebuilt into a real
+// ApprovalHandler, then drives an actual HandlePermissionRequest call against a session
+// reporting 45 minutes idle. It exists to catch a regression where RulesService and
+// ApprovalHandler each work correctly in isolation but don't actually compose — e.g. the
+// handler classifying against a stale/disconnected classifier instance rather than the
+// one RulesService just rebuilt.
+func TestHandlePermissionRequest_DeniesBasedOnSessionIdleTime_EndToEnd(t *testing.T) {
+	svc := newSimpleRulesService(t)
+
+	const ruleID = "idle-gate-deny-bash"
+	upsertResp, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:       ruleID,
+			Name:     "Deny Bash on long-idle sessions",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_DENY,
+			Enabled:  true,
+			// Outranks every seed rule (max seed priority is 1000, see classifier.SeedRules)
+			// so this rule is evaluated first regardless of which seed rules also match "Bash".
+			Priority:              5000,
+			MinSessionIdleMinutes: 30,
+			Reason:                "Session has been idle too long to safely run Bash commands unattended.",
+		},
+	}))
+	require.NoError(t, err)
+	require.Equal(t, ruleID, upsertResp.Msg.Rule.Id)
+
+	// Wrap the exact classifier instance RulesService just rebuilt (svc.classifier) --
+	// not a separately-constructed classifier loaded with equivalent rules -- so this
+	// test fails if the two services are ever wired to different classifier instances.
+	rc := &recordingClassifier{inner: svc.classifier}
+
+	h, storage := newHandlerWithStorage(t)
+	h.SetClassifier(rc)
+	h.timeout = 100 * time.Millisecond // short so the Escalate fallthrough (if any) times out fast
+
+	const uuid = "ffffffff-1111-2222-3333-ffffffffffff"
+	now := time.Now()
+	inst := &session.Instance{
+		Title:     "idle-45",
+		UUID:      uuid,
+		Path:      "/projects/idle-45",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: now.Add(-45 * time.Minute), // no meaningful output recorded — falls back to time since creation
+		UpdatedAt: now,
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
+
+	rr := postPermissionRequestWithCommand(t, h, uuid, "Bash", "npm test")
+
+	var resp hookDecisionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Equal(t, "deny", resp.HookSpecificOutput.Decision.Behavior,
+		"a session idle 45m, past the rule's 30m MinSessionIdleMinutes threshold, must be denied")
+	assert.Equal(t, ruleID, rc.lastRes.RuleID,
+		"the denial must be attributed to the rule upserted via RulesService, proving RulesService and ApprovalHandler compose against the same live rule set")
 }

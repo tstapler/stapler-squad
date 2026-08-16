@@ -14,6 +14,7 @@ import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -135,6 +136,7 @@ import {
   autoApproveBadge,
   autoApprovePendingBadge,
   noteBadge,
+  staleBadge,
   creationSpinner,
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
@@ -173,6 +175,11 @@ interface SessionCardProps {
   detectedStatus?: DetectedStatus; // Terminal-detected status from pattern analysis
   detectedContext?: string; // Context string for the detected status
   suppressApprovalSubStatus?: boolean; // When true, hides Needs Approval chip/badge during optimistic clear
+  // Minutes of inactivity after which an ACTIVE session is flagged "Stale" (see
+  // lib/session-staleness.ts's isSessionStale). Optional/defaulted so existing call
+  // sites and tests that don't thread it through keep compiling; SessionList passes
+  // the resolved value from useStaleSessionConfig().
+  staleThresholdMinutes?: number;
 }
 
 function SessionCardInner({
@@ -205,6 +212,7 @@ function SessionCardInner({
   detectedStatus,
   detectedContext,
   suppressApprovalSubStatus = false,
+  staleThresholdMinutes = 30,
 }: SessionCardProps) {
   const sessionActions = useSessionActions(session.id);
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
@@ -617,6 +625,15 @@ function SessionCardInner({
               !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
                 <SubStatusChip subStatus={session.subStatus} />
               )}
+            {isSessionStale(session, staleThresholdMinutes) && (
+              <span
+                role="img"
+                aria-label={`Stale — no output for over ${staleThresholdMinutes} minutes`}
+                className={`${staleBadge}`}
+              >
+                🟠 Stale
+              </span>
+            )}
             {(() => {
               const mb = Number(session.memoryRssMb ?? 0n);
               if (mb <= 0) return null;
@@ -803,11 +820,7 @@ function SessionCardInner({
         )}
         {/* Last Activity — Tier 1 always-visible in header */}
         {(() => {
-          const moSecs = session.lastMeaningfulOutput?.seconds ?? BigInt(0);
-          const tuSecs = session.lastTerminalUpdate?.seconds ?? BigInt(0);
-          const lastActivity = moSecs === BigInt(0) && tuSecs === BigInt(0)
-            ? undefined
-            : moSecs >= tuSecs ? session.lastMeaningfulOutput : session.lastTerminalUpdate;
+          const lastActivity = getLastActivityTimestamp(session);
           return lastActivity ? (
             <div className={lastActivityRow}>
               <span className={lastActivityLabel}>Active</span>

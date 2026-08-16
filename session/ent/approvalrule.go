@@ -68,7 +68,9 @@ type ApprovalRule struct {
 	SafePythonImportsOnly bool `json:"safe_python_imports_only,omitempty"`
 	// RequireCiPassing holds the value of the "require_ci_passing" field.
 	RequireCiPassing bool `json:"require_ci_passing,omitempty"`
-	selectValues     sql.SelectValues
+	// MinSessionIdleMinutes holds the value of the "min_session_idle_minutes" field.
+	MinSessionIdleMinutes int32 `json:"min_session_idle_minutes,omitempty"`
+	selectValues          sql.SelectValues
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -80,7 +82,7 @@ func (*ApprovalRule) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case approvalrule.FieldEnabled, approvalrule.FieldSafePythonImportsOnly, approvalrule.FieldRequireCiPassing:
 			values[i] = new(sql.NullBool)
-		case approvalrule.FieldID, approvalrule.FieldDecision, approvalrule.FieldRiskLevel, approvalrule.FieldPriority:
+		case approvalrule.FieldID, approvalrule.FieldDecision, approvalrule.FieldRiskLevel, approvalrule.FieldPriority, approvalrule.FieldMinSessionIdleMinutes:
 			values[i] = new(sql.NullInt64)
 		case approvalrule.FieldRuleID, approvalrule.FieldName, approvalrule.FieldToolName, approvalrule.FieldToolPattern, approvalrule.FieldToolCategory, approvalrule.FieldCommandPattern, approvalrule.FieldFilePattern, approvalrule.FieldReason, approvalrule.FieldAlternative, approvalrule.FieldSource:
 			values[i] = new(sql.NullString)
@@ -271,6 +273,12 @@ func (_m *ApprovalRule) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.RequireCiPassing = value.Bool
 			}
+		case approvalrule.FieldMinSessionIdleMinutes:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field min_session_idle_minutes", values[i])
+			} else if value.Valid {
+				_m.MinSessionIdleMinutes = int32(value.Int64)
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -381,6 +389,9 @@ func (_m *ApprovalRule) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("require_ci_passing=")
 	builder.WriteString(fmt.Sprintf("%v", _m.RequireCiPassing))
+	builder.WriteString(", ")
+	builder.WriteString("min_session_idle_minutes=")
+	builder.WriteString(fmt.Sprintf("%v", _m.MinSessionIdleMinutes))
 	builder.WriteByte(')')
 	return builder.String()
 }
