@@ -61,6 +61,25 @@ All external-boundary error paths (config file I/O, ent-backed store, event bus 
 - Each edge-triggered notification logs via the existing notification-event pathway.
 - No new alerting infra introduced (matches `CLAUDE.md`'s single-user, self-hosted, no-alerting-infra guidance) — the in-app notification is the alert mechanism, per plan.md's Observability Plan.
 
+## Post-Verification Review Cycle 1 (FAIL → fixed)
+
+The human/automated reviewer's `/backlog/review` pass (after this report's original PASS verdict above) found this
+verification incomplete on two points this report's Layer 1+2 fix loop did not catch:
+
+1. **AC4 real bug**: `StaleSessionNotifier.checkAll()` recorded a session as "already notified" in its dedup map
+   whenever it first crossed the stale threshold, regardless of `notify_enabled` — only the actual `notify()` call
+   was gated by the flag. If `notify_enabled` was `false` when a session first went stale, then flipped `true` later
+   in the *same* continuous stale episode (idle time never recovered below threshold in between), the notification
+   was permanently swallowed. Fixed in commit `8fbcbf048`: `notifyEnabled` now gates whether the dedup entry is
+   *written*, not just whether `notify()` is called. New regression test
+   `TestStaleSessionNotifier_checkAll_should_FireOnceOnceEnabled_When_NotifyWasDisabledDuringInitialStaleCrossing`.
+2. **AC7 minor gap**: `docs/registry/features/backend/approval/list-rules.json` cited
+   `TestMinSessionIdleMinutes_SurvivesRoundTrip` as covering `ListApprovalRules`, but that test never called the RPC.
+   Fixed in the same commit by adding a genuine 4th hop to the test that calls `ListApprovalRules` and asserts the
+   returned proto's `MinSessionIdleMinutes`, making the existing citation accurate.
+
+Re-verified after the fix: `go build ./...` clean, `go test ./server/services/... -run "StaleSessionNotifier|MinSessionIdleMinutes" -v` 8/8 pass, full `go test ./server/services/...` package suite green.
+
 ## Layer 4 — UX & Behavioral
 
 Skipped `quality:does-it-work`/Playwright golden-path run given the scope and time already invested in this large feature; UX acceptance criteria are covered by the 31-criterion mapping in `validation.md` (component/unit tests) plus this verification's explicit row-view fix. Manual smoke test of `StaleSessionNotifier` (Task 4.2.1b in plan.md) is documented as a manual, non-automated step in the plan and was not re-run in this session — flagged here as a known gap for the human reviewer to spot-check if desired.
@@ -72,7 +91,8 @@ Skipped `quality:does-it-work`/Playwright golden-path run given the scope and ti
 | L1+L2 | 1 / 5 | 2 MUST FIX (row-view badge, threshold reset bug) | 0 |
 | L3 | 0 / 5 | — (no correctness/test failures) | 0 |
 | L4 | 0 / 5 (skipped — see note above) | — | 0 |
+| Post-review cycle 1 | 1 / 3 | 2 (notify-flag dedup swallow bug, registry citation gap) | 0 |
 
 ## Verdict
 
-✅ **PASS** — all layers clean after the one fix-loop iteration. Ready for shipping.
+✅ **PASS** — all layers clean after the sdd:6-verify fix loop and one post-review repair cycle. Ready for shipping.
