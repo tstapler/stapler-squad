@@ -15,7 +15,6 @@ package gogitstore
 // mmap_stage2_test.go, alongside the staleness-detection and toggle tests.
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -27,7 +26,6 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/idxfile"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestMmapIndex_MatchesCopyBasedLoader_ByteForByte builds a real packed
@@ -39,6 +37,21 @@ import (
 // PackfileChecksum, IdxChecksum, every Entries() tuple, every FindOffset/
 // FindHash/FindCRC32/Contains result) must match exactly — not a spot check.
 func TestMmapIndex_MatchesCopyBasedLoader_ByteForByte(t *testing.T) {
+	if testing.Short() {
+		// This test's own fixture build is cheap now that buildPackedFixture
+		// caches the real git work per numCommits (see gogitstore_test.go's
+		// "golden fixture cache" section) — the reason to keep this gated is
+		// that it was the specific test whose from-scratch fixture build (back
+		// when every call paid the real cost) bottomed out both a 30-minute
+		// goroutine-dump timeout and a later `-race` 600s timeout, both in the
+		// same buildPackedFixtureOnce/gitRunErr real-git-subprocess path. The
+		// correctness this test proves (mmap-based .idx loading is
+		// byte-for-byte equivalent to the copy-based decoder) is exercised
+		// on demand via BenchmarkMmapIndex_LoadVsCopyBased below instead of on
+		// every -short run. See mmap_stage2_test.go:156/434 and
+		// gogitstore_test.go:746/1017 for the established -short convention.
+		t.Skip("skipped under -short: see BenchmarkMmapIndex_LoadVsCopyBased for on-demand coverage of this path")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
@@ -216,6 +229,62 @@ func TestMmapIndex_MatchesCopyBasedLoader_ByteForByte(t *testing.T) {
 	}
 }
 
+// BenchmarkMmapIndex_LoadVsCopyBased keeps the mmap-vs-copy-based .idx
+// loading path (proved byte-for-byte equivalent by
+// TestMmapIndex_MatchesCopyBasedLoader_ByteForByte, now testing.Short()-gated
+// — see that test's doc comment) exercised on demand: builds one real packed
+// fixture, then times openMmapIndexHandle (mmap-based) against
+// idxfile.NewDecoder(...).Decode (copy-based) loading the identical on-disk
+// .idx file. Run explicitly with `go test -run '^$' -bench BenchmarkMmapIndex
+// ./session/unfinished/gogitstore/...` — it is not part of any -short or
+// default `go test` run.
+func BenchmarkMmapIndex_LoadVsCopyBased(b *testing.B) {
+	if _, err := exec.LookPath("git"); err != nil {
+		b.Skip("git binary not available")
+	}
+	dir := b.TempDir()
+	buildPackedFixture(b, dir, 90)
+
+	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(dir)
+	if err != nil {
+		b.Fatalf("resolveGitFilesystems: %v", err)
+	}
+	store := newSharedObjectStore(commonDirAbs, commonFs, nil, 0, false)
+	packs, err := store.dir.ObjectPacks()
+	if err != nil {
+		b.Fatalf("ObjectPacks: %v", err)
+	}
+	if len(packs) != 1 {
+		b.Fatalf("fixture produced %d packs, want exactly 1", len(packs))
+	}
+	packHash := packs[0]
+
+	b.Run("copy", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			f, err := store.dir.ObjectPackIdx(packHash)
+			if err != nil {
+				b.Fatalf("ObjectPackIdx: %v", err)
+			}
+			mi := idxfile.NewMemoryIndex()
+			if err := idxfile.NewDecoder(f).Decode(mi); err != nil {
+				b.Fatalf("Decode: %v", err)
+			}
+			_ = f.Close()
+		}
+	})
+
+	b.Run("mmap", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			handle, err := openMmapIndexHandle(commonDirAbs, packHash)
+			if err != nil {
+				b.Fatalf("openMmapIndexHandle: %v", err)
+			}
+			_ = handle.mapping.Unmap()
+			_ = handle.file.Close()
+		}
+	})
+}
+
 // hashFromString parses a hex hash string (as produced by plumbing.Hash's
 // String method during the Entries() walk above) back into a
 // plumbing.Hash. plumbing.NewHash returns the zero hash on malformed input
@@ -258,6 +327,19 @@ func hashFromString(t *testing.T, s string) plumbing.Hash {
 // pre-unmap checksum (which would mean the UB, against all odds, didn't
 // manifest at all this run).
 func TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash(t *testing.T) {
+	if testing.Short() && os.Getenv("GOGITSTORE_MMAP_CRASH_HELPER") != "1" {
+		// The GOGITSTORE_MMAP_CRASH_HELPER re-exec below builds its own
+		// 60-commit fixture (runMmapCrashHelper -> buildPackedFixture) in a
+		// SEPARATE OS PROCESS, by necessity — the whole point of this test is
+		// to crash/corrupt that process, which the parent process's in-memory
+		// golden-fixture cache (see gogitstore_test.go) can't help with since
+		// it lives in a different address space. That means every run of
+		// this test pays a full from-scratch fixture build (~30s observed),
+		// unlike every other buildPackedFixture caller in this package. Gate
+		// it the same way as the other slow, non-cache-fixable tests (see
+		// mmap_stage2_test.go:156/434, gogitstore_test.go:746/1017).
+		t.Skip("skipped under -short: crash-detection subprocess can't share the parent's fixture cache, so this always pays a full from-scratch build")
+	}
 	if os.Getenv("GOGITSTORE_MMAP_CRASH_HELPER") == "1" {
 		runMmapCrashHelper(t)
 		return
@@ -266,9 +348,11 @@ func TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash(t *testing.T) {
 		t.Skip("git binary not available")
 	}
 
-	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash$", "-test.v")
-	cmd.Env = append(os.Environ(), "GOGITSTORE_MMAP_CRASH_HELPER=1")
-	out, err := cmd.CombinedOutput()
+	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash", "GOGITSTORE_MMAP_CRASH_HELPER=1")
+	if result.Outcome == crashSubprocessTimedOut {
+		t.Skip("subprocess killed by its own timeout — inconclusive, not proof of the crash/corruption this test exists to demonstrate")
+	}
+	out, err := result.Output, result.Err
 
 	if err != nil {
 		var exitErr *exec.ExitError

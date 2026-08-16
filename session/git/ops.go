@@ -462,16 +462,41 @@ func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
 		return "", err
 	}
 
+	return diffHashFromFilePatches(patch.FilePatches()), nil
+}
+
+// diffHashFromFilePatches is DiffHashBetween's core, split out so a test can
+// drive it with fake fdiff.FilePatch values instead of coaxing a real git
+// repository into producing a specific go-git edge case.
+func diffHashFromFilePatches(filePatches []fdiff.FilePatch) string {
 	type fileDigest struct {
 		path    string
 		content string
 	}
-	digests := make([]fileDigest, 0, len(patch.FilePatches()))
-	for _, fp := range patch.FilePatches() {
+	digests := make([]fileDigest, 0, len(filePatches))
+	for _, fp := range filePatches {
+		chunks := fp.Chunks()
+		if len(chunks) == 0 {
+			// Binary file (or submodule ref update) — no line-level diff to
+			// report; see FileStatsBetween's doc comment. Also covers symlink
+			// changes: go-git's Files() returns (nil, nil) for non-regular-file
+			// tree entries regardless of add/modify/delete, which would
+			// otherwise panic below on the assumption that at most one side is
+			// nil.
+			continue
+		}
+
 		from, to := fp.Files()
 		path := ""
 		status := ""
 		switch {
+		case from == nil && to == nil:
+			// go-git can return (nil, nil) from Files() even when Chunks() is
+			// non-empty -- observed in production on symlink/gitlink type-change
+			// entries whose textual content still produces chunks. Skip rather
+			// than falling into the single-sided cases below, which assume at
+			// most one side is nil and would dereference the other.
+			continue
 		case from == nil:
 			status, path = "added", to.Path()
 		case to == nil:
@@ -485,7 +510,7 @@ func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
 		var b strings.Builder
 		b.WriteString(status)
 		b.WriteByte('\n')
-		for _, chunk := range fp.Chunks() {
+		for _, chunk := range chunks {
 			fmt.Fprintf(&b, "%d:%s\n", chunk.Type(), chunk.Content())
 		}
 		digests = append(digests, fileDigest{path: path, content: b.String()})
@@ -499,7 +524,7 @@ func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
 		h.Write([]byte(d.content))
 		h.Write([]byte{0})
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // CheckoutBranch checks out a branch in an existing repository.

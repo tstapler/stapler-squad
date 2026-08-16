@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -44,6 +45,21 @@ type PRReassignmentGuard struct {
 	// NewPRAuthorVerified must be true only when the caller has verified the
 	// new PR's GitHub author matches the caller's own verified identity.
 	NewPRAuthorVerified bool
+}
+
+// ErrDependencyCycle is returned by AddBacklogItemDependency when the new
+// blocker->blocked edge would create a cycle in the dependency graph.
+var ErrDependencyCycle = errors.New("backlog item dependency would create a cycle")
+
+// BacklogItemDependencyEdge names a blocker/blocked pair explicitly so the
+// two bare ID strings can't be silently swapped at a call site — see
+// .claude/rules/primitive-obsession-checklist.md.
+type BacklogItemDependencyEdge struct {
+	// BlockerID is the item that must reach a resolved status (done or
+	// archived) before BlockedID is eligible for dequeue/start.
+	BlockerID string
+	// BlockedID is the dependent item, gated until BlockerID resolves.
+	BlockedID string
 }
 
 // Repository defines the interface for session persistence operations.
@@ -204,6 +220,8 @@ type Repository interface {
 	UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error)
 	// ArchiveBacklogItem sets the archived_at timestamp on a backlog item.
 	ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
+	// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+	UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
 	// DeleteBacklogItem permanently removes an item and all its child records.
 	DeleteBacklogItem(ctx context.Context, id string) error
 	// TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
@@ -217,6 +235,20 @@ type Repository interface {
 	// Unlike ListBacklogItems it omits Description/plan fields and eagerly loads
 	// ItemSessions (with ReviewVerdict) without over-fetching status events.
 	ListBacklogItemSummaries(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemSummary, error)
+	// AddBacklogItemDependency records that edge.BlockedID may not be
+	// dequeued/started until edge.BlockerID reaches a resolved status
+	// (done). Upserts against the unique (blocker_id, blocked_id) index —
+	// adding an existing pair is a no-op. Returns an error if the new edge
+	// would create a cycle.
+	AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error
+	// UnresolvedBlockerItemIDs returns the subset of itemIDs that have at
+	// least one BacklogItemDependency whose blocker has not reached done.
+	// Batched by blocked_id so callers (DequeueNextQueuedItems,
+	// transitionWithGuard) avoid an N+1 per-candidate query.
+	UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error)
+	// UnresolvedBlockerIDs returns the specific blocker item IDs still
+	// unresolved for a single blocked item, for stuck-reason messaging.
+	UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error)
 
 	// --- ItemSource ---
 
@@ -259,6 +291,7 @@ type ApprovalRuleData struct {
 	PythonModes           []string
 	SafePythonImportsOnly bool
 	RequireCIPassing      bool
+	MinSessionIdleMinutes int32
 }
 
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
@@ -345,6 +378,7 @@ type ItemSessionSummary struct {
 	StartedAt             *time.Time
 	EndedAt               *time.Time
 	EndReason             string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
+	FailureCapturePath    string // absolute path to a durable raw-output capture; see ItemSession.failure_capture_path schema comment
 	LastCommitAt          *time.Time
 	LastFileTouchAt       *time.Time
 	LastProgressAt        *time.Time
@@ -355,6 +389,10 @@ type ItemSessionSummary struct {
 	VerificationNotes     string // freeform verification evidence reported via request_review
 	OverallOutcome        string // from linked review_verdict (empty if none)
 	ReviewVerdict         *ReviewVerdictSummary
+	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
+	// attached this session. See ItemSession.claimant_host_id's schema comment for the
+	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.
+	ClaimantHostID string
 }
 
 // BacklogStatusEventData is the domain DTO replacing *ent.BacklogStatusEvent in Storage returns.
@@ -503,8 +541,24 @@ type BacklogItemData struct {
 	// fetch or file-stats computation failed — distinct from
 	// ShippedCheckConclusion, which holds only genuine CI-conclusion values.
 	ShippedSnapshotCaptureFailed bool
-	CreatedAt                    time.Time
-	UpdatedAt                    time.Time
+	// NextWorkflowID is the pipeline-chaining target (webhook-triggers FR10/AC5):
+	// the Workflow ChainFirer fires once this item reaches BacklogStatusDone. Nil
+	// means no chain is configured.
+	NextWorkflowID *uuid.UUID
+	// ChainFired is true once the NextWorkflowID chain-fire has reached a
+	// terminal outcome (fired, depth-capped, or expired) — never retried again
+	// once true. See ChainFirer/TriggerChainReconciler.
+	ChainFired bool
+	// ChainedAt is set atomically with the terminal done transition (when
+	// NextWorkflowID is already configured) — the eligibility timestamp
+	// TriggerChainReconciler's maxChainWaitDuration ceiling measures age
+	// against. Nil until the item has reached done with a chain configured.
+	ChainedAt *time.Time
+	// TriggeredByChainDepth is how many chain hops produced this item —
+	// propagated session->session and hard-capped at maxChainDepth (Epic 6.3).
+	TriggeredByChainDepth int
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 	// ItemSessions holds the eagerly-loaded item sessions for this backlog item.
 	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
 	ItemSessions []ItemSessionSummary
@@ -572,6 +626,19 @@ type BacklogItemFilter struct {
 	Limit int
 	// Offset skips the first N results (for pagination). Only applied when Limit > 0.
 	Offset int
+	// ChainFired, when non-nil, restricts results to items whose chain_fired
+	// column equals *ChainFired. Added so TriggerChainReconciler.ReconcileChains
+	// (session/chain_firer.go) can push its "unfired pending chain" filter into
+	// SQL instead of scanning every "done" item up to the default 1000-row
+	// safety cap and filtering in Go — past 1000 done items, a pending unfired
+	// chain outside that window was silently never reconciled (sdd:6-verify
+	// finding). Backed by index.Fields("status", "chain_fired")
+	// (session/ent/schema/backlog_item.go).
+	ChainFired *bool
+	// NextWorkflowIDSet, when non-nil, restricts results to items where
+	// next_workflow_id IS NOT NULL (true) or IS NULL (false). See ChainFired's
+	// doc comment — the two are combined by ReconcileChains's query.
+	NextWorkflowIDSet *bool
 }
 
 // BacklogItemUpdate carries the mutable fields for UpdateBacklogItem.
@@ -661,6 +728,23 @@ type BacklogItemUpdate struct {
 	// JSON-encoded set of user-modified field names (e.g. `["title"]`). Build
 	// the value with MergeUserModifiedFields rather than hand-encoding JSON.
 	UserModifiedFields *string
+	// NextWorkflowID/ClearNextWorkflowID follow the same nillable-clear
+	// convention as GitHubSyncedIssueUpdatedAt: nil+false means "leave
+	// untouched", ClearNextWorkflowID=true explicitly clears the chain
+	// configuration back to nil, otherwise a non-nil pointer sets it
+	// (webhook-triggers FR10/AC5 — see BacklogItemData.NextWorkflowID).
+	NextWorkflowID      *uuid.UUID
+	ClearNextWorkflowID bool
+	// ChainFired is a normal presence pointer (no clear semantics needed — it
+	// only ever moves false->true, by ChainFirer/TriggerChainReconciler).
+	ChainFired *bool
+	// ChainedAt/ClearChainedAt follow the same nillable-clear convention as
+	// NextWorkflowID above.
+	ChainedAt      *time.Time
+	ClearChainedAt bool
+	// TriggeredByChainDepth is a normal presence pointer — non-nillable in the
+	// schema (Default 0), so no clear semantics are needed.
+	TriggeredByChainDepth *int
 }
 
 // BacklogItemPrecondition is used for optimistic locking on update/transition.

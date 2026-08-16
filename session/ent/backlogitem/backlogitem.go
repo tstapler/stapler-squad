@@ -89,6 +89,14 @@ const (
 	FieldShippedSnapshotCaptureFailed = "shipped_snapshot_capture_failed"
 	// FieldReworkCapOverride holds the string denoting the rework_cap_override field in the database.
 	FieldReworkCapOverride = "rework_cap_override"
+	// FieldNextWorkflowID holds the string denoting the next_workflow_id field in the database.
+	FieldNextWorkflowID = "next_workflow_id"
+	// FieldChainFired holds the string denoting the chain_fired field in the database.
+	FieldChainFired = "chain_fired"
+	// FieldChainedAt holds the string denoting the chained_at field in the database.
+	FieldChainedAt = "chained_at"
+	// FieldTriggeredByChainDepth holds the string denoting the triggered_by_chain_depth field in the database.
+	FieldTriggeredByChainDepth = "triggered_by_chain_depth"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -105,6 +113,10 @@ const (
 	EdgeProgressNotes = "progress_notes"
 	// EdgeSource holds the string denoting the source edge name in mutations.
 	EdgeSource = "source"
+	// EdgeBlockingDependencies holds the string denoting the blocking_dependencies edge name in mutations.
+	EdgeBlockingDependencies = "blocking_dependencies"
+	// EdgeBlockedByDependencies holds the string denoting the blocked_by_dependencies edge name in mutations.
+	EdgeBlockedByDependencies = "blocked_by_dependencies"
 	// Table holds the table name of the backlogitem in the database.
 	Table = "backlog_items"
 	// ItemSessionsTable is the table that holds the item_sessions relation/edge.
@@ -147,6 +159,20 @@ const (
 	SourceInverseTable = "item_sources"
 	// SourceColumn is the table column denoting the source relation/edge.
 	SourceColumn = "item_source_backlog_items"
+	// BlockingDependenciesTable is the table that holds the blocking_dependencies relation/edge.
+	BlockingDependenciesTable = "backlog_item_dependencies"
+	// BlockingDependenciesInverseTable is the table name for the BacklogItemDependency entity.
+	// It exists in this package in order to avoid circular dependency with the "backlogitemdependency" package.
+	BlockingDependenciesInverseTable = "backlog_item_dependencies"
+	// BlockingDependenciesColumn is the table column denoting the blocking_dependencies relation/edge.
+	BlockingDependenciesColumn = "blocker_id"
+	// BlockedByDependenciesTable is the table that holds the blocked_by_dependencies relation/edge.
+	BlockedByDependenciesTable = "backlog_item_dependencies"
+	// BlockedByDependenciesInverseTable is the table name for the BacklogItemDependency entity.
+	// It exists in this package in order to avoid circular dependency with the "backlogitemdependency" package.
+	BlockedByDependenciesInverseTable = "backlog_item_dependencies"
+	// BlockedByDependenciesColumn is the table column denoting the blocked_by_dependencies relation/edge.
+	BlockedByDependenciesColumn = "blocked_id"
 )
 
 // Columns holds all SQL columns for backlogitem fields.
@@ -189,6 +215,10 @@ var Columns = []string{
 	FieldShippedFileStats,
 	FieldShippedSnapshotCaptureFailed,
 	FieldReworkCapOverride,
+	FieldNextWorkflowID,
+	FieldChainFired,
+	FieldChainedAt,
+	FieldTriggeredByChainDepth,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -253,6 +283,10 @@ var (
 	DefaultShippedChangesReqCount int
 	// DefaultShippedSnapshotCaptureFailed holds the default value on creation for the "shipped_snapshot_capture_failed" field.
 	DefaultShippedSnapshotCaptureFailed bool
+	// DefaultChainFired holds the default value on creation for the "chain_fired" field.
+	DefaultChainFired bool
+	// DefaultTriggeredByChainDepth holds the default value on creation for the "triggered_by_chain_depth" field.
+	DefaultTriggeredByChainDepth int
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -451,6 +485,26 @@ func ByReworkCapOverride(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldReworkCapOverride, opts...).ToFunc()
 }
 
+// ByNextWorkflowID orders the results by the next_workflow_id field.
+func ByNextWorkflowID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNextWorkflowID, opts...).ToFunc()
+}
+
+// ByChainFired orders the results by the chain_fired field.
+func ByChainFired(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldChainFired, opts...).ToFunc()
+}
+
+// ByChainedAt orders the results by the chained_at field.
+func ByChainedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldChainedAt, opts...).ToFunc()
+}
+
+// ByTriggeredByChainDepth orders the results by the triggered_by_chain_depth field.
+func ByTriggeredByChainDepth(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTriggeredByChainDepth, opts...).ToFunc()
+}
+
 // ByCreatedAt orders the results by the created_at field.
 func ByCreatedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCreatedAt, opts...).ToFunc()
@@ -537,6 +591,34 @@ func BySourceField(field string, opts ...sql.OrderTermOption) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newSourceStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByBlockingDependenciesCount orders the results by blocking_dependencies count.
+func ByBlockingDependenciesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newBlockingDependenciesStep(), opts...)
+	}
+}
+
+// ByBlockingDependencies orders the results by blocking_dependencies terms.
+func ByBlockingDependencies(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newBlockingDependenciesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByBlockedByDependenciesCount orders the results by blocked_by_dependencies count.
+func ByBlockedByDependenciesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newBlockedByDependenciesStep(), opts...)
+	}
+}
+
+// ByBlockedByDependencies orders the results by blocked_by_dependencies terms.
+func ByBlockedByDependencies(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newBlockedByDependenciesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newItemSessionsStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -577,5 +659,19 @@ func newSourceStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(SourceInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, SourceTable, SourceColumn),
+	)
+}
+func newBlockingDependenciesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(BlockingDependenciesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, BlockingDependenciesTable, BlockingDependenciesColumn),
+	)
+}
+func newBlockedByDependenciesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(BlockedByDependenciesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, BlockedByDependenciesTable, BlockedByDependenciesColumn),
 	)
 }

@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, us
 import { useRouter } from "next/navigation";
 import { Omnibar, OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { SessionType } from "@/gen/session/v1/types_pb";
@@ -11,6 +12,8 @@ import { getDefaultRegistry } from "@/lib/omnibar/detector";
 import { WorkflowDetector, type WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import { useAliases } from "@/lib/hooks/useAliases";
 import { AliasDetector } from "@/lib/omnibar/detectors/AliasDetector";
+import { useLauncherPresets } from "@/lib/hooks/useLauncherPresets";
+import { PresetDetector } from "@/lib/omnibar/detectors/PresetDetector";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
 
@@ -56,6 +59,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const { createSession, runWorkflow: runWorkflowRPC } = useSessionService({
     enabled: !authLoading && (!authEnabled || authenticated),
   });
+  const { createBacklogItemFromChat } = useBacklogService();
   const { workflows } = useWorkflows();
 
   // Lean WorkflowEntry[] for the detector and @ autocomplete dropdown.
@@ -107,6 +111,39 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
       aliasDetectorRef.current = null;
     };
   }, [aliases]);
+
+  // Single source of truth for launcher presets — both the PresetDetector registration below
+  // and OmnibarPresetList's rendering (passed down through Omnibar -> OmnibarCreationPanel as
+  // props) read from this one fetch. A second, independent useLauncherPresets() call in
+  // OmnibarCreationPanel would fetch redundantly and — worse — this effect's refetch-on-open
+  // would never reach it, since each hook call owns disconnected state.
+  const { presets: launcherPresets, loading: launcherPresetsLoading, loadError: launcherPresetsLoadError, refetch: refetchLauncherPresets } = useLauncherPresets();
+
+  // Dynamically register/unregister PresetDetector whenever the preset list changes.
+  const presetDetectorRef = useRef<PresetDetector | null>(null);
+  useEffect(() => {
+    const registry = getDefaultRegistry();
+    if (presetDetectorRef.current) {
+      registry.unregister(presetDetectorRef.current);
+    }
+    const detector = new PresetDetector(launcherPresets);
+    registry.register(detector);
+    presetDetectorRef.current = detector;
+    return () => {
+      registry.unregister(detector);
+      presetDetectorRef.current = null;
+    };
+  }, [launcherPresets]);
+
+  // Re-fetch presets each time the omnibar opens so a hand-edited launcher-presets.json
+  // change appears immediately, without a server restart (Success Criterion 1).
+  const prevOmnibarOpenRef = useRef(false);
+  useEffect(() => {
+    if (isOpen && !prevOmnibarOpenRef.current) {
+      refetchLauncherPresets();
+    }
+    prevOmnibarOpenRef.current = isOpen;
+  }, [isOpen, refetchLauncherPresets]);
 
   const enterpriseHosts = useGitHubEnterpriseHosts();
 
@@ -230,6 +267,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         permissionMode: data.permissionMode ?? "",
         aliasName: data.aliasName ?? "",
         cliFlags: data.extraCliFlags ?? "",
+        extraArgs: data.extraArgs ?? [],
       });
 
       if (session) {
@@ -261,6 +299,19 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     [runWorkflowRPC, workflows, router]
   );
 
+  // Handle chat_backlog_item: create a backlog item from a free-text message with no
+  // structured form fields — title/description both come from the raw message, and the
+  // normal auto-triage pipeline (skipTriage defaults to false) takes it from there.
+  const handleCreateBacklogItemFromChat = useCallback(
+    async (text: string) => {
+      const result = await createBacklogItemFromChat(text);
+      if (result) {
+        router.push(`/backlog?item=${result.item.id}`);
+      }
+    },
+    [createBacklogItemFromChat, router]
+  );
+
   const value: OmnibarContextValue = {
     isOpen,
     open,
@@ -280,10 +331,14 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onNavigateToSession={handleNavigateToSession}
         onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
         onRunWorkflow={handleRunWorkflow}
+        onCreateBacklogItemFromChat={handleCreateBacklogItemFromChat}
         initialMode={initialMode}
         initialInput={initialInput}
         initialTitle={initialTitle}
         workflows={workflowEntries}
+        launcherPresets={launcherPresets}
+        launcherPresetsLoading={launcherPresetsLoading}
+        launcherPresetsLoadError={launcherPresetsLoadError}
       />
     </OmnibarContext.Provider>
   );

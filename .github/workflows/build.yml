@@ -181,9 +181,16 @@ jobs:
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -coverprofile=coverage.out \
+          # -p 1: serializes package binaries to reduce -race CPU contention that caused intermittent hook/MCP-URL test timeouts — see project_plans/flaky-hook-url-tests/decisions/ADR-001. Do not remove without re-reading that ADR and re-verifying flake rate.
+          # -timeout=20m: explicit budget instead of relying on go test's silent 10m
+          # default. server/services previously tripped that default timeout with
+          # only an opaque "test timed out after 10m0s" — no goroutine/fd context —
+          # making it hard to tell a genuine hang apart from cumulative suite
+          # duration under -race -p 1. See BUG-067 and DeleteSession's cleanup
+          # goroutine leak fix (deleteCleanupWG in server/services/session_service.go).
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -p 1 -timeout=20m -coverprofile=coverage.out \
             -covermode=atomic ./server/... ./session/... ./config/... \
-            || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -v ./...; exit 1)
+            || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v ./...; exit 1)
 
       # PTY-triple (ptmx/attachCmd/attachCmdWaitOnce) race fix regression gate:
       # these tests were validated locally at -count=20/-count=50 during development
@@ -192,6 +199,11 @@ jobs:
       # a reintroduced race in a timing-sensitive test. Run them amplified here so
       # CI keeps the same confidence level the fix was originally verified with.
       - name: PTY-triple race regression (amplified repetitions)
+        # Same tmux-under-CPU-contention rationale as the "Run tests with coverage" step
+        # above (see its comment) -- -count=20 spawns real tmux servers 20x over, so it
+        # needs the same widened create-timeout headroom.
+        env:
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           TMUX_BIN="$(pwd)/bin/tmux" go test -race ./server/... \
             -run 'TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort|TestSessionService_CreateThenImmediateDelete_NoDataRace' \
@@ -221,48 +233,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Generate feature E2E coverage report
-        id: coverage
-        run: |
-          cd tools/coverage && pnpm install --silent
-          OUTPUT=$(npx ts-node feature-coverage.ts ../../docs/registry/backend-features.json '../../tests/e2e/**/*.spec.ts' 2>&1)
-          echo "$OUTPUT"
-          SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")
-          echo "summary=${SUMMARY}" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      - name: Post feature coverage PR comment
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        env:
-          COVERAGE_SUMMARY: ${{ steps.coverage.outputs.summary }}
-        with:
-          script: |
-            const marker = '<!-- feature-coverage -->';
-            const summary = process.env.COVERAGE_SUMMARY || 'Feature coverage report unavailable';
-            const body = `${marker}\n## 📊 Feature E2E Coverage\n\n${summary}\n\n> Run \`make e2e-report\` locally to view the full Allure report.`;
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
-        continue-on-error: true
+      - name: Run CI comment-gate unit tests
+        run: cd tools/ci-gates && pnpm install --silent && pnpm test
 
       - name: Check new RPCs have tests
         run: |
@@ -281,11 +253,108 @@ jobs:
           # Also validate the typed catalog
           cd web-app && pnpm install --frozen-lockfile --silent && pnpm run validate-catalog
 
+      # Runs after "Check new RPCs have tests" deliberately: that step is what
+      # actually generates docs/registry/backend-features.json (via `make
+      # registry-generate`, a gitignored artifact — see .gitignore:98). This
+      # step used to run before it and always found no registry file,
+      # producing "Feature E2E coverage: N/A" on every single run regardless
+      # of the actionability gate below — confirmed live via PR #462's first
+      # review pass. Root-caused and fixed by reordering rather than papering
+      # over the symptom in the gate logic.
+      - name: Generate feature E2E coverage report
+        id: coverage
+        run: |
+          cd tools/coverage && pnpm install --silent
+          OUTPUT=$(npx ts-node feature-coverage.ts ../../docs/registry/backend-features.json '../../tests/e2e/**/*.spec.ts' 2>&1)
+          echo "$OUTPUT"
+          SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")
+          echo "summary=${SUMMARY}" >> $GITHUB_OUTPUT
+          PCT=$(SUMMARY="$SUMMARY" node -e "console.log(require('../ci-gates/coverage-delta.js').parseCoveragePct(process.env.SUMMARY) ?? '')")
+          echo "pct=${PCT:-}" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Post feature coverage PR comment
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          COVERAGE_SUMMARY: ${{ steps.coverage.outputs.summary }}
+          COVERAGE_PCT: ${{ steps.coverage.outputs.pct }}
+        with:
+          script: |
+            const { isActionable, buildMarker, findExisting } = require('./tools/ci-gates/coverage-delta.js');
+            const summary = process.env.COVERAGE_SUMMARY || 'Feature coverage report unavailable';
+            const currentPct = parseFloat(process.env.COVERAGE_PCT);
+
+            // A NaN currentPct means the tool genuinely couldn't compute a
+            // number even with the registry available (a real failure, not
+            // "no change yet") — there's nothing actionable to report, so
+            // this skips rather than posting an uninformative comment.
+            if (isNaN(currentPct)) {
+              core.warning('Feature coverage report produced no parseable percentage; skipping comment.');
+              require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Feature E2E Coverage\n${summary}\n`);
+              return;
+            }
+
+            // Recency guard (resolves adversarial-review Blocker 1 for this
+            // workflow): build.yml also runs on push-to-main with 5 unrelated
+            // jobs, so it can't take a workflow-level concurrency block the
+            // way ux-analysis.yml/e2e-video.yml do without cancelling those
+            // too — instead, skip only this mutation if a newer push has
+            // already superseded the commit this run was triggered for.
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            if (pr.data.head.sha !== context.payload.pull_request.head.sha) {
+              core.info('Skipping feature-coverage comment: a newer push has superseded this run.');
+              return;
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = findExisting(comments);
+
+            require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Feature E2E Coverage\n${summary}\n`);
+
+            if (!isActionable({ existingBody: existing ? existing.body : null, currentPct })) {
+              // Unchanged coverage is the steady state, not a resolved
+              // problem — left untouched, never deleted (see coverage-delta.js).
+              return;
+            }
+
+            const marker = buildMarker(currentPct);
+            const body = `${marker}\n## 📊 Feature E2E Coverage\n\n${summary}\n\n> Run \`make e2e-report\` locally to view the full Allure report.`;
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
       # Benchmark comparison on PRs is handled by benchmark.yml (tier-1 job),
       # which posts a PR comment via benchstat. Removed dead step that ran
       # BenchmarkNavigation (a non-existent benchmark) for 15 min per PR.
 
       - name: Integration coverage (advisory)
+        # Same tmux-under-CPU-contention rationale as the "Run tests with coverage" step
+        # above (see its comment) -- this step's `-tags integration` run spawns real tmux
+        # servers under the same contention.
+        env:
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           mkdir -p /tmp/covdata
           go build -cover -o stapler-squad-cov .
@@ -406,7 +475,7 @@ jobs:
   benchmark-gate:
     name: Benchmark Gate (main only)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: [prepare, test]
     permissions:
       contents: read
@@ -447,13 +516,20 @@ jobs:
         run: ./scripts/build-tmux.sh
 
       - name: Run benchmarks (count=5 for significance)
+        env:
+          # production default is 10s; CI runners are slower/noisier, and the
+          # benchmark job's module cache is cold on first run (never populated
+          # by a prior success), so tmux session creation needs more headroom
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           # -run='^$'  benchmarks only (no tests)
           # -short     skip integration benchmarks that spawn real processes
           # -count=5   statistically meaningful for ≥20% regression detection
           # -timeout=10m per package (search/unfinished are legitimately slow)
+          # | tee      keeps step output visible live instead of buffered
+          #            until completion, so a stall shows its last line
           TMUX_BIN="$(pwd)/bin/tmux" go test -bench=. -benchmem -count=5 \
-            -run='^$' -short ./... -timeout=10m > bench-current.txt
+            -run='^$' -short ./... -timeout=10m | tee bench-current.txt
 
       - name: Install benchstat (pinned)
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0

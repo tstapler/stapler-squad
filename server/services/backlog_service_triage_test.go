@@ -49,7 +49,7 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, classifyHeadlessCallError(tc.err, tc.elapsed))
+			assert.Equal(t, tc.want, classifyHeadlessCallError(tc.err, tc.elapsed, triageCallBudget))
 		})
 	}
 }
@@ -154,6 +154,24 @@ func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(
 	resolved, resolveErr := session.ResolveSessionPath(repoPath)
 	require.NoError(t, resolveErr)
 	assert.Equal(t, resolved, path)
+}
+
+// TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit
+// guards the empty-repo case: a git repo with zero commits has no HEAD for a
+// worktree to branch from, but findGitRepoRoot (session/git/util.go, called by
+// both GitWorktree constructors before Setup runs) auto-creates an initial
+// commit for exactly this situation, so CreateBacklogWorktree succeeds instead
+// of hitting setupNewWorktree's "brand new repository" error. resolveSessionPath
+// must therefore return a real worktree, not fall back to directory mode.
+func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoForTest(t, repoPath) // git-initialized, but zero commits
+
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+
+	require.NoError(t, err)
+	assert.True(t, useWorktree)
+	assert.NotEqual(t, repoPath, path)
 }
 
 // --- Story 3.2.1: recentWorkSessionFileLists (feeds IsTestOnlyReworkCycle) ---
@@ -3254,6 +3272,98 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 	// invariant is structurally guaranteed rather than left unverified.
 }
 
+// waitForTriageFailureCaptured polls until itemID's triage ItemSession has both
+// ended and recorded a non-empty FailureCapturePath, then returns that ItemSession.
+func waitForTriageFailureCaptured(t *testing.T, storage *session.Storage, itemID string) session.ItemSessionSummary {
+	t.Helper()
+	var found session.ItemSessionSummary
+	require.Eventually(t, func() bool {
+		sessions, listErr := storage.ListItemSessions(context.Background(), itemID)
+		if listErr != nil {
+			return false
+		}
+		for _, is := range sessions {
+			if is.Role == session.SessionRoleTriage && is.EndedAt != nil && is.FailureCapturePath != "" {
+				found = is
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond, "expected the triage ItemSession to record a non-empty FailureCapturePath")
+	return found
+}
+
+// TestTriggerTriage_should_PersistFullRawOutputToDurableFile_When_HeadlessResultFailsToParse
+// is the core regression test for the observability gap this fix closes:
+// ParseHeadlessTriageResult previously discarded the LLM's full raw output on a
+// parse failure, logging only a ~200-byte preview to a log file that itself
+// rotates out of ~/.stapler-squad/logs/ within hours — investigating a stuck/failed
+// triage item after that window had no way to recover what the LLM actually
+// returned. This asserts the full raw output now survives in a durable file
+// referenced by a DB column that outlives log rotation.
+func TestTriggerTriage_should_PersistFullRawOutputToDurableFile_When_HeadlessResultFailsToParse(t *testing.T) {
+	storage := createTestStorage(t)
+	rawOutput := "I looked at the item and here's my analysis, but I forgot to emit the JSON block at the end as instructed."
+	pool := &fakeHeadlessPool{response: rawOutput}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "triage-parse-failure-capture item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	is := waitForTriageFailureCaptured(t, storage, item.ID)
+	t.Cleanup(func() { _ = os.Remove(is.FailureCapturePath) })
+
+	require.True(t, filepath.IsAbs(is.FailureCapturePath), "failure_capture_path should be an absolute, directly-openable path")
+
+	content, readErr := os.ReadFile(is.FailureCapturePath)
+	require.NoError(t, readErr, "the file referenced by failure_capture_path must actually exist and be readable")
+	assert.Equal(t, rawOutput, string(content), "the full raw LLM output must be recoverable from the capture file, not just a truncated preview")
+}
+
+// TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfErrors covers
+// the sibling failure path (the claude -p call errors before ever producing usable
+// output, e.g. a timeout or process error) rather than a parse failure — both branches
+// in TriggerTriage's goroutine independently wire up the capture.
+func TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfErrors(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: "partial output before the call errored out", err: errors.New("simulated LLM failure")}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "triage-call-error-capture item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	is := waitForTriageFailureCaptured(t, storage, item.ID)
+	t.Cleanup(func() { _ = os.Remove(is.FailureCapturePath) })
+
+	assert.NotEmpty(t, is.EndReason, "end_reason should also be classified alongside the capture")
+
+	content, readErr := os.ReadFile(is.FailureCapturePath)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(content), "partial output before the call errored out")
+}
+
 func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefaultPipelineModeAndFirstTriageBranch(t *testing.T) {
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -3632,6 +3742,50 @@ func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiff
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected an operator notification when the review is blocked")
 	}
+}
+
+// TestTriggerReReview_should_PersistFailureCapture_When_HeadlessCallItselfErrors covers
+// TriggerReReview's own callErr branch (the sibling of the two TriggerTriage capture
+// tests above): unlike TriggerTriage, no ItemSession existed yet for this attempt at
+// the point of failure prior to this fix, so a real call error here was previously
+// visible only in an ephemeral log line — nothing durable/queryable recorded it at
+// all. This asserts a best-effort audit ItemSession is now created with both
+// end_reason classified and failure_capture_path pointing at the raw output.
+func TestTriggerReReview_should_PersistFailureCapture_When_HeadlessCallItselfErrors(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	rawOutput := "some partial reasoning before the call failed"
+	pool := &fakeHeadlessPool{response: rawOutput, err: errors.New("simulated LLM failure")}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	_, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.Error(t, err, "the RPC must still surface the call failure to the caller")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, listErr)
+
+	var captured *session.ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role == string(session.SessionRoleReview) && sessions[i].FailureCapturePath != "" {
+			captured = &sessions[i]
+			break
+		}
+	}
+	require.NotNil(t, captured, "expected an audit ItemSession recording the failed re-review call, found none among: %+v", sessions)
+	t.Cleanup(func() { _ = os.Remove(captured.FailureCapturePath) })
+
+	assert.NotEmpty(t, captured.EndReason)
+	assert.NotNil(t, captured.EndedAt)
+
+	content, readErr := os.ReadFile(captured.FailureCapturePath)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(content), rawOutput)
 }
 
 // TestResolveCodebaseWorkDir_should_RefuseFallback_When_WorkSessionWorktreeUnresolvable

@@ -30,6 +30,8 @@ type ItemSession struct {
 	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// Set only alongside ended_at for a headless (triage/review) call: classifyHeadlessCallError's bucket ("shutdown", "timeout", "process_error", "claude_not_found", "other") or "" for a successful end / not yet classified. Lets orphan-recovery sweeps distinguish a call killed by our own graceful shutdown (retry immediately, no penalty) from a call that actually failed on its own merits (apply the normal backoff).
 	EndReason string `json:"end_reason,omitempty"`
+	// Absolute path to a durable file (see session.WriteHeadlessFailureCapture, under ~/.stapler-squad/headless-failures/) holding the size-capped raw stdout of a headless triage/review call that errored or whose result failed to parse. Set alongside end_reason on a call error, or on a successful call whose output was unparseable JSON. Exists because the log preview previously logged on parse failure is truncated to ~200 chars and the log file itself rotates out within a few hours — this file survives both, so diagnosing a failure doesn't require racing log rotation.
+	FailureCapturePath string `json:"failure_capture_path,omitempty"`
 	// JSON []AcCriterion at spawn time
 	AcSnapshot string `json:"ac_snapshot,omitempty"`
 	// The PipelineMode slug resolved and in effect when this session first started — snapshotted so later edits to the item's live pipeline_mode don't retroactively change what this session is shown to have run. Mirrors ac_snapshot's discipline.
@@ -58,6 +60,8 @@ type ItemSession struct {
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// Cost in USD; populated for headless sessions from claude -p output
 	EstimatedCostUsd float64 `json:"estimated_cost_usd,omitempty"`
+	// Identifies the physical stapler-squad process/host that claimed this item (SpawnSessionFromItem) or attached this session (AttachSessionToItem, using the attaching process's own identity). A random UUID generated once and persisted via Config.GetOrCreateClaimantHostID, stable across restarts of the same process/config dir. Not STAPLER_SQUAD_INSTANCE (namespaces state on one machine) and not session/contexts.go's CloudContext.InstanceID (a cloud provider instance id, unpopulated locally). Purely descriptive; empty for rows created before this field existed.
+	ClaimantHostID string `json:"claimant_host_id,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the ItemSessionQuery when eager-loading is set.
 	Edges                      ItemSessionEdges `json:"edges"`
@@ -107,7 +111,7 @@ func (*ItemSession) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case itemsession.FieldCommitCountSinceSpawn:
 			values[i] = new(sql.NullInt64)
-		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldEndReason, itemsession.FieldAcSnapshot, itemsession.FieldPipelineModeSnapshot, itemsession.FieldPipelineModeSnapshotHash, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage:
+		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldEndReason, itemsession.FieldFailureCapturePath, itemsession.FieldAcSnapshot, itemsession.FieldPipelineModeSnapshot, itemsession.FieldPipelineModeSnapshotHash, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage, itemsession.FieldClaimantHostID:
 			values[i] = new(sql.NullString)
 		case itemsession.FieldStartedAt, itemsession.FieldEndedAt, itemsession.FieldLastCommitAt, itemsession.FieldLastFileTouchAt, itemsession.FieldLastProgressAt, itemsession.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -167,6 +171,12 @@ func (_m *ItemSession) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field end_reason", values[i])
 			} else if value.Valid {
 				_m.EndReason = value.String
+			}
+		case itemsession.FieldFailureCapturePath:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field failure_capture_path", values[i])
+			} else if value.Valid {
+				_m.FailureCapturePath = value.String
 			}
 		case itemsession.FieldAcSnapshot:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -255,6 +265,12 @@ func (_m *ItemSession) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.EstimatedCostUsd = value.Float64
 			}
+		case itemsession.FieldClaimantHostID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field claimant_host_id", values[i])
+			} else if value.Valid {
+				_m.ClaimantHostID = value.String
+			}
 		case itemsession.ForeignKeys[0]:
 			if value, ok := values[i].(*sql.NullScanner); !ok {
 				return fmt.Errorf("unexpected type %T for field backlog_item_item_sessions", values[i])
@@ -327,6 +343,9 @@ func (_m *ItemSession) String() string {
 	builder.WriteString("end_reason=")
 	builder.WriteString(_m.EndReason)
 	builder.WriteString(", ")
+	builder.WriteString("failure_capture_path=")
+	builder.WriteString(_m.FailureCapturePath)
+	builder.WriteString(", ")
 	builder.WriteString("ac_snapshot=")
 	builder.WriteString(_m.AcSnapshot)
 	builder.WriteString(", ")
@@ -374,6 +393,9 @@ func (_m *ItemSession) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("estimated_cost_usd=")
 	builder.WriteString(fmt.Sprintf("%v", _m.EstimatedCostUsd))
+	builder.WriteString(", ")
+	builder.WriteString("claimant_host_id=")
+	builder.WriteString(_m.ClaimantHostID)
 	builder.WriteByte(')')
 	return builder.String()
 }

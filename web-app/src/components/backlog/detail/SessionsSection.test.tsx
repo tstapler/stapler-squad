@@ -118,9 +118,9 @@ describe("SessionsSection", () => {
     expect(screen.queryByTestId("sessions-show-more")).not.toBeInTheDocument();
   });
 
-  it("renders nothing when there are no linked sessions", () => {
+  it("SessionsSection_should_RenderExplicitEmptyState_When_ThereAreNoLinkedSessions", () => {
     const item = makeItem([]);
-    const { container } = render(
+    render(
       <SessionsSection
         item={item}
         pipelineModes={[]}
@@ -133,7 +133,47 @@ describe("SessionsSection", () => {
       />
     );
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByRole("status")).toHaveTextContent("No sessions yet for this item.");
+  });
+
+  it("SessionsSection_should_ReplaceListWithEmptyState_When_LinkedSessionsTransitionFromPopulatedToEmpty", () => {
+    // Simulates a live event overwriting a previously-populated item with an
+    // empty itemSessions snapshot (the WatchBacklogItems root cause this bug
+    // report is about) — the empty state must cleanly replace the list, with
+    // no crash or stale leftover session rows.
+    const session = makeSession({ sessionId: "work-live-transition", role: "work" });
+    const populatedItem = makeItem([session]);
+    const { rerender } = render(
+      <SessionsSection
+        item={populatedItem}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("work-live-transition")).toBeInTheDocument();
+
+    const emptiedItem = makeItem([]);
+    rerender(
+      <SessionsSection
+        item={emptiedItem}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.queryByText("work-live-transition")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("No sessions yet for this item.");
   });
 
   it("SessionsSection_should_RenderAnchorLinkUnchanged_When_SessionKindIsWork", () => {
@@ -483,5 +523,103 @@ describe("SessionsSection steer control (Story 2.2.2, ADR-002)", () => {
     expect(screen.queryByTestId("session-steer-input-work-live-a")).not.toBeInTheDocument();
     const inputB = screen.getByTestId("session-steer-input-work-live-b");
     expect(inputB).toHaveValue("");
+  });
+
+  it("SessionsSection_should_ShowCommitCountAndLastMessage_When_SessionHasCommits", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-with-commits",
+        role: "work",
+        commitCountSinceSpawn: 3,
+        lastCommitMessage: "fix(session): handle nil pointer\n\nLonger body text here.",
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    const detail = screen.getByText("3 commits — fix(session): handle nil pointer");
+    expect(detail).toHaveAttribute(
+      "title",
+      "fix(session): handle nil pointer\n\nLonger body text here."
+    );
+  });
+
+  it("SessionsSection_should_UseSingularCommitLabel_When_ExactlyOneCommit", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-one-commit",
+        role: "work",
+        commitCountSinceSpawn: 1,
+        lastCommitMessage: "chore: bump version",
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("1 commit — chore: bump version")).toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_NotRenderCommitDetail_When_SessionHasNoCommits", () => {
+    const item = makeItem([makeSession({ sessionId: "work-no-commits", role: "work" })]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.queryByText(/\d+ commits? —/)).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_ShowCommitCountWithoutDash_When_LastCommitMessageMissing", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-commit-no-message",
+        role: "work",
+        commitCountSinceSpawn: 2,
+        lastCommitMessage: undefined,
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("2 commits")).toBeInTheDocument();
+    expect(screen.queryByText(/—/)).not.toBeInTheDocument();
   });
 });

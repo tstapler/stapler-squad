@@ -45,6 +45,16 @@ func WithStartupTimeout(d time.Duration) DriverOption {
 	return func(a *AutonomousDriver) { a.startupTimeout = d }
 }
 
+// panePreviewer is the narrow interface AutonomousDriver needs to read the
+// current pane content. *Instance satisfies it directly via Preview().
+// Extracted (mirroring paneSettleChecker below) so driver-level tests can
+// substitute a fake that returns scripted pane content per call, instead of
+// only being able to exercise pane/delivery-timing behavior through the
+// pure functions in nudge_dedup_test.go.
+type panePreviewer interface {
+	Preview() (string, error)
+}
+
 // AutonomousDriver monitors a session and injects orchestrator prompts when idle.
 type AutonomousDriver struct {
 	inst           *Instance
@@ -58,6 +68,21 @@ type AutonomousDriver struct {
 	driverRunning  atomic.Bool
 	cancel         context.CancelFunc
 	mu             sync.Mutex
+	// previewer overrides pane content reads when set (used by tests to
+	// script pane content across turns). nil (the zero value, including for
+	// every existing struct-literal-constructed test in this package) falls
+	// back to d.inst.Preview() via previewPane() below.
+	previewer panePreviewer
+}
+
+// previewPane returns the current pane content, preferring d.previewer when
+// set (tests may substitute a scripted fake) and falling back to d.inst
+// otherwise — see the panePreviewer doc comment.
+func (d *AutonomousDriver) previewPane() (string, error) {
+	if d.previewer != nil {
+		return d.previewer.Preview()
+	}
+	return d.inst.Preview()
 }
 
 // NewAutonomousDriver creates an AutonomousDriver for inst.
@@ -198,7 +223,6 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	// persistence is needed and a local avoids any d.mu entanglement.
 	var lastSentNudge lastNudge
 
-turnLoop:
 	for turnCount := 0; turnCount < d.maxTurns; turnCount++ {
 		if ctx.Err() != nil {
 			break
@@ -209,7 +233,7 @@ turnLoop:
 			break
 		}
 
-		tail, _ := d.inst.Preview()
+		tail, _ := d.previewPane()
 		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns, lastSentNudge)
 
 		keyLen := 8
@@ -231,7 +255,7 @@ turnLoop:
 		}
 
 		if directive == directiveDone {
-			sessionOutput, _ := d.inst.Preview()
+			sessionOutput, _ := d.previewPane()
 			outcome = AutonomousDriverOutcome{
 				Done:   true,
 				Reason: payload,
@@ -249,16 +273,23 @@ turnLoop:
 		// still counts against maxTurns (bounds a runaway/looping orchestrator, same
 		// as a malformed response burning a turn) but skips SendKeys/fireTurnCallback
 		// entirely, and lastSentNudge is left unchanged since nothing new was sent.
-		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now())
+		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now(), tail)
 		if suppressed {
 			log.Info("AutonomousDriver: suppressed nudge", "session", sessionName, "turn", turnCount+1, "directive", directive)
-			// ctx-aware wait (not a bare time.Sleep) so Stop() can cancel this
-			// near-immediately instead of blocking the full nudgeCooldown — mirrors
-			// waitForPaneSettle/waitForRateLimitClear's select pattern above.
-			select {
-			case <-ctx.Done():
-				break turnLoop
-			case <-time.After(nudgeCooldown):
+			if ctx.Err() != nil {
+				break
+			}
+			// Proceed on the same idle-settle cadence a real send uses, instead of
+			// blocking the full nudgeCooldown (3min production default): a
+			// suppressed turn means the agent is still working, so waiting for it
+			// to go idle again is what re-arms the dedup guard (isDuplicateNudge
+			// re-checks the cooldown next turn) and lets the orchestrator re-poll
+			// promptly rather than stalling on an arbitrary fixed timer.
+			turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
+			idleReached := waitForIdle(turnCtx, statusCh, d.controller, idleSettleWindow)
+			turnCancel()
+			if !idleReached {
+				log.Warn("AutonomousDriver: session did not become idle after suppressed turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
 			}
 			continue
 		}
@@ -287,12 +318,20 @@ turnLoop:
 			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
+		// Re-capture the pane AFTER delivery completes, rather than reusing the
+		// pre-call `tail` captured before the blocking LLM call and both SendKeys
+		// writes. Real pane activity (agent output, prompt redraw) almost always
+		// occurs during that round-trip, so recording the stale pre-call snapshot
+		// as if it reflected delivery-time state made the next turn's
+		// isDuplicateNudge re-arm check fire on ordinary pane movement, defeating
+		// the suppression cooldown this feature exists to provide.
+		deliveryPane, _ := d.previewPane()
 		// Only recorded once both writes above have succeeded — a failed send must
 		// not be treated as delivered for future dedup checks. Isolated into
 		// nextLastNudge (a pure function) so this invariant is directly unit
 		// testable without needing a tmux-backed Instance to force a partial
 		// SendKeys failure.
-		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true)
+		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true, deliveryPane)
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
 		d.fireTurnCallback(turnCount+1, d.maxTurns, nextMsg)
 

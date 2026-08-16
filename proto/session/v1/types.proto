@@ -249,6 +249,10 @@ message Session {
   // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
   // Independent of auto_yes — see auto_yes's own comment for the distinction.
   bool auto_approve = 74;
+
+  // Count of active background agents/shells/monitors from the WaitingForAgent detector.
+  // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
+  int32 subagent_count = 75;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's
@@ -407,6 +411,9 @@ enum DetectedStatus {
   DETECTED_STATUS_UNKNOWN           = 9;
   DETECTED_STATUS_READY             = 10;
   DETECTED_STATUS_WAITING_FOR_AGENT = 11;
+  // Claude is actively compacting/summarizing conversation history (distinct
+  // from the "N% until auto-compact" approaching indicator).
+  DETECTED_STATUS_COMPACTING = 12;
 }
 
 // WorkingState represents the active-work status of a session for review queue filtering.
@@ -448,6 +455,9 @@ enum SubStatus {
   SUB_STATUS_SUCCESS = 9;
   // Claude is waiting for one or more background agents to finish (e.g. "✻ Waiting for 2 background agents").
   SUB_STATUS_WAITING_FOR_AGENT = 10;
+  // Claude is actively compacting/summarizing conversation history (distinct
+  // from the "N% until auto-compact" approaching indicator).
+  SUB_STATUS_COMPACTING = 11;
 }
 
 // RateLimitState indicates whether the session is experiencing rate limiting.
@@ -1126,6 +1136,10 @@ message ApprovalRuleProto {
   // require_ci_passing, when true, only matches when the requesting session's GitHub
   // CI check conclusion is "success". Combinable (AND) with all other conditions.
   bool            require_ci_passing      = 29;
+  // min_session_idle_minutes, when > 0, only matches if the requesting session has
+  // been idle >= N minutes since its last meaningful output. 0 = condition not
+  // applied. Combinable (AND) with all other conditions.
+  int32 min_session_idle_minutes = 30;
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.

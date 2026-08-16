@@ -295,11 +295,17 @@ type PTYDiscovery struct {
 	connections   []*PTYConnection
 	sessionMap    map[string]*Instance // Session name -> Instance
 	stopCh        chan struct{}
+	done          chan struct{} // closed by monitorLoop on exit; Stop() waits on this
 	refreshRate   time.Duration
 	config        PTYDiscoveryConfig // Discovery configuration
 	sessionLister tmux.SessionLister // nil = use exec fallback
 	refreshing    atomic.Bool        // true while a Refresh() from monitorLoop is in flight
 }
+
+// stopJoinTimeout bounds how long Stop() waits for monitorLoop to exit before
+// giving up and logging a warning. A background poller getting wedged on a
+// slow tmux call must not hang test teardown (or shutdown) indefinitely.
+const stopJoinTimeout = 5 * time.Second
 
 // NewPTYDiscovery creates a new PTY discovery service with default configuration.
 // Optional PTYDiscoveryOption values are applied after initialization.
@@ -308,6 +314,7 @@ func NewPTYDiscovery(opts ...PTYDiscoveryOption) *PTYDiscovery {
 		connections:   make([]*PTYConnection, 0),
 		sessionMap:    make(map[string]*Instance),
 		stopCh:        make(chan struct{}),
+		done:          make(chan struct{}),
 		refreshRate:   5 * time.Second,
 		config:        DefaultPTYDiscoveryConfig(),
 		sessionLister: tmux.GetServerRegistry(""),
@@ -325,6 +332,7 @@ func NewPTYDiscoveryWithConfig(config PTYDiscoveryConfig, opts ...PTYDiscoveryOp
 		connections:   make([]*PTYConnection, 0),
 		sessionMap:    make(map[string]*Instance),
 		stopCh:        make(chan struct{}),
+		done:          make(chan struct{}),
 		refreshRate:   config.DiscoveryInterval,
 		config:        config,
 		sessionLister: tmux.GetServerRegistry(""),
@@ -340,9 +348,19 @@ func (pd *PTYDiscovery) Start() {
 	go pd.monitorLoop()
 }
 
-// Stop halts PTY discovery monitoring
+// Stop halts PTY discovery monitoring. It blocks until monitorLoop has
+// actually exited (not just been signaled), so callers — test teardown in
+// particular — can rely on no further tmux exec-slot acquisitions happening
+// after Stop returns. If monitorLoop doesn't exit within stopJoinTimeout
+// (e.g. it's wedged on a slow tmux call), Stop logs a warning and returns
+// anyway rather than hanging indefinitely.
 func (pd *PTYDiscovery) Stop() {
 	close(pd.stopCh)
+	select {
+	case <-pd.done:
+	case <-time.After(stopJoinTimeout):
+		log.Warn("PTYDiscovery.Stop: monitorLoop did not exit within timeout", "timeout", stopJoinTimeout)
+	}
 }
 
 // SetSessions updates the session map for correlation
@@ -417,6 +435,7 @@ func (pd *PTYDiscovery) GetConnection(path string) *PTYConnection {
 
 // monitorLoop continuously monitors PTYs
 func (pd *PTYDiscovery) monitorLoop() {
+	defer close(pd.done)
 	ticker := time.NewTicker(pd.refreshRate)
 	defer ticker.Stop()
 

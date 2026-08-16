@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -615,4 +616,71 @@ func TestDiffHashBetween_ShouldReturnError_WhenBaseSHADoesNotExistInRepo(t *test
 	hash, err := DiffHashBetween(work, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", headSHA)
 	require.Error(t, err)
 	assert.Empty(t, hash)
+}
+
+// TestDiffHashBetween_ShouldNotPanic_WhenDiffContainsSymlinkChange guards against a
+// nil-pointer panic: go-git's FilePatch.Files() returns (nil, nil) for a symlink tree
+// entry regardless of whether it was added, modified, or deleted (Mode.IsFile() is
+// false for symlinks), which previously reached the "from == nil" branch below and
+// dereferenced a nil "to" via to.Path(). Mirrors
+// TestFileStatsBetween_ShouldOmitBinaryFiles_WhenBinaryContentChanges's zero-chunk-skip
+// fix for the same underlying go-git behavior.
+func TestDiffHashBetween_ShouldNotPanic_WhenDiffContainsSymlinkChange(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.Symlink("foo.go", filepath.Join(work, "link.go")))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "notes.txt"), []byte("hello\n"), 0o644))
+	runGit(t, work, "add", "link.go", "notes.txt")
+	runGit(t, work, "commit", "-m", "add symlink and notes.txt")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	hash, err := DiffHashBetween(work, baseSHA, headSHA)
+	require.NoError(t, err, "a symlink in the diff must not cause an error or panic")
+	assert.NotEmpty(t, hash)
+}
+
+// fakeChunk is a minimal fdiff.Chunk used to drive diffHashFromFilePatches
+// without a real git repository.
+type fakeChunk struct {
+	op      fdiff.Operation
+	content string
+}
+
+func (c fakeChunk) Content() string       { return c.content }
+func (c fakeChunk) Type() fdiff.Operation { return c.op }
+
+// fakeFilePatch is a minimal fdiff.FilePatch whose Files() returns (nil, nil)
+// while Chunks() is non-empty — the combination that panicked in production
+// (see markAbandonedReview -> AutoRespawnReview -> TriggerReReview ->
+// ComputeCurrentDiffHash -> DiffHashBetween) before the from==nil&&to==nil
+// case above existed. go-git's own Files() implementations return nil
+// interface values (not typed nils) for non-regular-file tree entries, so
+// this fake reproduces that exact shape rather than a typed-nil pointer.
+type fakeFilePatch struct {
+	chunks []fdiff.Chunk
+}
+
+func (p fakeFilePatch) IsBinary() bool                  { return false }
+func (p fakeFilePatch) Files() (fdiff.File, fdiff.File) { return nil, nil }
+func (p fakeFilePatch) Chunks() []fdiff.Chunk           { return p.chunks }
+
+// TestDiffHashFromFilePatches_ShouldSkipEntry_WhenFilesAreNilButChunksNonEmpty
+// guards against the SIGSEGV observed in production: go-git can return
+// (nil, nil) from FilePatch.Files() even when Chunks() is non-empty (a
+// symlink/gitlink type-change entry whose textual content still diffs to
+// produce chunks). Before the from==nil&&to==nil case existed, this fell
+// through to "case from == nil" and dereferenced the also-nil "to" via
+// to.Path(), panicking. Without that case, this test panics; with it, the
+// entry is skipped and the function returns cleanly.
+func TestDiffHashFromFilePatches_ShouldSkipEntry_WhenFilesAreNilButChunksNonEmpty(t *testing.T) {
+	patches := []fdiff.FilePatch{
+		fakeFilePatch{chunks: []fdiff.Chunk{fakeChunk{op: fdiff.Equal, content: ""}}},
+	}
+
+	require.NotPanics(t, func() {
+		hash := diffHashFromFilePatches(patches)
+		assert.NotEmpty(t, hash)
+	})
 }

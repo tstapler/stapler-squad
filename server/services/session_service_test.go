@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"go.uber.org/goleak"
 )
 
 // createTestStorage creates a test storage backed by a temporary SQLite database.
@@ -361,6 +362,182 @@ func TestDeleteSession_DestroyFailureIsNonFatal(t *testing.T) {
 	for _, d := range data {
 		assert.NotEqual(t, "stubborn-session", d.Title)
 	}
+}
+
+// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil verifies that
+// Shutdown blocks until DeleteSession's background cleanup goroutine (the
+// KillTmuxSessionByTitle fallback used when FindLiveInstance returns nil) has
+// actually finished, rather than returning while it is still running.
+//
+// The DeleteSession call below exercises the real KillTmuxSessionByTitle
+// branch, but that goroutine finishes almost instantly against a non-real
+// tmux session — a fast-finishing real cleanup goroutine looks the same
+// whether or not Shutdown actually blocks on it, and goroutine-count
+// before/after comparisons in a shared test binary are flaky by construction
+// (see go.uber.org/goleak's rationale). So this test additionally tracks a
+// second, artificially slow cleanup goroutine (same technique as
+// TestShutdown_BlocksUntilTrackedCleanupCompletes) on the same deleteCleanupWG
+// that DeleteSession's goroutine was tracked on, and asserts it has already
+// finished by the time Shutdown returns — a check that fails against the
+// pre-fix buggy code — plus goleak.VerifyNone to confirm nothing was leaked.
+func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "no-live-instance",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	baseline := goleak.IgnoreCurrent()
+
+	// No ReviewQueuePoller wired: FindLiveInstance returns nil, so DeleteSession
+	// takes the KillTmuxSessionByTitle fallback branch.
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "no-live-instance",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	var mu sync.Mutex
+	finished := false
+	svc.trackCleanup(func() {
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+
+	svc.Shutdown()
+
+	mu.Lock()
+	assert.True(t, finished, "Shutdown returned before the tracked cleanup goroutine finished")
+	mu.Unlock()
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent is the
+// liveInst-present counterpart to TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil:
+// it wires a ReviewQueuePoller with a live instance so FindLiveInstance returns
+// non-nil and DeleteSession takes the destroyWithTimeout(liveInst.Destroy, ...)
+// branch, then uses the same artificial-delay + goleak technique to verify
+// Shutdown still blocks until tracked cleanup exits and nothing leaks.
+func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	testInst := &session.Instance{
+		Title:     "live-instance",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInst))
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	poller.SetInstances([]*session.Instance{testInst})
+	svc.SetReviewQueuePoller(poller)
+
+	baseline := goleak.IgnoreCurrent()
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "live-instance",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	var mu sync.Mutex
+	finished := false
+	svc.trackCleanup(func() {
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+
+	svc.Shutdown()
+
+	mu.Lock()
+	assert.True(t, finished, "Shutdown returned before the tracked cleanup goroutine finished")
+	mu.Unlock()
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestShutdown_BlocksUntilTrackedCleanupCompletes proves Shutdown's blocking
+// contract directly: it tracks a cleanup goroutine that sleeps for a fixed
+// duration before recording completion, then asserts that completion is
+// already recorded by the time Shutdown returns. Unlike the goroutine-count
+// comparisons above (which pass identically whether or not Shutdown actually
+// blocks, since a fast-finishing goroutine looks the same either way — see
+// the deleteCleanupWG.Wait() removal check in git history for this repo's own
+// confirmation of that gap), this test fails if deleteCleanupWG.Wait() is
+// ever removed or short-circuited from Shutdown.
+func TestShutdown_BlocksUntilTrackedCleanupCompletes(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	var mu sync.Mutex
+	finished := false
+	svc.trackCleanup(func() {
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+
+	svc.Shutdown()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.True(t, finished, "Shutdown returned before the tracked cleanup goroutine finished")
+}
+
+// TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout exercises
+// destroyWithTimeout's timeout-exceeded branch, which had zero coverage: it
+// passes a callback that deliberately sleeps far longer than the configured
+// timeout and asserts destroyWithTimeout returns a timeout error at
+// approximately the timeout, not after waiting for the full work duration.
+// destroyWithTimeout takes destroy as a func() error (rather than a
+// *session.Instance) specifically so this can be tested without needing a
+// real Instance whose Destroy() can be made to hang on demand — see
+// destroyWithTimeout's doc comment.
+func TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout(t *testing.T) {
+	const testTimeout = 20 * time.Millisecond
+	const workDuration = 300 * time.Millisecond
+
+	workDone := make(chan struct{})
+	start := time.Now()
+	err := destroyWithTimeout(func() error {
+		time.Sleep(workDuration)
+		close(workDone)
+		return nil
+	}, testTimeout)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
+	assert.Lessf(t, elapsed, workDuration,
+		"destroyWithTimeout took %s, should have returned at ~%s (the configured timeout) rather than waiting for the full %s of work",
+		elapsed, testTimeout, workDuration)
+
+	// Drain the background goroutine so it doesn't outlive the test (it is
+	// intentionally untracked past the timeout — see destroyWithTimeout's doc
+	// comment — but leaving it running would otherwise trip goleak in other
+	// tests in this package that run concurrently or immediately after).
+	<-workDone
 }
 
 // TestDeleteSession_StorageDeletedBeforeResponse verifies that storage is fully

@@ -60,6 +60,17 @@ message TriageResult {
   // feedback is the free-text feedback that produced this iteration, empty
   // for the initial (non-refined) triage run.
   string feedback = 6;
+  // chat_history is the running transcript for chat-originated creation/
+  // refinement (CreateBacklogItemFromChat). Empty for triage runs triggered
+  // via the structured form/refine-feedback path.
+  repeated ChatTriageTurn chat_history = 7;
+}
+
+// ChatTriageTurn is a single message in a chat-originated triage conversation.
+message ChatTriageTurn {
+  string role = 1; // "user" or "assistant"
+  string text = 2;
+  google.protobuf.Timestamp created_at = 3;
 }
 
 // ItemSession records a session that was spawned or attached to a backlog item.
@@ -81,6 +92,32 @@ message ItemSession {
   string worktree_path = 15;
   string pipeline_mode_snapshot = 16;
   string pipeline_mode_snapshot_hash = 17;
+  // end_reason is set alongside ended_at for a headless (triage/review) call:
+  // classifyHeadlessCallError's bucket ("shutdown", "timeout", "process_error",
+  // "claude_not_found", "other"), or empty for a successful end. Already captured
+  // durably (session.ItemSessionSummary.EndReason) but previously never surfaced
+  // over the wire.
+  string end_reason = 18;
+  // failure_capture_path is the absolute path to a durable file holding the
+  // size-capped raw stdout of a headless triage/review call that errored or
+  // whose result failed to parse — see session.WriteHeadlessFailureCapture. Empty
+  // when the call succeeded and parsed cleanly, or capture itself failed.
+  string failure_capture_path = 19;
+  // claimant_host_id identifies the physical stapler-squad process/host that
+  // created this ItemSession — either by claiming the item (DequeueNextQueuedItems
+  // -> SpawnSessionFromItem) or by attaching an externally-created session
+  // (AttachSessionToItem, where it is the attaching process's own identity, not
+  // anything embedded in the attached session). A random UUID generated once and
+  // persisted in that process's own config (Config.GetOrCreateClaimantHostID),
+  // stable across restarts of the same process/config directory and distinct
+  // across different hosts or STAPLER_SQUAD_INSTANCE-namespaced config dirs on the
+  // same machine. Purely descriptive provenance — never read by
+  // TransitionBacklogItemStatus's CAS guard. Do not confuse with
+  // STAPLER_SQUAD_INSTANCE (namespaces on-disk state on a single machine) or
+  // session/contexts.go's CloudContext.InstanceID (a cloud provider's instance
+  // identifier, not populated for local/dev sessions). Empty for ItemSession rows
+  // created before this field existed.
+  string claimant_host_id = 20;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.
@@ -247,6 +284,21 @@ message CreateBacklogItemResponse {
   bool triage_triggered = 2;
 }
 
+// CreateBacklogItemFromChatRequest carries a single free-text chat turn.
+// When existing_item_id is empty, this is the first turn of a new
+// chat-originated item (delegates to CreateBacklogItem internally). When
+// existing_item_id is set, this is a refinement turn on an existing item
+// (delegates to TriggerTriage with feedback = message).
+message CreateBacklogItemFromChatRequest {
+  string existing_item_id = 1;
+  string message = 2;
+}
+
+message CreateBacklogItemFromChatResponse {
+  BacklogItem item = 1;
+  bool triage_triggered = 2;
+}
+
 message GetBacklogItemRequest {
   string item_id = 1;
 }
@@ -407,11 +459,31 @@ message ArchiveBacklogItemResponse {
   BacklogItem item = 1;
 }
 
+message UnarchiveBacklogItemRequest {
+  string item_id = 1;
+}
+
+message UnarchiveBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
 message DeleteBacklogItemRequest {
   string item_id = 1;
 }
 
 message DeleteBacklogItemResponse {}
+
+message AddBacklogItemDependencyRequest {
+  // Item that must reach a resolved status (done or archived) before
+  // blocked_item_id becomes eligible for dequeue/start.
+  string blocker_item_id = 1;
+  // Dependent item, gated until blocker_item_id resolves.
+  string blocked_item_id = 2;
+}
+
+message AddBacklogItemDependencyResponse {
+  BacklogItem item = 1;
+}
 
 message TransitionBacklogItemStatusRequest {
   string item_id = 1;
@@ -461,6 +533,12 @@ message TriggerTriageRequest {
   // completed triage result instead of a fresh triage run. Requires a prior
   // completed triage result to exist.
   string feedback = 2;
+  // chat_mode, when true alongside a non-empty feedback, tightens the
+  // refinement prompt to ask at most one clarifying question per turn
+  // instead of a batch of questions — set by CreateBacklogItemFromChat for
+  // chat-originated refinement turns. Ignored for a fresh triage run
+  // (feedback empty).
+  bool chat_mode = 3;
 }
 
 message TriggerTriageResponse {
@@ -734,6 +812,10 @@ message BacklogItemSessionAttachedEvent {
   string session_id = 2;
   BacklogItem item = 3;
   bool is_snapshot = 4;
+  // claimant_host_id is the attaching process's own identity (Config.GetOrCreateClaimantHostID),
+  // never anything read from the attached session. See ItemSession.claimant_host_id for the full
+  // disambiguation against STAPLER_SQUAD_INSTANCE and session/contexts.go's CloudContext.InstanceID.
+  string claimant_host_id = 5;
 }
 
 // BacklogItemUpdatedEvent is emitted when one or more item fields change
@@ -786,6 +868,12 @@ service BacklogService {
   // CreateBacklogItem adds a new item to the backlog.
   rpc CreateBacklogItem(CreateBacklogItemRequest) returns (CreateBacklogItemResponse) {}
 
+  // CreateBacklogItemFromChat handles one turn of a natural-language chat
+  // conversation for creating or refining a backlog item. First turn (no
+  // existing_item_id) creates a minimal item via CreateBacklogItem; later
+  // turns delegate to TriggerTriage with feedback = message.
+  rpc CreateBacklogItemFromChat(CreateBacklogItemFromChatRequest) returns (CreateBacklogItemFromChatResponse) {}
+
   // GetBacklogItem retrieves a single backlog item by ID.
   rpc GetBacklogItem(GetBacklogItemRequest) returns (GetBacklogItemResponse) {}
 
@@ -803,6 +891,12 @@ service BacklogService {
 
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // UnarchiveBacklogItem restores a previously archived item to the "idea"
+  // status and clears archived_at. It does not restore any prior status
+  // history, nor recreate a deleted git worktree/session — the item simply
+  // re-enters the idea column needing a fresh session.
+  rpc UnarchiveBacklogItem(UnarchiveBacklogItemRequest) returns (UnarchiveBacklogItemResponse) {}
 
   // DeleteBacklogItem permanently removes an item and all its child records.
   rpc DeleteBacklogItem(DeleteBacklogItemRequest) returns (DeleteBacklogItemResponse) {}
@@ -941,6 +1035,13 @@ service BacklogService {
   // Rejects with an error (rather than silently un-parking) when the row has
   // already exhausted its attempt budget — use ResetStuckRemediation first.
   rpc TriggerRemediationNow(TriggerRemediationNowRequest) returns (TriggerRemediationNowResponse) {}
+
+  // AddBacklogItemDependency marks blocked_item_id as depending on
+  // (blocked by) blocker_item_id. The dependent item is excluded from
+  // DequeueNextQueuedItems until the blocker resolves (reaches done or
+  // archived status, or is deleted). Rejects self-dependency and any edge
+  // that would close a dependency cycle.
+  rpc AddBacklogItemDependency(AddBacklogItemDependencyRequest) returns (AddBacklogItemDependencyResponse) {}
 
   // WatchBacklogItems streams real-time backlog item events (status changes,
   // verdicts, session attachments, updates, archival, removal).
@@ -1114,6 +1215,15 @@ enum StuckReason {
   // pass/fail signal. Purely informational — never gates the reopen/park
   // decision; present as a hint to verify, not a confident verdict.
   STUCK_REASON_LIKELY_FLAKY = 15;
+  // STUCK_REASON_MULTIPLE_REASONS: see domain.StuckReasonMultipleReasons — synthetic aggregate signal for multiple simultaneous stuck reasons.
+  STUCK_REASON_MULTIPLE_REASONS = 16;
+  // STUCK_REASON_BOUNCE_CAP_EXHAUSTED: see domain.StuckReasonBounceCapExhausted — synthetic aggregate signal for a bouncing item that exhausted its remediation cap.
+  STUCK_REASON_BOUNCE_CAP_EXHAUSTED = 17;
+  // STUCK_REASON_BLOCKED_BY_DEPENDENCY: see domain.StuckReasonBlockedByDependency
+  // (session/domain/backlog.go) — DequeueNextQueuedItems' dependency gate
+  // skipped this item because at least one of its blocker items has not yet
+  // reached a resolved status (done or archived).
+  STUCK_REASON_BLOCKED_BY_DEPENDENCY = 18;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

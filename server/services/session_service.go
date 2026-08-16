@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -54,6 +55,11 @@ var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 const createSessionTimeout = 150 * time.Second
 
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// testTmuxServerSocketCounter gives each SessionService created within a test binary run a
+// unique tmux -L socket suffix (combined with os.Getpid() for cross-process uniqueness), so
+// concurrent tests never contend on the same isolated socket. See SessionService.testTmuxServerSocket.
+var testTmuxServerSocketCounter uint64
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
 // The actual implementation is in server/review_queue_manager.go
@@ -130,6 +136,13 @@ type SessionService struct {
 
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
+
+	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
+	// (webhook-triggers Phase 5, FR7).
+	callbackConfigSvc *CallbackConfigService
+
+	// launcherPresetsSvc handles the GetLauncherPresets RPC.
+	launcherPresetsSvc *LauncherPresetsService
 
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
@@ -213,6 +226,91 @@ type SessionService struct {
 	// registry is the live-handle map for all running sessions. Wired after construction
 	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
 	registry *session.Registry
+
+	// deleteCleanupWG tracks DeleteSession's background tmux/worktree cleanup
+	// goroutines so Shutdown can await them instead of letting them outlive the
+	// process (or, in tests, outlive the test that spawned them).
+	deleteCleanupWG sync.WaitGroup
+
+	// deleteCleanupMu guards deleteCleanupClosed and serializes it against
+	// deleteCleanupWG.Add via trackCleanup, so Add never races Shutdown's Wait —
+	// see deleteCleanupClosed's doc comment.
+	deleteCleanupMu sync.Mutex
+
+	// deleteCleanupClosed is set once Shutdown begins draining deleteCleanupWG.
+	// sync.WaitGroup requires that any Add with a positive delta happen before
+	// the matching Wait call is invoked (or after a prior Wait returns) —
+	// calling Add concurrently with Wait when the counter may be zero is a
+	// documented misuse that can panic or let Wait return before the new work
+	// finishes. trackCleanup checks this flag under deleteCleanupMu before
+	// calling Add; Shutdown sets it under the same mutex before calling Wait.
+	// That makes the two mutually exclusive: any Add() that wins the lock race
+	// happens-before closed is set true (and thus happens-before Wait()), and
+	// any Add() that loses sees closed=true and never calls Add at all — it
+	// runs the cleanup untracked instead, which is fine because Shutdown no
+	// longer needs to wait for it.
+	deleteCleanupClosed bool
+
+	// testTmuxServerSocket, when non-empty, is applied to every Instance this
+	// service creates via TmuxServerSocket, isolating the tmux -L socket used
+	// by test runs from the shared production default. Set automatically by
+	// NewSessionServiceWithSearchEngine under config.IsTestMode() — see
+	// docs/bugs/fixed/BUG-075 for why this is a service-wide test hook rather
+	// than a per-call-site change across the package's ~90 NewSessionService
+	// test call sites.
+	testTmuxServerSocket string
+}
+
+// trackCleanup runs fn in a goroutine tracked by deleteCleanupWG so Shutdown
+// can await it, unless Shutdown has already begun draining the WaitGroup — see
+// deleteCleanupClosed's doc comment for why Add can't be allowed to race Wait.
+func (s *SessionService) trackCleanup(fn func()) {
+	s.deleteCleanupMu.Lock()
+	if s.deleteCleanupClosed {
+		s.deleteCleanupMu.Unlock()
+		go fn()
+		return
+	}
+	s.deleteCleanupWG.Add(1)
+	s.deleteCleanupMu.Unlock()
+	go func() {
+		defer s.deleteCleanupWG.Done()
+		fn()
+	}()
+}
+
+// deleteSessionCleanupTimeout bounds how long DeleteSession's background
+// liveInst.Destroy() cleanup (tmux kill, git diff stats, and worktree
+// filesystem cleanup) is awaited before Shutdown/deleteCleanupWG.Wait() gives
+// up on it. Destroy() takes no context and cannot be forcibly cancelled, so a
+// timed-out cleanup keeps running in its own goroutine (untracked by the
+// WaitGroup) after this deadline — only the *wait* is bounded, not the
+// underlying work (see BUG-072 for threading a real context.Context through
+// the cleanup chain so the timeout can cancel the work itself). Matches
+// KillTmuxSessionByTitle's 5s cap on the same kill-session subprocess.
+const deleteSessionCleanupTimeout = 5 * time.Second
+
+// destroyWithTimeout runs destroy() (normally inst.Destroy) and waits up to
+// timeout for it to finish. If it doesn't finish in time, this returns a
+// timeout error immediately while destroy() continues running in the
+// background goroutine it was started in — see deleteSessionCleanupTimeout's
+// doc comment for why the bound is on the wait, not the work itself.
+//
+// destroy is a func() error rather than a *session.Instance so the
+// timeout-exceeded branch can be exercised directly in tests with a
+// deliberately slow callback, without needing a real Instance whose Destroy()
+// can be made to hang on demand.
+func destroyWithTimeout(destroy func() error, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- destroy()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("timed out after %s waiting for session cleanup to finish (still running in background)", timeout)
+	}
 }
 
 // workflowMeta holds cached metadata about a workflow used at session-list time.
@@ -366,13 +464,13 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	capCfg = capCfg.CapacityConfigOrDefault()
 
-	var directCfg config.Config
+	directCfg := &config.Config{}
 	if dir, err := config.GetConfigDir(); err == nil {
 		if c, err := config.LoadConfigFromPath(filepath.Join(dir, "config.json")); err == nil {
-			directCfg = *c
+			directCfg = c
 		}
 	}
-	credChain := NewDefaultChain(&directCfg)
+	credChain := NewDefaultChain(directCfg)
 
 	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
@@ -387,33 +485,39 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
-		storage:           storage,
-		concStorage:       concStorage,
-		eventBus:          eventBus,
-		reviewQueueSvc:    reviewQueueSvc,
-		searchSvc:         NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
-		githubSvc:         NewGitHubService(concStorage),
-		workspaceSvc:      workspaceSvc,
-		configSvc:         NewConfigService(),
-		notificationSvc:   notificationSvc,
-		approvalSvc:       approvalSvc,
-		utilitySvc:        utilitySvc,
-		rulesSvc:          rulesSvc,
-		approvalStore:     approvalStore,
-		databaseSvc:       NewDatabaseService(),
-		fileSvc:           NewFileService(workspaceSvc),
-		pathCompletionSvc: NewPathCompletionService(),
-		slashCommandSvc:   NewSlashCommandService(),
-		defaultsSvc:       NewDefaultsService(),
-		projectSvc:        NewProjectService(concStorage),
-		checkpointSvc:     NewCheckpointService(storage, eventBus),
-		featureFlagSvc:    NewFeatureFlagService(),
-		terminalSvc:       NewTerminalService(),
-		promptStore:       newPromptStore(),
-		capacityMonitor:   capacityMonitor,
+		storage:            storage,
+		concStorage:        concStorage,
+		eventBus:           eventBus,
+		reviewQueueSvc:     reviewQueueSvc,
+		searchSvc:          NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		githubSvc:          NewGitHubService(concStorage),
+		workspaceSvc:       workspaceSvc,
+		configSvc:          NewConfigService(),
+		notificationSvc:    notificationSvc,
+		approvalSvc:        approvalSvc,
+		utilitySvc:         utilitySvc,
+		rulesSvc:           rulesSvc,
+		approvalStore:      approvalStore,
+		databaseSvc:        NewDatabaseService(),
+		fileSvc:            NewFileService(workspaceSvc),
+		pathCompletionSvc:  NewPathCompletionService(),
+		slashCommandSvc:    NewSlashCommandService(),
+		defaultsSvc:        NewDefaultsService(),
+		callbackConfigSvc:  NewCallbackConfigService(),
+		launcherPresetsSvc: NewLauncherPresetsService(),
+		projectSvc:         NewProjectService(concStorage),
+		checkpointSvc:      NewCheckpointService(storage, eventBus),
+		featureFlagSvc:     NewFeatureFlagService(),
+		terminalSvc:        NewTerminalService(),
+		promptStore:        newPromptStore(),
+		capacityMonitor:    capacityMonitor,
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
+
+	if config.IsTestMode() {
+		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))
+	}
 
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
@@ -716,6 +820,15 @@ func (s *SessionService) Shutdown() {
 	if store := s.GetAnalyticsStore(); store != nil {
 		store.Stop()
 	}
+	// Stop accepting new tracked cleanup work before draining what's already
+	// tracked — see deleteCleanupClosed's doc comment for why this ordering
+	// (under deleteCleanupMu, before Wait) is what makes Add/Wait race-free.
+	s.deleteCleanupMu.Lock()
+	s.deleteCleanupClosed = true
+	s.deleteCleanupMu.Unlock()
+	// Await DeleteSession's background cleanup goroutines so they don't
+	// outlive this process (or, in tests, outlive the test that spawned them).
+	s.deleteCleanupWG.Wait()
 }
 
 // SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
@@ -906,17 +1019,18 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
 	opts := session.InstanceOptions{
-		Title:           title,
-		Path:            path,
-		Program:         resolved.Program,
-		PermissionMode:  session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
-		SessionType:     session.SessionTypeDirectory,
-		Prompt:          prompt,
-		Tags:            tags,
-		OneShot:         oneShot,
-		Hidden:          hidden,
-		MCPServerURL:    s.resolveMCPServerURL(),
-		CreateIfMissing: true,
+		Title:            title,
+		Path:             path,
+		Program:          resolved.Program,
+		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
+		SessionType:      session.SessionTypeDirectory,
+		Prompt:           prompt,
+		Tags:             tags,
+		OneShot:          oneShot,
+		Hidden:           hidden,
+		MCPServerURL:     s.resolveMCPServerURL(),
+		CreateIfMissing:  true,
+		TmuxServerSocket: s.testTmuxServerSocket,
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -969,6 +1083,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 		Hidden:           hidden,
 		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  false,
+		TmuxServerSocket: s.testTmuxServerSocket,
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -1170,10 +1285,14 @@ func (s *SessionService) ListSessions(
 	// Convert instances to proto messages
 	sessions := make([]*sessionv1.Session, 0, len(instances))
 	for _, inst := range instances {
-		// Apply optional status filter
+		// Apply optional status filter. Read the status directly off the instance
+		// instead of building the full proto just to inspect one field — building it
+		// runs the full GetEffectiveStatus/GetStatusAndIdleInfo/DetectStateFromContent
+		// chain, which is expensive enough that doing it twice per instance (once here,
+		// once for the real output below) roughly doubles ListSessions' allocation cost
+		// whenever a status filter is applied.
 		if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-			protoStatus := adapters.InstanceToProto(inst, nil).Status
-			if protoStatus != *req.Msg.Status {
+			if adapters.StatusToProto(inst.GetEffectiveStatus()) != *req.Msg.Status {
 				continue
 			}
 		}
@@ -1573,6 +1692,12 @@ func (s *SessionService) CreateSession(
 		WorkflowID:       req.Msg.WorkflowId,
 		EnvVars:          instanceEnvVars,
 		CLIFlags:         instanceCLIFlags,
+		TmuxServerSocket: s.testTmuxServerSocket,
+		// ExtraArgs is a direct passthrough of req.Msg.ExtraArgs — unlike CLIFlags, it has no
+		// defaults-resolution concept to merge with. It composes with instanceCLIFlags at
+		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
+		// an intentional, tested ordering (see TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
+		ExtraArgs: req.Msg.ExtraArgs,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -2358,23 +2483,25 @@ func (s *SessionService) DeleteSession(
 
 	// Destroy tmux/git resources asynchronously so the RPC returns immediately
 	// after storage deletion. Cleanup errors are non-fatal — they are logged and
-	// do not affect the success response the caller receives.
+	// do not affect the success response the caller receives. Both goroutines are
+	// tracked via deleteCleanupWG so Shutdown (and tests) can await them instead
+	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
-		go func() {
-			if err := liveInst.Destroy(); err != nil {
+		s.trackCleanup(func() {
+			if err := destroyWithTimeout(liveInst.Destroy, deleteSessionCleanupTimeout); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
-		}()
+		})
 	} else {
 		// Instance is not in the live in-memory poller (e.g. the server restarted
 		// since this session was created). Fall back to killing the tmux session by
 		// its deterministic name so the Claude process inside it doesn't survive as
 		// an orphan after the DB record is gone.
-		go func() {
+		s.trackCleanup(func() {
 			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
-		}()
+		})
 	}
 
 	// Cancel any pending approvals BEFORE deleting from storage, so blocked
@@ -3675,6 +3802,11 @@ func (s *SessionService) GetSessionDefaults(ctx context.Context, req *connect.Re
 	return s.defaultsSvc.GetSessionDefaults(ctx, req)
 }
 
+// GetLauncherPresets returns the hand-authored launcher presets, freshly read on every call.
+func (s *SessionService) GetLauncherPresets(ctx context.Context, req *connect.Request[sessionv1.GetLauncherPresetsRequest]) (*connect.Response[sessionv1.GetLauncherPresetsResponse], error) {
+	return s.launcherPresetsSvc.GetLauncherPresets(ctx, req)
+}
+
 // ResolveDefaults merges all default layers for the given working directory and profile.
 func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Request[sessionv1.ResolveDefaultsRequest]) (*connect.Response[sessionv1.ResolveDefaultsResponse], error) {
 	return s.defaultsSvc.ResolveDefaults(ctx, req)
@@ -3702,6 +3834,15 @@ func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWM
 	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
 }
 
+// SetSharedCallbackConfig wires the *config.Config instance (and its guarding
+// mutex) CallbackDispatcher reads callback URLs from into this SessionService's
+// CallbackConfigService, so UpdateCallbackConfig can propagate a saved URL into
+// CallbackDispatcher's live view without a process restart. See
+// CallbackConfigService.SetSharedCallbackConfig.
+func (s *SessionService) SetSharedCallbackConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.callbackConfigSvc.SetSharedCallbackConfig(cfg, mu)
+}
+
 // UpsertProfile creates or updates a named profile.
 func (s *SessionService) UpsertProfile(ctx context.Context, req *connect.Request[sessionv1.UpsertProfileRequest]) (*connect.Response[sessionv1.UpsertProfileResponse], error) {
 	return s.defaultsSvc.UpsertProfile(ctx, req)
@@ -3720,6 +3861,20 @@ func (s *SessionService) UpsertDirectoryRule(ctx context.Context, req *connect.R
 // DeleteDirectoryRule removes a directory rule by path.
 func (s *SessionService) DeleteDirectoryRule(ctx context.Context, req *connect.Request[sessionv1.DeleteDirectoryRuleRequest]) (*connect.Response[sessionv1.DeleteDirectoryRuleResponse], error) {
 	return s.defaultsSvc.DeleteDirectoryRule(ctx, req)
+}
+
+// ─── Callback Config delegates (webhook-triggers Phase 5, FR7) ──────────────
+
+// +api: callback-config:get
+// GetCallbackConfig reports which outbound-callback URLs are configured.
+func (s *SessionService) GetCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.GetCallbackConfigRequest]) (*connect.Response[sessionv1.GetCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.GetCallbackConfig(ctx, req)
+}
+
+// +api: callback-config:update
+// UpdateCallbackConfig sets one or more outbound-callback URLs.
+func (s *SessionService) UpdateCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateCallbackConfigRequest]) (*connect.Response[sessionv1.UpdateCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.UpdateCallbackConfig(ctx, req)
 }
 
 // ListAliases returns all configured alias presets.
@@ -4548,6 +4703,17 @@ func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[s
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
 	}
 	return s.workflowSvc.RunWorkflow(ctx, req)
+}
+
+// +api: workflow:list-trigger-fire-events
+// ListTriggerFireEvents delegates to WorkflowService.
+func (s *SessionService) ListTriggerFireEvents(ctx context.Context, req *connect.Request[sessionv1.ListTriggerFireEventsRequest]) (*connect.Response[sessionv1.ListTriggerFireEventsResponse], error) {
+	if s.workflowSvc == nil {
+		return connect.NewResponse(&sessionv1.ListTriggerFireEventsResponse{
+			Events: []*sessionv1.TriggerFireEventProto{},
+		}), nil
+	}
+	return s.workflowSvc.ListTriggerFireEvents(ctx, req)
 }
 
 // GetDetectionEvents returns recent status-detection events for a session's Claude controller.

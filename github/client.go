@@ -172,16 +172,17 @@ func CheckGHAuth() error {
 			return authErr, nil
 		}
 		defer resp.Body.Close()
-		_, _ = io.Copy(io.Discard, resp.Body)
 
 		var authErr error
-		switch resp.StatusCode {
-		case http.StatusOK:
-			// authenticated — no error
-		case http.StatusUnauthorized, http.StatusForbidden:
-			authErr = fmt.Errorf("GitHub is not authenticated (HTTP %d). Set GITHUB_TOKEN or run 'gh auth login'", resp.StatusCode)
-		default:
-			authErr = fmt.Errorf("GitHub auth check: unexpected status %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusOK {
+			_, _ = io.Copy(io.Discard, resp.Body)
+		} else {
+			// classifyGHResponse distinguishes real auth failures (401, or a
+			// 403 with no rate-limit signal) from rate limiting (403 with
+			// Retry-After or X-RateLimit-Remaining: 0, or 429) — a plain
+			// "not authenticated, run gh auth login" message on a rate-limited
+			// response is misleading and sends users to fix the wrong thing.
+			authErr = classifyGHResponse(resp, "", false)
 		}
 
 		ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
@@ -202,7 +203,8 @@ func CheckGHAuth() error {
 
 // GetCurrentUserLogin returns the GitHub login of the authenticated user via
 // GET /user. Returns an empty string (not an error) when unauthenticated so
-// callers can degrade gracefully.
+// callers can degrade gracefully. Returns a non-nil error when the request
+// is rate limited instead — that isn't the same as being unauthenticated.
 func GetCurrentUserLogin(ctx context.Context) (string, error) {
 	req, err := newGHRequest(ctx, "user")
 	if err != nil {
@@ -213,7 +215,8 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 
 // GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token
 // on host ("" means github.com).
-// Returns ("", nil) when the token is invalid or unauthenticated.
+// Returns ("", nil) when the token is invalid or unauthenticated, and a
+// non-nil error when the request is rate limited instead.
 func GetCurrentUserLoginWithToken(ctx context.Context, host, token string) (string, error) {
 	req, err := newGHRequestForHostWithToken(ctx, host, "user", token)
 	if err != nil {
@@ -230,6 +233,12 @@ func fetchLoginFromRequest(req *http.Request) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// A rate-limited 403 isn't "unauthenticated" — surface it as an error
+		// so callers don't silently treat rate limiting as a missing/invalid
+		// token and degrade as if no one is logged in.
+		if isGHRateLimited(resp) {
+			return "", classifyGHResponse(resp, "", false)
+		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return "", nil
 	}
@@ -401,14 +410,8 @@ func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, e
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("GitHub API: unauthorized (401) – run 'gh auth login'")
-	}
-	if resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("GitHub API: forbidden (403) – check token permissions")
-	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned status %d for PR list", resp.StatusCode)
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -467,14 +470,8 @@ func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRIn
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, ErrNoPR
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("GitHub API: unauthorized (401) – run 'gh auth login'")
-	}
-	if resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("GitHub API: forbidden (403) – check token permissions")
-	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned status %d for PR #%d", resp.StatusCode, prNumber)
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)

@@ -16,6 +16,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -61,7 +62,47 @@ const (
 	// Continuation prompt constants.
 	driverContinuationMaxMessages = 10
 	driverContinuationMaxChars    = 500
+
+	// maxDialogAnswerAttempts bounds retry-on-failure for a DialogAnswerLatch
+	// (ADR-001): a SendKeys failure against the *same* dialog content hash is
+	// retried up to this many times before the latch gives up (dialogGaveUp).
+	// A hash change (a genuinely new/different dialog) resets the counter, so
+	// this does not bound legitimate re-answering of a later, different dialog.
+	maxDialogAnswerAttempts = 3
 )
+
+// dialogLatchStatus is the DialogAnswerLatch state machine (ADR-001):
+// dialogUnanswered -> dialogAwaitingDismissal -> dialogGaveUp, keyed by a
+// content hash of the (tail-sliced, whitespace-normalized) dialog text.
+type dialogLatchStatus int
+
+const (
+	// dialogUnanswered means either no dialog has been seen yet for the
+	// current hash, or the current hash's send attempts are still under
+	// the maxDialogAnswerAttempts retry cap.
+	dialogUnanswered dialogLatchStatus = iota
+	// dialogAwaitingDismissal means a SendKeys for the current hash
+	// succeeded; the latch will not resend while the hash is unchanged.
+	dialogAwaitingDismissal
+	// dialogGaveUp means SendKeys failed maxDialogAnswerAttempts times in a
+	// row for the current hash; the latch will not retry further while the
+	// hash is unchanged.
+	dialogGaveUp
+)
+
+// dialogAnswerState holds the per-call-site DialogAnswerLatch state for one
+// SendKeys call site within a single runSessionDriverWithPrompt invocation.
+// It is a plain local variable, not an Instance field: StartSessionDriver's
+// driverRunning.CompareAndSwap already guarantees a single sequential
+// goroutine owns this state for the life of one driver run — the same
+// reasoning sentInitial/initialPromptSentAt (already local vars in this
+// function) rely on. The zero value (hash 0, status dialogUnanswered,
+// attempts 0) doubles as "no dialog seen yet" (see ADR-001 Consequences).
+type dialogAnswerState struct {
+	hash     uint64
+	status   dialogLatchStatus
+	attempts int
+}
 
 // StartSessionDriver launches a background goroutine that drives the session
 // through its startup dialogs, fires the initial task prompt, and monitors
@@ -140,18 +181,6 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	ticker := time.NewTicker(driverPollInterval)
 	defer ticker.Stop()
 
-	// dialogAwaitingClear latches after we answer a startup dialog: it blocks a
-	// second "1\r" until the dialog text has visibly disappeared from the pane
-	// at least once. A fixed time-based cooldown is not sufficient here — a
-	// slow/loaded terminal can still be redrawing the same already-answered
-	// dialog past any fixed window, and sending another "1\r" then queues into
-	// whatever prompt appears next once the redraw finally completes.
-	var dialogAwaitingClear bool
-
-	// Same guard for directory-access approval prompts (see #165): NeedsApproval
-	// can stay the detected status for several poll ticks after "1\r" is sent.
-	var approvalAwaitingClear bool
-
 	// Once a PR URL is found in terminal output we stop scanning.
 	// Pre-seed from the current in-memory state so we don't re-scan for sessions
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
@@ -179,6 +208,21 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 	}
 	var sendAttempts int
+
+	// DialogAnswerLatch state (ADR-001), one per SendKeys("1\n") call site.
+	// Independently scoped — the approval-prompt latch is not shared with the
+	// startup-dialog latch (a buffer classified true by both detectors
+	// simultaneously, though very unlikely given their disjoint phrase sets,
+	// could fire both in one tick; see ADR-001/plan.md Risk Control).
+	var startupLatch dialogAnswerState
+	var approvalLatch dialogAnswerState
+
+	// Both DialogAnswerLatch call sites below send the identical key sequence
+	// ("1\n" selects the affirmative numbered option on both the startup-dialog
+	// and approval-prompt menus) — hoisted once so there is a single definition
+	// shared by both answerDialogOnce calls instead of two independent literal
+	// closures.
+	sendAnswerKey := func() error { return inst.SendKeys("1\n") }
 
 	for range ticker.C {
 		if time.Now().After(totalDeadline) {
@@ -251,25 +295,44 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// Always check Preview for startup dialogs that appear before the status
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
 		output, previewErr := inst.Preview()
-		if previewErr == nil && output != "" {
-			dialogVisible := isStartupDialog(output)
-			if shouldAnswerStartupDialog(dialogVisible, dialogAwaitingClear) {
-				if err := inst.SendKeys("1\r"); err != nil {
-					log.Warn("SessionDriver: failed to answer startup dialog",
-						"session", inst.Title,
-						"err", err,
-					)
-				} else {
-					dialogAwaitingClear = true
-					log.Info("SessionDriver: answered startup dialog",
-						"session", inst.Title,
-					)
-				}
+		hasOutput := previewErr == nil && output != ""
+		// Tail-slice once per tick: Preview() returns the entire accumulated PTY
+		// buffer (not a tailed "current screen" snapshot, despite its doc comment),
+		// so both the isStartupDialog/shouldApprovePrompt match and the latch hash
+		// below are computed against a bounded recent window, not the session's
+		// entire history (ADR-001 "Tail-slice before matching and hashing").
+		var tailed string
+		if hasOutput {
+			tailed = tailContent(output, statusDetectionTailBytes)
+		}
+
+		if hasOutput && isStartupDialog(tailed) {
+			status := answerDialogOnce(&startupLatch, tailed, sendAnswerKey, inst.Title, "startup dialog")
+
+			// Control-flow requirement (ADR-001): only dialogUnanswered (a send
+			// was just attempted this tick, whether it succeeded or is still
+			// under the retry cap) keeps the single-tick continue. Once the
+			// latch reaches dialogAwaitingDismissal or dialogGaveUp, fall
+			// through to the rest of the loop body exactly as if
+			// isStartupDialog had been false this tick — restoring
+			// Ready-detection, the inactivity-timeout escalation, and the
+			// NeedsApproval check for ticks after the dialog has been
+			// answered or abandoned. Without this, a dialogGaveUp session
+			// would silently wedge here until driverTotalTimeout (25 min)
+			// with zero operator escalation.
+			//
+			// Exhaustive switch (not a plain if) so a future 4th
+			// dialogLatchStatus value can't silently fall through the
+			// implicit "unanswered" path and reintroduce the original
+			// unbounded-resend bug.
+			switch status {
+			case dialogUnanswered:
 				continue
+			case dialogAwaitingDismissal, dialogGaveUp:
+				// Fall through to the rest of the loop body — see comment above.
+			default:
+				panic(fmt.Sprintf("SessionDriver: unhandled dialogLatchStatus %d from answerDialogOnce (startup dialog)", status))
 			}
-			// Latch clears only once the dialog text is no longer visible —
-			// this is what lets a genuinely new occurrence be answered later.
-			dialogAwaitingClear = dialogAwaitingClear && dialogVisible
 		}
 
 		if !sentInitial {
@@ -438,25 +501,18 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// After the initial prompt is sent, watch for NeedsApproval to handle
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
+		//
+		// Same DialogAnswerLatch defect class as the startup-dialog branch
+		// above (ADR-001), applied via an independently-scoped approvalLatch.
+		// Asymmetry note: unlike the startup-dialog branch, this call site has
+		// no `continue` today (it already falls through naturally to the end
+		// of the loop body regardless of outcome), so there is no analogous
+		// control-flow starvation risk to fix here — the returned status is
+		// only used for the latch's own bookkeeping, not for branching.
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
-				if previewErr == nil && output != "" {
-					approvalVisible := shouldApprovePrompt(output, allowedPath)
-					if shouldApprovePromptOnce(approvalVisible, approvalAwaitingClear) {
-						if err := inst.SendKeys("1\r"); err != nil {
-							log.Warn("SessionDriver: failed to approve prompt",
-								"session", inst.Title,
-								"err", err,
-							)
-						} else {
-							approvalAwaitingClear = true
-							log.Info("SessionDriver: approved directory-access prompt",
-								"session", inst.Title,
-							)
-						}
-					} else {
-						approvalAwaitingClear = approvalAwaitingClear && approvalVisible
-					}
+				if hasOutput && shouldApprovePrompt(tailed, allowedPath) {
+					answerDialogOnce(&approvalLatch, tailed, sendAnswerKey, inst.Title, "approval prompt")
 				}
 			}
 		}
@@ -655,6 +711,75 @@ func isOneShot(inst *Instance) bool {
 	return inst.HasTag("backlog:triage") || inst.HasTag("backlog:review")
 }
 
+// answerDialogOnce implements the DialogAnswerLatch state machine (ADR-001):
+// send at most once per unique dialog-content hash, with bounded
+// retry-on-failure only (never retried once a send succeeds).
+//
+// output is tail-sliced to statusDetectionTailBytes and whitespace-normalized
+// before hashing — mirroring GetCurrentStatus's existing tail-then-hash
+// precedent (claude_controller.go:528) — so the comparison is scoped to what
+// is actually still near-current on screen (not the session's entire
+// scrollback history) and is immune to incidental line-wrap/whitespace
+// jitter between polling ticks. Callers may pass either the raw Preview()
+// output or an already-tailed value (e.g. the same `tailed` they computed
+// for their own isStartupDialog/shouldApprovePrompt match) — tailContent is
+// idempotent on already-short input, so tailing twice is harmless and this
+// function's own tailing is what its unit tests (TestAnswerDialogOnce cases
+// f/g) exercise directly, independent of any caller-side tailing.
+//
+// Returns the latch's resulting status after this tick's transition, so the
+// call site can decide whether to keep short-circuiting the rest of the poll
+// tick or fall through to it (see ADR-001's "Control flow" section).
+func answerDialogOnce(state *dialogAnswerState, output string, send func() error, sessionTitle, logContext string) dialogLatchStatus {
+	tailed := tailContent(output, statusDetectionTailBytes)
+	normalized := strings.Join(strings.Fields(tailed), " ")
+	hash := hashString(normalized)
+
+	if hash != state.hash {
+		// New dialog, or this dialog was dismissed and a different one
+		// appeared with the same call site — re-arm the latch.
+		state.hash = hash
+		state.status = dialogUnanswered
+		state.attempts = 0
+	}
+
+	// Exhaustive switch (not a plain if) so a future 4th dialogLatchStatus
+	// value can't silently fall through the implicit "unanswered" path below
+	// and reintroduce the original unbounded-resend bug.
+	switch state.status {
+	case dialogAwaitingDismissal, dialogGaveUp:
+		return state.status
+	case dialogUnanswered:
+		// Proceed below: this hash has not yet been successfully answered
+		// (or is still within its retry budget) — attempt the send.
+	default:
+		panic(fmt.Sprintf("answerDialogOnce: unhandled dialogLatchStatus %d for %s", state.status, logContext))
+	}
+
+	if err := send(); err != nil {
+		state.attempts++
+		log.Warn("SessionDriver: failed to answer "+logContext,
+			"session", sessionTitle,
+			"attempt", state.attempts,
+			"err", err,
+		)
+		if state.attempts >= maxDialogAnswerAttempts {
+			state.status = dialogGaveUp
+			log.Warn("SessionDriver: giving up on "+logContext+" after repeated send failures",
+				"session", sessionTitle,
+				"attempts", state.attempts,
+			)
+		}
+		return state.status
+	}
+
+	log.Info("SessionDriver: answered "+logContext,
+		"session", sessionTitle,
+	)
+	state.status = dialogAwaitingDismissal
+	return state.status
+}
+
 // isStartupDialog returns true when output contains a Claude Code startup
 // interactive prompt that requires a numbered-menu response (e.g. the
 // "Do you trust this folder?" safety check shown on first launch in a new
@@ -667,28 +792,6 @@ func isStartupDialog(output string) bool {
 		// Must have a numbered option to select — avoids false positives on
 		// non-interactive output that merely mentions trust.
 		(strings.Contains(output, "1.") || strings.Contains(output, "❯ 1"))
-}
-
-// shouldSendOnce returns true when detected is true and awaitingClear is
-// false — the shared double-fire guard used by both the startup-dialog and
-// directory-approval auto-answer paths. awaitingClear must stay true (blocking
-// further sends) until the caller observes detected go false at least once,
-// confirming the dialog we already answered has actually left the pane. A
-// fixed time-based cooldown is deliberately not used here: a slow/loaded
-// terminal can still be showing the same already-answered dialog past any
-// fixed window, and sending another "1\r" then queues into whatever prompt
-// appears next once the redraw finally completes (see #165 and its
-// trust-folder analog).
-func shouldSendOnce(detected bool, awaitingClear bool) bool {
-	return detected && !awaitingClear
-}
-
-// shouldAnswerStartupDialog returns true when the terminal output shows a
-// startup dialog that has not yet been answered (or was answered but has
-// since been confirmed cleared). Extracted to make the double-fire guard
-// directly unit-testable.
-func shouldAnswerStartupDialog(dialogVisible bool, awaitingClear bool) bool {
-	return shouldSendOnce(dialogVisible, awaitingClear)
 }
 
 // outputShowsConversationStarted returns true when live terminal content
@@ -841,13 +944,4 @@ func shouldApprovePrompt(output, allowedPath string) bool {
 		return true
 	}
 	return strings.Contains(output, allowedPath)
-}
-
-// shouldApprovePromptOnce adds the same double-fire guard used by
-// shouldAnswerStartupDialog: NeedsApproval can remain the detected status for
-// several poll ticks after "1\r" is sent (the PTY needs time to redraw), so
-// without this latch the driver resends "1" every driverPollInterval until the
-// dialog visibly clears — the repeated-"1" bug in #165.
-func shouldApprovePromptOnce(approvalVisible bool, awaitingClear bool) bool {
-	return shouldSendOnce(approvalVisible, awaitingClear)
 }

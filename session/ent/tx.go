@@ -18,6 +18,8 @@ type Tx struct {
 	ApprovalRule *ApprovalRuleClient
 	// BacklogItem is the client for interacting with the BacklogItem builders.
 	BacklogItem *BacklogItemClient
+	// BacklogItemDependency is the client for interacting with the BacklogItemDependency builders.
+	BacklogItemDependency *BacklogItemDependencyClient
 	// BacklogProgressNote is the client for interacting with the BacklogProgressNote builders.
 	BacklogProgressNote *BacklogProgressNoteClient
 	// BacklogStatusEvent is the client for interacting with the BacklogStatusEvent builders.
@@ -58,6 +60,8 @@ type Tx struct {
 	SourceSyncEvent *SourceSyncEventClient
 	// Tag is the client for interacting with the Tag builders.
 	Tag *TagClient
+	// TriggerFireEvent is the client for interacting with the TriggerFireEvent builders.
+	TriggerFireEvent *TriggerFireEventClient
 	// Workflow is the client for interacting with the Workflow builders.
 	Workflow *WorkflowClient
 	// Worktree is the client for interacting with the Worktree builders.
@@ -196,6 +200,7 @@ func (tx *Tx) init() {
 	tx.AnalyticsEvent = NewAnalyticsEventClient(tx.config)
 	tx.ApprovalRule = NewApprovalRuleClient(tx.config)
 	tx.BacklogItem = NewBacklogItemClient(tx.config)
+	tx.BacklogItemDependency = NewBacklogItemDependencyClient(tx.config)
 	tx.BacklogProgressNote = NewBacklogProgressNoteClient(tx.config)
 	tx.BacklogStatusEvent = NewBacklogStatusEventClient(tx.config)
 	tx.BacklogStuckState = NewBacklogStuckStateClient(tx.config)
@@ -216,6 +221,7 @@ func (tx *Tx) init() {
 	tx.Shell = NewShellClient(tx.config)
 	tx.SourceSyncEvent = NewSourceSyncEventClient(tx.config)
 	tx.Tag = NewTagClient(tx.config)
+	tx.TriggerFireEvent = NewTriggerFireEventClient(tx.config)
 	tx.Workflow = NewWorkflowClient(tx.config)
 	tx.Worktree = NewWorktreeClient(tx.config)
 }

@@ -1,0 +1,14 @@
+{
+  "id": "session-compacting-badge",
+  "type": "frontend",
+  "name": "Compacting context badge on the session card",
+  "component": "SubStatusChip",
+  "path": "web-app/src/components/sessions/SubStatusChip.tsx",
+  "filePath": "web-app/src/components/sessions/SubStatusChip.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "SubStatusChip > renders Compacting Context chip for SubStatus.COMPACTING"
+  ],
+  "lastModified": "2026-08-12T00:00:00Z"
+}

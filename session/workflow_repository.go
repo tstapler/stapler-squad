@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -14,8 +15,17 @@ type WorkflowRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*ent.Workflow, error)
 	GetBySlug(ctx context.Context, slug string) (*ent.Workflow, error)
+	// GetByWebhookSlug retrieves a workflow by its webhook_slug (the routing key for
+	// POST /webhooks/{slug}). Only meaningful when TriggerType == "webhook".
+	GetByWebhookSlug(ctx context.Context, slug string) (*ent.Workflow, error)
 	ListAll(ctx context.Context) ([]*ent.Workflow, error)
 	ListEnabled(ctx context.Context) ([]*ent.Workflow, error) // cron_enabled=true
+	// ListByTriggerType returns all workflows with the given trigger_type, regardless
+	// of cron_enabled — callers (e.g. GitHubWebhookHandler) filter further by
+	// repo/branch/enabled in application code. Narrowing by trigger_type at the DB
+	// layer first avoids a linear decrypt-and-check over every workflow in the system
+	// (webhook-triggers Task 2.2.1b).
+	ListByTriggerType(ctx context.Context, triggerType string) ([]*ent.Workflow, error)
 }
 
 // WorkflowCreateInput holds the fields for creating a new workflow.
@@ -33,6 +43,16 @@ type WorkflowCreateInput struct {
 	CronEnabled       bool
 	KeepSessions      *int // nil = use default (0, disabled); 0 = keep all
 	ArchiveAfterHours *int // nil = use default (0, disabled); 0 = disabled
+
+	// Trigger fields (webhook-triggers Epic 1.1).
+	TriggerType            string // "cron" | "github_push" | "webhook" | "manual"; "" -> ent default "manual"
+	GitHubRepo             string
+	GitHubBranch           string
+	WebhookSlug            string
+	WebhookSecretEncrypted string
+	EventFilter            string
+	LabelFilter            string
+	PromptTemplate         string
 }
 
 // WorkflowUpdateInput holds optional fields for updating an existing workflow.
@@ -50,4 +70,15 @@ type WorkflowUpdateInput struct {
 	CronEnabled       *bool
 	KeepSessions      *int // nil = do not update; 0 = keep all (disabled)
 	ArchiveAfterHours *int // nil = do not update; 0 = disabled
+
+	// Trigger fields (webhook-triggers Epic 1.1).
+	TriggerType            *string
+	GitHubRepo             *string
+	GitHubBranch           *string
+	WebhookSlug            *string
+	WebhookSecretEncrypted *string
+	EventFilter            *string
+	LabelFilter            *string
+	PromptTemplate         *string
+	LastFiredAt            *time.Time
 }

@@ -9,6 +9,25 @@ type NotificationPrefs struct {
 	PushEnabled bool `json:"push_enabled"`
 }
 
+// CallbackConfig holds the global singleton outbound-callback URLs fired by
+// server/services.CallbackDispatcher on the three lifecycle events FR7
+// covers. Never echoed back in plaintext by any RPC (see
+// sessionv1.CallbackConfigProto, which reports booleans only) — same
+// masked-boolean-not-value shape as the (unimplemented)
+// project_plans/slack-review-notifications design, applied fresh here since
+// that project has no shipped code to reuse.
+type CallbackConfig struct {
+	// OnSessionCompleteURL receives a POST when a backlog item transitions to
+	// BacklogStatusDone. Empty string means disabled.
+	OnSessionCompleteURL string `json:"on_session_complete_url,omitempty"`
+	// OnSessionStaleURL receives a POST the first time a work session is
+	// detected stale (StuckReasonStaleWork). Empty string means disabled.
+	OnSessionStaleURL string `json:"on_session_stale_url,omitempty"`
+	// OnQueueItemCreatedURL receives a POST when an item is added to the
+	// review queue. Empty string means disabled.
+	OnQueueItemCreatedURL string `json:"on_queue_item_created_url,omitempty"`
+}
+
 // HibernationConfig holds configuration for the session hibernation feature.
 type HibernationConfig struct {
 	// Enabled controls whether hibernation is active. Default: true.
@@ -31,6 +50,11 @@ type HibernationConfig struct {
 // RetentionDays is unset (zero), including for configs saved before this field
 // existed.
 const defaultSessionRetentionDays = 14
+
+// defaultStaleSessionThresholdMinutes is used by ThresholdMinutesOrDefault
+// whenever ThresholdMinutes is unset (zero or negative), including for
+// configs saved before this field existed.
+const defaultStaleSessionThresholdMinutes = 30
 
 // SessionRetentionConfig holds configuration for the automatic session-retention
 // cleanup sweep, which deletes archived sessions past a retention window once they
@@ -62,6 +86,38 @@ func (c SessionRetentionConfig) RetentionDaysOrDefault() int {
 	return c.RetentionDays
 }
 
+// StaleSessionConfig holds configuration for stale-session detection: how long a
+// session may go without activity before it's flagged stale, and whether that
+// triggers a notification.
+type StaleSessionConfig struct {
+	// ThresholdMinutes is how many minutes of inactivity before a session is
+	// considered stale. Default: 30.
+	ThresholdMinutes int `json:"threshold_minutes,omitempty"`
+	// NotifyEnabled controls whether a notification is sent when a session goes
+	// stale. A pointer so a config saved before this field existed (nil) can be
+	// distinguished from an explicit `false` — nil defaults to enabled, matching
+	// SessionRetentionConfig.Enabled's pattern.
+	NotifyEnabled *bool `json:"notify_enabled,omitempty"`
+}
+
+// ThresholdMinutesOrDefault returns ThresholdMinutes, falling back to
+// defaultStaleSessionThresholdMinutes when unset (<=0).
+func (c StaleSessionConfig) ThresholdMinutesOrDefault() int {
+	if c.ThresholdMinutes <= 0 {
+		return defaultStaleSessionThresholdMinutes
+	}
+	return c.ThresholdMinutes
+}
+
+// NotifyEnabledOrDefault returns whether stale-session notifications are
+// enabled, defaulting to true when unset.
+func (c StaleSessionConfig) NotifyEnabledOrDefault() bool {
+	if c.NotifyEnabled == nil {
+		return true
+	}
+	return *c.NotifyEnabled
+}
+
 // TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently
 // against one tmux server, across every process on the machine (the main
 // daemon and every --mcp process) — tmux's server is single-threaded, so
@@ -70,11 +126,23 @@ type TmuxExecGateConfig struct {
 	// Slots is the number of concurrent tmux subprocess execution slots.
 	// Zero or unset means "use the default" — see SlotsOrDefault. Default: 8.
 	Slots int `json:"slots"`
+
+	// ResyncFastLaneSlots is the number of concurrent tmux subprocess execution
+	// slots reserved for terminal-resync traffic when the
+	// "terminal:resync-exec-gate-fast-lane" feature flag is on, so resync calls
+	// don't contend with other tmux exec traffic for the shared Slots pool.
+	// Zero or unset means "use the default" — see ResyncFastLaneSlotsOrDefault.
+	// Default: 4.
+	ResyncFastLaneSlots int `json:"resyncFastLaneSlots"`
 }
 
 // defaultTmuxExecGateSlots is used whenever Slots is unset (zero), including
 // for configs saved before this field existed.
 const defaultTmuxExecGateSlots = 8
+
+// defaultResyncFastLaneSlots is used whenever ResyncFastLaneSlots is unset
+// (zero), including for configs saved before this field existed.
+const defaultResyncFastLaneSlots = 4
 
 // SlotsOrDefault returns Slots, falling back to defaultTmuxExecGateSlots when
 // unset (covers both a fresh zero-value struct and a config.json saved before
@@ -84,6 +152,17 @@ func (c TmuxExecGateConfig) SlotsOrDefault() int {
 		return defaultTmuxExecGateSlots
 	}
 	return c.Slots
+}
+
+// ResyncFastLaneSlotsOrDefault returns ResyncFastLaneSlots, falling back to
+// defaultResyncFastLaneSlots when unset (covers both a fresh zero-value
+// struct and a config.json saved before this field existed, which unmarshals
+// the same way).
+func (c TmuxExecGateConfig) ResyncFastLaneSlotsOrDefault() int {
+	if c.ResyncFastLaneSlots <= 0 {
+		return defaultResyncFastLaneSlots
+	}
+	return c.ResyncFastLaneSlots
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools

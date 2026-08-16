@@ -144,6 +144,11 @@ func RequireCiPassing(v bool) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldEQ(FieldRequireCiPassing, v))
 }
 
+// MinSessionIdleMinutes applies equality check predicate on the "min_session_idle_minutes" field. It's identical to MinSessionIdleMinutesEQ.
+func MinSessionIdleMinutes(v int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldEQ(FieldMinSessionIdleMinutes, v))
+}
+
 // RuleIDEQ applies the EQ predicate on the "rule_id" field.
 func RuleIDEQ(v string) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldEQ(FieldRuleID, v))
@@ -1162,6 +1167,56 @@ func RequireCiPassingEQ(v bool) predicate.ApprovalRule {
 // RequireCiPassingNEQ applies the NEQ predicate on the "require_ci_passing" field.
 func RequireCiPassingNEQ(v bool) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldNEQ(FieldRequireCiPassing, v))
+}
+
+// MinSessionIdleMinutesEQ applies the EQ predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesEQ(v int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldEQ(FieldMinSessionIdleMinutes, v))
+}
+
+// MinSessionIdleMinutesNEQ applies the NEQ predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesNEQ(v int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNEQ(FieldMinSessionIdleMinutes, v))
+}
+
+// MinSessionIdleMinutesIn applies the In predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesIn(vs ...int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIn(FieldMinSessionIdleMinutes, vs...))
+}
+
+// MinSessionIdleMinutesNotIn applies the NotIn predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesNotIn(vs ...int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotIn(FieldMinSessionIdleMinutes, vs...))
+}
+
+// MinSessionIdleMinutesGT applies the GT predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesGT(v int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldGT(FieldMinSessionIdleMinutes, v))
+}
+
+// MinSessionIdleMinutesGTE applies the GTE predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesGTE(v int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldGTE(FieldMinSessionIdleMinutes, v))
+}
+
+// MinSessionIdleMinutesLT applies the LT predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesLT(v int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldLT(FieldMinSessionIdleMinutes, v))
+}
+
+// MinSessionIdleMinutesLTE applies the LTE predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesLTE(v int32) predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldLTE(FieldMinSessionIdleMinutes, v))
+}
+
+// MinSessionIdleMinutesIsNil applies the IsNil predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldMinSessionIdleMinutes))
+}
+
+// MinSessionIdleMinutesNotNil applies the NotNil predicate on the "min_session_idle_minutes" field.
+func MinSessionIdleMinutesNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldMinSessionIdleMinutes))
 }
 
 // And groups predicates with the AND operator between them.

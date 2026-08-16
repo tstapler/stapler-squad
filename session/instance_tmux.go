@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -140,7 +141,11 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 		// swallowed as inert positional text instead of a real flag.
 		cmd = i.buildClaudeCommand(p.base, claudeSessionID)
 	case plainProgram:
-		cmd = p.cmd
+		// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
+		// Program values like "sleep 300" that rely on shell word-splitting, while still
+		// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
+		// /tmp/pwned" -- from terminating the command and injecting a second one.
+		cmd = shellQuoteFields(p.cmd)
 		if i.AutoApprove {
 			if flag := yoloFlagFor(i.Program); flag != "" {
 				cmd = cmd + " " + flag
@@ -150,8 +155,15 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	default:
 		panic(fmt.Sprintf("unknown programKind %T", p))
 	}
-	for _, f := range strings.Fields(i.CLIFlags) {
-		cmd = cmd + " " + shellQuote(f)
+	if flags := shellQuoteFields(i.CLIFlags); flags != "" {
+		cmd = cmd + " " + flags
+	}
+	// ExtraArgs elements are appended after CLIFlags, each independently shell-quoted as one
+	// unit — never whitespace-split — so a multi-word element (e.g. a remote-exec fragment
+	// like "cd ~/repo && exec claude") survives intact instead of being re-split into several
+	// argv positions.
+	for _, a := range i.ExtraArgs {
+		cmd = cmd + " " + shellQuote(a)
 	}
 	return cmd
 }
@@ -163,6 +175,20 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 // quote, escaped by closing the quoted string, emitting \', and reopening.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellQuoteFields splits s on whitespace and shell-quotes each resulting token
+// independently, joining them back with single spaces. Used wherever a caller-supplied
+// string must be safe against embedded shell metacharacters while still preserving
+// multi-word values that rely on ordinary shell word-splitting (e.g. cli_flags,
+// or a plainProgram value like "sleep 300"). Returns "" for an empty/whitespace-only s.
+func shellQuoteFields(s string) string {
+	fields := strings.Fields(s)
+	quoted := make([]string, len(fields))
+	for i, f := range fields {
+		quoted[i] = shellQuote(f)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // buildClaudeCommand assembles the full claude invocation with all instance flags.
@@ -247,11 +273,29 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 // and is a world apart from the bug being fixed here (the entire tail of the
 // prompt being dropped or the spawn failing outright), so it's accepted
 // rather than worked around with a fragile shell trim-guard hack.
+// promptFileDir resolves config.Config.PromptCacheDirOrDefault()
+// (~/.stapler-squad/prompt-cache) and ensures it exists. Falls back to "" (the
+// OS default temp dir, via os.CreateTemp's own behavior) if resolution or
+// creation fails, mirroring promptArg's existing degrade-to-inline pattern of
+// never letting a filesystem hiccup here block session launch.
+func promptFileDir() string {
+	dir, err := config.LoadConfig().PromptCacheDirOrDefault()
+	if err != nil {
+		log.Warn("promptFileDir: failed to resolve prompt cache dir, using OS temp dir", "err", err)
+		return ""
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Warn("promptFileDir: failed to create prompt cache dir, using OS temp dir", "dir", dir, "err", err)
+		return ""
+	}
+	return dir
+}
+
 func (i *Instance) promptArg() string {
 	if len(i.Prompt) < maxInlinePromptBytes {
 		return shellQuote(i.Prompt)
 	}
-	f, err := os.CreateTemp("", "stapler-squad-prompt-*.txt")
+	f, err := os.CreateTemp(promptFileDir(), "prompt-*.txt")
 	if err != nil {
 		log.Warn("promptArg: failed to create temp file for large prompt, embedding inline", "err", err, "promptBytes", len(i.Prompt))
 		return shellQuote(i.Prompt)
@@ -268,12 +312,19 @@ func (i *Instance) promptArg() string {
 		log.Warn("promptArg: failed to close temp prompt file, embedding inline", "err", closeErr, "promptBytes", len(i.Prompt))
 		return shellQuote(i.Prompt)
 	}
+	i.promptFilePath.Store(&path)
 	// Captured before spawning: promptFileCleanupDelay is a package var tests
 	// override for the duration of a single call (see
 	// withShortPromptFileCleanupDelay), restoring it via t.Cleanup once the
 	// test returns. Reading the var directly inside the goroutine below would
 	// race that restore — the goroutine can still be asleep, holding a read of
 	// the shared var pending, when t.Cleanup's write lands.
+	//
+	// This timer is a fallback safety net, not the primary cleanup path:
+	// Instance.Destroy() removes the file immediately via cleanupPromptFile.
+	// The timer still exists for cases Destroy never runs (process crash,
+	// or a session that's replaced by a later promptArg call before it is
+	// ever destroyed).
 	delay := promptFileCleanupDelay
 	go func() {
 		time.Sleep(delay)
@@ -282,6 +333,20 @@ func (i *Instance) promptArg() string {
 		}
 	}()
 	return fmt.Sprintf(`"$(cat %s)"`, shellQuote(path))
+}
+
+// cleanupPromptFile removes the most recently created temp-file-backed prompt
+// for this instance, if any. Called from Instance.Destroy() so the file is
+// removed promptly at session teardown rather than relying solely on
+// promptFileCleanupDelay's background timer.
+func (i *Instance) cleanupPromptFile() {
+	pathPtr := i.promptFilePath.Swap(nil)
+	if pathPtr == nil {
+		return
+	}
+	if rmErr := os.Remove(*pathPtr); rmErr != nil && !os.IsNotExist(rmErr) {
+		log.Warn("cleanupPromptFile: failed to remove temp prompt file", "path", *pathPtr, "err", rmErr)
+	}
 }
 
 // claudeMCPConfigArgs returns the --mcp-config flag and its shell-quoted JSON value.
@@ -540,6 +605,58 @@ func (i *Instance) CapturePaneContent() (string, error) {
 		return "", fmt.Errorf("session not started or paused")
 	}
 	return i.pm().CapturePaneContent()
+}
+
+// terminalResyncExecGateFastLaneFlagName mirrors server/services'
+// terminalResyncExecGateFastLaneFlagName (feature_flag_service.go). It can't
+// be shared directly — server/services imports session, so the reverse
+// import would cycle — so the literal is duplicated here; keep both in sync
+// if the flag is ever renamed.
+const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-lane"
+
+// CapturePaneContentPriority captures the current visible tmux pane content
+// via the resync exec-gate fast lane (Epic 4.2) when the instance is
+// tmux-backed, falling back to the plain CapturePaneContent() call for
+// non-tmux-backed instances (there is no fast lane to reach there, and the
+// plain call is a correct, if unoptimized, behavior).
+func (i *Instance) CapturePaneContentPriority() (string, error) {
+	if !i.started.Load() || i.Status == Paused {
+		return "", fmt.Errorf("session not started or paused")
+	}
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		return tb.TmuxManager().CapturePaneContentPriority()
+	}
+	i.logFastLaneAssertionFailure("CapturePaneContentPriority")
+	return i.pm().CapturePaneContent()
+}
+
+// RefreshTmuxClientPriority forces the tmux client to refresh via the resync
+// exec-gate fast lane (Epic 4.2) when the instance is tmux-backed, falling
+// back to the plain RefreshTmuxClient() call otherwise. See
+// CapturePaneContentPriority's doc comment for the fallback rationale.
+func (i *Instance) RefreshTmuxClientPriority() error {
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		return tb.TmuxManager().RefreshClientPriority()
+	}
+	i.logFastLaneAssertionFailure("RefreshTmuxClientPriority")
+	return i.pm().RefreshClient()
+}
+
+// logFastLaneAssertionFailure logs, at debug level, that a Priority() call
+// fell back to its non-priority sibling because i.processManager wasn't a
+// *TmuxBackend. It's a no-op unless terminal:resync-exec-gate-fast-lane is
+// on: with the flag off, falling back is the expected no-op path and would
+// just be noise. With the flag on, this distinguishes "flag on but this
+// instance genuinely can't reach the fast lane" (e.g. a non-tmux backend)
+// from "flag off, fast lane never attempted" — see pre-mortem.md P2 #4: a
+// silent fallback here would otherwise mask a broken type assertion behind
+// an unmoved top-line metric.
+func (i *Instance) logFastLaneAssertionFailure(method string) {
+	if !config.LoadConfig().GetFeatureFlag(terminalResyncExecGateFastLaneFlagName) {
+		return
+	}
+	log.Debug("fast-lane priority call fell back to non-priority path: instance is not tmux-backed",
+		"method", method, "instanceID", i.UUID, "title", i.Title)
 }
 
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).

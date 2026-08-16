@@ -236,6 +236,26 @@ func ReworkCapOverride(v int) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldReworkCapOverride, v))
 }
 
+// NextWorkflowID applies equality check predicate on the "next_workflow_id" field. It's identical to NextWorkflowIDEQ.
+func NextWorkflowID(v uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldNextWorkflowID, v))
+}
+
+// ChainFired applies equality check predicate on the "chain_fired" field. It's identical to ChainFiredEQ.
+func ChainFired(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldChainFired, v))
+}
+
+// ChainedAt applies equality check predicate on the "chained_at" field. It's identical to ChainedAtEQ.
+func ChainedAt(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldChainedAt, v))
+}
+
+// TriggeredByChainDepth applies equality check predicate on the "triggered_by_chain_depth" field. It's identical to TriggeredByChainDepthEQ.
+func TriggeredByChainDepth(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldTriggeredByChainDepth, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldCreatedAt, v))
@@ -2136,6 +2156,156 @@ func ReworkCapOverrideNotNil() predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNotNull(FieldReworkCapOverride))
 }
 
+// NextWorkflowIDEQ applies the EQ predicate on the "next_workflow_id" field.
+func NextWorkflowIDEQ(v uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldNextWorkflowID, v))
+}
+
+// NextWorkflowIDNEQ applies the NEQ predicate on the "next_workflow_id" field.
+func NextWorkflowIDNEQ(v uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldNextWorkflowID, v))
+}
+
+// NextWorkflowIDIn applies the In predicate on the "next_workflow_id" field.
+func NextWorkflowIDIn(vs ...uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldNextWorkflowID, vs...))
+}
+
+// NextWorkflowIDNotIn applies the NotIn predicate on the "next_workflow_id" field.
+func NextWorkflowIDNotIn(vs ...uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldNextWorkflowID, vs...))
+}
+
+// NextWorkflowIDGT applies the GT predicate on the "next_workflow_id" field.
+func NextWorkflowIDGT(v uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldNextWorkflowID, v))
+}
+
+// NextWorkflowIDGTE applies the GTE predicate on the "next_workflow_id" field.
+func NextWorkflowIDGTE(v uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldNextWorkflowID, v))
+}
+
+// NextWorkflowIDLT applies the LT predicate on the "next_workflow_id" field.
+func NextWorkflowIDLT(v uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldNextWorkflowID, v))
+}
+
+// NextWorkflowIDLTE applies the LTE predicate on the "next_workflow_id" field.
+func NextWorkflowIDLTE(v uuid.UUID) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldNextWorkflowID, v))
+}
+
+// NextWorkflowIDIsNil applies the IsNil predicate on the "next_workflow_id" field.
+func NextWorkflowIDIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldNextWorkflowID))
+}
+
+// NextWorkflowIDNotNil applies the NotNil predicate on the "next_workflow_id" field.
+func NextWorkflowIDNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldNextWorkflowID))
+}
+
+// ChainFiredEQ applies the EQ predicate on the "chain_fired" field.
+func ChainFiredEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldChainFired, v))
+}
+
+// ChainFiredNEQ applies the NEQ predicate on the "chain_fired" field.
+func ChainFiredNEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldChainFired, v))
+}
+
+// ChainedAtEQ applies the EQ predicate on the "chained_at" field.
+func ChainedAtEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldChainedAt, v))
+}
+
+// ChainedAtNEQ applies the NEQ predicate on the "chained_at" field.
+func ChainedAtNEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldChainedAt, v))
+}
+
+// ChainedAtIn applies the In predicate on the "chained_at" field.
+func ChainedAtIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldChainedAt, vs...))
+}
+
+// ChainedAtNotIn applies the NotIn predicate on the "chained_at" field.
+func ChainedAtNotIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldChainedAt, vs...))
+}
+
+// ChainedAtGT applies the GT predicate on the "chained_at" field.
+func ChainedAtGT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldChainedAt, v))
+}
+
+// ChainedAtGTE applies the GTE predicate on the "chained_at" field.
+func ChainedAtGTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldChainedAt, v))
+}
+
+// ChainedAtLT applies the LT predicate on the "chained_at" field.
+func ChainedAtLT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldChainedAt, v))
+}
+
+// ChainedAtLTE applies the LTE predicate on the "chained_at" field.
+func ChainedAtLTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldChainedAt, v))
+}
+
+// ChainedAtIsNil applies the IsNil predicate on the "chained_at" field.
+func ChainedAtIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldChainedAt))
+}
+
+// ChainedAtNotNil applies the NotNil predicate on the "chained_at" field.
+func ChainedAtNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldChainedAt))
+}
+
+// TriggeredByChainDepthEQ applies the EQ predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthNEQ applies the NEQ predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthNEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthIn applies the In predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldTriggeredByChainDepth, vs...))
+}
+
+// TriggeredByChainDepthNotIn applies the NotIn predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthNotIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldTriggeredByChainDepth, vs...))
+}
+
+// TriggeredByChainDepthGT applies the GT predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthGT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthGTE applies the GTE predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthGTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthLT applies the LT predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthLT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldTriggeredByChainDepth, v))
+}
+
+// TriggeredByChainDepthLTE applies the LTE predicate on the "triggered_by_chain_depth" field.
+func TriggeredByChainDepthLTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldTriggeredByChainDepth, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldCreatedAt, v))
@@ -2346,6 +2516,52 @@ func HasSource() predicate.BacklogItem {
 func HasSourceWith(preds ...predicate.ItemSource) predicate.BacklogItem {
 	return predicate.BacklogItem(func(s *sql.Selector) {
 		step := newSourceStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasBlockingDependencies applies the HasEdge predicate on the "blocking_dependencies" edge.
+func HasBlockingDependencies() predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, BlockingDependenciesTable, BlockingDependenciesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasBlockingDependenciesWith applies the HasEdge predicate on the "blocking_dependencies" edge with a given conditions (other predicates).
+func HasBlockingDependenciesWith(preds ...predicate.BacklogItemDependency) predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := newBlockingDependenciesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasBlockedByDependencies applies the HasEdge predicate on the "blocked_by_dependencies" edge.
+func HasBlockedByDependencies() predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, BlockedByDependenciesTable, BlockedByDependenciesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasBlockedByDependenciesWith applies the HasEdge predicate on the "blocked_by_dependencies" edge with a given conditions (other predicates).
+func HasBlockedByDependenciesWith(preds ...predicate.BacklogItemDependency) predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := newBlockedByDependenciesStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

@@ -325,6 +325,10 @@ type Instance struct {
 	EnvVars map[string]string `json:"env_vars,omitempty"`
 	// CLIFlags are additional CLI flags appended to the program launch command.
 	CLIFlags string `json:"cli_flags,omitempty"`
+	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
+	// CLIFlags at launch time. Populated by a selected launcher preset's argv[1:]; see
+	// buildLaunchCommand in instance_tmux.go for the shell-quoting boundary.
+	ExtraArgs []string `json:"extra_args,omitempty"`
 
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
@@ -403,6 +407,11 @@ type Instance struct {
 	// Accessed atomically so actor helpers (sendSyncErr/send/sendCtx) can route
 	// commands through the mailbox without holding any other lock.
 	liveInstance atomic.Pointer[LiveInstance]
+
+	// promptFilePath tracks the most recently created temp-file-backed launch
+	// prompt (see promptArg), so Destroy can remove it immediately instead of
+	// relying solely on promptFileCleanupDelay's background timer.
+	promptFilePath atomic.Pointer[string]
 
 	// mu protects Instance's mutable data fields (Status, started, Tags,
 	// Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts, etc.).
@@ -588,6 +597,9 @@ type InstanceOptions struct {
 	EnvVars map[string]string
 	// CLIFlags are additional CLI flags appended to the program launch command.
 	CLIFlags string
+	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
+	// CLIFlags at launch time.
+	ExtraArgs []string
 }
 
 // ResolveSessionPath expands a leading "~" to the current user's home directory
@@ -692,6 +704,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CreateIfMissing: opts.CreateIfMissing,
 		EnvVars:         opts.EnvVars,
 		CLIFlags:        opts.CLIFlags,
+		ExtraArgs:       opts.ExtraArgs,
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice
@@ -937,7 +950,6 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
-	i.initTmuxSession()
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -946,6 +958,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	var setupErr error
@@ -1029,6 +1048,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		i.startVNCDisplay(context.Background())
 		i.allocateCDPPort()
@@ -1121,8 +1147,6 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
-	i.initTmuxSession()
-
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
 	// the callback to fire again after the sync.Once was exhausted in the prior run.
@@ -1134,6 +1158,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	// Cleanup on error: kill session and invalidate the caller's cleanup handle.
@@ -1245,6 +1276,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 		// can be injected via ExtraEnv at new-session time. This ensures the agent
@@ -1334,12 +1372,25 @@ func (i *Instance) Kill() error {
 	return i.Destroy()
 }
 
+// destroyChainTimeout bounds Destroy()'s stopVNC/stopCDP/KillSession/
+// CleanupWorktree chain so a hung subsystem (e.g. a wedged x11vnc/CDP
+// process, or a git worktree removal stuck on a locked index) can't block
+// Destroy() indefinitely. KillSession's own tmux subprocess is already
+// independently bounded by killSessionTimeout in session/tmux/tmux.go — this
+// is the equivalent cap on the chain as a whole, matching that same 5s value
+// so no single Destroy() caller (e.g. SessionService.DeleteSession's
+// trackCleanup goroutine) can wait longer than the tmux-kill path already
+// tolerates. The chain keeps running in its goroutine after the timeout
+// fires — this bounds the wait, not the work.
+const destroyChainTimeout = 5 * time.Second
+
 // Destroy completely destroys the instance - both tmux session and worktree.
 // Fires EventStopped unconditionally (even if the instance was never started)
 // so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
 // ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
+	defer i.cleanupPromptFile()
 
 	if !i.started.Load() {
 		// If instance was never started, just return success
@@ -1349,6 +1400,22 @@ func (i *Instance) Destroy() error {
 	// Stop the controller first
 	i.StopController()
 
+	done := make(chan error, 1)
+	go func() {
+		done <- i.destroyChain()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(destroyChainTimeout):
+		return fmt.Errorf("timed out after %s waiting for session %q cleanup chain (stopVNC/stopCDP/KillSession/CleanupWorktree) to finish (still running in background)", destroyChainTimeout, i.Title)
+	}
+}
+
+// destroyChain runs the actual stopVNC/stopCDP/KillSession/CleanupWorktree
+// teardown sequence. Split out of Destroy() so it can be bounded by
+// destroyChainTimeout without losing track of the goroutine it runs in.
+func (i *Instance) destroyChain() error {
 	// Stop VNC before killing tmux (x11vnc must stop before Xvfb).
 	i.stopVNC()
 	// Stop CDP screencast goroutines and clean up wrapper scripts.

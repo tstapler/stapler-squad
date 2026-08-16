@@ -22,23 +22,25 @@ FAIL	github.com/tstapler/stapler-squad/server/services	84.844s
 
 This repo's own audit history (`docs/tasks/backlog-feature-improvement.md`) has repeatedly
 named "known pre-existing flake, confirmed unrelated" as an acceptable reason to route around
-a failure rather than fix it — `session/tmux`'s `TestEnsureServerRunning_NoOp` and
-`TestKillOrphanedControlModeClients`, and `server/services`'
-`TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresent`, have each been
-cited this way across multiple unrelated PRs without ever being fixed. Every re-excusal is a
-missed root-cause opportunity, and it erodes the value of CI red as a signal — a reviewer who
-sees "known flake, unrelated" stops checking whether that's still true. This is the same
-`.claude/rules/interface-pollution-checklist.md`-style discipline applied to test reliability
-instead of code structure: name the recurring shape once, then close it, not paper over it
-indefinitely.
+a failure rather than fix it. `session/tmux`'s `TestEnsureServerRunning_NoOp` and
+`TestKillOrphanedControlModeClients` were cited this way across multiple unrelated PRs without
+being fixed. Every re-excusal is a missed root-cause opportunity, and it erodes the value of CI
+red as a signal — a reviewer who sees "known flake, unrelated" stops checking whether that's
+still true.
+
+`server/services`' `TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresent`
+is the worked example of doing this right: after being re-excused across several PRs, it was
+root-caused (a strict-prefix URL match bug in `hookCommandReferencesURL`, see the doc comment
+at `server/services/hook_injector.go:60`) and fixed with a deterministic regression test
+(`Test_hookCommandReferencesURL_should_NotMatchWhenURLIsAStrictPrefixOfAnother` in
+`server/services/hook_injector_test.go`) instead of being deferred again.
 
 ## How to apply
 
 - If you can root-cause and fix it in the current session (most flakes are a missing
   synchronization point, shared mutable state, or a fixed/non-unique temp resource name — see
   `TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON`'s doc
-  comment in `server/services/hook_injector_test.go` for a worked example of exactly this
-  class of bug, fixed via a unique `os.CreateTemp` name), fix it.
+  comment in `server/services/hook_injector_test.go` for another worked example), fix it.
 - If it's out of scope for the current change, don't just move on — file it as its own bug
   (or route it to `sdd:fix-bug`) so it gets picked up on its own, rather than letting the next
   person re-discover and re-excuse the same flake.

@@ -574,6 +574,44 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	hookReceiver.RegisterRoutes(srv.mux)
 	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit,post-tool-use-drift-check}")
 
+	// Register inbound webhook-trigger receivers (webhook-triggers Epic 2.2/2.3) — like
+	// the hook receivers just above, these are external-POST, verify-signature-first,
+	// trust-boundary-adjacent routes, registered near /api/hooks/permission-request per
+	// Task 2.2.1e. Both handlers self-gate on the "webhook_triggers" feature flag as
+	// their own first line (defense in depth); nil-guarded here too so route
+	// registration itself is skipped entirely when there's no workflow repository to
+	// back it, mirroring WorkflowScheduler's own nil guard above.
+	if deps.WorkflowRepo != nil && deps.TriggerFireEventRepo != nil {
+		// config.LoadConfig() (not a threaded deps.Config — ServerDependencies has no
+		// such field) matches this function's own established pattern for feature-flag
+		// reads elsewhere (see the "backlog" flag check above and cfg := config.LoadConfig()
+		// further down in this function).
+		webhookCfg := config.LoadConfig()
+		// Route registration itself is flag-gated (not just each handler's internal
+		// first-line check) so that when webhook_triggers is off, /webhooks/* falls
+		// through to the same catch-all behavior as any other undefined path, rather
+		// than deterministically 404ing from a registered-but-disabled handler — the
+		// latter is a discoverable "feature exists but disabled" signal to an
+		// unauthenticated prober (plan.md Risk Control). This does mean flipping the
+		// flag off requires a restart to stop serving these routes, same limitation the
+		// "backlog" flag already has for its own route-gated pieces.
+		if webhookCfg.GetFeatureFlag("webhook_triggers") {
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			githubWebhookHandler.RegisterRoutes(srv.mux)
+			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			genericWebhookHandler.RegisterRoutes(srv.mux)
+			log.Info("Registered webhook-trigger receivers at POST /webhooks/{github,{slug}}")
+		} else {
+			// Pre-mortem P2 #4: route registration is boot-time only, so an operator who
+			// flips this flag on expecting /webhooks/* to work immediately otherwise gets
+			// silent 404s from the mux with zero signal anywhere in the app (no
+			// TriggerFireEvent row is ever created for a request to an unregistered
+			// route). This log line at least makes the boot-time-only nature of the gate
+			// visible in the service log.
+			log.Info("webhook-trigger routes NOT registered (webhook_triggers flag off) — /webhooks/* will 404 until the flag is enabled and the service restarts")
+		}
+	}
+
 	// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
 	sessionUploadHandler := services.NewSessionImageUploadHandler(deps.Storage, deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("POST /api/v1/upload-image", sessionUploadHandler.HandleUpload)
@@ -739,6 +777,34 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered backlog attachment upload handler at POST /api/v1/upload-backlog-attachment", "dir", backlogAttachmentDir)
 	}
 
+	// One-time best-effort sweep of the launch-prompt temp-file cache
+	// (session/instance_tmux.go's promptArg). Instance.Destroy() and
+	// promptFileCleanupDelay's timer both clean up individual files during
+	// normal operation; this sweep catches orphans left behind by a crash or
+	// an unclean shutdown.
+	if promptCacheDir, err := cfg.PromptCacheDirOrDefault(); err != nil {
+		log.Error("[Server] cannot resolve prompt cache dir", "err", err)
+	} else if entries, err := os.ReadDir(promptCacheDir); err != nil {
+		if !os.IsNotExist(err) {
+			log.Warn("[Server] cannot read prompt cache dir for startup sweep", "dir", promptCacheDir, "err", err)
+		}
+	} else {
+		removed := 0
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if err := os.Remove(filepath.Join(promptCacheDir, entry.Name())); err != nil {
+				log.Warn("[Server] failed to remove orphaned prompt cache file", "path", entry.Name(), "err", err)
+				continue
+			}
+			removed++
+		}
+		if removed > 0 {
+			log.Info("Swept orphaned prompt cache files at startup", "dir", promptCacheDir, "count", removed)
+		}
+	}
+
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
 		sweeper := session.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
@@ -758,6 +824,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go retentionSweeper.Start(serverCtx)
 		log.Info("Session retention sweeper started",
 			"retention_days", cfg.SessionRetention.RetentionDaysOrDefault())
+	}
+
+	// Start stale session notifier (fires an operator-facing notification the first time an
+	// ACTIVE session crosses the configured stale threshold — see StaleSessionNotifier doc
+	// comment).
+	if deps.ReviewQueuePoller != nil {
+		staleNotifier := services.NewStaleSessionNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		go staleNotifier.Start(serverCtx)
+		log.Info("Stale session notifier started",
+			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
+			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
 	}
 }
 

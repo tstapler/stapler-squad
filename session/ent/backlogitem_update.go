@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -743,6 +744,81 @@ func (_u *BacklogItemUpdate) ClearReworkCapOverride() *BacklogItemUpdate {
 	return _u
 }
 
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (_u *BacklogItemUpdate) SetNextWorkflowID(v uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.SetNextWorkflowID(v)
+	return _u
+}
+
+// SetNillableNextWorkflowID sets the "next_workflow_id" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableNextWorkflowID(v *uuid.UUID) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetNextWorkflowID(*v)
+	}
+	return _u
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (_u *BacklogItemUpdate) ClearNextWorkflowID() *BacklogItemUpdate {
+	_u.mutation.ClearNextWorkflowID()
+	return _u
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (_u *BacklogItemUpdate) SetChainFired(v bool) *BacklogItemUpdate {
+	_u.mutation.SetChainFired(v)
+	return _u
+}
+
+// SetNillableChainFired sets the "chain_fired" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableChainFired(v *bool) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetChainFired(*v)
+	}
+	return _u
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (_u *BacklogItemUpdate) SetChainedAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetChainedAt(v)
+	return _u
+}
+
+// SetNillableChainedAt sets the "chained_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableChainedAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetChainedAt(*v)
+	}
+	return _u
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (_u *BacklogItemUpdate) ClearChainedAt() *BacklogItemUpdate {
+	_u.mutation.ClearChainedAt()
+	return _u
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (_u *BacklogItemUpdate) SetTriggeredByChainDepth(v int) *BacklogItemUpdate {
+	_u.mutation.ResetTriggeredByChainDepth()
+	_u.mutation.SetTriggeredByChainDepth(v)
+	return _u
+}
+
+// SetNillableTriggeredByChainDepth sets the "triggered_by_chain_depth" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableTriggeredByChainDepth(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetTriggeredByChainDepth(*v)
+	}
+	return _u
+}
+
+// AddTriggeredByChainDepth adds value to the "triggered_by_chain_depth" field.
+func (_u *BacklogItemUpdate) AddTriggeredByChainDepth(v int) *BacklogItemUpdate {
+	_u.mutation.AddTriggeredByChainDepth(v)
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdate) SetUpdatedAt(v time.Time) *BacklogItemUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -841,6 +917,36 @@ func (_u *BacklogItemUpdate) SetNillableSourceID(id *uuid.UUID) *BacklogItemUpda
 // SetSource sets the "source" edge to the ItemSource entity.
 func (_u *BacklogItemUpdate) SetSource(v *ItemSource) *BacklogItemUpdate {
 	return _u.SetSourceID(v.ID)
+}
+
+// AddBlockingDependencyIDs adds the "blocking_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (_u *BacklogItemUpdate) AddBlockingDependencyIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.AddBlockingDependencyIDs(ids...)
+	return _u
+}
+
+// AddBlockingDependencies adds the "blocking_dependencies" edges to the BacklogItemDependency entity.
+func (_u *BacklogItemUpdate) AddBlockingDependencies(v ...*BacklogItemDependency) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddBlockingDependencyIDs(ids...)
+}
+
+// AddBlockedByDependencyIDs adds the "blocked_by_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (_u *BacklogItemUpdate) AddBlockedByDependencyIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.AddBlockedByDependencyIDs(ids...)
+	return _u
+}
+
+// AddBlockedByDependencies adds the "blocked_by_dependencies" edges to the BacklogItemDependency entity.
+func (_u *BacklogItemUpdate) AddBlockedByDependencies(v ...*BacklogItemDependency) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddBlockedByDependencyIDs(ids...)
 }
 
 // Mutation returns the BacklogItemMutation object of the builder.
@@ -957,6 +1063,48 @@ func (_u *BacklogItemUpdate) RemoveProgressNotes(v ...*BacklogProgressNote) *Bac
 func (_u *BacklogItemUpdate) ClearSource() *BacklogItemUpdate {
 	_u.mutation.ClearSource()
 	return _u
+}
+
+// ClearBlockingDependencies clears all "blocking_dependencies" edges to the BacklogItemDependency entity.
+func (_u *BacklogItemUpdate) ClearBlockingDependencies() *BacklogItemUpdate {
+	_u.mutation.ClearBlockingDependencies()
+	return _u
+}
+
+// RemoveBlockingDependencyIDs removes the "blocking_dependencies" edge to BacklogItemDependency entities by IDs.
+func (_u *BacklogItemUpdate) RemoveBlockingDependencyIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.RemoveBlockingDependencyIDs(ids...)
+	return _u
+}
+
+// RemoveBlockingDependencies removes "blocking_dependencies" edges to BacklogItemDependency entities.
+func (_u *BacklogItemUpdate) RemoveBlockingDependencies(v ...*BacklogItemDependency) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveBlockingDependencyIDs(ids...)
+}
+
+// ClearBlockedByDependencies clears all "blocked_by_dependencies" edges to the BacklogItemDependency entity.
+func (_u *BacklogItemUpdate) ClearBlockedByDependencies() *BacklogItemUpdate {
+	_u.mutation.ClearBlockedByDependencies()
+	return _u
+}
+
+// RemoveBlockedByDependencyIDs removes the "blocked_by_dependencies" edge to BacklogItemDependency entities by IDs.
+func (_u *BacklogItemUpdate) RemoveBlockedByDependencyIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.RemoveBlockedByDependencyIDs(ids...)
+	return _u
+}
+
+// RemoveBlockedByDependencies removes "blocked_by_dependencies" edges to BacklogItemDependency entities.
+func (_u *BacklogItemUpdate) RemoveBlockedByDependencies(v ...*BacklogItemDependency) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveBlockedByDependencyIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -1231,6 +1379,27 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.ReworkCapOverrideCleared() {
 		_spec.ClearField(backlogitem.FieldReworkCapOverride, field.TypeInt)
 	}
+	if value, ok := _u.mutation.NextWorkflowID(); ok {
+		_spec.SetField(backlogitem.FieldNextWorkflowID, field.TypeUUID, value)
+	}
+	if _u.mutation.NextWorkflowIDCleared() {
+		_spec.ClearField(backlogitem.FieldNextWorkflowID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.ChainFired(); ok {
+		_spec.SetField(backlogitem.FieldChainFired, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ChainedAt(); ok {
+		_spec.SetField(backlogitem.FieldChainedAt, field.TypeTime, value)
+	}
+	if _u.mutation.ChainedAtCleared() {
+		_spec.ClearField(backlogitem.FieldChainedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.TriggeredByChainDepth(); ok {
+		_spec.SetField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTriggeredByChainDepth(); ok {
+		_spec.AddField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)
 	}
@@ -1481,6 +1650,96 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(itemsource.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.BlockingDependenciesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockingDependenciesTable,
+			Columns: []string{backlogitem.BlockingDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedBlockingDependenciesIDs(); len(nodes) > 0 && !_u.mutation.BlockingDependenciesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockingDependenciesTable,
+			Columns: []string{backlogitem.BlockingDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.BlockingDependenciesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockingDependenciesTable,
+			Columns: []string{backlogitem.BlockingDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.BlockedByDependenciesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockedByDependenciesTable,
+			Columns: []string{backlogitem.BlockedByDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedBlockedByDependenciesIDs(); len(nodes) > 0 && !_u.mutation.BlockedByDependenciesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockedByDependenciesTable,
+			Columns: []string{backlogitem.BlockedByDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.BlockedByDependenciesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockedByDependenciesTable,
+			Columns: []string{backlogitem.BlockedByDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {
@@ -2215,6 +2474,81 @@ func (_u *BacklogItemUpdateOne) ClearReworkCapOverride() *BacklogItemUpdateOne {
 	return _u
 }
 
+// SetNextWorkflowID sets the "next_workflow_id" field.
+func (_u *BacklogItemUpdateOne) SetNextWorkflowID(v uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.SetNextWorkflowID(v)
+	return _u
+}
+
+// SetNillableNextWorkflowID sets the "next_workflow_id" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableNextWorkflowID(v *uuid.UUID) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetNextWorkflowID(*v)
+	}
+	return _u
+}
+
+// ClearNextWorkflowID clears the value of the "next_workflow_id" field.
+func (_u *BacklogItemUpdateOne) ClearNextWorkflowID() *BacklogItemUpdateOne {
+	_u.mutation.ClearNextWorkflowID()
+	return _u
+}
+
+// SetChainFired sets the "chain_fired" field.
+func (_u *BacklogItemUpdateOne) SetChainFired(v bool) *BacklogItemUpdateOne {
+	_u.mutation.SetChainFired(v)
+	return _u
+}
+
+// SetNillableChainFired sets the "chain_fired" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableChainFired(v *bool) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetChainFired(*v)
+	}
+	return _u
+}
+
+// SetChainedAt sets the "chained_at" field.
+func (_u *BacklogItemUpdateOne) SetChainedAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetChainedAt(v)
+	return _u
+}
+
+// SetNillableChainedAt sets the "chained_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableChainedAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetChainedAt(*v)
+	}
+	return _u
+}
+
+// ClearChainedAt clears the value of the "chained_at" field.
+func (_u *BacklogItemUpdateOne) ClearChainedAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearChainedAt()
+	return _u
+}
+
+// SetTriggeredByChainDepth sets the "triggered_by_chain_depth" field.
+func (_u *BacklogItemUpdateOne) SetTriggeredByChainDepth(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetTriggeredByChainDepth()
+	_u.mutation.SetTriggeredByChainDepth(v)
+	return _u
+}
+
+// SetNillableTriggeredByChainDepth sets the "triggered_by_chain_depth" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableTriggeredByChainDepth(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetTriggeredByChainDepth(*v)
+	}
+	return _u
+}
+
+// AddTriggeredByChainDepth adds value to the "triggered_by_chain_depth" field.
+func (_u *BacklogItemUpdateOne) AddTriggeredByChainDepth(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddTriggeredByChainDepth(v)
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdateOne) SetUpdatedAt(v time.Time) *BacklogItemUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -2313,6 +2647,36 @@ func (_u *BacklogItemUpdateOne) SetNillableSourceID(id *uuid.UUID) *BacklogItemU
 // SetSource sets the "source" edge to the ItemSource entity.
 func (_u *BacklogItemUpdateOne) SetSource(v *ItemSource) *BacklogItemUpdateOne {
 	return _u.SetSourceID(v.ID)
+}
+
+// AddBlockingDependencyIDs adds the "blocking_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (_u *BacklogItemUpdateOne) AddBlockingDependencyIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.AddBlockingDependencyIDs(ids...)
+	return _u
+}
+
+// AddBlockingDependencies adds the "blocking_dependencies" edges to the BacklogItemDependency entity.
+func (_u *BacklogItemUpdateOne) AddBlockingDependencies(v ...*BacklogItemDependency) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddBlockingDependencyIDs(ids...)
+}
+
+// AddBlockedByDependencyIDs adds the "blocked_by_dependencies" edge to the BacklogItemDependency entity by IDs.
+func (_u *BacklogItemUpdateOne) AddBlockedByDependencyIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.AddBlockedByDependencyIDs(ids...)
+	return _u
+}
+
+// AddBlockedByDependencies adds the "blocked_by_dependencies" edges to the BacklogItemDependency entity.
+func (_u *BacklogItemUpdateOne) AddBlockedByDependencies(v ...*BacklogItemDependency) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddBlockedByDependencyIDs(ids...)
 }
 
 // Mutation returns the BacklogItemMutation object of the builder.
@@ -2429,6 +2793,48 @@ func (_u *BacklogItemUpdateOne) RemoveProgressNotes(v ...*BacklogProgressNote) *
 func (_u *BacklogItemUpdateOne) ClearSource() *BacklogItemUpdateOne {
 	_u.mutation.ClearSource()
 	return _u
+}
+
+// ClearBlockingDependencies clears all "blocking_dependencies" edges to the BacklogItemDependency entity.
+func (_u *BacklogItemUpdateOne) ClearBlockingDependencies() *BacklogItemUpdateOne {
+	_u.mutation.ClearBlockingDependencies()
+	return _u
+}
+
+// RemoveBlockingDependencyIDs removes the "blocking_dependencies" edge to BacklogItemDependency entities by IDs.
+func (_u *BacklogItemUpdateOne) RemoveBlockingDependencyIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.RemoveBlockingDependencyIDs(ids...)
+	return _u
+}
+
+// RemoveBlockingDependencies removes "blocking_dependencies" edges to BacklogItemDependency entities.
+func (_u *BacklogItemUpdateOne) RemoveBlockingDependencies(v ...*BacklogItemDependency) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveBlockingDependencyIDs(ids...)
+}
+
+// ClearBlockedByDependencies clears all "blocked_by_dependencies" edges to the BacklogItemDependency entity.
+func (_u *BacklogItemUpdateOne) ClearBlockedByDependencies() *BacklogItemUpdateOne {
+	_u.mutation.ClearBlockedByDependencies()
+	return _u
+}
+
+// RemoveBlockedByDependencyIDs removes the "blocked_by_dependencies" edge to BacklogItemDependency entities by IDs.
+func (_u *BacklogItemUpdateOne) RemoveBlockedByDependencyIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.RemoveBlockedByDependencyIDs(ids...)
+	return _u
+}
+
+// RemoveBlockedByDependencies removes "blocked_by_dependencies" edges to BacklogItemDependency entities.
+func (_u *BacklogItemUpdateOne) RemoveBlockedByDependencies(v ...*BacklogItemDependency) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveBlockedByDependencyIDs(ids...)
 }
 
 // Where appends a list predicates to the BacklogItemUpdate builder.
@@ -2733,6 +3139,27 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	if _u.mutation.ReworkCapOverrideCleared() {
 		_spec.ClearField(backlogitem.FieldReworkCapOverride, field.TypeInt)
 	}
+	if value, ok := _u.mutation.NextWorkflowID(); ok {
+		_spec.SetField(backlogitem.FieldNextWorkflowID, field.TypeUUID, value)
+	}
+	if _u.mutation.NextWorkflowIDCleared() {
+		_spec.ClearField(backlogitem.FieldNextWorkflowID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.ChainFired(); ok {
+		_spec.SetField(backlogitem.FieldChainFired, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ChainedAt(); ok {
+		_spec.SetField(backlogitem.FieldChainedAt, field.TypeTime, value)
+	}
+	if _u.mutation.ChainedAtCleared() {
+		_spec.ClearField(backlogitem.FieldChainedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.TriggeredByChainDepth(); ok {
+		_spec.SetField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTriggeredByChainDepth(); ok {
+		_spec.AddField(backlogitem.FieldTriggeredByChainDepth, field.TypeInt, value)
+	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)
 	}
@@ -2983,6 +3410,96 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(itemsource.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.BlockingDependenciesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockingDependenciesTable,
+			Columns: []string{backlogitem.BlockingDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedBlockingDependenciesIDs(); len(nodes) > 0 && !_u.mutation.BlockingDependenciesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockingDependenciesTable,
+			Columns: []string{backlogitem.BlockingDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.BlockingDependenciesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockingDependenciesTable,
+			Columns: []string{backlogitem.BlockingDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.BlockedByDependenciesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockedByDependenciesTable,
+			Columns: []string{backlogitem.BlockedByDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedBlockedByDependenciesIDs(); len(nodes) > 0 && !_u.mutation.BlockedByDependenciesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockedByDependenciesTable,
+			Columns: []string{backlogitem.BlockedByDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.BlockedByDependenciesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.BlockedByDependenciesTable,
+			Columns: []string{backlogitem.BlockedByDependenciesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitemdependency.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

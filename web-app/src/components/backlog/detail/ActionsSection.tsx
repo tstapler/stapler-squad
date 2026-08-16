@@ -92,14 +92,28 @@ export function ActionsSection({
       <h3 className={styles.sectionTitle}>Actions</h3>
       <div className={styles.actionsPanel} role="group" aria-label="Item actions">
         {terminalState ? (
-          <InlineNotice
-            message={
-              terminalState === "archived"
-                ? "This item was archived elsewhere."
-                : "This item was removed elsewhere."
-            }
-            data-testid="backlog-detail-terminal-notice"
-          />
+          <>
+            <InlineNotice
+              message={
+                terminalState === "archived"
+                  ? "This item was archived elsewhere."
+                  : "This item was removed elsewhere."
+              }
+              data-testid="backlog-detail-terminal-notice"
+            />
+            {terminalState === "archived" && (
+              <button
+                className={styles.actionButton}
+                onClick={() => onAction("unarchive")}
+                disabled={actionLoading !== null}
+                aria-busy={actionLoading === "unarchive"}
+                title="Restores the item to the Idea column. Its git worktree, if any, was deleted at archive time and cannot be recreated."
+                data-testid="backlog-action-unarchive"
+              >
+                <ActionButtonLabel pending={actionLoading === "unarchive"} label="Unarchive" />
+              </button>
+            )}
+          </>
         ) : (
           <>
         {actions.has("mark_ready") && (
@@ -350,6 +364,18 @@ export function ActionsSection({
             data-testid="backlog-action-reopen"
           >
             <ActionButtonLabel pending={actionLoading === "reopen"} label="Re-open to Review" />
+          </button>
+        )}
+        {actions.has("unarchive") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("unarchive")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "unarchive"}
+            title="Restores the item to the Idea column. Its git worktree, if any, was deleted at archive time and cannot be recreated."
+            data-testid="backlog-action-unarchive"
+          >
+            <ActionButtonLabel pending={actionLoading === "unarchive"} label="Unarchive" />
           </button>
         )}
 

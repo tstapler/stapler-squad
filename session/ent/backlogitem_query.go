@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -26,17 +27,19 @@ import (
 // BacklogItemQuery is the builder for querying BacklogItem entities.
 type BacklogItemQuery struct {
 	config
-	ctx               *QueryContext
-	order             []backlogitem.OrderOption
-	inters            []Interceptor
-	predicates        []predicate.BacklogItem
-	withItemSessions  *ItemSessionQuery
-	withSessions      *SessionQuery
-	withStatusEvents  *BacklogStatusEventQuery
-	withStuckStates   *BacklogStuckStateQuery
-	withProgressNotes *BacklogProgressNoteQuery
-	withSource        *ItemSourceQuery
-	withFKs           bool
+	ctx                       *QueryContext
+	order                     []backlogitem.OrderOption
+	inters                    []Interceptor
+	predicates                []predicate.BacklogItem
+	withItemSessions          *ItemSessionQuery
+	withSessions              *SessionQuery
+	withStatusEvents          *BacklogStatusEventQuery
+	withStuckStates           *BacklogStuckStateQuery
+	withProgressNotes         *BacklogProgressNoteQuery
+	withSource                *ItemSourceQuery
+	withBlockingDependencies  *BacklogItemDependencyQuery
+	withBlockedByDependencies *BacklogItemDependencyQuery
+	withFKs                   bool
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -198,6 +201,50 @@ func (_q *BacklogItemQuery) QuerySource() *ItemSourceQuery {
 			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, selector),
 			sqlgraph.To(itemsource.Table, itemsource.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, true, backlogitem.SourceTable, backlogitem.SourceColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryBlockingDependencies chains the current query on the "blocking_dependencies" edge.
+func (_q *BacklogItemQuery) QueryBlockingDependencies() *BacklogItemDependencyQuery {
+	query := (&BacklogItemDependencyClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, selector),
+			sqlgraph.To(backlogitemdependency.Table, backlogitemdependency.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.BlockingDependenciesTable, backlogitem.BlockingDependenciesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryBlockedByDependencies chains the current query on the "blocked_by_dependencies" edge.
+func (_q *BacklogItemQuery) QueryBlockedByDependencies() *BacklogItemDependencyQuery {
+	query := (&BacklogItemDependencyClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, selector),
+			sqlgraph.To(backlogitemdependency.Table, backlogitemdependency.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.BlockedByDependenciesTable, backlogitem.BlockedByDependenciesColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -392,17 +439,19 @@ func (_q *BacklogItemQuery) Clone() *BacklogItemQuery {
 		return nil
 	}
 	return &BacklogItemQuery{
-		config:            _q.config,
-		ctx:               _q.ctx.Clone(),
-		order:             append([]backlogitem.OrderOption{}, _q.order...),
-		inters:            append([]Interceptor{}, _q.inters...),
-		predicates:        append([]predicate.BacklogItem{}, _q.predicates...),
-		withItemSessions:  _q.withItemSessions.Clone(),
-		withSessions:      _q.withSessions.Clone(),
-		withStatusEvents:  _q.withStatusEvents.Clone(),
-		withStuckStates:   _q.withStuckStates.Clone(),
-		withProgressNotes: _q.withProgressNotes.Clone(),
-		withSource:        _q.withSource.Clone(),
+		config:                    _q.config,
+		ctx:                       _q.ctx.Clone(),
+		order:                     append([]backlogitem.OrderOption{}, _q.order...),
+		inters:                    append([]Interceptor{}, _q.inters...),
+		predicates:                append([]predicate.BacklogItem{}, _q.predicates...),
+		withItemSessions:          _q.withItemSessions.Clone(),
+		withSessions:              _q.withSessions.Clone(),
+		withStatusEvents:          _q.withStatusEvents.Clone(),
+		withStuckStates:           _q.withStuckStates.Clone(),
+		withProgressNotes:         _q.withProgressNotes.Clone(),
+		withSource:                _q.withSource.Clone(),
+		withBlockingDependencies:  _q.withBlockingDependencies.Clone(),
+		withBlockedByDependencies: _q.withBlockedByDependencies.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -472,6 +521,28 @@ func (_q *BacklogItemQuery) WithSource(opts ...func(*ItemSourceQuery)) *BacklogI
 		opt(query)
 	}
 	_q.withSource = query
+	return _q
+}
+
+// WithBlockingDependencies tells the query-builder to eager-load the nodes that are connected to
+// the "blocking_dependencies" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *BacklogItemQuery) WithBlockingDependencies(opts ...func(*BacklogItemDependencyQuery)) *BacklogItemQuery {
+	query := (&BacklogItemDependencyClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withBlockingDependencies = query
+	return _q
+}
+
+// WithBlockedByDependencies tells the query-builder to eager-load the nodes that are connected to
+// the "blocked_by_dependencies" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *BacklogItemQuery) WithBlockedByDependencies(opts ...func(*BacklogItemDependencyQuery)) *BacklogItemQuery {
+	query := (&BacklogItemDependencyClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withBlockedByDependencies = query
 	return _q
 }
 
@@ -554,13 +625,15 @@ func (_q *BacklogItemQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*
 		nodes       = []*BacklogItem{}
 		withFKs     = _q.withFKs
 		_spec       = _q.querySpec()
-		loadedTypes = [6]bool{
+		loadedTypes = [8]bool{
 			_q.withItemSessions != nil,
 			_q.withSessions != nil,
 			_q.withStatusEvents != nil,
 			_q.withStuckStates != nil,
 			_q.withProgressNotes != nil,
 			_q.withSource != nil,
+			_q.withBlockingDependencies != nil,
+			_q.withBlockedByDependencies != nil,
 		}
 	)
 	if _q.withSource != nil {
@@ -625,6 +698,24 @@ func (_q *BacklogItemQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*
 	if query := _q.withSource; query != nil {
 		if err := _q.loadSource(ctx, query, nodes, nil,
 			func(n *BacklogItem, e *ItemSource) { n.Edges.Source = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withBlockingDependencies; query != nil {
+		if err := _q.loadBlockingDependencies(ctx, query, nodes,
+			func(n *BacklogItem) { n.Edges.BlockingDependencies = []*BacklogItemDependency{} },
+			func(n *BacklogItem, e *BacklogItemDependency) {
+				n.Edges.BlockingDependencies = append(n.Edges.BlockingDependencies, e)
+			}); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withBlockedByDependencies; query != nil {
+		if err := _q.loadBlockedByDependencies(ctx, query, nodes,
+			func(n *BacklogItem) { n.Edges.BlockedByDependencies = []*BacklogItemDependency{} },
+			func(n *BacklogItem, e *BacklogItemDependency) {
+				n.Edges.BlockedByDependencies = append(n.Edges.BlockedByDependencies, e)
+			}); err != nil {
 			return nil, err
 		}
 	}
@@ -842,6 +933,66 @@ func (_q *BacklogItemQuery) loadSource(ctx context.Context, query *ItemSourceQue
 		for i := range nodes {
 			assign(nodes[i], n)
 		}
+	}
+	return nil
+}
+func (_q *BacklogItemQuery) loadBlockingDependencies(ctx context.Context, query *BacklogItemDependencyQuery, nodes []*BacklogItem, init func(*BacklogItem), assign func(*BacklogItem, *BacklogItemDependency)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[uuid.UUID]*BacklogItem)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(backlogitemdependency.FieldBlockerID)
+	}
+	query.Where(predicate.BacklogItemDependency(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(backlogitem.BlockingDependenciesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.BlockerID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "blocker_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *BacklogItemQuery) loadBlockedByDependencies(ctx context.Context, query *BacklogItemDependencyQuery, nodes []*BacklogItem, init func(*BacklogItem), assign func(*BacklogItem, *BacklogItemDependency)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[uuid.UUID]*BacklogItem)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(backlogitemdependency.FieldBlockedID)
+	}
+	query.Where(predicate.BacklogItemDependency(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(backlogitem.BlockedByDependenciesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.BlockedID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "blocked_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
 	}
 	return nil
 }

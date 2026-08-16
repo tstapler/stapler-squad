@@ -63,6 +63,8 @@ const (
 	FieldSafePythonImportsOnly = "safe_python_imports_only"
 	// FieldRequireCiPassing holds the string denoting the require_ci_passing field in the database.
 	FieldRequireCiPassing = "require_ci_passing"
+	// FieldMinSessionIdleMinutes holds the string denoting the min_session_idle_minutes field in the database.
+	FieldMinSessionIdleMinutes = "min_session_idle_minutes"
 	// Table holds the table name of the approvalrule in the database.
 	Table = "approval_rules"
 )
@@ -95,6 +97,7 @@ var Columns = []string{
 	FieldPythonModes,
 	FieldSafePythonImportsOnly,
 	FieldRequireCiPassing,
+	FieldMinSessionIdleMinutes,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -142,6 +145,8 @@ var (
 	DefaultSafePythonImportsOnly bool
 	// DefaultRequireCiPassing holds the default value on creation for the "require_ci_passing" field.
 	DefaultRequireCiPassing bool
+	// DefaultMinSessionIdleMinutes holds the default value on creation for the "min_session_idle_minutes" field.
+	DefaultMinSessionIdleMinutes int32
 )
 
 // OrderOption defines the ordering options for the ApprovalRule queries.
@@ -240,4 +245,9 @@ func BySafePythonImportsOnly(opts ...sql.OrderTermOption) OrderOption {
 // ByRequireCiPassing orders the results by the require_ci_passing field.
 func ByRequireCiPassing(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRequireCiPassing, opts...).ToFunc()
+}
+
+// ByMinSessionIdleMinutes orders the results by the min_session_idle_minutes field.
+func ByMinSessionIdleMinutes(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldMinSessionIdleMinutes, opts...).ToFunc()
 }
