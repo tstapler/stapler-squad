@@ -475,7 +475,7 @@ jobs:
   benchmark-gate:
     name: Benchmark Gate (main only)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: [prepare, test]
     permissions:
       contents: read
@@ -516,13 +516,20 @@ jobs:
         run: ./scripts/build-tmux.sh
 
       - name: Run benchmarks (count=5 for significance)
+        env:
+          # production default is 10s; CI runners are slower/noisier, and the
+          # benchmark job's module cache is cold on first run (never populated
+          # by a prior success), so tmux session creation needs more headroom
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           # -run='^$'  benchmarks only (no tests)
           # -short     skip integration benchmarks that spawn real processes
           # -count=5   statistically meaningful for ≥20% regression detection
           # -timeout=10m per package (search/unfinished are legitimately slow)
+          # | tee      keeps step output visible live instead of buffered
+          #            until completion, so a stall shows its last line
           TMUX_BIN="$(pwd)/bin/tmux" go test -bench=. -benchmem -count=5 \
-            -run='^$' -short ./... -timeout=10m > bench-current.txt
+            -run='^$' -short ./... -timeout=10m | tee bench-current.txt
 
       - name: Install benchstat (pinned)
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
