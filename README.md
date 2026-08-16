@@ -206,40 +206,51 @@ For process isolation when running multiple stapler-squad instances, configure a
 
 ### Usage
 
-```
-Usage:
-  ssq [flags]
-  ssq [command]
-
-Available Commands:
-  completion  Generate the autocompletion script for the specified shell
-  debug       Print debug information like config paths
-  help        Help about any command
-  reset       Reset all stored instances
-  version     Print the version number of stapler-squad
-
-Flags:
-  -y, --autoyes          [experimental] If enabled, all instances will automatically accept prompts for claude code & aider
-  -h, --help             help for stapler-squad
-  -p, --program string   Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')
-```
-
 Run the application with:
 
 ```bash
 ssq
 ```
-NOTE: The default program is `claude` and we recommend using the latest version.
+
+This starts the web server (default `http://localhost:8543`) and opens the web UI, where you create and manage sessions. Program selection (Claude Code, Aider, Codex, Gemini, Amp, etc.) happens in the UI's session-creation panel, not via a CLI flag — the server auto-detects which agent CLIs are installed and lists them there.
+
+```
+Usage:
+  stapler-squad [flags]
+  stapler-squad [command]
+
+Available Commands:
+  debug            Print debug information like config paths
+  help             Help about any command
+  list             List all sessions
+  print-qr-codes   Generate a 1-hour setup token and print QR codes for all detected domains
+  reset            Reset all stored instances
+  test-pty         Test PTY initialization and discovery
+  version          Print the version number of stapler-squad
+
+Flags:
+      --discover-external    Enable external session discovery (tmux/screen sessions outside stapler-squad)
+      --discovery-mode       Enable session discovery mode
+  -h, --help                 help for stapler-squad
+      --listen string        Address to listen on
+      --mcp                  Run as an MCP server over stdio instead of starting the web server
+      --profile              Enable pprof profiling endpoints
+      --profile-port int     Port for pprof profiling endpoints (default 6060)
+      --remote-access        Enable remote access (WebAuthn passkey + QR code setup)
+      --remote-port int      Port for remote access (default 8444)
+      --rp-id string         WebAuthn relying party ID for remote access
+      --test-dir string      Directory to use for test-mode state
+      --test-mode            Run in an isolated test-mode state directory
+      --tmux-keep-server     Keep the tmux server alive after stapler-squad exits (default true)
+      --trace               Enable execution tracing
+```
 
 <br />
 
 <b>Using Stapler Squad with other AI assistants:</b>
 - For [Codex](https://github.com/openai/codex): Set your API key with `export OPENAI_API_KEY=<your_key>`
-- Launch with specific assistants:
-   - Codex: `ssq -p "codex"`
-   - Aider: `ssq -p "aider ..."`
-   - Gemini: `ssq -p "gemini"`
-- Make this the default, by modifying the config file (locate with `ssq debug`)
+- Open the web UI, start a new session, and pick the assistant (Claude Code, Codex, Aider, Gemini, Amp, ...) from the program dropdown in the session-creation panel.
+- Set a default assistant for new sessions in the config file (locate with `ssq debug`) via the `default_program` key.
 
 ### Development
 
