@@ -365,6 +365,24 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 	}
 }
 
+// TestPTYDiscovery_StopJoinsMonitorLoop verifies Stop() blocks until
+// monitorLoop has actually exited, not just been signaled — regression test
+// for a TempDir cleanup race where a leaked monitorLoop goroutine called
+// tmux.TryAcquireExecSlot after the test's t.TempDir() had already begun
+// tearing down.
+func TestPTYDiscovery_StopJoinsMonitorLoop(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	pd.Start()
+	pd.Stop()
+
+	select {
+	case <-pd.done:
+	default:
+		t.Fatal("Stop() returned before monitorLoop closed pd.done")
+	}
+}
+
 func TestPTYDiscovery_OrganizeByCategory(t *testing.T) {
 	pd := NewPTYDiscovery()
 
