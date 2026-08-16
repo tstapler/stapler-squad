@@ -719,8 +719,8 @@ func buildTopToolEntries(toolCounts map[string]int64, limit int) []*sessionv1.To
 	result := make([]*sessionv1.TopEntry, 0, len(sorted))
 	for _, e := range sorted {
 		result = append(result, &sessionv1.TopEntry{
-			Name:       e.name,
-			TokenCount: e.count,
+			Name:            e.name,
+			ActivationCount: int32(e.count), //nolint:gosec
 		})
 	}
 	return result
