@@ -36,6 +36,8 @@ const (
 	FieldCronExpression = "cron_expression"
 	// FieldCronEnabled holds the string denoting the cron_enabled field in the database.
 	FieldCronEnabled = "cron_enabled"
+	// FieldEnabled holds the string denoting the enabled field in the database.
+	FieldEnabled = "enabled"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -80,6 +82,7 @@ var Columns = []string{
 	FieldAgentType,
 	FieldCronExpression,
 	FieldCronEnabled,
+	FieldEnabled,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 	FieldKeepSessions,
@@ -116,6 +119,8 @@ var (
 	DefaultSessionType string
 	// DefaultCronEnabled holds the default value on creation for the "cron_enabled" field.
 	DefaultCronEnabled bool
+	// DefaultEnabled holds the default value on creation for the "enabled" field.
+	DefaultEnabled bool
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -193,6 +198,11 @@ func ByCronExpression(opts ...sql.OrderTermOption) OrderOption {
 // ByCronEnabled orders the results by the cron_enabled field.
 func ByCronEnabled(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCronEnabled, opts...).ToFunc()
+}
+
+// ByEnabled orders the results by the enabled field.
+func ByEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEnabled, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.
