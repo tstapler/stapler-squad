@@ -79,7 +79,8 @@ func ScanZombies() ([]ZombieInfo, error) {
 // Audited 2026-08-15 for the same signal-vs-join gap fixed in PTYDiscovery.Stop()
 // (session/pty_discovery.go): see the note on StartForkPressureLogger in
 // fork_metrics.go — same pattern, same conclusion (production-only, doesn't touch
-// gateDir()/STAPLER_SQUAD_TEST_DIR, follow-up filed rather than fixed here).
+// gateDir()/STAPLER_SQUAD_TEST_DIR; tracked as backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec rather than fixed here).
 func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any)) {
 	go func() {
 		ticker := time.NewTicker(interval)

@@ -174,8 +174,9 @@ func ForkPressureSnapshot() ForkPressureStats {
 // paths — and is only started from server.go with the long-lived serverCtx, never
 // from a test's per-test setup, so it cannot reproduce the exec-gate TempDir race
 // this fix targets. Adding a real join belongs in server.Shutdown() alongside the
-// other two goroutines below and is filed as a follow-up rather than fixed here to
-// avoid expanding this change's blast radius into process shutdown ordering.
+// other two goroutines below; tracked as backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec
+// rather than fixed here to avoid expanding this change's blast radius into process
+// shutdown ordering.
 func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any)) {
 	go func() {
 		ticker := time.NewTicker(interval)
