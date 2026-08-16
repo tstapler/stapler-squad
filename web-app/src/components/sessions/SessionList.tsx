@@ -428,6 +428,7 @@ export function SessionList({
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
   const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
   const [isBulkTagEditing, setIsBulkTagEditing] = useState(false);
+  const bulkTagEditorTriggerRef = useRef<HTMLElement | null>(null);
 
   // Notification hook for undo toasts
   const { showUndoToast, removeNotification, addNotification } = useNotifications();
@@ -960,6 +961,7 @@ export function SessionList({
   }, [onDeleteSession, activeSelection, flushPendingDeletes, showUndoToast, removeNotification]);
 
   const handleBulkAddTag = () => {
+    bulkTagEditorTriggerRef.current = document.activeElement as HTMLElement;
     setIsBulkTagEditing(true);
   };
 
@@ -1213,6 +1215,7 @@ export function SessionList({
           onSave={handleBulkTagSave}
           onCancel={() => setIsBulkTagEditing(false)}
           sessionTitle={`${selectedSessions.size} selected session${selectedSessions.size !== 1 ? 's' : ''}`}
+          triggerRef={bulkTagEditorTriggerRef}
         />
       )}
 

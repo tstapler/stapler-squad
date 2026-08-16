@@ -1,7 +1,7 @@
 "use client";
 // +feature: import-sessions-container
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useImportSessionService } from "@/lib/hooks/useImportSessionService";
 import {
   ImportStatus,
@@ -30,6 +30,12 @@ export function ImportSessionsContainer() {
   const [importQueue, setImportQueue] = useState<ExternalSessionCandidateRef[]>([]);
   const [pendingKill, setPendingKill] = useState<PendingKill | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
+  // Import can be triggered from a per-row button or a bulk "Import
+  // selected" button, so there's no single static opener element to attach
+  // a ref to. Capture whichever one was actually focused at click time and
+  // reuse it across the whole chained flow (preview -> kill dialog), since
+  // ConfirmKillDialog has no trigger of its own.
+  const importTriggerRef = useRef<HTMLElement | null>(null);
 
   // advanceQueue pulls the next candidate (if any) off importQueue and makes
   // it the active preview, or clears previewCandidate once the queue is
@@ -44,6 +50,7 @@ export function ImportSessionsContainer() {
 
   const handleImport = useCallback((candidates: ExternalSessionCandidateRef[]) => {
     if (candidates.length === 0) return;
+    importTriggerRef.current = document.activeElement as HTMLElement | null;
     setCommitError(null);
     advanceQueue(candidates);
   }, [advanceQueue]);
@@ -103,6 +110,7 @@ export function ImportSessionsContainer() {
           candidate={previewCandidate}
           onConfirm={handleConfirmPreview}
           onCancel={() => advanceQueue(importQueue)}
+          triggerRef={importTriggerRef}
         />
       )}
 
@@ -116,6 +124,7 @@ export function ImportSessionsContainer() {
             setPendingKill(null);
             advanceQueue(importQueue);
           }}
+          triggerRef={importTriggerRef}
         />
       )}
     </div>
