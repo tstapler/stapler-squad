@@ -41,7 +41,7 @@ func NewSlackConfigService(n *SlackNotifier) *SlackConfigService {
 // webhook_configured/signing_secret_configured reflect ciphertext (or env
 // override) *presence*, not decrypt success — see plan.md's Task 1.4.2a
 // decrypt-health note for why that's an accepted Phase 1 gap.
-// +api: GetSlackConfig
+// +api: slack-config:get
 func (s *SlackConfigService) GetSlackConfig(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetSlackConfigRequest],
@@ -55,7 +55,7 @@ func (s *SlackConfigService) GetSlackConfig(
 // UpdateSlackConfig updates the Slack notification configuration. See
 // UpdateSlackConfigRequest's doc comment for the empty-string-vs-clear-bool
 // precedence semantics applied to both secret fields.
-// +api: UpdateSlackConfig
+// +api: slack-config:update
 func (s *SlackConfigService) UpdateSlackConfig(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateSlackConfigRequest],
@@ -120,7 +120,7 @@ func (s *SlackConfigService) UpdateSlackConfig(
 // (already plaintext from the settings form, tested before any save); a
 // blank webhook_url falls back to the currently-saved config. Testing an
 // in-form URL never persists it.
-// +api: TestSlackWebhook
+// +api: slack-config:test-webhook
 func (s *SlackConfigService) TestSlackWebhook(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TestSlackWebhookRequest],

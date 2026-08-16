@@ -1,5 +1,5 @@
 {
-  "id": "UpdateSlackConfig",
+  "id": "slack-config:update",
   "type": "backend",
   "service": "SessionService",
   "method": "UpdateSlackConfig",

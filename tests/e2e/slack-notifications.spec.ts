@@ -1,4 +1,4 @@
-// @feature GetSlackConfig, UpdateSlackConfig, TestSlackWebhook, slack-notification-settings
+// @feature slack-config:get, slack-config:update, slack-config:test-webhook, slack-notification-settings
 /**
  * E2E tests for the Slack Notification Settings panel.
  *

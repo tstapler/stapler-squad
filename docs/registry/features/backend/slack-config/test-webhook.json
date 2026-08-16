@@ -1,14 +1,15 @@
 {
-  "id": "GetSlackConfig",
+  "id": "slack-config:test-webhook",
   "type": "backend",
   "service": "SessionService",
-  "method": "GetSlackConfig",
+  "method": "TestSlackWebhook",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/slack_config_service.go",
   "tested": true,
   "testIds": [
-    "TestGetSlackConfig_NeverReturnsPlaintextSecret_OnlyBooleans"
+    "TestTestSlackWebhook_ReturnsSlackErrorText_When_WebhookReturns404",
+    "TestTestSlackWebhook_UsesTypedFormValue_NotSavedConfig"
   ],
   "lastModified": "2026-08-15T22:35:55.19401311-07:00"
 }
