@@ -2,11 +2,13 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -612,6 +614,50 @@ func TestSaveConfigAtomic(t *testing.T) {
 	loaded, err := LoadConfigFromPath(path)
 	require.NoError(t, err)
 	assert.Equal(t, 2, loaded.ConfigVersion)
+}
+
+// TestSaveConfig_ConcurrentWritesToSamePath_NeverProduceCorruptJSON pins the
+// saveConfigMu regression: without it, two goroutines racing saveConfig
+// against the same configPath can interleave WriteFile/Rename on the shared
+// ".tmp" file, producing a rename failure or a torn write that LoadConfig
+// silently swallows into DefaultConfig() (see saveConfigMu's doc comment).
+// Mirrors TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON
+// in server/services/hook_injector_test.go.
+func TestSaveConfig_ConcurrentWritesToSamePath_NeverProduceCorruptJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	const n = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cfg := &Config{ConfigVersion: i}
+			errCh <- saveConfig(cfg, path)
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		assert.NoError(t, err, "saveConfig must not error under concurrent writers to the same path")
+	}
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "config file must exist after concurrent saveConfig calls")
+
+	var parsed Config
+	require.NoError(t, json.Unmarshal(data, &parsed), "config.json must be valid JSON after concurrent writes, not torn/corrupt: %s", data)
+
+	loaded, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	// Every writer used a distinct ConfigVersion in [0, n). A torn/corrupt
+	// write that LoadConfig silently swallowed into DefaultConfig() would
+	// surface here as a value outside that range instead.
+	assert.True(t, loaded.ConfigVersion >= 0 && loaded.ConfigVersion < n,
+		"loaded ConfigVersion %d must be one written by a goroutine, not a fallback default", loaded.ConfigVersion)
 }
 
 func TestOneOffBaseDirOrDefault_Empty(t *testing.T) {
