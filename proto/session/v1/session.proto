@@ -1825,6 +1825,11 @@ message SessionDefaultsConfig {
   // Max backlog items that may be in_progress at once. 0 in a request means
   // "use the server default (2)"; the response always echoes the resolved value.
   int32 max_concurrent_backlog_work_items = 11;
+  // Minutes of no meaningful output before a main-list session is flagged stale.
+  // Always the resolved value (never 0) in responses.
+  int32 stale_session_threshold_minutes = 12;
+  // Whether crossing the stale threshold also emits a notification.
+  bool stale_session_notify_enabled = 13;
 }
 
 // GetSessionDefaults
@@ -1885,6 +1890,9 @@ message UpdateGlobalDefaultsRequest {
   int32 max_auto_rework_iterations = 8;
   // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
   int32 max_concurrent_backlog_work_items = 9;
+  // 0 = use the server default. See SessionDefaultsConfig.stale_session_threshold_minutes.
+  int32 stale_session_threshold_minutes = 10;
+  bool stale_session_notify_enabled = 11;
 }
 
 message UpdateGlobalDefaultsResponse {

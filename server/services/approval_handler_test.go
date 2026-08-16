@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -443,4 +444,53 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	if got := summary.EscalationReasonCounts["no-match"]; got != 0 {
 		t.Errorf("EscalationReasonCounts[\"no-match\"] = %d, want 0 — analytics must not disagree with the review-queue card's \"unexpected\" category", got)
 	}
+}
+
+// TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance verifies that
+// when a live instance is found, ClassificationContext.SessionIdleMinutes is populated from
+// Instance.GetTimeSinceLastMeaningfulOutput(), converted to whole minutes. Population happens
+// unconditionally inside the liveFinder nil-guard (not nested under the GitHubPRNumber > 0
+// check next to it) because idle time is independent of whether the session has an open PR.
+func TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance(t *testing.T) {
+	h, storage := newHandlerWithStorage(t)
+	cc := &capturingClassifier{}
+	h.SetClassifier(cc)
+	h.timeout = 100 * time.Millisecond // short so the Escalate fallthrough times out fast
+
+	const uuid = "eeeeeeee-1111-2222-3333-ffffffffffff"
+	now := time.Now()
+	inst := &session.Instance{
+		Title:     "idle-session",
+		UUID:      uuid,
+		Path:      "/projects/idle",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: now.Add(-75 * time.Minute), // no meaningful output recorded — falls back to time since creation
+		UpdatedAt: now,
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
+
+	postPermissionRequestWithCommand(t, h, uuid, "Bash", "npm test")
+
+	require.Equal(t, 75, cc.lastCtx.SessionIdleMinutes,
+		"a live instance idle for 75 minutes must populate SessionIdleMinutes=75")
+}
+
+// TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstance verifies the
+// fail-closed contract documented on ClassificationContext.SessionIdleMinutes: when no live
+// instance is found for the session, the field is left at its Go zero value (0) rather than
+// set to a sentinel "unknown"/"infinite" value, so it can never accidentally satisfy a
+// MinSessionIdleMinutes > 0 rule condition.
+func TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstance(t *testing.T) {
+	h, _ := newHandlerWithStorage(t)
+	cc := &capturingClassifier{}
+	h.SetClassifier(cc)
+	h.timeout = 100 * time.Millisecond
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: nil}) // FindLiveInstance always returns nil
+
+	postPermissionRequestWithCommand(t, h, "unknown-session-id", "Bash", "npm test")
+
+	require.Equal(t, 0, cc.lastCtx.SessionIdleMinutes,
+		"no live instance found must leave SessionIdleMinutes at the Go zero value, never a sentinel")
 }

@@ -51,6 +51,11 @@ type HibernationConfig struct {
 // existed.
 const defaultSessionRetentionDays = 14
 
+// defaultStaleSessionThresholdMinutes is used by ThresholdMinutesOrDefault
+// whenever ThresholdMinutes is unset (zero or negative), including for
+// configs saved before this field existed.
+const defaultStaleSessionThresholdMinutes = 30
+
 // SessionRetentionConfig holds configuration for the automatic session-retention
 // cleanup sweep, which deletes archived sessions past a retention window once they
 // pass safety checks (clean worktree, no open PR).
@@ -79,6 +84,38 @@ func (c SessionRetentionConfig) RetentionDaysOrDefault() int {
 		return defaultSessionRetentionDays
 	}
 	return c.RetentionDays
+}
+
+// StaleSessionConfig holds configuration for stale-session detection: how long a
+// session may go without activity before it's flagged stale, and whether that
+// triggers a notification.
+type StaleSessionConfig struct {
+	// ThresholdMinutes is how many minutes of inactivity before a session is
+	// considered stale. Default: 30.
+	ThresholdMinutes int `json:"threshold_minutes,omitempty"`
+	// NotifyEnabled controls whether a notification is sent when a session goes
+	// stale. A pointer so a config saved before this field existed (nil) can be
+	// distinguished from an explicit `false` — nil defaults to enabled, matching
+	// SessionRetentionConfig.Enabled's pattern.
+	NotifyEnabled *bool `json:"notify_enabled,omitempty"`
+}
+
+// ThresholdMinutesOrDefault returns ThresholdMinutes, falling back to
+// defaultStaleSessionThresholdMinutes when unset (<=0).
+func (c StaleSessionConfig) ThresholdMinutesOrDefault() int {
+	if c.ThresholdMinutes <= 0 {
+		return defaultStaleSessionThresholdMinutes
+	}
+	return c.ThresholdMinutes
+}
+
+// NotifyEnabledOrDefault returns whether stale-session notifications are
+// enabled, defaulting to true when unset.
+func (c StaleSessionConfig) NotifyEnabledOrDefault() bool {
+	if c.NotifyEnabled == nil {
+		return true
+	}
+	return *c.NotifyEnabled
 }
 
 // TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently

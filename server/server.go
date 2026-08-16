@@ -825,6 +825,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Session retention sweeper started",
 			"retention_days", cfg.SessionRetention.RetentionDaysOrDefault())
 	}
+
+	// Start stale session notifier (fires an operator-facing notification the first time an
+	// ACTIVE session crosses the configured stale threshold — see StaleSessionNotifier doc
+	// comment).
+	if deps.ReviewQueuePoller != nil {
+		staleNotifier := services.NewStaleSessionNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		go staleNotifier.Start(serverCtx)
+		log.Info("Stale session notifier started",
+			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
+			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
+	}
 }
 
 // registerStaticRoutes mounts routes that are always registered regardless of
