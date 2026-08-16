@@ -3401,13 +3401,14 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
 	require.NoError(t, err)
 
-	// 5s/50ms matches the sibling SDD-mode triage tests immediately above
-	// (TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
-	// et al.) rather than the tighter 2s/10ms this test previously used — under
-	// -race, observed passing runs of this exact test already take 3.5-4.2s end to
-	// end (worktree create+setup, fake headless call, commit, branch rename, DB
-	// writes), so the old 2s budget was undersized independent of the worktree
-	// test-isolation fix above.
+	// 5s/50ms matches TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
+	// (:3262) — the closest analog by I/O shape: this test's async triage goroutine performs
+	// 6-9 real, unmocked git subprocess forks (worktree add/remove, merge-base loop, status,
+	// add, commit, branch rename) plus sequential DB writes. The prior 2s/10ms budget was
+	// copy-pasted from an unrelated test (:1170-1177) that does a real headless LLM call but
+	// no git I/O, and was too tight for this test's actual pipeline — causing intermittent
+	// "Condition never satisfied" failures under load. Under -race, observed passing runs of
+	// this exact test already take 3.5-4.2s end to end.
 	require.Eventually(t, func() bool {
 		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		return getErr == nil && getResp.Msg.Item.Status == "ready"
