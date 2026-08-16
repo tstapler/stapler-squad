@@ -38,12 +38,16 @@ type StaleSessionNotifier struct {
 	eventBus *events.EventBus
 
 	mu sync.Mutex
-	// notifiedSessions tracks sessions that have already fired a notification for the
-	// CURRENT stale episode, keyed by stable ID (UUID, falling back to Title). An entry is
-	// removed (re-arming the session) when it recovers below the threshold, or when it
-	// transitions away from ACTIVE for any reason -- including a pause-then-resume that
-	// never dropped below threshold, so that sequence notifies again on resume rather than
-	// staying silently suppressed forever (see the
+	// notifiedSessions tracks sessions that have already fired an ACTUAL notification for
+	// the CURRENT stale episode, keyed by stable ID (UUID, falling back to Title). An entry
+	// is written only when a notification is actually sent -- if notify_enabled is false
+	// when a session first crosses threshold, no entry is recorded, so the session remains
+	// eligible to notify later in that same episode once the flag is turned on (see the
+	// *_should_FireOnceOnceEnabled_When_NotifyWasDisabledDuringInitialStaleCrossing test).
+	// An entry is removed (re-arming the session) when it recovers below the threshold, or
+	// when it transitions away from ACTIVE for any reason -- including a pause-then-resume
+	// that never dropped below threshold, so that sequence notifies again on resume rather
+	// than staying silently suppressed forever (see the
 	// *_should_ReNotify_When_SessionPausesThenResumesStillStale test).
 	notifiedSessions map[string]time.Time
 }
@@ -114,7 +118,11 @@ func (n *StaleSessionNotifier) checkAll() {
 		n.mu.Lock()
 		_, alreadyNotified := n.notifiedSessions[stableID]
 		switch {
-		case idle > threshold && !alreadyNotified:
+		case idle > threshold && !alreadyNotified && notifyEnabled:
+			// Only record the dedup entry when a notification is actually about to be
+			// sent. If notifyEnabled is false here, deliberately leave no entry so this
+			// same stale episode can still fire once the flag is turned on later,
+			// instead of being permanently swallowed.
 			n.notifiedSessions[stableID] = time.Now()
 			shouldNotify = true
 		case idle <= threshold && alreadyNotified:
@@ -122,7 +130,7 @@ func (n *StaleSessionNotifier) checkAll() {
 		}
 		n.mu.Unlock()
 
-		if shouldNotify && notifyEnabled {
+		if shouldNotify {
 			n.notify(inst, idle)
 		}
 	}

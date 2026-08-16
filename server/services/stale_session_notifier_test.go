@@ -238,3 +238,46 @@ func TestStaleSessionNotifier_checkAll_should_ReNotify_When_SessionPausesThenRes
 	notifier.checkAll()
 	drainOneNotification(t, ch)
 }
+
+// TestStaleSessionNotifier_checkAll_should_FireOnceOnceEnabled_When_NotifyWasDisabledDuringInitialStaleCrossing
+// is the regression test for the dedup-swallow bug: a session going stale while
+// notify_enabled is false must NOT be recorded as "already notified," so that flipping
+// notify_enabled to true later in the SAME continuous stale episode (idle time never
+// recovered below threshold in between) still fires the deferred notification instead of
+// being permanently suppressed.
+func TestStaleSessionNotifier_checkAll_should_FireOnceOnceEnabled_When_NotifyWasDisabledDuringInitialStaleCrossing(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
+	writeStaleSessionConfig(t, dir, 30, false)
+
+	inst := newStaleTestInstance("sess-7", "uuid-7", session.Active, time.Now().Add(-40*time.Minute))
+	poller := newTestNotifierPoller(inst)
+	bus := events.NewEventBus(4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+
+	notifier := NewStaleSessionNotifier(poller, bus)
+
+	// notify_enabled is false when the session first crosses threshold -- no notification,
+	// and (per the fix) no dedup entry should be recorded either.
+	notifier.checkAll()
+	assertNoNotification(t, ch)
+
+	notifier.mu.Lock()
+	_, wronglyMarked := notifier.notifiedSessions["uuid-7"]
+	notifier.mu.Unlock()
+	require.False(t, wronglyMarked, "session must not be marked as notified when notify_enabled was false")
+
+	// Operator flips notify_enabled to true mid-episode -- idle time never recovered below
+	// threshold in between. Without the fix, this would stay silently suppressed because
+	// the session was already (incorrectly) marked as notified above.
+	writeStaleSessionConfig(t, dir, 30, true)
+	notifier.checkAll()
+	drainOneNotification(t, ch)
+
+	// Still stale, still enabled -- must not fire a duplicate notification for the same
+	// episode.
+	notifier.checkAll()
+	assertNoNotification(t, ch)
+}

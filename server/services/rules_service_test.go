@@ -1077,15 +1077,18 @@ func TestExportRules_Roundtrip(t *testing.T) {
 }
 
 // TestMinSessionIdleMinutes_SurvivesRoundTrip is a dedicated regression test for
-// MinSessionIdleMinutes because it crosses four independent hand-written conversion
+// MinSessionIdleMinutes because it crosses several independent hand-written conversion
 // hops (ApprovalRuleProto -> RuleSpec -> ent-backed storage -> RuleSpec ->
-// classifier.Rule) with no compile-time completeness check tying them together — a
-// missed hop compiles fine but silently drops the field. Mirrors the
-// storage-backed setup used by TestExportRules_Roundtrip, but additionally
-// re-opens the RulesStore against the same underlying ent storage to prove the
-// value survived an actual DB round trip rather than only the in-memory cache,
-// and inspects the rebuilt classifier's rules to prove the RuleSpec ->
-// classifier.Rule hop also preserved it.
+// classifier.Rule, and RuleSpec -> ApprovalRuleProto again via ListApprovalRules) with
+// no compile-time completeness check tying them together — a missed hop compiles fine
+// but silently drops the field. Mirrors the storage-backed setup used by
+// TestExportRules_Roundtrip, but additionally re-opens the RulesStore against the same
+// underlying ent storage to prove the value survived an actual DB round trip rather
+// than only the in-memory cache, inspects the rebuilt classifier's rules to prove the
+// RuleSpec -> classifier.Rule hop also preserved it, and calls ListApprovalRules to
+// prove the read-path proto conversion preserved it too (this is also what the
+// docs/registry/features/backend/approval/list-rules.json entry cites as covering
+// ListApprovalRules).
 func TestMinSessionIdleMinutes_SurvivesRoundTrip(t *testing.T) {
 	const ruleID = "user-idle-test"
 	const wantIdleMinutes = int32(60)
@@ -1138,6 +1141,22 @@ func TestMinSessionIdleMinutes_SurvivesRoundTrip(t *testing.T) {
 	require.NotNil(t, classifierRule, "rule should be present in the rebuilt classifier")
 	assert.Equal(t, wantIdleMinutes, classifierRule.MinSessionIdleMinutes,
 		"MinSessionIdleMinutes should survive the RuleSpec->classifier.Rule conversion")
+
+	// Hop 4: RuleSpec -> ApprovalRuleProto via the ListApprovalRules RPC, proving the
+	// read-path conversion (specToProto, called from the list handler rather than the
+	// upsert response) also preserves the field.
+	listResp, err := svc.ListApprovalRules(context.Background(), connect.NewRequest(&sessionv1.ListApprovalRulesRequest{}))
+	require.NoError(t, err)
+	var listedRule *sessionv1.ApprovalRuleProto
+	for _, r := range listResp.Msg.Rules {
+		if r.Id == ruleID {
+			listedRule = r
+			break
+		}
+	}
+	require.NotNil(t, listedRule, "rule should be present in ListApprovalRules response")
+	assert.Equal(t, wantIdleMinutes, listedRule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the RuleSpec->proto conversion in ListApprovalRules")
 }
 
 // ── UT-BE-20: BulkUpsert 20 new rules ────────────────────────────────────────
