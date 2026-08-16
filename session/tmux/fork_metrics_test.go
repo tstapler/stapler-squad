@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -483,5 +484,54 @@ func TestCheckPressure_RingBufferWrap(t *testing.T) {
 	if stats.ZombiesInWindow != ringCapacity {
 		t.Errorf("ZombiesInWindow = %d; want %d after ring wrap (capacity %d)",
 			stats.ZombiesInWindow, ringCapacity, ringCapacity)
+	}
+}
+
+// TestStartForkPressureLogger_GoroutineFullyExits_When_WaitGroupIsJoined proves
+// StartForkPressureLogger's goroutine has actually returned by the time wg.Wait()
+// unblocks — not just that ctx was canceled (backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec, AC0). A short ticker interval combined
+// with an atomic counter in logFn lets us detect any tick that fires after the
+// join, which would mean the goroutine outlived the join.
+func TestStartForkPressureLogger_GoroutineFullyExits_When_WaitGroupIsJoined(t *testing.T) {
+	resetForkMonitor(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	var tickCount atomic.Int64
+
+	// Record a spawn so the logger has something to log every tick.
+	recordSpawn(time.Now())
+
+	StartForkPressureLogger(ctx, time.Millisecond, func(string, ...any) {
+		tickCount.Add(1)
+	}, &wg)
+
+	// Let a few ticks fire before signaling shutdown.
+	for tickCount.Load() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+
+	cancel()
+
+	joined := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(joined)
+	}()
+	select {
+	case <-joined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wg.Wait() did not return within 5s after cancel — goroutine leaked")
+	}
+
+	countAtJoin := tickCount.Load()
+	// If the goroutine were still running post-join, it would keep incrementing
+	// tickCount on its 1ms ticker. Sleeping several ticks' worth of time and
+	// confirming no further increments proves it actually exited, not just that
+	// ctx.Done() fired.
+	time.Sleep(20 * time.Millisecond)
+	if got := tickCount.Load(); got != countAtJoin {
+		t.Fatalf("tickCount kept increasing after wg join (from %d to %d) — goroutine did not fully exit", countAtJoin, got)
 	}
 }

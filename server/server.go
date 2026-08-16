@@ -58,6 +58,7 @@ type Server struct {
 	connCtxCancel     context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
 	availablePrograms []string                        // cached once at startup; programs change only on system changes
 	startedAt         time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	backgroundTasksWG sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
 }
 
 // newServerBase creates the base Server struct and returns it alongside the
@@ -297,7 +298,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Start fork pressure logger (logs stats every 30s when activity > 0).
 	tmux.StartForkPressureLogger(serverCtx, 30*time.Second, func(format string, args ...any) {
 		log.Info(fmt.Sprintf(format, args...))
-	})
+	}, &srv.backgroundTasksWG)
 
 	// Become the subreaper for our process tree so that tmux's zombie children
 	// get reparented to us (not init) when tmux hasn't yet reaped them.
@@ -311,13 +312,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Start zombie watcher (scans for zombie child processes every 30s).
 	tmux.StartZombieWatcher(serverCtx, 30*time.Second, func(format string, args ...any) {
 		log.Warn(fmt.Sprintf(format, args...))
-	})
+	}, &srv.backgroundTasksWG)
 
 	// Start zombie reaper (calls waitpid(-1, WNOHANG) every 60s to reap any
 	// zombie children left by cmd.Start() paths that skipped cmd.Wait()).
 	tmux.StartZombieReaper(serverCtx, 60*time.Second, func(format string, args ...any) {
 		log.Info(fmt.Sprintf(format, args...))
-	})
+	}, &srv.backgroundTasksWG)
 
 	// Wire tmux server recovery → web UI toast notification.
 	tmux.SetServerRecoveryCallback(func() {
@@ -1042,6 +1043,35 @@ func (s *Server) Start(ctx context.Context) error {
 // regardless. Prevents a stuck hook from causing a SIGKILL on restart/stop.
 const shutdownHooksTimeout = 30 * time.Second
 
+// backgroundTasksJoinTimeout bounds how long Shutdown waits for the
+// fork-pressure logger, zombie watcher, and zombie reaper goroutines
+// (session/tmux) to exit after being signaled via connCtxCancel, before
+// proceeding regardless (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
+// zombie_detector.go's ScanZombies shells out to `ps` under its own 10s
+// timeout, so this value is not generous headroom above that — a stuck `ps`
+// call can consume the whole budget. Kept at 10s to match stopJoinTimeout's
+// order of magnitude (session/pty_discovery.go) rather than guessing a larger
+// number; revisit if the join-timeout warning fires in practice.
+const backgroundTasksJoinTimeout = 10 * time.Second
+
+// waitGroupWithTimeout waits for wg to reach zero, returning true if it did
+// so within timeout. Returns false if timeout elapses first; the spawned
+// goroutine remains running and reports into wg after this function returns
+// but its result is discarded (sync.WaitGroup has no cancelable Wait).
+func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
 	// Cancel the server's BaseContext first so active streaming connections
@@ -1069,6 +1099,13 @@ func (s *Server) Shutdown() error {
 	case <-hooksDone:
 	case <-time.After(shutdownHooksTimeout):
 		log.Warn("[shutdown] shutdown hooks did not complete within deadline, proceeding anyway", "timeout", shutdownHooksTimeout)
+	}
+
+	// Join the fork-pressure logger, zombie watcher, and zombie reaper
+	// goroutines (signaled above via connCtxCancel) so Shutdown doesn't return
+	// while they're still mid-tick (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
+	if !waitGroupWithTimeout(&s.backgroundTasksWG, backgroundTasksJoinTimeout) {
+		log.Warn("[shutdown] background tasks (fork-pressure logger/zombie watcher/zombie reaper) did not exit within timeout", "timeout", backgroundTasksJoinTimeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
