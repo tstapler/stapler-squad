@@ -9,15 +9,11 @@ import (
 )
 
 // sigkillEscalations counts confirmed SIGKILL escalations from
-// CommandContextPG's cmd.Cancel path — i.e. cases where the process group
-// did not honor SIGTERM within sigkillGrace and had to be force-killed.
-// "Confirmed" excludes ESRCH (the group already exited on its own); see the
-// call site in safeexec_pg.go.
+// CommandContextPG's cmd.Cancel path (excludes ESRCH, where the group
+// already exited on its own — see safeexec_pg.go).
 //
-// Built against telemetry.GetMeter(), which is safe to call before
-// telemetry.Initialize (returns a no-op meter that later starts exporting
-// once a real MeterProvider is installed) — see session/unfinished/metrics.go
-// for the established pattern this mirrors.
+// telemetry.GetMeter() is safe to call before telemetry.Initialize (returns
+// a no-op meter until a real MeterProvider is installed).
 var sigkillEscalations = mustInt64Counter(telemetry.GetMeter(), "safeexec.sigkill_escalations",
 	metric.WithDescription("Confirmed SIGKILL escalations after a process group ignored SIGTERM within CommandContextPG's grace period"))
 
