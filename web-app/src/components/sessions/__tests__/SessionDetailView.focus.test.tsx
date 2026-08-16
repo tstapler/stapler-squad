@@ -69,7 +69,7 @@ function makeSession() {
     id: "s1",
     title: "Session One",
     status: SessionStatus.PAUSED,
-    instanceType: InstanceType.LOCAL,
+    instanceType: InstanceType.MANAGED,
     path: "/workspace/s1",
     workingDir: "/workspace/s1",
     branch: "main",
