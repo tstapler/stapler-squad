@@ -3,13 +3,18 @@
  *
  * Deliberately does NOT mock useFocusTrap (unlike ReviewChangesModal.test.tsx)
  * so the real trap-and-restore behavior runs end to end. Also covers the case
- * that motivated capturing document.activeElement at click-time rather than a
- * single shared ref: this modal has two independent openers ("View Changes"
- * and "View Diff" in BacklogItemDetail.tsx), and each must restore focus to
- * its own trigger, not the other's.
+ * that motivated capturing the trigger from the click event's
+ * `currentTarget` rather than a single shared ref keyed off
+ * `document.activeElement`: this modal has two independent openers ("View
+ * Changes" and "View Diff" in BacklogItemDetail.tsx), and each must restore
+ * focus to its own trigger, not the other's. Capturing from `currentTarget`
+ * (mirroring BacklogItemDetail.tsx's real onClick handlers) also works on
+ * Safari, which doesn't focus `<button>` elements on click — unlike a
+ * `document.activeElement` read, which would silently fail there.
  */
 
 import React, { useRef } from "react";
+import type { MouseEvent } from "react";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { ReviewChangesModal } from "../ReviewChangesModal";
 
@@ -24,30 +29,19 @@ jest.mock("@connectrpc/connect-web", () => ({
 
 function Harness() {
   const [open, setOpen] = React.useState(false);
-  const viewChangesRef = useRef<HTMLButtonElement | null>(null);
-  const viewDiffRef = useRef<HTMLButtonElement | null>(null);
   const activeTriggerRef = useRef<HTMLElement | null>(null);
+
+  const handleOpen = (event: MouseEvent<HTMLButtonElement>) => {
+    activeTriggerRef.current = event.currentTarget;
+    setOpen(true);
+  };
 
   return (
     <>
-      <button
-        ref={viewChangesRef}
-        data-testid="view-changes"
-        onClick={() => {
-          activeTriggerRef.current = viewChangesRef.current;
-          setOpen(true);
-        }}
-      >
+      <button data-testid="view-changes" onClick={handleOpen}>
         View Changes
       </button>
-      <button
-        ref={viewDiffRef}
-        data-testid="view-diff"
-        onClick={() => {
-          activeTriggerRef.current = viewDiffRef.current;
-          setOpen(true);
-        }}
-      >
+      <button data-testid="view-diff" onClick={handleOpen}>
         View Diff
       </button>
       {open && (

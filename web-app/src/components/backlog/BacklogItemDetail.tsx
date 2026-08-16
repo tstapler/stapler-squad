@@ -2,6 +2,7 @@
 // +feature: backlog:item-detail
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import type { MouseEvent } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -1496,8 +1497,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               workSession={latestWorkSession}
               actionLoading={actionLoading}
               defaultExpanded={reviewingExpanded}
-              onViewChanges={() => {
-                changesModalTriggerRef.current = document.activeElement as HTMLElement | null;
+              onViewChanges={(event: MouseEvent<HTMLButtonElement>) => {
+                changesModalTriggerRef.current = event.currentTarget;
                 setShowChangesModal(true);
               }}
               onGateApprove={handleGateApprove}
@@ -1543,12 +1544,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             activeSessionCount={activeWorkSessionCount}
             worktreePath={latestWorkSession?.worktreePath}
             defaultExpanded={versionControlExpanded}
-            onViewDiff={() => {
-              changesModalTriggerRef.current = document.activeElement as HTMLElement | null;
+            onViewDiff={(event: MouseEvent<HTMLButtonElement>) => {
+              changesModalTriggerRef.current = event.currentTarget;
               setShowChangesModal(true);
             }}
-            onBrowseFiles={() => {
-              fileBrowserTriggerRef.current = document.activeElement as HTMLElement | null;
+            onBrowseFiles={(event: MouseEvent<HTMLButtonElement>) => {
+              fileBrowserTriggerRef.current = event.currentTarget;
               setShowFileBrowser(true);
             }}
           />
