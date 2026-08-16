@@ -169,9 +169,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
   // Review changes modal
   const [showChangesModal, setShowChangesModal] = useState(false);
+  const changesModalTriggerRef = useRef<HTMLElement | null>(null);
 
   // File browser modal
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const fileBrowserTriggerRef = useRef<HTMLElement | null>(null);
 
   // Manual review form
   const [showManualReview, setShowManualReview] = useState(false);
@@ -1413,6 +1415,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             sessionId={latestWorkSession?.sessionId}
             sessionTitle={item.title}
             onClose={() => setShowChangesModal(false)}
+            triggerRef={changesModalTriggerRef}
           />
         )}
 
@@ -1421,6 +1424,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             sessionId={latestWorkSession.sessionId}
             sessionTitle={item.title}
             onClose={() => setShowFileBrowser(false)}
+            triggerRef={fileBrowserTriggerRef}
           />
         )}
 
@@ -1492,7 +1496,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               workSession={latestWorkSession}
               actionLoading={actionLoading}
               defaultExpanded={reviewingExpanded}
-              onViewChanges={() => setShowChangesModal(true)}
+              onViewChanges={() => {
+                changesModalTriggerRef.current = document.activeElement as HTMLElement | null;
+                setShowChangesModal(true);
+              }}
               onGateApprove={handleGateApprove}
               onGateReopen={handleGateReopen}
               onGateOverride={handleGateOverride}
@@ -1536,8 +1543,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             activeSessionCount={activeWorkSessionCount}
             worktreePath={latestWorkSession?.worktreePath}
             defaultExpanded={versionControlExpanded}
-            onViewDiff={() => setShowChangesModal(true)}
-            onBrowseFiles={() => setShowFileBrowser(true)}
+            onViewDiff={() => {
+              changesModalTriggerRef.current = document.activeElement as HTMLElement | null;
+              setShowChangesModal(true);
+            }}
+            onBrowseFiles={() => {
+              fileBrowserTriggerRef.current = document.activeElement as HTMLElement | null;
+              setShowFileBrowser(true);
+            }}
           />
 
           <AutonomousHealthStrip item={item} />
