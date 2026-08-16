@@ -656,15 +656,47 @@ func (c *packHandleCache) get(pack plumbing.Hash, open func() (billy.File, error
 // Must be called exactly once, when the owning WorktreeStorer is evicted
 // (see storer.go's WorktreeStorer.Close) — otherwise every cached handle
 // leaks a file descriptor for the life of the process.
+//
+// c.mu is held only long enough to swap out the handles map, NOT for the
+// rest of this method — getFromPackfile holds a *cachedPackHandle's own mu
+// for the duration of p.GetByOffset (potentially a slow read), and an
+// earlier version of this method held c.mu across the whole close loop,
+// including while blocked waiting for each handle's mu. That serialized
+// every other concurrent packHandleCache.get() call on this worktree (any
+// pack, not just the one being closed) behind a single slow in-flight read,
+// which is consistent with the reported hang: a goroutine parked in
+// sync.(*Once).doSlow at storer.go's closeOnce.Do, whose body calls
+// closeAll first. Once the map is swapped out under c.mu, no new get() call
+// can observe or race these handles, so closing them can safely happen
+// without c.mu held at all.
+//
+// A handle whose mu is still held by an in-flight read at this point uses
+// TryLock instead of blocking inline, so one slow reader can't stall the
+// rest of the handles in this same closeAll call either — its close is
+// deferred to a background goroutine that finishes once the read releases
+// the lock. This mirrors stopPackWatch's "never block eviction on a
+// still-in-use resource" principle (mmapwatch.go), but here the handle is
+// always eventually closed (no fd leak) since nothing but this closeAll
+// call ever holds that lock for long.
 func (c *packHandleCache) closeAll() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, h := range c.handles {
-		h.mu.Lock()
+	handles := c.handles
+	c.handles = nil
+	c.mu.Unlock()
+
+	for pack, h := range handles {
+		if !h.mu.TryLock() {
+			log.Warn("gogitstore: pack handle still in use at worktree close, closing it in the background", "pack", pack.String())
+			go func(h *cachedPackHandle) {
+				h.mu.Lock()
+				_ = h.f.Close()
+				h.mu.Unlock()
+			}(h)
+			continue
+		}
 		_ = h.f.Close()
 		h.mu.Unlock()
 	}
-	c.handles = nil
 }
 
 // cachedPackHandle wraps one long-lived billy.File open on a pack, plus a

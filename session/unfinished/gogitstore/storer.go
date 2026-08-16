@@ -2,12 +2,23 @@ package gogitstore
 
 import (
 	"sync"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/tstapler/stapler-squad/log"
 )
+
+// closeTimeout bounds how long Close waits for closeOnce's body
+// (packHandles.closeAll + shared.release) before returning anyway. Defense
+// in depth on top of closeAll's own TryLock-and-background-close handling
+// (store.go) — if closeAll or release ever blocks for some other reason,
+// this keeps a caller (and the whole process, in the soak test's case) from
+// hanging on a single WorktreeStorer.Close call. The Once's body still runs
+// to completion in the background; only this call's wait is bounded.
+const closeTimeout = 30 * time.Second
 
 // WorktreeStorer implements storage.Storer for exactly one worktree, while
 // delegating all object storage to a SharedObjectStore that may be shared
@@ -67,11 +78,27 @@ type WorktreeStorer struct {
 // unconditionally — pack handle close errors are logged, not propagated,
 // since a failed close on an already-evicted worktree has no actionable
 // recovery for the caller.
+//
+// Waits up to closeTimeout for closeOnce's body to finish before returning;
+// see closeTimeout's doc comment. The Once semantics (exactly-once
+// execution, safe to call Close again) are unaffected by the timeout —
+// closeOnce.Do still runs in the background and a concurrent or later
+// Close call still correctly waits on/observes the same single execution.
 func (w *WorktreeStorer) Close() error {
-	w.closeOnce.Do(func() {
-		w.packHandles.closeAll()
-		w.shared.release()
-	})
+	done := make(chan struct{})
+	go func() {
+		w.closeOnce.Do(func() {
+			w.packHandles.closeAll()
+			w.shared.release()
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(closeTimeout):
+		log.Warn("gogitstore: WorktreeStorer.Close timed out waiting for packHandles.closeAll/shared.release; continuing in background", "timeout", closeTimeout)
+	}
 	return nil
 }
 

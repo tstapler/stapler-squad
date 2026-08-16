@@ -673,6 +673,106 @@ func TestPackHandleCache_DifferentWorktrees_DoNotShareOneHandle(t *testing.T) {
 	}
 }
 
+// TestPackHandleCache_CloseAll_WithBusyHandle_DoesNotBlockAndClosesInBackground
+// is the regression test for the fix in closeAll's doc comment: a pack
+// handle still locked by an in-flight read (simulating a slow
+// getFromPackfile call) must not make WorktreeStorer.Close block on it — the
+// TryLock-and-defer-to-background-goroutine path must fire instead — and the
+// handle must still eventually get closed (no fd leak, AC 3), and Close must
+// remain safe to call a second time afterward (AC 4's no-op-after-first-call
+// contract, unaffected by the busy-handle path).
+//
+// This is the "true chokepoint" scenario from the recovered goroutine dump:
+// one goroutine parked in sync.(*Once).doSlow at storer.go's closeOnce.Do,
+// whose body's first call is packHandles.closeAll — see closeAll's own doc
+// comment in store.go for the full lock-convoy analysis this test guards
+// against regressing.
+func TestPackHandleCache_CloseAll_WithBusyHandle_DoesNotBlockAndClosesInBackground(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	dir := t.TempDir()
+	mainRepo := filepath.Join(dir, "main")
+	buildPackedFixture(t, mainRepo, 80)
+
+	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(mainRepo)
+	if err != nil {
+		t.Fatalf("resolveGitFilesystems: %v", err)
+	}
+	counting := &countingFs{Filesystem: commonFs}
+	store := newSharedObjectStore(commonDirAbs, counting, cache.NewObjectLRU(cache.FileSize(1)), 0, false)
+
+	hashes := firstPackedHashes(t, store, 1)
+	if len(hashes) == 0 {
+		t.Fatal("fixture produced no packed objects to read")
+	}
+	h := hashes[0]
+
+	ws := &WorktreeStorer{shared: store}
+	if _, err := ws.EncodedObject(plumbing.AnyObject, h); err != nil {
+		t.Fatalf("EncodedObject: %v", err)
+	}
+
+	// Grab the cached handle directly and hold its mu, simulating a slow
+	// in-flight read that is still running when Close is called.
+	ws.packHandles.mu.Lock()
+	var busy *cachedPackHandle
+	for _, ch := range ws.packHandles.handles {
+		busy = ch
+	}
+	ws.packHandles.mu.Unlock()
+	if busy == nil {
+		t.Fatal("expected exactly one cached pack handle after EncodedObject")
+	}
+	busy.mu.Lock()
+
+	release := make(chan struct{})
+	unlocked := make(chan struct{})
+	go func() {
+		<-release
+		busy.mu.Unlock()
+		close(unlocked)
+	}()
+
+	closeDone := make(chan struct{})
+	go func() {
+		if err := ws.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WorktreeStorer.Close blocked on a busy pack handle instead of deferring its close to a background goroutine")
+	}
+
+	// The busy handle must not have been closed synchronously by Close.
+	if counting.allClosedWithSuffix(".pack") {
+		t.Error("busy handle was closed before its lock was released — closeAll should have deferred to a background goroutine")
+	}
+
+	close(release)
+	<-unlocked
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !counting.allClosedWithSuffix(".pack") {
+		if time.Now().After(deadline) {
+			t.Fatal("busy pack handle was never closed after its lock was released — file descriptor leak")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	refCountAfterFirstClose := store.RefCount()
+	if err := ws.Close(); err != nil {
+		t.Fatalf("second Close call: %v", err)
+	}
+	if got := store.RefCount(); got != refCountAfterFirstClose {
+		t.Errorf("second Close call changed refCount from %d to %d — closeOnce should make Close a no-op after the first call", refCountAfterFirstClose, got)
+	}
+}
+
 // firstPackedHashes returns up to n object hashes known to live in store's
 // packfile(s) (via its already-parsed idxfile.Index), for tests that need
 // guaranteed-packed hashes without depending on which objects git's own gc
