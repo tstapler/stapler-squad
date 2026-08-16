@@ -1,0 +1,17 @@
+{
+  "id": "UpdateSlackConfig",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UpdateSlackConfig",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/slack_config_service.go",
+  "tested": true,
+  "testIds": [
+    "TestUpdateSlackConfig_LeavesStoredCiphertextUnchanged_When_WebhookURLFieldEmpty",
+    "TestUpdateSlackConfig_ReEncryptsAndPersists_When_NewWebhookURLProvided",
+    "TestUpdateSlackConfig_RejectsInvalidWebhookURLFormat_When_DoesNotMatchSlackHooksPrefix",
+    "TestUpdateSlackConfig_ClearsStoredCiphertext_When_ClearWebhookUrlTrue"
+  ],
+  "lastModified": "2026-08-15T22:35:55.19401311-07:00"
+}
