@@ -101,7 +101,7 @@ func TestNewEntRepository_should_NotReDisableLegitimatelyEnabledTrigger_When_Reo
 	created, err := wfRepo.Create(context.Background(), WorkflowCreateInput{
 		Slug: "legit-enabled-webhook", Name: "Legit Enabled", Command: "cmd", TargetDirectory: "/tmp/test",
 		TriggerType: "webhook", WebhookSlug: "legit-enabled-webhook",
-		CronEnabled: false, // vestigial for a webhook trigger — the real gate is Enabled
+		CronEnabled: false,         // vestigial for a webhook trigger — the real gate is Enabled
 		Enabled:     boolPtr(true), // the operator's actual, intended, permanent state
 	})
 	require.NoError(t, err)
