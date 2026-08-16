@@ -113,6 +113,12 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
 
+	// Must be read BEFORE client.Schema.Create() below, which is what adds the
+	// enabled column this signal depends on being absent — see
+	// workflow_enabled_field_migration.go's doc comment for why this exact
+	// signal (not a value-based heuristic) is required.
+	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
+
 	// Create Ent client with the existing database connection
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := ent.NewClient(ent.Driver(drv))
@@ -153,6 +159,14 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
+	}
+
+	// One-time-per-database correction for rows that predate the enabled field
+	// — see workflow_enabled_field_migration.go's doc comment for why this
+	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
+	// unconditionally on every startup like its sibling backfills above.
+	if !workflowEnabledColumnAlreadyExisted {
+		runWorkflowEnabledFieldBackfill(context.Background(), repo)
 	}
 
 	// Populate github_pr_url for pre-existing sessions that have a known PR

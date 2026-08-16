@@ -27,8 +27,10 @@ func (r *EntWorkflowRepository) Create(ctx context.Context, w WorkflowCreateInpu
 		SetSlug(w.Slug).
 		SetName(w.Name).
 		SetCommand(w.Command).
-		SetCronEnabled(w.CronEnabled).
-		SetEnabled(w.Enabled)
+		SetCronEnabled(w.CronEnabled)
+	if w.Enabled != nil {
+		c.SetEnabled(*w.Enabled)
+	}
 
 	if w.Description != "" {
 		c.SetDescription(w.Description)
@@ -102,11 +104,24 @@ func (r *EntWorkflowRepository) Update(ctx context.Context, id uuid.UUID, w Work
 
 // UpdateConditional applies a partial update to an existing workflow by UUID, only if
 // the row's current updated_at exactly matches expectedUpdatedAt — an optimistic-
-// concurrency CAS mirroring EntRepository.TransitionBacklogItemStatus's precondition
-// pattern (ent_repository_backlog.go). A zero expectedUpdatedAt applies no precondition
-// (always writes), matching Update's unconditional behavior.
+// concurrency CAS. A zero expectedUpdatedAt applies no precondition (always writes),
+// matching Update's unconditional behavior.
+//
+// Built on WorkflowUpdateOne (UpdateOneID), not the bulk Update().Where() builder that
+// an earlier version of this method used: UpdateOneID's Save() returns the mutated
+// entity directly, computed inside the same UPDATE statement/transaction ent's
+// generated sqlgraph.UpdateNode issues — one atomic round trip, matching this method's
+// pre-CAS performance and read-your-own-write consistency exactly when
+// expectedUpdatedAt is zero (the common case: every existing single-writer caller, plus
+// the hot per-fire LastFiredAt bump in Scheduler). The bulk builder's Update().Where()
+// only returns an affected-row count, forcing a second, separate, unguarded Get to
+// reload the entity — which both doubles the round trips on every call AND lets a
+// concurrent writer's update land in the gap between the CAS write and that reload,
+// so the caller could receive someone else's state as if it were their own write's
+// result. UpdateOneID.Where() supports the same predicate this needs
+// (workflow.UpdatedAtEQ), so there's no capability lost by using it instead.
 func (r *EntWorkflowRepository) UpdateConditional(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput, expectedUpdatedAt time.Time) (*ent.Workflow, error) {
-	u := r.client.Workflow.Update().Where(workflow.ID(id))
+	u := r.client.Workflow.UpdateOneID(id)
 	if !expectedUpdatedAt.IsZero() {
 		u = u.Where(workflow.UpdatedAtEQ(expectedUpdatedAt))
 	}
@@ -187,29 +202,25 @@ func (r *EntWorkflowRepository) UpdateConditional(ctx context.Context, id uuid.U
 		u.SetLastFiredAt(*w.LastFiredAt)
 	}
 
-	affected, err := u.Save(ctx)
+	wf, err := u.Save(ctx)
 	if err != nil {
+		if ent.IsNotFound(err) {
+			// Either the row doesn't exist at all, or (when a precondition was
+			// supplied) it exists but updated_at no longer matches — both collapse
+			// to the identical "0 rows matched WHERE id=... AND updated_at=..."
+			// result at the SQL level, so disambiguate with one targeted existence
+			// check, paid only on this (rare) failure path, not on every call.
+			if !expectedUpdatedAt.IsZero() {
+				if _, getErr := r.client.Workflow.Get(ctx, id); getErr == nil {
+					return nil, fmt.Errorf("%w: workflow %s updated_at mismatch", ErrPreconditionFailed, id)
+				}
+			}
+			return nil, fmt.Errorf("%w: workflow %s", ErrNotFound, id)
+		}
 		if ent.IsConstraintError(err) {
 			return nil, fmt.Errorf("%w: slug already exists", ErrConflict)
 		}
 		return nil, fmt.Errorf("update workflow %s: %w", id, err)
-	}
-
-	// Where(...).Save() returns an affected-row count, not the entity — reload it.
-	// This also resolves whether affected==0 means the row doesn't exist at all.
-	wf, err := r.client.Workflow.Get(ctx, id)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: workflow %s", ErrNotFound, id)
-		}
-		return nil, fmt.Errorf("get workflow %s: %w", id, err)
-	}
-	if affected == 0 && !expectedUpdatedAt.IsZero() {
-		// The row exists (Get above succeeded) but the precondition WHERE clause
-		// excluded it — updated_at no longer matches what the caller expected, i.e.
-		// a concurrent writer won the race between the caller reading
-		// expectedUpdatedAt and this write landing.
-		return nil, fmt.Errorf("%w: workflow %s updated_at mismatch", ErrPreconditionFailed, id)
 	}
 	return wf, nil
 }

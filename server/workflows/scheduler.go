@@ -162,8 +162,11 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 	// One-time backfill of trigger_type on rows that predate the field (Task 1.1.1d).
 	backfillTriggerTypes(ctx, s.repo)
-	// One-time backfill of the enabled field on rows that predate it (verify follow-ups AC0-3).
-	backfillEnabledField(ctx, s.repo)
+	// The analogous enabled-field backfill runs once, in session.NewEntRepository,
+	// gated on whether the enabled column itself was just added — see
+	// session/workflow_enabled_field_migration.go's doc comment for why that
+	// backfill can't safely run unconditionally on every Start() the way this
+	// one does (its correction condition doesn't naturally self-exhaust).
 
 	wfs, err := s.repo.ListEnabled(ctx)
 	if err != nil {

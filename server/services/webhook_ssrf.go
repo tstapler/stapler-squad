@@ -54,6 +54,11 @@ func resolveAndValidateCallbackHost(ctx context.Context, rawURL string) (net.IP,
 			return nil, err
 		}
 	}
+	// Only the first validated address is ever dialed (CallbackDispatcher pins to
+	// exactly this IP) — a multi-A/AAAA-record host whose first address is transiently
+	// unreachable hard-fails this attempt instead of falling back to the next address
+	// the way an unpinned dialer would. Accepted tradeoff for closing the DNS-rebinding
+	// window; revisit if multi-address callback targets become common.
 	return addrs[0].IP, nil
 }
 
@@ -79,13 +84,28 @@ func ValidateCallbackURL(ctx context.Context, rawURL string) error {
 	return err
 }
 
-// checkDisallowedCallbackIP rejects loopback, link-local, private-range, and the
-// cloud-metadata address.
+// cgnatBlock is RFC 6598 shared address space (100.64.0.0/10) — used by several
+// cloud providers (AWS Lambda ENIs, various CNI/CGNAT setups) for internal-only
+// addressing. Not covered by net.IP.IsPrivate(), which only implements RFC 1918 +
+// IPv6 ULA, so it's checked explicitly (sdd:6-verify security review).
+var cgnatBlock = func() *net.IPNet {
+	_, n, err := net.ParseCIDR("100.64.0.0/10")
+	if err != nil {
+		panic(err) // unreachable: the literal is a valid CIDR
+	}
+	return n
+}()
+
+// checkDisallowedCallbackIP rejects loopback, unspecified, link-local, private-range,
+// CGNAT, and the cloud-metadata address.
 func checkDisallowedCallbackIP(ip net.IP) error {
 	if ip.Equal(net.ParseIP(cloudMetadataIP)) {
 		return errors.New("callback host resolves to the cloud metadata address")
 	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() {
+	// IsUnspecified (0.0.0.0 / ::): on Linux, connect() to 0.0.0.0 is treated by the
+	// kernel as connecting to localhost — a documented SSRF technique for bypassing
+	// exactly this kind of allow/deny-list filter (sdd:6-verify security review).
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || cgnatBlock.Contains(ip) {
 		return errors.New("callback host resolves to a disallowed address range")
 	}
 	return nil

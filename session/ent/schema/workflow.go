@@ -75,7 +75,6 @@ func (Workflow) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("slug"),
 		index.Fields("cron_enabled"),
-		index.Fields("enabled"),
 		index.Fields("created_at"),
 		index.Fields("webhook_slug"),
 		index.Fields("trigger_type"),

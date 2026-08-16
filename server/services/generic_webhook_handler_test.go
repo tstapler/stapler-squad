@@ -30,7 +30,7 @@ func newGenericWebhookWorkflow(t *testing.T, infra *webhookTestInfra, slug, secr
 		EventFilter:            eventFilter,
 		LabelFilter:            labelFilter,
 		PromptTemplate:         promptTemplate,
-		Enabled:                true,
+		Enabled:                boolPtr(true),
 	})
 	require.NoError(t, err)
 	return wf
@@ -182,7 +182,7 @@ func TestGenericWebhookHandler_should_Return404_When_EnabledIsFalse_EvenIfCronEn
 		EventFilter:            "issue_created",
 		PromptTemplate:         "Triage {{.issue.key}}",
 		CronEnabled:            true,
-		Enabled:                false,
+		Enabled:                boolPtr(false),
 	})
 	require.NoError(t, err)
 	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)

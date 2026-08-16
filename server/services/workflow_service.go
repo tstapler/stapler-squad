@@ -254,7 +254,7 @@ func (s *WorkflowService) CreateWorkflow(
 		AgentType:       req.Msg.AgentType,
 		CronExpression:  req.Msg.CronExpression,
 		CronEnabled:     req.Msg.CronEnabled,
-		Enabled:         req.Msg.Enabled == nil || *req.Msg.Enabled,
+		Enabled:         req.Msg.Enabled, // nil (unset) now correctly falls through to the schema default (true)
 		TriggerType:     triggerType,
 		GitHubRepo:      req.Msg.GithubRepo,
 		GitHubBranch:    req.Msg.GithubBranch,

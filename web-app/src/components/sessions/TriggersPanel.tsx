@@ -3,6 +3,7 @@
 // +feature: triggers-panel
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { ConnectError, Code } from "@connectrpc/connect";
 import { useWorkflows, WorkflowFormData } from "@/lib/hooks/useWorkflows";
 import { WorkflowProto } from "@/gen/session/v1/session_pb";
 import { protoTimestampToDate } from "@/lib/utils/timestamp";
@@ -190,14 +191,21 @@ export function TriggersPanel() {
       // comment). Keep the two fields in lockstep for cron-type rows so this single
       // toggle still controls whether a cron trigger actually fires; for
       // webhook/github_push rows only enabled matters, so cronEnabled is left alone.
+      // expectedUpdatedAt (AC9's CAS precondition) is included so two tabs/users
+      // clicking the same toggle in quick succession can't both silently win — the
+      // second one gets a CodeAborted conflict instead.
       await updateWorkflow(w.id, {
         enabled: nextEnabled,
         ...(w.triggerType === "cron" && { cronEnabled: nextEnabled }),
+        expectedUpdatedAt: w.updatedAt,
       });
       setLiveMessage(`${w.name || w.slug} ${w.enabled ? "disabled" : "enabled"}.`);
     } catch (e) {
       console.error("Failed to toggle trigger:", e);
-      const message = `Failed to ${w.enabled ? "disable" : "enable"} ${w.name || w.slug}.`;
+      const isConflict = e instanceof ConnectError && e.code === Code.Aborted;
+      const message = isConflict
+        ? `${w.name || w.slug} was changed elsewhere — refresh and try again.`
+        : `Failed to ${w.enabled ? "disable" : "enable"} ${w.name || w.slug}.`;
       setLiveMessage(message);
       // Visible (not just screen-reader-only) error for sighted users — transient,
       // clears itself after a few seconds or on the next toggle attempt.

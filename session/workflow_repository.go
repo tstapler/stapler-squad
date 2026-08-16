@@ -36,18 +36,23 @@ type WorkflowRepository interface {
 
 // WorkflowCreateInput holds the fields for creating a new workflow.
 type WorkflowCreateInput struct {
-	Slug              string
-	Name              string
-	Description       string
-	Command           string
-	TargetDirectory   string
-	InputTemplate     string
-	SessionType       string
-	Model             string
-	AgentType         string
-	CronExpression    string
-	CronEnabled       bool
-	Enabled           bool // generic per-trigger enable gate; callers should default this to true
+	Slug            string
+	Name            string
+	Description     string
+	Command         string
+	TargetDirectory string
+	InputTemplate   string
+	SessionType     string
+	Model           string
+	AgentType       string
+	CronExpression  string
+	CronEnabled     bool
+	// Enabled is the generic per-trigger enable gate. Pointer, not a bare bool: the
+	// schema default (true) only applies when the column is never explicitly set, so
+	// a bare bool would silently create a disabled workflow for any caller that
+	// forgets to set it (the zero value is false) — nil here means "use the schema
+	// default," matching every other optional-with-a-meaningful-default field's shape.
+	Enabled           *bool
 	KeepSessions      *int // nil = use default (0, disabled); 0 = keep all
 	ArchiveAfterHours *int // nil = use default (0, disabled); 0 = disabled
 

@@ -52,6 +52,29 @@ func TestValidateCallbackURL_RejectsCloudMetadataAddress(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestValidateCallbackURL_RejectsUnspecifiedAddress proves the fix for the SSRF gap
+// found during sdd:6-verify's security review: on Linux, connect() to 0.0.0.0 (or ::)
+// is treated by the kernel as connecting to localhost — an attacker who controls DNS
+// for the callback host's domain could return 0.0.0.0 and sail past a filter that only
+// checks loopback/link-local/private ranges.
+func TestValidateCallbackURL_RejectsUnspecifiedAddress(t *testing.T) {
+	for _, raw := range []string{"http://0.0.0.0/", "http://[::]/"} {
+		t.Run(raw, func(t *testing.T) {
+			err := ValidateCallbackURL(context.Background(), raw)
+			assert.Error(t, err, "expected the unspecified address to be rejected")
+		})
+	}
+}
+
+// TestValidateCallbackURL_RejectsCGNATRange proves the fix for the second SSRF gap
+// found during review: net.IP.IsPrivate() only covers RFC 1918 + IPv6 ULA, not RFC
+// 6598 shared address space (100.64.0.0/10), which several cloud providers use for
+// internal-only addressing.
+func TestValidateCallbackURL_RejectsCGNATRange(t *testing.T) {
+	err := ValidateCallbackURL(context.Background(), "http://100.64.0.1/")
+	assert.Error(t, err)
+}
+
 func TestValidateCallbackURL_RejectsPrivateRanges(t *testing.T) {
 	for _, raw := range []string{
 		"http://10.0.0.5/",

@@ -261,51 +261,6 @@ func TestBackfillTriggerTypes_CorrectsLegacyRowsOnly(t *testing.T) {
 	assert.Equal(t, "webhook", got2.TriggerType, "explicit mismatched trigger_type must not be silently overwritten")
 }
 
-// TestBackfillEnabledField_CorrectsLegacyDisabledRowsOnly verifies backfillEnabledField
-// (webhook-triggers verify follow-ups AC0-3): a row that predates the enabled field
-// (backfilled to the schema default true) but had cron_enabled=false under the old
-// overloaded "cron_enabled is also the generic enable flag" semantics is corrected to
-// enabled=false; a row with cron_enabled=true is left at enabled=true untouched.
-func TestBackfillEnabledField_CorrectsLegacyDisabledRowsOnly(t *testing.T) {
-	_, wfRepo, _ := newTestScheduler(t, &fakeSessionService{})
-	ctx := context.Background()
-
-	// Simulates a pre-migration row: cron_enabled=false meant "disabled" under the old
-	// semantics, but ent's auto-migration backfilled enabled to its schema default
-	// (true) uniformly — WorkflowCreateInput.Enabled defaults to Go's zero value
-	// (false) here since it's left unset, so set it to true explicitly to simulate
-	// what auto-migration would have produced.
-	legacyDisabled, err := wfRepo.Create(ctx, session.WorkflowCreateInput{
-		Slug:            "legacy-disabled",
-		Name:            "Legacy Disabled",
-		Command:         "cmd",
-		TargetDirectory: "/tmp/test",
-		CronEnabled:     false,
-		Enabled:         true,
-	})
-	require.NoError(t, err)
-
-	legacyEnabled, err := wfRepo.Create(ctx, session.WorkflowCreateInput{
-		Slug:            "legacy-enabled",
-		Name:            "Legacy Enabled",
-		Command:         "cmd",
-		TargetDirectory: "/tmp/test",
-		CronEnabled:     true,
-		Enabled:         true,
-	})
-	require.NoError(t, err)
-
-	backfillEnabledField(ctx, wfRepo)
-
-	got, err := wfRepo.GetByID(ctx, legacyDisabled.ID)
-	require.NoError(t, err)
-	assert.False(t, got.Enabled, "a legacy row with cron_enabled=false must be corrected to enabled=false")
-
-	got2, err := wfRepo.GetByID(ctx, legacyEnabled.ID)
-	require.NoError(t, err)
-	assert.True(t, got2.Enabled, "a row with cron_enabled=true must be left at enabled=true")
-}
-
 // TestScheduler_Start_RegistersValidCronTrigger is the control case proving the guard
 // above doesn't just reject everything: a correctly self-consistent cron trigger is
 // still registered.

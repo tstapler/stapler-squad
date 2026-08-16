@@ -220,6 +220,14 @@ func (d *CallbackDispatcher) deliver(eventType, url string, payload any) {
 // fresh Transport per attempt (not one shared on d) means a pinned IP for one host can
 // never leak onto a different host's connection via pooled keep-alives.
 //
+// The pinned Transport clones d.client's real Transport (falling back to
+// http.DefaultTransport) rather than a bare &http.Transport{}, so proxy settings
+// (Proxy: http.ProxyFromEnvironment), TLS handshake timeout, and any other tuning
+// survive the pin instead of being silently dropped. DisableKeepAlives is forced on:
+// this Transport is discarded after exactly one request, so a pooled idle connection
+// waiting to be reused would just leak a goroutine and an open socket for the rest of
+// the process's life (there is no later request that could ever reuse it).
+//
 // The pin only applies when d.client is using the real network Transport (nil, or an
 // explicit *http.Transport) — a custom http.RoundTripper (as this package's own tests
 // inject to intercept requests before any DNS/dial happens, e.g.
@@ -234,20 +242,7 @@ func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byt
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := d.client
-	if _, usesRealTransport := d.client.Transport.(*http.Transport); usesRealTransport || d.client.Transport == nil {
-		dialer := &net.Dialer{}
-		pinnedTransport := &http.Transport{
-			DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
-				_, port, splitErr := net.SplitHostPort(addr)
-				if splitErr != nil {
-					return nil, splitErr
-				}
-				return dialer.DialContext(dialCtx, network, net.JoinHostPort(validIP.String(), port))
-			},
-		}
-		client = &http.Client{Transport: pinnedTransport, CheckRedirect: d.client.CheckRedirect}
-	}
+	client := pinnedClientFor(d.client, validIP)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -257,4 +252,30 @@ func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byt
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// pinnedClientFor returns a client that dials validIP directly for every connection,
+// or base unmodified if base.Transport isn't a real network Transport (see attempt's
+// doc comment for why — a custom RoundTripper has no dial step to pin). The returned
+// Transport, when built, clones base.Transport (falling back to http.DefaultTransport)
+// so proxy/TLS settings survive, and forces DisableKeepAlives since it's discarded
+// after exactly one request — pooling would only leak the idle connection.
+func pinnedClientFor(base *http.Client, validIP net.IP) *http.Client {
+	realBase, usesRealTransport := base.Transport.(*http.Transport)
+	if !usesRealTransport && base.Transport != nil {
+		return base
+	}
+	if realBase == nil {
+		realBase = http.DefaultTransport.(*http.Transport)
+	}
+	pinnedTransport := realBase.Clone()
+	pinnedTransport.DisableKeepAlives = true
+	pinnedTransport.DialContext = func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		return (&net.Dialer{}).DialContext(dialCtx, network, net.JoinHostPort(validIP.String(), port))
+	}
+	return &http.Client{Transport: pinnedTransport, CheckRedirect: base.CheckRedirect}
 }

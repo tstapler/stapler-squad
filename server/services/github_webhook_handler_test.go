@@ -46,7 +46,7 @@ func newGitHubPushWorkflow(t *testing.T, infra *webhookTestInfra, slug, secret, 
 		GitHubBranch:           branch,
 		WebhookSecretEncrypted: infra.encryptSecret(t, secret),
 		PromptTemplate:         promptTemplate,
-		Enabled:                true,
+		Enabled:                boolPtr(true),
 	})
 	require.NoError(t, err)
 	return wf
@@ -132,7 +132,7 @@ func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_EnabledIsFal
 		WebhookSecretEncrypted: infra.encryptSecret(t, "s3cr3t"),
 		PromptTemplate:         "Review {{.head_commit.message}}",
 		CronEnabled:            true,
-		Enabled:                false,
+		Enabled:                boolPtr(false),
 	})
 	require.NoError(t, err)
 	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)

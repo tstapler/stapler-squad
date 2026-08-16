@@ -277,9 +277,11 @@ func TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost(t *testing.T)
 
 // TestCallbackDispatcher_Attempt_DoesNotLeakPinnedIPAcrossHosts proves the per-attempt
 // Transport isn't shared/pooled across different targets (AC8's shared-transport-
-// pooling risk called out in research/pitfalls.md): two attempts to two different
-// httptest servers, each pinned to its own server's IP, must each reach their own
-// server — not cross-contaminate via a reused connection/Transport.
+// pooling risk called out in research/pitfalls.md): two attempts, pinned to two
+// genuinely DIFFERENT IPs (127.0.0.1 and 127.0.0.2, not just two ports on the same
+// IP — a prior version of this test used the identical IP literal for both calls,
+// which only port happened to separate and would not have caught a leaked/cached
+// validIP), must each reach their own server.
 func TestCallbackDispatcher_Attempt_DoesNotLeakPinnedIPAcrossHosts(t *testing.T) {
 	var hitsA, hitsB atomic.Int32
 	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -287,21 +289,71 @@ func TestCallbackDispatcher_Attempt_DoesNotLeakPinnedIPAcrossHosts(t *testing.T)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srvA.Close()
-	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+	lnB, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Skipf("cannot bind 127.0.0.2 in this environment: %v", err)
+	}
+	srvB := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hitsB.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
+	require.NoError(t, srvB.Listener.Close())
+	srvB.Listener = lnB
+	srvB.Start()
 	defer srvB.Close()
 
 	d := testDispatcher(20, "session_complete", srvA.URL)
 
 	okA := d.attempt(context.Background(), srvA.URL, []byte("{}"), net.ParseIP("127.0.0.1"))
-	okB := d.attempt(context.Background(), srvB.URL, []byte("{}"), net.ParseIP("127.0.0.1"))
+	okB := d.attempt(context.Background(), srvB.URL, []byte("{}"), net.ParseIP("127.0.0.2"))
 
 	assert.True(t, okA)
 	assert.True(t, okB)
 	assert.Equal(t, int32(1), hitsA.Load())
 	assert.Equal(t, int32(1), hitsB.Load())
+}
+
+// TestPinnedClientFor_should_DisableKeepAlives_When_BuildingRealTransport proves the
+// fix for the goroutine/socket leak found during sdd:6-verify's code-quality review:
+// a bare &http.Transport{} discarded after exactly one request, with keep-alives left
+// on (the zero value's default), parks its persistConn goroutine and open socket
+// waiting for a reuse that can never happen — DisableKeepAlives must be forced on.
+func TestPinnedClientFor_should_DisableKeepAlives_When_BuildingRealTransport(t *testing.T) {
+	client := pinnedClientFor(&http.Client{}, net.ParseIP("127.0.0.1"))
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok, "expected a real *http.Transport when base.Transport is nil")
+	assert.True(t, transport.DisableKeepAlives, "a Transport used for exactly one request must not pool the connection")
+}
+
+// TestPinnedClientFor_should_PreserveProxySettings_When_CloningBaseTransport proves
+// the fix for the proxy-support regression found during review: pinning must clone
+// the real base Transport (or http.DefaultTransport), not build a bare struct literal
+// that silently drops Proxy/TLS tuning a deployment might rely on for egress control.
+func TestPinnedClientFor_should_PreserveProxySettings_When_CloningBaseTransport(t *testing.T) {
+	proxyCalled := false
+	base := &http.Transport{
+		Proxy: func(*http.Request) (*url.URL, error) {
+			proxyCalled = true
+			return nil, nil
+		},
+		TLSHandshakeTimeout: 7 * time.Second,
+	}
+	client := pinnedClientFor(&http.Client{Transport: base}, net.ParseIP("127.0.0.1"))
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Equal(t, 7*time.Second, transport.TLSHandshakeTimeout, "cloned Transport must preserve tuning from the base")
+	require.NotNil(t, transport.Proxy)
+	_, _ = transport.Proxy(&http.Request{})
+	assert.True(t, proxyCalled, "cloned Transport must preserve the base's Proxy function")
+}
+
+// TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRoundTripper
+// proves the fix doesn't break test doubles that intercept before any dial happens.
+func TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRoundTripper(t *testing.T) {
+	base := &http.Client{Transport: &recordingRoundTripper{}}
+	client := pinnedClientFor(base, net.ParseIP("127.0.0.1"))
+	assert.Same(t, base, client, "a custom RoundTripper has no dial step to pin — base must be returned unmodified")
 }
 
 // TestCallbackDispatcher_Dispatch_NoopWhenFeatureFlagOff proves Task 8.2.1b's
