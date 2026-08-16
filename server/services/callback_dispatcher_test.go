@@ -335,7 +335,7 @@ func TestPinnedClientFor_should_PreserveProxySettings_When_CloningBaseTransport(
 	base := &http.Transport{
 		Proxy: func(*http.Request) (*url.URL, error) {
 			proxyCalled = true
-			return nil, nil
+			return nil, nil //nolint:nilnil // http.Transport.Proxy's documented "no proxy" return, not the anti-pattern the linter targets
 		},
 		TLSHandshakeTimeout: 7 * time.Second,
 	}
