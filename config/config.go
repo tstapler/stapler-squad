@@ -870,6 +870,28 @@ func LoadConfig() *Config {
 	return cfg
 }
 
+// saveConfigMu serializes the write-tmp-then-rename sequence in saveConfig,
+// keyed per configPath. Without it, two concurrent callers targeting the same
+// tmpPath (e.g. two goroutines independently calling
+// GetOrCreateEncryptionKey/SaveConfig) can interleave: both os.WriteFile the
+// shared tmpPath, then both os.Rename it — the first rename succeeds and
+// consumes tmpPath, so the second fails with "no such file or directory" and,
+// in tighter interleavings, a torn write leaves config.json holding malformed
+// JSON that the next LoadConfig call silently falls back to DefaultConfig()
+// over (losing whatever was there). Keyed per path (rather than one global
+// mutex) so concurrent saves to different configPaths — e.g. distinct
+// per-instance state dirs under state-isolation, see .claude/docs/state-isolation.md
+// — aren't needlessly serialized against each other.
+var saveConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex, serializes concurrent saveConfig callers sharing the same tmpPath
+
+// saveConfigLockFor returns the *sync.Mutex guarding writes to configPath,
+// creating it on first use. LoadOrStore's atomicity is what makes this safe
+// under concurrent callers racing to lock the same never-before-seen path.
+func saveConfigLockFor(configPath string) *sync.Mutex {
+	lock, _ := saveConfigMu.LoadOrStore(configPath, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
 // saveConfig saves the configuration to disk atomically via a temp-file rename.
 // Accepts an optional explicit path; when omitted the path is derived from GetConfigDir().
 func saveConfig(config *Config, paths ...string) error {
@@ -891,6 +913,10 @@ func saveConfig(config *Config, paths ...string) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
+
+	pathLock := saveConfigLockFor(configPath)
+	pathLock.Lock()
+	defer pathLock.Unlock()
 
 	// Write to a temp file in the same directory, then rename for atomicity.
 	tmpPath := configPath + ".tmp"
