@@ -288,11 +288,11 @@ describe('Flow Control Stress Tests', () => {
       expect(completed).toBeGreaterThan(0);
       const metrics = tracker.getMetrics();
       expect(metrics.watermark).toBeLessThan(50000); // Should drain well
-      // 15000ms was too tight: this loop performs ~5000 setTimeout-bound
-      // macrotask round-trips (plus ~50 extra yield timers), and under
-      // jest-worker scheduling contention that alone can exceed 15s with no
-      // logic bug involved.
-    }, 30000);
+      // 15000ms was too tight, then 30000ms too: this loop performs ~5000
+      // setTimeout-bound macrotask round-trips (plus ~50 extra yield timers),
+      // and under full-suite jest-worker scheduling contention that alone has
+      // been observed to exceed 30s with no logic bug involved.
+    }, 60000);
   });
 
   describe('Watermark Behavior', () => {
