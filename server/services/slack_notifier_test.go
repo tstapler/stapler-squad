@@ -165,6 +165,40 @@ func TestPostToSlack_Treats429IdenticallyToOtherNon2xxFailures(t *testing.T) {
 	assert.Contains(t, errMsg, "429")
 }
 
+// TestPostToSlack_IncludesResponseBodyText_OnNon2xx covers the review-flagged
+// gap: postToSlack previously discarded resp.Body entirely on a non-2xx
+// response, so a caller (TestSlackWebhook's "Send test message" button in
+// particular) only ever saw a bare status code, never Slack's own short
+// plain-text error token (e.g. "no_service", "channel_not_found").
+func TestPostToSlack_IncludesResponseBodyText_OnNon2xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("no_service"))
+	}))
+	t.Cleanup(srv.Close)
+
+	n := NewSlackNotifier()
+	err := n.postToSlack(context.Background(), srv.URL, slackWebhookPayload{Text: "hi"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "404")
+	assert.Contains(t, err.Error(), "no_service")
+}
+
+// TestPostToSlack_OmitsBodySuffix_When_ResponseBodyEmpty guards the empty-body
+// case (a non-2xx response with no body, e.g. a plain 404 from an unrelated
+// server) still produces a clean status-only message, not a trailing ": ".
+func TestPostToSlack_OmitsBodySuffix_When_ResponseBodyEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	n := NewSlackNotifier()
+	err := n.postToSlack(context.Background(), srv.URL, slackWebhookPayload{Text: "hi"})
+	require.Error(t, err)
+	assert.Equal(t, "slack webhook request failed: status 404", err.Error())
+}
+
 // --- Story 1.2.2: NotifyReviewQueueItem / NotifyApprovalPending ---
 
 func TestNotifyReviewQueueItem_TruncatesOversizedDiff(t *testing.T) {

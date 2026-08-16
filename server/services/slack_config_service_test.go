@@ -141,6 +141,7 @@ func TestTestSlackWebhook_ReturnsSlackErrorText_When_WebhookReturns404(t *testin
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("no_service"))
 	}))
 	defer srv.Close()
 
@@ -167,6 +168,9 @@ func TestTestSlackWebhook_ReturnsSlackErrorText_When_WebhookReturns404(t *testin
 	require.NoError(t, err)
 	assert.False(t, resp.Msg.Success)
 	assert.Contains(t, resp.Msg.Error, "404")
+	// The AC's literal requirement is Slack's *actual* error text, not just
+	// the status code -- postToSlack must surface the response body.
+	assert.Contains(t, resp.Msg.Error, "no_service")
 }
 
 // TestTestSlackWebhook_UsesTypedFormValue_NotSavedConfig covers the "test

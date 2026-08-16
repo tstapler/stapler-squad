@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -25,6 +26,14 @@ const maxSlackBlockTextLen = 2900
 // intentionally short — Slack notifications are best-effort and must never
 // become a source of goroutine buildup during an extended outage.
 const slackDispatchTimeout = 5 * time.Second
+
+// maxSlackErrorBodyLen bounds how much of a non-2xx response body postToSlack
+// will read and surface in its returned error. Slack's own error bodies are
+// short plain-text tokens ("no_service", "channel_not_found", ...); this cap
+// just guards against an unexpectedly large body from a misbehaving or
+// malicious endpoint (a user-supplied webhook URL, not necessarily Slack's
+// real servers) rather than reflecting a real expected size.
+const maxSlackErrorBodyLen = 256
 
 // SlackNotifier formats Block Kit messages and delivers them to a configured
 // Slack Incoming Webhook. It is the single implementation of this concern in
@@ -192,7 +201,22 @@ func (n *SlackNotifier) postToSlack(ctx context.Context, webhookURL string, payl
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		sanitized := fmt.Errorf("slack webhook request failed: status %d", resp.StatusCode)
+		// Slack's own error responses are a short plain-text body ("no_service",
+		// "channel_not_found", "invalid_payload", ...) -- surface it so callers
+		// (TestSlackWebhook's "Send test message" button in particular) can show
+		// the user Slack's actual error, not just a bare status code. Bounded
+		// read: the body comes from whatever URL the user configured, not
+		// necessarily Slack's real servers.
+		bodyText := ""
+		if bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxSlackErrorBodyLen)); readErr == nil {
+			bodyText = strings.TrimSpace(string(bodyBytes))
+		}
+		var sanitized error
+		if bodyText != "" {
+			sanitized = fmt.Errorf("slack webhook request failed: status %d: %s", resp.StatusCode, bodyText)
+		} else {
+			sanitized = fmt.Errorf("slack webhook request failed: status %d", resp.StatusCode)
+		}
 		n.recordDelivery(false, sanitized.Error())
 		log.Warn("SlackNotifier: send failed", "error", sanitized)
 		return sanitized
