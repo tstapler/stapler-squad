@@ -2767,10 +2767,29 @@ func (s *BacklogService) TriggerTriage(
 			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, result.Title, triageWorktree)
 		}
 
+		// persistCtx replaces cleanupCtx for every write from here on. cleanupCtx's
+		// triageCleanupTimeout budget started ticking right after CallBlocking
+		// returned (see its own comment above) — but CommitChanges/retitle just above
+		// run real git subprocesses (fetch, checkout/reuse, commit) that this test
+		// suite has observed take up to ~30s on their own (see
+		// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession's
+		// "Second root cause" comment), silently eating into the same 10s default
+		// budget the status transition below needs. That produced an intermittent
+		// "expected: ready, actual: idea" flake under -race -count=5: the deferred
+		// testTriageCompleteHook fires on every exit path (including this one) once
+		// the goroutine returns, but TransitionBacklogItemStatus's write below had
+		// failed against an already-expired cleanupCtx deadline it never actually
+		// caused. Giving the persistence writes their own fresh budget here — after
+		// the slow git ops, not before — closes that gap without weakening the
+		// timeout that still legitimately bounds callErr/parseErr's early-exit paths
+		// above (which run before CommitChanges and never see this cost).
+		persistCtx, persistCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
+		defer persistCancel()
+
 		payloadJSON, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] marshal triage result item=%s: %v", itemID, marshalErr)
-			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
 			return
 		}
 		// persistFailures accumulates which of the post-triage persistence steps below
@@ -2779,7 +2798,7 @@ func (s *BacklogService) TriggerTriage(
 		// surfaces a single operator-facing notification so a failure here is never silent.
 		var persistFailures []string
 
-		if updateErr := s.storage.UpdateItemSessionTriageResult(cleanupCtx, isID, string(payloadJSON)); updateErr != nil {
+		if updateErr := s.storage.UpdateItemSessionTriageResult(persistCtx, isID, string(payloadJSON)); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] persist triage result item=%s: %v", itemID, updateErr)
 			persistFailures = append(persistFailures, "saving the triage result")
 		}
@@ -2807,14 +2826,14 @@ func (s *BacklogService) TriggerTriage(
 			ClearPlanRejectedAt: true,
 		}
 		applyTriageResultToUpdate(&result, &update)
-		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
+		if _, updateErr := s.storage.UpdateBacklogItem(persistCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
 		}
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
-		if _, transErr := s.storage.TransitionBacklogItemStatus(cleanupCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
+		if _, transErr := s.storage.TransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
 			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")
@@ -2822,7 +2841,7 @@ func (s *BacklogService) TriggerTriage(
 		}
 
 		if len(persistFailures) > 0 {
-			s.notifyTriagePersistFailure(cleanupCtx, itemID, item.Title, persistFailures, statusAdvanced)
+			s.notifyTriagePersistFailure(persistCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
 
 		// Close out the ItemSession and release triageInFlight together, right here —
@@ -2837,7 +2856,7 @@ func (s *BacklogService) TriggerTriage(
 		// above), so moving one without the other would let a concurrent reconciliation
 		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
 		// simply between here and its final log line.
-		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
 		s.triageInFlight.Delete(itemID)
 
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
@@ -2846,7 +2865,7 @@ func (s *BacklogService) TriggerTriage(
 		// first, which is the whole point of this toggle (default false; existing manual
 		// flow is unchanged unless explicitly opted in).
 		if statusAdvanced && item.AutoSpawnSession {
-			if _, spawnErr := s.SpawnSessionFromItem(cleanupCtx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+			if _, spawnErr := s.SpawnSessionFromItem(persistCtx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
 				ItemId:     itemID,
 				Autonomous: true,
 			})); spawnErr != nil {
