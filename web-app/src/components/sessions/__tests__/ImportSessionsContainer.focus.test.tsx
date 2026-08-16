@@ -80,7 +80,7 @@ function resolvedPreview(program: string, withPid: boolean) {
   return {
     program,
     path: `/home/user/project-${program}`,
-    correlation: { kind: CorrelationKind.NONE, uuid: "", confidence: 0, candidates: [] },
+    correlation: { kind: CorrelationKind.UNSPECIFIED, uuid: "", confidence: 0, candidates: [] },
     turnCount: 0,
     lastMessageExcerpt: "",
     pidIdentity: withPid ? { pid: 1000, createTimeMs: BigInt(1) } : undefined,
