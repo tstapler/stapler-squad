@@ -46,6 +46,40 @@ type HibernationConfig struct {
 	RetentionDays int `json:"retention_days"`
 }
 
+// SlackConfig holds configuration for the Slack review-queue notification
+// feature (Phase 1: notify-only; Phase 2: interactive approval buttons).
+//
+// WebhookURLEncrypted and SigningSecretEncrypted store ciphertext only, per
+// ADR-001 (project_plans/slack-review-notifications/decisions/ADR-001-slack-secret-storage-encryption.md):
+// both values are encrypted at rest with Config.GetOrCreateEncryptionKey() +
+// session.EncryptToken/DecryptToken, the same primitive already used for
+// backlog ItemSource tokens. The config package cannot decrypt them itself
+// (it would need to import session, which already imports config); decryption
+// happens in server/services, which imports both.
+type SlackConfig struct {
+	// WebhookURLEncrypted is the AES-256-GCM-encrypted Slack Incoming Webhook
+	// URL, or empty if not configured. Never store or log the plaintext value.
+	WebhookURLEncrypted string `json:"webhook_url_encrypted,omitempty"`
+	// SigningSecretEncrypted is the AES-256-GCM-encrypted Slack app signing
+	// secret (Phase 2, used to verify interactive-button callbacks), or empty
+	// if not configured. Never store or log the plaintext value.
+	SigningSecretEncrypted string `json:"signing_secret_encrypted,omitempty"`
+	// NotifyOnQueueItem controls whether a Slack message is sent when an item
+	// enters the review queue. Default: false (opt-in).
+	NotifyOnQueueItem bool `json:"notify_on_queue_item,omitempty"`
+	// QueueDepthThreshold is the review-queue depth at which a digest
+	// notification is sent (edge-triggered: one digest per burst). 0 disables
+	// depth-based notifications.
+	QueueDepthThreshold int `json:"queue_depth_threshold,omitempty"`
+	// ApprovalEnabled controls whether outbound Slack messages include
+	// interactive allow/deny buttons (Phase 2) and whether the interactive
+	// callback route is registered. Default: false.
+	ApprovalEnabled bool `json:"approval_enabled,omitempty"`
+	// DashboardBaseURL is the base URL used to build "view in dashboard" links
+	// in Slack messages. Empty string means links are omitted.
+	DashboardBaseURL string `json:"dashboard_base_url,omitempty"`
+}
+
 // defaultSessionRetentionDays is used by RetentionDaysOrDefault whenever
 // RetentionDays is unset (zero), including for configs saved before this field
 // existed.

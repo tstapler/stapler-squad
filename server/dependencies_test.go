@@ -9,6 +9,67 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
+// TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+// is the regression test for commit 13ad9c260, which fixed a split-brain bug
+// where SessionService's SlackConfigService constructed and used its own
+// private *services.SlackNotifier instead of the shared instance wired into
+// ReactiveQueueManager/ApprovalHandler (server.go's wireDepsIntoServer,
+// server/server.go:559/563: approvalHandler.SetSlackNotifier(deps.SlackNotifier)
+// / deps.SessionService.SetSlackNotifier(deps.SlackNotifier)). Left
+// unregression-tested, dropping either SetSlackNotifier call would silently
+// desync GetSlackConfig's last_delivery snapshot from the real review-queue/
+// approval send paths, with no compiler error to catch it.
+//
+// Exercises the real wireDepsIntoServer wiring via NewServerWithDeps (not just
+// BuildDependencies, which never constructs ApprovalHandler -- that only
+// happens inside wireDepsIntoServer). ApprovalHandler.SlackNotifierForTest and
+// SessionService.SlackNotifierForTest are minimal test-only accessors added
+// for exactly this assertion (server/services/approval_handler.go,
+// server/services/session_service.go) -- ReactiveQueueManager needs no such
+// accessor since it lives in this same package and its unexported
+// slackNotifier field is reachable directly from a same-package test.
+func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	if deps.SlackNotifier == nil {
+		t.Fatal("expected ServerDependencies.SlackNotifier to be wired")
+	}
+	if deps.ReactiveQueueMgr == nil {
+		t.Fatal("expected ReactiveQueueMgr to be wired")
+	}
+	if srv.approvalHandler == nil {
+		t.Fatal("expected wireDepsIntoServer to have constructed and stored the ApprovalHandler")
+	}
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+
+	if deps.ReactiveQueueMgr.slackNotifier != deps.SlackNotifier {
+		t.Errorf("ReactiveQueueManager.slackNotifier is not the same instance as deps.SlackNotifier: got %p, want %p",
+			deps.ReactiveQueueMgr.slackNotifier, deps.SlackNotifier)
+	}
+	if srv.approvalHandler.SlackNotifierForTest() != deps.SlackNotifier {
+		t.Errorf("ApprovalHandler's SlackNotifier is not the same instance as deps.SlackNotifier: got %p, want %p",
+			srv.approvalHandler.SlackNotifierForTest(), deps.SlackNotifier)
+	}
+	if deps.SessionService.SlackNotifierForTest() != deps.SlackNotifier {
+		t.Errorf("SessionService's SlackNotifier is not the same instance as deps.SlackNotifier (split-brain regression, commit 13ad9c260): got %p, want %p",
+			deps.SessionService.SlackNotifierForTest(), deps.SlackNotifier)
+	}
+}
+
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
 	_, err := BuildServiceDeps(nil)
 	if err == nil {
