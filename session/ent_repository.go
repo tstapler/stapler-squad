@@ -1387,6 +1387,7 @@ func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error
 			PythonModes:           rule.PythonModes,
 			SafePythonImportsOnly: rule.SafePythonImportsOnly,
 			RequireCIPassing:      rule.RequireCiPassing,
+			MinSessionIdleMinutes: rule.MinSessionIdleMinutes,
 		}
 	}
 	return result, nil
@@ -1445,6 +1446,7 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetPythonModes(pythonModes).
 		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
 		SetRequireCiPassing(data.RequireCIPassing).
+		SetMinSessionIdleMinutes(data.MinSessionIdleMinutes).
 		OnConflictColumns(approvalrule.FieldRuleID).
 		UpdateNewValues().
 		Exec(ctx)

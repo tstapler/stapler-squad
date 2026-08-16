@@ -4,11 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
-
-	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -368,43 +365,22 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 	}
 }
 
-// TestPTYDiscovery_Stop_JoinsMonitorLoop pins the regression this fix
-// addresses: monitorLoop() used to be signaled via close(stopCh) but never
-// joined, so Stop() could return while monitorLoop was still mid-tick and
-// about to touch tmux exec-gate paths derived from STAPLER_SQUAD_TEST_DIR —
-// racing a test's t.TempDir() cleanup (RemoveAll) that runs right after Stop
-// returns. A short refreshRate drives multiple ticks during the test, and
-// goleak.VerifyNone after Stop confirms no monitorLoop goroutine survives it.
-func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
-	baseline := goleak.IgnoreCurrent()
+// TestPTYDiscovery_StopJoinsMonitorLoop verifies Stop() blocks until
+// monitorLoop has actually exited, not just been signaled — regression test
+// for a TempDir cleanup race where a leaked monitorLoop goroutine called
+// tmux.TryAcquireExecSlot after the test's t.TempDir() had already begun
+// tearing down.
+func TestPTYDiscovery_StopJoinsMonitorLoop(t *testing.T) {
+	pd := NewPTYDiscovery()
 
-	pd := NewPTYDiscoveryWithConfig(PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond})
 	pd.Start()
-	time.Sleep(20 * time.Millisecond) // let several ticks fire
 	pd.Stop()
 
-	goleak.VerifyNone(t, baseline)
-}
-
-// TestWaitGroupWithTimeout pins waitGroupWithTimeout's two branches directly,
-// mirroring server/services' TestWaitWithTimeout for the same helper shape.
-func TestWaitGroupWithTimeout(t *testing.T) {
-	t.Run("returns true when the group finishes in time", func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() { defer wg.Done() }()
-		if !waitGroupWithTimeout(&wg, time.Second) {
-			t.Error("waitGroupWithTimeout returned false, want true")
-		}
-	})
-
-	t.Run("returns false when the group doesn't finish in time", func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(1) // deliberately never Done()
-		if waitGroupWithTimeout(&wg, 10*time.Millisecond) {
-			t.Error("waitGroupWithTimeout returned true, want false")
-		}
-	})
+	select {
+	case <-pd.done:
+	default:
+		t.Fatal("Stop() returned before monitorLoop closed pd.done")
+	}
 }
 
 func TestPTYDiscovery_OrganizeByCategory(t *testing.T) {

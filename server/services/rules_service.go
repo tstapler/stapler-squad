@@ -117,6 +117,7 @@ func (rs *RulesService) UpsertApprovalRule(
 		PythonModes:           r.PythonModes,
 		SafePythonImportsOnly: r.SafePythonImportsOnly,
 		RequireCIPassing:      r.RequireCiPassing,
+		MinSessionIdleMinutes: r.MinSessionIdleMinutes,
 	}
 	if r.CreatedAt != nil {
 		spec.CreatedAt = r.CreatedAt.AsTime()
@@ -470,6 +471,7 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 		PythonModes:           spec.PythonModes,
 		SafePythonImportsOnly: spec.SafePythonImportsOnly,
 		RequireCiPassing:      spec.RequireCIPassing,
+		MinSessionIdleMinutes: spec.MinSessionIdleMinutes,
 	}
 	if !spec.CreatedAt.IsZero() {
 		p.CreatedAt = timestamppb.New(spec.CreatedAt)
@@ -479,18 +481,19 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 
 func ruleToSpec(r classifier.Rule) RuleSpec {
 	spec := RuleSpec{
-		ID:               r.ID,
-		Name:             r.Name,
-		ToolName:         r.ToolName,
-		ToolCategory:     r.ToolCategory,
-		Decision:         decisionString(r.Decision),
-		RiskLevel:        riskLevelString(r.RiskLevel),
-		Reason:           r.Reason,
-		Alternative:      r.Alternative,
-		Priority:         r.Priority,
-		Enabled:          r.Enabled,
-		Source:           r.Source,
-		RequireCIPassing: r.RequireCIPassing,
+		ID:                    r.ID,
+		Name:                  r.Name,
+		ToolName:              r.ToolName,
+		ToolCategory:          r.ToolCategory,
+		Decision:              decisionString(r.Decision),
+		RiskLevel:             riskLevelString(r.RiskLevel),
+		Reason:                r.Reason,
+		Alternative:           r.Alternative,
+		Priority:              r.Priority,
+		Enabled:               r.Enabled,
+		Source:                r.Source,
+		RequireCIPassing:      r.RequireCIPassing,
+		MinSessionIdleMinutes: r.MinSessionIdleMinutes,
 	}
 	if r.ToolPattern != nil {
 		spec.ToolPattern = r.ToolPattern.String()
@@ -1224,6 +1227,7 @@ func ruleProtoToSpec(p *sessionv1.ApprovalRuleProto) RuleSpec {
 		PythonModes:           p.PythonModes,
 		SafePythonImportsOnly: p.SafePythonImportsOnly,
 		RequireCIPassing:      p.RequireCiPassing,
+		MinSessionIdleMinutes: p.MinSessionIdleMinutes,
 		Decision:              autoDecisionToString(p.Decision),
 		RiskLevel:             p.RiskLevel,
 		Reason:                p.Reason,

@@ -291,6 +291,7 @@ type ApprovalRuleData struct {
 	PythonModes           []string
 	SafePythonImportsOnly bool
 	RequireCIPassing      bool
+	MinSessionIdleMinutes int32
 }
 
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
