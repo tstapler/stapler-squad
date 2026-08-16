@@ -45,6 +45,16 @@ func WithStartupTimeout(d time.Duration) DriverOption {
 	return func(a *AutonomousDriver) { a.startupTimeout = d }
 }
 
+// panePreviewer is the narrow interface AutonomousDriver needs to read the
+// current pane content. *Instance satisfies it directly via Preview().
+// Extracted (mirroring paneSettleChecker below) so driver-level tests can
+// substitute a fake that returns scripted pane content per call, instead of
+// only being able to exercise pane/delivery-timing behavior through the
+// pure functions in nudge_dedup_test.go.
+type panePreviewer interface {
+	Preview() (string, error)
+}
+
 // AutonomousDriver monitors a session and injects orchestrator prompts when idle.
 type AutonomousDriver struct {
 	inst           *Instance
@@ -58,6 +68,21 @@ type AutonomousDriver struct {
 	driverRunning  atomic.Bool
 	cancel         context.CancelFunc
 	mu             sync.Mutex
+	// previewer overrides pane content reads when set (used by tests to
+	// script pane content across turns). nil (the zero value, including for
+	// every existing struct-literal-constructed test in this package) falls
+	// back to d.inst.Preview() via previewPane() below.
+	previewer panePreviewer
+}
+
+// previewPane returns the current pane content, preferring d.previewer when
+// set (tests may substitute a scripted fake) and falling back to d.inst
+// otherwise — see the panePreviewer doc comment.
+func (d *AutonomousDriver) previewPane() (string, error) {
+	if d.previewer != nil {
+		return d.previewer.Preview()
+	}
+	return d.inst.Preview()
 }
 
 // NewAutonomousDriver creates an AutonomousDriver for inst.
@@ -208,7 +233,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			break
 		}
 
-		tail, _ := d.inst.Preview()
+		tail, _ := d.previewPane()
 		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns, lastSentNudge)
 
 		keyLen := 8
@@ -230,7 +255,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		}
 
 		if directive == directiveDone {
-			sessionOutput, _ := d.inst.Preview()
+			sessionOutput, _ := d.previewPane()
 			outcome = AutonomousDriverOutcome{
 				Done:   true,
 				Reason: payload,
@@ -300,7 +325,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// as if it reflected delivery-time state made the next turn's
 		// isDuplicateNudge re-arm check fire on ordinary pane movement, defeating
 		// the suppression cooldown this feature exists to provide.
-		deliveryPane, _ := d.inst.Preview()
+		deliveryPane, _ := d.previewPane()
 		// Only recorded once both writes above have succeeded — a failed send must
 		// not be treated as delivered for future dedup checks. Isolated into
 		// nextLastNudge (a pure function) so this invariant is directly unit

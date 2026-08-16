@@ -17,9 +17,18 @@ type fakeHeadlessPool struct {
 	responses    []string
 	callCount    int32
 	capturedKeys []headless.FeatureKey
+	// firstCallCh, if non-nil, is closed the first time CallBlocking is
+	// invoked — a deterministic readiness signal tests can wait on instead
+	// of guessing a sleep duration for "has the driver reached its first
+	// LLM call yet" (see firstCallOnce).
+	firstCallCh   chan struct{}
+	firstCallOnce sync.Once
 }
 
 func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+	if f.firstCallCh != nil {
+		f.firstCallOnce.Do(func() { close(f.firstCallCh) })
+	}
 	idx := int(atomic.AddInt32(&f.callCount, 1)) - 1
 	f.capturedKeys = append(f.capturedKeys, key)
 	if idx < len(f.responses) {
@@ -243,6 +252,32 @@ func (f *fakeSendKeysProcessManager) recorded() []string {
 
 var errTestSendKeysFailure = errors.New("fakeSendKeysProcessManager: forced SendKeys failure")
 
+// fakePanePreviewer is a scripted panePreviewer: each call to Preview pops
+// the next value off snapshots (repeating the last one once exhausted),
+// letting a test script distinct pane content across the pre-call tail
+// capture, the post-SendKeys delivery-time capture, and later turns'
+// pre-call captures — without needing a real tmux-backed Instance. Mirrors
+// fakePaneSettleChecker's pop-with-repeat pattern.
+type fakePanePreviewer struct {
+	mu        sync.Mutex
+	snapshots []string
+	calls     int
+}
+
+func (f *fakePanePreviewer) Preview() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	idx := f.calls
+	f.calls++
+	if idx >= len(f.snapshots) {
+		idx = len(f.snapshots) - 1
+	}
+	if idx < 0 {
+		return "", nil
+	}
+	return f.snapshots[idx], nil
+}
+
 // withShrunkIdleSettleTimers shrinks idleSettlePollInterval/idleSettleWindow
 // for the duration of a test (restored via t.Cleanup), so tests exercising
 // the between-turn settle-window debounce run in milliseconds instead of
@@ -406,6 +441,168 @@ func TestAutonomousDriver_run_should_sendBoth_When_NextMessagesDiffer(t *testing
 	}
 	if !foundFirst || !foundSecond {
 		t.Errorf("expected both distinct messages to be sent, got: %v", sent)
+	}
+}
+
+// TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged is an
+// integration-level test through the real run() loop (Start()), not just the
+// pure isDuplicateNudge/nextLastNudge functions covered in
+// nudge_dedup_test.go: with the panePreviewer seam scripted to return
+// identical pane content on every call, an orchestrator returning the same
+// NEXT_MESSAGE twice must only trigger SendKeys once — the second turn's
+// pane-unchanged + text-repeat combination must hit the suppression branch.
+func TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
+	withShrunkPaneSettleTimers(t)
+
+	pool := &fakeHeadlessPool{responses: []string{
+		"NEXT_MESSAGE: keep going",
+		"NEXT_MESSAGE: keep going",
+		"DONE: finished",
+	}}
+
+	inst := &Instance{Title: "test-suppress-pane-unchanged", UUID: "abcdefgh-punc"}
+	cc, _ := NewClaudeController(inst)
+	inst.controllerManager.controller.Store(cc)
+
+	fakePM := &fakeSendKeysProcessManager{}
+	inst.processManager = fakePM
+	inst.started.Store(true)
+
+	// Every Preview() call (pre-call tail, post-SendKeys delivery capture,
+	// and the DONE-branch capture) returns identical content, simulating a
+	// session with no new pane activity across the whole run.
+	preview := &fakePanePreviewer{snapshots: []string{"unchanged pane content"}}
+
+	driver := &AutonomousDriver{
+		inst:         inst,
+		controller:   cc,
+		headlessPool: pool,
+		goal:         "fix everything",
+		maxTurns:     10,
+		previewer:    preview,
+	}
+
+	doneCh := make(chan AutonomousDriverOutcome, 1)
+	driver.RegisterCompletionCallback(func(_ string, outcome AutonomousDriverOutcome) {
+		doneCh <- outcome
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go pumpIdleSignals(ctx, cc)
+
+	if err := driver.Start(ctx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	select {
+	case outcome := <-doneCh:
+		if outcome.Stuck {
+			t.Errorf("expected DONE completion, got Stuck: %+v", outcome)
+		}
+	case <-ctx.Done():
+		t.Fatal("test timed out waiting for driver completion")
+	}
+
+	sent := fakePM.recorded()
+	msgSends := 0
+	for _, s := range sent {
+		if s == "keep going" {
+			msgSends++
+		}
+	}
+	if msgSends != 1 {
+		t.Errorf("expected exactly 1 SendKeys call for the repeated message content with an unchanged pane, got %d (all sends: %v)", msgSends, sent)
+	}
+}
+
+// TestAutonomousDriver_run_should_useDeliveryTimeSnapshot_When_PaneChangesDuringRoundTrip
+// is the integration-level regression test for the fix recorded in
+// nextLastNudge's/lastSentNudge's doc comments: the delivery-time pane
+// snapshot stored for the next turn's re-arm comparison must be captured
+// AFTER the SendKeys writes complete, not reused from the pre-call tail
+// captured before the blocking LLM call. The panePreviewer is scripted so
+// the pane visibly changes DURING turn 1's round-trip (pre-call tail =
+// "pane-before-turn1", post-SendKeys delivery capture = "pane-after-turn1"),
+// then turn 2's pre-call tail returns that SAME "pane-after-turn1" value
+// (i.e. no further activity after delivery). If the driver incorrectly used
+// the stale pre-call tail as the delivery snapshot (the bug this test
+// guards against), turn 2's tail would differ from the stored snapshot,
+// wrongly re-arming the guard and causing a second SendKeys call. With the
+// fix, turn 2 compares against the correct post-delivery snapshot, finds no
+// new activity, and suppresses — so SendKeys must fire only once.
+func TestAutonomousDriver_run_should_useDeliveryTimeSnapshot_When_PaneChangesDuringRoundTrip(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
+	withShrunkPaneSettleTimers(t)
+
+	pool := &fakeHeadlessPool{responses: []string{
+		"NEXT_MESSAGE: keep going",
+		"NEXT_MESSAGE: keep going",
+		"DONE: finished",
+	}}
+
+	inst := &Instance{Title: "test-delivery-snapshot", UUID: "abcdefgh-dsnap"}
+	cc, _ := NewClaudeController(inst)
+	inst.controllerManager.controller.Store(cc)
+
+	fakePM := &fakeSendKeysProcessManager{}
+	inst.processManager = fakePM
+	inst.started.Store(true)
+
+	// Preview() call order within run(): turn1 pre-call tail, turn1
+	// post-SendKeys delivery capture, turn2 pre-call tail, (DONE branch
+	// capture on turn3 if reached).
+	preview := &fakePanePreviewer{snapshots: []string{
+		"pane-before-turn1", // turn 1 pre-call tail
+		"pane-after-turn1",  // turn 1 post-SendKeys delivery capture — pane changed mid-round-trip
+		"pane-after-turn1",  // turn 2 pre-call tail — no further activity since delivery
+		"pane-after-turn1",  // DONE-branch capture, if reached
+	}}
+
+	driver := &AutonomousDriver{
+		inst:         inst,
+		controller:   cc,
+		headlessPool: pool,
+		goal:         "fix everything",
+		maxTurns:     10,
+		previewer:    preview,
+	}
+
+	doneCh := make(chan AutonomousDriverOutcome, 1)
+	driver.RegisterCompletionCallback(func(_ string, outcome AutonomousDriverOutcome) {
+		doneCh <- outcome
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go pumpIdleSignals(ctx, cc)
+
+	if err := driver.Start(ctx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	select {
+	case outcome := <-doneCh:
+		if outcome.Stuck {
+			t.Errorf("expected DONE completion, got Stuck: %+v", outcome)
+		}
+	case <-ctx.Done():
+		t.Fatal("test timed out waiting for driver completion")
+	}
+
+	sent := fakePM.recorded()
+	msgSends := 0
+	for _, s := range sent {
+		if s == "keep going" {
+			msgSends++
+		}
+	}
+	if msgSends != 1 {
+		t.Errorf("expected exactly 1 SendKeys call — turn 2 should be suppressed against the "+
+			"post-delivery pane snapshot, not the stale pre-call tail; got %d (all sends: %v)", msgSends, sent)
 	}
 }
 
@@ -646,7 +843,8 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) {
 	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
-		responses: []string{"WAIT: agent already acknowledged the plan"},
+		responses:   []string{"WAIT: agent already acknowledged the plan"},
+		firstCallCh: make(chan struct{}),
 	}
 
 	inst := &Instance{Title: "test-stop-suppressed", UUID: "abcdefgh-stop1"}
@@ -670,9 +868,15 @@ func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) 
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Give the driver time to reach the WAIT-suppression branch and enter its
-	// cooldown wait before calling Stop.
-	time.Sleep(150 * time.Millisecond)
+	// Wait for the driver to actually reach its first LLM call (and, given
+	// the sole scripted response is WAIT, the suppression branch that
+	// follows) rather than guessing a sleep duration — deterministic and not
+	// a flake risk on a slow CI runner.
+	select {
+	case <-pool.firstCallCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for driver to reach its first LLM call")
+	}
 	stopStart := time.Now()
 	driver.Stop()
 
