@@ -3328,10 +3328,17 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
 	require.NoError(t, err)
 
+	// 5s/50ms matches TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
+	// (:3262) — the closest analog by I/O shape: this test's async triage goroutine performs
+	// 6-9 real, unmocked git subprocess forks (worktree add/remove, merge-base loop, status,
+	// add, commit, branch rename) plus sequential DB writes. The prior 2s/10ms budget was
+	// copy-pasted from an unrelated test (:1170-1177) that does a real headless LLM call but
+	// no git I/O, and was too tight for this test's actual pipeline — causing intermittent
+	// "Condition never satisfied" failures under load.
 	require.Eventually(t, func() bool {
 		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		return getErr == nil && getResp.Msg.Item.Status == "ready"
-	}, 2*time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 
 	require.Equal(t, 1, pool.callCount())
 	triageWorktreePath := pool.firstCall().workDir
