@@ -152,4 +152,40 @@ describe("Import flow focus restoration", () => {
 
     await waitFor(() => expect(document.activeElement).toBe(opener));
   });
+
+  it("ConfirmKillDialog_should_restoreFocusToTheContainerFallback_When_theRowTriggerUnmountsDuringCommit", async () => {
+    mockPreviewImport.mockResolvedValue(resolvedPreview("a", true));
+    mockCancelPendingKill.mockResolvedValue({ resumed: true, error: "" });
+
+    render(<ImportSessionsContainer />);
+
+    const container = screen.getByTestId("import-sessions-container");
+    const opener = screen.getByTestId("import-row-a");
+    // Mirrors the real ImportExternalSessionsPanel: once commitImport
+    // resolves, the row's instanceType flips away from EXTERNAL and the row
+    // (including this Import button) is removed from the DOM -- before
+    // handleConfirmPreview gets a chance to capture it for ConfirmKillDialog.
+    mockCommitImport.mockImplementation(async () => {
+      opener.remove();
+      return {
+        status: ImportStatus.COMMITTED,
+        instanceId: "inst",
+        error: "",
+        pidIdentity: { pid: 1000, createTimeMs: BigInt(1) },
+      };
+    });
+
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() => expect(screen.getByTestId("import-preview-dialog")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("import-preview-confirm-button"));
+
+    await waitFor(() => expect(screen.getByTestId("confirm-kill-dialog")).toBeInTheDocument());
+    expect(opener.isConnected).toBe(false);
+
+    fireEvent.click(screen.getByTestId("confirm-kill-revert-button"));
+
+    await waitFor(() => expect(document.activeElement).toBe(container));
+  });
 });
