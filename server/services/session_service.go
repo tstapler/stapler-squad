@@ -1265,6 +1265,15 @@ func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
 	s.slackConfigSvc = NewSlackConfigService(n)
 }
 
+// SlackNotifierForTest returns the SlackNotifier instance currently wired
+// into slackConfigSvc. Exported only so cross-package wiring regression
+// tests (server package) can assert pointer identity against the other
+// consumers (ReactiveQueueManager, ApprovalHandler) without restructuring
+// production code — not intended for any non-test caller.
+func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
+	return s.slackConfigSvc.slackNotifier
+}
+
 // SetFeatureController wires a runtime controller for the named feature flag.
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {

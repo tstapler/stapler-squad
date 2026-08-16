@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,6 +120,23 @@ type slackButtonElement struct {
 	Value    string          `json:"value"`
 	ActionID string          `json:"action_id"`
 	Style    string          `json:"style,omitempty"`
+}
+
+// escapeSlackMrkdwn escapes Slack's three mrkdwn special characters so
+// dynamic, potentially agent/user-influenced text (session names, review
+// context, diff content, approval detail) can never be interpreted as
+// mrkdwn/entity syntax when placed into a Block Kit text object. Per Slack's
+// formatting reference, "&" MUST be escaped first — escaping "<"/">" before
+// "&" would double-escape the "&" just introduced by their replacements
+// (e.g. "<" -> "&lt;" -> "&amp;lt;" if done in the wrong order). Escaping
+// stops literal injected sequences like "<!channel>" or "<@U12345>" from
+// rendering as real Slack mention/broadcast directives, and keeps a
+// dynamic label from corrupting the surrounding "<url|label>" link syntax.
+func escapeSlackMrkdwn(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
 }
 
 // truncateForSlackBlock caps s at maxRunes runes (rune-safe), appending
@@ -235,25 +253,25 @@ func (n *SlackNotifier) NotifyReviewQueueItem(ctx context.Context, cfg *config.C
 			return
 		}
 
-		primary := fmt.Sprintf("*%s* needs attention: %s", sanitizeNotificationText(item.SessionName), item.Reason.String())
+		primary := fmt.Sprintf("*%s* needs attention: %s", escapeSlackMrkdwn(sanitizeNotificationText(item.SessionName)), item.Reason.String())
 		blocks := []slackBlock{
 			{Type: "section", Text: &slackBlockText{Type: "mrkdwn", Text: primary}},
 		}
 		if item.Context != "" {
 			blocks = append(blocks, slackBlock{
 				Type: "section",
-				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(sanitizeNotificationText(item.Context), maxSlackBlockTextLen)},
+				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(escapeSlackMrkdwn(sanitizeNotificationText(item.Context)), maxSlackBlockTextLen)},
 			})
 		}
 		if item.DiffStats != nil && item.DiffStats.Content != "" {
 			blocks = append(blocks, slackBlock{
 				Type: "section",
-				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(item.DiffStats.Content, maxSlackBlockTextLen)},
+				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(escapeSlackMrkdwn(item.DiffStats.Content), maxSlackBlockTextLen)},
 			})
 		}
 		if dashboardURL != "" {
 			link := dashboardURL + "/?session=" + item.SessionID
-			linkText := fmt.Sprintf("<%s|View %s>", link, sanitizeNotificationText(item.SessionName))
+			linkText := fmt.Sprintf("<%s|View %s>", link, escapeSlackMrkdwn(sanitizeNotificationText(item.SessionName)))
 			blocks = append(blocks, slackBlock{
 				Type: "section",
 				Text: &slackBlockText{Type: "mrkdwn", Text: linkText},
@@ -285,7 +303,7 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 		if displayName == "" {
 			displayName = approval.SessionID
 		}
-		primary := fmt.Sprintf("*%s* is waiting for approval to use *%s*", sanitizeNotificationText(displayName), sanitizeNotificationText(approval.ToolName))
+		primary := fmt.Sprintf("*%s* is waiting for approval to use *%s*", escapeSlackMrkdwn(sanitizeNotificationText(displayName)), escapeSlackMrkdwn(sanitizeNotificationText(approval.ToolName)))
 		blocks := []slackBlock{
 			{Type: "section", Text: &slackBlockText{Type: "mrkdwn", Text: primary}},
 		}
@@ -294,13 +312,13 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 		if detail != "" {
 			blocks = append(blocks, slackBlock{
 				Type: "section",
-				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(sanitizeNotificationText(detail), maxSlackBlockTextLen)},
+				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(escapeSlackMrkdwn(sanitizeNotificationText(detail)), maxSlackBlockTextLen)},
 			})
 		}
 
 		if dashboardURL != "" {
 			link := dashboardURL + "/?session=" + approval.SessionID
-			linkText := fmt.Sprintf("<%s|View %s>", link, sanitizeNotificationText(displayName))
+			linkText := fmt.Sprintf("<%s|View %s>", link, escapeSlackMrkdwn(sanitizeNotificationText(displayName)))
 			blocks = append(blocks, slackBlock{
 				Type: "section",
 				Text: &slackBlockText{Type: "mrkdwn", Text: linkText},
@@ -347,6 +365,15 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 // resetting when depth drops back below it. threshold <= 0 always returns
 // false (feature-flag-off state) with no dispatch. Returns fired=true iff a
 // digest was dispatched by this call.
+//
+// Argument order (both plain ints — do not swap):
+//   - depth is the CURRENT review-queue size (rqm.queue.GetStatistics().TotalItems).
+//   - threshold is the CONFIGURED crossing point (cfg.Slack.QueueDepthThreshold).
+//
+// Swapping them silently inverts the crossing logic (e.g. a threshold of 0
+// read as the depth would permanently disable notifications, since
+// threshold <= 0 short-circuits above) with no compiler error — see
+// .claude/rules/primitive-obsession-checklist.md.
 func (n *SlackNotifier) MaybeNotifyQueueDepthThreshold(ctx context.Context, cfg *config.Config, depth, threshold int, dashboardURL string) (fired bool) {
 	if threshold <= 0 {
 		return false

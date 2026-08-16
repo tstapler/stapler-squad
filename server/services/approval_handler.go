@@ -183,6 +183,15 @@ func (h *ApprovalHandler) SetSlackNotifier(n *SlackNotifier) {
 	h.slackNotifier = n
 }
 
+// SlackNotifierForTest returns the wired SlackNotifier instance. Exported
+// only so cross-package wiring regression tests (server package) can assert
+// pointer identity against the other consumers (ReactiveQueueManager,
+// SessionService) without restructuring production code — not intended for
+// any non-test caller.
+func (h *ApprovalHandler) SlackNotifierForTest() *SlackNotifier {
+	return h.slackNotifier
+}
+
 // SetAutonomousChecker injects a function that returns true when the given session ID is an
 // autonomous session. Injected from server.go to avoid a construction-time circular dependency.
 func (h *ApprovalHandler) SetAutonomousChecker(fn func(string) bool) {

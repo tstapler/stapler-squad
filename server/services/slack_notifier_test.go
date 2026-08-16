@@ -642,6 +642,128 @@ func TestSlackNotifier_NeverLogsWebhookURL_OnTransportError(t *testing.T) {
 	assert.NotContains(t, buf.String(), closedAddr)
 }
 
+// --- Security: mrkdwn escaping of dynamic, potentially agent/user-influenced content ---
+
+// TestEscapeSlackMrkdwn_EscapesAmpersandLessThanGreaterThan_InCorrectOrder
+// pins escapeSlackMrkdwn's three-character escaping and, critically, its
+// ordering: "&" must be escaped FIRST so the "&lt;"/"&gt;" entities produced
+// by escaping "<"/">" are never themselves re-escaped into "&amp;lt;"/"&amp;gt;".
+func TestEscapeSlackMrkdwn_EscapesAmpersandLessThanGreaterThan_InCorrectOrder(t *testing.T) {
+	t.Run("plain text unchanged", func(t *testing.T) {
+		assert.Equal(t, "fix-login-bug", escapeSlackMrkdwn("fix-login-bug"))
+	})
+
+	t.Run("all three special chars escaped, no double-escaping", func(t *testing.T) {
+		got := escapeSlackMrkdwn("Tom & Jerry <script> a > b")
+		assert.Equal(t, "Tom &amp; Jerry &lt;script&gt; a &gt; b", got)
+		// If "&" were escaped after "<"/">", the entities just introduced would
+		// themselves get re-escaped into "&amp;lt;"/"&amp;gt;". Assert that never happens.
+		assert.NotContains(t, got, "&amp;lt;")
+		assert.NotContains(t, got, "&amp;gt;")
+		assert.Contains(t, got, "&lt;")
+		assert.Contains(t, got, "&gt;")
+	})
+
+	t.Run("channel-mention injection attempt neutralized to literal text", func(t *testing.T) {
+		got := escapeSlackMrkdwn("please review <!channel> now")
+		assert.Equal(t, "please review &lt;!channel&gt; now", got)
+		// The literal "<!channel>" directive sequence must not survive escaping —
+		// Slack only interprets an unescaped "<...>" span as a mention/broadcast.
+		assert.NotContains(t, got, "<!channel>")
+	})
+}
+
+// TestNotifyReviewQueueItem_EscapesInjectedSlackDirective_InSessionName proves
+// NotifyReviewQueueItem actually applies escapeSlackMrkdwn to dynamic content
+// it receives: a SessionName shaped like a "<!channel>" mass-ping directive
+// must render as literal escaped text in the outbound payload, never as an
+// unescaped "<...>" span Slack would interpret as a real directive.
+func TestNotifyReviewQueueItem_EscapesInjectedSlackDirective_InSessionName(t *testing.T) {
+	srv, ch := startCapturingSlackServer(t)
+	cfg := slackConfigWithWebhook(t, srv.URL)
+	n := NewSlackNotifier()
+
+	item := &session.ReviewItem{
+		SessionID:   "sess-1",
+		SessionName: "<!channel> urgent-fix",
+		Reason:      session.ReasonTestsFailing,
+		Context:     "contains <b>html</b> & an ampersand",
+	}
+	n.NotifyReviewQueueItem(context.Background(), cfg, item, "https://dash.example.com")
+	req := waitForCapturedRequest(t, ch)
+
+	// Decode the JSON wire body the way Slack itself would (json.Marshal HTML-escapes
+	// "&"/"<"/">" into "&"/"<"/">" by default, so raw-byte substring
+	// checks for the mrkdwn-escaped form would be misleading) and assert on the
+	// resulting mrkdwn text, which is what actually reaches Slack's renderer.
+	var decoded slackWebhookPayload
+	require.NoError(t, json.Unmarshal(req.body, &decoded))
+
+	var primaryBlock, contextBlock *slackBlockText
+	for _, b := range decoded.Blocks {
+		if b.Text == nil {
+			continue
+		}
+		if strings.Contains(b.Text.Text, "urgent-fix") {
+			primaryBlock = b.Text
+		}
+		if strings.Contains(b.Text.Text, "html") {
+			contextBlock = b.Text
+		}
+	}
+	require.NotNil(t, primaryBlock, "expected the primary block")
+	assert.NotContains(t, primaryBlock.Text, "<!channel>", "raw injected directive must never reach Slack unescaped")
+	assert.Contains(t, primaryBlock.Text, "&lt;!channel&gt;")
+
+	require.NotNil(t, contextBlock, "expected the Context block")
+	assert.Equal(t, "contains &lt;b&gt;html&lt;/b&gt; &amp; an ampersand", contextBlock.Text)
+}
+
+// TestNotifyApprovalPending_EscapesInjectedSlackDirective_InSessionNameAndDetail
+// mirrors the above for NotifyApprovalPending: a session name and an approval
+// command detail both shaped like Slack directive/entity injection attempts
+// must render as literal escaped text.
+func TestNotifyApprovalPending_EscapesInjectedSlackDirective_InSessionNameAndDetail(t *testing.T) {
+	srv, ch := startCapturingSlackServer(t)
+	cfg := slackConfigWithWebhook(t, srv.URL)
+	n := NewSlackNotifier()
+
+	approval := &PendingApproval{
+		ID:        "appr-123",
+		SessionID: "sess-1",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": "echo <@U12345> & run"},
+	}
+	n.NotifyApprovalPending(context.Background(), cfg, approval, "<!channel> deploy-session", "https://home.example.com")
+	req := waitForCapturedRequest(t, ch)
+
+	// See the analogous comment in the NotifyReviewQueueItem test above for why
+	// this decodes the JSON before asserting rather than scanning raw bytes.
+	var decoded slackWebhookPayload
+	require.NoError(t, json.Unmarshal(req.body, &decoded))
+
+	var primaryBlock, detailBlock *slackBlockText
+	for _, b := range decoded.Blocks {
+		if b.Text == nil {
+			continue
+		}
+		if strings.Contains(b.Text.Text, "deploy-session") {
+			primaryBlock = b.Text
+		}
+		if strings.Contains(b.Text.Text, "run") {
+			detailBlock = b.Text
+		}
+	}
+	require.NotNil(t, primaryBlock, "expected the primary block")
+	assert.NotContains(t, primaryBlock.Text, "<!channel>", "raw injected channel directive must never reach Slack unescaped")
+	assert.Contains(t, primaryBlock.Text, "&lt;!channel&gt;")
+
+	require.NotNil(t, detailBlock, "expected the command-detail block")
+	assert.NotContains(t, detailBlock.Text, "<@U12345>", "raw injected user-mention directive must never reach Slack unescaped")
+	assert.Contains(t, detailBlock.Text, "&lt;@U12345&gt;")
+	assert.Contains(t, detailBlock.Text, "&amp; run")
+}
+
 // --- Story 1.2.1b / REQ-17: resolveSlackWebhookURL precedence ---
 
 func TestResolveSlackWebhookURL_EnvOverride_TakesPrecedenceOverDecryptedValue(t *testing.T) {
