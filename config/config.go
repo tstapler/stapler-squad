@@ -850,6 +850,16 @@ func LoadConfig() *Config {
 	return cfg
 }
 
+// saveConfigMu serializes the write-tmp-then-rename sequence in saveConfig.
+// Without it, two concurrent callers targeting the same tmpPath (e.g. two
+// goroutines independently calling GetOrCreateEncryptionKey/SaveConfig) can
+// interleave: both os.WriteFile the shared tmpPath, then both os.Rename it —
+// the first rename succeeds and consumes tmpPath, so the second fails with
+// "no such file or directory" and, in tighter interleavings, a torn write
+// leaves config.json holding malformed JSON that the next LoadConfig call
+// silently falls back to DefaultConfig() over (losing whatever was there).
+var saveConfigMu sync.Mutex
+
 // saveConfig saves the configuration to disk atomically via a temp-file rename.
 // Accepts an optional explicit path; when omitted the path is derived from GetConfigDir().
 func saveConfig(config *Config, paths ...string) error {
@@ -871,6 +881,9 @@ func saveConfig(config *Config, paths ...string) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
+
+	saveConfigMu.Lock()
+	defer saveConfigMu.Unlock()
 
 	// Write to a temp file in the same directory, then rename for atomicity.
 	tmpPath := configPath + ".tmp"

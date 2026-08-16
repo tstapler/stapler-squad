@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,13 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// stopJoinTimeout bounds how long Stop() waits for monitorLoop to exit.
+// refreshRate defaults to 5s and a single Refresh() cycle should complete
+// well within it, so a multiple of the default is a generous margin without
+// risking an indefinite hang if a poller is genuinely stuck (e.g. blocked on
+// a contended tmux exec-gate slot).
+const stopJoinTimeout = 10 * time.Second
 
 // paneEntry holds the result of one row from `tmux list-panes -a`.
 type paneEntry struct {
@@ -295,6 +303,8 @@ type PTYDiscovery struct {
 	connections   []*PTYConnection
 	sessionMap    map[string]*Instance // Session name -> Instance
 	stopCh        chan struct{}
+	stopOnce      sync.Once
+	monitorWG     sync.WaitGroup // tracks monitorLoop, joined by Stop()
 	refreshRate   time.Duration
 	config        PTYDiscoveryConfig // Discovery configuration
 	sessionLister tmux.SessionLister // nil = use exec fallback
@@ -337,12 +347,43 @@ func NewPTYDiscoveryWithConfig(config PTYDiscoveryConfig, opts ...PTYDiscoveryOp
 
 // Start begins PTY discovery monitoring
 func (pd *PTYDiscovery) Start() {
+	pd.monitorWG.Add(1)
 	go pd.monitorLoop()
 }
 
-// Stop halts PTY discovery monitoring
+// Stop halts PTY discovery monitoring and blocks until monitorLoop has fully
+// exited, so callers (notably tests tearing down a t.TempDir()-backed config
+// dir) can rely on monitorLoop no longer touching any shared state — e.g. the
+// tmux exec-gate directory — once Stop returns. The wait is bounded: a
+// monitorLoop stuck mid-refresh (blocked on a contended exec-gate slot) logs
+// a warning and lets the caller proceed rather than hanging teardown
+// indefinitely. stopOnce guards against a double-close panic if Stop is ever
+// called more than once on the same instance.
 func (pd *PTYDiscovery) Stop() {
-	close(pd.stopCh)
+	pd.stopOnce.Do(func() {
+		close(pd.stopCh)
+	})
+	if !waitGroupWithTimeout(&pd.monitorWG, stopJoinTimeout) {
+		log.Warn("PTYDiscovery.Stop: monitorLoop did not exit within timeout; it may still be running", "timeout", stopJoinTimeout)
+	}
+}
+
+// waitGroupWithTimeout waits for wg to complete, returning true if it did so
+// within timeout and false if the timeout elapsed first. On timeout, this
+// bookkeeping goroutine itself is harmlessly leaked (it will eventually
+// complete and close the now-unread done channel).
+func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // SetSessions updates the session map for correlation
@@ -417,6 +458,8 @@ func (pd *PTYDiscovery) GetConnection(path string) *PTYConnection {
 
 // monitorLoop continuously monitors PTYs
 func (pd *PTYDiscovery) monitorLoop() {
+	defer pd.monitorWG.Done()
+
 	ticker := time.NewTicker(pd.refreshRate)
 	defer ticker.Stop()
 
