@@ -81,6 +81,7 @@ var (
 		{Name: "python_modes", Type: field.TypeJSON, Nullable: true},
 		{Name: "safe_python_imports_only", Type: field.TypeBool, Default: false},
 		{Name: "require_ci_passing", Type: field.TypeBool, Default: false},
+		{Name: "min_session_idle_minutes", Type: field.TypeInt32, Nullable: true, Default: 0},
 	}
 	// ApprovalRulesTable holds the schema information for the "approval_rules" table.
 	ApprovalRulesTable = &schema.Table{

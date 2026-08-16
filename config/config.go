@@ -360,6 +360,9 @@ type Config struct {
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
 	SessionRetention SessionRetentionConfig `json:"session_retention,omitempty"`
+	// StaleSession holds configuration for stale-session detection (inactivity threshold
+	// and notify-on-stale toggle).
+	StaleSession StaleSessionConfig `json:"stale_session,omitempty"`
 	// Callbacks holds the global singleton outbound-callback URLs (webhook-triggers
 	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
 	// queue-item-created lifecycle events.

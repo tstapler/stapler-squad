@@ -18,6 +18,7 @@ import { TagEditor } from "./TagEditor";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions, cycleGroupingStrategy } from "@/lib/grouping/strategies";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
+import { useStaleSessionConfig } from "@/lib/hooks/useStaleSessionConfig";
 import { ColumnPicker } from "./ColumnPicker";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
@@ -132,6 +133,7 @@ interface SessionRowWrapperProps extends SessionRowHandlers {
   selectMode: boolean;
   isSelected: boolean;
   suppressApprovalSubStatus: boolean;
+  staleThresholdMinutes: number;
 }
 
 // Memoized wrapper: turns stable per-action handlers into per-session closures
@@ -144,6 +146,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   selectMode,
   isSelected,
   suppressApprovalSubStatus,
+  staleThresholdMinutes,
   onSessionClick,
   onSessionOpenInNewPane,
   onDeleteSession,
@@ -187,6 +190,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(id) : undefined}
       onUpdateTags={onUpdateTags}
       suppressApprovalSubStatus={suppressApprovalSubStatus}
+      staleThresholdMinutes={staleThresholdMinutes}
       visibleColumns={visibleColumns}
       selectMode={selectMode}
       isSelected={isSelected}
@@ -367,6 +371,19 @@ export function SessionList({
 
   // Terminal-detected status data from Redux store
   const detectedStatusMap = useAppSelector(selectDetectedStatusMap);
+
+  // Resolved stale-session threshold/notify config, fetched once on mount.
+  const staleSessionConfig = useStaleSessionConfig();
+
+  // Stale-session re-render tick: a session can cross the stale threshold purely by
+  // clock time passing, with no new session data arriving. Force a re-render every
+  // 60s so groupedSessions (below) recomputes and reclassifies it without a page
+  // refresh. The setter's argument is discarded — only the re-render matters.
+  const [staleRecomputeTick, forceStaleRecompute] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => forceStaleRecompute((n) => n + 1), 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   // clearedSessions: optimistic approval suppression per session (card mode only; row mode uses SubStatusChip suppression)
   const { clearedSessions } = useApprovalsContext();
@@ -644,10 +661,15 @@ export function SessionList({
   // Derived: whether any filter is active (used for empty-state messaging)
   const hasActiveFilters = !!(searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused || filterNeedsApproval);
 
-  // Group sessions by selected strategy
+  // Group sessions by selected strategy. staleRecomputeTick is a dependency purely to
+  // force recomputation on the 60s tick above — a session can cross the stale threshold
+  // with no change to sortedSessions/groupingStrategy, and this is the only way to pick
+  // that up without a page refresh.
   const groupedSessions = useMemo(() => {
-    return groupSessions(sortedSessions, groupingStrategy);
-  }, [sortedSessions, groupingStrategy]);
+    return groupSessions(sortedSessions, groupingStrategy, {
+      thresholdMinutes: staleSessionConfig.thresholdMinutes,
+    });
+  }, [sortedSessions, groupingStrategy, staleSessionConfig.thresholdMinutes, staleRecomputeTick]);
 
   // Flat item list for row-mode virtualizer: headers and sessions interleaved.
   type FlatItem =
@@ -1402,6 +1424,7 @@ export function SessionList({
                     onResumeHibernatedSession={stableOnResumeHibernatedSession}
                     onUpdateTags={onUpdateTags}
                     suppressApprovalSubStatus={clearedSessions.has(item.session.id)}
+                    staleThresholdMinutes={staleSessionConfig.thresholdMinutes}
                     visibleColumns={visibleColumns}
                     selectMode={selectMode}
                     isSelected={selectedSessions.has(item.session.id)}
@@ -1588,6 +1611,7 @@ export function SessionList({
                   isSelected={selectedSessions.has(session.id)}
                   onToggleSelect={(e) => handleToggleSession(session.id, e)}
                   reviewItem={reviewItemBySessionId.get(session.id)}
+                  staleThresholdMinutes={staleSessionConfig.thresholdMinutes}
                   detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
                   detectedContext={detectedStatusMap[session.id]?.detectedContext}
                   suppressApprovalSubStatus={clearedSessions.has(session.id)}

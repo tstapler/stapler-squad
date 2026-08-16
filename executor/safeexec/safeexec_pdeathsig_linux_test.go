@@ -31,6 +31,10 @@ func TestMain(m *testing.M) {
 		runPdeathsigHelperProcess()
 		return
 	}
+	if os.Getenv(sigkillHelperEnvVar) == "1" {
+		runSigkillHelperProcess()
+		return
+	}
 	os.Exit(m.Run())
 }
 
