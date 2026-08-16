@@ -91,17 +91,34 @@ type slackWebhookPayload struct {
 	Blocks []slackBlock `json:"blocks,omitempty"`
 }
 
-// slackBlock is a single Block Kit block (only the "section" shape is used
-// by this notifier).
+// slackBlock is a single Block Kit block. Two shapes are used by this
+// notifier: "section" (Text set, Elements nil) for every message body block,
+// and "actions" (Elements set, Text nil — Phase 2, Story 2.1.4) for the
+// Approve/Deny button row NotifyApprovalPending appends when
+// cfg.Slack.ApprovalEnabled. One struct rather than a second type so
+// slackWebhookPayload.Blocks can stay a single, homogeneously-typed slice.
 type slackBlock struct {
-	Type string          `json:"type"`
-	Text *slackBlockText `json:"text,omitempty"`
+	Type     string               `json:"type"`
+	Text     *slackBlockText      `json:"text,omitempty"`
+	Elements []slackButtonElement `json:"elements,omitempty"`
 }
 
 // slackBlockText is a Block Kit text object.
 type slackBlockText struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+// slackButtonElement is a Block Kit button element. Value carries
+// "<approvalID>:allow" or "<approvalID>:deny", which
+// SlackInteractiveHandler.Handle (slack_interactive_handler.go) splits back
+// apart to resolve the approval.
+type slackButtonElement struct {
+	Type     string          `json:"type"`
+	Text     *slackBlockText `json:"text"`
+	Value    string          `json:"value"`
+	ActionID string          `json:"action_id"`
+	Style    string          `json:"style,omitempty"`
 }
 
 // truncateForSlackBlock caps s at maxRunes runes (rune-safe), appending
@@ -287,6 +304,34 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 			blocks = append(blocks, slackBlock{
 				Type: "section",
 				Text: &slackBlockText{Type: "mrkdwn", Text: linkText},
+			})
+		}
+
+		// Phase 2, Story 2.1.4: when interactive approvals are enabled, add an
+		// actions block with Approve/Deny buttons whose values encode
+		// "<approvalID>:allow"/"<approvalID>:deny" -- SlackInteractiveHandler
+		// (slack_interactive_handler.go) splits them back apart on a verified
+		// click. Omitted entirely when !ApprovalEnabled so Phase 1's payload
+		// shape is unchanged.
+		if cfg.Slack.ApprovalEnabled {
+			blocks = append(blocks, slackBlock{
+				Type: "actions",
+				Elements: []slackButtonElement{
+					{
+						Type:     "button",
+						Text:     &slackBlockText{Type: "plain_text", Text: "Approve"},
+						Value:    approval.ID + ":allow",
+						ActionID: "approve",
+						Style:    "primary",
+					},
+					{
+						Type:     "button",
+						Text:     &slackBlockText{Type: "plain_text", Text: "Deny"},
+						Value:    approval.ID + ":deny",
+						ActionID: "deny",
+						Style:    "danger",
+					},
+				},
 			})
 		}
 

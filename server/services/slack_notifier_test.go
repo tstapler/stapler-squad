@@ -303,6 +303,53 @@ func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.
 	assert.True(t, cmdFound, "expected truncated command text in payload")
 }
 
+// --- Story 2.1.4: conditional outbound actions block (Phase 2) ---
+
+func TestNotifyApprovalPending_IncludesActionsBlock_When_ApprovalEnabled(t *testing.T) {
+	srv, ch := startCapturingSlackServer(t)
+	cfg := slackConfigWithWebhook(t, srv.URL)
+	cfg.Slack.ApprovalEnabled = true
+	n := NewSlackNotifier()
+
+	approval := &PendingApproval{ID: "appr-9", SessionID: "sess-1", ToolName: "Bash"}
+	n.NotifyApprovalPending(context.Background(), cfg, approval, "fix-login-bug", "https://home.example.com")
+	req := waitForCapturedRequest(t, ch)
+
+	var decoded slackWebhookPayload
+	require.NoError(t, json.Unmarshal(req.body, &decoded))
+
+	var actionsBlock *slackBlock
+	for i, b := range decoded.Blocks {
+		if b.Type == "actions" {
+			actionsBlock = &decoded.Blocks[i]
+		}
+	}
+	require.NotNil(t, actionsBlock, "expected a block with type \"actions\"")
+	require.Len(t, actionsBlock.Elements, 2)
+
+	values := []string{actionsBlock.Elements[0].Value, actionsBlock.Elements[1].Value}
+	assert.Contains(t, values, "appr-9:allow")
+	assert.Contains(t, values, "appr-9:deny")
+}
+
+func TestNotifyApprovalPending_OmitsActionsBlock_When_ApprovalDisabled(t *testing.T) {
+	srv, ch := startCapturingSlackServer(t)
+	cfg := slackConfigWithWebhook(t, srv.URL)
+	cfg.Slack.ApprovalEnabled = false
+	n := NewSlackNotifier()
+
+	approval := &PendingApproval{ID: "appr-9", SessionID: "sess-1", ToolName: "Bash"}
+	n.NotifyApprovalPending(context.Background(), cfg, approval, "fix-login-bug", "https://home.example.com")
+	req := waitForCapturedRequest(t, ch)
+
+	var decoded slackWebhookPayload
+	require.NoError(t, json.Unmarshal(req.body, &decoded))
+
+	for _, b := range decoded.Blocks {
+		assert.NotEqual(t, "actions", b.Type, "expected no actions block when ApprovalEnabled is false")
+	}
+}
+
 // --- Story 1.2.3: non-blocking dispatch ---
 
 func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
