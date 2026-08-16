@@ -7,6 +7,7 @@ import {
   getStuckReasonIcon,
   getStuckReasonLabel,
   isPrStatusUnknown,
+  isRemediationParked,
   formatStuckDuration,
   formatAgo,
   PR_STATUS_UNKNOWN_CLASS,
@@ -63,6 +64,12 @@ interface StuckItemProps {
    * reaches the caller instead of being swallowed.
    */
   onApprovePlan?: (itemId: string) => Promise<void>;
+  /**
+   * itemId from the `/unfinished?item=<itemId>` deep link (routes.unfinishedItem) —
+   * when it matches this card's item.itemId, scrolls the card into view. Expansion
+   * is driven by the parent (StuckItemsSection) via isExpanded, not by this prop.
+   */
+  focusItemId?: string;
 }
 
 /** Extracts "owner/repo" from a GitHub PR URL, for the glance-level identity line. */
@@ -84,14 +91,6 @@ const SNOOZE_DURATION_LABELS: Record<SnoozeDuration, string> = {
   "1d": "1 day",
   "3d": "3 days",
 };
-
-/**
- * Mirrors session.MaxRemediationAttempts (session/backlog_remediation.go) —
- * the backoff schedule has 5 entries (30m/2h/8h/24h/72h), so a row with
- * remediation_attempts >= 5 is "parked". Not sourced from the proto response
- * itself since the cap is a backend policy constant, not per-item data.
- */
-const MAX_REMEDIATION_ATTEMPTS = 5;
 
 /**
  * Detects a `(hover: none), (pointer: coarse)` pointer — the media query the
@@ -139,6 +138,7 @@ export function StuckItem({
   reworkCapOverrideLoaded = false,
   onTriggerRemediationNow,
   onApprovePlan,
+  focusItemId,
 }: StuckItemProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -161,6 +161,14 @@ export function StuckItem({
     }
     wasExpandedRef.current = isExpanded;
   }, [isExpanded]);
+
+  // /unfinished?item=<itemId> deep link (routes.unfinishedItem): scroll the
+  // matching card into view once it's expanded and rendered.
+  useEffect(() => {
+    if (focusItemId && item.itemId === focusItemId && isExpanded) {
+      cardRef.current?.scrollIntoView({ block: "center" });
+    }
+  }, [focusItemId, item.itemId, isExpanded]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -227,7 +235,7 @@ export function StuckItem({
     }
   }, []);
 
-  const isParked = item.remediationAttempts >= MAX_REMEDIATION_ATTEMPTS;
+  const isParked = isRemediationParked(item);
 
   const handleRetryNow = useCallback(
     async (e: React.MouseEvent) => {
@@ -274,6 +282,7 @@ export function StuckItem({
         onKeyDown={handleKeyDown}
         data-testid="stuck-item"
         data-reason={item.reason}
+        data-item-id={item.itemId}
       >
         <div className={styles.header}>
           <span
