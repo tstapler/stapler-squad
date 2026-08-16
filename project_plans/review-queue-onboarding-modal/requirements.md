@@ -174,3 +174,18 @@ skipped, `--retries=0` — AC1, AC2, AC3, AC5, AC6, AC7 satisfied). Formally
 fail AC4 (criteria_index=3) via `report_progress` with this evidence cited,
 then `request_review` leading with the AC4-vs-AC2 conflict and full evidence
 in `verification_notes`, per `research/pitfalls.md`'s recommendation.
+
+## Review cycle log (this session, 2026-08-16)
+
+- **Cycle 1**: `request_review` with the AC4-vs-AC2 conflict fully cited in
+  `verification_notes` (fresh test re-runs same session: `review-queue.spec.ts`
+  0 failed/14 passed/8 skipped `--retries=0`; `escalation-reasoning.spec.ts`
+  2 failed, isolated as pre-existing via swap-test against pre-migration
+  content). Verdict: `FAIL` — *"Review blocked: no committed changes were
+  found for this session. There is nothing to review — the work session
+  ended without shipping any commits."* This is a session-scoped commit
+  check, not a re-litigation of AC4: the code fix (`2811df54e`) predates
+  this session, and this session had made zero new commits before calling
+  `request_review`. Resolution: commit this log entry (a legitimate durable
+  planning artifact per `.claude/rules/sdd-planning-artifacts-commit.md`) so
+  the session has an attributable commit, then re-request review (cycle 2).
