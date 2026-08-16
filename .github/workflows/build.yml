@@ -182,9 +182,15 @@ jobs:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           # -p 1: serializes package binaries to reduce -race CPU contention that caused intermittent hook/MCP-URL test timeouts — see project_plans/flaky-hook-url-tests/decisions/ADR-001. Do not remove without re-reading that ADR and re-verifying flake rate.
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -p 1 -coverprofile=coverage.out \
+          # -timeout=20m: explicit budget instead of relying on go test's silent 10m
+          # default. server/services previously tripped that default timeout with
+          # only an opaque "test timed out after 10m0s" — no goroutine/fd context —
+          # making it hard to tell a genuine hang apart from cumulative suite
+          # duration under -race -p 1. See BUG-067 and DeleteSession's cleanup
+          # goroutine leak fix (deleteCleanupWG in server/services/session_service.go).
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -p 1 -timeout=20m -coverprofile=coverage.out \
             -covermode=atomic ./server/... ./session/... ./config/... \
-            || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -v ./...; exit 1)
+            || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v ./...; exit 1)
 
       # PTY-triple (ptmx/attachCmd/attachCmdWaitOnce) race fix regression gate:
       # these tests were validated locally at -count=20/-count=50 during development
@@ -469,7 +475,7 @@ jobs:
   benchmark-gate:
     name: Benchmark Gate (main only)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: [prepare, test]
     permissions:
       contents: read
@@ -510,13 +516,20 @@ jobs:
         run: ./scripts/build-tmux.sh
 
       - name: Run benchmarks (count=5 for significance)
+        env:
+          # production default is 10s; CI runners are slower/noisier, and the
+          # benchmark job's module cache is cold on first run (never populated
+          # by a prior success), so tmux session creation needs more headroom
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           # -run='^$'  benchmarks only (no tests)
           # -short     skip integration benchmarks that spawn real processes
           # -count=5   statistically meaningful for ≥20% regression detection
           # -timeout=10m per package (search/unfinished are legitimately slow)
+          # | tee      keeps step output visible live instead of buffered
+          #            until completion, so a stall shows its last line
           TMUX_BIN="$(pwd)/bin/tmux" go test -bench=. -benchmem -count=5 \
-            -run='^$' -short ./... -timeout=10m > bench-current.txt
+            -run='^$' -short ./... -timeout=10m | tee bench-current.txt
 
       - name: Install benchstat (pinned)
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0

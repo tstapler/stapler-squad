@@ -19,6 +19,14 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+// BacklogFilterBar (now rendered above the board, see AC 3/4 — shared
+// filter state) calls useAnalytics() for chip-toggle tracking, which
+// requires an AnalyticsContextProvider we don't want to stand up for this
+// focused test. Mock it the same way BacklogItemDetail.test.tsx does.
+jest.mock("@/lib/analytics", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
+
 function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
   return {
     id: "item-1",

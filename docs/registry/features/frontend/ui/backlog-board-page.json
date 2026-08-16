@@ -1,0 +1,12 @@
+{
+  "id": "backlog:board-page",
+  "type": "frontend",
+  "component": "BacklogBoardPage",
+  "path": "web-app/src/app/backlog/board/page.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "BoardPage_should_CallUseStuckBacklogItemsOnceAndDistributeResolvedItemsPerCard_When_MultipleCardsRender"
+  ],
+  "lastModified": "2026-08-14T00:00:00Z"
+}

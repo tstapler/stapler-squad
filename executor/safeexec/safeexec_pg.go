@@ -9,7 +9,19 @@ import (
 	"context"
 	"os/exec"
 	"syscall"
+	"time"
 )
+
+// sigkillGrace bounds how long CommandContextPG waits after SIGTERM before
+// escalating to SIGKILL. Cmd.Wait calls Process.Wait unconditionally before
+// ever consulting WaitDelay (see os/exec.(*Cmd).Wait in the stdlib), so
+// WaitDelay bounds only pipe-closing, never the wait for actual process
+// exit — if the child ignores or never receives SIGTERM (e.g. a detached
+// git gc.auto grandchild, or a foreground process that traps SIGTERM),
+// Process.Wait blocks forever regardless of the caller's context deadline
+// or WaitDelay. SIGKILL cannot be caught or blocked, so escalating to it
+// bounds that wait to sigkillGrace instead of indefinitely.
+const sigkillGrace = 5 * time.Second
 
 // CommandContextPG returns an exec.Cmd with WaitDelay pre-set AND Setpgid: true.
 //
@@ -29,6 +41,23 @@ func CommandContextPG(ctx context.Context, name string, arg ...string) *exec.Cmd
 	cmd := CommandContext(ctx, name, arg...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
+	}
+	// Setpgid alone only places the child in its own process group — it does
+	// not change what cmd.Cancel signals. Without this override, the default
+	// Cancel (cmd.Process.Kill(), i.e. SIGKILL to the single child PID only)
+	// still applies, leaving grandchildren (e.g. git spawning a background
+	// pack-objects/gc helper) alive and holding the child's inherited
+	// stdout/stderr pipes open, which can hang CombinedOutput's Wait() well
+	// past both the context deadline and WaitDelay. Killing the negative PID
+	// signals the whole process group instead of just the direct child.
+	cmd.Cancel = func() error {
+		pgid := -cmd.Process.Pid
+		err := syscall.Kill(pgid, syscall.SIGTERM)
+		time.AfterFunc(sigkillGrace, func() {
+			// ESRCH here just means the group already exited; ignore it.
+			_ = syscall.Kill(pgid, syscall.SIGKILL)
+		})
+		return err
 	}
 	return cmd
 }
