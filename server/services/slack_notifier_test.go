@@ -303,6 +303,71 @@ func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.
 	assert.True(t, cmdFound, "expected truncated command text in payload")
 }
 
+// TestNotifyReviewQueueItem_And_NotifyApprovalPending_UseDescriptiveLinkText_NotClickHere
+// pins REQ-22/UX-19: the mrkdwn dashboard link blocks built by
+// NotifyReviewQueueItem and NotifyApprovalPending must use descriptive link
+// text ("<url|View <name>>") rather than a generic "click here" or a bare
+// URL with nothing surrounding it.
+func TestNotifyReviewQueueItem_And_NotifyApprovalPending_UseDescriptiveLinkText_NotClickHere(t *testing.T) {
+	t.Run("NotifyReviewQueueItem", func(t *testing.T) {
+		srv, ch := startCapturingSlackServer(t)
+		cfg := slackConfigWithWebhook(t, srv.URL)
+		n := NewSlackNotifier()
+
+		item := &session.ReviewItem{
+			SessionID:   "sess-1",
+			SessionName: "fix-login-bug",
+			Reason:      session.ReasonTestsFailing,
+		}
+		dashboardURL := "https://dash.example.com"
+		wantLink := dashboardURL + "/?session=" + item.SessionID
+		n.NotifyReviewQueueItem(context.Background(), cfg, item, dashboardURL)
+		req := waitForCapturedRequest(t, ch)
+
+		var decoded slackWebhookPayload
+		require.NoError(t, json.Unmarshal(req.body, &decoded))
+
+		var linkBlock *slackBlockText
+		for _, b := range decoded.Blocks {
+			if b.Text != nil && strings.Contains(b.Text.Text, wantLink) {
+				linkBlock = b.Text
+			}
+		}
+		require.NotNil(t, linkBlock, "expected a block containing the dashboard link")
+		assert.Contains(t, linkBlock.Text, "View fix-login-bug")
+		assert.Equal(t, "<"+wantLink+"|View fix-login-bug>", linkBlock.Text,
+			"link block must be descriptive mrkdwn, not a bare URL")
+		assert.NotContains(t, strings.ToLower(linkBlock.Text), "click here")
+	})
+
+	t.Run("NotifyApprovalPending", func(t *testing.T) {
+		srv, ch := startCapturingSlackServer(t)
+		cfg := slackConfigWithWebhook(t, srv.URL)
+		n := NewSlackNotifier()
+
+		approval := &PendingApproval{ID: "appr-123", SessionID: "sess-1", ToolName: "Bash"}
+		dashboardURL := "https://home.example.com"
+		wantLink := dashboardURL + "/?session=" + approval.SessionID
+		n.NotifyApprovalPending(context.Background(), cfg, approval, "fix-login-bug", dashboardURL)
+		req := waitForCapturedRequest(t, ch)
+
+		var decoded slackWebhookPayload
+		require.NoError(t, json.Unmarshal(req.body, &decoded))
+
+		var linkBlock *slackBlockText
+		for _, b := range decoded.Blocks {
+			if b.Text != nil && strings.Contains(b.Text.Text, wantLink) {
+				linkBlock = b.Text
+			}
+		}
+		require.NotNil(t, linkBlock, "expected a block containing the dashboard link")
+		assert.Contains(t, linkBlock.Text, "View fix-login-bug")
+		assert.Equal(t, "<"+wantLink+"|View fix-login-bug>", linkBlock.Text,
+			"link block must be descriptive mrkdwn, not a bare URL")
+		assert.NotContains(t, strings.ToLower(linkBlock.Text), "click here")
+	})
+}
+
 // --- Story 2.1.4: conditional outbound actions block (Phase 2) ---
 
 func TestNotifyApprovalPending_IncludesActionsBlock_When_ApprovalEnabled(t *testing.T) {
