@@ -960,8 +960,8 @@ export function SessionList({
     };
   }, [onDeleteSession, activeSelection, flushPendingDeletes, showUndoToast, removeNotification]);
 
-  const handleBulkAddTag = () => {
-    bulkTagEditorTriggerRef.current = document.activeElement as HTMLElement;
+  const handleBulkAddTag = (triggerEl: HTMLElement) => {
+    bulkTagEditorTriggerRef.current = triggerEl;
     setIsBulkTagEditing(true);
   };
 
@@ -1200,7 +1200,7 @@ export function SessionList({
           onPauseAll={handlePauseSelected}
           onResumeAll={handleResumeSelected}
           onDeleteAll={handleDeleteSelected}
-          onAddTagAll={handleBulkAddTag}
+          onAddTagAll={(e) => handleBulkAddTag(e.currentTarget)}
           onSelectAll={handleSelectAll}
           onClearSelection={handleClearSelection}
           feedback={bulkFeedback}

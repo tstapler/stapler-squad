@@ -682,14 +682,14 @@ export function SessionDetailView({
   };
 
   // Action sheet handlers
-  const handlePauseResume = async () => {
+  const handlePauseResume = async (triggerEl: HTMLElement) => {
     if (session.status === SessionStatus.PAUSED) {
       // The action sheet's own opener buttons unmount when the sheet closes, so
       // fall back to the persistent "More actions" button in that case (see
       // tagEditorTriggerRef/workspaceSwitchTriggerRef below for the same pattern).
       resumeTriggerRef.current = actionSheetOpen
         ? moreActionsButtonRef.current
-        : (document.activeElement as HTMLElement);
+        : triggerEl;
       setActionSheetOpen(false);
       setShowResumeModal(true);
     } else {
@@ -1034,7 +1034,7 @@ export function SessionDetailView({
                       className={pausedOverlayButton}
                       onClick={(e) => {
                         e.stopPropagation();
-                        handlePauseResume();
+                        handlePauseResume(e.currentTarget);
                       }}
                       aria-label="Resume this session"
                     >
@@ -1655,7 +1655,7 @@ export function SessionDetailView({
             {session.instanceType !== InstanceType.EXTERNAL && (
               <button
                 className={styles.actionSheetItem}
-                onClick={handlePauseResume}
+                onClick={(e) => handlePauseResume(e.currentTarget)}
                 data-testid="action-pause"
               >
                 {session.status === SessionStatus.PAUSED ? '▶ Resume' : '⏸ Pause'}
