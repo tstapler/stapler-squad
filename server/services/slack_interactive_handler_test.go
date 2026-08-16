@@ -69,6 +69,30 @@ func TestSlackInteractiveHandler_ResolvesApproval_When_VerifiedClickReceived(t *
 	assert.Equal(t, "allow", fake.calledWith.Decision)
 }
 
+// TestSlackInteractiveHandler_LogsSlackActorOnSuccess covers the security
+// review's audit-trail finding: a successful Approve/Deny via this
+// internet-facing endpoint must be logged with the Slack user who did it,
+// not just failures.
+func TestSlackInteractiveHandler_LogsSlackActorOnSuccess(t *testing.T) {
+	t.Setenv("SLACK_SIGNING_SECRET", slackInteractiveTestSecret)
+	buf := captureLogs(t)
+
+	payloadJSON := `{"user":{"id":"U123","username":"alice"},"actions":[{"action_id":"approve","value":"appr-123:allow"}]}`
+	body := "payload=" + url.QueryEscape(payloadJSON)
+	req := slackInteractiveTestRequest(t, body)
+
+	fake := &fakeApprovalResolver{}
+	h := NewSlackInteractiveHandler(fake)
+	w := httptest.NewRecorder()
+	h.Handle(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	logged := buf.String()
+	assert.Contains(t, logged, "alice", "audit log must capture which Slack user resolved the approval")
+	assert.Contains(t, logged, "appr-123")
+	assert.Contains(t, logged, "allow")
+}
+
 func TestSlackInteractiveHandler_Rejects_When_SignatureInvalid(t *testing.T) {
 	t.Setenv("SLACK_SIGNING_SECRET", slackInteractiveTestSecret)
 

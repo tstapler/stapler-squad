@@ -62,21 +62,11 @@ type Server struct {
 	slackInteractiveDisabled bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
 }
 
-// ServeHTTP makes *Server itself an http.Handler wrapping s.mux, so Start()'s
-// middleware chain and any test calling srv.ServeHTTP directly see identical
-// behavior. Its only job beyond delegating to s.mux is the Slack
-// interactive-approvals route gate (Phase 2, Epic 2.1, Story 2.1.3): when
-// Slack.ApprovalEnabled was false at boot, s.mux has NO registration at all
-// for "/api/hooks/slack-interactive" (unlike an earlier version of this gate,
-// which called s.mux.HandleFunc(path, http.NotFound) -- registering
-// *something*, even a 404 handler, still satisfies "is this pattern present
-// in the mux" checks a reviewer or future maintainer might reasonably run).
-// This method intercepts that one fixed, already-publicly-documented path
-// before it ever reaches s.mux, so "route is not registered in the mux" and
-// "returns a 404" are both literally true simultaneously -- something
-// impossible to achieve via mux registration alone in this app, since
-// registerStaticRoutes always mounts an SPA catch-all at "/" that answers
-// 200+index.html for genuinely unmatched paths.
+// ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
+// it intercepts the Slack interactive-approvals path pre-mux when disabled,
+// so s.mux itself has zero registration for it (registering even a 404
+// handler on s.mux wouldn't do — this app's SPA catch-all at "/" would
+// otherwise turn a genuinely-unregistered path into a 200, not a 404).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.slackInteractiveDisabled && r.URL.Path == "/api/hooks/slack-interactive" {
 		http.NotFound(w, r)

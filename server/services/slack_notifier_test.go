@@ -86,12 +86,16 @@ func waitForCapturedRequest(t *testing.T, ch chan capturedSlackRequest) captured
 	}
 }
 
+// assertNoRequestReceived waits for a window well over any realistic
+// goroutine-scheduling delay before concluding no send happened. Widened
+// from an original 200ms after code review flagged flakiness risk under a
+// contended CI runner (fix-flaky-tests-dont-defer.md).
 func assertNoRequestReceived(t *testing.T, ch chan capturedSlackRequest) {
 	t.Helper()
 	select {
 	case <-ch:
 		t.Fatal("unexpected slack webhook request received")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(750 * time.Millisecond):
 	}
 }
 
@@ -240,7 +244,7 @@ func TestNotifyReviewQueueItem_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	require.Never(t, func() bool {
 		attempted, _, _, _ := n.GetDeliveryStatus()
 		return attempted
-	}, 300*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
+	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
 func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *testing.T) {
@@ -301,7 +305,7 @@ func TestNotifyApprovalPending_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	require.Never(t, func() bool {
 		attempted, _, _, _ := n.GetDeliveryStatus()
 		return attempted
-	}, 300*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
+	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
 func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.T) {

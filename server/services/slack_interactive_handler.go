@@ -21,9 +21,14 @@ import (
 // research/pitfalls.md §5 item 7's "standard HTTP hardening" note.
 const maxSlackInteractiveBodyBytes = 1 << 20 // 1 MiB
 
-// SlackInteractivePayload is the minimal subset of Slack's interactive-
-// component callback payload this handler needs: which button was clicked.
+// SlackInteractivePayload is the subset of Slack's interactive-component
+// callback payload this handler needs: which button was clicked and who
+// clicked it (User, for audit logging -- see Handle's success-path log line).
 type SlackInteractivePayload struct {
+	User struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	} `json:"user"`
 	Actions []struct {
 		ActionID string `json:"action_id"`
 		Value    string `json:"value"`
@@ -57,18 +62,11 @@ func NewSlackInteractiveHandler(resolver approvalResolver) *SlackInteractiveHand
 	return &SlackInteractiveHandler{resolver: resolver}
 }
 
-// Handle reads the raw request body via io.ReadAll exactly once — before any
-// form/JSON parsing touches it — and reuses that same buffer for both
-// signature verification and payload parsing. It never calls r.ParseForm()
-// first: that is the named "read body before ParseForm" bug class from
-// research/pitfalls.md §5, which would verify against an already-consumed
-// (or differently-encoded) body instead of the exact bytes Slack signed.
-//
-// On any verification failure it responds 401 with a generic body — no
-// internals leaked to this now-internet-facing surface (§5 item 7). On
-// success it parses Slack's form-encoded "payload" field, extracts the
-// clicked button's value ("<approvalID>:allow" or "<approvalID>:deny"), and
-// resolves the approval in-process via approvalResolver.
+// Handle reads the raw body exactly once and reuses it for both signature
+// verification and payload parsing — never calling r.ParseForm() first,
+// which would verify against a different/already-consumed body than the
+// bytes Slack signed (research/pitfalls.md §5). Any verification failure
+// gets a generic 401; on success it resolves the clicked button's approval.
 func (h *SlackInteractiveHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSlackInteractiveBodyBytes)
 	rawBody, err := io.ReadAll(r.Body)
@@ -124,7 +122,12 @@ func (h *SlackInteractiveHandler) Handle(w http.ResponseWriter, r *http.Request)
 			Decision:   decision,
 		})
 		if _, err := h.resolver.ResolveApproval(r.Context(), req); err != nil {
-			log.Warn("SlackInteractiveHandler: ResolveApproval failed", "approval_id", approvalID, "error", err)
+			log.Warn("SlackInteractiveHandler: ResolveApproval failed", "approval_id", approvalID, "slack_user", payload.User.Username, "error", err)
+		} else {
+			// Audit trail: this is an internet-facing endpoint granting/denying
+			// tool-execution approval, so a successful outcome needs the same
+			// visibility a failure already gets, including who did it.
+			log.Info("SlackInteractiveHandler: approval resolved via Slack", "approval_id", approvalID, "decision", decision, "slack_user", payload.User.Username)
 		}
 	}
 

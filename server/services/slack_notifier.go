@@ -28,11 +28,9 @@ const maxSlackBlockTextLen = 2900
 const slackDispatchTimeout = 5 * time.Second
 
 // maxSlackErrorBodyLen bounds how much of a non-2xx response body postToSlack
-// will read and surface in its returned error. Slack's own error bodies are
-// short plain-text tokens ("no_service", "channel_not_found", ...); this cap
-// just guards against an unexpectedly large body from a misbehaving or
-// malicious endpoint (a user-supplied webhook URL, not necessarily Slack's
-// real servers) rather than reflecting a real expected size.
+// reads into its returned error (Slack's own error bodies are short
+// plain-text tokens like "no_service"; the cap guards against an oversized
+// body from a misbehaving user-supplied webhook URL).
 const maxSlackErrorBodyLen = 256
 
 // SlackNotifier formats Block Kit messages and delivers them to a configured
@@ -101,12 +99,9 @@ type slackWebhookPayload struct {
 	Blocks []slackBlock `json:"blocks,omitempty"`
 }
 
-// slackBlock is a single Block Kit block. Two shapes are used by this
-// notifier: "section" (Text set, Elements nil) for every message body block,
-// and "actions" (Elements set, Text nil — Phase 2, Story 2.1.4) for the
-// Approve/Deny button row NotifyApprovalPending appends when
-// cfg.Slack.ApprovalEnabled. One struct rather than a second type so
-// slackWebhookPayload.Blocks can stay a single, homogeneously-typed slice.
+// slackBlock is a single Block Kit block: "section" (Text set) for message
+// body blocks, or "actions" (Elements set) for the Phase 2 Approve/Deny
+// button row — one struct so slackWebhookPayload.Blocks stays homogeneous.
 type slackBlock struct {
 	Type     string               `json:"type"`
 	Text     *slackBlockText      `json:"text,omitempty"`
@@ -131,16 +126,10 @@ type slackButtonElement struct {
 	Style    string          `json:"style,omitempty"`
 }
 
-// escapeSlackMrkdwn escapes Slack's three mrkdwn special characters so
-// dynamic, potentially agent/user-influenced text (session names, review
-// context, diff content, approval detail) can never be interpreted as
-// mrkdwn/entity syntax when placed into a Block Kit text object. Per Slack's
-// formatting reference, "&" MUST be escaped first — escaping "<"/">" before
-// "&" would double-escape the "&" just introduced by their replacements
-// (e.g. "<" -> "&lt;" -> "&amp;lt;" if done in the wrong order). Escaping
-// stops literal injected sequences like "<!channel>" or "<@U12345>" from
-// rendering as real Slack mention/broadcast directives, and keeps a
-// dynamic label from corrupting the surrounding "<url|label>" link syntax.
+// escapeSlackMrkdwn escapes Slack's three mrkdwn special chars in
+// dynamic/agent-influenced text before it enters a Block Kit text object,
+// preventing injected directives like "<!channel>". "&" must be escaped
+// first, or escaping "<"/">" afterward double-escapes it.
 func escapeSlackMrkdwn(s string) string {
 	s = strings.ReplaceAll(s, "&", "&amp;")
 	s = strings.ReplaceAll(s, "<", "&lt;")
@@ -168,12 +157,10 @@ func truncateForSlackBlock(s string, maxRunes int) string {
 }
 
 // postToSlack marshals payload and POSTs it to webhookURL. It never lets the
-// raw error from httpClient.Do (which Go wraps in *url.Error embedding the
-// full request URL) reach a log call or returned error — on any transport
-// failure it returns a fresh, unwrapped sanitized error. On a non-2xx
-// response it returns an error carrying only the status code, never the URL.
-// Updates lastDeliveryAt/lastDeliverySuccess/lastDeliveryError under n.mu on
-// every call (success or failure).
+// raw *url.Error from httpClient.Do (which embeds the full request URL)
+// reach a log call or returned error — both transport and non-2xx failures
+// return a fresh, sanitized error instead. Updates the delivery-status
+// fields under n.mu on every call.
 func (n *SlackNotifier) postToSlack(ctx context.Context, webhookURL string, payload slackWebhookPayload) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -243,12 +230,9 @@ func (n *SlackNotifier) recordDelivery(success bool, errMsg string) {
 	}
 }
 
-// dispatchAsync runs fn on a new goroutine with panic recovery (logged via
-// log.Error) and a slackDispatchTimeout-bounded context derived from ctx.
-// This is a private implementation detail of SlackNotifier: NotifyReviewQueueItem,
-// NotifyApprovalPending, and MaybeNotifyQueueDepthThreshold each call this as
-// the first line of their own body and return immediately — the non-blocking
-// guarantee lives entirely inside SlackNotifier, never a caller's responsibility.
+// dispatchAsync runs fn on a new goroutine with panic recovery and a
+// slackDispatchTimeout-bounded context — the non-blocking guarantee for
+// every Notify*/MaybeNotify* method lives here, not with the caller.
 func (n *SlackNotifier) dispatchAsync(ctx context.Context, fn func(ctx context.Context)) {
 	go func() {
 		defer func() {
@@ -347,12 +331,8 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 			})
 		}
 
-		// Phase 2, Story 2.1.4: when interactive approvals are enabled, add an
-		// actions block with Approve/Deny buttons whose values encode
-		// "<approvalID>:allow"/"<approvalID>:deny" -- SlackInteractiveHandler
-		// (slack_interactive_handler.go) splits them back apart on a verified
-		// click. Omitted entirely when !ApprovalEnabled so Phase 1's payload
-		// shape is unchanged.
+		// Approve/Deny buttons (Phase 2): values encode "<approvalID>:allow/deny",
+		// which SlackInteractiveHandler splits apart on a verified click.
 		if cfg.Slack.ApprovalEnabled {
 			blocks = append(blocks, slackBlock{
 				Type: "actions",
@@ -381,19 +361,11 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 }
 
 // MaybeNotifyQueueDepthThreshold implements the edge-triggered digest latch:
-// fires exactly one Slack digest message per crossing above threshold,
-// resetting when depth drops back below it. threshold <= 0 always returns
-// false (feature-flag-off state) with no dispatch. Returns fired=true iff a
-// digest was dispatched by this call.
-//
-// Argument order (both plain ints — do not swap):
-//   - depth is the CURRENT review-queue size (rqm.queue.GetStatistics().TotalItems).
-//   - threshold is the CONFIGURED crossing point (cfg.Slack.QueueDepthThreshold).
-//
-// Swapping them silently inverts the crossing logic (e.g. a threshold of 0
-// read as the depth would permanently disable notifications, since
-// threshold <= 0 short-circuits above) with no compiler error — see
-// .claude/rules/primitive-obsession-checklist.md.
+// fires exactly one Slack digest per crossing above threshold, resetting
+// when depth drops back below it. threshold <= 0 always returns false.
+// depth and threshold are both plain ints — do not swap them, it silently
+// inverts the crossing logic with no compiler error (primitive-obsession
+// checklist).
 func (n *SlackNotifier) MaybeNotifyQueueDepthThreshold(ctx context.Context, cfg *config.Config, depth, threshold int, dashboardURL string) (fired bool) {
 	if threshold <= 0 {
 		return false
