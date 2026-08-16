@@ -297,7 +297,12 @@ export function SlackNotificationSettings() {
             Paste your Slack Incoming Webhook URL
           </p>
           {webhookError && (
-            <p id="slack-webhook-error" role="alert" className={errorText}>
+            <p
+              id="slack-webhook-error"
+              role="alert"
+              data-testid="slack-webhook-error"
+              className={errorText}
+            >
               {webhookError}
             </p>
           )}
@@ -401,6 +406,7 @@ export function SlackNotificationSettings() {
           <InlineNotice
             message="Your Slack links may not work outside your home network — set a Dashboard URL below."
             onDismiss={() => setDashboardWarningDismissed(true)}
+            data-testid="slack-dashboard-warning"
           />
         )}
 
@@ -423,6 +429,7 @@ export function SlackNotificationSettings() {
 
         <div
           role="status"
+          data-testid="slack-last-delivery-status"
           className={`${deliveryStatus} ${lastDelivery && lastDelivery.attempted && !lastDelivery.success ? deliveryStatusFailed : ""}`}
         >
           {lastDelivery && lastDelivery.attempted ? (
