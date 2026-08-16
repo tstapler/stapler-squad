@@ -26,7 +26,12 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	}
 
 	dbPath := filepath.Join(dataDir, "analytics.db")
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on&_pragma=wal_autocheckpoint(1000)", dbPath)
+	// _timeout must be set explicitly: unlike the previous mattn/go-sqlite3 driver
+	// (which defaulted busy_timeout to 5000ms even when the DSN omitted it),
+	// modernc.org/sqlite only issues `PRAGMA busy_timeout` when the DSN sets
+	// _timeout/_busy_timeout, otherwise leaving SQLite's own default of 0 (immediate
+	// SQLITE_BUSY on lock contention) in effect.
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on&_timeout=5000&_pragma=wal_autocheckpoint(1000)", dbPath)
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
