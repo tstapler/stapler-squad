@@ -861,7 +861,7 @@ func LoadConfig() *Config {
 // "no such file or directory" and, in tighter interleavings, a torn write
 // leaves config.json holding malformed JSON that the next LoadConfig call
 // silently falls back to DefaultConfig() over (losing whatever was there).
-var saveConfigMu sync.Mutex
+var saveConfigMu sync.Mutex //nolint:gochecknoglobals // serializes concurrent saveConfig callers sharing the same tmpPath
 
 // saveConfig saves the configuration to disk atomically via a temp-file rename.
 // Accepts an optional explicit path; when omitted the path is derived from GetConfigDir().
