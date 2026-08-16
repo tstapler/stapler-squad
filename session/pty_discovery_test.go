@@ -378,25 +378,33 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 
-	// A healthy fakeSessionLister must be injected explicitly: leaving sessionLister
-	// unset defaults to tmux.GetServerRegistry(""), which lazily starts a real
-	// process-global TmuxServerRegistry singleton with its own reconnectLoop
-	// goroutine (a live tmux control-mode subprocess wait). That singleton is
-	// shared across the whole test binary and outlives this test's pd.Stop(), so
-	// goleak occasionally observed it as a false-positive leak (~5% locally)
-	// depending on exactly when its goroutine got scheduled relative to the
-	// baseline capture above — unrelated to monitorLoop's own join behavior.
+	// A healthy fakeSessionLister avoids starting the real process-global
+	// TmuxServerRegistry singleton (and its reconnectLoop goroutine), which
+	// would otherwise register as an unrelated goleak false-positive.
 	lister := &fakeSessionLister{healthy: true}
 	pd := NewPTYDiscoveryWithConfig(PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond}, WithSessionLister(lister))
 	pd.Start()
 	time.Sleep(20 * time.Millisecond) // let several ticks fire
 	pd.Stop()
 
+	// Deterministic check: Stop() must not return until monitorWG has already
+	// hit zero. Stop() itself only returns after its own internal
+	// waitGroupWithTimeout(&pd.monitorWG, stopJoinTimeout) call unblocks, so by
+	// this point the counter is guaranteed to already be 0 — this call cannot
+	// block in the success case. It's a direct wg.Wait() rather than
+	// waitGroupWithTimeout with a short timeout: a zero/short-duration timeout
+	// races a freshly spawned goroutine against time.After, which can lose
+	// even when the counter is already zero (observed intermittently in local
+	// runs, especially under -race). If a real regression reintroduces the
+	// join gap, this call hangs until the test's own -timeout kills it —
+	// still catches the regression, just via test timeout instead of an
+	// assertion message.
+	pd.monitorWG.Wait()
+
 	// os/exec's internal watchCtx goroutine doesn't synchronize its own exit
-	// with cmd.Wait()/cmd.Output() returning, so goleak can catch it mid-teardown
-	// on a scheduler tick (~20% locally) even though monitorLoop itself has
-	// already joined. Ignore it here rather than in the process-wide goleak.TestMain
-	// filter, since it's specific to this test's subprocess-heavy tick timing.
+	// with cmd.Wait()/cmd.Output() returning, so it can still be winding down
+	// here even though monitorLoop itself has already joined; ignore it as a
+	// secondary belt-and-suspenders check.
 	goleak.VerifyNone(t, baseline, goleak.IgnoreTopFunction("os/exec.(*Cmd).watchCtx"))
 }
 
