@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -91,20 +92,25 @@ func gitRun(t *testing.T, dir string, args ...string) {
 // window in lockstep. See gitRetryBackoff.
 func gitRunErr(logf func(format string, args ...any), dir string, args ...string) error {
 	const maxAttempts = 5
+	timeout := gitCommandTimeout(args)
 	var lastErr error
 	var lastOut []byte
+	var lastTimedOut bool
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		cmd := safeexec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",
 			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.local",
 		)
 		out, err := cmd.CombinedOutput()
+		timedOut := ctx.Err() == context.DeadlineExceeded
+		cancel()
 		if err == nil {
 			return nil
 		}
-		lastErr, lastOut = err, out
+		lastErr, lastOut, lastTimedOut = err, out, timedOut
 		if !gitCommandIsRetryable(args) || attempt == maxAttempts {
 			break
 		}
@@ -113,7 +119,29 @@ func gitRunErr(logf func(format string, args ...any), dir string, args ...string
 		}
 		time.Sleep(gitRetryBackoff(attempt))
 	}
+	if lastTimedOut {
+		return fmt.Errorf("git %v timed out after %s (subprocess never exited — killed): %w\n%s", args, timeout, lastErr, lastOut)
+	}
 	return fmt.Errorf("git %v failed: %w\n%s", args, lastErr, lastOut)
+}
+
+// gitCommandTimeout returns how long a single gitRunErr attempt may run
+// before its subprocess is killed. context.Background() previously left
+// gitRunErr's safeexec.CommandContext with no deadline at all — safeexec's
+// WaitDelay only bounds the wait *after* a context is cancelled, so a
+// context that never cancels leaves the subprocess completely unbounded.
+// `git gc --aggressive` on this package's few-hundred-commit fixture is the
+// only command here with a meaningfully large runtime (repack/prune over
+// every object), so it gets a generous timeout; everything else (init,
+// config, add, commit, worktree add) is cheap plumbing and gets a much
+// smaller bound so a genuine hang fails fast.
+func gitCommandTimeout(args []string) time.Duration {
+	for _, a := range args {
+		if a == "gc" {
+			return 90 * time.Second
+		}
+	}
+	return 30 * time.Second
 }
 
 // gitRetryBackoff returns the delay before retrying a failed retryable git
@@ -144,6 +172,70 @@ func gitCommandIsRetryable(args []string) bool {
 		}
 	}
 	return false
+}
+
+// TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever is the
+// synthetic-hang regression test for the bug this file's gitCommandTimeout
+// doc comment describes: gitRunErr previously ran its subprocess under
+// context.Background(), which never cancels, so safeexec's WaitDelay (which
+// only bounds Wait() *after* the context is cancelled) never engaged and a
+// wedged git subprocess could hang indefinitely — this is what produced the
+// observed "test timed out after 5m0s" panic on
+// TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst.
+//
+// It replaces "git" on PATH with a fake binary that never exits on its own
+// (an unkillable-by-cooperation `sleep`), then calls gitRunErr with a
+// non-retryable subcommand ("status") so exactly one attempt is made. If
+// gitRunErr still bounds the subprocess with a real context.WithTimeout,
+// the call must return an error mentioning the timeout well within
+// gitCommandTimeout's non-gc bound (30s) plus safeexec's WaitDelay
+// (executor/safeexec.DefaultWaitDelay, 2s) and process-teardown overhead —
+// asserted here via a generous 45s wall-clock ceiling enforced with a
+// timer, not by trusting gitRunErr to return promptly on its own. Before
+// the fix, this exact test would have hung for the fake process's full
+// sleep duration (or until the outer `go test` timeout killed the whole
+// run), since context.Background() never fires and the fake process never
+// exits voluntarily.
+func TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever(t *testing.T) {
+	fakeBinDir := t.TempDir()
+	fakeGitPath := filepath.Join(fakeBinDir, "git")
+	// A real `sleep` far longer than any timeout this test could plausibly
+	// wait on. Once ctx's deadline fires, exec.CommandContext SIGKILLs this
+	// process directly (SIGKILL can't be trapped/ignored), so the fake
+	// binary doesn't need to trap signals to prove the point — it only
+	// needs to never exit on its own within the test's window.
+	script := "#!/bin/sh\nexec sleep 3600\n"
+	if err := os.WriteFile(fakeGitPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git binary: %v", err)
+	}
+
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+origPath)
+
+	type result struct {
+		err error
+		dur time.Duration
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		err := gitRunErr(t.Logf, t.TempDir(), "status")
+		done <- result{err: err, dur: time.Since(start)}
+	}()
+
+	const ceiling = 45 * time.Second
+	select {
+	case r := <-done:
+		if r.err == nil {
+			t.Fatalf("gitRunErr against a wedged subprocess returned nil error (want a timeout error) after %s", r.dur)
+		}
+		if !strings.Contains(r.err.Error(), "timed out") {
+			t.Fatalf("gitRunErr error = %v, want it to mention \"timed out\" (proves the context.WithTimeout path fired, not some other failure)", r.err)
+		}
+		t.Logf("gitRunErr against a wedged subprocess returned in %s: %v", r.dur, r.err)
+	case <-time.After(ceiling):
+		t.Fatalf("gitRunErr did not return within %s against a wedged subprocess — context.WithTimeout is not bounding the subprocess (regression to the context.Background() bug)", ceiling)
+	}
 }
 
 // buildPackedFixtureAttempts bounds how many times buildPackedFixture will
