@@ -125,7 +125,37 @@ func (r *EntWorkflowRepository) UpdateConditional(ctx context.Context, id uuid.U
 	if !expectedUpdatedAt.IsZero() {
 		u = u.Where(workflow.UpdatedAtEQ(expectedUpdatedAt))
 	}
+	applyWorkflowUpdate(u, w)
 
+	wf, err := u.Save(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			// Either the row doesn't exist at all, or (when a precondition was
+			// supplied) it exists but updated_at no longer matches — both collapse
+			// to the identical "0 rows matched WHERE id=... AND updated_at=..."
+			// result at the SQL level, so disambiguate with one targeted existence
+			// check, paid only on this (rare) failure path, not on every call.
+			if !expectedUpdatedAt.IsZero() {
+				if _, getErr := r.client.Workflow.Get(ctx, id); getErr == nil {
+					return nil, fmt.Errorf("%w: workflow %s updated_at mismatch", ErrPreconditionFailed, id)
+				}
+			}
+			return nil, fmt.Errorf("%w: workflow %s", ErrNotFound, id)
+		}
+		if ent.IsConstraintError(err) {
+			return nil, fmt.Errorf("%w: slug already exists", ErrConflict)
+		}
+		return nil, fmt.Errorf("update workflow %s: %w", id, err)
+	}
+	return wf, nil
+}
+
+// applyWorkflowUpdate copies every non-nil field from w onto u. Split out of
+// UpdateConditional (rather than inlined) purely to keep that function's cyclomatic
+// complexity under CI's gocyclo threshold — this is just a flat list of independent
+// optional-field assignments, no branching logic of its own beyond WebhookSlug's
+// clear-vs-set distinction.
+func applyWorkflowUpdate(u *ent.WorkflowUpdateOne, w WorkflowUpdateInput) {
 	if w.Name != nil {
 		u.SetName(*w.Name)
 	}
@@ -201,28 +231,6 @@ func (r *EntWorkflowRepository) UpdateConditional(ctx context.Context, id uuid.U
 	if w.LastFiredAt != nil {
 		u.SetLastFiredAt(*w.LastFiredAt)
 	}
-
-	wf, err := u.Save(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			// Either the row doesn't exist at all, or (when a precondition was
-			// supplied) it exists but updated_at no longer matches — both collapse
-			// to the identical "0 rows matched WHERE id=... AND updated_at=..."
-			// result at the SQL level, so disambiguate with one targeted existence
-			// check, paid only on this (rare) failure path, not on every call.
-			if !expectedUpdatedAt.IsZero() {
-				if _, getErr := r.client.Workflow.Get(ctx, id); getErr == nil {
-					return nil, fmt.Errorf("%w: workflow %s updated_at mismatch", ErrPreconditionFailed, id)
-				}
-			}
-			return nil, fmt.Errorf("%w: workflow %s", ErrNotFound, id)
-		}
-		if ent.IsConstraintError(err) {
-			return nil, fmt.Errorf("%w: slug already exists", ErrConflict)
-		}
-		return nil, fmt.Errorf("update workflow %s: %w", id, err)
-	}
-	return wf, nil
 }
 
 // Delete removes a workflow by UUID.
