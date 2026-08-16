@@ -1,7 +1,7 @@
 "use client";
 // +feature: backlog:file-browser-modal
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { FileTree } from "@/components/sessions/FileTree";
 import { FileContentViewer } from "@/components/sessions/FileContentViewer";
@@ -26,6 +26,7 @@ interface BacklogFileBrowserModalProps {
   sessionId: string;
   sessionTitle?: string;
   onClose: () => void;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -35,9 +36,9 @@ interface BacklogFileBrowserModalProps {
  * no dependency on SessionVcsContext/session tab-switching state — see
  * FileTree.tsx / FileContentViewer.tsx prop signatures.
  */
-export function BacklogFileBrowserModal({ sessionId, sessionTitle, onClose }: BacklogFileBrowserModalProps) {
+export function BacklogFileBrowserModal({ sessionId, sessionTitle, onClose, triggerRef }: BacklogFileBrowserModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(modalRef, true);
+  useFocusTrap(modalRef, true, triggerRef);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const baseUrl = getApiBaseUrl();
 

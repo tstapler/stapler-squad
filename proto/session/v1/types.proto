@@ -1136,6 +1136,10 @@ message ApprovalRuleProto {
   // require_ci_passing, when true, only matches when the requesting session's GitHub
   // CI check conclusion is "success". Combinable (AND) with all other conditions.
   bool            require_ci_passing      = 29;
+  // min_session_idle_minutes, when > 0, only matches if the requesting session has
+  // been idle >= N minutes since its last meaningful output. 0 = condition not
+  // applied. Combinable (AND) with all other conditions.
+  int32 min_session_idle_minutes = 30;
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.
