@@ -15,7 +15,9 @@ func newTestScrollbackManager(t *testing.T) *scrollback.ScrollbackManager {
 	t.Helper()
 	cfg := scrollback.DefaultScrollbackConfig()
 	cfg.StoragePath = t.TempDir()
-	return scrollback.NewScrollbackManager(cfg)
+	sm := scrollback.NewScrollbackManager(cfg)
+	t.Cleanup(func() { _ = sm.Close() })
+	return sm
 }
 
 func TestStripANSI(t *testing.T) {

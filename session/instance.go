@@ -424,6 +424,24 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// driverWG tracks the SessionDriver goroutine (runSessionDriver or its
+	// handleDriverFailure-spawned restart) so tests can join it before
+	// t.TempDir() cleanup runs. See StartSessionDriver and JoinSessionDriver.
+	driverWG sync.WaitGroup
+	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
+	// goroutines so tests can join them before t.TempDir() cleanup runs.
+	// See JoinHibernation.
+	hibernateWG sync.WaitGroup
+
+	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
+	// its own teardown (session_driver.go's loop only self-terminates on a
+	// 25-minute wall-clock deadline or a detected terminal status, both of
+	// which can lag well behind Destroy() returning) notices on its very next
+	// driverPollInterval tick and exits immediately instead of continuing to
+	// call SendKeys/AcquireExecSlot against a torn-down session. Zero-value
+	// safe (false) so the many `&Instance{}` construction sites that bypass
+	// NewInstance need no changes.
+	destroyed atomic.Bool
 
 	// sessionGoal is the cached goal state for this session.
 	// Always use GetSessionGoal/SetSessionGoalCached accessors.
@@ -1389,6 +1407,11 @@ const destroyChainTimeout = 5 * time.Second
 // so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
 // ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
+	// Set first, before anything else: a leftover SessionDriver goroutine
+	// (session_driver.go) polls this every driverPollInterval and exits on
+	// seeing it, rather than continuing until its own 25-minute deadline.
+	i.destroyed.Store(true)
+
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
 

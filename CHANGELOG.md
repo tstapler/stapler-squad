@@ -1,5 +1,63 @@
 # Changelog
 
+## [1.44.0](https://github.com/tstapler/stapler-squad/compare/v1.43.1...v1.44.0) (2026-08-16)
+
+
+### Features
+
+* **backlog:** add UnarchiveBacklogItem RPC and archive confirmation guard ([#499](https://github.com/tstapler/stapler-squad/issues/499)) ([8af1707](https://github.com/tstapler/stapler-squad/commit/8af1707bfd5d77e45854308e9705d34686cf5ceb))
+* **backlog:** display current reworkCapOverride value to users ([#507](https://github.com/tstapler/stapler-squad/issues/507)) ([a89fe5d](https://github.com/tstapler/stapler-squad/commit/a89fe5d230b5abffabba4d4fbc89a0eae2b2bc2c))
+* **backlog:** share filter/sort state between list and board views ([#506](https://github.com/tstapler/stapler-squad/issues/506)) ([b234af6](https://github.com/tstapler/stapler-squad/commit/b234af61743b35280da380e08be67225d303f18d))
+* **backlog:** wire retry action into detail-page BlockerChip ([#510](https://github.com/tstapler/stapler-squad/issues/510)) ([54bd63b](https://github.com/tstapler/stapler-squad/commit/54bd63bcb5fd0c8faa65b25cfcf4845cfac2ee7c))
+* **github:** add SetCommitStatus primitive for the Statuses API ([648bd24](https://github.com/tstapler/stapler-squad/commit/648bd24c1becb276087f7f463b5687ca47a8611b))
+* **mcp:** expose backlog list/notification-history/history-search as MCP tools ([#502](https://github.com/tstapler/stapler-squad/issues/502)) ([24122b9](https://github.com/tstapler/stapler-squad/commit/24122b9b3862cc9ce9dcafd8ded93afe4ef0a7c5))
+* **session:** clean up temp prompt files on destroy, add fast-lane pane capture ([3cb89cd](https://github.com/tstapler/stapler-squad/commit/3cb89cd0b95ddf4221eb728afe8e3d6184e1321f))
+* **sessions:** add stale session detection and alerting ([#515](https://github.com/tstapler/stapler-squad/issues/515)) ([f5a78fb](https://github.com/tstapler/stapler-squad/commit/f5a78fb72338cecc075b6586ac08934a0cf41036))
+* Slack webhook notifications for review queue ([#525](https://github.com/tstapler/stapler-squad/issues/525)) ([a3f57cf](https://github.com/tstapler/stapler-squad/commit/a3f57cf246970451eab5cc7b297a877a11b17995))
+* **terminal-resync:** improve terminal resync reliability ([04ec32a](https://github.com/tstapler/stapler-squad/commit/04ec32a92af1a8ec3f7b66cd39e06f8a9a329258))
+
+
+### Bug Fixes
+
+* **autonomous-driver:** suppress duplicate nudges on fixed idle-settle cadence ([#511](https://github.com/tstapler/stapler-squad/issues/511)) ([bdfd947](https://github.com/tstapler/stapler-squad/commit/bdfd9479b7436c90814fd0fd00c39b982e70a842))
+* **backlog:** derive board card primary action from real item state ([#500](https://github.com/tstapler/stapler-squad/issues/500)) ([bc05477](https://github.com/tstapler/stapler-squad/commit/bc054776cb7931b0429359b49706cc2bbd16141b))
+* **backlog:** make sortable table headers keyboard-accessible ([#504](https://github.com/tstapler/stapler-squad/issues/504)) ([a64c2d5](https://github.com/tstapler/stapler-squad/commit/a64c2d52f7b325c2cb35f7aa593861141c2a0c85))
+* **backlog:** restore focus to trigger element when modals close ([#516](https://github.com/tstapler/stapler-squad/issues/516)) ([eb01643](https://github.com/tstapler/stapler-squad/commit/eb016431e12e34ba7cd69c78a6cab34d4d092c90))
+* **backlog:** trap keyboard focus in ReviewChangesModal and BacklogFileBrowserModal ([#508](https://github.com/tstapler/stapler-squad/issues/508)) ([d068cae](https://github.com/tstapler/stapler-squad/commit/d068caea8c361f8505942817d1df4636a53bed20))
+* **ci:** widen Benchmark Gate timeout and unhide its output ([6f2dc5d](https://github.com/tstapler/stapler-squad/commit/6f2dc5d9bf52ce8a5663ea5e0ca203fce7434a82))
+* **e2e:** stop review-queue.spec.ts's 10 failures at their real root causes ([#520](https://github.com/tstapler/stapler-squad/issues/520)) ([f8f3772](https://github.com/tstapler/stapler-squad/commit/f8f3772a24c6e5c2b8066a4ae07990d48c28267d))
+* **git:** prevent SIGSEGV in DiffHashBetween on nil FilePatch.Files() ([28b06ac](https://github.com/tstapler/stapler-squad/commit/28b06ac25def918c700cc39370a30d0efeb6eef3))
+* **gogitstore:** bound closeAll() to stop soak-test hang under sustained load ([#517](https://github.com/tstapler/stapler-squad/issues/517)) ([d7dce85](https://github.com/tstapler/stapler-squad/commit/d7dce85da6004c92853782e667862f485ce779b6))
+* **gogitstore:** bound gitRunErr subprocesses with a real timeout ([#523](https://github.com/tstapler/stapler-squad/issues/523)) ([9de4fb9](https://github.com/tstapler/stapler-squad/commit/9de4fb940371665d53b9d99905953f2acac82187))
+* **gogitstore:** bound test-fixture git subprocess calls with a timeout ([e952d2e](https://github.com/tstapler/stapler-squad/commit/e952d2eb71d1d3710cae46249294c81b24f820a0))
+* **perf:** batch Associator lookups instead of per-result full scan ([623b770](https://github.com/tstapler/stapler-squad/commit/623b770d57172b826fa5130d0cb131e984cc2678))
+* **perf:** prune stale ordinal counters in MangleCorrelator ([73c128c](https://github.com/tstapler/stapler-squad/commit/73c128c97782affa21c36dcb12d0cedbab8d9fbd))
+* **safeexec:** escalate to SIGKILL after grace period in CommandContextPG ([7e92c29](https://github.com/tstapler/stapler-squad/commit/7e92c29cfedf1e0bd9054c64a47599c69ede3ff3))
+* **safeexec:** instrument SIGKILL escalation with logs, metrics, and proc-state snapshot ([#514](https://github.com/tstapler/stapler-squad/issues/514)) ([3e4ddea](https://github.com/tstapler/stapler-squad/commit/3e4ddeac463d2420d148a4fea661b83d176df84a))
+* **services:** bound DeleteSession cleanup goroutines and tmux kill-session timeout ([#503](https://github.com/tstapler/stapler-squad/issues/503)) ([e5252ab](https://github.com/tstapler/stapler-squad/commit/e5252abdb05388b695dbe2e28049af7caeb97996))
+* **session-retention:** eager-load Worktree in retention sweep ([cce386f](https://github.com/tstapler/stapler-squad/commit/cce386fc15e635f7a4087bfba1879c0213d55c04))
+* **session:** block PTYDiscovery.Stop() until monitorLoop exits ([c213aee](https://github.com/tstapler/stapler-squad/commit/c213aeec33123146cc0bac67a1f9f943a846fbb5))
+* **session:** fix TestWaitForPaneSettle flake, join driver/hibernate goroutines before teardown ([#527](https://github.com/tstapler/stapler-squad/issues/527)) ([facfb86](https://github.com/tstapler/stapler-squad/commit/facfb869a3f337c4f23e6d3b202c5472bf2a5985))
+* **session:** join PTYDiscovery.Stop() with monitorLoop to fix TempDir cleanup race ([#521](https://github.com/tstapler/stapler-squad/issues/521)) ([445e252](https://github.com/tstapler/stapler-squad/commit/445e2529a1a4e43a329add454ca73696f1bce830))
+* **terminal-resync:** pick up live terminal:resync-batching flag toggle ([7e76f18](https://github.com/tstapler/stapler-squad/commit/7e76f18d1bdbae8e5cbefe03f921e1937e99637f))
+* **terminal-resync:** route all CurrentPaneRequest replies through writeCurrentPaneResponse ([05bafa8](https://github.com/tstapler/stapler-squad/commit/05bafa83a8f9b9a28ad2ec2832f778eded574a7f))
+* **terminal-resync:** use data-testid locators in feature flags e2e spec ([1aa7cfc](https://github.com/tstapler/stapler-squad/commit/1aa7cfc53edbeb5e73c3a308d527310bcd896af6))
+* **test:** resolve symlinks before comparing worktree paths on macOS ([e6bc36c](https://github.com/tstapler/stapler-squad/commit/e6bc36cbfed439b6ffa085dcdc8712a6c05b610d))
+* **tests:** update stale selective-loading assertions to match applyLoadOptions ([61b71a9](https://github.com/tstapler/stapler-squad/commit/61b71a95ddc2b64f024680f4eea4dd381cca8926))
+* **tmux:** route Close()'s kill-session call through the injected executor ([f54fa69](https://github.com/tstapler/stapler-squad/commit/f54fa6991daa3ff25662831c38b3615694aba31a))
+* **web-app:** prevent mobile overflow in Unfinished/backlog chip rows ([c91a831](https://github.com/tstapler/stapler-squad/commit/c91a8315339ecdf8e511baabf566f3e41b6da5be))
+* **web-app:** wire triggerRef into remaining useFocusTrap call sites ([#518](https://github.com/tstapler/stapler-squad/issues/518)) ([4e5e318](https://github.com/tstapler/stapler-squad/commit/4e5e318b24957777ea3350f348ec1e69d803129d))
+* **worktree:** resolve symlinks in worktree base directory ([c729c74](https://github.com/tstapler/stapler-squad/commit/c729c74e95892a07843138e622114f003fa28a3e))
+
+
+### Performance Improvements
+
+* **github:** coalesce concurrent keychain token reads with singleflight ([057d0ea](https://github.com/tstapler/stapler-squad/commit/057d0eae8f14e55b3e1015aa6eb870df6fbb2191))
+* **github:** document why keychainMu stays a single global mutex ([d0392a1](https://github.com/tstapler/stapler-squad/commit/d0392a11ded29a27a2ec13d8839383a4ba2c373e))
+* **git:** reuse ahead/behind cache on unchanged hashes, bound countCommitsTo ([6661fb4](https://github.com/tstapler/stapler-squad/commit/6661fb4065a412b45a05ac0d6f8b5988a51c825e))
+* **gogitstore:** cache indexSnapshot to avoid per-lookup map copy ([3666e09](https://github.com/tstapler/stapler-squad/commit/3666e09c51a1d23ff74c27bf8b8f91b066a5b7d0))
+* **gogitstore:** decouple gitignore matcher cache from cachedRepo TTL ([1c70e2c](https://github.com/tstapler/stapler-squad/commit/1c70e2c11a67a3405cd46cbb4fc106e2c9715faf))
+
 ## [1.43.1](https://github.com/tstapler/stapler-squad/compare/v1.43.0...v1.43.1) (2026-08-14)
 
 

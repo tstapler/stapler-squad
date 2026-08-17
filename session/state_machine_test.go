@@ -219,6 +219,10 @@ func TestTransitionTo_ValidTransitions(t *testing.T) {
 			// cold-restore Start() that now hard-fails on a missing workdir instead
 			// of silently falling back to the process cwd (see ErrWorkDirMissing).
 			inst := &Instance{Title: "test", Status: from, Path: t.TempDir()}
+			t.Cleanup(func() {
+				JoinHibernation(inst)
+				JoinSessionDriver(inst)
+			})
 			err := inst.transitionTo(ctx, to)
 			if err != nil {
 				t.Errorf("transitionTo(%s) from %s: unexpected error %v", to, from, err)
@@ -293,6 +297,10 @@ func TestTransitionTo_ChainedTransitions(t *testing.T) {
 			// cold-restore Start() that now hard-fails on a missing workdir instead
 			// of silently falling back to the process cwd (see ErrWorkDirMissing).
 			inst := &Instance{Title: "test-chain", Status: chain.start, Path: t.TempDir()}
+			t.Cleanup(func() {
+				JoinHibernation(inst)
+				JoinSessionDriver(inst)
+			})
 			for i, step := range chain.steps {
 				if err := inst.transitionTo(ctx, step.to); err != nil {
 					t.Fatalf("step %d: transitionTo(%s) from %s: %v", i, step.to, inst.Status, err)
