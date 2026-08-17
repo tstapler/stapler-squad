@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -653,162 +654,22 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		}
 	}()
 
-	// quiescenceCh is signaled inline by the output forwarding goroutine (below) on every
-	// received frame, eliminating the separate subscription and fan-out goroutine that was
-	// waking up 212K+ times per stream for every terminal byte.
-	quiescenceCh := make(chan struct{}, 16)
-
-	if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
-		targetCols := int(*currentPaneReq.TargetCols)
-		targetRows := int(*currentPaneReq.TargetRows)
-
-		log.Info("[streamViaControlMode] handshake dimensions, forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
-
-		// The nudge below repaints the TUI at targetCols x targetRows, so any snapshot
-		// cached from an earlier connection is stale by construction — it was captured at
-		// the previous dimensions. Drop it here so the capture at the end of this function
-		// re-reads the pane. Without this, getOrRefreshSnapshot sees a "clean" entry (the
-		// repaint cannot mark it dirty: markSnapshotDirty is only reachable from the
-		// output-forwarding goroutine, which starts later) and serves the old-dimension
-		// content, which xterm.js then paints live frames over — producing rows composited
-		// from two different wrap widths, duplicated table rows and stray glyphs.
-		h.invalidateSnapshot(sessionID)
-
-		// Nudge to (cols-1) so tmux always sends SIGWINCH regardless of current size
-		if targetCols > 1 {
-			if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr != nil {
-				log.Warn("[streamViaControlMode] pre-nudge resize failed", "err", resizeErr)
-			}
-		}
-
-		if err := instance.ResizePTY(targetCols, targetRows); err != nil {
-			log.Error("[streamViaControlMode] failed to resize", "err", err)
-		} else {
-			// Wait for the TUI to complete its full redraw before capturing.
-			//
-			// NOTE: nothing signals quiescenceCh yet at this point — its only producer is
-			// the output-forwarding goroutine started further down — so this currently
-			// degenerates to a fixed quietFor settle rather than real quiescence
-			// detection, and the timeout warning below cannot fire. quietFor is therefore
-			// set to match the 200ms post-nudge settle that streamViaTmuxCapture uses, so
-			// a slow repaint is less likely to be captured half-drawn. Making this
-			// genuinely quiescence-driven requires subscribing a producer before the
-			// nudge (the previous subscription was removed for performance — see the
-			// quiescenceCh comment above).
-			quiescenceStart := time.Now()
-			waitForQuiescence(quiescenceCh, 500*time.Millisecond, 200*time.Millisecond)
-			if elapsed := time.Since(quiescenceStart); elapsed >= 500*time.Millisecond-5*time.Millisecond {
-				log.Warn("[streamViaControlMode] initial quiescence timed out; session may be stalled", "elapsed", elapsed.Round(time.Millisecond), "session", sessionID)
-			}
-			log.Info("[streamViaControlMode] tmux resized, redraw complete", "cols", targetCols, "rows", targetRows)
-		}
-	} else {
-		log.Warn("[streamViaControlMode] handshake missing dimensions, layout may be incorrect")
-	}
-
-	// Now capture content at correct dimensions.
-	// If capture fails, it may be because a concurrent Instance.Resume() is still mid-restore
-	// (RestoreWithWorkDir racing this handler's own lazy-restore-skip path above, which only
-	// restores when the tmux session is absent — it does nothing if Resume() is already
-	// restoring an existing one). Poll briefly rather than immediately declaring the session
-	// stopped: the frontend's loading spinner stays up until the first WS message arrives, so
-	// withholding that message here is what turns a misleading "stopped" flash into a visible
-	// "still resuming" wait.
-	initialContent, err := h.getOrRefreshSnapshot(sessionID, func() (string, error) {
-		return waitForPaneContent(instance)
-	})
-	if err != nil {
-		log.Info("[streamViaControlMode] capture-pane failed, sending stopped notice", "session", sessionID, "err", err)
-		// Send a visible notice instead of leaving the terminal blank so the user
-		// knows why there is no output (session stopped, not a connection failure).
-		initialContent = "\r\n\x1b[33m[session stopped — no terminal content available]\x1b[0m\r\n"
-	}
-
-	if initialContent != "" {
-		// Strip cursor-positioning codes before prepending clear+home.
-		// capture-pane -e preserves absolute cursor positions (ESC[n;mH) from the live
-		// session. Replaying these in a fresh xterm.js terminal causes garbled output
-		// because the positions assume a prior terminal state that no longer exists.
-		// Colors (SGR) are preserved; only context-dependent positioning is removed.
-		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(initialContent), instance)
-
-		terminalData := &sessionv1.TerminalData{
-			SessionId: sessionID,
-			Data: &sessionv1.TerminalData_Output{
-				Output: &sessionv1.TerminalOutput{
-					Data: []byte(fullContent),
-				},
-			},
-		}
-
-		dataBytes, err := proto.Marshal(terminalData)
-		if err != nil {
-			return fmt.Errorf("failed to marshal initial content: %w", err)
-		}
-
-		envelope := protocol.CreateEnvelope(0, dataBytes)
-		if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
-			return fmt.Errorf("failed to send initial content: %w", err)
-		}
-
-		log.Info("[streamViaControlMode] sent initial snapshot", "bytes", len(initialContent), "session", sessionID)
-		log.Info("[streamViaControlMode] scrollback lines sent", "lines", strings.Count(initialContent, "\n")+1, "session", sessionID)
-
-		instance.UpdateTerminalTimestamps(initialContent, true)
-	}
-
-	// Send initial ScrollbackResponse with the most recent history so the client
-	// can populate its scrollback buffer immediately on connect (R2.2).
-	if h.scrollbackManager != nil {
-		const initialScrollbackLines = 500
-		sbData, sbErr := h.scrollbackManager.GetRecentLines(sessionID, initialScrollbackLines)
-		if sbErr != nil {
-			log.Warn("[streamViaControlMode] failed to fetch initial scrollback", "session", sessionID, "err", sbErr)
-		} else if len(sbData) > 0 {
-			// GetRecentLines returns raw bytes; wrap as a single chunk.
-			sbStats, statsErr := h.scrollbackManager.GetStats(sessionID)
-			var oldestSeq, newestSeq uint64
-			if statsErr == nil {
-				oldestSeq = sbStats.OldestSequence
-				newestSeq = sbStats.NewestSequence
-			}
-			chunks := []*sessionv1.ScrollbackChunk{
-				{
-					Data:     sbData,
-					Sequence: newestSeq,
-				},
-			}
-			// has_more is true when the session has more history than the initial window.
-			hasMore := sbStats.MemoryLines > initialScrollbackLines || sbStats.StorageBytes > 0
-			sbResp := &sessionv1.TerminalData{
-				SessionId: sessionID,
-				Data: &sessionv1.TerminalData_ScrollbackResponse{
-					ScrollbackResponse: &sessionv1.ScrollbackResponse{
-						Chunks:         chunks,
-						HasMore:        hasMore,
-						TotalLines:     uint64(sbStats.MemoryLines),
-						OldestSequence: oldestSeq,
-						NewestSequence: newestSeq,
-					},
-				},
-			}
-			if sbBytes, merr := proto.Marshal(sbResp); merr != nil {
-				log.Error("[streamViaControlMode] failed to marshal initial scrollback", "session", sessionID, "err", merr)
-			} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, sbBytes)); wsErr == nil {
-				log.Info("[streamViaControlMode] sent initial scrollback", "bytes", len(sbData), "session", sessionID)
-			}
-		}
-	}
-
-	// Subscribe to control mode updates for streaming
+	// Subscribe and start the output-forwarding goroutine BEFORE the resize nudge below,
+	// so quiescenceCh (signaled inline by that goroutine on every received frame) has a
+	// real producer during the initial handshake wait instead of degenerating into a fixed
+	// timer. Frames that arrive before the initial snapshot has been captured and sent are
+	// used only to drive quiescence detection — they are not forwarded to the client
+	// (forwardingReady gates that), since the canonical initial snapshot captured after the
+	// resize settles supersedes any partial pre-resize content.
 	subscriberID, updateChan := streamer.SubscribeControlModeUpdates()
 	defer streamer.UnsubscribeControlModeUpdates(subscriberID)
 
 	log.Info("[streamViaControlMode] subscribed to control mode", "subscriber_id", subscriberID, "session", sessionID)
 
-	// Create channels for goroutine coordination
+	quiescenceCh := make(chan struct{}, 16)
 	errChan := make(chan error, 2)
 	doneChan := make(chan struct{})
+	var forwardingReady atomic.Bool
 
 	// Goroutine 1: Forward control mode updates to WebSocket.
 	// Coalesces back-to-back frames so rapid terminal bursts are batched into a
@@ -855,6 +716,17 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 						}
 					}
 					return
+				}
+
+				if !forwardingReady.Load() {
+					// Still settling from the initial resize nudge: this frame is redraw
+					// noise from before the canonical initial snapshot has been captured.
+					// Drop it, but still count it toward quiescence below.
+					select {
+					case quiescenceCh <- struct{}{}:
+					default:
+					}
+					continue
 				}
 
 				// Mark snapshot dirty so the next client connect captures fresh content.
@@ -920,6 +792,145 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 			}
 		}
 	}()
+
+	if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
+		targetCols := int(*currentPaneReq.TargetCols)
+		targetRows := int(*currentPaneReq.TargetRows)
+
+		log.Info("[streamViaControlMode] handshake dimensions, forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
+
+		// The nudge below repaints the TUI at targetCols x targetRows, so any snapshot
+		// cached from an earlier connection is stale by construction — it was captured at
+		// the previous dimensions. Drop it here so the capture at the end of this function
+		// re-reads the pane. Without this, getOrRefreshSnapshot sees a "clean" entry (the
+		// repaint cannot mark it dirty: markSnapshotDirty is only reachable from the
+		// output-forwarding goroutine, which starts later) and serves the old-dimension
+		// content, which xterm.js then paints live frames over — producing rows composited
+		// from two different wrap widths, duplicated table rows and stray glyphs.
+		h.invalidateSnapshot(sessionID)
+
+		// Nudge to (cols-1) so tmux always sends SIGWINCH regardless of current size
+		if targetCols > 1 {
+			if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr != nil {
+				log.Warn("[streamViaControlMode] pre-nudge resize failed", "err", resizeErr)
+			}
+		}
+
+		if err := instance.ResizePTY(targetCols, targetRows); err != nil {
+			log.Error("[streamViaControlMode] failed to resize", "err", err)
+		} else {
+			// Wait for the TUI to complete its full redraw before capturing. The
+			// output-forwarding goroutine above is already subscribed and running, so
+			// quiescenceCh receives real signals from redraw frames here — this is genuine
+			// quiescence detection, not a fixed settle timer.
+			quiescenceStart := time.Now()
+			waitForQuiescence(quiescenceCh, 500*time.Millisecond, 200*time.Millisecond)
+			if elapsed := time.Since(quiescenceStart); elapsed >= 500*time.Millisecond-5*time.Millisecond {
+				log.Warn("[streamViaControlMode] initial quiescence timed out; session may be stalled", "elapsed", elapsed.Round(time.Millisecond), "session", sessionID)
+			}
+			log.Info("[streamViaControlMode] tmux resized, redraw complete", "cols", targetCols, "rows", targetRows)
+		}
+	} else {
+		log.Warn("[streamViaControlMode] handshake missing dimensions, layout may be incorrect")
+	}
+
+	// Now capture content at correct dimensions.
+	// If capture fails, it may be because a concurrent Instance.Resume() is still mid-restore
+	// (RestoreWithWorkDir racing this handler's own lazy-restore-skip path above, which only
+	// restores when the tmux session is absent — it does nothing if Resume() is already
+	// restoring an existing one). Poll briefly rather than immediately declaring the session
+	// stopped: the frontend's loading spinner stays up until the first WS message arrives, so
+	// withholding that message here is what turns a misleading "stopped" flash into a visible
+	// "still resuming" wait.
+	initialContent, err := h.getOrRefreshSnapshot(sessionID, func() (string, error) {
+		return waitForPaneContent(instance)
+	})
+	if err != nil {
+		log.Info("[streamViaControlMode] capture-pane failed, sending stopped notice", "session", sessionID, "err", err)
+		// Send a visible notice instead of leaving the terminal blank so the user
+		// knows why there is no output (session stopped, not a connection failure).
+		initialContent = "\r\n\x1b[33m[session stopped — no terminal content available]\x1b[0m\r\n"
+	}
+
+	if initialContent != "" {
+		// Strip cursor-positioning codes before prepending clear+home.
+		// capture-pane -e preserves absolute cursor positions (ESC[n;mH) from the live
+		// session. Replaying these in a fresh xterm.js terminal causes garbled output
+		// because the positions assume a prior terminal state that no longer exists.
+		// Colors (SGR) are preserved; only context-dependent positioning is removed.
+		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(initialContent), instance)
+
+		terminalData := &sessionv1.TerminalData{
+			SessionId: sessionID,
+			Data: &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{
+					Data: []byte(fullContent),
+				},
+			},
+		}
+
+		dataBytes, err := proto.Marshal(terminalData)
+		if err != nil {
+			return fmt.Errorf("failed to marshal initial content: %w", err)
+		}
+
+		envelope := protocol.CreateEnvelope(0, dataBytes)
+		if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+			return fmt.Errorf("failed to send initial content: %w", err)
+		}
+
+		log.Info("[streamViaControlMode] sent initial snapshot", "bytes", len(initialContent), "session", sessionID)
+		log.Info("[streamViaControlMode] scrollback lines sent", "lines", strings.Count(initialContent, "\n")+1, "session", sessionID)
+
+		instance.UpdateTerminalTimestamps(initialContent, true)
+	}
+
+	// The canonical initial snapshot has been sent; frames from here on are live
+	// updates the output-forwarding goroutine should actually forward to the client.
+	forwardingReady.Store(true)
+
+	// Send initial ScrollbackResponse with the most recent history so the client
+	// can populate its scrollback buffer immediately on connect (R2.2).
+	if h.scrollbackManager != nil {
+		const initialScrollbackLines = 500
+		sbData, sbErr := h.scrollbackManager.GetRecentLines(sessionID, initialScrollbackLines)
+		if sbErr != nil {
+			log.Warn("[streamViaControlMode] failed to fetch initial scrollback", "session", sessionID, "err", sbErr)
+		} else if len(sbData) > 0 {
+			// GetRecentLines returns raw bytes; wrap as a single chunk.
+			sbStats, statsErr := h.scrollbackManager.GetStats(sessionID)
+			var oldestSeq, newestSeq uint64
+			if statsErr == nil {
+				oldestSeq = sbStats.OldestSequence
+				newestSeq = sbStats.NewestSequence
+			}
+			chunks := []*sessionv1.ScrollbackChunk{
+				{
+					Data:     sbData,
+					Sequence: newestSeq,
+				},
+			}
+			// has_more is true when the session has more history than the initial window.
+			hasMore := sbStats.MemoryLines > initialScrollbackLines || sbStats.StorageBytes > 0
+			sbResp := &sessionv1.TerminalData{
+				SessionId: sessionID,
+				Data: &sessionv1.TerminalData_ScrollbackResponse{
+					ScrollbackResponse: &sessionv1.ScrollbackResponse{
+						Chunks:         chunks,
+						HasMore:        hasMore,
+						TotalLines:     uint64(sbStats.MemoryLines),
+						OldestSequence: oldestSeq,
+						NewestSequence: newestSeq,
+					},
+				},
+			}
+			if sbBytes, merr := proto.Marshal(sbResp); merr != nil {
+				log.Error("[streamViaControlMode] failed to marshal initial scrollback", "session", sessionID, "err", merr)
+			} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, sbBytes)); wsErr == nil {
+				log.Info("[streamViaControlMode] sent initial scrollback", "bytes", len(sbData), "session", sessionID)
+			}
+		}
+	}
 
 	// resizeCh coalesces rapid resize events (e.g. window drags) so only the
 	// latest dimensions reach SetWindowSize. The channel holds at most one
@@ -1127,7 +1138,86 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 		}
 	}()
 
+	// Subscribe and start the output-forwarding goroutine BEFORE the resize nudge below,
+	// mirroring the fix in streamViaControlMode: quiescenceCh needs a real producer during
+	// the initial handshake wait, not a fixed settle timer. Frames received before the
+	// canonical initial snapshot has been sent are used only to drive quiescence detection
+	// (forwardingReady gates actual delivery to the client).
+	subscriberID, updateChan := shellSess.SubscribeToControlModeUpdates()
+	defer shellSess.UnsubscribeFromControlModeUpdates(subscriberID)
+
+	log.Info("[streamShellViaControlMode] subscribed to control mode", "subscriber_id", subscriberID, "session", sessionID, "shell", shellID)
+
 	quiescenceCh := make(chan struct{}, 16)
+	errChan := make(chan error, 2)
+	doneChan := make(chan struct{})
+	var forwardingReady atomic.Bool
+
+	go func() {
+		defer close(doneChan)
+		sendData := func(data []byte) error {
+			msg := terminalDataPool.Get().(*sessionv1.TerminalData)
+			msg.SessionId = sessionID
+			msg.ShellId = shellID
+			msg.Data = &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{Data: data},
+			}
+			err := marshalProtoEnvelope(stream, 0, msg)
+			proto.Reset(msg)
+			terminalDataPool.Put(msg)
+			return err
+		}
+
+		for {
+			select {
+			case <-doneChan:
+				return
+			case data, ok := <-updateChan:
+				if !ok {
+					return
+				}
+
+				if !forwardingReady.Load() {
+					select {
+					case quiescenceCh <- struct{}{}:
+					default:
+					}
+					continue
+				}
+
+				cbp := coalesceBufPool.Get().(*[]byte)
+				buf := append((*cbp)[:0], data...)
+				const maxBatchFrames = 32
+				framesInBatch := 1
+			coalesce:
+				for framesInBatch < maxBatchFrames {
+					select {
+					case more, ok := <-updateChan:
+						if !ok {
+							break coalesce
+						}
+						buf = append(buf, more...)
+						framesInBatch++
+					default:
+						break coalesce
+					}
+				}
+
+				sendErr := sendData(buf)
+				*cbp = buf[:0]
+				coalesceBufPool.Put(cbp)
+				if sendErr != nil {
+					log.Error("[streamShellViaControlMode] failed to send output", "err", sendErr)
+					errChan <- fmt.Errorf("failed to send output: %w", sendErr)
+					return
+				}
+				select {
+				case quiescenceCh <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
 
 	if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
 		targetCols := int(*currentPaneReq.TargetCols)
@@ -1144,6 +1234,8 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 		if err := shellSess.SetWindowSize(targetCols, targetRows); err != nil {
 			log.Error("[streamShellViaControlMode] failed to resize", "err", err)
 		} else {
+			// Output-forwarding goroutine above is already subscribed, so quiescenceCh
+			// receives real signals from redraw frames here.
 			quiescenceStart := time.Now()
 			waitForQuiescence(quiescenceCh, 500*time.Millisecond, 50*time.Millisecond)
 			if elapsed := time.Since(quiescenceStart); elapsed >= 500*time.Millisecond-5*time.Millisecond {
@@ -1183,70 +1275,8 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 		log.Info("[streamShellViaControlMode] sent initial snapshot", "bytes", len(initialContent), "session", sessionID, "shell", shellID)
 	}
 
-	subscriberID, updateChan := shellSess.SubscribeToControlModeUpdates()
-	defer shellSess.UnsubscribeFromControlModeUpdates(subscriberID)
-
-	log.Info("[streamShellViaControlMode] subscribed to control mode", "subscriber_id", subscriberID, "session", sessionID, "shell", shellID)
-
-	errChan := make(chan error, 2)
-	doneChan := make(chan struct{})
-
-	go func() {
-		defer close(doneChan)
-		sendData := func(data []byte) error {
-			msg := terminalDataPool.Get().(*sessionv1.TerminalData)
-			msg.SessionId = sessionID
-			msg.ShellId = shellID
-			msg.Data = &sessionv1.TerminalData_Output{
-				Output: &sessionv1.TerminalOutput{Data: data},
-			}
-			err := marshalProtoEnvelope(stream, 0, msg)
-			proto.Reset(msg)
-			terminalDataPool.Put(msg)
-			return err
-		}
-
-		for {
-			select {
-			case <-doneChan:
-				return
-			case data, ok := <-updateChan:
-				if !ok {
-					return
-				}
-				cbp := coalesceBufPool.Get().(*[]byte)
-				buf := append((*cbp)[:0], data...)
-				const maxBatchFrames = 32
-				framesInBatch := 1
-			coalesce:
-				for framesInBatch < maxBatchFrames {
-					select {
-					case more, ok := <-updateChan:
-						if !ok {
-							break coalesce
-						}
-						buf = append(buf, more...)
-						framesInBatch++
-					default:
-						break coalesce
-					}
-				}
-
-				sendErr := sendData(buf)
-				*cbp = buf[:0]
-				coalesceBufPool.Put(cbp)
-				if sendErr != nil {
-					log.Error("[streamShellViaControlMode] failed to send output", "err", sendErr)
-					errChan <- fmt.Errorf("failed to send output: %w", sendErr)
-					return
-				}
-				select {
-				case quiescenceCh <- struct{}{}:
-				default:
-				}
-			}
-		}
-	}()
+	// The canonical initial snapshot has been sent; forward live updates from here on.
+	forwardingReady.Store(true)
 
 	type resizeReq struct{ cols, rows int }
 	resizeCh := make(chan resizeReq, 1)
