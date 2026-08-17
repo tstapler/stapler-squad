@@ -5,8 +5,12 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"go.uber.org/goleak"
 )
 
 // newTestServer builds a minimal Server (bypassing BuildDependencies),
@@ -151,5 +155,114 @@ func Test_Start_should_ReturnListenError_When_RequestedPortIsAlreadyBound(t *tes
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Start() did not return an error within the timeout")
+	}
+}
+
+// Backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec, AC3: the join must be
+// bounded by a timeout, not a bare Wait(). Coverage of the underlying
+// timeout-bounded join primitive itself now lives in
+// internal/syncutil/syncutil_test.go (WaitWithTimeout), shared with
+// session/pty_discovery.go instead of duplicated here.
+
+// Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRunning
+// is the integration-level proof for AC0-AC2: a test-only goroutine registered
+// on srv.backgroundTasksWG (standing in for StartForkPressureLogger /
+// StartZombieWatcher / StartZombieReaper, which all join the same shared
+// WaitGroup) must have fully exited by the time Shutdown() returns, not just
+// been signaled via connCtxCancel.
+func Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRunning(t *testing.T) {
+	srv := newTestServer("localhost:0")
+
+	var exited atomic.Bool
+	srv.backgroundTasksWG.Add(1)
+	go func() {
+		defer srv.backgroundTasksWG.Done()
+		// Simulate a background task still mid-tick when shutdown begins.
+		time.Sleep(50 * time.Millisecond)
+		exited.Store(true)
+	}()
+
+	if err := srv.Shutdown(); err != nil {
+		t.Fatalf("Shutdown() returned unexpected error: %v", err)
+	}
+	if !exited.Load() {
+		t.Fatal("Shutdown() returned before the background task finished — expected it to block until the task joined")
+	}
+}
+
+// TestServer_Shutdown_JoinsBackgroundTickers pins the regression this fix
+// addresses at the server level: the fork-pressure logger, zombie watcher,
+// and zombie reaper goroutines used to be signaled via serverCtx cancellation
+// but never joined, so Shutdown() could return while they were still running.
+// Wiring them directly to a short interval and to srv.backgroundTasksWG
+// (bypassing the full dependency graph, the same way newTestServer does)
+// drives several ticks before Shutdown() is called; goleak.VerifyNone
+// afterward confirms all three have actually exited by the time Shutdown()
+// returns — genuinely different coverage from the fake-goroutine test above,
+// since this exercises the real tmux.Start* functions end to end.
+func TestServer_Shutdown_JoinsBackgroundTickers(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+
+	srv, serverCtx := newServerBase("localhost:0")
+
+	noop := func(string, ...any) {}
+	tmux.StartForkPressureLogger(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
+	tmux.StartZombieWatcher(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
+	tmux.StartZombieReaper(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
+
+	time.Sleep(20 * time.Millisecond) // let several ticks fire
+
+	if err := srv.Shutdown(); err != nil {
+		t.Fatalf("Shutdown() returned unexpected error: %v", err)
+	}
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// Test_Shutdown_should_NotBlockPastTimeout_When_BackgroundTaskNeverExits proves
+// AC3 end-to-end through Shutdown() itself: a background task that never
+// observes cancellation (simulating a stuck fork-pressure logger/zombie
+// watcher/zombie reaper) must not prevent Shutdown() from returning — it
+// should proceed once the join timeout elapses, not hang forever.
+//
+// srv.backgroundTasksJoinTimeout is overridden to a short duration here so
+// this test doesn't have to wait out the real 10s production default
+// (defaultBackgroundTasksJoinTimeout) on every run.
+func Test_Shutdown_should_NotBlockPastTimeout_When_BackgroundTaskNeverExits(t *testing.T) {
+	srv := newTestServer("localhost:0")
+	const testTimeout = 50 * time.Millisecond
+	srv.backgroundTasksJoinTimeout = testTimeout
+
+	srv.backgroundTasksWG.Add(1)
+	// Deliberately never call Done() — simulates a task stuck past shutdown signal.
+
+	start := time.Now()
+	err := srv.Shutdown()
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Shutdown() returned unexpected error: %v", err)
+	}
+	if elapsed < testTimeout {
+		t.Fatalf("Shutdown() returned after %v, before the %v background-tasks join timeout elapsed", elapsed, testTimeout)
+	}
+	if elapsed > testTimeout+5*time.Second {
+		t.Fatalf("Shutdown() took %v to return; expected it to proceed shortly after the %v join timeout, not hang", elapsed, testTimeout)
+	}
+}
+
+// Test_Shutdown_should_NotPanic_When_CalledTwice guards against a regression
+// where joining backgroundTasksWG a second time (e.g. a double Shutdown()
+// call during a racy restart) could panic or deadlock. sync.WaitGroup.Wait()
+// on an already-zero counter returns immediately, and connCtxCancel is an
+// idempotent context.CancelFunc, so no additional guard should be needed.
+func Test_Shutdown_should_NotPanic_When_CalledTwice(t *testing.T) {
+	srv := newTestServer("localhost:0")
+
+	if err := srv.Shutdown(); err != nil {
+		t.Fatalf("first Shutdown() returned unexpected error: %v", err)
+	}
+	if err := srv.Shutdown(); err != nil {
+		t.Fatalf("second Shutdown() returned unexpected error: %v", err)
 	}
 }
