@@ -474,12 +474,23 @@ func assertGenuineLeakStillFails(t *testing.T, calleeName string) {
 	t.Cleanup(func() { close(block) })
 
 	// goleak.VerifyNone's leak-found path only ever calls t.Error (never
-	// t.Fatal/t.Skip), which never invokes runtime.Goexit, so a manually
-	// constructed *testing.T is safe to receive that call. Deliberately NOT
-	// using t.Run: a failing subtest also marks its parent failed
-	// (common.Fail's parent-chain propagation), which would make this
-	// meta-test itself report as failed in `go test` output even though
-	// observing the expected failure here is success.
+	// t.Fatal/t.Skip), which — unlike the elision-skip test above — never
+	// invokes runtime.Goexit, so a manually constructed *testing.T is safe
+	// to receive that call. Deliberately NOT using t.Run: a failing subtest
+	// also marks its parent failed (common.Fail's parent-chain propagation),
+	// which would make this meta-test itself report as failed in `go test`
+	// output even though observing the expected failure here is success.
+	//
+	// runGoleakTolerant itself is NOT used here (unlike the elision-skip test
+	// above): its own elision path calls t.Skip, which invokes
+	// runtime.Goexit — legal only inside a goroutine started by testing's own
+	// tRunner, which sub is not. CI hit exactly this: in a large test binary
+	// (hundreds of concurrently-running goroutines under -race) goleak's
+	// whole-process capture can itself hit the elided-stack parser panic
+	// (goleakElidedStackPanicMarker) regardless of how shallow this test's
+	// own deliberately-leaked goroutine is — that capture panic is recovered
+	// here directly, and skipped via the real t (safe: called at the top
+	// level of this test's own tRunner goroutine), never via sub.
 	sub := &testing.T{}
 	elided := func() (elided bool) {
 		defer func() {
