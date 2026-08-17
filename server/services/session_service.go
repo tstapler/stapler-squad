@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -394,6 +395,35 @@ func newDefaultSearchEngine() *search.SearchEngine {
 	return searchEngine
 }
 
+// loadClaudeSettingsRulesAtStartup parses ~/.claude/settings.json (and project-level
+// equivalents under cwd) and merges the resulting rules into classifierObj, publishing a
+// one-time notification if any were found. Extracted from NewSessionServiceWithSearchEngine
+// so it can be unit-tested directly without needing config.IsTestMode() to be false.
+func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassifier, cwd string, eventBus *events.EventBus) {
+	var claudeSettingsRules []classifier.Rule
+	for _, result := range LoadClaudeSettingsRulesDetailed(cwd) {
+		claudeSettingsRules = append(claudeSettingsRules, result.Rules...)
+	}
+	if len(claudeSettingsRules) == 0 {
+		return
+	}
+	classifierObj.AddRules(claudeSettingsRules)
+	log.Info("[ClaudeSettings] activated claude-settings rules at startup", "rule_count", len(claudeSettingsRules))
+	// First activation of previously-dead claude-settings rules must be a visible, one-time
+	// notification, not just a log line — these permissions.allow entries are about to
+	// silently become unattended stapler-squad auto-approval rules.
+	if eventBus != nil {
+		eventBus.Publish(events.NewNotificationEvent(
+			"", "System", uuid.New().String(),
+			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+			int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+			"Claude Settings Rules Activated",
+			fmt.Sprintf("%d rule(s) from your Claude settings are now active as stapler-squad auto-approval rules.", len(claudeSettingsRules)),
+			map[string]string{"type": "claude_settings_reload", "origin": "startup"},
+		))
+	}
+}
+
 // NewSessionServiceWithSearchEngine is the dependency-injection seam for the search engine:
 // pass an explicit *search.SearchEngine (e.g. search.NewSearchEngine() for in-memory)
 // instead of relying on NewSessionService's config.IsTestMode() default. Full migration of
@@ -441,6 +471,32 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	if userRules := rulesStore.ToRules(); len(userRules) > 0 {
 		classifierObj.AddRules(userRules)
 	}
+
+	// Determine the server process's own working directory for claude-settings
+	// project-level scope. Empty cwd makes LoadClaudeSettingsRulesDetailed skip
+	// project-level paths gracefully. Global-only for v1 — this is always the
+	// server's own cwd, never a per-session git worktree path (see ADR-001).
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		log.Warn("failed to determine working directory for claude-settings project scope", "err", cwdErr)
+		cwd = ""
+	}
+
+	// Load claude-settings (~/.claude/settings.json permissions.allow) rules into the
+	// classifier at startup. This was previously dead code — LoadClaudeSettingsRules had
+	// zero call sites — so these entries never took effect as auto-approval rules until now.
+	//
+	// Skipped under config.IsTestMode() (same guard newDefaultSearchEngine uses two lines
+	// above): unlike search persistence, this isn't about slow disk I/O — every one of the
+	// ~hundreds of pre-existing NewSessionService call sites in this repo's test suite would
+	// otherwise read the *developer's actual* ~/.claude/settings.json on every run, making
+	// unrelated tests' behavior depend on whatever happens to be in that file on that
+	// machine/CI runner. Real startup (the compiled binary, including e2e's spawned
+	// process) is unaffected — IsTestMode() is only true inside a `go test` binary.
+	if !config.IsTestMode() {
+		loadClaudeSettingsRulesAtStartup(classifierObj, cwd, eventBus)
+	}
+
 	// Wire AI rule generation. NewBestAvailableAIClient selects the highest-priority
 	// available backend: Anthropic HTTP API (if ANTHROPIC_API_KEY is set) → claude CLI
 	// → gemini CLI → opencode CLI. Returns nil when no backend is available.
@@ -457,6 +513,25 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		}
 	}
 	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
+
+	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
+	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
+	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
+	claudeSettingsWatcher := NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string) {
+		rulesSvc.rebuildClaudeSettingsRules(rules)
+		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
+		if eventBus != nil {
+			eventBus.Publish(events.NewNotificationEvent(
+				"", "System", uuid.New().String(),
+				int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+				int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+				"Claude Settings Reloaded",
+				fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin),
+				map[string]string{"type": "claude_settings_reload", "origin": origin},
+			))
+		}
+	})
+	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
@@ -815,6 +890,15 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 		return nil
 	}
 	return s.rulesSvc.analyticsStore
+}
+
+// GetClaudeSettingsWatcher returns the claude-settings file watcher for starting/stopping it
+// with the server lifecycle (see wireDepsIntoServer).
+func (s *SessionService) GetClaudeSettingsWatcher() *ClaudeSettingsWatcher {
+	if s.rulesSvc == nil {
+		return nil
+	}
+	return s.rulesSvc.claudeSettingsWatcher
 }
 
 // Shutdown stops background goroutines owned by SessionService (currently the
@@ -3569,6 +3653,13 @@ func (s *SessionService) DeleteApprovalRule(
 	req *connect.Request[sessionv1.DeleteApprovalRuleRequest],
 ) (*connect.Response[sessionv1.DeleteApprovalRuleResponse], error) {
 	return s.rulesSvc.DeleteApprovalRule(ctx, req)
+}
+
+func (s *SessionService) ReloadClaudeSettingsRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ReloadClaudeSettingsRulesRequest],
+) (*connect.Response[sessionv1.ReloadClaudeSettingsRulesResponse], error) {
+	return s.rulesSvc.ReloadClaudeSettingsRules(ctx, req)
 }
 
 // GetApprovalAnalytics returns aggregated analytics for classification decisions.

@@ -151,6 +151,12 @@ service SessionService {
   // DeleteApprovalRule removes a user-defined auto-approval rule by ID.
   rpc DeleteApprovalRule(DeleteApprovalRuleRequest) returns (DeleteApprovalRuleResponse) {}
 
+  // ReloadClaudeSettingsRules re-parses ~/.claude/settings.json (and project-level
+  // equivalents) and hot-swaps the resulting claude-settings-sourced rules into the live
+  // classifier. Malformed files are skipped; previously loaded rules for that file are
+  // retained.
+  rpc ReloadClaudeSettingsRules(ReloadClaudeSettingsRulesRequest) returns (ReloadClaudeSettingsRulesResponse) {}
+
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
@@ -1533,6 +1539,14 @@ message DeleteApprovalRuleRequest {
 message DeleteApprovalRuleResponse {
   bool success = 1;
   string message = 2;
+}
+
+message ReloadClaudeSettingsRulesRequest {}
+
+message ReloadClaudeSettingsRulesResponse {
+  bool success = 1;
+  int32 rule_count = 2;
+  string message = 3;
 }
 
 message GetApprovalAnalyticsRequest {

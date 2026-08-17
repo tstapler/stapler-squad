@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1493,4 +1495,215 @@ func TestSaveRulesToConfigFile_should_returnCodeUnimplemented_when_configStoreIs
 	_, err := svc.SaveRulesToConfigFile(context.Background(), connect.NewRequest(&sessionv1.SaveRulesToConfigFileRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+// ── ReloadClaudeSettingsRules ──────────────────────────────────────────────────
+
+func TestReloadClaudeSettingsRules_WatcherNotConfigured_ReturnsUnimplemented(t *testing.T) {
+	svc := newSimpleRulesService(t) // claudeSettingsWatcher never set
+
+	_, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
+	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string) {
+		svc.rebuildClaudeSettingsRules(rules)
+	}))
+
+	resp, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Success)
+	assert.EqualValues(t, 2, resp.Msg.RuleCount)
+	assert.Contains(t, resp.Msg.Message, "Reloaded 2 claude-settings rule(s)")
+}
+
+func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGoodCount(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
+	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string) {
+		svc.rebuildClaudeSettingsRules(rules)
+	}))
+
+	// Establish a known-good baseline.
+	first, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+	require.NoError(t, err)
+	require.True(t, first.Msg.Success)
+
+	writeSettingsFile(t, settingsPath, `{"permissions": {"allow": [`) // corrupt
+
+	resp, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Success)
+	assert.EqualValues(t, first.Msg.RuleCount, resp.Msg.RuleCount, "rule count must fall back to last-known-good")
+	assert.Contains(t, resp.Msg.Message, "previous rules still active")
+	assert.Contains(t, resp.Msg.Message, settingsPath)
+}
+
+// TestUpsertApprovalRule_StillHotSwapsClassifierRules_AfterRebuildMuAdded regression-guards
+// REQ-6: adding rebuildMu to rebuildClassifier must not change UpsertApprovalRule's existing
+// hot-swap behavior.
+func TestUpsertApprovalRule_StillHotSwapsClassifierRules_AfterRebuildMuAdded(t *testing.T) {
+	svc := newRulesService(t)
+
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:       "hot-swap-rule",
+			Name:     "hot swap",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Source:   "user",
+		},
+	}))
+	require.NoError(t, err)
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "hot-swap-rule" {
+			found = true
+		}
+	}
+	assert.True(t, found, "new user rule must be immediately classify-visible, unchanged from pre-rebuildMu behavior")
+}
+
+// TestDeleteApprovalRule_InvalidRuleID_LeavesExistingRulesIntact guards against a rebuildMu
+// deadlock or partial-clear regression on the error path.
+func TestDeleteApprovalRule_InvalidRuleID_LeavesExistingRulesIntact(t *testing.T) {
+	svc := newRulesService(t)
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:       "keep-me",
+			Name:     "keep me",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Source:   "user",
+		},
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.DeleteApprovalRule(context.Background(), connect.NewRequest(&sessionv1.DeleteApprovalRuleRequest{Id: "does-not-exist"}))
+	require.Error(t, err)
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "keep-me" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a failed delete of an unrelated rule must not clear existing rules")
+}
+
+// TestRebuildClassifier_ConcurrentWithClaudeSettingsRebuild_NeitherUpdateIsLost is the
+// Story 3.1.1 regression test: rebuildMu must serialize rebuildClassifier (DB-backed user
+// rules) and rebuildClaudeSettingsRules (claude-settings file rules) so a rule upsert and a
+// claude-settings reload happening at the same instant never clobber each other. Run with
+// -race.
+func TestRebuildClassifier_ConcurrentWithClaudeSettingsRebuild_NeitherUpdateIsLost(t *testing.T) {
+	svc := newRulesService(t)
+
+	const n = 25
+	var wg sync.WaitGroup
+	wg.Add(n * 2)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			_, _ = svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+				Rule: &sessionv1.ApprovalRuleProto{
+					Id:       fmt.Sprintf("user-rule-%d", i),
+					Name:     fmt.Sprintf("user rule %d", i),
+					ToolName: "Bash",
+					Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+					Enabled:  true,
+					Source:   "user",
+				},
+			}))
+		}()
+		go func() {
+			defer wg.Done()
+			svc.rebuildClaudeSettingsRules([]classifier.Rule{{
+				ID:       fmt.Sprintf("claude-settings-rule-%d", i),
+				Name:     fmt.Sprintf("claude settings rule %d", i),
+				ToolName: "Read",
+				Decision: classifier.AutoAllow,
+				Enabled:  true,
+				Source:   "claude-settings",
+				Priority: 150,
+			}})
+		}()
+	}
+	wg.Wait()
+
+	var userCount, claudeSettingsCount int
+	for _, r := range svc.classifier.Rules() {
+		switch r.Source {
+		case "user":
+			userCount++
+		case "claude-settings":
+			claudeSettingsCount++
+		}
+	}
+	// The final rebuildClaudeSettingsRules call fully replaces claude-settings rules (by
+	// design — each call carries the complete current set), so exactly 1 survives; but all
+	// n concurrent user-rule upserts must be visible, since UpsertApprovalRule persists to
+	// the store first and rebuildClassifier reads the full store on every call.
+	assert.Equal(t, n, userCount, "no concurrent user-rule upsert should be lost")
+	assert.Equal(t, 1, claudeSettingsCount, "rebuildClaudeSettingsRules replaces wholesale by design")
+}
+
+// TestClassify_DuringConcurrentReload_NeverObservesPartialRuleSet guards REQ-3: a Classify
+// call racing a rebuild must see one full consistent rule snapshot, never a partial one. Run
+// with -race.
+func TestClassify_DuringConcurrentReload_NeverObservesPartialRuleSet(t *testing.T) {
+	svc := newRulesService(t)
+	ctx := context.Background()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			svc.rebuildClaudeSettingsRules([]classifier.Rule{{
+				ID:       fmt.Sprintf("cs-%d", i),
+				ToolName: "Read",
+				Decision: classifier.AutoAllow,
+				Enabled:  true,
+				Source:   "claude-settings",
+				Priority: 150,
+			}})
+			i++
+		}
+	}()
+
+	for i := 0; i < 200; i++ {
+		result := svc.classifier.Classify(
+			classifier.PermissionRequestPayload{ToolName: "Read"},
+			classifier.ClassificationContext{},
+		)
+		_ = result // each call returns a decision computed against one consistent snapshot
+	}
+	close(stop)
+	wg.Wait()
+	_ = ctx
 }
