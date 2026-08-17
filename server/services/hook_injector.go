@@ -90,6 +90,131 @@ func hookEndpoints(baseURLFn func() string) map[HookName]string {
 	}
 }
 
+// RemoteHookTarget carries the remote-session-specific values needed to route a generated
+// PermissionRequest hook command at a RemoteApprovalRelay's remote-side Unix socket
+// (session/sshremote/approval_relay.go, ssh-remote-workspaces Phase 5 Epic 5.1) instead of
+// hookBaseURLFn()'s http://localhost:8543 default -- Phase 5 Epic 5.2 / ADR-003
+// ("Multiplex the Approval Callback Over the Existing SSH Connection").
+//
+// SocketPath and BearerToken are two independently meaningful strings a caller could
+// otherwise transpose at a call site with no compiler error -- exactly what
+// .claude/rules/primitive-obsession-checklist.md exists to catch -- so this is a named
+// struct, not two positional string parameters threaded through InjectHooksConfig.
+//
+// PRODUCTION WIRING: the real session-creation call site (server/services/session_service.go's
+// setupRemoteApprovalHooks, called from CreateSession for a remote session) does NOT build one
+// of these and pass it to InjectHooksConfig via WithRemoteHookTarget below -- it calls
+// InjectHookConfigRemote (approval_handler.go) directly, which builds a RemoteHookTarget from
+// the session's just-started *sshremote.RemoteApprovalRelay and reuses remoteApprovalHookCommand
+// (this file). RemoteHookTarget itself is shared by both entry points; WithRemoteHookTarget
+// below remains available for InjectHooksConfig's other production callers
+// (server/mcp/tools_lifecycle.go, server/mcp/tools_github.go,
+// server/services/backlog_service_triage.go) if any of them ever need to route a
+// PermissionRequest hook at a remote session's relay the same way:
+//
+//	token, _ := relay.BearerToken()
+//	target := services.RemoteHookTarget{
+//	    SocketPath:  sshremote.RemoteApprovalSocketPath(inst.GetEffectiveRootDir()),
+//	    BearerToken: token,
+//	}
+//	services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, hooks,
+//	    services.WithRemoteHookTarget(target))
+//
+// None of those four callers pass this option today, so every hook command they generate --
+// local or remote session alike -- is byte-identical to pre-Phase-5 behavior.
+type RemoteHookTarget struct {
+	// SocketPath is the remote-host Unix domain socket path RemoteApprovalRelay reads
+	// from -- see sshremote.RemoteApprovalSocketPath(basePath).
+	SocketPath string
+	// BearerToken is the relay's current bearer credential (sshremote.RemoteApprovalRelay.
+	// BearerToken), embedded in the generated hook command's JSON payload so the relay's
+	// verifyToken accepts it.
+	BearerToken string
+}
+
+// injectHookOptions is InjectHooksConfig/InjectHookOption's internal option state.
+// Unexported: callers configure it only through InjectHookOption functions returned by
+// WithRemoteHookTarget (and any future With* option), never by constructing this directly --
+// the functional-options pattern this package's public API already leans on elsewhere
+// keeping the exported InjectHooksConfig signature additive rather than breaking.
+type injectHookOptions struct {
+	remote *RemoteHookTarget
+}
+
+// InjectHookOption configures a single InjectHooksConfig call.
+type InjectHookOption func(*injectHookOptions)
+
+// WithRemoteHookTarget routes the generated PermissionRequest hook command at target's
+// remote Unix socket instead of hookBaseURLFn()'s HTTP endpoint (Phase 5 Epic 5.2). Every
+// other hook type (Stop, PreToolUse, PostToolUse, UserPromptSubmit, git-drift-check)
+// deliberately keeps using the HTTP command even when this option is supplied:
+// RemoteApprovalRelay (session/sshremote/approval_relay.go) decodes the socket payload's
+// "request" field as raw json.RawMessage and hands it, unmodified, to
+// PermissionRequestHandler.HandlePermissionRequest -- the same handler a real PermissionRequest
+// HTTP hook POSTs to -- which expects a classifier.PermissionRequestPayload-shaped body
+// specifically. Routing an unrelated hook type's differently-shaped JSON through the same
+// socket would reach HandlePermissionRequest as a malformed/misleading request, not fail
+// cleanly. Widening remote routing to other hook types is out of this epic's stated scope
+// (plan.md's Story 5.2.1 acceptance criteria only exercises PermissionRequest) and would need
+// its own relay-side and handler-side support first.
+//
+// A zero-value target (SocketPath == "") is treated the same as omitting the option
+// entirely, so a caller that hasn't resolved a real relay yet never emits a broken
+// UNIX-CONNECT with an empty path.
+func WithRemoteHookTarget(target RemoteHookTarget) InjectHookOption {
+	return func(o *injectHookOptions) {
+		if target.SocketPath == "" {
+			return
+		}
+		t := target
+		o.remote = &t
+	}
+}
+
+// remoteApprovalWriteTool is the executable the remote-aware PermissionRequest hook command
+// shells out to in order to write a raw JSON payload directly onto RemoteApprovalRelay's
+// Unix domain socket. Deliberately NOT curl: curl's --unix-socket transport still speaks
+// HTTP framing (a request line and headers) over the socket, but RemoteApprovalRelay.
+// decodePayload (session/sshremote/approval_relay.go) calls json.NewDecoder(conn).Decode
+// directly on the raw connection bytes with no HTTP parsing at all -- an HTTP-framed write
+// would fail to decode as JSON (a request line like "POST / HTTP/1.1" is not valid JSON) and
+// be silently dropped by handleConnection's decode-error branch. socat's `- UNIX-CONNECT:
+// <path>` form writes stdin bytes verbatim to the socket with no protocol framing, matching
+// the relay's actual wire format. This is a new remote-host dependency (socat must be
+// installed there) that no previous hook command required -- flagged here rather than
+// silently assumed; see this file's package doc / RemoteHookTarget's wiring-gap note for the
+// broader context this lands in.
+const remoteApprovalWriteTool = "socat"
+
+// remoteApprovalHookCommand builds the shell command a remote session's PermissionRequest
+// hook runs to deliver its payload to target instead of POSTing to hookBaseURLFn(). It wraps
+// Claude Code's raw hook-event JSON (piped to the command's stdin, exactly like the local
+// curl command's `-d @-` reads its POST body from stdin) as the "request" field of
+// relayedApprovalPayload's JSON shape (session/sshremote/approval_relay.go) --
+// {"token":"<token>","request":<stdin>} -- by string concatenation rather than a JSON
+// library: the value being embedded (stdin) is already a complete JSON object emitted by
+// Claude Code itself, so no escaping is needed for that composition, only for the token.
+// token is bearerCredential's base64.RawURLEncoding output (session/sshremote/
+// approval_relay.go's newBearerCredential) -- URL-safe base64 (letters, digits, '-', '_'
+// only) -- safe to interpolate into a single-quoted shell string with no additional
+// escaping.
+func remoteApprovalHookCommand(target RemoteHookTarget) string {
+	return fmt.Sprintf(
+		`(printf '{"token":"%s","request":'; cat; printf '}') | %s - 'UNIX-CONNECT:%s'`,
+		target.BearerToken, remoteApprovalWriteTool, target.SocketPath,
+	)
+}
+
+// hookCommandTargetsSocket reports whether curlCmd is the remote-aware hook command built by
+// remoteApprovalHookCommand for socketPath. Mirrors hookCommandReferencesURL's
+// quote-bounded-match design (see its doc comment for the strict-prefix false-positive bug
+// that pattern fixes): matching on the quoted `'UNIX-CONNECT:<path>'` form, not a bare
+// strings.Contains(command, socketPath), so one socket path can never falsely match another
+// that happens to be its strict prefix.
+func hookCommandTargetsSocket(curlCmd, socketPath string) bool {
+	return strings.Contains(curlCmd, "'UNIX-CONNECT:"+socketPath+"'")
+}
+
 // InjectHooksConfig writes (or merges) hook entries into
 // <rootDir>/.claude/settings.local.json.
 //
@@ -98,7 +223,18 @@ func hookEndpoints(baseURLFn func() string) map[HookName]string {
 //     X-CS-Session-ID set to sessionTitle.
 //   - The write is atomic (temp file + rename).
 //   - Idempotent: existing entries pointing to our URL are preserved.
-func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
+//
+// opts is variadic (InjectHookOption, e.g. WithRemoteHookTarget) so every pre-Phase-5 call
+// site keeps compiling and keeps generating byte-identical local-session commands without
+// modification -- see RemoteHookTarget's doc comment for what a remote-aware call looks like
+// once a caller has a session's relay in hand, and its wiring-gap note for why no production
+// call site passes one yet.
+func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...InjectHookOption) error {
+	var cfg injectHookOptions
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
 
@@ -143,10 +279,20 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 	for hookName := range wanted {
 		eventKey := hookEventName[hookName]
 		url := endpoints[hookName]
-		curlCmd := fmt.Sprintf(
-			"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-			hookTimeout, url, sessionTitle,
-		)
+
+		// Remote-aware branch (Phase 5 Epic 5.2 / ADR-003): only HookPermissionApproval
+		// routes at the relay's socket -- see WithRemoteHookTarget's doc comment for why
+		// every other hook type keeps the HTTP command even when cfg.remote is set.
+		remoteTargeted := cfg.remote != nil && hookName == HookPermissionApproval
+		var curlCmd string
+		if remoteTargeted {
+			curlCmd = remoteApprovalHookCommand(*cfg.remote)
+		} else {
+			curlCmd = fmt.Sprintf(
+				"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
+				hookTimeout, url, sessionTitle,
+			)
+		}
 
 		// Check if this hook command is already present.
 		if existing, ok := hooksMap[eventKey]; ok {
@@ -155,7 +301,13 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 				alreadyPresent := false
 				for _, g := range groups {
 					for _, h := range g.Hooks {
-						if h.Type == "command" && hookCommandReferencesURL(h.Command, url) {
+						matches := h.Type == "command"
+						if matches && remoteTargeted {
+							matches = hookCommandTargetsSocket(h.Command, cfg.remote.SocketPath)
+						} else if matches {
+							matches = hookCommandReferencesURL(h.Command, url)
+						}
+						if matches {
 							alreadyPresent = true
 							break
 						}

@@ -635,6 +635,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 	srv.approvalHandler = approvalHandler
+	// Wire the same ApprovalHandler as the PermissionRequestHandler every
+	// remote session's RemoteApprovalRelay drives its requests through
+	// (ssh-remote-workspaces Phase 5 correction, ADR-003's addendum) --
+	// mirrors SetRemoteDeps's existing pattern of injecting a server.go-
+	// constructed dependency into SessionService rather than SessionService
+	// owning a second instance of its own.
+	deps.SessionService.SetPermissionRequestHandler(approvalHandler)
 
 	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit,
 	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only

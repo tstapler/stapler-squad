@@ -7,16 +7,16 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -38,7 +38,7 @@ type streamLocalOpenMsg struct {
 // directStreamlocalHandler is a gliderssh.ChannelHandler for
 // "direct-streamlocal@openssh.com". gliderlabs/ssh only ships a built-in
 // handler for direct-tcpip (DirectTCPIPHandler); this mirrors that
-// handler's exact accept-then-bidirectional-copy shape
+// handler's general accept-then-bidirectional-copy shape
 // (github.com/gliderlabs/ssh@v0.3.8/tcpip.go) but dials a Unix domain
 // socket instead of TCP -- faithfully simulating what a real sshd does for
 // direct-streamlocal: connect, as a client, to the socket path the
@@ -47,6 +47,17 @@ type streamLocalOpenMsg struct {
 // client.Dial("unix", socketPath) actually reach a real net.Listener at
 // socketPath in these tests, exactly as it would reach a real sshd-side
 // Unix socket connect() on an actual remote host.
+//
+// Unlike the original tcpip.go shape this mirrors (which is fine for a
+// pure one-shot forward with no response), each copy direction here
+// propagates EOF as a HALF-close (ssh.Channel.CloseWrite / UnixConn.
+// CloseWrite) rather than fully closing both ends the moment either
+// direction finishes -- required once Part A's request/response round trip
+// needs the channel to survive a write-side half-close on one side (the
+// test payload writer calling CloseWrite after writing its JSON) long
+// enough for the OTHER direction (the relay's response bytes) to still get
+// through. Both ends are only fully closed once BOTH copy directions have
+// finished.
 func directStreamlocalHandler(_ *gliderssh.Server, _ *ssh.ServerConn, newChan ssh.NewChannel, _ gliderssh.Context) {
 	var msg streamLocalOpenMsg
 	if err := ssh.Unmarshal(newChan.ExtraData(), &msg); err != nil {
@@ -68,15 +79,24 @@ func directStreamlocalHandler(_ *gliderssh.Server, _ *ssh.ServerConn, newChan ss
 	}
 	go ssh.DiscardRequests(reqs)
 
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
-		defer ch.Close()
-		defer dconn.Close()
+		defer wg.Done()
 		_, _ = io.Copy(ch, dconn)
+		_ = ch.CloseWrite()
 	}()
 	go func() {
-		defer ch.Close()
-		defer dconn.Close()
+		defer wg.Done()
 		_, _ = io.Copy(dconn, ch)
+		if cw, ok := dconn.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+	}()
+	go func() {
+		wg.Wait()
+		_ = ch.Close()
+		_ = dconn.Close()
 	}()
 }
 
@@ -155,26 +175,48 @@ func testClientConfig(t *testing.T, hostKey ssh.PublicKey) ssh.ClientConfig {
 	}
 }
 
-// writeApprovalOnce simulates the remote agent hook script (Epic 5.2, not
-// this package): it listens on socketPath, accepts exactly one connection,
-// writes payload as JSON, and closes. Returns a channel closed once the
-// write attempt (successful or not) completes, and the error (if any).
-func writeApprovalOnce(t *testing.T, socketPath string, payload relayedApprovalPayload) <-chan error {
+// writeApprovalAndReadResponse simulates the remote agent hook script
+// (server/services.remoteApprovalHookCommand's socat pipeline, not this
+// package): it listens on socketPath, accepts exactly one connection,
+// writes payload as JSON, half-closes its write side (via CloseWrite, the
+// same "printf/cat's stdin EOF becomes an SSH channel EOF" mechanic socat
+// produces in production), reads back whatever bytes the relay writes as
+// the response, and closes. Returns a channel delivering the response bytes
+// (and any error) once the whole exchange completes.
+type approvalExchangeResult struct {
+	response []byte
+	err      error
+}
+
+func writeApprovalAndReadResponse(t *testing.T, socketPath string, payload relayedApprovalPayload) <-chan approvalExchangeResult {
 	t.Helper()
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen unix %s: %v", socketPath, err)
 	}
-	resultCh := make(chan error, 1)
+	resultCh := make(chan approvalExchangeResult, 1)
 	go func() {
 		defer ln.Close()
 		conn, err := ln.Accept()
 		if err != nil {
-			resultCh <- err
+			resultCh <- approvalExchangeResult{err: err}
 			return
 		}
 		defer conn.Close()
-		resultCh <- json.NewEncoder(conn).Encode(payload)
+
+		if err := json.NewEncoder(conn).Encode(payload); err != nil {
+			resultCh <- approvalExchangeResult{err: err}
+			return
+		}
+		// Half-close the write side so the relay's json.Decoder sees a clean
+		// end of the JSON value's stream, mirroring what socat does once
+		// printf/cat's stdin reaches EOF in production.
+		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+
+		resp, err := io.ReadAll(conn)
+		resultCh <- approvalExchangeResult{response: resp, err: err}
 	}()
 	return resultCh
 }
@@ -189,21 +231,58 @@ func poolTargetFor(t *testing.T, srv *approvalRelayTestServer, name string) (tmu
 	return tmux.SSHTarget{Name: name, Addr: srv.Addr}, testClientConfig(t, srv.HostKey)
 }
 
-// waitForPendingApproval polls monitor.GetPendingApprovals(sessionKey)
-// until it contains an entry with the given requestID or the deadline
-// elapses, returning the matching request (or nil on timeout).
-func waitForPendingApproval(t *testing.T, monitor *session.ExternalApprovalMonitor, sessionKey, requestID string, timeout time.Duration) *detection.ApprovalRequest {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		for _, req := range monitor.GetPendingApprovals(sessionKey) {
-			if req.ID == requestID {
-				return req
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
+// fakePermissionRequestHandler is a same-package test double for
+// PermissionRequestHandler. Every test in this file uses a fake rather than
+// a real *server/services.ApprovalHandler: constructing one here would
+// require this package to import server/services, which itself imports
+// session/sshremote -- an import cycle. The real end-to-end proof that
+// *server/services.ApprovalHandler actually satisfies this interface and
+// works correctly through a real RemoteApprovalRelay belongs in
+// server/services's own package tests (Part B).
+type fakePermissionRequestHandler struct {
+	// handle is invoked synchronously with the decoded request body and
+	// X-CS-Session-ID header value; its return value is written verbatim to
+	// the ResponseWriter as the "response". nil defaults to echoing back a
+	// fixed allow decision.
+	handle func(bodyBytes []byte, sessionIDHeader string, r *http.Request) []byte
+
+	callsCh  chan struct{}
+	lastBody []byte
+	lastHdr  string
+}
+
+func newFakePermissionRequestHandler() *fakePermissionRequestHandler {
+	return &fakePermissionRequestHandler{callsCh: make(chan struct{}, 16)}
+}
+
+func (f *fakePermissionRequestHandler) HandlePermissionRequest(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	f.lastBody = body
+	f.lastHdr = r.Header.Get("X-CS-Session-ID")
+
+	var out []byte
+	if f.handle != nil {
+		out = f.handle(body, f.lastHdr, r)
+	} else {
+		out = []byte(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`)
 	}
-	return nil
+	_, _ = w.Write(out)
+
+	select {
+	case f.callsCh <- struct{}{}:
+	default:
+	}
+}
+
+// waitForCall blocks until HandlePermissionRequest has been invoked at
+// least once, or timeout elapses (in which case it fails the test).
+func (f *fakePermissionRequestHandler) waitForCall(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-f.callsCh:
+	case <-time.After(timeout):
+		t.Fatal("PermissionRequestHandler.HandlePermissionRequest was never called")
+	}
 }
 
 func TestRemoteApprovalSocketPath(t *testing.T) {
@@ -223,38 +302,40 @@ func TestRemoteApprovalSocketPath(t *testing.T) {
 
 func TestNewRemoteApprovalRelay_ValidatesArgs(t *testing.T) {
 	pool := newTestPool(t)
-	monitor := session.NewExternalApprovalMonitor()
+	handler := newFakePermissionRequestHandler()
 
 	tests := []struct {
-		name       string
-		pool       *tmux.SSHClientPool
-		monitor    *session.ExternalApprovalMonitor
-		remoteName string
-		basePath   string
-		sessionKey string
+		name            string
+		pool            *tmux.SSHClientPool
+		handler         PermissionRequestHandler
+		remoteName      string
+		basePath        string
+		stableSessionID string
 	}{
-		{"nil pool", nil, monitor, "r", "/base", "k"},
-		{"nil monitor", pool, nil, "r", "/base", "k"},
-		{"empty remoteName", pool, monitor, "", "/base", "k"},
-		{"empty basePath", pool, monitor, "r", "", "k"},
-		{"empty sessionKey", pool, monitor, "r", "/base", ""},
+		{"nil pool", nil, handler, "r", "/base", "k"},
+		{"nil handler", pool, nil, "r", "/base", "k"},
+		{"empty remoteName", pool, handler, "", "/base", "k"},
+		{"empty basePath", pool, handler, "r", "", "k"},
+		{"empty stableSessionID", pool, handler, "r", "/base", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			target := RemoteApprovalRelayTarget{RemoteName: tt.remoteName, BasePath: tt.basePath, SessionKey: tt.sessionKey, Title: "title"}
-			if _, err := NewRemoteApprovalRelay(tt.pool, tt.monitor, target); err == nil {
+			target := RemoteApprovalRelayTarget{RemoteName: tt.remoteName, BasePath: tt.basePath, StableSessionID: tt.stableSessionID, Title: "title"}
+			if _, err := NewRemoteApprovalRelay(tt.pool, tt.handler, target); err == nil {
 				t.Error("NewRemoteApprovalRelay() error = nil, want a validation error")
 			}
 		})
 	}
 }
 
-// TestRemoteApprovalRelay_ForwardsPayloadToMonitor is Task 5.1.1e's
-// integration test: a test payload matching detection.ApprovalRequest's
-// shape, written to the remote Unix socket, must reach
-// ExternalApprovalMonitor.GetPendingApprovals(sessionKey) within a bounded
-// poll interval.
-func TestRemoteApprovalRelay_ForwardsPayloadToMonitor(t *testing.T) {
+// TestRemoteApprovalRelay_DrivesRequestThroughHandler is
+// this file's core Part A integration test: a raw JSON payload written to
+// the remote Unix socket must be decoded, its bearer token verified, and
+// then driven through PermissionRequestHandler as a synthetic HTTP request
+// carrying the raw bytes as its body and X-CS-Session-ID set to the
+// relay's configured StableSessionID -- with the handler's written response
+// bytes relayed back over the SAME connection.
+func TestRemoteApprovalRelay_DrivesRequestThroughHandler(t *testing.T) {
 	srv := startApprovalRelayTestServer(t)
 	pool := newTestPool(t)
 	target, cfg := poolTargetFor(t, srv, "forward-remote")
@@ -265,12 +346,12 @@ func TestRemoteApprovalRelay_ForwardsPayloadToMonitor(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	monitor := session.NewExternalApprovalMonitor()
-	monitor.Start()
-	defer monitor.Stop()
+	handler := newFakePermissionRequestHandler()
+	wantResponse := []byte(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"no"}}}`)
+	handler.handle = func([]byte, string, *http.Request) []byte { return wantResponse }
 
 	basePath := t.TempDir()
-	relay, err := NewRemoteApprovalRelay(pool, monitor, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, SessionKey: "session-key", Title: "Test Remote Session"}, withPollInterval(20*time.Millisecond))
+	relay, err := NewRemoteApprovalRelay(pool, handler, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "stable-session-1", Title: "Test Remote Session"}, withPollInterval(20*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
 	}
@@ -285,41 +366,35 @@ func TestRemoteApprovalRelay_ForwardsPayloadToMonitor(t *testing.T) {
 		t.Fatal("BearerToken() returned an already-expired credential")
 	}
 
+	rawRequest := json.RawMessage(`{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/home/agent/work"}`)
 	socketPath := RemoteApprovalSocketPath(basePath)
-	payload := relayedApprovalPayload{
-		Token: token,
-		Request: detection.ApprovalRequest{
-			ID:           "req-1",
-			Type:         detection.ApprovalCommand,
-			DetectedText: "rm -rf /",
-			Confidence:   0.87,
-		},
-	}
-	writeErrCh := writeApprovalOnce(t, socketPath, payload)
+	payload := relayedApprovalPayload{Token: token, Request: rawRequest}
+	resultCh := writeApprovalAndReadResponse(t, socketPath, payload)
 
-	got := waitForPendingApproval(t, monitor, "session-key", "req-1", 5*time.Second)
-	if got == nil {
-		t.Fatal("relayed approval request never became visible via GetPendingApprovals")
+	handler.waitForCall(t, 5*time.Second)
+
+	if handler.lastHdr != "stable-session-1" {
+		t.Errorf("X-CS-Session-ID header = %q, want %q", handler.lastHdr, "stable-session-1")
 	}
-	if got.DetectedText != "rm -rf /" {
-		t.Errorf("DetectedText = %q, want %q", got.DetectedText, "rm -rf /")
-	}
-	if got.Confidence != 0.87 {
-		t.Errorf("Confidence = %v, want 0.87", got.Confidence)
+	if string(handler.lastBody) != string(rawRequest) {
+		t.Errorf("request body = %s, want %s (raw passthrough)", handler.lastBody, rawRequest)
 	}
 
 	select {
-	case err := <-writeErrCh:
-		if err != nil {
-			t.Fatalf("writing the test payload failed: %v", err)
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("exchange failed: %v", result.err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("test payload write never completed")
+		if string(result.response) != string(wantResponse) {
+			t.Errorf("response written back to remote = %s, want %s", result.response, wantResponse)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("never received a response back from the relay")
 	}
 }
 
 // TestRemoteApprovalRelay_RejectsWrongBearerToken verifies a payload with
-// the wrong token is dropped without ever reaching the monitor -- Task
+// the wrong token is dropped without ever reaching the handler -- Task
 // 5.1.1d's requirement that the relay not act as an open channel any
 // process on the remote host could forge traffic into.
 func TestRemoteApprovalRelay_RejectsWrongBearerToken(t *testing.T) {
@@ -333,12 +408,10 @@ func TestRemoteApprovalRelay_RejectsWrongBearerToken(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	monitor := session.NewExternalApprovalMonitor()
-	monitor.Start()
-	defer monitor.Stop()
+	handler := newFakePermissionRequestHandler()
 
 	basePath := t.TempDir()
-	relay, err := NewRemoteApprovalRelay(pool, monitor, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, SessionKey: "session-key", Title: "Test"}, withPollInterval(20*time.Millisecond))
+	relay, err := NewRemoteApprovalRelay(pool, handler, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "session-key", Title: "Test"}, withPollInterval(20*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
 	}
@@ -346,14 +419,13 @@ func TestRemoteApprovalRelay_RejectsWrongBearerToken(t *testing.T) {
 	defer relay.Stop()
 
 	socketPath := RemoteApprovalSocketPath(basePath)
-	payload := relayedApprovalPayload{
-		Token:   "not-the-real-token",
-		Request: detection.ApprovalRequest{ID: "req-forged", Type: detection.ApprovalCommand, DetectedText: "evil"},
-	}
-	<-writeApprovalOnce(t, socketPath, payload)
+	payload := relayedApprovalPayload{Token: "not-the-real-token", Request: json.RawMessage(`{"tool_name":"Bash"}`)}
+	<-writeApprovalAndReadResponse(t, socketPath, payload)
 
-	if got := waitForPendingApproval(t, monitor, "session-key", "req-forged", 500*time.Millisecond); got != nil {
-		t.Fatal("a payload with the wrong bearer token was forwarded into the monitor")
+	select {
+	case <-handler.callsCh:
+		t.Fatal("a payload with the wrong bearer token was forwarded to the handler")
+	case <-time.After(500 * time.Millisecond):
 	}
 }
 
@@ -371,14 +443,12 @@ func TestRemoteApprovalRelay_RejectsExpiredBearerToken(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	monitor := session.NewExternalApprovalMonitor()
-	monitor.Start()
-	defer monitor.Stop()
+	handler := newFakePermissionRequestHandler()
 
 	basePath := t.TempDir()
 	relay, err := NewRemoteApprovalRelay(
-		pool, monitor,
-		RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, SessionKey: "session-key", Title: "Test"},
+		pool, handler,
+		RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "session-key", Title: "Test"},
 		withPollInterval(20*time.Millisecond),
 		withBearerTokenTTL(10*time.Millisecond),
 	)
@@ -392,14 +462,13 @@ func TestRemoteApprovalRelay_RejectsExpiredBearerToken(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // let the short TTL elapse
 
 	socketPath := RemoteApprovalSocketPath(basePath)
-	payload := relayedApprovalPayload{
-		Token:   token,
-		Request: detection.ApprovalRequest{ID: "req-expired", Type: detection.ApprovalCommand, DetectedText: "cmd"},
-	}
-	<-writeApprovalOnce(t, socketPath, payload)
+	payload := relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"Bash"}`)}
+	<-writeApprovalAndReadResponse(t, socketPath, payload)
 
-	if got := waitForPendingApproval(t, monitor, "session-key", "req-expired", 500*time.Millisecond); got != nil {
-		t.Fatal("a payload with an expired bearer token was forwarded into the monitor")
+	select {
+	case <-handler.callsCh:
+		t.Fatal("a payload with an expired bearer token was forwarded to the handler")
+	case <-time.After(500 * time.Millisecond):
 	}
 }
 
@@ -410,7 +479,7 @@ func TestRemoteApprovalRelay_RejectsExpiredBearerToken(t *testing.T) {
 // relay's single poll goroutine forever -- proven here not by inspecting
 // decodePayload's internals directly, but by observing the poll loop's
 // externally-visible behavior: a second, well-formed payload sent shortly
-// after the hung one still reaches the monitor well within the test's
+// after the hung one still reaches the handler well within the test's
 // deadline, which is only possible if the first (hung) connection's
 // handleConnection call actually returned instead of blocking the loop
 // indefinitely.
@@ -425,14 +494,12 @@ func TestRemoteApprovalRelay_DialTimeout_DoesNotWedgePollLoop(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	monitor := session.NewExternalApprovalMonitor()
-	monitor.Start()
-	defer monitor.Stop()
+	handler := newFakePermissionRequestHandler()
 
 	basePath := t.TempDir()
 	relay, err := NewRemoteApprovalRelay(
-		pool, monitor,
-		RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, SessionKey: "session-key", Title: "Test"},
+		pool, handler,
+		RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "session-key", Title: "Test"},
 		withPollInterval(20*time.Millisecond),
 		withDialTimeout(100*time.Millisecond),
 	)
@@ -473,24 +540,18 @@ func TestRemoteApprovalRelay_DialTimeout_DoesNotWedgePollLoop(t *testing.T) {
 	// A fresh listener (same socket path) for the follow-up payload -- the
 	// relay's poll loop re-dials the socket path fresh on every iteration,
 	// so this is a distinct connection/listener from the hung one above.
-	payload := relayedApprovalPayload{
-		Token:   token,
-		Request: detection.ApprovalRequest{ID: "req-after-hang", Type: detection.ApprovalCommand, DetectedText: "still works"},
-	}
-	writeErrCh := writeApprovalOnce(t, socketPath, payload)
+	payload := relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"Bash"}`)}
+	resultCh := writeApprovalAndReadResponse(t, socketPath, payload)
 
-	got := waitForPendingApproval(t, monitor, "session-key", "req-after-hang", 5*time.Second)
-	if got == nil {
-		t.Fatal("poll loop appears wedged: a payload sent after the hung connection never reached the monitor")
-	}
+	handler.waitForCall(t, 5*time.Second)
 
 	select {
-	case writeErr := <-writeErrCh:
-		if writeErr != nil {
-			t.Fatalf("writing the follow-up payload failed: %v", writeErr)
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("writing/reading the follow-up payload failed: %v", result.err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("follow-up payload write never completed")
+		t.Fatal("follow-up payload exchange never completed")
 	}
 }
 
@@ -498,9 +559,8 @@ func TestRemoteApprovalRelay_DialTimeout_DoesNotWedgePollLoop(t *testing.T) {
 // integration test: the underlying pooled *ssh.Client is killed (simulating
 // a connection drop) and redialed (simulating reconnect), and a request
 // delivered only AFTER that redial -- standing in for the remote agent's
-// documented retry-with-the-same-ID behavior (RemoteApprovalRelay's type
-// doc comment) -- must still reach the monitor without recreating the
-// relay or the session.
+// documented retry-with-the-same-payload behavior -- must still reach the
+// handler without recreating the relay or the session.
 func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 	srv := startApprovalRelayTestServer(t)
 	pool := newTestPool(t)
@@ -514,12 +574,10 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	monitor := session.NewExternalApprovalMonitor()
-	monitor.Start()
-	defer monitor.Stop()
+	handler := newFakePermissionRequestHandler()
 
 	basePath := t.TempDir()
-	relay, err := NewRemoteApprovalRelay(pool, monitor, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, SessionKey: "session-key", Title: "Test"}, withPollInterval(20*time.Millisecond))
+	relay, err := NewRemoteApprovalRelay(pool, handler, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "session-key", Title: "Test"}, withPollInterval(20*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
 	}
@@ -530,13 +588,8 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 	socketPath := RemoteApprovalSocketPath(basePath)
 
 	// Baseline: prove the relay works before any disruption.
-	<-writeApprovalOnce(t, socketPath, relayedApprovalPayload{
-		Token:   token,
-		Request: detection.ApprovalRequest{ID: "req-before", Type: detection.ApprovalCommand, DetectedText: "before"},
-	})
-	if got := waitForPendingApproval(t, monitor, "session-key", "req-before", 5*time.Second); got == nil {
-		t.Fatal("baseline request (pre-drop) never reached the monitor")
-	}
+	<-writeApprovalAndReadResponse(t, socketPath, relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"before"}`)})
+	handler.waitForCall(t, 5*time.Second)
 
 	// Simulate the connection dropping.
 	_ = client1.Close()
@@ -552,13 +605,9 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 	}
 
 	// Simulate the agent script retrying: it keeps re-listening/re-writing
-	// the SAME request (same ID) on the fixed socket path until it gets
-	// through -- the documented agent-side-retry constraint Story 5.1.2
-	// relies on (no relay-side buffering).
-	retryPayload := relayedApprovalPayload{
-		Token:   token,
-		Request: detection.ApprovalRequest{ID: "req-inflight", Type: detection.ApprovalCommand, DetectedText: "in-flight"},
-	}
+	// the same request on the fixed socket path until it gets through -- the
+	// documented agent-side-retry constraint Story 5.1.2 relies on (no
+	// relay-side buffering).
 	stopRetry := make(chan struct{})
 	retryFinished := make(chan struct{})
 	go func() {
@@ -569,13 +618,11 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 				return
 			default:
 			}
-			errCh := writeApprovalOnce(t, socketPath, retryPayload)
+			resultCh := writeApprovalAndReadResponse(t, socketPath, relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"in-flight"}`)})
 			select {
-			case <-errCh:
-			case <-time.After(500 * time.Millisecond):
-			}
-			if waitForPendingApproval(t, monitor, "session-key", "req-inflight", 200*time.Millisecond) != nil {
+			case <-resultCh:
 				return
+			case <-time.After(500 * time.Millisecond):
 			}
 		}
 	}()
@@ -590,48 +637,60 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 		t.Fatal("GetOrDial() returned the dead client instead of redialing")
 	}
 
-	got := waitForPendingApproval(t, monitor, "session-key", "req-inflight", 10*time.Second)
-	close(stopRetry)
-	<-retryFinished
-	if got == nil {
+	select {
+	case <-retryFinished:
+	case <-time.After(10 * time.Second):
+		close(stopRetry)
 		t.Fatal("the in-flight request was never delivered after reconnect -- it was silently lost")
 	}
-
-	// Both the pre-drop and post-reconnect requests must be visible --
-	// reconnecting must not have dropped or replaced the session's other
-	// pending state.
-	pending := monitor.GetPendingApprovals("session-key")
-	if len(pending) != 2 {
-		t.Errorf("GetPendingApprovals() after reconnect = %d entries, want 2 (req-before, req-inflight)", len(pending))
-	}
+	close(stopRetry)
+	// retryFinished closing (awaited above) already proves the post-reconnect
+	// request reached the handler -- writeApprovalAndReadResponse's resultCh
+	// only fires once a response comes back over the connection, which only
+	// happens after handleConnection's r.handler.HandlePermissionRequest call
+	// returns. Combined with the baseline handler.waitForCall above (the
+	// pre-drop request), both requests are proven delivered.
 }
 
-// TestWriteApprovalOnce_SmokeTestsTheTestHelper is a narrow sanity check on
-// this file's own writeApprovalOnce helper (not RemoteApprovalRelay
-// itself): if the Unix-socket test double is broken, every other test in
-// this file would fail for the wrong reason, so this pins its basic
-// behavior directly.
-func TestWriteApprovalOnce_SmokeTestsTheTestHelper(t *testing.T) {
+// TestWriteApprovalAndReadResponse_SmokeTestsTheTestHelper is a narrow
+// sanity check on this file's own writeApprovalAndReadResponse helper (not
+// RemoteApprovalRelay itself): if the Unix-socket test double is broken,
+// every other test in this file would fail for the wrong reason, so this
+// pins its basic behavior directly.
+func TestWriteApprovalAndReadResponse_SmokeTestsTheTestHelper(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := filepath.Join(dir, "smoke.sock")
-	payload := relayedApprovalPayload{Token: "t", Request: detection.ApprovalRequest{ID: "smoke"}}
-	errCh := writeApprovalOnce(t, socketPath, payload)
+	payload := relayedApprovalPayload{Token: "t", Request: json.RawMessage(`{"tool_name":"smoke"}`)}
+	resultCh := writeApprovalAndReadResponse(t, socketPath, payload)
 
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		t.Fatalf("dial unix %s: %v", socketPath, err)
 	}
-	defer conn.Close()
 
 	var got relayedApprovalPayload
 	if err := json.NewDecoder(conn).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.Request.ID != "smoke" {
-		t.Errorf("Request.ID = %q, want %q", got.Request.ID, "smoke")
+	if string(got.Request) != `{"tool_name":"smoke"}` {
+		t.Errorf("Request = %s, want %s", got.Request, `{"tool_name":"smoke"}`)
 	}
-	if err := <-errCh; err != nil {
-		t.Fatalf("writeApprovalOnce reported an error: %v", err)
+
+	if _, err := conn.Write([]byte("fake-response")); err != nil {
+		t.Fatalf("write fake response: %v", err)
+	}
+	_ = conn.Close()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("writeApprovalAndReadResponse reported an error: %v", result.err)
+		}
+		if string(result.response) != "fake-response" {
+			t.Errorf("response = %q, want %q", result.response, "fake-response")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("writeApprovalAndReadResponse never completed")
 	}
 	_ = os.Remove(socketPath)
 }

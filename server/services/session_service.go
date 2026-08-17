@@ -276,6 +276,17 @@ type SessionService struct {
 	// panicking.
 	remoteKeyStore   *sshremote.KeyStore
 	remoteKnownHosts *sshremote.KnownHostsStore
+
+	// permissionRequestHandler backs setupRemoteApprovalHooks's per-remote-
+	// session *sshremote.RemoteApprovalRelay construction (ssh-remote-
+	// workspaces Phase 5 correction, ADR-003's addendum): every relay is
+	// wired to drive its requests through this handler, exactly the way the
+	// real local `/api/hooks/permission-request` HTTP endpoint does. nil
+	// until SetPermissionRequestHandler is called (server.go wires the same
+	// *ApprovalHandler registered at that endpoint) -- setupRemoteApprovalHooks
+	// returns an error (non-fatal, logged and swallowed by its caller) rather
+	// than nil-pointer panicking when unset.
+	permissionRequestHandler sshremote.PermissionRequestHandler
 }
 
 // trackCleanup runs fn in a goroutine tracked by deleteCleanupWG so Shutdown
@@ -1229,6 +1240,20 @@ func (s *SessionService) SetRemoteDeps(keyStore *sshremote.KeyStore, knownHosts 
 	s.remoteKnownHosts = knownHosts
 }
 
+// SetPermissionRequestHandler wires the handler every remote session's
+// *sshremote.RemoteApprovalRelay drives its PermissionRequest hook payloads
+// through (ssh-remote-workspaces Phase 5 correction). server.go passes the
+// same *ApprovalHandler registered at the local `/api/hooks/permission-request`
+// HTTP endpoint, mirroring SetRemoteDeps's pattern of injecting a
+// server.go-constructed dependency rather than SessionService owning its
+// own separate instance. Must be called during server startup before any
+// remote session is created; setupRemoteApprovalHooks degrades to a
+// non-fatal logged error (not a panic) if a remote session is created
+// before this is wired.
+func (s *SessionService) SetPermissionRequestHandler(handler sshremote.PermissionRequestHandler) {
+	s.permissionRequestHandler = handler
+}
+
 // SetMemoryCacheReader wires the HibernationSweeper so that ListSessions can
 // populate memory_rss_mb, estimated_savings_mb, and system_memory_pct fields.
 func (s *SessionService) SetMemoryCacheReader(r session.MemoryCacheReader) {
@@ -1959,7 +1984,19 @@ func (s *SessionService) CreateSession(
 
 		// Inject Claude Code HTTP hook config for remote approval from the web UI.
 		// Non-fatal: session is fully functional even without this config.
-		if err := InjectHookConfig(instanceRootDir, instanceTitle); err != nil {
+		//
+		// Remote sessions (ssh-remote-workspaces Phase 5 correction) can't use
+		// InjectHookConfig at all: instanceRootDir is a path that only exists on
+		// the remote host, so os.ReadFile/os.WriteFile there would either fail
+		// outright or -- worse -- silently write to a local path nobody remote
+		// ever reads, exactly the bug this correction fixes (see ADR-003's
+		// addendum). setupRemoteApprovalHooks routes through a
+		// *sshremote.RemoteApprovalRelay + InjectHookConfigRemote instead.
+		if instance.IsRemote() {
+			if err := s.setupRemoteApprovalHooks(instance, instanceRootDir, instanceTitle); err != nil {
+				log.Warn("[CreateSession] failed to set up remote approval relay", "session", instanceTitle, "err", err)
+			}
+		} else if err := InjectHookConfig(instanceRootDir, instanceTitle); err != nil {
 			log.Warn("[CreateSession] failed to inject hook config", "session", instanceTitle, "err", err)
 		}
 
@@ -2007,6 +2044,68 @@ func (s *SessionService) CreateSession(
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: creatingProto,
 	}), nil
+}
+
+// setupRemoteApprovalHooks wires a remote session's PermissionRequest hook
+// round trip end to end (ssh-remote-workspaces Phase 5 correction, ADR-003's
+// addendum): constructs and starts a *sshremote.RemoteApprovalRelay for
+// instance, stores it on instance so it gets stopped on teardown (Instance.
+// destroyChain -> stopRemoteApprovalRelay), then injects the socat-based
+// remote hook command via InjectHookConfigRemote using the relay's freshly
+// minted bearer token.
+//
+// Called from CreateSession's async goroutine only when instance.IsRemote();
+// every error here is non-fatal by design -- the caller logs and continues,
+// exactly like the local InjectHookConfig call site it replaces for remote
+// sessions (the session is fully functional without approval-hook config,
+// it just falls back to no hook at all for PermissionRequest events).
+func (s *SessionService) setupRemoteApprovalHooks(instance *session.Instance, rootDir, title string) error {
+	if s.permissionRequestHandler == nil {
+		return errors.New("remote approval relay: no PermissionRequestHandler wired (SetPermissionRequestHandler was never called)")
+	}
+	remoteTarget, ok := instance.GetExecutionTarget().(session.RemoteExecutionTarget)
+	if !ok {
+		return fmt.Errorf("instance.IsRemote() true but ExecutionTarget is %T, not session.RemoteExecutionTarget", instance.GetExecutionTarget())
+	}
+
+	relay, err := sshremote.NewRemoteApprovalRelay(tmux.DefaultSSHClientPool(), s.permissionRequestHandler, sshremote.RemoteApprovalRelayTarget{
+		RemoteName:      remoteTarget.Target().Name,
+		BasePath:        rootDir,
+		StableSessionID: instance.GetStableID(),
+		Title:           title,
+	})
+	if err != nil {
+		return fmt.Errorf("construct remote approval relay: %w", err)
+	}
+
+	// Started against context.Background(), not a request-scoped or
+	// server-shutdown-bound context: this relay's lifetime is the session's
+	// lifetime, stopped explicitly via instance.destroyChain() ->
+	// stopRemoteApprovalRelay() when the session itself is torn down, not
+	// when any particular request or the server process happens to be
+	// shutting down (a tmux session is meant to survive a server restart;
+	// this in-memory relay does not survive one today -- reconnecting
+	// existing remote sessions' relays on server restart is a known gap,
+	// out of this change's scope, since CreateSession's async goroutine is
+	// the only call site wired here; see the final report for this
+	// explicitly flagged as a follow-up).
+	relay.Start(context.Background())
+
+	token, _ := relay.BearerToken()
+	hookTarget := RemoteHookTarget{
+		SocketPath:  sshremote.RemoteApprovalSocketPath(rootDir),
+		BearerToken: token,
+	}
+
+	injectCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := InjectHookConfigRemote(injectCtx, remoteTarget.Runner(), rootDir, instance.GetStableID(), hookTarget); err != nil {
+		relay.Stop()
+		return fmt.Errorf("inject remote hook config: %w", err)
+	}
+
+	instance.SetRemoteApprovalRelay(relay)
+	return nil
 }
 
 // resolveRemoteTarget resolves req.Msg.Remote.RemoteName (if set) against

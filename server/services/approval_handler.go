@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -816,39 +818,91 @@ func hookApprovalURL() string {
 // If the file already contains a hook pointing to hookApprovalURL(), it is left unchanged.
 // If the file exists but lacks our hook, the hook is prepended to PermissionRequest.
 // If the file does not exist, it is created with just our hook config.
+//
+// Local-only: rootDir must be a path on THIS host (os.ReadFile/os.WriteFile).
+// For a remote session's rootDir (a path that only exists on the remote
+// host), use InjectHookConfigRemote instead -- calling this on a remote
+// path silently produces no hook at all (os.ReadFile treats the missing
+// local path as "file doesn't exist" and this then writes a settings file
+// nobody remote will ever read), which was the ssh-remote-workspaces Phase
+// 5 bug this pair of functions exists to fix. See ADR-003's addendum.
 func InjectHookConfig(rootDir, sessionTitle string) error {
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
 
+	url := hookApprovalURL()
 	// Desired hook entry for this session.
 	// settings.local.json only supports "command" type hooks; use curl to POST to the approval URL.
 	curlCmd := fmt.Sprintf(
 		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, hookApprovalURL(), sessionTitle,
+		hookTimeout, url, sessionTitle,
 	)
-	entry := hookEntry{
-		Type:    "command",
-		Command: curlCmd,
-		Timeout: hookTimeout,
-	}
-	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
+	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
 
 	// Read existing settings (if any).
-	raw := map[string]json.RawMessage{}
 	data, err := os.ReadFile(settingsPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", settingsPath, err)
 	}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &raw); err != nil {
+
+	out, alreadyPresent, err := mergeHookEntryIntoSettings(data, entry, func(command string) bool {
+		return hookCommandReferencesURL(command, url)
+	})
+	if err != nil {
+		return err
+	}
+	if alreadyPresent {
+		log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
+		return nil
+	}
+
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		return fmt.Errorf("create .claude dir: %w", err)
+	}
+	// Write atomically via temp file to avoid partial writes corrupting the file.
+	tmpPath := settingsPath + ".tmp"
+	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
+		return fmt.Errorf("write temp %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, settingsPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename %s: %w", tmpPath, err)
+	}
+	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
+	return nil
+}
+
+// mergeHookEntryIntoSettings computes the merged settings.local.json bytes
+// for a single PermissionRequest hook entry, given existingData (the raw
+// bytes currently on disk/remote-host, or nil/empty if the file doesn't
+// exist yet) and the pre-built entry to inject. alreadyPresentFn decides
+// whether an existing command-type hook already matches entry -- callers
+// pass a URL-based match (hookCommandReferencesURL) for the local HTTP path
+// or a socket-based match (hookCommandTargetsSocket) for the remote path,
+// since the two paths generate differently-shaped commands for the same
+// logical hook.
+//
+// Extracted out of InjectHookConfig so InjectHookConfig (local, writes via
+// os.WriteFile) and InjectHookConfigRemote (writes via a piped `sh -c` over
+// tmux.CommandRunner) share exactly ONE implementation of the merge/repair
+// logic rather than two that could silently drift -- ssh-remote-workspaces
+// Phase 5 correction, see ADR-003's addendum.
+//
+// Returns the final, fully-marshaled settings JSON (ready to write
+// verbatim) and whether entry's hook was already present (in which case out
+// is nil and the caller should skip writing anything).
+func mergeHookEntryIntoSettings(existingData []byte, entry hookEntry, alreadyPresentFn func(command string) bool) (out []byte, alreadyPresent bool, err error) {
+	raw := map[string]json.RawMessage{}
+	if len(existingData) > 0 {
+		if err := json.Unmarshal(existingData, &raw); err != nil {
 			// Malformed JSON — attempt targeted repair before falling back to a fresh config.
-			log.Warn("[InjectHookConfig] invalid JSON, attempting repair", "path", settingsPath, "err", err)
-			repaired, repairErr := repairSettingsJSON(data)
+			log.Warn("[mergeHookEntryIntoSettings] invalid JSON, attempting repair", "err", err)
+			repaired, repairErr := repairSettingsJSON(existingData)
 			if repairErr == nil {
-				log.Info("[InjectHookConfig] repaired settings file", "path", settingsPath)
+				log.Info("[mergeHookEntryIntoSettings] repaired settings file")
 				_ = json.Unmarshal(repaired, &raw) // best-effort; raw may still be partial
 			} else {
-				log.Warn("[InjectHookConfig] could not repair settings, resetting to minimal config", "path", settingsPath, "err", repairErr)
+				log.Warn("[mergeHookEntryIntoSettings] could not repair settings, resetting to minimal config", "err", repairErr)
 				raw = map[string]json.RawMessage{}
 			}
 		}
@@ -863,9 +917,8 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 				if err := json.Unmarshal(prRaw, &groups); err == nil {
 					for _, g := range groups {
 						for _, h := range g.Hooks {
-							if h.Type == "command" && hookCommandReferencesURL(h.Command, hookApprovalURL()) {
-								log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
-								return nil
+							if h.Type == "command" && alreadyPresentFn(h.Command) {
+								return nil, true, nil
 							}
 						}
 					}
@@ -876,6 +929,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 
 	// Merge: prepend our group to PermissionRequest hooks.
 	// Also remove any old http-type entries pointing to our URL (migration from old format).
+	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
 	var prGroups []hookMatcherGroup
 	if hooksRaw, ok := raw["hooks"]; ok {
 		var hooks map[string]json.RawMessage
@@ -909,35 +963,104 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	}
 	prJSON, err := json.Marshal(prGroups)
 	if err != nil {
-		return fmt.Errorf("marshal PermissionRequest hooks: %w", err)
+		return nil, false, fmt.Errorf("marshal PermissionRequest hooks: %w", err)
 	}
 	hooksMap["PermissionRequest"] = json.RawMessage(prJSON)
 
 	hooksJSON, err := json.Marshal(hooksMap)
 	if err != nil {
-		return fmt.Errorf("marshal hooks map: %w", err)
+		return nil, false, fmt.Errorf("marshal hooks map: %w", err)
 	}
 	raw["hooks"] = json.RawMessage(hooksJSON)
 
-	// Write back with indentation.
-	out, err := json.MarshalIndent(raw, "", "  ")
+	out, err = json.MarshalIndent(raw, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal settings: %w", err)
+		return nil, false, fmt.Errorf("marshal settings: %w", err)
 	}
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		return fmt.Errorf("create .claude dir: %w", err)
+	return out, false, nil
+}
+
+// InjectHookConfigRemote is InjectHookConfig's remote-host counterpart
+// (ssh-remote-workspaces Phase 5, ADR-003): it reads, merges, and writes
+// back <rootDir>/.claude/settings.local.json on the OTHER end of runner
+// instead of this process's local filesystem, and routes the generated
+// PermissionRequest hook at target's Unix socket (via
+// remoteApprovalHookCommand's socat pipeline, the same mechanism
+// InjectHooksConfig's WithRemoteHookTarget option already builds for the
+// plural entry point) instead of hookApprovalURL()'s HTTP endpoint --
+// curl-over-HTTP can never reach this process from a different host the way
+// it can from rootDir on this same machine.
+//
+// rootDir is the session's remote-host working-directory root (its
+// worktree path on the remote host, e.g. instance.GetEffectiveRootDir());
+// sessionID is used only for log messages here (the X-CS-Session-ID value
+// actually delivered to ApprovalHandler comes from RemoteApprovalRelayTarget.
+// StableSessionID, embedded by the relay itself, not from this function).
+func InjectHookConfigRemote(ctx context.Context, runner tmux.CommandRunner, rootDir, sessionID string, target RemoteHookTarget) error {
+	claudeDir := path.Join(rootDir, ".claude")
+	settingsPath := path.Join(claudeDir, "settings.local.json")
+
+	// Read existing settings: empty output, no error, if the file doesn't exist yet (mirrors
+	// os.ReadFile+os.IsNotExist's "missing means empty" semantics) -- but unlike an
+	// unconditional `cat ... 2>/dev/null || true`, a file that DOES exist but can't be read
+	// (permission denied, etc.) still surfaces as a real error here rather than being silently
+	// treated as empty and then clobbered by the write below. `[ -e path ]` gates whether cat
+	// runs at all; if it does, cat's own exit code is the script's exit code (the last command
+	// in an `sh -c` script determines its overall status), which runner.Run reports as err.
+	readScript := "if [ -e " + posixShellQuoteRemote(settingsPath) + " ]; then cat " + posixShellQuoteRemote(settingsPath) + "; fi"
+	data, err := runner.Run(ctx, "", "sh", "-c", readScript)
+	if err != nil {
+		return fmt.Errorf("read remote %s: %w", settingsPath, err)
 	}
-	// Write atomically via temp file to avoid partial writes corrupting the file.
-	tmpPath := settingsPath + ".tmp"
-	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
-		return fmt.Errorf("write temp %s: %w", tmpPath, err)
+
+	curlCmd := remoteApprovalHookCommand(target)
+	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
+
+	out, alreadyPresent, err := mergeHookEntryIntoSettings(data, entry, func(command string) bool {
+		return hookCommandTargetsSocket(command, target.SocketPath)
+	})
+	if err != nil {
+		return err
 	}
-	if err := os.Rename(tmpPath, settingsPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename %s: %w", tmpPath, err)
+	if alreadyPresent {
+		log.Debug("[InjectHookConfigRemote] hook already present", "path", settingsPath, "session", sessionID)
+		return nil
 	}
-	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
+
+	writeScript := "mkdir -p " + posixShellQuoteRemote(claudeDir) + " && cat > " + posixShellQuoteRemote(settingsPath)
+	stdin, stdout, wait, err := runner.Start(ctx, "", "sh", "-c", writeScript)
+	if err != nil {
+		return fmt.Errorf("start remote write for %s: %w", settingsPath, err)
+	}
+	if _, err := stdin.Write(out); err != nil {
+		_ = stdin.Close()
+		return fmt.Errorf("write remote settings %s: %w", settingsPath, err)
+	}
+	if err := stdin.Close(); err != nil {
+		return fmt.Errorf("close remote settings stdin for %s: %w", settingsPath, err)
+	}
+	if stdout != nil {
+		_, _ = io.Copy(io.Discard, stdout) // drain, best-effort; the script has no meaningful stdout
+	}
+	if err := wait(); err != nil {
+		return fmt.Errorf("remote write %s failed: %w", settingsPath, err)
+	}
+	log.Info("[InjectHookConfigRemote] wrote hook config", "path", settingsPath, "session", sessionID)
 	return nil
+}
+
+// posixShellQuoteRemote POSIX-single-quotes s so it survives the remote
+// `sh -c` scripts InjectHookConfigRemote builds, unmodified regardless of
+// embedded spaces or shell metacharacters. Package-local rather than
+// exporting session/git's equivalent posixShellQuote (a different package)
+// or session/tmux's unexported shellQuote (also a different package, and
+// itself unexported there) -- same three-line escaping strategy (close
+// quote, literal quote, reopen quote), independently duplicated because
+// it's not worth promoting to a shared export for one caller on each side,
+// per session/git/remote_worktree.go's own posixShellQuote doc comment
+// making the identical call.
+func posixShellQuoteRemote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
 // repairSettingsJSON attempts to fix common JSON syntax errors in Claude settings files.

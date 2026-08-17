@@ -143,6 +143,18 @@ func pinModernAlgorithms(cfg *ssh.ClientConfig) {
 // SSHRunner instance in the process, per the Design Decision.
 var defaultSSHClientPool = NewSSHClientPool()
 
+// DefaultSSHClientPool returns the process-wide shared pool every SSHRunner
+// uses unless constructed with WithSSHClientPool. Exported for callers
+// outside this package that need to attach a SECOND consumer to the SAME
+// pooled *ssh.Client a session's SSHRunner is already using -- e.g.
+// session/sshremote.RemoteApprovalRelay, which must subscribe to the exact
+// connection a remote session's terminal streaming already dialed (ADR-003)
+// rather than dialing (and pooling) an unrelated one under the same
+// RemoteName.
+func DefaultSSHClientPool() *SSHClientPool {
+	return defaultSSHClientPool
+}
+
 // SSHRunner implements CommandRunner over a persistent, pooled *ssh.Client:
 // Run and Start execute remote commands as new SSH channels on the shared
 // connection for Target.Name (session/tmux/ssh_pool.go), rather than

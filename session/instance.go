@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -494,6 +495,27 @@ type Instance struct {
 	// sites) that bypass NewInstance are unaffected. Read via executionTarget(), never
 	// this field directly, outside of construction/serialization code.
 	ExecutionTarget ExecutionTarget `json:"-"`
+
+	// remoteApprovalRelay is the per-session *sshremote.RemoteApprovalRelay
+	// (ssh-remote-workspaces Phase 5, session/sshremote) server/services.
+	// SessionService wires up for a remote session's PermissionRequest hook
+	// round trip (see SetRemoteApprovalRelay). nil for every local session,
+	// and nil for a remote session until CreateSession's async setup
+	// finishes -- read/written only via SetRemoteApprovalRelay/
+	// stopRemoteApprovalRelay, never this field directly. Protected by its
+	// own mutex rather than i.mu: it's set once, well after Start() returns,
+	// by a goroutine outside the actor's normal mutation path, and read only
+	// by destroyChain() during teardown -- routing it through the actor's
+	// sendSync machinery for a single conditional Stop() call would be
+	// disproportionate. The concrete *sshremote.RemoteApprovalRelay type is
+	// used directly rather than a package-local Stop()-only interface: no
+	// import cycle exists (session/sshremote no longer imports this package
+	// after Part A), and there is no second implementation on the horizon --
+	// introducing an interface purely for testability here is exactly the
+	// speculative abstraction .claude/rules/interface-pollution-checklist.md
+	// warns against.
+	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
+	remoteApprovalRelayMu deadlock.Mutex
 }
 
 // executionTarget returns i.ExecutionTarget, defaulting to LocalTarget{} when nil.
@@ -505,6 +527,43 @@ func (i *Instance) executionTarget() ExecutionTarget {
 		return LocalTarget{}
 	}
 	return i.ExecutionTarget
+}
+
+// GetExecutionTarget returns this instance's ExecutionTarget (defaulting to
+// LocalTarget{} when unset), exposed for server/services call sites (a
+// different package, so the unexported executionTarget() accessor isn't
+// reachable there) that need the underlying tmux.CommandRunner or resolved
+// RemoteTarget -- e.g. wiring a RemoteApprovalRelay/InjectHookConfigRemote
+// for a newly created remote session (ssh-remote-workspaces Phase 5).
+// Mirrors IsRemote()'s existing precedent for exposing executionTarget()
+// state across the package boundary without a type switch.
+func (i *Instance) GetExecutionTarget() ExecutionTarget {
+	return i.executionTarget()
+}
+
+// SetRemoteApprovalRelay stores relay so destroyChain() can Stop() it when
+// this instance is torn down. Intended for a remote session only (relay is
+// nil for local sessions); passing nil clears any previously stored relay
+// without stopping it -- callers that need to stop-and-clear call Stop()
+// themselves first (see server/services' error-cleanup path, which stops a
+// relay it failed to finish wiring before ever calling this).
+func (i *Instance) SetRemoteApprovalRelay(relay *sshremote.RemoteApprovalRelay) {
+	i.remoteApprovalRelayMu.Lock()
+	i.remoteApprovalRelay = relay
+	i.remoteApprovalRelayMu.Unlock()
+}
+
+// stopRemoteApprovalRelay stops and clears this instance's remote approval
+// relay (if any), called from destroyChain() during teardown. No-op for
+// every local session (relay is always nil there).
+func (i *Instance) stopRemoteApprovalRelay() {
+	i.remoteApprovalRelayMu.Lock()
+	relay := i.remoteApprovalRelay
+	i.remoteApprovalRelay = nil
+	i.remoteApprovalRelayMu.Unlock()
+	if relay != nil {
+		relay.Stop()
+	}
 }
 
 // SessionType indicates the type of session workflow to use
@@ -1500,6 +1559,9 @@ func (i *Instance) Destroy() error {
 // teardown sequence. Split out of Destroy() so it can be bounded by
 // destroyChainTimeout without losing track of the goroutine it runs in.
 func (i *Instance) destroyChain() error {
+	// Stop the remote approval relay (if any) -- see SetRemoteApprovalRelay's
+	// doc comment. No-op for local sessions (always nil there).
+	i.stopRemoteApprovalRelay()
 	// Stop VNC before killing tmux (x11vnc must stop before Xvfb).
 	i.stopVNC()
 	// Stop CDP screencast goroutines and clean up wrapper scripts.

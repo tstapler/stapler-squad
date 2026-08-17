@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -478,6 +479,207 @@ func TestRemoveHooksConfig_should_BeNoOp_When_HookWasNeverInjected(t *testing.T)
 	afterJSON, _ := json.Marshal(after)
 	if string(beforeJSON) != string(afterJSON) {
 		t.Errorf("settings changed even though the named hook was never present:\nbefore=%s\nafter=%s", beforeJSON, afterJSON)
+	}
+}
+
+// Test_InjectHooksConfig_should_TargetRelaySocket_When_WithRemoteHookTargetPassed
+// (Story 5.2.1, plan.md's first bullet under Task 5.2.1b): a remote session's generated
+// PermissionRequest hook command must target RemoteApprovalRelay's remote-side Unix socket
+// -- not hookBaseURLFn()'s http://localhost:8543 -- and must carry the relay's bearer token
+// so RemoteApprovalRelay.verifyToken accepts the payload once written.
+func Test_InjectHooksConfig_should_TargetRelaySocket_When_WithRemoteHookTargetPassed(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := RemoteHookTarget{
+		SocketPath:  "/home/agent/work/.stapler-squad-approval.sock",
+		BearerToken: "test-bearer-token-abc123",
+	}
+
+	if err := InjectHooksConfig(tmpDir, "remote-sess", nil, WithRemoteHookTarget(target)); err != nil {
+		t.Fatalf("InjectHooksConfig: %v", err)
+	}
+
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
+		t.Fatalf("parse hooks: %v", err)
+	}
+	prRaw, ok := hooksMap["PermissionRequest"]
+	if !ok {
+		t.Fatal("PermissionRequest not found")
+	}
+	var groups []hookMatcherGroup
+	if err := json.Unmarshal(prRaw, &groups); err != nil {
+		t.Fatalf("parse PermissionRequest groups: %v", err)
+	}
+
+	var command string
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if strings.Contains(h.Command, target.SocketPath) {
+				command = h.Command
+			}
+		}
+	}
+	if command == "" {
+		t.Fatalf("no PermissionRequest hook command references socket path %q; groups=%+v", target.SocketPath, groups)
+	}
+
+	if strings.Contains(command, "http://localhost:8543") {
+		t.Errorf("remote hook command must not reference localhost:8543, got: %s", command)
+	}
+	if !strings.Contains(command, "UNIX-CONNECT:"+target.SocketPath) {
+		t.Errorf("remote hook command must target the relay socket via UNIX-CONNECT, got: %s", command)
+	}
+	if !strings.Contains(command, target.BearerToken) {
+		t.Errorf("remote hook command must embed the relay's bearer token, got: %s", command)
+	}
+	if !strings.Contains(command, `"token"`) || !strings.Contains(command, `"request"`) {
+		t.Errorf("remote hook command must build a JSON payload with \"token\" and \"request\" fields (relayedApprovalPayload's shape), got: %s", command)
+	}
+}
+
+// Test_InjectHooksConfig_should_ProduceByteIdenticalLocalCommand_When_NoRemoteTargetPassed
+// (Story 5.2.1's explicit acceptance criterion): a local session -- InjectHooksConfig called
+// with no WithRemoteHookTarget option, exactly as every pre-Phase-5 call site still does --
+// must generate the exact same PermissionRequest hook command as before this change.
+func Test_InjectHooksConfig_should_ProduceByteIdenticalLocalCommand_When_NoRemoteTargetPassed(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := InjectHooksConfig(tmpDir, "local-sess", nil); err != nil {
+		t.Fatalf("InjectHooksConfig: %v", err)
+	}
+
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
+		t.Fatalf("parse hooks: %v", err)
+	}
+	var groups []hookMatcherGroup
+	if err := json.Unmarshal(hooksMap["PermissionRequest"], &groups); err != nil {
+		t.Fatalf("parse PermissionRequest groups: %v", err)
+	}
+	if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+		t.Fatalf("expected exactly one PermissionRequest hook group/entry, got groups=%+v", groups)
+	}
+
+	want := fmt.Sprintf(
+		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
+		hookTimeout, hookApprovalURL(), "local-sess",
+	)
+	got := groups[0].Hooks[0].Command
+	if got != want {
+		t.Errorf("local session's PermissionRequest hook command changed by Phase 5:\n  want: %s\n  got:  %s", want, got)
+	}
+}
+
+// Test_InjectHooksConfig_should_LeaveOtherHookTypesOnHTTP_When_WithRemoteHookTargetPassed
+// documents and locks in WithRemoteHookTarget's scope decision: only HookPermissionApproval
+// is remote-routed. RemoteApprovalRelay (Epic 5.1) only understands the approval-request
+// payload shape, so routing e.g. Stop's differently-shaped JSON at the same socket would be
+// silently wrong, not just unimplemented -- see WithRemoteHookTarget's doc comment.
+func Test_InjectHooksConfig_should_LeaveOtherHookTypesOnHTTP_When_WithRemoteHookTargetPassed(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := RemoteHookTarget{
+		SocketPath:  "/home/agent/work/.stapler-squad-approval.sock",
+		BearerToken: "test-bearer-token-abc123",
+	}
+
+	if err := InjectHooksConfig(tmpDir, "remote-sess", []HookName{HookStopNotification}, WithRemoteHookTarget(target)); err != nil {
+		t.Fatalf("InjectHooksConfig: %v", err)
+	}
+
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
+		t.Fatalf("parse hooks: %v", err)
+	}
+	var groups []hookMatcherGroup
+	if err := json.Unmarshal(hooksMap["Stop"], &groups); err != nil {
+		t.Fatalf("parse Stop groups: %v", err)
+	}
+
+	found := false
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if strings.Contains(h.Command, "/api/hooks/stop") {
+				found = true
+			}
+			if strings.Contains(h.Command, "UNIX-CONNECT") {
+				t.Errorf("Stop hook must never be routed at the relay socket, got: %s", h.Command)
+			}
+		}
+	}
+	if !found {
+		t.Error("Stop hook command missing or not using the HTTP endpoint")
+	}
+}
+
+// Test_WithRemoteHookTarget_should_BeNoOp_When_SocketPathEmpty guards the documented
+// zero-value behavior: a caller that hasn't resolved a real relay yet (RemoteHookTarget{})
+// must never emit a broken empty UNIX-CONNECT -- it silently falls back to local behavior.
+func Test_WithRemoteHookTarget_should_BeNoOp_When_SocketPathEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := InjectHooksConfig(tmpDir, "sess", nil, WithRemoteHookTarget(RemoteHookTarget{})); err != nil {
+		t.Fatalf("InjectHooksConfig: %v", err)
+	}
+
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
+		t.Fatalf("parse hooks: %v", err)
+	}
+	var groups []hookMatcherGroup
+	if err := json.Unmarshal(hooksMap["PermissionRequest"], &groups); err != nil {
+		t.Fatalf("parse PermissionRequest groups: %v", err)
+	}
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if strings.Contains(h.Command, "UNIX-CONNECT") {
+				t.Errorf("zero-value RemoteHookTarget must not produce a UNIX-CONNECT command, got: %s", h.Command)
+			}
+		}
+	}
+}
+
+// Test_InjectHooksConfig_should_BeIdempotent_When_RemoteTargetCalledTwice mirrors
+// TestInjectHooksIdempotent for the remote-socket branch: calling InjectHooksConfig twice
+// with the same RemoteHookTarget must not duplicate the PermissionRequest hook entry.
+// Exercises hookCommandTargetsSocket, the remote-branch analog of hookCommandReferencesURL.
+func Test_InjectHooksConfig_should_BeIdempotent_When_RemoteTargetCalledTwice(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := RemoteHookTarget{
+		SocketPath:  "/home/agent/work/.stapler-squad-approval.sock",
+		BearerToken: "test-bearer-token-abc123",
+	}
+
+	if err := InjectHooksConfig(tmpDir, "sess", nil, WithRemoteHookTarget(target)); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if err := InjectHooksConfig(tmpDir, "sess", nil, WithRemoteHookTarget(target)); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
+		t.Fatalf("parse hooks: %v", err)
+	}
+	var groups []hookMatcherGroup
+	if err := json.Unmarshal(hooksMap["PermissionRequest"], &groups); err != nil {
+		t.Fatalf("parse PermissionRequest groups: %v", err)
+	}
+
+	count := 0
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if strings.Contains(h.Command, "UNIX-CONNECT:"+target.SocketPath) {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 remote PermissionRequest hook entry after 2 calls, got %d", count)
 	}
 }
 

@@ -1,6 +1,7 @@
 package sshremote
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -10,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"path"
 	"sync"
 	"time"
@@ -17,8 +20,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -92,34 +93,74 @@ func newBearerCredential(ttl time.Duration) (bearerCredential, error) {
 	}, nil
 }
 
-// relayedApprovalPayload is the JSON envelope the remote hook script (Epic
-// 5.2, not this package) writes to the fixed Unix socket for a single
-// approval request. Token must equal the relay's current bearer credential
-// and must not be expired (see verifyToken); a payload failing either check
-// is dropped without being forwarded into ExternalApprovalMonitor.
+// relayedApprovalPayload is the JSON envelope the remote hook script
+// (server/services.remoteApprovalHookCommand, Epic 5.2, not this package)
+// writes to the fixed Unix socket for a single approval request. Token must
+// equal the relay's current bearer credential and must not be expired (see
+// verifyToken); a payload failing either check is dropped without being
+// forwarded to PermissionRequestHandler.
+//
+// Request is the RAW, untouched bytes Claude Code itself wrote to the
+// PermissionRequest hook's stdin -- a classifier.PermissionRequestPayload-
+// shaped JSON object (pkg/classifier/classifier.go) -- deliberately kept as
+// json.RawMessage rather than decoded into a concrete type here: this
+// package never needs to interpret the payload, only pass it through
+// unmodified as an HTTP request body to PermissionRequestHandler, which
+// decodes it exactly the way the real HTTP hook endpoint does. Earlier
+// (Epic 5.1) this field was typed detection.ApprovalRequest and fed into
+// session.ExternalApprovalMonitor -- the wrong target entirely; see
+// ADR-003's addendum for why.
 type relayedApprovalPayload struct {
-	Token   string                    `json:"token"`
-	Request detection.ApprovalRequest `json:"request"`
+	Token   string          `json:"token"`
+	Request json.RawMessage `json:"request"`
+}
+
+// PermissionRequestHandler is anything that can process a raw
+// PermissionRequest hook payload the same way
+// server/services.ApprovalHandler.HandlePermissionRequest does -- defined
+// here (the consumer package) rather than imported from server/services,
+// which would create an import cycle (server/services already imports
+// session/sshremote for KeyStore/KnownHostsStore). *server/services.
+// ApprovalHandler already has exactly this method signature and satisfies
+// this interface structurally, with zero changes there.
+type PermissionRequestHandler interface {
+	HandlePermissionRequest(w http.ResponseWriter, r *http.Request)
 }
 
 // RemoteApprovalRelay reads approval-request payloads a remote agent
 // process writes to a fixed Unix domain socket on the remote host
 // (RemoteApprovalSocketPath) via a direct-streamlocal@openssh.com channel
 // dialed over the SAME pooled *ssh.Client the session's terminal stream
-// already uses, and forwards them into the local ExternalApprovalMonitor.
-// See ADR-003 (project_plans/ssh-remote-workspaces/decisions/) for why this
+// already uses, and drives them through PermissionRequestHandler exactly
+// the way Claude Code's real HTTP PermissionRequest hook does -- see
+// ADR-003 (project_plans/ssh-remote-workspaces/decisions/) for why this
 // reuses the existing multiplexed SSH connection instead of a reverse
-// tunnel or a third-party tunneling library.
+// tunnel or a third-party tunneling library, and its addendum for why the
+// forwarding target changed from Epic 5.1's original
+// session.ExternalApprovalMonitor to this handler-based design.
 //
-// This type implements Story 5.1.1's REQUEST direction only: a relayed
-// approval request flows from the remote host to the local dashboard, but
-// the local approve/deny decision is not yet written back over the channel
-// to unblock the remote agent's blocking hook-script read -- that round
-// trip is Epic 5.3 (Story 5.3.1), deliberately scoped out of Epic 5.1 (see
-// plan.md's Epic split). Each accepted direct-streamlocal connection is
-// therefore closed immediately after its single JSON payload is decoded
-// and forwarded; Epic 5.3 will need to keep the connection open (or pair it
-// with a second one) to write the response instead of closing it here.
+// Unlike Epic 5.1's original design (request-direction-only, closing the
+// connection immediately after decoding), this merges the request and
+// response into a single blocking round trip: handleConnection decodes the
+// payload, builds a synthetic *http.Request from its raw bytes, calls
+// PermissionRequestHandler.HandlePermissionRequest -- which BLOCKS until a
+// human decision is made or its own configured timeout fires, exactly as
+// it does for a real local HTTP hook -- and writes the resulting response
+// body back onto the SAME connection before closing it, so the remote-side
+// hook script (server/services.remoteApprovalHookCommand's socat pipeline)
+// gets the identical bytes curl's stdout would have gotten locally. This
+// subsumes what was originally planned as a separate Epic 5.3 response-
+// delivery step: merging request+response into one blocking round trip is
+// simpler than two independent half-duplex pieces and was never separately
+// buildable once PermissionRequestHandler (not ExternalApprovalMonitor)
+// was identified as the correct target.
+//
+// Known v1 constraint (not addressed here): the remote-host socket path is
+// fixed per session, so only one approval can be in flight per remote
+// session at a time -- handleConnection blocks the poll loop for the
+// duration of the human decision, and a second concurrent request has
+// nowhere to connect until the first completes. Acceptable per the
+// original plan design; not solved by this change.
 //
 // RemoteApprovalRelay never dials the SSH connection pool itself -- it only
 // subscribes (via pool.Subscribe) to whichever *ssh.Client is CURRENTLY
@@ -129,12 +170,12 @@ type relayedApprovalPayload struct {
 // credentials entirely means it has nothing more to configure than "which
 // pooled connection" and "which remote-side socket."
 type RemoteApprovalRelay struct {
-	pool       *tmux.SSHClientPool
-	monitor    *session.ExternalApprovalMonitor
-	remoteName string
-	socketPath string
-	sessionKey string
-	title      string
+	pool            *tmux.SSHClientPool
+	handler         PermissionRequestHandler
+	remoteName      string
+	socketPath      string
+	stableSessionID string
+	title           string
 
 	pollInterval time.Duration
 	dialTimeout  time.Duration
@@ -200,49 +241,68 @@ func withBearerTokenTTL(ttl time.Duration) RemoteApprovalRelayOption {
 
 // RemoteApprovalRelayTarget bundles the four caller-supplied identifiers
 // NewRemoteApprovalRelay needs. Deliberately a struct, not four adjacent
-// string parameters: RemoteName/BasePath/SessionKey/Title are independently
-// meaningful, same-typed strings a caller could silently transpose at a
-// call site with no compiler error (e.g. passing SessionKey where Title is
-// expected still compiles) -- exactly what
+// string parameters: RemoteName/BasePath/StableSessionID/Title are
+// independently meaningful, same-typed strings a caller could silently
+// transpose at a call site with no compiler error (e.g. passing
+// StableSessionID where Title is expected still compiles) -- exactly what
 // .claude/rules/primitive-obsession-checklist.md exists to catch. Field
 // names carry the disambiguation a positional four-string parameter list
 // can't.
 type RemoteApprovalRelayTarget struct {
 	// RemoteName is the SSHClientPool key this relay's channel is dialed
-	// under (session/tmux.SSHClientPool).
+	// under (session/tmux.SSHClientPool). Must match the same name the
+	// session's own tmux.SSHRunner/tmux.SSHTarget was constructed with, so
+	// this relay shares the SAME pooled *ssh.Client the terminal stream
+	// uses (ADR-003) rather than dialing an unrelated connection.
 	RemoteName string
-	// BasePath is the session's remote-host working-directory root;
-	// RemoteApprovalSocketPath is derived from it.
+	// BasePath is the session's remote-host working-directory root -- i.e.
+	// its worktree path on the remote host (session.Instance.
+	// GetEffectiveRootDir()), NOT the remote's shared config.RemoteConfig.
+	// BasePath. RemoteApprovalSocketPath is derived from it, so the fixed
+	// socket this relay reads from is scoped to ONE session, not shared
+	// across every session on the same remote (which would make the "one
+	// approval in flight at a time" constraint apply across unrelated
+	// sessions instead of within a single one).
 	BasePath string
-	// SessionKey is the key ExternalApprovalMonitor stores pending
-	// approvals under. Must be unique per session, e.g.
-	// "remote:<RemoteName>:<sessionID>" -- callers own this convention,
-	// this package does not invent one.
-	SessionKey string
-	// Title is the display title shown in the local approval UI.
+	// StableSessionID is written into the synthetic HTTP request's
+	// X-CS-Session-ID header before it's handed to PermissionRequestHandler
+	// -- must be the SAME stable ID server/services.ApprovalHandler.
+	// resolveSessionID resolves this session to locally
+	// (session.Instance.GetStableID(): UUID, falling back to Title), or the
+	// handler silently fails to correlate the relayed request with the
+	// right session's approval UI/notifications. Renamed from Epic 5.1's
+	// "SessionKey" (a session.ExternalApprovalMonitor lookup key that no
+	// longer applies once this relay stopped forwarding into that
+	// subsystem -- see ADR-003's addendum) to name what this value is
+	// actually used for now.
+	StableSessionID string
+	// Title is used only for this relay's own log messages; the local
+	// approval UI's session title comes from PermissionRequestHandler's own
+	// session lookup (ApprovalHandler.resolveSessionName), not from here.
 	Title string
 }
 
 // NewRemoteApprovalRelay constructs a RemoteApprovalRelay for a single
 // remote session: pool is the shared SSH connection pool target.RemoteName
-// is dialed under; monitor is the local ExternalApprovalMonitor relayed
-// requests are forwarded into. See RemoteApprovalRelayTarget's field docs
-// for the rest.
+// is dialed under; handler is what every relayed request is driven through
+// (production callers pass a *server/services.ApprovalHandler, which
+// satisfies PermissionRequestHandler structurally). See
+// RemoteApprovalRelayTarget's field docs for the rest.
 //
 // A fresh, random bearer credential is minted immediately (see BearerToken)
 // -- callers wiring hook injection (Epic 5.2) read it back via BearerToken
 // to embed in the generated hook command.
 func NewRemoteApprovalRelay(
 	pool *tmux.SSHClientPool,
-	monitor *session.ExternalApprovalMonitor,
+	handler PermissionRequestHandler,
 	target RemoteApprovalRelayTarget,
 	opts ...RemoteApprovalRelayOption,
 ) (*RemoteApprovalRelay, error) {
 	if pool == nil {
 		return nil, errors.New("sshremote: NewRemoteApprovalRelay: pool must not be nil")
 	}
-	if monitor == nil {
-		return nil, errors.New("sshremote: NewRemoteApprovalRelay: monitor must not be nil")
+	if handler == nil {
+		return nil, errors.New("sshremote: NewRemoteApprovalRelay: handler must not be nil")
 	}
 	if target.RemoteName == "" {
 		return nil, errors.New("sshremote: NewRemoteApprovalRelay: target.RemoteName must not be empty")
@@ -250,8 +310,8 @@ func NewRemoteApprovalRelay(
 	if target.BasePath == "" {
 		return nil, errors.New("sshremote: NewRemoteApprovalRelay: target.BasePath must not be empty")
 	}
-	if target.SessionKey == "" {
-		return nil, errors.New("sshremote: NewRemoteApprovalRelay: target.SessionKey must not be empty")
+	if target.StableSessionID == "" {
+		return nil, errors.New("sshremote: NewRemoteApprovalRelay: target.StableSessionID must not be empty")
 	}
 
 	cred, err := newBearerCredential(defaultBearerTokenTTL)
@@ -260,16 +320,16 @@ func NewRemoteApprovalRelay(
 	}
 
 	r := &RemoteApprovalRelay{
-		pool:         pool,
-		monitor:      monitor,
-		remoteName:   target.RemoteName,
-		socketPath:   RemoteApprovalSocketPath(target.BasePath),
-		sessionKey:   target.SessionKey,
-		title:        target.Title,
-		pollInterval: defaultPollInterval,
-		dialTimeout:  defaultDialTimeout,
-		cred:         cred,
-		wake:         make(chan struct{}, 1),
+		pool:            pool,
+		handler:         handler,
+		remoteName:      target.RemoteName,
+		socketPath:      RemoteApprovalSocketPath(target.BasePath),
+		stableSessionID: target.StableSessionID,
+		title:           target.Title,
+		pollInterval:    defaultPollInterval,
+		dialTimeout:     defaultDialTimeout,
+		cred:            cred,
+		wake:            make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -317,7 +377,7 @@ func (r *RemoteApprovalRelay) Start(ctx context.Context) {
 		go r.watchReconnects(ch, unsubscribe)
 		go r.run()
 
-		log.Info("remote approval relay started", "remote", r.remoteName, "socketPath", r.socketPath, "sessionKey", r.sessionKey)
+		log.Info("remote approval relay started", "remote", r.remoteName, "socketPath", r.socketPath, "sessionID", r.stableSessionID)
 	})
 }
 
@@ -436,13 +496,20 @@ func (r *RemoteApprovalRelay) dial(client *ssh.Client) (net.Conn, error) {
 }
 
 // handleConnection reads exactly one JSON relayedApprovalPayload from conn,
-// verifies its bearer token, and -- on success -- forwards the request into
-// ExternalApprovalMonitor via IngestRelayedApproval. The connection is
-// always closed before returning: Story 5.1.1 is request-direction only
-// (see RemoteApprovalRelay's doc comment), so there is no response to write
-// back yet.
+// verifies its bearer token, and -- on success -- drives the raw request
+// bytes through r.handler exactly as server/services.ApprovalHandler.
+// HandlePermissionRequest would process a real local HTTP POST, then writes
+// the resulting response body back onto conn before closing it. This call
+// BLOCKS for as long as r.handler takes to resolve the request (a human
+// decision, or the handler's own configured timeout) -- see this type's doc
+// comment for why that's intentional and what it constrains.
+//
+// A decode/token failure closes conn with nothing written, mirroring the
+// original request-only behavior for those failure paths: there is no
+// well-formed request to hand the handler, so there is nothing meaningful
+// to respond with either.
 func (r *RemoteApprovalRelay) handleConnection(conn net.Conn) {
-	defer conn.Close() //nolint:errcheck // best-effort; the payload has already been read (or reading failed) by the time this runs
+	defer conn.Close() //nolint:errcheck // best-effort; the response (if any) has already been written by the time this runs
 
 	payload, err := r.decodePayload(conn)
 	if err != nil {
@@ -453,12 +520,34 @@ func (r *RemoteApprovalRelay) handleConnection(conn net.Conn) {
 	}
 
 	if !r.verifyToken(payload.Token) {
-		log.Warn("remote approval relay: rejected payload with invalid or expired bearer token", "remote", r.remoteName, "sessionKey", r.sessionKey)
+		log.Warn("remote approval relay: rejected payload with invalid or expired bearer token", "remote", r.remoteName, "sessionID", r.stableSessionID)
 		return
 	}
 
-	request := payload.Request
-	r.monitor.IngestRelayedApproval(r.sessionKey, r.title, &request)
+	// httptest.NewRequest, not http.NewRequest: this synthetic request never
+	// travels over a real net/http transport (it's fed directly into
+	// r.handler's http.HandlerFunc signature), so httptest's simpler
+	// constructor (no URL-scheme/host validation, always succeeds) is the
+	// right tool -- the same one this package's own tests already use to
+	// build the fake sshd side.
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload.Request))
+	req.Header.Set("X-CS-Session-ID", r.stableSessionID)
+	// Bind the synthetic request's context to the relay's own lifecycle
+	// (r.ctx) rather than leaving it as httptest.NewRequest's default
+	// context.Background(): ApprovalHandler.HandlePermissionRequest selects
+	// on r.Context().Done() as one of its three ways to stop waiting (see
+	// its "Claude Code disconnected" case) -- wiring r.ctx here means
+	// RemoteApprovalRelay.Stop() (e.g. the owning session being torn down)
+	// unblocks an in-flight wait promptly instead of leaking it until
+	// ApprovalHandler's own multi-minute timeout fires.
+	req = req.WithContext(r.ctx)
+
+	rec := httptest.NewRecorder()
+	r.handler.HandlePermissionRequest(rec, req)
+
+	if _, err := conn.Write(rec.Body.Bytes()); err != nil {
+		log.Warn("remote approval relay: failed to write decision back to remote", "remote", r.remoteName, "sessionID", r.stableSessionID, "err", err)
+	}
 }
 
 // decodePayload reads and JSON-decodes exactly one relayedApprovalPayload
