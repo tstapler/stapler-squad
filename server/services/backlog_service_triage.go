@@ -2408,26 +2408,18 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 }
 
 // testTriageCompleteHook, when non-nil, is invoked with the item's ID as the
-// very last thing TriggerTriage's background goroutine does on every exit
-// path (success, early return, or panic-free error). Production code never
-// sets this — it exists solely so tests can wait for the goroutine to
-// actually finish (including its trailing storage writes, e.g.
-// UpdateItemSessionEnded below) instead of polling the item's status field,
-// which flips to Ready *before* that goroutine is done. Without this seam, a
-// test that returns as soon as status=="ready" races its own t.Cleanup
-// (createTestStorage's repo.Close(), session_service_test.go) against the
-// goroutine's still-in-flight storage write — the root cause of
-// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession's
-// flakiness. Modeled on backlog_service_events.go's testAfterSubscribeHook.
-//
-// Guarded by testTriageCompleteHookMu: without it, a `-race` run catches a
-// genuine data race whenever one test's TriggerTriage goroutine is still
-// alive (its own test having returned only after status flipped to Ready,
-// not after this hook fired) at the moment a LATER test assigns a new
-// closure here -- an unsynchronized read/write pair on the same package
-// variable from two different goroutines, regardless of whether the read
-// value would have been "correct" in practice.
+// last thing TriggerTriage's background goroutine does on every exit path.
+// Production code never sets this; it exists so tests can wait for the
+// goroutine to actually finish instead of polling item status, which flips
+// before the goroutine's trailing writes land. Callers must filter by item
+// ID themselves — this is one shared hook across all tests, and a leftover
+// goroutine from an unmigrated test can still fire it. Modeled on
+// backlog_service_events.go's testAfterSubscribeHook.
 var (
+	// testTriageCompleteHookMu guards concurrent read/write of the hook from
+	// a test goroutine (setter) and a still-running TriggerTriage goroutine
+	// (reader) — required under -race even though a stale read would often
+	// be harmless in practice.
 	testTriageCompleteHookMu sync.Mutex
 	testTriageCompleteHook   func(itemID string)
 )
@@ -2767,22 +2759,13 @@ func (s *BacklogService) TriggerTriage(
 			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, result.Title, triageWorktree)
 		}
 
-		// persistCtx replaces cleanupCtx for every write from here on. cleanupCtx's
-		// triageCleanupTimeout budget started ticking right after CallBlocking
-		// returned (see its own comment above) — but CommitChanges/retitle just above
-		// run real git subprocesses (fetch, checkout/reuse, commit) that this test
-		// suite has observed take up to ~30s on their own (see
+		// persistCtx gives post-git persistence writes their own fresh timeout
+		// budget, started after CommitChanges/retitle's ~30s-capable git
+		// subprocesses run rather than before — reusing cleanupCtx here produced
+		// an intermittent "expected: ready, actual: idea" flake under
+		// -race -count=5 when those git ops alone ate its budget. See
 		// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession's
-		// "Second root cause" comment), silently eating into the same 10s default
-		// budget the status transition below needs. That produced an intermittent
-		// "expected: ready, actual: idea" flake under -race -count=5: the deferred
-		// testTriageCompleteHook fires on every exit path (including this one) once
-		// the goroutine returns, but TransitionBacklogItemStatus's write below had
-		// failed against an already-expired cleanupCtx deadline it never actually
-		// caused. Giving the persistence writes their own fresh budget here — after
-		// the slow git ops, not before — closes that gap without weakening the
-		// timeout that still legitimately bounds callErr/parseErr's early-exit paths
-		// above (which run before CommitChanges and never see this cost).
+		// "Second root cause" comment for the full history.
 		persistCtx, persistCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
 		defer persistCancel()
 

@@ -3320,8 +3320,19 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 	// below). Polling status alone lets this test return while that goroutine
 	// is still running, racing a later test's use of the same package-level
 	// hook variable under -race.
+	// Filter by item ID: a still-running goroutine from an earlier,
+	// unmigrated TriggerTriage test can fire this shared hook after this
+	// test registers its closure, delivering a false completion signal.
 	triageDone := make(chan string, 1)
-	setTestTriageCompleteHook(func(id string) { triageDone <- id })
+	setTestTriageCompleteHook(func(id string) {
+		if id != item.ID {
+			return
+		}
+		select {
+		case triageDone <- id:
+		default:
+		}
+	})
 	t.Cleanup(func() { setTestTriageCompleteHook(nil) })
 
 	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
@@ -3443,8 +3454,19 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	// ... for <path>", "not a git repository", "unable to read tree"). 60s
 	// gives headroom above the observed worst case (30.29s) so the test only
 	// ever fails on a genuine hang, not on ordinary latency variance.
+	// Filter by item ID: a still-running goroutine from an earlier,
+	// unmigrated TriggerTriage test can fire this shared hook after this
+	// test registers its closure, delivering a false completion signal.
 	triageDone := make(chan string, 1)
-	setTestTriageCompleteHook(func(id string) { triageDone <- id })
+	setTestTriageCompleteHook(func(id string) {
+		if id != itemID {
+			return
+		}
+		select {
+		case triageDone <- id:
+		default:
+		}
+	})
 	t.Cleanup(func() { setTestTriageCompleteHook(nil) })
 
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
