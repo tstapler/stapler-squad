@@ -8,6 +8,8 @@ import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { SessionType } from "@/gen/session/v1/types_pb";
+import { RemoteTargetSchema } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { getDefaultRegistry } from "@/lib/omnibar/detector";
 import { WorkflowDetector, type WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import { useAliases } from "@/lib/hooks/useAliases";
@@ -264,6 +266,10 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         createIfMissing: data.createIfMissing ?? false,
         initialPrompt: data.initialPrompt,
         autonomousMode: data.autonomousMode ?? false,
+        // Remote target composes with sessionType (ADR-001: remote-as-orthogonal-flag) —
+        // omitted entirely (not just an empty remote_name) when no remote is selected, so a
+        // local session's CreateSessionRequest stays byte-identical to pre-change behavior.
+        remote: data.remoteName ? create(RemoteTargetSchema, { remoteName: data.remoteName }) : undefined,
         permissionMode: data.permissionMode ?? "",
         aliasName: data.aliasName ?? "",
         cliFlags: data.extraCliFlags ?? "",

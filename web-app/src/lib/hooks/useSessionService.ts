@@ -277,6 +277,10 @@ export function useSessionService(
             createIfMissing: request.createIfMissing ?? false,
             initialPrompt: request.initialPrompt,
             autonomousMode: request.autonomousMode ?? false,
+            // No default (unlike autonomousMode) -- an omitted remote must stay omitted on
+            // the wire, not coerced to a zero-value RemoteTarget, so local session creation
+            // is byte-identical to pre-change behavior (ADR-001: remote-as-orthogonal-flag).
+            remote: request.remote,
             permissionMode: request.permissionMode ?? "",
             aliasName: request.aliasName ?? "",
             cliFlags: request.cliFlags ?? "",
