@@ -1,4 +1,5 @@
 "use client";
+// +feature: remote-connection-indicator
 
 import { useEffect, useRef, useState } from "react";
 import { useAppSelector } from "@/lib/store";

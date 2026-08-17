@@ -69,90 +69,139 @@ export interface CreateRemoteInput {
  * mirroring useGitHubEnterpriseHosts/useApprovalRules's pattern.
  */
 export function useRemotesService() {
-  const client = useMemo(() => createClient(RemoteService, getConnectTransport()), []);
+  const client = useMemo(
+    () => createClient(RemoteService, getConnectTransport()),
+    [],
+  );
 
-  const listRemotes = async (): Promise<RemoteConfigInfo[]> => {
-    const resp = await client.listRemotes(create(ListRemotesRequestSchema, {}));
-    return resp.remotes;
-  };
-
-  const createRemote = async (input: CreateRemoteInput): Promise<RemoteConfigInfo> => {
-    const resp = await client.createRemote(
-      create(CreateRemoteRequestSchema, {
-        name: input.name,
-        host: input.host,
-        user: input.user,
-        port: input.port,
-        basePath: input.basePath,
-      })
-    );
-    if (!resp.remote) {
-      // Defensive: the backend always populates this on success (a failure
-      // surfaces as a thrown ConnectError instead) -- this only guards
-      // against a future contract drift silently producing a null remote.
-      throw new Error("CreateRemote succeeded but returned no remote");
-    }
-    return resp.remote;
-  };
-
-  const deleteRemote = async (name: string): Promise<void> => {
-    await client.deleteRemote(create(DeleteRemoteRequestSchema, { name }));
-  };
-
-  const generateRemoteIdentity = async (name: string): Promise<GeneratedIdentityInfo> => {
-    const resp = await client.generateRemoteIdentity(create(GenerateRemoteIdentityRequestSchema, { name }));
-    return { publicKeyText: resp.publicKeyText, authorizedKeysLine: resp.authorizedKeysLine };
-  };
-
-  const toDraftProto = (draft: DraftRemoteTarget) =>
-    create(DraftRemoteTargetSchema, { name: draft.name, host: draft.host, user: draft.user, port: draft.port });
-
-  const testRemoteConnectionDraft = async (draft: DraftRemoteTarget): Promise<TestConnectionResult> => {
-    const resp = await client.testRemoteConnection(
-      create(TestRemoteConnectionRequestSchema, { draft: toDraftProto(draft) })
-    );
-    return {
-      success: resp.success,
-      hostKeyUnknown: resp.hostKeyUnknown,
-      fingerprint: resp.fingerprint,
-      errorMessage: resp.errorMessage,
+  // The whole returned API is wrapped in useMemo (keyed on the already-stable `client`) so its
+  // methods keep a stable identity across re-renders. Without this, every call to
+  // useRemotesService() returned brand-new function objects, which is a footgun for any
+  // caller putting one of them in a useEffect/useCallback dependency array (exactly what
+  // RemotesPage.tsx's `refresh` does, depending on `listRemotes`) -- a fresh function identity
+  // every render makes that effect re-fire every render, which re-triggers the state update
+  // that caused the render, which changes identity again: an infinite ListRemotes fetch loop.
+  // Found while writing remote-workspaces.spec.ts (ssh-remote-workspaces Phase 6 Epic 6.3):
+  // the live page was issuing thousands of ListRemotes calls per second and the remotes list
+  // was re-rendering continuously, which is also why row buttons kept "detaching" mid-click in
+  // that spec before this fix.
+  return useMemo(() => {
+    const listRemotes = async (): Promise<RemoteConfigInfo[]> => {
+      const resp = await client.listRemotes(
+        create(ListRemotesRequestSchema, {}),
+      );
+      return resp.remotes;
     };
-  };
 
-  const testRemoteConnectionSaved = async (remoteName: string): Promise<TestConnectionResult> => {
-    const resp = await client.testRemoteConnection(create(TestRemoteConnectionRequestSchema, { remoteName }));
-    return {
-      success: resp.success,
-      hostKeyUnknown: resp.hostKeyUnknown,
-      fingerprint: resp.fingerprint,
-      errorMessage: resp.errorMessage,
+    const createRemote = async (
+      input: CreateRemoteInput,
+    ): Promise<RemoteConfigInfo> => {
+      const resp = await client.createRemote(
+        create(CreateRemoteRequestSchema, {
+          name: input.name,
+          host: input.host,
+          user: input.user,
+          port: input.port,
+          basePath: input.basePath,
+        }),
+      );
+      if (!resp.remote) {
+        // Defensive: the backend always populates this on success (a failure
+        // surfaces as a thrown ConnectError instead) -- this only guards
+        // against a future contract drift silently producing a null remote.
+        throw new Error("CreateRemote succeeded but returned no remote");
+      }
+      return resp.remote;
     };
-  };
 
-  const trustRemoteHostKeyDraft = async (draft: DraftRemoteTarget, fingerprint: string): Promise<TrustHostKeyResult> => {
-    const resp = await client.trustRemoteHostKey(
-      create(TrustRemoteHostKeyRequestSchema, { draft: toDraftProto(draft), fingerprint })
-    );
-    return { success: resp.success, errorMessage: resp.errorMessage };
-  };
+    const deleteRemote = async (name: string): Promise<void> => {
+      await client.deleteRemote(create(DeleteRemoteRequestSchema, { name }));
+    };
 
-  const trustRemoteHostKeySaved = async (remoteName: string, fingerprint: string): Promise<TrustHostKeyResult> => {
-    const resp = await client.trustRemoteHostKey(
-      create(TrustRemoteHostKeyRequestSchema, { remoteName, fingerprint })
-    );
-    return { success: resp.success, errorMessage: resp.errorMessage };
-  };
+    const generateRemoteIdentity = async (
+      name: string,
+    ): Promise<GeneratedIdentityInfo> => {
+      const resp = await client.generateRemoteIdentity(
+        create(GenerateRemoteIdentityRequestSchema, { name }),
+      );
+      return {
+        publicKeyText: resp.publicKeyText,
+        authorizedKeysLine: resp.authorizedKeysLine,
+      };
+    };
 
-  return {
-    listRemotes,
-    createRemote,
-    deleteRemote,
-    generateRemoteIdentity,
-    testRemoteConnectionDraft,
-    testRemoteConnectionSaved,
-    trustRemoteHostKeyDraft,
-    trustRemoteHostKeySaved,
-  };
+    const toDraftProto = (draft: DraftRemoteTarget) =>
+      create(DraftRemoteTargetSchema, {
+        name: draft.name,
+        host: draft.host,
+        user: draft.user,
+        port: draft.port,
+      });
+
+    const testRemoteConnectionDraft = async (
+      draft: DraftRemoteTarget,
+    ): Promise<TestConnectionResult> => {
+      const resp = await client.testRemoteConnection(
+        create(TestRemoteConnectionRequestSchema, {
+          draft: toDraftProto(draft),
+        }),
+      );
+      return {
+        success: resp.success,
+        hostKeyUnknown: resp.hostKeyUnknown,
+        fingerprint: resp.fingerprint,
+        errorMessage: resp.errorMessage,
+      };
+    };
+
+    const testRemoteConnectionSaved = async (
+      remoteName: string,
+    ): Promise<TestConnectionResult> => {
+      const resp = await client.testRemoteConnection(
+        create(TestRemoteConnectionRequestSchema, { remoteName }),
+      );
+      return {
+        success: resp.success,
+        hostKeyUnknown: resp.hostKeyUnknown,
+        fingerprint: resp.fingerprint,
+        errorMessage: resp.errorMessage,
+      };
+    };
+
+    const trustRemoteHostKeyDraft = async (
+      draft: DraftRemoteTarget,
+      fingerprint: string,
+    ): Promise<TrustHostKeyResult> => {
+      const resp = await client.trustRemoteHostKey(
+        create(TrustRemoteHostKeyRequestSchema, {
+          draft: toDraftProto(draft),
+          fingerprint,
+        }),
+      );
+      return { success: resp.success, errorMessage: resp.errorMessage };
+    };
+
+    const trustRemoteHostKeySaved = async (
+      remoteName: string,
+      fingerprint: string,
+    ): Promise<TrustHostKeyResult> => {
+      const resp = await client.trustRemoteHostKey(
+        create(TrustRemoteHostKeyRequestSchema, { remoteName, fingerprint }),
+      );
+      return { success: resp.success, errorMessage: resp.errorMessage };
+    };
+
+    return {
+      listRemotes,
+      createRemote,
+      deleteRemote,
+      generateRemoteIdentity,
+      testRemoteConnectionDraft,
+      testRemoteConnectionSaved,
+      trustRemoteHostKeyDraft,
+      trustRemoteHostKeySaved,
+    };
+  }, [client]);
 }
 
 // Re-exported so consumers (e.g. AddRemoteForm) don't need to import

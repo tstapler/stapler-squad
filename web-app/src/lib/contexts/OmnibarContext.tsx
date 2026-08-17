@@ -18,6 +18,7 @@ import { useLauncherPresets } from "@/lib/hooks/useLauncherPresets";
 import { PresetDetector } from "@/lib/omnibar/detectors/PresetDetector";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
+import { useConfiguredRemotes } from "@/lib/hooks/useConfiguredRemotes";
 
 const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
@@ -120,6 +121,11 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // OmnibarCreationPanel would fetch redundantly and — worse — this effect's refetch-on-open
   // would never reach it, since each hook call owns disconnected state.
   const { presets: launcherPresets, loading: launcherPresetsLoading, loadError: launcherPresetsLoadError, refetch: refetchLauncherPresets } = useLauncherPresets();
+
+  // Configured remotes for the Omnibar's "Remote host" selector (ADR-001:
+  // remote-as-orthogonal-flag) -- see useConfiguredRemotes' doc comment for why this wiring
+  // was missing until ssh-remote-workspaces Phase 6 Epic 6.3.
+  const { remotes: configuredRemotes } = useConfiguredRemotes();
 
   // Dynamically register/unregister PresetDetector whenever the preset list changes.
   const presetDetectorRef = useRef<PresetDetector | null>(null);
@@ -345,6 +351,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         launcherPresets={launcherPresets}
         launcherPresetsLoading={launcherPresetsLoading}
         launcherPresetsLoadError={launcherPresetsLoadError}
+        remotes={configuredRemotes}
       />
     </OmnibarContext.Provider>
   );

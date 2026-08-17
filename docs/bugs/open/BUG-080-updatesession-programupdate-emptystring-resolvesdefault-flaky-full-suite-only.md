@@ -73,3 +73,32 @@ to take on mid-implementation.
 Per `.claude/rules/fix-flaky-tests-dont-defer.md`, filing rather than
 silently re-excusing as "known pre-existing, unrelated" — this is the first
 time it's been captured in writing rather than waved off in review.
+
+## Recurrence: 2026-08-17
+
+Reproduced 3/3 times while re-verifying `go test ./server/services/... -race
+-count=1` for the same backlog item (ssh-remote-workspaces Phase 6 Epic 6.3,
+Story 6.3.1 — feature registry + e2e tests: `docs/registry/features/`,
+`tools/scanner/`, `tests/e2e/`, plus small fixes to
+`web-app/src/lib/hooks/useRemotesService.ts`,
+`web-app/src/lib/contexts/OmnibarContext.tsx`, and
+`web-app/src/components/sessions/{SessionRow,SessionCard}.tsx` found while
+writing that spec). None of this session's changed files touch
+`session_service_program_test.go`, `config/config.go`, or any config-dir
+isolation helper — confirmed via `git diff --stat` before appending this
+note, same as the original report.
+
+Same signature every time, exact match to the original report — only
+`TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault` failed, with
+the identical `"Should NOT be empty, but was" / "test assumption: a default
+program must be configured"` message, in all three consecutive full-package
+runs. No other test failed in any of the three runs. This does NOT broaden
+the bug's scope beyond what's already documented above — logging the
+recurrence per this bug's own convention (see BUG-051's "Recurrence log"
+section for the same pattern) rather than re-excusing it as "known,
+unrelated" without writing it down.
+
+```
+go test ./server/services/... -race -count=1
+# --- FAIL: TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault (x3, identical)
+```

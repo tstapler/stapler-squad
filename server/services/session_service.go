@@ -2125,6 +2125,14 @@ func (s *SessionService) setupRemoteApprovalHooks(instance *session.Instance, ro
 // resolveRemoteTarget resolves req.Msg.Remote against cfg's configured remotes. ok is false
 // when the request didn't specify a remote at all (not an error); err is non-nil only when a
 // remote WAS requested but its name doesn't match any configured RemoteConfig.
+//
+// Registry note: this is CreateSession's remote-target extension (docs/registry/features/
+// backend/session/create.json's testIds), not a separate registered feature -- a hand-authored
+// "session:create-remote-target" per-feature file was tried and found non-durable: the CreateSession
+// RPC itself is the only real proto-derived feature id, and registry-generate-backend's
+// prune-stale-backend.sh deletes any committed backend file whose id it can't re-derive from
+// the proto+markers scan on every run (silently deleted the hand-authored file the first time
+// `make registry-generate` ran after adding it).
 func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config) (target *session.RemoteTarget, ok bool, err error) {
 	if msg.GetRemote() == nil || msg.GetRemote().GetRemoteName() == "" {
 		return nil, false, nil

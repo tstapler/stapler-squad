@@ -1,4 +1,5 @@
 "use client";
+// +feature: remote-host-badge
 
 import { useState, useRef, memo } from "react";
 import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
