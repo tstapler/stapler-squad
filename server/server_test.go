@@ -5,8 +5,12 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"go.uber.org/goleak"
 )
 
 // newTestServer builds a minimal Server (bypassing BuildDependencies),
@@ -152,4 +156,52 @@ func Test_Start_should_ReturnListenError_When_RequestedPortIsAlreadyBound(t *tes
 	case <-time.After(5 * time.Second):
 		t.Fatal("Start() did not return an error within the timeout")
 	}
+}
+
+// TestWaitGroupWithTimeout pins waitGroupWithTimeout's two branches directly,
+// mirroring session's TestWaitGroupWithTimeout for the same helper shape.
+func TestWaitGroupWithTimeout(t *testing.T) {
+	t.Run("returns true when the group finishes in time", func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() { defer wg.Done() }()
+		if !waitGroupWithTimeout(&wg, time.Second) {
+			t.Error("waitGroupWithTimeout returned false, want true")
+		}
+	})
+
+	t.Run("returns false when the group doesn't finish in time", func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(1) // deliberately never Done()
+		if waitGroupWithTimeout(&wg, 10*time.Millisecond) {
+			t.Error("waitGroupWithTimeout returned true, want false")
+		}
+	})
+}
+
+// TestServer_Shutdown_JoinsBackgroundTickers pins the regression this fix
+// addresses at the server level: the fork-pressure logger, zombie watcher,
+// and zombie reaper goroutines used to be signaled via serverCtx cancellation
+// but never joined, so Shutdown() could return while they were still running.
+// Wiring them directly to a short interval and to srv.bgTickersWG (bypassing
+// the full dependency graph, the same way newTestServer does) drives several
+// ticks before Shutdown() is called; goleak.VerifyNone afterward confirms all
+// three have actually exited by the time Shutdown() returns.
+func TestServer_Shutdown_JoinsBackgroundTickers(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+
+	srv, serverCtx := newServerBase("localhost:0")
+
+	noop := func(string, ...any) {}
+	tmux.StartForkPressureLogger(serverCtx, time.Millisecond, noop, &srv.bgTickersWG)
+	tmux.StartZombieWatcher(serverCtx, time.Millisecond, noop, &srv.bgTickersWG)
+	tmux.StartZombieReaper(serverCtx, time.Millisecond, noop, &srv.bgTickersWG)
+
+	time.Sleep(20 * time.Millisecond) // let several ticks fire
+
+	if err := srv.Shutdown(); err != nil {
+		t.Fatalf("Shutdown() returned unexpected error: %v", err)
+	}
+
+	goleak.VerifyNone(t, baseline)
 }

@@ -58,6 +58,7 @@ type Server struct {
 	connCtxCancel     context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
 	availablePrograms []string                        // cached once at startup; programs change only on system changes
 	startedAt         time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	bgTickersWG       sync.WaitGroup                  // tracks StartForkPressureLogger/StartZombieWatcher/StartZombieReaper goroutines, joined in Shutdown()
 }
 
 // newServerBase creates the base Server struct and returns it alongside the
@@ -297,7 +298,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Start fork pressure logger (logs stats every 30s when activity > 0).
 	tmux.StartForkPressureLogger(serverCtx, 30*time.Second, func(format string, args ...any) {
 		log.Info(fmt.Sprintf(format, args...))
-	})
+	}, &srv.bgTickersWG)
 
 	// Become the subreaper for our process tree so that tmux's zombie children
 	// get reparented to us (not init) when tmux hasn't yet reaped them.
@@ -311,13 +312,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Start zombie watcher (scans for zombie child processes every 30s).
 	tmux.StartZombieWatcher(serverCtx, 30*time.Second, func(format string, args ...any) {
 		log.Warn(fmt.Sprintf(format, args...))
-	})
+	}, &srv.bgTickersWG)
 
 	// Start zombie reaper (calls waitpid(-1, WNOHANG) every 60s to reap any
 	// zombie children left by cmd.Start() paths that skipped cmd.Wait()).
 	tmux.StartZombieReaper(serverCtx, 60*time.Second, func(format string, args ...any) {
 		log.Info(fmt.Sprintf(format, args...))
-	})
+	}, &srv.bgTickersWG)
 
 	// Wire tmux server recovery → web UI toast notification.
 	tmux.SetServerRecoveryCallback(func() {
@@ -1031,6 +1032,35 @@ func (s *Server) Start(ctx context.Context) error {
 // regardless. Prevents a stuck hook from causing a SIGKILL on restart/stop.
 const shutdownHooksTimeout = 30 * time.Second
 
+// bgTickersJoinTimeout bounds how long Shutdown waits for the fork-pressure
+// logger, zombie watcher, and zombie reaper goroutines to observe ctx.Done()
+// and exit. Reuses PTYDiscovery.Stop()'s precedented 10s (stopJoinTimeout in
+// session/pty_discovery.go) rather than a leaner value: the zombie watcher's
+// ScanZombies() runs `ps` under its own independent 10s timeout that is not
+// derived from serverCtx, so an in-flight scan at shutdown time can't observe
+// cancellation until that call returns — a shorter bound would risk spurious
+// warnings under normal (non-stuck) conditions.
+const bgTickersJoinTimeout = 10 * time.Second
+
+// waitGroupWithTimeout waits for wg to complete, returning true if it did so
+// within timeout and false if the timeout elapsed first. On timeout, this
+// bookkeeping goroutine itself is harmlessly leaked (it will eventually
+// complete and close the now-unread done channel). Mirrors the helper of the
+// same name in session/pty_discovery.go.
+func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
 	// Cancel the server's BaseContext first so active streaming connections
@@ -1038,6 +1068,14 @@ func (s *Server) Shutdown() error {
 	// preventing context deadline exceeded on the graceful shutdown below.
 	if s.connCtxCancel != nil {
 		s.connCtxCancel()
+	}
+
+	// Join the background ticker goroutines (fork pressure logger, zombie
+	// watcher, zombie reaper) now that connCtxCancel (which also cancels
+	// serverCtx, their shared parent context) has fired. Bounded so a stuck
+	// goroutine can't block process shutdown indefinitely.
+	if !waitGroupWithTimeout(&s.bgTickersWG, bgTickersJoinTimeout) {
+		log.Warn("[shutdown] background ticker goroutines did not exit within deadline, proceeding anyway", "timeout", bgTickersJoinTimeout)
 	}
 
 	// Run registered hooks (e.g. capture pane paths, persist instance state) before

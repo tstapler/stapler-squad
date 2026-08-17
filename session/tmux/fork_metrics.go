@@ -4,6 +4,7 @@ import "github.com/linkdata/deadlock"
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -166,8 +167,12 @@ func ForkPressureSnapshot() ForkPressureStats {
 }
 
 // StartForkPressureLogger starts a background goroutine that logs fork pressure stats periodically.
-func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any)) {
+// wg.Add(1) is called before the goroutine starts, and the goroutine calls wg.Done() on exit
+// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait().
+func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any), wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {

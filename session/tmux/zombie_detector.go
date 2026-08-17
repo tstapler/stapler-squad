@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -67,6 +68,14 @@ func ScanZombies() ([]ZombieInfo, error) {
 	return zombies, scanner.Err()
 }
 
+// scanZombiesFn is the seam StartZombieWatcher calls through instead of
+// ScanZombies directly, so tests can substitute a fake that doesn't fork a
+// real "ps" subprocess. ScanZombies's real latency is unbounded under system
+// load (a real OS process fork/exec/wait), which makes any fixed wall-clock
+// assertion around it inherently flaky; production callers always get the
+// real ScanZombies via this default.
+var scanZombiesFn = ScanZombies
+
 // StartZombieWatcher starts a background goroutine that periodically scans for zombie
 // processes and records them via RecordZombieProcess when found. ctx controls its lifetime.
 // interval is how often to scan (recommended: 30s).
@@ -76,8 +85,12 @@ func ScanZombies() ([]ZombieInfo, error) {
 // appear after the baseline (i.e. growth over time) are recorded and counted toward the
 // alert threshold. This prevents a burst of spurious critical alerts on service restart
 // when a stable set of zombie children already exists.
-func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any)) {
+// wg.Add(1) is called before the goroutine starts, and the goroutine calls wg.Done() on exit
+// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait().
+func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any), wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -91,7 +104,7 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				zombies, err := ScanZombies()
+				zombies, err := scanZombiesFn()
 				if err != nil {
 					// ps failure is non-fatal
 					continue
