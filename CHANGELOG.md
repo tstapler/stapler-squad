@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.45.0](https://github.com/tstapler/stapler-squad/compare/v1.44.1...v1.45.0) (2026-08-17)
+
+
+### Features
+
+* **insights:** surface cache read/write tokens across dashboard ([8ac1cca](https://github.com/tstapler/stapler-squad/commit/8ac1cca57fb41d8df75a7d5ae9397e794de95f95))
+* **session:** add SetCommitStatus and PR head SHA tracking ([db4e208](https://github.com/tstapler/stapler-squad/commit/db4e20869e807e5930a2e1555235bce9c8b92c49))
+
+
+### Bug Fixes
+
+* **github:** fail fast on known rate limits instead of retrying blind ([a6e747e](https://github.com/tstapler/stapler-squad/commit/a6e747ef24c5dad9ed3cc055bc69caf8e552edc2))
+* **server:** join fork-pressure/zombie-watcher/zombie-reaper goroutines in Shutdown() ([#531](https://github.com/tstapler/stapler-squad/issues/531)) ([658a7e9](https://github.com/tstapler/stapler-squad/commit/658a7e9cd3bfb4b54b59f92ec90799009a92d87a))
+* **sqlite:** migrate to pure-Go modernc.org/sqlite driver for CGO_ENABLED=0 releases ([#526](https://github.com/tstapler/stapler-squad/issues/526)) ([0212d33](https://github.com/tstapler/stapler-squad/commit/0212d33002d41bd846d44010e9a52b1e108816f5))
+* **web-app:** batch pending writes with Promise.all in flow-control stress test ([#539](https://github.com/tstapler/stapler-squad/issues/539)) ([ed5f596](https://github.com/tstapler/stapler-squad/commit/ed5f596b970de4e90c0dae1e94329bea11186c90))
+
+
+### Performance Improvements
+
+* **web-app:** preserve session entity refs on unchanged snapshot data ([a38f54f](https://github.com/tstapler/stapler-squad/commit/a38f54f219fceaa5e388a2578e1e1117347b41e3))
+
 ## [1.44.1](https://github.com/tstapler/stapler-squad/compare/v1.44.0...v1.44.1) (2026-08-17)
 
 
