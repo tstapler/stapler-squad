@@ -105,6 +105,25 @@ describe("SessionCard — note badge", () => {
   });
 });
 
+describe("SessionCard — host badge (ssh-remote-workspaces Epic 6.2, Story 6.2.1)", () => {
+  it("SessionCard_should_RenderHostBadge_When_SessionRemoteNameIsSet", () => {
+    const session = { ...minimalSession, remoteName: "prod-box" } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const badge = screen.getByTestId("host-badge");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("role", "img");
+    expect(badge).toHaveAttribute("aria-label", "Running on prod-box");
+  });
+
+  it("SessionCard_should_NotRenderHostBadge_When_SessionIsLocal", () => {
+    const session = { ...minimalSession, remoteName: "" } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    expect(screen.queryByTestId("host-badge")).toBeNull();
+  });
+});
+
 // Builds a Timestamp-shaped object (seconds/nanos) the number of minutes ago from now —
 // matches the {seconds: bigint, nanos: number} shape session-staleness.ts and SessionCard's
 // own formatTimeAgo/formatDate helpers read from lastMeaningfulOutput/lastTerminalUpdate.

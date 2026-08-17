@@ -87,6 +87,18 @@ message RemoteConfigProto {
   bool has_identity = 6;
 }
 
+// RemoteConnectionState mirrors session/sshremote.RemoteConnectionState for
+// wire transport (Epic 6.2's RemoteHealthChangedEvent). Kept as a proto enum
+// rather than a bare string so frontend switch/exhaustiveness checks catch a
+// state the client doesn't yet handle, instead of silently falling through
+// on an unrecognized string value.
+enum RemoteConnectionState {
+  REMOTE_CONNECTION_STATE_UNSPECIFIED = 0;
+  REMOTE_CONNECTION_STATE_CONNECTED = 1;
+  REMOTE_CONNECTION_STATE_RECONNECTING = 2;
+  REMOTE_CONNECTION_STATE_DISCONNECTED = 3;
+}
+
 // DraftRemoteTarget supplies inline connection coordinates for a remote that
 // has NOT yet been saved to config.json -- used by TestRemoteConnectionRequest
 // and TrustRemoteHostKeyRequest's draft field (the Add Remote form's flow,
