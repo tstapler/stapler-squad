@@ -120,3 +120,45 @@ export const sectionTitle = style({
   color: vars.color.textPrimary,
   margin: 0,
 });
+
+export const sectionHeader = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space[3],
+});
+
+export const modeToggleGroup = style({
+  display: "flex",
+  gap: vars.space[1],
+});
+
+export const modeToggleButton = style({
+  padding: `${vars.space[1]} ${vars.space[2]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderSubtle}`,
+  background: "transparent",
+  color: vars.color.textSecondary,
+  fontSize: vars.fontSize.xs,
+  cursor: "pointer",
+  ":hover": {
+    background: vars.color.hoverBackground,
+    color: vars.color.textPrimary,
+  },
+});
+
+export const modeToggleButtonActive = style({
+  background: vars.color.hoverBackground,
+  color: vars.color.textPrimary,
+  fontWeight: vars.fontWeight.semibold,
+});
+
+export const projectedCostEmptyState = style({
+  display: "flex",
+  alignItems: "center",
+  padding: `${vars.space[3]} ${vars.space[4]}`,
+  border: `1px dashed ${vars.color.borderSubtle}`,
+  borderRadius: vars.radii.lg,
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.xs,
+});
