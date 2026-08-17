@@ -4,6 +4,7 @@ import "github.com/linkdata/deadlock"
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -166,19 +167,14 @@ func ForkPressureSnapshot() ForkPressureStats {
 }
 
 // StartForkPressureLogger starts a background goroutine that logs fork pressure stats periodically.
-//
-// Audited 2026-08-15 for the same signal-vs-join gap fixed in PTYDiscovery.Stop()
-// (session/pty_discovery.go): this goroutine is signaled via ctx.Done() but never
-// joined by server.Server.Shutdown(). It reads only in-memory ring buffers — it
-// never touches gateDir()/TryAcquireExecSlot or STAPLER_SQUAD_TEST_DIR-derived
-// paths — and is only started from server.go with the long-lived serverCtx, never
-// from a test's per-test setup, so it cannot reproduce the exec-gate TempDir race
-// this fix targets. Adding a real join belongs in server.Shutdown() alongside the
-// other two goroutines below; tracked as backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec
-// rather than fixed here to avoid expanding this change's blast radius into process
-// shutdown ordering.
-func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any)) {
+// wg.Add(1) is called before the goroutine starts, and the goroutine calls wg.Done() on exit
+// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait(). This closes
+// the signal-vs-join gap noted alongside PTYDiscovery.Stop() (session/pty_discovery.go) and
+// tracked as backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec.
+func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any), wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {

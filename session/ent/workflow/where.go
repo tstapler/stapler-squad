@@ -110,6 +110,11 @@ func CronEnabled(v bool) predicate.Workflow {
 	return predicate.Workflow(sql.FieldEQ(FieldCronEnabled, v))
 }
 
+// Enabled applies equality check predicate on the "enabled" field. It's identical to EnabledEQ.
+func Enabled(v bool) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldEnabled, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.Workflow {
 	return predicate.Workflow(sql.FieldEQ(FieldCreatedAt, v))
@@ -903,6 +908,16 @@ func CronEnabledEQ(v bool) predicate.Workflow {
 // CronEnabledNEQ applies the NEQ predicate on the "cron_enabled" field.
 func CronEnabledNEQ(v bool) predicate.Workflow {
 	return predicate.Workflow(sql.FieldNEQ(FieldCronEnabled, v))
+}
+
+// EnabledEQ applies the EQ predicate on the "enabled" field.
+func EnabledEQ(v bool) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldEnabled, v))
+}
+
+// EnabledNEQ applies the NEQ predicate on the "enabled" field.
+func EnabledNEQ(v bool) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldEnabled, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

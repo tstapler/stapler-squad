@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -67,6 +68,14 @@ func ScanZombies() ([]ZombieInfo, error) {
 	return zombies, scanner.Err()
 }
 
+// scanZombiesFn is the seam StartZombieWatcher calls through instead of
+// ScanZombies directly, so tests can substitute a fake that doesn't fork a
+// real "ps" subprocess. ScanZombies's real latency is unbounded under system
+// load (a real OS process fork/exec/wait), which makes any fixed wall-clock
+// assertion around it inherently flaky; production callers always get the
+// real ScanZombies via this default.
+var scanZombiesFn = ScanZombies
+
 // StartZombieWatcher starts a background goroutine that periodically scans for zombie
 // processes and records them via RecordZombieProcess when found. ctx controls its lifetime.
 // interval is how often to scan (recommended: 30s).
@@ -76,13 +85,15 @@ func ScanZombies() ([]ZombieInfo, error) {
 // appear after the baseline (i.e. growth over time) are recorded and counted toward the
 // alert threshold. This prevents a burst of spurious critical alerts on service restart
 // when a stable set of zombie children already exists.
-// Audited 2026-08-15 for the same signal-vs-join gap fixed in PTYDiscovery.Stop()
-// (session/pty_discovery.go): see the note on StartForkPressureLogger in
-// fork_metrics.go — same pattern, same conclusion (production-only, doesn't touch
-// gateDir()/STAPLER_SQUAD_TEST_DIR; tracked as backlog item
-// 81e82fee-9528-4dc9-a513-1040b4dee2ec rather than fixed here).
-func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any)) {
+// wg.Add(1) is called before the goroutine starts, and the goroutine calls wg.Done() on exit
+// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait(). Closes the
+// signal-vs-join gap noted alongside StartForkPressureLogger (fork_metrics.go) and
+// PTYDiscovery.Stop() (session/pty_discovery.go); tracked as backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec.
+func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any), wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -96,46 +107,54 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				zombies, err := ScanZombies()
-				if err != nil {
-					// ps failure is non-fatal
-					continue
-				}
-
-				// Build current set so we can evict stale entries
-				current := make(map[int]bool, len(zombies))
-
-				if len(zombies) > 0 {
-					// Immediately reap rather than waiting for the 60s background tick.
-					// Doing this before recording ensure we've at least tried to clean
-					// up before the fork pressure monitor evaluates the alert state.
-					if n := reapZombieChildren(); n > 0 {
-						warnFn("[zombie-reaper] reaped %d zombie child(ren) on detection", n)
-					}
-				}
-
-				for _, z := range zombies {
-					current[z.PID] = true
-					if !reported[z.PID] {
-						reported[z.PID] = true
-						if firstScan {
-							// Baseline: log but don't record against the pressure threshold.
-							warnFn("[zombie-watcher] baseline zombie at startup: pid=%d comm=%q (not counted toward alert threshold)", z.PID, z.Command)
-						} else {
-							RecordZombieProcess(z.PID, z.Command, warnFn)
-						}
-					}
-				}
-
-				firstScan = false
-
-				// Evict reaped zombies from the reported set
-				for pid := range reported {
-					if !current[pid] {
-						delete(reported, pid)
-					}
-				}
+				firstScan = watchZombieTick(warnFn, reported, firstScan)
 			}
 		}
 	}()
+}
+
+// watchZombieTick performs one scan/reap/report/evict cycle for
+// StartZombieWatcher's ticker loop, and returns the updated firstScan value.
+// Split out from StartZombieWatcher to keep the ticker goroutine's cognitive
+// complexity under the repo's gocognit gate.
+func watchZombieTick(warnFn func(string, ...any), reported map[int]bool, firstScan bool) bool {
+	zombies, err := scanZombiesFn()
+	if err != nil {
+		// ps failure is non-fatal
+		return firstScan
+	}
+
+	// Build current set so we can evict stale entries
+	current := make(map[int]bool, len(zombies))
+
+	if len(zombies) > 0 {
+		// Immediately reap rather than waiting for the 60s background tick.
+		// Doing this before recording ensure we've at least tried to clean
+		// up before the fork pressure monitor evaluates the alert state.
+		if n := reapZombieChildren(); n > 0 {
+			warnFn("[zombie-reaper] reaped %d zombie child(ren) on detection", n)
+		}
+	}
+
+	for _, z := range zombies {
+		current[z.PID] = true
+		if !reported[z.PID] {
+			reported[z.PID] = true
+			if firstScan {
+				// Baseline: log but don't record against the pressure threshold.
+				warnFn("[zombie-watcher] baseline zombie at startup: pid=%d comm=%q (not counted toward alert threshold)", z.PID, z.Command)
+			} else {
+				RecordZombieProcess(z.PID, z.Command, warnFn)
+			}
+		}
+	}
+
+	// Evict reaped zombies from the reported set
+	for pid := range reported {
+		if !current[pid] {
+			delete(reported, pid)
+		}
+	}
+
+	return false
 }

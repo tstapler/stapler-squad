@@ -4,6 +4,7 @@ package tmux
 
 import (
 	"context"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -19,13 +20,15 @@ import (
 // Recommended interval: 60s (half the watcher period is plenty; slower means
 // fewer interference opportunities with in-flight cmd.Wait calls).
 //
-// Audited 2026-08-15 for the same signal-vs-join gap fixed in PTYDiscovery.Stop()
-// (session/pty_discovery.go): see the note on StartForkPressureLogger in
-// fork_metrics.go — same pattern, same conclusion (production-only, doesn't touch
-// gateDir()/STAPLER_SQUAD_TEST_DIR; tracked as backlog item
-// 81e82fee-9528-4dc9-a513-1040b4dee2ec rather than fixed here).
-func StartZombieReaper(ctx context.Context, interval time.Duration, logFn func(string, ...any)) {
+// wg.Add(1) is called before the goroutine starts, and the goroutine calls wg.Done() on exit
+// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait(). Closes the
+// signal-vs-join gap noted alongside StartForkPressureLogger (fork_metrics.go) and
+// PTYDiscovery.Stop() (session/pty_discovery.go); tracked as backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec.
+func StartZombieReaper(ctx context.Context, interval time.Duration, logFn func(string, ...any), wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
