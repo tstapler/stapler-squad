@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
@@ -133,7 +134,7 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 // should call this before relying on t.TempDir() cleanup, since a driver
 // goroutine can otherwise outlive the temp dir it was launched against.
 func JoinSessionDriver(inst *Instance) {
-	if !waitGroupWithTimeout(&inst.driverWG, stopJoinTimeout) {
+	if !syncutil.WaitWithTimeout(&inst.driverWG, stopJoinTimeout) {
 		log.Warn("JoinSessionDriver: driver goroutine did not exit within timeout; it may still be running",
 			"session", inst.Title, "timeout", stopJoinTimeout)
 	}
