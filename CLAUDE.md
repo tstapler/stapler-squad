@@ -214,16 +214,17 @@ make e2e-lighthouse
 Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it restarts that live service, killing its tmux server and every session/backlog work in flight; see the WARNING above and `.claude/docs/tmux-keep-server-on-restart.md`). To click around a change by hand instead, run a second, fully separate instance:
 
 ```bash
-go build -o /tmp/ssq-manual-test .
-PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test /tmp/ssq-manual-test --tmux-keep-server &
+mkdir -p ~/.stapler-squad/manual-builds/manual-1
+go build -o ~/.stapler-squad/manual-builds/manual-1/stapler-squad .
+PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test ~/.stapler-squad/manual-builds/manual-1/stapler-squad --tmux-keep-server &
 # ...test in a browser at http://localhost:62871...
 # for --remote-access, also pass: --remote-port 62872   (its default, 8444, collides with the live instance)
 kill %1   # stop it when done
 ```
 
-- Build to a distinct output path (not `./stapler-squad`) — that path is the live systemd unit's `ExecStart` binary; overwriting it in place is confusing even though a running process keeps its old inode open.
+- Build to `~/.stapler-squad/manual-builds/manual-<N>/stapler-squad` — never `./stapler-squad` (the live launchd/systemd unit's `ExecStart` binary; overwriting it in place is confusing even though a running process keeps its old inode open) and never a bare `/tmp/ssq-manual-test` path (no per-instance separation, so a second concurrent manual build silently overwrites the first instance's running binary, and `/tmp` can be cleared by the OS between reboots, unlike `~/.stapler-squad/`). Number the directory to match the port-block instance (`manual-1` ↔ `62871`/`62872`, `manual-2` ↔ `62873`/`62874`) so the binary path and the port it's bound to stay obviously paired.
 - Use ports from the **manual dev port block** below — `PORT` must differ from `:8543` (and `--remote-port` from `:8444`) or the bind will fail.
-- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `.claude/docs/state-isolation.md`) — it will not see or affect the live deployed instance's sessions, backlog items, or config.
+- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `.claude/docs/state-isolation.md`) — it will not see or affect the live deployed instance's sessions, backlog items, or config. This is separate from the build directory above: `instances/<name>/` holds runtime state (sessions, config, worktrees), `manual-builds/manual-<N>/` holds the binary.
 - `--tmux-keep-server` still applies here: without it, stopping this manual instance kills its tmux server too (fine for a throwaway instance, but keep the flag if you want to leave sessions running between restarts of it).
 
 #### Manual dev port block
