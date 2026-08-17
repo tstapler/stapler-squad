@@ -713,6 +713,106 @@ func TestOneOffBaseDir_JSONRoundTrip(t *testing.T) {
 	assert.NotContains(t, string(emptyRaw), `"one_off_base_dir"`)
 }
 
+// ─── RemoteConfig tests (ssh-remote-workspaces Phase 3, Epic 3.1) ────────────
+
+// TestRemoteConfigRoundTrip covers plan.md Story 3.1.1's acceptance criterion:
+// a RemoteConfig saved via config.Save round-trips through config.json with
+// its exact field values intact.
+func TestRemoteConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{
+				Name:        "prod-box",
+				Host:        "prod.example.com",
+				User:        "tyler",
+				BasePath:    "/srv/workspaces",
+				IdentityRef: "ssh-key:prod-box",
+			},
+		},
+	}
+	require.NoError(t, saveConfig(cfg, path))
+
+	loaded, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	require.Len(t, loaded.Remotes, 1)
+	assert.Equal(t, "prod-box", loaded.Remotes[0].Name)
+	assert.Equal(t, "prod.example.com", loaded.Remotes[0].Host)
+	assert.Equal(t, "tyler", loaded.Remotes[0].User)
+	assert.Equal(t, "/srv/workspaces", loaded.Remotes[0].BasePath)
+	assert.Equal(t, "ssh-key:prod-box", loaded.Remotes[0].IdentityRef)
+
+	// omitempty: no configured remotes omits the "remotes" key entirely.
+	emptyCfg := &Config{}
+	emptyPath := filepath.Join(dir, "empty-config.json")
+	require.NoError(t, saveConfig(emptyCfg, emptyPath))
+	emptyRaw, err := os.ReadFile(emptyPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(emptyRaw), `"remotes"`)
+}
+
+// TestRemoteConfig_SavedJSONContainsNoPlaintextSecret pins plan.md Story
+// 3.1.1's "no secret material in config.json" acceptance criterion: a saved
+// RemoteConfig's raw JSON never contains a PEM-shaped value or a
+// private-key/passphrase field, because RemoteConfig has no such field —
+// IdentityRef is only an opaque pointer resolved against the OS keychain
+// (sshremote.KeyStore, Epic 3.2), never the key material itself.
+func TestRemoteConfig_SavedJSONContainsNoPlaintextSecret(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{
+				Name:        "prod-box",
+				Host:        "prod.example.com",
+				User:        "tyler",
+				BasePath:    "/srv/workspaces",
+				IdentityRef: "ssh-key:prod-box",
+			},
+		},
+	}
+	require.NoError(t, saveConfig(cfg, path))
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	rawJSON := string(raw)
+
+	assert.False(t, strings.Contains(rawJSON, "BEGIN"), "config.json must not contain PEM-shaped content")
+	assert.NotContains(t, rawJSON, "private_key")
+	assert.NotContains(t, rawJSON, "passphrase")
+
+	// Sanity: the remote's non-secret fields are actually present, so this
+	// test isn't vacuously passing against an empty/failed save.
+	assert.Contains(t, rawJSON, `"remotes"`)
+	assert.Contains(t, rawJSON, "prod-box")
+}
+
+// TestConfig_RemoteByName covers the lookup helper consumed by session
+// creation (Phase 4) and Settings UI validation (Phase 6).
+func TestConfig_RemoteByName(t *testing.T) {
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{Name: "prod-box", Host: "prod.example.com", User: "tyler", BasePath: "/srv/workspaces", IdentityRef: "ssh-key:prod-box"},
+			{Name: "staging-box", Host: "staging.example.com", User: "tyler", BasePath: "/srv/workspaces", IdentityRef: "ssh-key:staging-box"},
+		},
+	}
+
+	found, ok := cfg.RemoteByName("staging-box")
+	require.True(t, ok)
+	require.NotNil(t, found)
+	assert.Equal(t, "staging.example.com", found.Host)
+
+	_, ok = cfg.RemoteByName("does-not-exist")
+	assert.False(t, ok)
+
+	var nilCfg *Config
+	_, ok = nilCfg.RemoteByName("prod-box")
+	assert.False(t, ok, "RemoteByName must be nil-safe")
+}
+
 // ─── Escape analytics config tests ───────────────────────────────────────────
 
 // TestEscapeAnalyticsDefaults verifies that zero-value configs get the correct defaults

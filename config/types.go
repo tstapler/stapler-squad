@@ -484,6 +484,43 @@ func (c QuotaConfig) QuotaConfigOrDefault() QuotaConfig {
 	return out
 }
 
+// RemoteConfig registers one SSH-reachable remote host that sessions can be
+// created against (ssh-remote-workspaces feature). It holds only connection
+// coordinates and a pointer to credential material — never the credential
+// material itself. See sshremote.KeyStore (Phase 3.2) for where the actual
+// SSH private key/passphrase bytes live (OS keychain), and
+// Config.RemoteByName for the lookup helper consumed by session creation
+// (Phase 4) and Settings UI validation (Phase 6).
+type RemoteConfig struct {
+	// Name is the unique, user-chosen identifier for this remote (e.g.
+	// "prod-box"), referenced by session-creation flows. Not a hostname and
+	// not required to resolve as one.
+	Name string `json:"name"`
+	// Host is the SSH-reachable hostname or address (e.g. "prod.example.com"
+	// or "10.0.0.5"). Not a full "user@host" string — see User for the
+	// login name — and not a URL (no scheme, no path, no port suffix; use a
+	// standard SSH config Host block for non-default ports).
+	Host string `json:"host"`
+	// User is the SSH login username on the remote host. Not a local
+	// username and not validated against the remote's actual user list at
+	// save time.
+	User string `json:"user"`
+	// BasePath is the absolute filesystem path on the remote host under
+	// which session worktrees/directories are created (e.g.
+	// "/srv/workspaces"). Not a local path and not created automatically by
+	// saving this config — it must already exist (or be creatable) on the
+	// remote.
+	BasePath string `json:"base_path"`
+	// IdentityRef is an opaque, non-secret pointer to the SSH identity
+	// (private key + optional passphrase) that authenticates to this
+	// remote, resolved at connection time via sshremote.KeyStore against the
+	// OS keychain. It is NOT a filesystem path to a key file, NOT the key's
+	// raw bytes, and NOT the passphrase itself — no key material is ever
+	// stored in config.json. An empty value means no identity has been
+	// registered yet for this remote.
+	IdentityRef string `json:"identity_ref"`
+}
+
 // CapacityConfigOrDefault returns a CapacityConfig with standard defaults applied to zero fields.
 func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	out := c
