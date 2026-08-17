@@ -41,8 +41,8 @@
 - **Staged rollout**: N/A — ships as a normal `fix:` commit per this repo's Conventional Commits convention (patch version bump via release-please), no gradual rollout mechanism exists or is warranted for a backend MCP tool error-code fix.
 
 ## Unresolved Questions
-- [ ] Should a follow-up backlog item be filed for `DeleteBacklogItem` (`session/ent_repository_backlog.go:783-840`) having no guard against deleting an item with an active session? — Not blocking any story in this plan (explicitly out of scope per requirements.md non-goals) — owner: human operator, to decide when triaging this item's suggestions.
-- [ ] Should a follow-up backlog item be filed to add a real `report_blocked` MCP tool (research confirmed none exists anywhere in this codebase — no tool, command, or skill)? — Not blocking any story in this plan — owner: human operator.
+- [ ] Should a follow-up backlog item be filed for `DeleteBacklogItem` (`session/ent_repository_backlog.go:783-840`) having no guard against deleting an item with an active session? — Not blocking any story in this plan (explicitly out of scope per requirements.md non-goals) — owner: human operator, to decide when triaging this item's suggestions. **Pre-mortem P2 (Failure #5)**: without this guard, the underlying bug class (item/link vanishing under a live session) keeps recurring at the same rate — this fix only makes it legible, not prevented. Recommend filing at ship time rather than leaving as optional, so the PR isn't mistaken for closing the incident class.
+- [ ] Should a follow-up backlog item be filed to add a real `report_blocked` MCP tool (research confirmed none exists anywhere in this codebase — no tool, command, or skill)? **Pre-mortem P1 (Failure #4)**: elevated from optional to a near-term filed item — the fix's own improved `PERMISSION_DENIED` message (Task 1.1.1a) now tells a session to stop retrying and report in its final summary after one bounded retry, but "report in your final summary" only reaches a human if someone reads the transcript; a real `report_blocked`/escalation tool would close that gap properly. File this alongside this fix's PR, not as a someday-maybe. — owner: human operator, at PR-open time.
 - [ ] Should the list_sessions/get_session/get_session_goal timeout investigation (AC4, documented below in "Follow-up Findings") be filed as its own backlog item for root-cause confirmation against `SetMaxOpenConns(1)` contention? — owner: human operator.
 
 ## Dependency Visualization
@@ -127,7 +127,11 @@ confirms it ships with the PR)
       // Disambiguate: does the item itself exist?
       if _, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr != nil {
           if errors.Is(itemErr, session.ErrNotFound) {
-              return session.ItemSessionSummary{}, errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), "")
+              return session.ItemSessionSummary{}, errResult(ErrItemNotFound,
+                  fmt.Sprintf("backlog item %q not found", itemID),
+                  "This item id does not exist — do not retry any backlog MCP tool call against it. If you were given "+
+                      "this item id at session start, report it in your final summary; it may have been deleted or "+
+                      "archived out from under this session.")
           }
           return session.ItemSessionSummary{}, errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", itemErr), "")
       }
@@ -136,11 +140,16 @@ confirms it ships with the PR)
       return session.ItemSessionSummary{}, errResult(ErrPermissionDenied,
           fmt.Sprintf("session %s is not linked to backlog item %s", callerUUID, itemID),
           "This item exists, but no session-item link was found for this session. If this session was just spawned, "+
-              "the link may not have committed yet — wait a few seconds and retry. Otherwise report this session UUID "+
-              "and item ID to an operator; the link may have been lost.")
+              "the link may not have committed yet — wait ~10 seconds and retry this same tool call ONCE. If it fails "+
+              "again, the link is not transient: stop calling ANY backlog MCP tool for this item (report_progress, "+
+              "request_review, submit_review_verdict, report_pr_created, submit_triage_result will all fail identically "+
+              "for the same reason). Report this session UUID and item ID in your final summary so an operator can "+
+              "reconcile it — this tool cannot self-recover the link.")
   }
   ```
 - Files: `server/mcp/tools_backlog.go`
+- **Pre-mortem P1 (Failure #4) fix baked in above**: the remediation string bounds the retry to one attempt with a concrete duration and an explicit stop condition, rather than open-ended "wait a few seconds and retry" — pre-mortem.md found the open-ended wording gives an LLM agent session no way to distinguish transient-retry from permanent-stop, risking an indefinite retry loop against a permanently severed link (e.g. after `DeleteBacklogItem`). Since this codebase has no `report_blocked` tool (research/features.md), "report in your final summary" is the only self-report channel available today.
+- **Triad UX repair (round 1)**: two gaps found by the UX lens, both patched above: (1) the PERMISSION_DENIED remediation originally said "stop calling this tool" (singular) — since the no-link condition is session/item-scoped, not tool-scoped, an agent could waste up to 5 calls (one per mutating tool) before giving up; it now names all 5 tools explicitly and says "ANY backlog MCP tool for this item." (2) ITEM_NOT_FOUND's remediation was an empty string on every call site (including the pre-existing `get_backlog_item` path and all 5 mutating-tool paths via `resolveItemLink`) — the same open-ended-retry risk pre-mortem caught for PERMISSION_DENIED existed here too, just unexamined; it now explicitly says do not retry. `get_backlog_item`'s own pre-existing `ITEM_NOT_FOUND` branch (line 130 in the current file, untouched by this fix's other stories) should get the same remediation string for consistency — add this as part of Task 1.1.1a rather than leaving it inconsistent with the new `resolveItemLink` behavior.
 
 ---
 
@@ -206,11 +215,11 @@ confirms it ships with the PR)
 - Files: `server/mcp/tools_backlog.go`
 
 #### Story 1.2.3: `submit_review_verdict`
-**As a** review-role session, **I want** `submit_review_verdict` to distinguish item-missing from not-linked while leaving the separate role-mismatch check untouched, **so that** the existing "wrong role" regression tests keep passing.
+**As a** review-role session, **I want** `submit_review_verdict` to distinguish item-missing from not-linked while leaving the separate role-mismatch check untouched, **so that** role enforcement for this handler is provably intact, not just visually unchanged.
 **Acceptance Criteria**:
 - *Given* item id `77777777-7777-7777-7777-777777777777` does not exist, *When* `submit_review_verdict` is called with that `item_id`, a `summary`, and a valid `verdicts` array, *Then* `error.code == "ITEM_NOT_FOUND"`.
-- *Given* item exists, session is linked, but `itemSession.Role != "review"` (e.g. role `"work"`), *When* `submit_review_verdict` is called, *Then* `error.code == "PERMISSION_DENIED"` with message containing `"only 'review' role may submit verdicts"` — unchanged from today (`TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork`-style existing tests for this handler must still pass).
-**Files**: `server/mcp/tools_backlog.go`
+- *Given* item exists, session is linked, but `itemSession.Role != "review"` (e.g. role `"work"`), *When* `submit_review_verdict` is called, *Then* `error.code == "PERMISSION_DENIED"` with message containing `"only 'review' role may submit verdicts"`. **Correction (pre-mortem P1, Failure #2)**: no pre-existing test for this branch exists anywhere in the repo today (confirmed by the adversarial review's grep) — Task 2.1.1d below adds it as new coverage; do not assume "unchanged from today" without that test.
+**Files**: `server/mcp/tools_backlog.go`, `server/mcp/tools_backlog_test.go`
 
 ##### Task 1.2.3a: Replace the link-check block at lines 501-508 only (~3 min)
 - Replace:
@@ -281,8 +290,8 @@ confirms it ships with the PR)
 **As a** triage-role session, **I want** `submit_triage_result` to distinguish item-missing from not-linked while leaving the role-mismatch check untouched, **so that** triage sessions get the same self-diagnosis capability.
 **Acceptance Criteria**:
 - *Given* item id `12121212-1212-1212-1212-121212121212` does not exist, *When* `submit_triage_result` is called with that `item_id` and a `summary`, *Then* `error.code == "ITEM_NOT_FOUND"`.
-- *Given* item exists, session is linked, but `itemSession.Role != "triage"`, *When* `submit_triage_result` is called, *Then* `error.code == "PERMISSION_DENIED"` with the existing role-mismatch message — unchanged.
-**Files**: `server/mcp/tools_backlog.go`
+- *Given* item exists, session is linked, but `itemSession.Role != "triage"`, *When* `submit_triage_result` is called, *Then* `error.code == "PERMISSION_DENIED"` with the role-mismatch message. **Correction (pre-mortem P1, Failure #2)**: no pre-existing test for this branch exists anywhere in the repo today (confirmed by the adversarial review's grep) — Task 2.1.1d below adds it as new coverage; do not assume "unchanged" without that test.
+**Files**: `server/mcp/tools_backlog.go`, `server/mcp/tools_backlog_test.go`
 
 ##### Task 1.2.5a: Replace the link-check block at lines 754-761 only (~3 min)
 - Replace:
@@ -313,10 +322,11 @@ confirms it ships with the PR)
 - **Do not touch** the `if itemSession.Role != "triage"` block.
 - Files: `server/mcp/tools_backlog.go`
 
-##### Task 1.2.6a: Confirm `get_backlog_item` needs no change (~2 min)
-- Re-read `getBacklogItem` (lines 114-237): it already calls `h.storage.GetBacklogItem` directly (line 127) and maps `ErrNotFound` to `ITEM_NOT_FOUND` — it never goes through the ambiguous `GetItemSessionBySessionAndItem` join for its primary result (the role-lookup at line 193 uses that join, but on failure it just falls through to the generic `default` role-guidance block — it does not surface an error code at all, so there is nothing to fix there).
-- No code change; record this confirmation in the PR description so a reviewer doesn't wonder why `get_backlog_item` was left untouched.
-- Files: none (verification only)
+##### Task 1.2.6a: Confirm `get_backlog_item`'s control flow needs no change; align its remediation text (~3 min)
+- Re-read `getBacklogItem` (lines 114-237): it already calls `h.storage.GetBacklogItem` directly (line 127) and maps `ErrNotFound` to `ITEM_NOT_FOUND` — it never goes through the ambiguous `GetItemSessionBySessionAndItem` join for its primary result (the role-lookup at line 193 uses that join, but on failure it just falls through to the generic `default` role-guidance block — it does not surface an error code at all, so there is no *control-flow* fix needed there).
+- **Triad UX repair (round 1)**: its `errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), "")` call at line 130 has an empty remediation string, inconsistent with `resolveItemLink`'s new ITEM_NOT_FOUND remediation (Task 1.1.1a). Update this one call site's third argument to the same "do not retry, report in your final summary" text for consistency — a session calling `get_backlog_item` first (the documented recommended first step in its own role-aware guidance) should get the same actionable message as one that discovers ITEM_NOT_FOUND via a mutating tool.
+- Record this confirmation (control flow unchanged, remediation text aligned) in the PR description so a reviewer doesn't wonder why `get_backlog_item` was otherwise left untouched.
+- Files: `server/mcp/tools_backlog.go`
 
 ---
 
@@ -334,7 +344,8 @@ confirms it ships with the PR)
   - *Given* item id `uuid.New().String()` with no corresponding row ever created, *When* `getBacklogItem` and each of the 5 mutating handlers are invoked with that `item_id` (any session UUID, since the item-not-found branch is checked before role), *Then* every one returns `error.code == "ITEM_NOT_FOUND"`.
 - (c) existing "item exists, link exists" happy path is unaffected.
   - *Given* a backlog item plus a properly-linked, correctly-roled `ItemSession` for each tool (role `"work"` for `report_progress`/`request_review`/`report_pr_created`, `"review"` for `submit_review_verdict`, `"triage"` for `submit_triage_result`), *When* each handler is called with valid arguments, *Then* each returns `success: true` (no error object) — asserted by running the existing happy-path tests (`TestReportProgress_SuccessfullyUpdatesAcStatus`, `TestRequestReview_TransitionsItemToReview`, `TestReportPRCreated_should_TransitionToPRPending_When_ValidPR`, etc.) unmodified, plus this new test's own minimal happy-path row per tool.
-- Existing role-mismatch tests are confirmed unaffected: `TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork` and the equivalent role-mismatch assertions embedded in `submit_review_verdict`/`submit_triage_result` tests still return `PERMISSION_DENIED` for a wrong-role, correctly-linked session — this condition is orthogonal to the fix and must not change.
+- (d) role-mismatch PERMISSION_DENIED is provably intact for `submit_review_verdict` and `submit_triage_result` (pre-mortem P1, Failure #2). **Correction**: `TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork` covers only `report_pr_created`'s role check; no equivalent test exists today for `submit_review_verdict` or `submit_triage_result` (confirmed by the adversarial review's grep of `server/mcp/tools_backlog_test.go`). Task 2.1.1d below adds one minimal role-mismatch case per handler as new coverage, not a regression check against a nonexistent baseline.
+  - *Given* a backlog item plus a correctly-linked `ItemSession` with role `"work"` (wrong role) for `submit_review_verdict`, and role `"work"` (wrong role) for `submit_triage_result`, *When* each handler is called with otherwise-valid args, *Then* each returns `error.code == "PERMISSION_DENIED"` with message containing `"only 'review' role"` / `"only 'triage' role"` respectively.
 
 **Files**: `server/mcp/tools_backlog_test.go`
 
@@ -371,15 +382,22 @@ confirms it ships with the PR)
       }},
   }
   ```
-- Test `TestBacklogTools_LinkErrorConsistency_should_ReturnPermissionDenied_When_ItemExistsButNoLink`: create one item, one un-linked session UUID, loop `linkConsistencyMutatingTools`, assert `ErrPermissionDenied` for each via `t.Run(tc.name, ...)`.
+- Test `TestBacklogTools_LinkErrorConsistency_should_ReturnPermissionDenied_When_ItemExistsButNoLink`: create one item, one un-linked session UUID, loop `linkConsistencyMutatingTools`, assert `ErrPermissionDenied` for each via `t.Run(tc.name, ...)`. **Triad UX repair (round 2)**: also assert `error.message` contains both the session UUID and item ID (AC2's literal requirement) and `error.remediation` contains all 5 tool names (`report_progress`, `request_review`, `submit_review_verdict`, `report_pr_created`, `submit_triage_result`) — asserting on `error.code` alone doesn't lock in AC2's message-content requirement or the round-1 UX fix (naming all 5 tools so an agent doesn't waste calls retrying each one), so a future edit could silently regress the message text while this test stays green.
 - Files: `server/mcp/tools_backlog_test.go`
 
 ##### Task 2.1.1b: Write the item-not-found sub-test, including `get_backlog_item` (~5 min)
-- Test `TestBacklogTools_LinkErrorConsistency_should_ReturnItemNotFound_When_ItemDoesNotExist`: generate `itemID := uuid.New().String()` with no `CreateBacklogItem` call, use any `WithSessionUUID` context (link state is irrelevant — item-not-found must win first), loop `linkConsistencyMutatingTools` plus a manual `h.getBacklogItem(ctx, ...)` call, assert `ErrItemNotFound` for all 6.
+- Test `TestBacklogTools_LinkErrorConsistency_should_ReturnItemNotFound_When_ItemDoesNotExist`: generate `itemID := uuid.New().String()` with no `CreateBacklogItem` call, use any `WithSessionUUID` context (link state is irrelevant — item-not-found must win first), loop `linkConsistencyMutatingTools` plus a manual `h.getBacklogItem(ctx, ...)` call, assert `ErrItemNotFound` for all 6. **Triad UX repair (round 2)**: also assert `error.remediation` is non-empty and contains "not exist"/"do not retry"-style guidance for all 6 call sites (not just `error.code`) — this locks in Task 1.1.1a's and Task 1.2.6a's remediation-text alignment (both `resolveItemLink` and `get_backlog_item`'s own ITEM_NOT_FOUND branch) rather than leaving it untested.
+- Files: `server/mcp/tools_backlog_test.go`
+
+##### Task 2.1.1d: Add role-mismatch regression tests for `submit_review_verdict` and `submit_triage_result` (~4 min)
+- **Added per pre-mortem P1, Failure #2** — closes the adversarial review's Concern #1 (no baseline test exists for these two handlers' role checks today).
+- Test `TestSubmitReviewVerdict_should_ReturnPermissionDenied_When_CallerRoleNotReview`: create an item, link the caller session with role `"work"` (wrong role), call `h.submitReviewVerdict` with a valid `verdicts` payload, assert `error.code == "PERMISSION_DENIED"` and message contains `"only 'review' role may submit verdicts"`.
+- Test `TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTriage`: same shape, role `"work"`, call `h.submitTriageResult`, assert message contains `"only 'triage' role may submit triage results"`.
+- Mirror the structure of the existing `TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork` (same file) for harness/setup conventions.
 - Files: `server/mcp/tools_backlog_test.go`
 
 ##### Task 2.1.1c: Run the new tests and the full existing backlog test file (~3 min)
-- `go test ./server/mcp/... -run 'TestBacklogTools_LinkErrorConsistency|TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork|TestReportProgress|TestRequestReview|TestSubmitTriageResult|TestGetBacklogItem' -v`
+- `go test ./server/mcp/... -run 'TestBacklogTools_LinkErrorConsistency|TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork|TestSubmitReviewVerdict_should_ReturnPermissionDenied_When_CallerRoleNotReview|TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTriage|TestReportProgress|TestRequestReview|TestSubmitTriageResult|TestGetBacklogItem' -v`
 - Confirm zero regressions in the pre-existing role-mismatch and happy-path tests.
 - Files: none (verification only)
 
