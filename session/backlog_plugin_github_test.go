@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	gh "github.com/tstapler/stapler-squad/github"
 )
 
 // These tests (both GitHubIssuesPlugin and GitHubPRsPlugin) rely on
@@ -23,14 +24,23 @@ import (
 // will silently start hitting the real GitHub API with a real token on any
 // machine that has one stored.
 
-// withGitHubTestServer points githubAPIBaseURL at ts for the duration of the test.
+// withGitHubTestServer points githubAPIBaseURL at ts for the duration of the
+// test. It also resets gh.DefaultRateLimiter — a package-level global in the
+// github package — so a test that intentionally triggers a rate-limit
+// response (e.g. TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError)
+// can't leave later tests in this binary short-circuited by
+// gh.DefaultRateLimiter.IsLimited() even though their own httptest server
+// never returned a rate-limit response.
 func withGitHubTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(handler)
 	orig := githubAPIBaseURL
 	githubAPIBaseURL = ts.URL
+	origLimiter := gh.DefaultRateLimiter
+	gh.DefaultRateLimiter = &gh.RateLimiter{}
 	t.Cleanup(func() {
 		githubAPIBaseURL = orig
+		gh.DefaultRateLimiter = origLimiter
 		ts.Close()
 	})
 	return ts
