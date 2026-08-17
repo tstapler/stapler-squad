@@ -96,7 +96,7 @@ func Test_migration_should_be_reversible(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test-migration-reversible.db")
 
-	db, err := sql.Open("sqlite3", dbPath+"?_fk=1")
+	db, err := sql.Open("sqlite", dbPath+"?_fk=1")
 	require.NoError(t, err)
 	defer db.Close()
 

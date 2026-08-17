@@ -11,11 +11,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
 
 	"connectrpc.com/connect"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver for session counting
 	"google.golang.org/protobuf/types/known/timestamppb"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver, used for session counting
 )
 
 // DatabaseService implements the database/workspace switcher RPC methods.
@@ -224,7 +225,7 @@ func (ds *DatabaseService) MergeDatabase(
 // mergeSessions copies sessions from sourceDB into destDB.
 // Returns (imported, skipped, error).
 func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, error) {
-	db, err := sql.Open("sqlite3", destDB)
+	db, err := sql.Open("sqlite", sqlitedsn.New(destDB).WithBusyTimeout(5000*time.Millisecond).Build())
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to open destination database: %w", err)
 	}
@@ -239,7 +240,7 @@ func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, erro
 	// Count sessions in source
 	var sourceTotal int
 	{
-		src, err := sql.Open("sqlite3", sourceDB+"?mode=ro")
+		src, err := sql.Open("sqlite", sqlitedsn.New(sourceDB).WithQueryOnly().WithBusyTimeout(5000*time.Millisecond).Build())
 		if err != nil {
 			return 0, 0, fmt.Errorf("failed to open source database: %w", err)
 		}
@@ -330,7 +331,7 @@ func countSessionsInDB(configDir string) int {
 		return 0
 	}
 
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro&_journal_mode=WAL")
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithQueryOnly().WithWAL().WithBusyTimeout(5000*time.Millisecond).Build())
 	if err != nil {
 		return 0
 	}
