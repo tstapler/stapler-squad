@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -157,57 +156,10 @@ func Test_Start_should_ReturnListenError_When_RequestedPortIsAlreadyBound(t *tes
 }
 
 // Backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec, AC3: the join must be
-// bounded by a timeout, not a bare Wait().
-
-// Test_waitGroupWithTimeout_should_ReturnTrue_When_WaitGroupReachesZeroBeforeTimeout
-// covers the success path: wg.Done() is called well within the timeout, so
-// waitGroupWithTimeout must return true promptly rather than waiting out the
-// full timeout duration.
-func Test_waitGroupWithTimeout_should_ReturnTrue_When_WaitGroupReachesZeroBeforeTimeout(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		wg.Done()
-	}()
-
-	start := time.Now()
-	ok := waitGroupWithTimeout(&wg, 5*time.Second)
-	elapsed := time.Since(start)
-
-	if !ok {
-		t.Fatal("expected waitGroupWithTimeout to return true when the WaitGroup reaches zero before the timeout")
-	}
-	if elapsed > time.Second {
-		t.Fatalf("waitGroupWithTimeout took %v to return after the WaitGroup reached zero; expected it to return promptly, not wait out the full timeout", elapsed)
-	}
-}
-
-// Test_waitGroupWithTimeout_should_ReturnFalse_When_WaitGroupNeverReachesZero
-// covers the timeout path: the WaitGroup counter never reaches zero (a
-// goroutine that never calls Done()), so waitGroupWithTimeout must return
-// false at approximately the timeout instead of blocking forever like a bare
-// wg.Wait() would.
-func Test_waitGroupWithTimeout_should_ReturnFalse_When_WaitGroupNeverReachesZero(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	// Deliberately never call wg.Done() — simulates a stuck background task.
-
-	const timeout = 100 * time.Millisecond
-	start := time.Now()
-	ok := waitGroupWithTimeout(&wg, timeout)
-	elapsed := time.Since(start)
-
-	if ok {
-		t.Fatal("expected waitGroupWithTimeout to return false when the WaitGroup never reaches zero")
-	}
-	if elapsed < timeout {
-		t.Fatalf("waitGroupWithTimeout returned after %v, before the %v timeout elapsed", elapsed, timeout)
-	}
-	if elapsed > timeout+2*time.Second {
-		t.Fatalf("waitGroupWithTimeout took %v to return; expected it to return at approximately the %v timeout", elapsed, timeout)
-	}
-}
+// bounded by a timeout, not a bare Wait(). Coverage of the underlying
+// timeout-bounded join primitive itself now lives in
+// internal/syncutil/syncutil_test.go (WaitWithTimeout), shared with
+// session/pty_discovery.go instead of duplicated here.
 
 // Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRunning
 // is the integration-level proof for AC0-AC2: a test-only goroutine registered
@@ -239,9 +191,15 @@ func Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRun
 // AC3 end-to-end through Shutdown() itself: a background task that never
 // observes cancellation (simulating a stuck fork-pressure logger/zombie
 // watcher/zombie reaper) must not prevent Shutdown() from returning — it
-// should proceed once backgroundTasksJoinTimeout elapses, not hang forever.
+// should proceed once the join timeout elapses, not hang forever.
+//
+// srv.backgroundTasksJoinTimeout is overridden to a short duration here so
+// this test doesn't have to wait out the real 10s production default
+// (defaultBackgroundTasksJoinTimeout) on every run.
 func Test_Shutdown_should_NotBlockPastTimeout_When_BackgroundTaskNeverExits(t *testing.T) {
 	srv := newTestServer("localhost:0")
+	const testTimeout = 50 * time.Millisecond
+	srv.backgroundTasksJoinTimeout = testTimeout
 
 	srv.backgroundTasksWG.Add(1)
 	// Deliberately never call Done() — simulates a task stuck past shutdown signal.
@@ -253,11 +211,11 @@ func Test_Shutdown_should_NotBlockPastTimeout_When_BackgroundTaskNeverExits(t *t
 	if err != nil {
 		t.Fatalf("Shutdown() returned unexpected error: %v", err)
 	}
-	if elapsed < backgroundTasksJoinTimeout {
-		t.Fatalf("Shutdown() returned after %v, before the %v background-tasks join timeout elapsed", elapsed, backgroundTasksJoinTimeout)
+	if elapsed < testTimeout {
+		t.Fatalf("Shutdown() returned after %v, before the %v background-tasks join timeout elapsed", elapsed, testTimeout)
 	}
-	if elapsed > backgroundTasksJoinTimeout+5*time.Second {
-		t.Fatalf("Shutdown() took %v to return; expected it to proceed shortly after the %v join timeout, not hang", elapsed, backgroundTasksJoinTimeout)
+	if elapsed > testTimeout+5*time.Second {
+		t.Fatalf("Shutdown() took %v to return; expected it to proceed shortly after the %v join timeout, not hang", elapsed, testTimeout)
 	}
 }
 

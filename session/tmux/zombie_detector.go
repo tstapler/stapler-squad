@@ -23,10 +23,17 @@ type ZombieInfo struct {
 // ScanZombies returns zombie processes (state "Z") that are direct children of
 // the current process. Only direct children can be reaped via Wait4(-1, WNOHANG),
 // so reporting system-wide zombies would produce un-reapable noise.
-func ScanZombies() ([]ZombieInfo, error) {
+//
+// The `ps` subprocess is bounded to 10s, derived from ctx so that canceling ctx
+// (e.g. StartZombieWatcher's caller signaling shutdown) aborts an in-flight `ps`
+// call immediately instead of leaving the caller's select loop blocked inside
+// ScanZombies for up to the full 10s even after shutdown was requested — this
+// was the root cause of an intermittent goroutine-leak-looking failure in
+// TestStartZombieWatcher_GoroutineFullyExits_When_WaitGroupIsJoined under load.
+func ScanZombies(ctx context.Context) ([]ZombieInfo, error) {
 	ourPID := os.Getpid()
 	// -axo: all processes, custom columns; state Z = zombie
-	psCtx, psCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	psCtx, psCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer psCancel()
 	psCmd := safeexec.CommandContext(psCtx, "ps", "-axo", "pid,ppid,stat,comm")
 	out, err := psCmd.Output()
@@ -98,7 +105,7 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				zombies, err := ScanZombies()
+				zombies, err := ScanZombies(ctx)
 				if err != nil {
 					// ps failure is non-fatal
 					continue

@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics"
@@ -46,21 +47,22 @@ type Server struct {
 	// "localhost:0") and is overwritten with the real OS-assigned address once
 	// Start()'s listener goroutine binds — read via GetAddr() from other
 	// goroutines (lazy hook/MCP URL closures, tests), so it must be atomic.
-	addr                     atomic.Pointer[string]
-	httpServer               *http.Server
-	mux                      *http.ServeMux
-	tlsConfig                *tls.Config                     // non-nil when TLS is enabled
-	authMiddleware           func(http.Handler) http.Handler // nil when auth is disabled
-	httpsURL                 string                          // set when remote access is enabled
-	hostnames                []string                        // detected LAN hostnames
-	origins                  []string                        // allowed CORS origins
-	shutdownHooks            []func()                        // called before HTTP server stops
-	connCtxCancel            context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
-	availablePrograms        []string                        // cached once at startup; programs change only on system changes
-	startedAt                time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
-	approvalHandler          *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
-	slackInteractiveDisabled bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
-	backgroundTasksWG        sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
+	addr                       atomic.Pointer[string]
+	httpServer                 *http.Server
+	mux                        *http.ServeMux
+	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
+	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
+	httpsURL                   string                          // set when remote access is enabled
+	hostnames                  []string                        // detected LAN hostnames
+	origins                    []string                        // allowed CORS origins
+	shutdownHooks              []func()                        // called before HTTP server stops
+	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
+	availablePrograms          []string                        // cached once at startup; programs change only on system changes
+	startedAt                  time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	approvalHandler            *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
+	slackInteractiveDisabled   bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
+	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
 }
 
 // ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
@@ -83,8 +85,9 @@ func newServerBase(addr string) (*Server, context.Context) {
 	mux := http.NewServeMux()
 	connCtx, connCtxCancel := context.WithCancel(context.Background())
 	srv := &Server{
-		mux:           mux,
-		connCtxCancel: connCtxCancel,
+		mux:                        mux,
+		connCtxCancel:              connCtxCancel,
+		backgroundTasksJoinTimeout: defaultBackgroundTasksJoinTimeout,
 		httpServer: &http.Server{
 			Addr:         addr,
 			Handler:      nil, // Set in Start() after middleware chain is built
@@ -1111,7 +1114,7 @@ func (s *Server) Start(ctx context.Context) error {
 // regardless. Prevents a stuck hook from causing a SIGKILL on restart/stop.
 const shutdownHooksTimeout = 30 * time.Second
 
-// backgroundTasksJoinTimeout bounds how long Shutdown waits for the
+// defaultBackgroundTasksJoinTimeout bounds how long Shutdown waits for the
 // fork-pressure logger, zombie watcher, and zombie reaper goroutines
 // (session/tmux) to exit after being signaled via connCtxCancel, before
 // proceeding regardless (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
@@ -1120,25 +1123,10 @@ const shutdownHooksTimeout = 30 * time.Second
 // call can consume the whole budget. Kept at 10s to match stopJoinTimeout's
 // order of magnitude (session/pty_discovery.go) rather than guessing a larger
 // number; revisit if the join-timeout warning fires in practice.
-const backgroundTasksJoinTimeout = 10 * time.Second
-
-// waitGroupWithTimeout waits for wg to reach zero, returning true if it did
-// so within timeout. Returns false if timeout elapses first; the spawned
-// goroutine remains running and reports into wg after this function returns
-// but its result is discarded (sync.WaitGroup has no cancelable Wait).
-func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
-}
+//
+// This is the production default, set on Server.backgroundTasksJoinTimeout by
+// newServerBase; tests override the field directly to avoid a real 10s wait.
+const defaultBackgroundTasksJoinTimeout = 10 * time.Second
 
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
@@ -1172,8 +1160,8 @@ func (s *Server) Shutdown() error {
 	// Join the fork-pressure logger, zombie watcher, and zombie reaper
 	// goroutines (signaled above via connCtxCancel) so Shutdown doesn't return
 	// while they're still mid-tick (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
-	if !waitGroupWithTimeout(&s.backgroundTasksWG, backgroundTasksJoinTimeout) {
-		log.Warn("[shutdown] background tasks (fork-pressure logger/zombie watcher/zombie reaper) did not exit within timeout", "timeout", backgroundTasksJoinTimeout)
+	if !syncutil.WaitWithTimeout(&s.backgroundTasksWG, s.backgroundTasksJoinTimeout) {
+		log.Warn("[shutdown] background tasks (fork-pressure logger/zombie watcher/zombie reaper) did not exit within timeout", "timeout", s.backgroundTasksJoinTimeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
