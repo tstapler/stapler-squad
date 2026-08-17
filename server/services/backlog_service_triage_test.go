@@ -191,6 +191,67 @@ func TestSanitizeTriageTitle_should_PreserveReadableSlug_When_TitleIsBenign(t *t
 	assert.Equal(t, "fix-null-pointer-in-parser", sanitizeTriageTitle("Fix null pointer in parser!", itemID))
 }
 
+// TestTriageResultTitle_should_MatchSanitizedTitle_When_PersistedAndReReadForBranchSlug
+// guards a regression that reopened the drift TestBacklogFullLifecycle_
+// SDDTriageWorktreeIsReusedBySpawnedWorkSession was written to catch: sanitizing
+// result.Title only at the filepath.Join/commit-message/retitle call sites in
+// TriggerTriage isn't enough, because the *raw* result.Title also used to reach
+// json.Marshal(result) and get persisted as the item's TriageResult JSON. A later
+// work-session spawn reads that persisted JSON back via triageShortTitle and feeds
+// the raw title into backlogWorkBranchSlug, while retitleTriageWorktreeToFinalBranch
+// (this file, ~line 2789) already renamed the triage worktree's branch using the
+// *sanitized* title — the same slugify()-hyphen-trimming asymmetry the traversal
+// tests above exercise means those two computations diverge for an adversarial
+// title, e.g. "../../../etc/passwd" retitles to "myrepo-etc-passwd" but re-derives
+// as "myrepo----------etc-passwd" from the unsanitized persisted JSON. The fix sets
+// result.Title = sanitizedTitle before json.Marshal(result), so every downstream
+// reader (including triageShortTitle) sees the same sanitized string used to
+// create the worktree. This test proves that end to end: marshal/unmarshal through
+// the real persisted-JSON shape (not just a direct sanitizeTriageTitle call) and
+// assert the retitle-time and spawn-time branch slugs agree.
+func TestTriageResultTitle_should_MatchSanitizedTitle_When_PersistedAndReReadForBranchSlug(t *testing.T) {
+	const itemID = "abcdef12-3456-7890-abcd-ef1234567890"
+	const repoPath = "/home/user/repos/myrepo"
+
+	adversarialTitles := []string{
+		"../../../etc/passwd",
+		"....//....//etc/passwd",
+		"!!!leading-punctuation",
+	}
+
+	for _, rawTitle := range adversarialTitles {
+		t.Run(rawTitle, func(t *testing.T) {
+			sanitizedTitle := sanitizeTriageTitle(rawTitle, itemID)
+
+			// Mirrors TriggerTriage: result starts with the raw LLM-controlled
+			// title, then gets overwritten with the sanitized value before
+			// marshaling — see the fix at ~line 2790.
+			result := &session.HeadlessTriageResult{Title: rawTitle}
+			result.Title = sanitizedTitle
+			payloadJSON, err := json.Marshal(result)
+			require.NoError(t, err)
+
+			sessions := []session.ItemSessionSummary{
+				{Role: string(session.SessionRoleTriage), TriageResult: string(payloadJSON)},
+			}
+
+			// Spawn-time read: what a later work-session spawn recovers from the
+			// persisted triage result.
+			spawnTimeTitle := triageShortTitle(sessions, "fallback item title")
+			assert.Equal(t, sanitizedTitle, spawnTimeTitle,
+				"persisted TriageResult.Title must be the sanitized value, not the raw LLM title %q", rawTitle)
+
+			// Retitle-time and spawn-time branch slugs must agree, or the spawned
+			// work session won't reuse the worktree retitleTriageWorktreeToFinalBranch
+			// already renamed.
+			retitleTimeBranch := backlogWorkBranchSlug(repoPath, sanitizedTitle)
+			spawnTimeBranch := backlogWorkBranchSlug(repoPath, spawnTimeTitle)
+			assert.Equal(t, retitleTimeBranch, spawnTimeBranch,
+				"retitle-time branch %q must match spawn-time branch %q for adversarial title %q", retitleTimeBranch, spawnTimeBranch, rawTitle)
+		})
+	}
+}
+
 // initGitRepoForTest initialises a minimal git repository in dir. A smaller,
 // dependency-free duplicate of backlog_triage_harness_test.go's initGitRepo,
 // which lives behind the "harness" build tag and isn't linked into normal

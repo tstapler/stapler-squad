@@ -2773,7 +2773,18 @@ func (s *BacklogService) TriggerTriage(
 		// sanitized once, up front, and every downstream use must go through
 		// sanitizedTitle rather than the raw field. See sanitizeTriageTitle's
 		// doc comment for the path-traversal primitive this closes.
+		//
+		// result.Title itself is overwritten with sanitizedTitle below, not just
+		// read from it: result is JSON-marshaled and persisted as the item's
+		// TriageResult a few lines down, and triageShortTitle/backlogWorkBranchSlug
+		// later read Title back out of that persisted JSON to recompute the
+		// work-session branch name. If the persisted Title stayed raw, that
+		// spawn-time branch computation would diverge from the sanitizedTitle
+		// already used above to create the worktree/branch here — reintroducing
+		// the worktree/branch drift regression backlogWorkBranchSlug's doc
+		// comment says was already fixed once.
 		sanitizedTitle := sanitizeTriageTitle(result.Title, itemID)
+		result.Title = sanitizedTitle
 
 		// Commit whatever the triage prompt wrote (project_plans/<name>/ for SDD
 		// mode; nothing for default mode, which writes to artifactAbsPath instead
