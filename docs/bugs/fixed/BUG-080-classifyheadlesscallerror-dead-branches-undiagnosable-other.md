@@ -1,4 +1,4 @@
-# BUG-079: `classifyHeadlessCallError` has two structurally unreachable branches, leaving most triage failures undiagnosable as "other" [SEVERITY: Medium]
+# BUG-080: `classifyHeadlessCallError` has two structurally unreachable branches, leaving most triage failures undiagnosable as "other" [SEVERITY: Medium]
 
 **Status**: ✅ Fixed (2026-08-16)
 **Discovered**: 2026-08-16 — 17 of 19 currently-parked production backlog items (auto-triage
