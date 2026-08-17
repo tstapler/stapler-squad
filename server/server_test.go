@@ -444,6 +444,33 @@ func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t
 	}
 }
 
+// Test_verifyNoLeaksTolerant_should_ForwardBaselineAndFailOnGenuineLeak
+// exercises verifyNoLeaksTolerant directly rather than only as a side effect
+// of TestServer_Shutdown_JoinsBackgroundTickers: it proves the wrapper
+// actually forwards baseline into goleak.VerifyNone (a leaked goroutine not
+// present in baseline is reported) rather than, say, silently dropping it.
+func Test_verifyNoLeaksTolerant_should_ForwardBaselineAndFailOnGenuineLeak(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+
+	block := make(chan struct{})
+	// Deliberately leaked past the end of the test, same rationale as
+	// Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs.
+	go func() { <-block }()
+	t.Cleanup(func() { close(block) })
+
+	// See that test's comment for why a bare *testing.T (not t.Run) is safe
+	// here: goleak.VerifyNone's failure path only ever calls t.Error.
+	sub := &testing.T{}
+	verifyNoLeaksTolerant(sub, baseline)
+
+	if !sub.Failed() {
+		t.Error("expected verifyNoLeaksTolerant to report a genuine leak not present in baseline as a failure")
+	}
+	if sub.Skipped() {
+		t.Error("a genuine leak must fail the test, not be skipped")
+	}
+}
+
 // Test_runGoleakTolerant_should_RepanicUnrelatedPanics covers AC2: a panic
 // that doesn't match goleak's known elided-stack marker must propagate
 // unchanged, so runGoleakTolerant never silently swallows an unrelated
