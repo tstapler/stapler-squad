@@ -98,6 +98,99 @@ func TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory(t *tes
 
 func intPtr(v int) *int { return &v }
 
+// TestSanitizeTriageTitle_should_NeverProducePathEscapingValue_When_TitleContainsTraversalSequences
+// guards the path-traversal fix: result.Title is unmarshaled straight from the
+// triage LLM's JSON output by session.ParseHeadlessTriageResult, which never
+// sanitizes it (only Tasks length is capped — see its doc comment), and an
+// unsanitized Title reaches filepath.Join(triageWorkDir, "project_plans",
+// result.Title, "implementation") to build PlanArtifactsPath, later opened by
+// readPlanFile (session/backlog_review.go). A crafted title with "../"
+// sequences previously resolved that join outside triageWorkDir — an
+// arbitrary-file-read primitive if a backlog item's content can steer the
+// triage LLM's output (this repo already treats triage-time prompt injection
+// as a realistic threat). Asserts structurally, by actually performing the
+// same filepath.Join the production code does and checking the result stays
+// under triageWorkDir, rather than just checking the crafted string is gone —
+// per this repo's evidence standard, a string-match assertion here would only
+// prove *this* payload was stripped, not that no payload can escape.
+func TestSanitizeTriageTitle_should_NeverProducePathEscapingValue_When_TitleContainsTraversalSequences(t *testing.T) {
+	const itemID = "abcdef12-3456-7890-abcd-ef1234567890"
+	triageWorkDir := filepath.Join(t.TempDir(), "triage-work")
+
+	titles := []string{
+		"../../../etc/passwd",
+		"../../secret",
+		"....//....//etc/passwd",
+		"/etc/passwd",
+		"..",
+		"...",
+		".",
+		"a/../../../b",
+		`..\..\..\windows\system32`,
+		"",
+		"   ",
+		"!!!///???",
+	}
+
+	for _, title := range titles {
+		t.Run(title, func(t *testing.T) {
+			sanitized := sanitizeTriageTitle(title, itemID)
+
+			require.NotEmpty(t, sanitized, "sanitizeTriageTitle must never return an empty string")
+			assert.NotContains(t, sanitized, "..", "sanitized title must never contain a traversal segment")
+			assert.NotContains(t, sanitized, "/", "sanitized title must never contain a path separator")
+			assert.NotContains(t, sanitized, `\`, "sanitized title must never contain a Windows path separator")
+
+			// Reproduce the exact join the production code performs (pap
+			// construction in TriggerTriage) and assert the result stays
+			// structurally inside triageWorkDir — the containment property
+			// that actually matters, not just an absence of "..".
+			joined := filepath.Join(triageWorkDir, "project_plans", sanitized, "implementation")
+			cleanWorkDir := filepath.Clean(triageWorkDir)
+			assert.True(t, strings.HasPrefix(joined, cleanWorkDir+string(filepath.Separator)),
+				"joined path %q escaped triageWorkDir %q for title %q (sanitized: %q)", joined, cleanWorkDir, title, sanitized)
+		})
+	}
+}
+
+// TestSanitizeTriageTitle_should_FallBackToItemIDSlug_When_TitleSanitizesToEmpty
+// covers the fallback branch directly: slugify strips every rune outside
+// [a-z0-9], so a title made entirely of separators/punctuation (or an empty
+// string) collapses to "" — sanitizeTriageTitle must substitute a safe,
+// non-empty value derived from itemID rather than passing an empty path
+// segment through to filepath.Join (which would silently no-op that segment
+// and point PlanArtifactsPath one directory higher than intended).
+func TestSanitizeTriageTitle_should_FallBackToItemIDSlug_When_TitleSanitizesToEmpty(t *testing.T) {
+	tests := []struct {
+		name  string
+		title string
+	}{
+		{"empty string", ""},
+		{"only punctuation", "!!!///???...."},
+		{"only whitespace", "   \t\n  "},
+	}
+	const itemID = "abcdef12-3456-7890-abcd-ef1234567890"
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeTriageTitle(tc.title, itemID)
+			assert.Equal(t, "item-"+itemID[:8], got)
+		})
+	}
+}
+
+// TestSanitizeTriageTitle_should_PreserveReadableSlug_When_TitleIsBenign is the
+// happy-path complement to the traversal/fallback tests above: a normal
+// triage-suggested title must still produce a stable, readable slug (this is
+// also what feeds the commit message and, via backlogWorkBranchSlug, the
+// final branch name — see retitleTriageWorktreeToFinalBranch), not just an
+// opaque itemID fallback.
+func TestSanitizeTriageTitle_should_PreserveReadableSlug_When_TitleIsBenign(t *testing.T) {
+	const itemID = "abcdef12-3456-7890-abcd-ef1234567890"
+	assert.Equal(t, "add-user-authentication", sanitizeTriageTitle("Add User Authentication", itemID))
+	assert.Equal(t, "fix-null-pointer-in-parser", sanitizeTriageTitle("Fix null pointer in parser!", itemID))
+}
+
 // initGitRepoForTest initialises a minimal git repository in dir. A smaller,
 // dependency-free duplicate of backlog_triage_harness_test.go's initGitRepo,
 // which lives behind the "harness" build tag and isn't linked into normal
