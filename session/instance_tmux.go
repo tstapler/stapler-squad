@@ -381,11 +381,18 @@ func (i *Instance) initTmuxSession() {
 		tmuxPrefix = "staplersquad_"
 	}
 
+	// runner threads i.ExecutionTarget through TmuxSession construction (ssh-remote-workspaces
+	// Phase 4, Task 4.2.1d) -- tmux.LocalRunner{} for LocalTarget (the default, identical to
+	// every construction site's pre-Phase-4 behavior) or the dialed *tmux.SSHRunner for a
+	// remote target, so this session's tmux subprocess calls run on the same host the
+	// CreateSession mode-specific block (server/services/session_service.go) already created
+	// the remote tmux session on.
+	runner := i.executionTarget().Runner()
 	var session *tmux.TmuxSession
 	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil))
+		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil), tmux.WithCommandRunner(runner))
 	} else {
-		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
+		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, tmux.WithCommandRunner(runner))
 	}
 	if i.UUID != "" {
 		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})

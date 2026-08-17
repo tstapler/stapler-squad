@@ -81,6 +81,18 @@ func sanitizeBranchName(s string) string {
 	return cleaned
 }
 
+// SanitizeBranchName exports sanitizeBranchName for callers outside this
+// package that need the same safe-subset transform for a remote worktree
+// directory name (server/services/session_service.go's CreateSession
+// mode-specific block, ssh-remote-workspaces Phase 4 Epic 4.2) as this
+// package already applies to local branch/directory names -- including its
+// path-traversal-segment stripping, which matters just as much for a remote
+// `path.Join(base_path, name)` as it does for the local filepath.Join call
+// sites in this file.
+func SanitizeBranchName(s string) string {
+	return sanitizeBranchName(s)
+}
+
 // joinWithinDir joins name onto baseDir and verifies the result is still a
 // descendant of baseDir, returning an error instead of the escaped path if
 // not. sanitizeBranchName already strips "." and ".." segments, so this

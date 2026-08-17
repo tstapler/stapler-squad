@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -33,10 +34,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -262,6 +265,17 @@ type SessionService struct {
 	// than a per-call-site change across the package's ~90 NewSessionService
 	// test call sites.
 	testTmuxServerSocket string
+
+	// remoteKeyStore and remoteKnownHosts back CreateSession's remote-target
+	// mode-specific block (ssh-remote-workspaces Phase 4, Epic 4.2): resolving
+	// a remote's stored SSH identity and verifying its host key, mirroring
+	// RemoteService's own fields of the same purpose. nil until SetRemoteDeps
+	// is called (server.go wires the same *sshremote.KnownHostsStore/*sshremote.KeyStore
+	// instances RemoteService uses) -- CreateSession returns CodeFailedPrecondition
+	// for any request naming a remote when either is nil, rather than nil-pointer
+	// panicking.
+	remoteKeyStore   *sshremote.KeyStore
+	remoteKnownHosts *sshremote.KnownHostsStore
 }
 
 // trackCleanup runs fn in a goroutine tracked by deleteCleanupWG so Shutdown
@@ -1203,6 +1217,18 @@ func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller)
 	}
 }
 
+// SetRemoteDeps wires the SSH-identity and host-key-trust stores CreateSession's
+// remote-target mode-specific block needs (ssh-remote-workspaces Phase 4, Epic
+// 4.2). server.go passes the same *sshremote.KeyStore/*sshremote.KnownHostsStore
+// instances used to construct RemoteService, so a remote trusted/given an
+// identity via Settings' TOFU flow is immediately usable by CreateSession with
+// no separate wiring step. Until called, CreateSession rejects any request
+// naming a remote with CodeFailedPrecondition.
+func (s *SessionService) SetRemoteDeps(keyStore *sshremote.KeyStore, knownHosts *sshremote.KnownHostsStore) {
+	s.remoteKeyStore = keyStore
+	s.remoteKnownHosts = knownHosts
+}
+
 // SetMemoryCacheReader wires the HibernationSweeper so that ListSessions can
 // populate memory_rss_mb, estimated_savings_mb, and system_memory_pct fields.
 func (s *SessionService) SetMemoryCacheReader(r session.MemoryCacheReader) {
@@ -1690,6 +1716,123 @@ func (s *SessionService) CreateSession(
 			fmt.Errorf("auto_approve is not supported for program %q", program))
 	}
 
+	// Remote-target mode-specific block (ssh-remote-workspaces Phase 4, Epic 4.2,
+	// Task 4.2.1c): when req.Msg.Remote names a saved remote, resolve its stored
+	// identity, dial an SSHRunner, and synchronously create the remote worktree +
+	// remote tmux session -- mirroring how the AutonomousMode/OneOff blocks above
+	// do mode-specific work before session.CreateManagedInstance is called, so a
+	// failure here surfaces as a normal RPC error instead of being buried in the
+	// async goroutine below.
+	//
+	// v1 only supports session_type=new_worktree: resolvedPath is treated as an
+	// existing repo already on the remote host (mirroring how a local
+	// SessionTypeNewWorktree session's Path names an existing local repo), and the
+	// new worktree is created under the remote's configured base_path. Any other
+	// session type combined with a remote target is rejected up front rather than
+	// silently attempting local-filesystem worktree discovery against a path that
+	// only exists on the remote host.
+	//
+	// On success, sessionType/existingWorktreeOverride are remapped to
+	// SessionTypeExistingWorktree pointing at the worktree just created -- see
+	// setupFirstTimeWorktree's doc comment (session/instance_worktree.go) for why
+	// that's the shape the later async Start() goroutine needs: it only attaches
+	// to the already-created worktree/tmux session, it never tries to create them
+	// again (Setup() is skipped entirely for SessionTypeExistingWorktree).
+	var executionTarget session.ExecutionTarget = session.LocalTarget{}
+	existingWorktreeOverride := req.Msg.ExistingWorktree
+	resolvedRemote, remoteRequested, remoteErr := resolveRemoteTarget(req.Msg, cfg)
+	if remoteErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, remoteErr)
+	}
+	if remoteRequested {
+		if sessionType != session.SessionTypeNewWorktree {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("remote sessions currently only support session_type=new_worktree, got %q", sessionType))
+		}
+		if s.remoteKeyStore == nil || s.remoteKnownHosts == nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("remote session support is not configured on this server"))
+		}
+
+		target := tmux.SSHTarget{Name: resolvedRemote.Name, Addr: remoteAddr(resolvedRemote.Host)}
+		clientConfig := ssh.ClientConfig{
+			User:            resolvedRemote.User,
+			Auth:            resolveIdentityAuthMethods(ctx, s.remoteKeyStore, resolvedRemote.IdentityRef),
+			HostKeyCallback: s.remoteKnownHosts.HostKeyCallback(),
+		}
+		runner := tmux.NewSSHRunner(target, clientConfig)
+		if dialErr := runner.Dial(ctx); dialErr != nil {
+			return nil, connect.NewError(connect.CodeUnavailable,
+				fmt.Errorf("failed to connect to remote %q: %w", resolvedRemote.Name, dialErr))
+		}
+
+		if branch == "" {
+			branch = cfg.BranchPrefix + git.SanitizeBranchName(req.Msg.Title)
+		}
+		remoteWorktreePath := path.Join(resolvedRemote.BasePath, git.SanitizeBranchName(req.Msg.Title))
+		worktreeOps := git.NewRemoteWorktreeOps(runner)
+		remoteWT := git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorktreePath, Branch: branch}
+
+		// RemoteWorktreeOps.CreateWorktree (Phase 2, session/git/remote_worktree.go)
+		// mirrors the local "attach to an already-existing branch" `git worktree add
+		// <path> <branch>` shape deliberately, with no -b -- so a session that wants
+		// a fresh branch on the remote (the common case, mirroring local
+		// SessionTypeNewWorktree's own branch auto-creation) needs it created first.
+		// Best-effort: "git branch <name>" failing because the branch already exists
+		// is expected and ignored; any other failure (unreachable repo, invalid
+		// resolvedPath) is surfaced immediately rather than deferred to a more
+		// confusing failure from CreateWorktree itself.
+		if out, branchErr := runner.Run(ctx, resolvedPath, "git", "branch", branch); branchErr != nil &&
+			!strings.Contains(string(out), "already exists") {
+			return nil, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
+					branch, resolvedRemote.Name, strings.TrimSpace(string(out)), branchErr))
+		}
+		if createErr := worktreeOps.CreateWorktree(ctx, remoteWT); createErr != nil {
+			return nil, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("failed to create remote worktree on %q: %w", resolvedRemote.Name, createErr))
+		}
+
+		// Best-effort compensating cleanup if the remote tmux session can't be
+		// brought up after the worktree already exists (Task 4.2.1e,
+		// adversarial-review.md Blocker 3): the worktree creation above already
+		// succeeded, so a failure here must not leave it silently orphaned.
+		//
+		// s.testTmuxServerSocket must be applied here exactly as instance.go's
+		// initTmuxSession applies InstanceOptions.TmuxServerSocket (set to the
+		// same value a few lines below) -- otherwise this synchronous check
+		// and the Instance's own later TmuxSession construction resolve to two
+		// DIFFERENT tmux -L server sockets under config.IsTestMode() (each
+		// SessionService gets its own isolated per-instance test socket; the
+		// package-wide test-isolation fallback ResolveSocket("") would use
+		// instead is a different socket entirely), so the session this block
+		// creates would silently be invisible to -- and get recreated a second
+		// time by -- the Instance's own startLocked() shortly after. Confirmed
+		// via TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession,
+		// which failed before this fix with the two calls targeting
+		// "test-isolated-<pid>" and "test_server_services_<pid>_<n>" respectively.
+		var remoteSession *tmux.TmuxSession
+		if s.testTmuxServerSocket != "" {
+			remoteSession = tmux.NewTmuxSessionWithServerSocket(req.Msg.Title, program, "staplersquad_", s.testTmuxServerSocket, tmux.WithRegistry(nil), tmux.WithCommandRunner(runner))
+		} else {
+			remoteSession = tmux.NewTmuxSessionWithPrefix(req.Msg.Title, program, "staplersquad_", tmux.WithCommandRunner(runner))
+		}
+		if ensureErr := remoteSession.EnsureRemoteSession(ctx, remoteWorktreePath); ensureErr != nil {
+			if cleanupErr := worktreeOps.RemoveWorktree(ctx, remoteWT); cleanupErr != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf(
+					"failed to start remote tmux session on %q (%v); best-effort cleanup of remote worktree %s ALSO failed (%v) -- this path may be orphaned on the remote host and require manual removal",
+					resolvedRemote.Name, ensureErr, remoteWorktreePath, cleanupErr))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf(
+				"failed to start remote tmux session on %q: %w (remote worktree %s was cleaned up)",
+				resolvedRemote.Name, ensureErr, remoteWorktreePath))
+		}
+
+		executionTarget = session.NewRemoteExecutionTarget(*resolvedRemote, runner)
+		sessionType = session.SessionTypeExistingWorktree
+		existingWorktreeOverride = remoteWorktreePath
+	}
+
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
 		Title:            req.Msg.Title,
@@ -1701,7 +1844,7 @@ func (s *SessionService) CreateSession(
 		AutoApprove:      req.Msg.AutoApprove,
 		Prompt:           req.Msg.Prompt,
 		InitialPrompt:    initialPrompt,
-		ExistingWorktree: req.Msg.ExistingWorktree,
+		ExistingWorktree: existingWorktreeOverride,
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,
 		TmuxPrefix:       "", // Use default from config
@@ -1722,6 +1865,10 @@ func (s *SessionService) CreateSession(
 		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
 		// an intentional, tested ordering (see TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
 		ExtraArgs: req.Msg.ExtraArgs,
+		// ExecutionTarget carries the dialed remote runner (ssh-remote-workspaces
+		// Phase 4 Epic 4.2) built by the mode-specific block above, or the
+		// LocalTarget{} default for the overwhelming majority of local sessions.
+		ExecutionTarget: executionTarget,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -1860,6 +2007,41 @@ func (s *SessionService) CreateSession(
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: creatingProto,
 	}), nil
+}
+
+// resolveRemoteTarget resolves req.Msg.Remote.RemoteName (if set) against
+// cfg's saved remotes into the plain session.RemoteTarget data (name, host,
+// user, base_path, identity_ref) -- ssh-remote-workspaces Phase 4, Task
+// 4.2.1b. It does not dial anything; that's the mode-specific block in
+// CreateSession below (Task 4.2.1c), which pairs this data with a dialed
+// *tmux.SSHRunner into a single session.RemoteExecutionTarget in one atomic
+// step.
+//
+// Returns (nil, nil) when msg.Remote is unset or names no remote (the
+// ordinary local-session case, the overwhelming majority of requests).
+// Returns a non-nil error, always wrapping an unknown-remote message, when
+// msg.Remote.RemoteName is set but does not match any cfg.RemoteByName entry
+// -- CreateSession maps this to connect.CodeInvalidArgument before any
+// worktree/tmux work begins.
+// resolveRemoteTarget resolves req.Msg.Remote against cfg's configured remotes. ok is false
+// when the request didn't specify a remote at all (not an error); err is non-nil only when a
+// remote WAS requested but its name doesn't match any configured RemoteConfig.
+func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config) (target *session.RemoteTarget, ok bool, err error) {
+	if msg.GetRemote() == nil || msg.GetRemote().GetRemoteName() == "" {
+		return nil, false, nil
+	}
+	remoteName := msg.GetRemote().GetRemoteName()
+	remoteCfg, found := cfg.RemoteByName(remoteName)
+	if !found {
+		return nil, false, fmt.Errorf("no remote configured named %q", remoteName)
+	}
+	return &session.RemoteTarget{
+		Name:        remoteCfg.Name,
+		Host:        remoteCfg.Host,
+		User:        remoteCfg.User,
+		BasePath:    remoteCfg.BasePath,
+		IdentityRef: remoteCfg.IdentityRef,
+	}, true, nil
 }
 
 // resolveSessionType maps a CreateSessionRequest + resolved branch to a session.SessionType.

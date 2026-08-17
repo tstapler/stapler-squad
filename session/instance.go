@@ -485,6 +485,26 @@ type Instance struct {
 	// Artifacts holds structured artifacts extracted from the session's JSONL history.
 	// Populated asynchronously by ArtifactExtractor. Protected by mu.
 	Artifacts *artifacts.SessionArtifactsBlob
+
+	// ExecutionTarget selects where this session's TmuxSession/GitWorktree
+	// subprocess commands run (session/execution_target.go, ssh-remote-workspaces
+	// Phase 4 Epic 4.2). Set once at construction from InstanceOptions.ExecutionTarget;
+	// nil is treated as LocalTarget{} by the executionTarget() accessor so the many
+	// &Instance{} struct literals across this codebase (tests, legacy construction
+	// sites) that bypass NewInstance are unaffected. Read via executionTarget(), never
+	// this field directly, outside of construction/serialization code.
+	ExecutionTarget ExecutionTarget `json:"-"`
+}
+
+// executionTarget returns i.ExecutionTarget, defaulting to LocalTarget{} when nil.
+// Every read site in this package uses this helper rather than i.ExecutionTarget
+// directly, since &Instance{} struct literals (tests, legacy construction sites)
+// bypass NewInstance's default-assignment below.
+func (i *Instance) executionTarget() ExecutionTarget {
+	if i.ExecutionTarget == nil {
+		return LocalTarget{}
+	}
+	return i.ExecutionTarget
 }
 
 // SessionType indicates the type of session workflow to use
@@ -618,6 +638,13 @@ type InstanceOptions struct {
 	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
 	// CLIFlags at launch time.
 	ExtraArgs []string
+
+	// ExecutionTarget selects where this session's TmuxSession/GitWorktree subprocess
+	// commands run (ssh-remote-workspaces Phase 4 Epic 4.2). nil (the zero value) means
+	// LocalTarget{} -- every existing caller that doesn't set this field is unaffected.
+	// Set by server/services/session_service.go's CreateSession mode-specific block when
+	// req.Msg.Remote names a configured remote.
+	ExecutionTarget ExecutionTarget
 }
 
 // ResolveSessionPath expands a leading "~" to the current user's home directory
@@ -723,6 +750,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		EnvVars:         opts.EnvVars,
 		CLIFlags:        opts.CLIFlags,
 		ExtraArgs:       opts.ExtraArgs,
+		ExecutionTarget: opts.ExecutionTarget,
+	}
+	if instance.ExecutionTarget == nil {
+		instance.ExecutionTarget = LocalTarget{}
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice
@@ -1074,34 +1105,64 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		// shell that reads it back via `$(cat ...)`.
 		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
-		i.startVNCDisplay(context.Background())
-		i.allocateCDPPort()
-		if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
-			if tb, ok := i.processManager.(*TmuxBackend); ok {
-				if sess := tb.TmuxManager().Session(); sess != nil {
-					sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+
+		if i.executionTarget().IsRemote() {
+			// Terminal streaming over SSH (attaching a local PTY to a remote tmux
+			// pane) is out of scope for ssh-remote-workspaces Phase 4 Epic 4.2 (Story
+			// 4.2.1) -- see that epic's doc comment in
+			// project_plans/ssh-remote-workspaces/implementation/plan.md. The remote
+			// tmux session was already created synchronously by CreateSession's
+			// mode-specific block (server/services/session_service.go) via
+			// TmuxSession.EnsureRemoteSession, before this async goroutine ever runs
+			// -- so there is no local PTY to start, and no VNC/CDP display to
+			// allocate (both local-machine concepts with no remote equivalent yet).
+			// i.pm().Start(startPath) would in any case fail: it validates startPath
+			// via a local os.Stat, and startPath here is a path on the remote host.
+			// Re-confirm the remote session is still up (idempotent) instead.
+			tb, ok := i.processManager.(*TmuxBackend)
+			if !ok {
+				setupErr = fmt.Errorf("remote execution target requires a tmux-backed process manager")
+				return setupErr
+			}
+			sess := tb.TmuxManager().Session()
+			if sess == nil {
+				setupErr = fmt.Errorf("remote tmux session was not initialized")
+				return setupErr
+			}
+			if ensureErr := sess.EnsureRemoteSession(context.Background(), startPath); ensureErr != nil {
+				setupErr = fmt.Errorf("remote tmux session unavailable: %w", ensureErr)
+				return setupErr
+			}
+		} else {
+			i.startVNCDisplay(context.Background())
+			i.allocateCDPPort()
+			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+				if tb, ok := i.processManager.(*TmuxBackend); ok {
+					if sess := tb.TmuxManager().Session(); sess != nil {
+						sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+					}
 				}
 			}
-		}
-		if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
-			if tb, ok := i.processManager.(*TmuxBackend); ok {
-				if sess := tb.TmuxManager().Session(); sess != nil {
-					sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
+			if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+				if tb, ok := i.processManager.(*TmuxBackend); ok {
+					if sess := tb.TmuxManager().Session(); sess != nil {
+						sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
+					}
 				}
 			}
-		}
-		if err := i.pm().Start(startPath); err != nil {
-			if i.gitManager.HasWorktree() {
-				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
-					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+			if err := i.pm().Start(startPath); err != nil {
+				if i.gitManager.HasWorktree() {
+					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
+						err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+					}
 				}
+				setupErr = fmt.Errorf("failed to start new session: %w", err)
+				return setupErr
 			}
-			setupErr = fmt.Errorf("failed to start new session: %w", err)
-			return setupErr
-		}
-		_ = i.pm().RestoreWithWorkDir(startPath)
-		if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-			log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			_ = i.pm().RestoreWithWorkDir(startPath)
+			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
+				log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			}
 		}
 	}
 

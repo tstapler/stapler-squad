@@ -169,18 +169,30 @@ func (s *RemoteService) TrustRemoteHostKey(
 }
 
 // resolveAuthMethods builds SSH auth methods for remote from its stored
-// identity (sshremote.KeyStore, Epic 3.2), if one is registered. Returns nil
-// when no identity is registered yet or it can't be parsed -- Dial then
-// fails at the authentication step, which happens strictly AFTER host-key
-// verification in the SSH handshake (golang.org/x/crypto/ssh's
-// clientHandshake runs the key exchange -- where HostKeyCallback fires --
-// before clientAuthenticate), so an auth failure here can never masquerade
-// as a host-key problem.
+// identity (sshremote.KeyStore, Epic 3.2), if one is registered. See
+// resolveIdentityAuthMethods for the shared implementation (also used by
+// SessionService.CreateSession's remote-target mode-specific block, Epic
+// 4.2 -- extracted to a package-level function rather than duplicated so
+// the two call sites can't drift).
 func (s *RemoteService) resolveAuthMethods(ctx context.Context, remote *config.RemoteConfig) []ssh.AuthMethod {
-	if remote.IdentityRef == "" {
+	return resolveIdentityAuthMethods(ctx, s.keyStore, remote.IdentityRef)
+}
+
+// resolveIdentityAuthMethods builds SSH auth methods from identityRef's
+// stored identity (sshremote.KeyStore, Epic 3.2), if one is registered.
+// Returns nil when identityRef is empty, no identity is registered for it,
+// or it can't be parsed -- Dial then fails at the authentication step, which
+// happens strictly AFTER host-key verification in the SSH handshake
+// (golang.org/x/crypto/ssh's clientHandshake runs the key exchange -- where
+// HostKeyCallback fires -- before clientAuthenticate), so an auth failure
+// here can never masquerade as a host-key problem. Shared by RemoteService
+// (TestRemoteConnection) and SessionService (CreateSession's remote-target
+// mode-specific block, Epic 4.2) rather than duplicated per call site.
+func resolveIdentityAuthMethods(ctx context.Context, keyStore *sshremote.KeyStore, identityRef string) []ssh.AuthMethod {
+	if identityRef == "" {
 		return nil
 	}
-	kind, value, err := s.keyStore.GetIdentity(ctx, remote.IdentityRef)
+	kind, value, err := keyStore.GetIdentity(ctx, identityRef)
 	if err != nil || kind != sshremote.IdentityKindPrivateKey {
 		return nil
 	}

@@ -33,11 +33,27 @@ func (i *Instance) RepoName() (string, error) {
 }
 
 // setupFirstTimeWorktree creates or attaches to the git worktree based on session type.
+//
+// A remote ExecutionTarget (ssh-remote-workspaces Phase 4 Epic 4.2) only supports
+// SessionTypeExistingWorktree: CreateSession's mode-specific block
+// (server/services/session_service.go) already creates the remote worktree
+// synchronously via RemoteWorktreeOps.CreateWorktree -- and remaps the request's
+// session_type to SessionTypeExistingWorktree with ExistingWorktree set to the
+// remote path -- before this method ever runs, precisely so the git.NewGitWorktreeWithBranch
+// path below (which does local-filesystem repo discovery: findGitRepoRoot,
+// getWorktreeDirectory, findExistingWorktreeForBranch) is never reached against a
+// path that only exists on the remote host. Any other combination is rejected
+// up front rather than silently attempting local discovery against a remote path.
 func (i *Instance) setupFirstTimeWorktree() error {
+	if i.executionTarget().IsRemote() && i.SessionType != SessionTypeExistingWorktree {
+		return fmt.Errorf("remote execution target only supports session_type=existing_worktree "+
+			"(worktree must be pre-created by CreateSession's mode-specific block); got %v", i.SessionType)
+	}
+
 	switch i.SessionType {
 	case SessionTypeNewWorktree:
 		log.Info("creating git worktree for instance", "session", i.Title, "path", i.Path)
-		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch)
+		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch, git.WithCommandRunner(i.executionTarget().Runner()))
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
@@ -50,8 +66,41 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		if i.ExistingWorktree == "" {
 			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
 		}
+		runner := i.executionTarget().Runner()
+		if i.executionTarget().IsRemote() {
+			// Attach to the already-created remote worktree using the field-setting
+			// constructor -- NOT NewGitWorktreeFromExisting, whose IsGitRepo/
+			// findMainRepoPathForWorktree/getCurrentBranchName discovery reads the
+			// local filesystem and would resolve against this process's own disk,
+			// not the remote host's.
+			//
+			// base_commit_sha must be resolved via a real remote `git rev-parse
+			// HEAD` (not left "") -- the ent schema's Worktree.base_commit_sha
+			// field is NotEmpty (session/ent/schema/worktree.go), so a blank value
+			// fails persistence (Storage.SaveInstances) the first time this
+			// instance is saved, discovered via
+			// TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession.
+			// Best-effort: mirrors NewGitWorktreeFromCommitSHA's local
+			// counterparts, which likewise tolerate a lookup failure by falling
+			// back to a placeholder rather than failing worktree attachment
+			// entirely over a cosmetic diff-stats field.
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			baseCommitSHA := "unknown"
+			if out, shaErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "HEAD"); shaErr == nil {
+				if sha := strings.TrimSpace(string(out)); sha != "" {
+					baseCommitSHA = sha
+				}
+			} else {
+				log.Warn("failed to resolve remote worktree base commit SHA", "session", i.Title, "path", i.ExistingWorktree, "err", shaErr)
+			}
+			cancel()
+			gitWorktree := git.NewGitWorktreeFromStorage(i.Path, i.ExistingWorktree, i.Title, i.Branch, baseCommitSHA, git.WithCommandRunner(runner))
+			i.gitManager.SetWorktree(gitWorktree)
+			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", i.Branch)
+			break
+		}
 		log.Info("connecting to existing worktree", "session", i.Title, "path", i.ExistingWorktree)
-		gitWorktree, err := git.NewGitWorktreeFromExisting(i.ExistingWorktree, i.Title)
+		gitWorktree, err := git.NewGitWorktreeFromExisting(i.ExistingWorktree, i.Title, git.WithCommandRunner(runner))
 		if err != nil {
 			return fmt.Errorf("failed to connect to existing worktree: %w", err)
 		}

@@ -1401,8 +1401,24 @@ func (t *TmuxSession) EnsureRemoteSession(ctx context.Context, workDir string) e
 	}
 	log.Info("remote tmux session not found, will create", "session", t.sanitizedName)
 
-	if err := validateWorkDir(workDir); err != nil {
-		return fmt.Errorf("cannot start remote tmux session %s: %w", t.sanitizedName, err)
+	// NOT validateWorkDir: that helper's os.Stat(workDir) checks THIS PROCESS's
+	// local filesystem, which is the right check for the local start() path
+	// (validateWorkDir's other two call sites) but wrong here -- workDir is a
+	// path on the remote host, which this process cannot os.Stat at all. A
+	// remote path that happens to also exist locally (e.g. this package's own
+	// tests, whose "remote" is a co-located test sshd exec'ing against the real
+	// local filesystem) would pass either check, silently masking the bug for
+	// every test written against that pattern; a genuinely different remote
+	// path would always fail validateWorkDir's local stat regardless of whether
+	// it exists on the actual remote host. Checked via the runner instead,
+	// mirroring RemoteWorktreeOps.CreateWorktree's own remote `test -d`
+	// base_path check (session/git/remote_worktree.go).
+	if workDir == "" {
+		return fmt.Errorf("cannot start remote tmux session %s: working directory not set: %w", t.sanitizedName, ErrWorkDirMissing)
+	}
+	if out, err := runner.Run(ctx, "", "test", "-d", workDir); err != nil {
+		return fmt.Errorf("cannot start remote tmux session %s: working directory %q is not accessible on remote host: %w: %s",
+			t.sanitizedName, workDir, ErrWorkDirMissing, strings.TrimSpace(string(out)))
 	}
 
 	return t.createRemoteSession(ctx, runner, workDir)

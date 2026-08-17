@@ -443,11 +443,20 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if knownHosts, khErr := sshremote.NewKnownHostsStore(); khErr != nil {
 		log.Error("Failed to create known_hosts store, RemoteService disabled", "err", khErr)
 	} else {
-		remoteSvc := services.NewRemoteService(knownHosts, sshremote.NewKeyStore(), config.LoadConfig)
+		keyStore := sshremote.NewKeyStore()
+		remoteSvc := services.NewRemoteService(knownHosts, keyStore, config.LoadConfig)
 		remotePath, remoteHandler := sessionv1connect.NewRemoteServiceHandler(remoteSvc, ConnectOptions(deps.ErrorRegistry)...)
 		remoteAPIPath := "/api" + remotePath
 		srv.RegisterConnectHandler(remoteAPIPath, http.StripPrefix("/api", remoteHandler))
 		log.Info("Registered RemoteService handler", "path", remoteAPIPath)
+
+		// Share the same identity/host-key stores with SessionService so
+		// CreateSession's remote-target mode-specific block (ssh-remote-workspaces
+		// Phase 4, Epic 4.2) can dial with the identity/trust decisions made via
+		// this RemoteService's TOFU flow, with no separate wiring step.
+		if deps.SessionService != nil {
+			deps.SessionService.SetRemoteDeps(keyStore, knownHosts)
+		}
 	}
 
 	// Register BacklogService handler.
