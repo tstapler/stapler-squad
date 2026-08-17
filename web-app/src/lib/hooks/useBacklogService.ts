@@ -99,7 +99,7 @@ export interface LinkedSession {
   pipelineModeSnapshotHash?: string;
   /**
    * Set alongside endedAt for a headless (triage/review) call: a coarse
-   * failure bucket ("shutdown", "timeout", "process_error", "claude_not_found",
+   * failure bucket ("shutdown", "timeout", "subprocess_start_error", "claude_not_found",
    * "other"), or "" for a successful end. See classifyHeadlessCallError
    * (server/services/backlog_service_triage.go) for the bucketing logic.
    */
