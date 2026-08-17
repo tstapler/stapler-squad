@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.44.1](https://github.com/tstapler/stapler-squad/compare/v1.44.0...v1.44.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* **insights:** fix broken virtualization and zero-value Tokens columns ([8a8917d](https://github.com/tstapler/stapler-squad/commit/8a8917d14e2ff08d5aff3ccf73b522a4f7bcf291))
+* **insights:** restore missing sortOrderHint CSS export broken by 8a8917d14 ([47c75c5](https://github.com/tstapler/stapler-squad/commit/47c75c511e2f2343b5ce0df79b87110c277a0bdb))
+* **server:** join fork-pressure/zombie-watcher/zombie-reaper goroutines in Shutdown() ([#533](https://github.com/tstapler/stapler-squad/issues/533)) ([d699554](https://github.com/tstapler/stapler-squad/commit/d6995542b8de58287a79b01b10f0e7a4d0e11155))
+* **session:** use PID-keyed tmux exec-gate dir to avoid shared TempDir race ([4d7149f](https://github.com/tstapler/stapler-squad/commit/4d7149f6b72c9f6f3ea5b6c8f5b60c8c541d4b31))
+* **session:** watch newly created subdirectories for history JSONL files ([bb71330](https://github.com/tstapler/stapler-squad/commit/bb71330e2832b2b23ebebcb539c7646cb1877c7c))
+* **test:** resolve flaky SDD triage lifecycle test and ListWithOptions no-op ([#529](https://github.com/tstapler/stapler-squad/issues/529)) ([ccda7ae](https://github.com/tstapler/stapler-squad/commit/ccda7ae3e03b4aecf7f743871c183e84db938d30))
+
 ## [1.44.0](https://github.com/tstapler/stapler-squad/compare/v1.43.1...v1.44.0) (2026-08-16)
 
 
