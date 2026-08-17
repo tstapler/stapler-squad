@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	ptyPkg "github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -581,6 +582,92 @@ func (i *Instance) GetPTYReader() (*os.File, error) {
 		return nil, fmt.Errorf("session not started")
 	}
 	return i.pm().GetPTY()
+}
+
+// IsRemote reports whether this instance's tmux session runs on a remote
+// host (ssh-remote-workspaces Phase 4 Epic 4.2's ExecutionTarget), exposed
+// for server/services call sites (a different package, so the unexported
+// executionTarget() accessor isn't reachable there) that need to branch on
+// remoteness -- e.g. StreamTerminal's raw-PTY fallback (Task 4.4.1d). This
+// is the same single mechanism (IsRemote()) every in-package branch already
+// uses; server/services must never type-switch on ExecutionTarget/Instance
+// fields instead (architecture-review.md Blocker 1).
+func (i *Instance) IsRemote() bool {
+	return i.executionTarget().IsRemote()
+}
+
+// GetPTYSession returns a live, resizable terminal connection for this
+// instance's raw (non-control-mode) PTY-attach path --
+// server/services/session_service.go's StreamTerminal raw-PTY fallback
+// (ssh-remote-workspaces Phase 4, Task 4.4.1d). For a local instance this is
+// exactly GetPTYReader()'s *os.File (which already satisfies
+// tmux.PtySession: *os.File has Read/Write/Close, and localPTYSession below
+// adds Resize via pty.Setsize). For a remote instance (IsRemote()) it opens
+// a fresh SSH-backed PTY attached to the SAME remote tmux session via
+// tmux.SSHPtyFactory (RequestPty + "tmux ... attach-session ..."), so a
+// remote session's raw-PTY consumers see byte-identical behavior to a local
+// one, differing only in transport underneath -- matching Story 4.4.1's
+// acceptance criteria for streamViaControlMode, applied here to this
+// separate raw-PTY code path. cols/rows seed the PTY's initial size (no
+// terminal dimensions flow through StreamTerminal's handshake the way
+// streamViaControlMode's CurrentPaneRequest does, so callers pass their own
+// best-known size; tmux.defaultAttachCols/Rows-equivalent values are a
+// reasonable default when none is known yet).
+func (i *Instance) GetPTYSession(ctx context.Context, cols, rows int) (tmux.PtySession, error) {
+	if !i.executionTarget().IsRemote() {
+		ptyFile, err := i.GetPTYReader()
+		if err != nil {
+			return nil, err
+		}
+		return &localPTYSession{File: ptyFile}, nil
+	}
+
+	remote, ok := i.executionTarget().(RemoteExecutionTarget)
+	if !ok {
+		return nil, fmt.Errorf("session: IsRemote() true but ExecutionTarget is %T, not RemoteExecutionTarget", i.executionTarget())
+	}
+	sshRunner, ok := remote.Runner().(*tmux.SSHRunner)
+	if !ok {
+		return nil, fmt.Errorf("session: remote target's CommandRunner is %T, not *tmux.SSHRunner", remote.Runner())
+	}
+	tmuxSession := i.GetTmuxSession()
+	if tmuxSession == nil {
+		return nil, fmt.Errorf("session: no tmux session to attach to")
+	}
+
+	// Declared as the tmux.RemotePtyFactory interface (not the concrete
+	// *tmux.SSHPtyFactory NewSSHPtyFactory returns) so this call site is
+	// actually written against the interface, matching how PtyFactory
+	// itself is consumed elsewhere in this codebase (TmuxSession's
+	// ptyFactory field is PtyFactory-typed despite Pty{} being its only real
+	// implementation) -- see RemotePtyFactory's doc comment in
+	// session/tmux/pty.go for why the interface exists at all.
+	var factory tmux.RemotePtyFactory = tmux.NewSSHPtyFactory(sshRunner)
+
+	// WrapRemoteCommand applies the same $TMUX-unset/$TERM-forced treatment
+	// startRemoteControlMode applies to the remote "tmux -C attach-session"
+	// -- necessary here too since "tmux attach-session" (no -C) is even more
+	// sensitive to a stale/absent $TERM (it renders the pane directly,
+	// unlike control mode's structured text protocol).
+	runName, runArgs := tmux.WrapRemoteCommand(tmux.Binary(), tmuxSession.AttachArgs())
+	ws := &ptyPkg.Winsize{Rows: uint16(rows), Cols: uint16(cols)}
+	return factory.StartPty(ctx, ws, "", runName, runArgs...)
+}
+
+// localPTYSession adapts *os.File to tmux.PtySession for GetPTYSession's
+// local branch -- *os.File already has Read/Write/Close; Resize is the only
+// method it's missing, implemented via the same pty.Setsize the local
+// control-mode/raw-attach paths already use elsewhere in this codebase
+// (session/tmux/tmux.go's updateWindowSize).
+type localPTYSession struct {
+	*os.File
+}
+
+func (l *localPTYSession) Resize(cols, rows int) error {
+	return ptyPkg.Setsize(l.File, &ptyPkg.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
 }
 
 // WriteToPTY writes data to the PTY, sending input to the terminal session.

@@ -151,7 +151,17 @@ type TmuxSession struct {
 	noCacheSF singleflight.Group //nolint:exhaustruct
 
 	// Control mode streaming infrastructure (replaces pipe-pane + FIFO)
-	controlModeCmd         *exec.Cmd              // tmux -C attach process
+	controlModeCmd *exec.Cmd // tmux -C attach process (LOCAL only -- nil for a remote-backed CM connection; existing tests construct fake *exec.Cmd values directly against this field, so its type/zero-value semantics are unchanged by Epic 4.4)
+	// controlModeRemoteProc holds SSH-channel-backed teardown state for a
+	// remote control-mode connection (StartControlMode's IsRemote() branch,
+	// ssh-remote-workspaces Phase 4, Task 4.4.1c). Exactly one of
+	// controlModeCmd/controlModeRemoteProc is non-nil while control mode is
+	// running; both nil when it is not. Kept as a separate field rather than
+	// retyping controlModeCmd so every pre-existing local-only test that
+	// pokes controlModeCmd directly (control_mode_refcount_test.go,
+	// kill_orphaned_control_mode_clients_test.go) keeps compiling and passing
+	// unmodified.
+	controlModeRemoteProc  *remoteControlModeProc
 	controlModeStdout      io.ReadCloser          // stdout pipe for control mode notifications
 	controlModeStdin       io.WriteCloser         // stdin pipe for control mode commands
 	controlModeDone        chan struct{}          // Signal channel for control mode termination
@@ -361,6 +371,7 @@ func (t *TmuxSession) ResetExitOnce() {
 	t.controlModeSubMu.Lock()
 	t.controlModeRefCount = 0
 	t.controlModeCmd = nil
+	t.controlModeRemoteProc = nil
 	t.controlModeExited = false
 	t.controlModeSubMu.Unlock()
 }
@@ -1052,6 +1063,16 @@ func (t *TmuxSession) buildAttachCommand() *exec.Cmd {
 		cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	}
 	return cmd
+}
+
+// AttachArgs returns the tmux argv (socket flag + "attach-session -t name")
+// this session's raw-PTY attach uses locally (buildAttachCommand) -- exposed
+// so callers outside this package can build the equivalent remote attach via
+// a RemotePtyFactory (session/tmux/pty.go, ssh-remote-workspaces Task
+// 4.4.1d: server/services/session_service.go's StreamTerminal raw-PTY
+// fallback for a remote session) without reaching into unexported fields.
+func (t *TmuxSession) AttachArgs() []string {
+	return Socket(t.serverSocket).Args("attach-session", "-t", t.sanitizedName)
 }
 
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
@@ -2247,24 +2268,37 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 		ctx, cancel := cmCtx()
 		defer cancel()
 		if _, cmErr := t.sendCMCommand(ctx,
-			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr != nil {
+			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr == nil {
+			// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
+			t.lastKnownCols.Store(int32(cols))
+			t.lastKnownRows.Store(int32(rows))
+			return nil
+		} else {
 			log.Debug("SetWindowSize CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
-			cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
-			if err := runGatedErr(context.Background(), t.serverSocket, func() error {
-				return t.cmdExec.Run(cmd)
-			}); err != nil {
-				log.Error("tmux resize-window failed", "session", t.sanitizedName, "err", err)
-				return fmt.Errorf("failed to resize tmux window: %w", err)
-			}
 		}
-	} else {
-		cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
-		if err := runGatedErr(context.Background(), t.serverSocket, func() error {
-			return t.cmdExec.Run(cmd)
-		}); err != nil {
-			log.Error("tmux resize-window failed", "session", t.sanitizedName, "err", err)
-			return fmt.Errorf("failed to resize tmux window: %w", err)
-		}
+	}
+
+	// Every path below this point goes through t.cmdExec, which is always
+	// local (see buildTmuxCommandContext's doc comment) -- there is no
+	// commandRunner()-routed equivalent of this circuit-breaker-gated
+	// *exec.Cmd path, mirroring RefreshClient's identical guard/doc comment
+	// a few functions below. For a remote session that reaches here (CM
+	// disabled entirely, or its resize-window command itself just failed
+	// above), silently resizing the LOCAL tmux server's window would be a
+	// no-op at best and leave the actual remote tmux pane at the wrong size
+	// with no error surfaced to the caller -- refusing outright is strictly
+	// safer than that silent no-op. The CM path above is the real
+	// remote-appropriate resize mechanism and is always tried first.
+	if t.commandRunner().IsRemote() {
+		return fmt.Errorf("resize-window: control mode unavailable for remote session %q and there is no local-subprocess fallback for a remote host", t.sanitizedName)
+	}
+
+	cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
+	if err := runGatedErr(context.Background(), t.serverSocket, func() error {
+		return t.cmdExec.Run(cmd)
+	}); err != nil {
+		log.Error("tmux resize-window failed", "session", t.sanitizedName, "err", err)
+		return fmt.Errorf("failed to resize tmux window: %w", err)
 	}
 
 	// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
@@ -2487,6 +2521,27 @@ func (t *TmuxSession) RefreshClient() error {
 		log.Debug("RefreshClient CM path failed, falling back to subprocess", "session", t.sanitizedName)
 	}
 
+	// Methods 1/2 below both go through t.cmdExec, which is always local
+	// (see buildTmuxCommandContext's doc comment) -- there is no
+	// commandRunner()-routed equivalent of the circuit-breaker-gated
+	// *exec.Cmd path t.cmdExec.Run/Output require. For a remote session that
+	// already reached here (i.e. the CM path above either wasn't available
+	// or failed), Method 1 would run "refresh-client" against the LOCAL
+	// tmux server -- a no-op at best -- and Method 2 would compound it by
+	// resolving a LOCAL pane PID and sending kill -WINCH for that PID via
+	// t.commandRunner() (which IS remote), targeting a PID on the wrong
+	// host entirely. Refusing outright is strictly safer than silently
+	// doing either: previously-accepted as a known gap "to resolve when
+	// Phase 4 actually wires RefreshClient into a live remote session" (see
+	// git blame) -- ssh-remote-workspaces Phase 4 Epic 4.4 is that phase;
+	// the CM path above is the actual fix (tmux resize-window/refresh-client
+	// travel over the SSH-backed control-mode connection once
+	// startRemoteControlMode is running), so this refusal is the fallback's
+	// fallback, only reached if CM itself is down.
+	if t.commandRunner().IsRemote() {
+		return fmt.Errorf("refresh-client: control mode unavailable for remote session %q and there is no local-subprocess fallback for a remote host", t.sanitizedName)
+	}
+
 	// Method 1: Use refresh-client command (preferred)
 	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
 	refreshErr := runGatedErr(context.Background(), t.serverSocket, func() error {
@@ -2512,12 +2567,9 @@ func (t *TmuxSession) RefreshClient() error {
 		// real tmux invocations in listSessionsRaw/EnsureRemoteSession) --
 		// wrapping it would be mechanical over-application of "every
 		// commandRunner() call gets wrapped" rather than "every tmux call
-		// gets wrapped". Separately, and pre-existing from Phase 1: panePID
-		// above is resolved via t.cmdExec, which is always local, so even
-		// when t.commandRunner() is remote this line already sends a local
-		// PID to a kill that would target the remote host -- a real
-		// incoherence, but one to resolve when Phase 4 actually wires
-		// RefreshClient into a live remote session, not here.
+		// gets wrapped". t.commandRunner() is LocalRunner{} on this path
+		// (the IsRemote() guard above already returned for a remote one),
+		// so this always targets the same host panePID was resolved on.
 		if _, err := t.commandRunner().Run(winchCtx, "", "kill", "-WINCH", panePID); err != nil {
 			return fmt.Errorf("failed to send SIGWINCH: %w", err)
 		}

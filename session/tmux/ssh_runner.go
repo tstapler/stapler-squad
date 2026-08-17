@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/creack/pty"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -102,6 +103,18 @@ func wrapHostKeyCallback(cb ssh.HostKeyCallback) ssh.HostKeyCallback {
 // bumps. SSHRunner pins its own allowlist rather than trusting whatever
 // ssh.Config{} defaults to at whatever x/crypto/ssh version this repo is
 // pinned to at build time.
+//
+// No Compression entry appears in this allowlist, and ssh.Config has no
+// Compression field to pin -- Task 4.4.1f (disable SSH compression on the
+// terminal data channel, per research/pitfalls.md §1's escape-sequence-
+// boundary-corruption risk) is satisfied by construction, not by an
+// explicit setting: golang.org/x/crypto/ssh never implements a compression
+// algorithm at all. Its own supportedCompressions list
+// (golang.org/x/crypto/ssh/common.go) is exactly []string{"none"} in every
+// version this repo has depended on (verified against v0.35.0 through
+// v0.53.0 in the local module cache), so "none" is the only outcome the
+// handshake can ever negotiate regardless of what a remote sshd offers.
+// zlib@openssh.com is simply not reachable through this client.
 var (
 	allowedKeyExchanges = []string{
 		"curve25519-sha256",
@@ -433,6 +446,140 @@ type sshSessionStdout struct {
 
 func (s *sshSessionStdout) Close() error {
 	return s.session.Close()
+}
+
+// SSHPtyFactory implements RemotePtyFactory (session/tmux/pty.go, Task
+// 4.4.1a) using an SSHRunner's pooled *ssh.Client: RequestPty followed by
+// Start(cmd) gets a genuine remote pseudo-terminal running a specific
+// command (session/tmux/tmux.go's local buildAttachCommand()+PtyFactory
+// equivalent for "tmux attach-session -t name", not a bare login shell --
+// plan.md's Task 4.4.1b sketch names session.Shell(), but Shell() takes no
+// command argument; Start(cmd) is the ssh package's primitive for "run this
+// exact command with a PTY attached," which is what the raw-PTY-attach path
+// needs). Used by server/services/session_service.go's StreamTerminal
+// raw-PTY fallback for a remote session (control-mode's remote path,
+// control_mode.go's StartControlMode, does NOT use this -- tmux control
+// mode's protocol is plain text over stdin/stdout and needs no PTY, so it
+// goes through CommandRunner.Start directly, same as this type's
+// non-PTY sibling).
+type SSHPtyFactory struct {
+	runner *SSHRunner
+}
+
+// NewSSHPtyFactory constructs an SSHPtyFactory over runner's pooled connection.
+func NewSSHPtyFactory(runner *SSHRunner) *SSHPtyFactory {
+	return &SSHPtyFactory{runner: runner}
+}
+
+var _ RemotePtyFactory = (*SSHPtyFactory)(nil)
+
+// StartPty implements RemotePtyFactory. Mirrors SSHRunner.Run/Start's own
+// dial/session/release bookkeeping (see those methods' doc comments for why
+// a newSession failure doesn't evict the shared client or count against the
+// reconnect backoff) but additionally requests a PTY before starting cmd,
+// and sizes it BEFORE the command starts (RequestPty's rows/cols arguments,
+// taken from ws -- the same *pty.Winsize type PtyFactory.StartWithSize
+// takes, rather than adjacent cols/rows ints), matching
+// PtyFactory.StartWithSize's "size set before the child is forked" contract
+// so a remote tmux attach-session never briefly sees a 0x0 terminal and
+// self-disconnects.
+func (f *SSHPtyFactory) StartPty(ctx context.Context, ws *pty.Winsize, dir, name string, args ...string) (PtySession, error) {
+	client, err := f.runner.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	release := func() { f.runner.pool.Release(f.runner.target.Name) }
+
+	sshSession, err := f.runner.newSession(ctx, client)
+	if err != nil {
+		release()
+		return nil, err
+	}
+
+	// Matches the local attach path's terminal type (session/tmux/tmux.go's
+	// buildAttachCommand sets TERM=xterm-256color when unset) and a
+	// conservative fixed baud rate -- ttyname/ioctl baud settings have no
+	// meaning over SSH; RequestPty requires nonzero values regardless.
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}
+	if err := sshSession.RequestPty("xterm-256color", int(ws.Rows), int(ws.Cols), modes); err != nil {
+		release()
+		_ = sshSession.Close()
+		return nil, fmt.Errorf("ssh: request pty on %s: %w", f.runner.target.Name, err)
+	}
+
+	stdin, err := sshSession.StdinPipe()
+	if err != nil {
+		release()
+		_ = sshSession.Close()
+		return nil, fmt.Errorf("ssh: stdin pipe on %s: %w", f.runner.target.Name, err)
+	}
+	stdout, err := sshSession.StdoutPipe()
+	if err != nil {
+		release()
+		_ = sshSession.Close()
+		return nil, fmt.Errorf("ssh: stdout pipe on %s: %w", f.runner.target.Name, err)
+	}
+
+	cmd := buildRemoteCommand(dir, name, args)
+
+	startCh := make(chan error, 1)
+	go func() { startCh <- sshSession.Start(cmd) }()
+	select {
+	case startErr := <-startCh:
+		if startErr != nil {
+			release()
+			_ = sshSession.Close()
+			return nil, fmt.Errorf("ssh: start pty %q on %s: %w", cmd, f.runner.target.Name, startErr)
+		}
+	case <-ctx.Done():
+		release()
+		_ = sshSession.Close()
+		return nil, fmt.Errorf("ssh: start pty %q on %s: %w", cmd, f.runner.target.Name, ctx.Err())
+	}
+
+	var releaseOnce sync.Once
+	return &sshPtySession{
+		session: sshSession,
+		stdin:   stdin,
+		stdout:  stdout,
+		release: func() { releaseOnce.Do(release) },
+	}, nil
+}
+
+// sshPtySession implements PtySession over a PTY-attached *ssh.Session.
+// There is no way to half-close just one direction of an SSH channel, so
+// Close tears down the whole session (mirroring sshSessionStdout.Close()'s
+// same constraint for the non-PTY CommandRunner.Start path above).
+type sshPtySession struct {
+	session   *ssh.Session
+	stdin     io.WriteCloser
+	stdout    io.Reader
+	release   func()
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (s *sshPtySession) Read(p []byte) (int, error)  { return s.stdout.Read(p) }
+func (s *sshPtySession) Write(p []byte) (int, error) { return s.stdin.Write(p) }
+
+// Resize implements PtySession via SSH's native window-change request --
+// the remote-transport analog of pty.Setsize, per Task 4.4.1e and
+// research/pitfalls.md §1's "SSH channel window-change request -> remote
+// tmux resize-window" description of this 3-hop path.
+func (s *sshPtySession) Resize(cols, rows int) error {
+	return s.session.WindowChange(rows, cols)
+}
+
+func (s *sshPtySession) Close() error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.session.Close()
+		s.release()
+	})
+	return s.closeErr
 }
 
 // shellQuote POSIX-single-quotes s so it round-trips through a remote shell

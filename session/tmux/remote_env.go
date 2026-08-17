@@ -44,3 +44,14 @@ func wrapRemoteCommand(name string, args []string) (string, []string) {
 	wrapped = append(wrapped, args...)
 	return "env", wrapped
 }
+
+// WrapRemoteCommand is wrapRemoteCommand, exported for callers outside this
+// package that build remote tmux invocations against a RemotePtyFactory/
+// CommandRunner directly -- e.g. session.Instance.GetPTYSession (Task
+// 4.4.1d), which needs the exact same $TMUX-unset/$TERM-forced treatment
+// for a remote "tmux attach-session" raw-PTY attach that
+// startRemoteControlMode (this package) already applies to a remote "tmux
+// -C attach-session".
+func WrapRemoteCommand(name string, args []string) (string, []string) {
+	return wrapRemoteCommand(name, args)
+}

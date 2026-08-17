@@ -2861,6 +2861,16 @@ func (s *SessionService) WatchSessions(
 	}
 }
 
+// fallbackPTYCols/Rows seed a remote raw-PTY session's initial size in
+// StreamTerminal's IsRemote() branch (Task 4.4.1d): unlike
+// streamViaControlMode's CurrentPaneRequest handshake, no client dimensions
+// flow through StreamTerminal's first message, so this is a reasonable
+// starting size until the client's first TerminalData_Resize arrives.
+const (
+	fallbackPTYCols = 80
+	fallbackPTYRows = 24
+)
+
 // StreamTerminal provides bidirectional streaming for terminal I/O.
 // Implements bidirectional streaming where:
 // - Client sends: terminal input and resize events
@@ -2925,31 +2935,57 @@ func (s *SessionService) StreamTerminal(
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session is paused"))
 	}
 
-	// Get PTY for reading terminal output
-	ptyFile, err := instance.GetPTYReader()
-	if err != nil {
-		log.Error("[StreamSession] failed to get PTY reader", "session", instance.Title, "err", err)
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PTY reader: %w", err))
-	}
-
-	// Duplicate the PTY fd for this goroutine's exclusive use. ptyFile is
-	// shared with the instance's own internal consumers (response stream,
-	// command executor), so calling SetReadDeadline directly on it would
-	// mutate poll.FD state those other readers depend on. A dup'd fd gets
-	// its own independent *os.File/poll.FD — closing or setting a deadline
-	// on readFile has no effect on ptyFile or its other readers, since the
-	// underlying open file description is only released once every fd
-	// referencing it is closed. dupPTYFile is platform-specific
-	// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
-	// on Windows.
-	readFile, err := dupPTYFile(ptyFile)
-	if err != nil {
-		return connect.NewError(connect.CodeInternal, err)
-	}
-
-	// Create context for managing goroutines
+	// Create context for managing goroutines. Created here (rather than just
+	// above goroutine 1, as before Task 4.4.1d) so the remote branch below
+	// can pass it to GetPTYSession.
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Acquire this handler's terminal data source. IsRemote() is the single
+	// mechanism this branch is gated on (architecture-review.md Blocker 1)
+	// -- never a type switch on ExecutionTarget/Instance fields.
+	//
+	// Local (unchanged from pre-4.4.1d): GetPTYReader() + dupPTYFile.
+	//
+	// Remote (ssh-remote-workspaces Phase 4, Task 4.4.1d): a fresh SSH-backed
+	// PTY attached to the same remote tmux session via GetPTYSession, so this
+	// fallback path streams remote terminal bytes in the same TerminalData
+	// shape a local session produces -- differing only in transport
+	// underneath, per Story 4.4.1's acceptance criteria. fallbackPTYCols/Rows
+	// seed its initial size: unlike streamViaControlMode's handshake, no
+	// client dimensions flow through StreamTerminal's first message, and a
+	// resize arrives moments later via the TerminalData_Resize case below.
+	var readFile *os.File         // set only for a local session; exact pre-4.4.1d behavior
+	var remotePTY tmux.PtySession // set only for a remote session
+	if instance.IsRemote() {
+		remotePTY, err = instance.GetPTYSession(streamCtx, fallbackPTYCols, fallbackPTYRows)
+		if err != nil {
+			log.Error("[StreamSession] failed to get remote PTY session", "session", instance.Title, "err", err)
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get remote PTY session: %w", err))
+		}
+	} else {
+		// Get PTY for reading terminal output
+		ptyFile, ptyErr := instance.GetPTYReader()
+		if ptyErr != nil {
+			log.Error("[StreamSession] failed to get PTY reader", "session", instance.Title, "err", ptyErr)
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PTY reader: %w", ptyErr))
+		}
+
+		// Duplicate the PTY fd for this goroutine's exclusive use. ptyFile is
+		// shared with the instance's own internal consumers (response stream,
+		// command executor), so calling SetReadDeadline directly on it would
+		// mutate poll.FD state those other readers depend on. A dup'd fd gets
+		// its own independent *os.File/poll.FD — closing or setting a deadline
+		// on readFile has no effect on ptyFile or its other readers, since the
+		// underlying open file description is only released once every fd
+		// referencing it is closed. dupPTYFile is platform-specific
+		// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
+		// on Windows.
+		readFile, err = dupPTYFile(ptyFile)
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, err)
+		}
+	}
 
 	// Channel for errors from goroutines
 	errCh := make(chan error, 2)
@@ -2989,51 +3025,59 @@ func (s *SessionService) StreamTerminal(
 
 	// Goroutine 1: Read from PTY and send deltas to client (terminal output)
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer readFile.Close() // our own dup'd fd; does not affect ptyFile or its other readers
-		defer func() {
-			if r := recover(); r != nil {
-				errCh <- fmt.Errorf("panic in output goroutine: %v", r)
-			}
-		}()
+	if instance.IsRemote() {
+		// Remote variant (Task 4.4.1d): reads from remotePTY (tmux.PtySession,
+		// an SSH channel) instead of a dup'd local fd. ssh.Session's stdout has
+		// no SetReadDeadline -- an io.Reader over an SSH channel doesn't
+		// implement net.Conn's deadline interface -- so this cannot reuse the
+		// local branch's poll-with-timeout structure below. Instead, a small
+		// watcher goroutine closes remotePTY on streamCtx cancellation, which
+		// unblocks the in-flight Read with an error (the same "no half-close,
+		// Close tears down the whole channel" mechanism sshPtySession.Close()
+		// documents) -- the SSH-idiomatic analog of the local deadline.
+		go func() {
+			defer wg.Done()
+			defer remotePTY.Close()
+			defer func() {
+				if r := recover(); r != nil {
+					errCh <- fmt.Errorf("panic in output goroutine: %v", r)
+				}
+			}()
 
-		buf := make([]byte, 32*1024)
-		for {
-			// Block until unpaused rather than spinning.
-			if ptyPaused {
+			go func() {
+				<-streamCtx.Done()
+				_ = remotePTY.Close()
+			}()
+
+			buf := make([]byte, 32*1024)
+			for {
+				// Block until unpaused rather than spinning.
+				if ptyPaused {
+					select {
+					case <-streamCtx.Done():
+						return
+					case ptyPaused = <-pauseCh:
+						if !ptyPaused {
+							log.Info("[FlowControl] PTY reading RESUMED", "session", initialMsg.SessionId)
+						}
+					}
+					continue
+				}
+
 				select {
 				case <-streamCtx.Done():
 					return
-				case ptyPaused = <-pauseCh:
-					if !ptyPaused {
-						log.Info("[FlowControl] PTY reading RESUMED", "session", initialMsg.SessionId)
+				case paused := <-pauseCh:
+					ptyPaused = paused
+					if paused {
+						log.Info("[FlowControl] PTY reading PAUSED", "session", initialMsg.SessionId)
 					}
+					continue
+				default:
 				}
-				continue
-			}
 
-			select {
-			case <-streamCtx.Done():
-				return
-			case paused := <-pauseCh:
-				ptyPaused = paused
-				if paused {
-					log.Info("[FlowControl] PTY reading PAUSED", "session", initialMsg.SessionId)
-				}
-			default:
-				// A short deadline on our own dup'd fd (see readFile above)
-				// bounds how long Read can block, so this goroutine notices
-				// streamCtx cancellation promptly instead of potentially
-				// blocking until the next real PTY output — which could
-				// arrive well after the handler has returned and Connect has
-				// closed the stream. Safe to set here because readFile is
-				// exclusively ours; it does not touch ptyFile's poll.FD.
-				_ = readFile.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-				n, readErr := readFile.Read(buf)
+				n, readErr := remotePTY.Read(buf)
 				if n > 0 {
-					// Update terminal activity timestamps with the output content
-					// This ensures LastMeaningfulOutput reflects web UI viewing activity
 					instance.UpdateTerminalTimestamps(string(buf[:n]), true)
 
 					select {
@@ -3057,20 +3101,103 @@ func (s *SessionService) StreamTerminal(
 				}
 
 				if readErr != nil {
-					if netErr, ok := readErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-						// Expected: the deadline above elapsed with no data.
-						// Loop back around to re-check streamCtx/pauseCh.
-						continue
+					select {
+					case <-streamCtx.Done():
+						// Expected: streamCtx cancellation closed remotePTY to unblock Read.
+						return
+					default:
 					}
-					// EOF or other read error
 					if readErr.Error() != "EOF" {
-						errCh <- fmt.Errorf("PTY read error: %w", readErr)
+						errCh <- fmt.Errorf("remote PTY read error: %w", readErr)
 					}
 					return
 				}
 			}
-		}
-	}()
+		}()
+	} else {
+		go func() {
+			defer wg.Done()
+			defer readFile.Close() // our own dup'd fd; does not affect ptyFile or its other readers
+			defer func() {
+				if r := recover(); r != nil {
+					errCh <- fmt.Errorf("panic in output goroutine: %v", r)
+				}
+			}()
+
+			buf := make([]byte, 32*1024)
+			for {
+				// Block until unpaused rather than spinning.
+				if ptyPaused {
+					select {
+					case <-streamCtx.Done():
+						return
+					case ptyPaused = <-pauseCh:
+						if !ptyPaused {
+							log.Info("[FlowControl] PTY reading RESUMED", "session", initialMsg.SessionId)
+						}
+					}
+					continue
+				}
+
+				select {
+				case <-streamCtx.Done():
+					return
+				case paused := <-pauseCh:
+					ptyPaused = paused
+					if paused {
+						log.Info("[FlowControl] PTY reading PAUSED", "session", initialMsg.SessionId)
+					}
+				default:
+					// A short deadline on our own dup'd fd (see readFile above)
+					// bounds how long Read can block, so this goroutine notices
+					// streamCtx cancellation promptly instead of potentially
+					// blocking until the next real PTY output — which could
+					// arrive well after the handler has returned and Connect has
+					// closed the stream. Safe to set here because readFile is
+					// exclusively ours; it does not touch ptyFile's poll.FD.
+					_ = readFile.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+					n, readErr := readFile.Read(buf)
+					if n > 0 {
+						// Update terminal activity timestamps with the output content
+						// This ensures LastMeaningfulOutput reflects web UI viewing activity
+						instance.UpdateTerminalTimestamps(string(buf[:n]), true)
+
+						select {
+						case <-streamCtx.Done():
+							return
+						default:
+						}
+
+						outputMsg := &sessionv1.TerminalData{
+							SessionId: initialMsg.SessionId,
+							Data: &sessionv1.TerminalData_Output{
+								Output: &sessionv1.TerminalOutput{
+									Data: buf[:n],
+								},
+							},
+						}
+						if sendErr := sendLocked(outputMsg); sendErr != nil {
+							errCh <- fmt.Errorf("failed to send output: %w", sendErr)
+							return
+						}
+					}
+
+					if readErr != nil {
+						if netErr, ok := readErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+							// Expected: the deadline above elapsed with no data.
+							// Loop back around to re-check streamCtx/pauseCh.
+							continue
+						}
+						// EOF or other read error
+						if readErr.Error() != "EOF" {
+							errCh <- fmt.Errorf("PTY read error: %w", readErr)
+						}
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	// Goroutine 2: Receive from client and forward to PTY (terminal input + resize)
 	wg.Add(1)
@@ -3117,8 +3244,22 @@ func (s *SessionService) StreamTerminal(
 					// This ensures LastMeaningfulOutput reflects user interaction via web UI
 					instance.UpdateTerminalTimestamps(string(data.Input.Data), true)
 
-					// Forward input to PTY
-					if _, writeErr := instance.WriteToPTY(data.Input.Data); writeErr != nil {
+					// Forward input to the terminal data source. remotePTY is
+					// the only live write target for a remote session --
+					// instance.WriteToPTY() routes to TmuxSession.SendKeys(),
+					// which writes to t.lockedPTMX() (the LOCAL raw-attach
+					// PTY, never populated for a remote session), so it must
+					// never be called on this branch (Task 4.4.1d fix: the
+					// pre-fix code called it unconditionally, which returned
+					// "PTY not initialized" for a remote session's very first
+					// keystroke and tore the stream down).
+					var writeErr error
+					if remotePTY != nil {
+						_, writeErr = remotePTY.Write(data.Input.Data)
+					} else {
+						_, writeErr = instance.WriteToPTY(data.Input.Data)
+					}
+					if writeErr != nil {
 						// Send error back to client
 						errorMsg := &sessionv1.TerminalData{
 							SessionId: msg.SessionId,
@@ -3160,6 +3301,17 @@ func (s *SessionService) StreamTerminal(
 						_ = sendLocked(errorMsg) // Best effort
 						// Don't return on resize errors, they're not fatal
 					} else {
+						// instance.ResizePTY resizes the tmux window/pane (remote-transparent
+						// via the tmux CM/subprocess resize-window command); remotePTY.Resize
+						// additionally issues this raw-PTY session's own SSH window-change
+						// request (Task 4.4.1e), since this session is a separate SSH channel
+						// from the one control-mode/tmux commands travel over and has no other
+						// way to learn its PTY dimensions changed.
+						if remotePTY != nil {
+							if err := remotePTY.Resize(cols, rows); err != nil {
+								log.Warn("failed to resize remote PTY session", "cols", cols, "rows", rows, "session", msg.SessionId, "err", err)
+							}
+						}
 						log.Info("resized terminal", "cols", cols, "rows", rows, "session", msg.SessionId)
 					}
 

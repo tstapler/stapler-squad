@@ -615,6 +615,24 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// Without the nudge, tmux resize-window is a no-op when dimensions match and the TUI
 	// never redraws, leaving capture-pane content from a prior mid-session state that
 	// produces garbled output in a fresh xterm.js terminal.
+	//
+	// This nudge already runs unconditionally on every reconnect (handshake),
+	// regardless of whether the browser's reported dimensions actually changed
+	// from last time -- which is exactly the "unconditional resize-on-reconnect"
+	// research/pitfalls.md §1 and Task 4.4.1e call for, and it needs no separate
+	// remote-specific implementation here at the call site: instance.ResizePTY
+	// below calls TmuxSession.SetWindowSize, whose tmux "resize-window" command
+	// travels over the same control-mode stdin (t.sendCMCommand) that Task
+	// 4.4.1c made remote-transparent by wiring StartControlMode's remote branch
+	// through CommandRunner.Start over the SSH channel -- so once a remote
+	// session's control-mode connection is up (session/tmux/control_mode.go's
+	// startRemoteControlMode, which streamViaControlMode itself just started a
+	// few lines above via streamer.StartControlMode()), this same nudge reaches
+	// the remote tmux server on every reconnect exactly as it does locally.
+	// SetWindowSize itself still has an IsRemote()-guarded fallback for when CM
+	// is unavailable (mirroring RefreshClient's identical guard) -- it refuses
+	// rather than silently resizing the wrong (local) tmux server in that case,
+	// so this call site needs no IsRemote() branch of its own either way.
 	// Start control mode streaming early so we can subscribe to output events
 	// for quiescence detection BEFORE the resize nudge.
 	// Use the SessionStreamer interface to decouple this handler from the concrete
