@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -14,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -442,5 +445,133 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	}
 	if got := summary.EscalationReasonCounts["no-match"]; got != 0 {
 		t.Errorf("EscalationReasonCounts[\"no-match\"] = %d, want 0 — analytics must not disagree with the review-queue card's \"unexpected\" category", got)
+	}
+}
+
+// TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance verifies that
+// when a live instance is found, ClassificationContext.SessionIdleMinutes is populated from
+// Instance.GetTimeSinceLastMeaningfulOutput(), converted to whole minutes. Population happens
+// unconditionally inside the liveFinder nil-guard (not nested under the GitHubPRNumber > 0
+// check next to it) because idle time is independent of whether the session has an open PR.
+func TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance(t *testing.T) {
+	h, storage := newHandlerWithStorage(t)
+	cc := &capturingClassifier{}
+	h.SetClassifier(cc)
+	h.timeout = 100 * time.Millisecond // short so the Escalate fallthrough times out fast
+
+	const uuid = "eeeeeeee-1111-2222-3333-ffffffffffff"
+	now := time.Now()
+	inst := &session.Instance{
+		Title:     "idle-session",
+		UUID:      uuid,
+		Path:      "/projects/idle",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: now.Add(-75 * time.Minute), // no meaningful output recorded — falls back to time since creation
+		UpdatedAt: now,
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
+
+	postPermissionRequestWithCommand(t, h, uuid, "Bash", "npm test")
+
+	require.Equal(t, 75, cc.lastCtx.SessionIdleMinutes,
+		"a live instance idle for 75 minutes must populate SessionIdleMinutes=75")
+}
+
+// TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstance verifies the
+// fail-closed contract documented on ClassificationContext.SessionIdleMinutes: when no live
+// instance is found for the session, the field is left at its Go zero value (0) rather than
+// set to a sentinel "unknown"/"infinite" value, so it can never accidentally satisfy a
+// MinSessionIdleMinutes > 0 rule condition.
+func TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstance(t *testing.T) {
+	h, _ := newHandlerWithStorage(t)
+	cc := &capturingClassifier{}
+	h.SetClassifier(cc)
+	h.timeout = 100 * time.Millisecond
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: nil}) // FindLiveInstance always returns nil
+
+	postPermissionRequestWithCommand(t, h, "unknown-session-id", "Bash", "npm test")
+
+	require.Equal(t, 0, cc.lastCtx.SessionIdleMinutes,
+		"no live instance found must leave SessionIdleMinutes at the Go zero value, never a sentinel")
+}
+
+// --------------------------------------------------------------------------
+// Slack notification wiring (Epic 1.3, Story 1.3.2)
+// --------------------------------------------------------------------------
+
+// TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNotifierWired
+// is the happy-path REQ-10 test (plan.md Story 1.3.2 AC1): a wired
+// *SlackNotifier, pointed (via SLACK_WEBHOOK_URL) at an httptest.Server, sees
+// exactly one webhook POST when broadcastApprovalNotification runs — proving
+// NotifyApprovalPending was invoked (it dispatches its own POST internally,
+// per Story 1.2.3's ownership model).
+func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNotifierWired(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("SLACK_WEBHOOK_URL", srv.URL)
+
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h.SetSlackNotifier(NewSlackNotifier())
+
+	approval := &PendingApproval{
+		ID:        "appr-1",
+		SessionID: "sess-1",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{},
+	}
+	h.broadcastApprovalNotification("sess-1", approval)
+
+	require.Eventually(t, func() bool {
+		return requestCount.Load() >= 1
+	}, 3*time.Second, 10*time.Millisecond, "expected NotifyApprovalPending to POST to the configured webhook")
+
+	// Give any accidental second dispatch a moment to land, then assert the
+	// count settled at exactly one call.
+	time.Sleep(100 * time.Millisecond)
+	require.EqualValues(t, 1, requestCount.Load(), "NotifyApprovalPending should be invoked exactly once")
+}
+
+// TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil is the
+// error/edge-path REQ-10 test (plan.md Story 1.3.2 AC2): an ApprovalHandler
+// that never calls SetSlackNotifier (h.slackNotifier == nil, e.g. every other
+// existing unit test in this file) must behave identically to the pre-feature
+// baseline — no panic, and the existing eventBus.Publish notification still
+// fires normally.
+func TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil(t *testing.T) {
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	// Deliberately never call h.SetSlackNotifier — h.slackNotifier stays nil.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	approval := &PendingApproval{
+		ID:        "appr-2",
+		SessionID: "sess-2",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{},
+	}
+
+	require.NotPanics(t, func() {
+		h.broadcastApprovalNotification("sess-2", approval)
+	})
+
+	select {
+	case ev := <-eventCh:
+		require.Equal(t, events.EventNotification, ev.Type, "baseline eventBus notification must still fire when slackNotifier is nil")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for baseline eventBus notification")
 	}
 }

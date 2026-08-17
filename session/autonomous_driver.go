@@ -45,6 +45,16 @@ func WithStartupTimeout(d time.Duration) DriverOption {
 	return func(a *AutonomousDriver) { a.startupTimeout = d }
 }
 
+// panePreviewer is the narrow interface AutonomousDriver needs to read the
+// current pane content. *Instance satisfies it directly via Preview().
+// Extracted (mirroring paneSettleChecker below) so driver-level tests can
+// substitute a fake that returns scripted pane content per call, instead of
+// only being able to exercise pane/delivery-timing behavior through the
+// pure functions in nudge_dedup_test.go.
+type panePreviewer interface {
+	Preview() (string, error)
+}
+
 // AutonomousDriver monitors a session and injects orchestrator prompts when idle.
 type AutonomousDriver struct {
 	inst           *Instance
@@ -58,6 +68,21 @@ type AutonomousDriver struct {
 	driverRunning  atomic.Bool
 	cancel         context.CancelFunc
 	mu             sync.Mutex
+	// previewer overrides pane content reads when set (used by tests to
+	// script pane content across turns). nil (the zero value, including for
+	// every existing struct-literal-constructed test in this package) falls
+	// back to d.inst.Preview() via previewPane() below.
+	previewer panePreviewer
+}
+
+// previewPane returns the current pane content, preferring d.previewer when
+// set (tests may substitute a scripted fake) and falling back to d.inst
+// otherwise — see the panePreviewer doc comment.
+func (d *AutonomousDriver) previewPane() (string, error) {
+	if d.previewer != nil {
+		return d.previewer.Preview()
+	}
+	return d.inst.Preview()
 }
 
 // NewAutonomousDriver creates an AutonomousDriver for inst.
@@ -208,8 +233,8 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			break
 		}
 
-		tail, _ := d.inst.Preview()
-		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns, lastSentNudge.text, lastSentNudge.at)
+		tail, _ := d.previewPane()
+		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns, lastSentNudge)
 
 		keyLen := 8
 		if len(sessionID) < keyLen {
@@ -230,7 +255,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		}
 
 		if directive == directiveDone {
-			sessionOutput, _ := d.inst.Preview()
+			sessionOutput, _ := d.previewPane()
 			outcome = AutonomousDriverOutcome{
 				Done:   true,
 				Reason: payload,
@@ -248,10 +273,24 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// still counts against maxTurns (bounds a runaway/looping orchestrator, same
 		// as a malformed response burning a turn) but skips SendKeys/fireTurnCallback
 		// entirely, and lastSentNudge is left unchanged since nothing new was sent.
-		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now())
+		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now(), tail)
 		if suppressed {
 			log.Info("AutonomousDriver: suppressed nudge", "session", sessionName, "turn", turnCount+1, "directive", directive)
-			time.Sleep(nudgeCooldown)
+			if ctx.Err() != nil {
+				break
+			}
+			// Proceed on the same idle-settle cadence a real send uses, instead of
+			// blocking the full nudgeCooldown (3min production default): a
+			// suppressed turn means the agent is still working, so waiting for it
+			// to go idle again is what re-arms the dedup guard (isDuplicateNudge
+			// re-checks the cooldown next turn) and lets the orchestrator re-poll
+			// promptly rather than stalling on an arbitrary fixed timer.
+			turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
+			idleReached := waitForIdle(turnCtx, statusCh, d.controller, idleSettleWindow)
+			turnCancel()
+			if !idleReached {
+				log.Warn("AutonomousDriver: session did not become idle after suppressed turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
+			}
 			continue
 		}
 
@@ -279,9 +318,20 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
-		// Only recorded once both writes above have succeeded (criterion 7) — a
-		// failed send must not be treated as delivered for future dedup checks.
-		lastSentNudge = lastNudge{text: nextMsg, at: time.Now()}
+		// Re-capture the pane AFTER delivery completes, rather than reusing the
+		// pre-call `tail` captured before the blocking LLM call and both SendKeys
+		// writes. Real pane activity (agent output, prompt redraw) almost always
+		// occurs during that round-trip, so recording the stale pre-call snapshot
+		// as if it reflected delivery-time state made the next turn's
+		// isDuplicateNudge re-arm check fire on ordinary pane movement, defeating
+		// the suppression cooldown this feature exists to provide.
+		deliveryPane, _ := d.previewPane()
+		// Only recorded once both writes above have succeeded — a failed send must
+		// not be treated as delivered for future dedup checks. Isolated into
+		// nextLastNudge (a pure function) so this invariant is directly unit
+		// testable without needing a tmux-backed Instance to force a partial
+		// SendKeys failure.
+		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true, deliveryPane)
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
 		d.fireTurnCallback(turnCount+1, d.maxTurns, nextMsg)
 
@@ -503,24 +553,43 @@ No other text.`
 // buildOrchestrationPrompt constructs the user prompt for the orchestrator LLM call.
 // Goal and session output are wrapped in XML-style delimiters so that user-controlled
 // content (e.g., GitHub PR body embedded in the goal) cannot escape its section and
-// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text. lastNudgeText/
-// lastNudgeAt describe the most recent nudge actually delivered (both SendKeys calls
-// succeeded); lastNudgeAt.IsZero() means none has been sent yet. lastNudgeText is
-// LLM-generated content from a prior turn, so it's wrapped in its own <last_nudge> tag
-// (same anti-spoofing rationale as <goal>/<session_output>) rather than interpolated
-// directly into the instruction text.
-func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int, lastNudgeText string, lastNudgeAt time.Time) string {
+// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text. lastSent describes
+// the most recent nudge actually delivered (both SendKeys calls succeeded); a zero
+// lastSent (lastSent.at.IsZero()) means none has been sent yet. Bundled into one
+// struct param (rather than two same-shaped text/time.Time args) per
+// .claude/rules/primitive-obsession-checklist.md — the two values are always read
+// and passed together, so a struct removes the chance of them being supplied out of
+// order at a call site. lastSent.text is LLM-generated content from a prior turn, so
+// it's wrapped in its own <last_nudge> tag (same anti-spoofing rationale as
+// <goal>/<session_output>) rather than interpolated directly into the instruction text.
+// lastNudgeTagEscaper neutralizes the two characters that could otherwise let
+// lastSent.text close its <last_nudge> block early.
+var lastNudgeTagEscaper = strings.NewReplacer("<", "&lt;", ">", "&gt;")
+
+func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int, lastSent lastNudge) string {
 	const maxTailBytes = 80 * 120 // ~80 lines × 120 chars
 	if len(tail) > maxTailBytes {
 		tail = tail[len(tail)-maxTailBytes:]
 	}
-	lastNudgeBlock := "None sent yet."
-	if lastNudgeText != "" && !lastNudgeAt.IsZero() {
-		lastNudgeBlock = fmt.Sprintf("%s\n(sent %s ago)", lastNudgeText, time.Since(lastNudgeAt).Round(time.Second))
+	// The whole <last_nudge> section is omitted (not just given placeholder
+	// content) on turn 1 / whenever no nudge has been delivered yet — an
+	// absent section is unambiguous to the orchestrator LLM, whereas a
+	// present-but-empty tag risks being mistaken for "a nudge with empty
+	// text was sent".
+	lastNudgeSection := ""
+	if lastSent.text != "" && !lastSent.at.IsZero() {
+		// Escape "<"/">" before interpolating: lastSent.text is the system's own
+		// prior LLM output being round-tripped back into the prompt, so a nudge
+		// containing "</last_nudge>" (or another tag) could otherwise close the
+		// block early and spoof content into the surrounding instruction text —
+		// the same anti-spoofing rationale as the <goal>/<session_output> wrapping.
+		escapedNudgeText := lastNudgeTagEscaper.Replace(lastSent.text)
+		lastNudgeSection = fmt.Sprintf("\n\n<last_nudge>\n%s\n(sent %s ago)\n</last_nudge>",
+			escapedNudgeText, time.Since(lastSent.at).Round(time.Second))
 	}
 	return fmt.Sprintf(
-		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>\n\n<last_nudge>\n%s\n</last_nudge>\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text>, DONE: <reason>, or WAIT: <reason>.",
-		goal, tail, lastNudgeBlock, turnCount, maxTurns)
+		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>%s\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text>, DONE: <reason>, or WAIT: <reason>.",
+		goal, tail, lastNudgeSection, turnCount, maxTurns)
 }
 
 // orchestrationDirectiveMarker matches "DONE:", "NEXT_MESSAGE:", or "WAIT:"

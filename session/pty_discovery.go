@@ -315,15 +315,22 @@ type PTYDiscovery struct {
 // Optional PTYDiscoveryOption values are applied after initialization.
 func NewPTYDiscovery(opts ...PTYDiscoveryOption) *PTYDiscovery {
 	pd := &PTYDiscovery{
-		connections:   make([]*PTYConnection, 0),
-		sessionMap:    make(map[string]*Instance),
-		stopCh:        make(chan struct{}),
-		refreshRate:   5 * time.Second,
-		config:        DefaultPTYDiscoveryConfig(),
-		sessionLister: tmux.GetServerRegistry(""),
+		connections: make([]*PTYConnection, 0),
+		sessionMap:  make(map[string]*Instance),
+		stopCh:      make(chan struct{}),
+		refreshRate: 5 * time.Second,
+		config:      DefaultPTYDiscoveryConfig(),
 	}
 	for _, opt := range opts {
 		opt(pd)
+	}
+	// Resolved lazily, after options: calling GetServerRegistry("") eagerly in
+	// the struct literal starts the process-global TmuxServerRegistry singleton
+	// (and its reconnectLoop goroutine) as a side effect even when a test's
+	// WithSessionLister option immediately discards the result — see
+	// TestPTYDiscovery_Stop_JoinsMonitorLoop's goleak comment.
+	if pd.sessionLister == nil {
+		pd.sessionLister = tmux.GetServerRegistry("")
 	}
 	return pd
 }
@@ -332,15 +339,21 @@ func NewPTYDiscovery(opts ...PTYDiscoveryOption) *PTYDiscovery {
 // Optional PTYDiscoveryOption values are applied after initialization.
 func NewPTYDiscoveryWithConfig(config PTYDiscoveryConfig, opts ...PTYDiscoveryOption) *PTYDiscovery {
 	pd := &PTYDiscovery{
-		connections:   make([]*PTYConnection, 0),
-		sessionMap:    make(map[string]*Instance),
-		stopCh:        make(chan struct{}),
-		refreshRate:   config.DiscoveryInterval,
-		config:        config,
-		sessionLister: tmux.GetServerRegistry(""),
+		connections: make([]*PTYConnection, 0),
+		sessionMap:  make(map[string]*Instance),
+		stopCh:      make(chan struct{}),
+		refreshRate: config.DiscoveryInterval,
+		config:      config,
 	}
 	for _, opt := range opts {
 		opt(pd)
+	}
+	// See the identical comment in NewPTYDiscovery: resolve lazily, after
+	// options, so WithSessionLister can actually prevent the real
+	// TmuxServerRegistry singleton (and its reconnectLoop goroutine) from
+	// starting as a side effect.
+	if pd.sessionLister == nil {
+		pd.sessionLister = tmux.GetServerRegistry("")
 	}
 	return pd
 }

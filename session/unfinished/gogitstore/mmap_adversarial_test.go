@@ -375,7 +375,7 @@ func buildFuzzSeedIdx() (data []byte, ok bool) {
 		// context.Background() here leaves a wedged git subprocess blocking
 		// cmd.Run() forever, past go test's own -timeout (see gitCommandTimeout's
 		// doc comment for the reproduced hang this pattern fixes).
-		ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout(args))
 		defer cancel()
 		cmd := safeexec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir

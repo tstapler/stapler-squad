@@ -378,12 +378,34 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 
-	pd := NewPTYDiscoveryWithConfig(PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond})
+	// A healthy fakeSessionLister avoids starting the real process-global
+	// TmuxServerRegistry singleton (and its reconnectLoop goroutine), which
+	// would otherwise register as an unrelated goleak false-positive.
+	lister := &fakeSessionLister{healthy: true}
+	pd := NewPTYDiscoveryWithConfig(PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond}, WithSessionLister(lister))
 	pd.Start()
 	time.Sleep(20 * time.Millisecond) // let several ticks fire
 	pd.Stop()
 
-	goleak.VerifyNone(t, baseline)
+	// Deterministic check: Stop() must not return until monitorWG has already
+	// hit zero. Stop() itself only returns after its own internal
+	// waitGroupWithTimeout(&pd.monitorWG, stopJoinTimeout) call unblocks, so by
+	// this point the counter is guaranteed to already be 0 — this call cannot
+	// block in the success case. It's a direct wg.Wait() rather than
+	// waitGroupWithTimeout with a short timeout: a zero/short-duration timeout
+	// races a freshly spawned goroutine against time.After, which can lose
+	// even when the counter is already zero (observed intermittently in local
+	// runs, especially under -race). If a real regression reintroduces the
+	// join gap, this call hangs until the test's own -timeout kills it —
+	// still catches the regression, just via test timeout instead of an
+	// assertion message.
+	pd.monitorWG.Wait()
+
+	// os/exec's internal watchCtx goroutine doesn't synchronize its own exit
+	// with cmd.Wait()/cmd.Output() returning, so it can still be winding down
+	// here even though monitorLoop itself has already joined; ignore it as a
+	// secondary belt-and-suspenders check.
+	goleak.VerifyNone(t, baseline, goleak.IgnoreTopFunction("os/exec.(*Cmd).watchCtx"))
 }
 
 // TestWaitGroupWithTimeout pins waitGroupWithTimeout's two branches directly,

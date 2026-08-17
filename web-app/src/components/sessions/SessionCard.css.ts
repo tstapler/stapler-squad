@@ -880,6 +880,22 @@ export const noteBadge = style({
   whiteSpace: "nowrap",
 });
 
+// Reuses the same warning tokens as backlog-stuck/stuckReason.css.ts's chipStaleWork
+// — both flag "no recent activity" states, so they share one visual language.
+export const staleBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  whiteSpace: "nowrap",
+});
+
 /** Goal row compact display — session list card */
 export const taskFraction = style({
   fontSize: vars.fontSize.xs,

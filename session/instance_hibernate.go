@@ -27,7 +27,11 @@ func (i *Instance) Hibernate(ctx context.Context) error {
 // Called from transitionToLocked when transitioning Active→Hibernated;
 // dispatches the I/O work to a goroutine so the actor is not blocked.
 func hibernateProcessLocked(s *instanceState, ctx context.Context) {
-	go s.inst.hibernateProcess(ctx)
+	s.inst.hibernateWG.Add(1)
+	go func() {
+		defer s.inst.hibernateWG.Done()
+		s.inst.hibernateProcess(ctx)
+	}()
 }
 
 // hibernateProcess performs the actual hibernation side-effects:
@@ -106,7 +110,9 @@ func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 	i := s.inst
 	i.started.Store(false)
+	i.hibernateWG.Add(1)
 	go func() {
+		defer i.hibernateWG.Done()
 		if err := i.Start(false); err != nil {
 			log.Error("hibernation resume: failed to start session",
 				"session", i.Title, "err", err.Error())
@@ -140,6 +146,19 @@ func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 			}
 		}
 	}()
+}
+
+// JoinHibernation waits for any in-flight hibernateProcessLocked or
+// resumeFromHibernationLocked goroutine to exit, up to stopJoinTimeout. Tests
+// should call this before relying on t.TempDir() cleanup, since a resume
+// goroutine can otherwise outlive the temp dir it was launched against (see
+// the "session working directory missing" hibernation-resume errors this
+// guards against).
+func JoinHibernation(i *Instance) {
+	if !waitGroupWithTimeout(&i.hibernateWG, stopJoinTimeout) {
+		log.Warn("JoinHibernation: hibernate/resume goroutine did not exit within timeout; it may still be running",
+			"session", i.Title, "timeout", stopJoinTimeout)
+	}
 }
 
 // resumeFromHibernation re-launches the AI process and cleans up the checkpoint.

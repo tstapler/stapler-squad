@@ -2,11 +2,13 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -614,6 +616,50 @@ func TestSaveConfigAtomic(t *testing.T) {
 	assert.Equal(t, 2, loaded.ConfigVersion)
 }
 
+// TestSaveConfig_ConcurrentWritesToSamePath_NeverProduceCorruptJSON pins the
+// saveConfigMu regression: without it, two goroutines racing saveConfig
+// against the same configPath can interleave WriteFile/Rename on the shared
+// ".tmp" file, producing a rename failure or a torn write that LoadConfig
+// silently swallows into DefaultConfig() (see saveConfigMu's doc comment).
+// Mirrors TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON
+// in server/services/hook_injector_test.go.
+func TestSaveConfig_ConcurrentWritesToSamePath_NeverProduceCorruptJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	const n = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cfg := &Config{ConfigVersion: i}
+			errCh <- saveConfig(cfg, path)
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		assert.NoError(t, err, "saveConfig must not error under concurrent writers to the same path")
+	}
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "config file must exist after concurrent saveConfig calls")
+
+	var parsed Config
+	require.NoError(t, json.Unmarshal(data, &parsed), "config.json must be valid JSON after concurrent writes, not torn/corrupt: %s", data)
+
+	loaded, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	// Every writer used a distinct ConfigVersion in [0, n). A torn/corrupt
+	// write that LoadConfig silently swallowed into DefaultConfig() would
+	// surface here as a value outside that range instead.
+	assert.True(t, loaded.ConfigVersion >= 0 && loaded.ConfigVersion < n,
+		"loaded ConfigVersion %d must be one written by a goroutine, not a fallback default", loaded.ConfigVersion)
+}
+
 func TestOneOffBaseDirOrDefault_Empty(t *testing.T) {
 	cfg := &Config{}
 	home, err := os.UserHomeDir()
@@ -944,4 +990,72 @@ func TestIsIsolatedInstance_should_ReturnTrue_When_NamedInstanceSet(t *testing.T
 	}()
 
 	assert.True(t, IsIsolatedInstance())
+}
+
+// ─── SlackConfig ────────────────────────────────────────────────────────────
+
+// TestLoadConfig_SlackConfig_DefaultsToZeroValue_When_NoSlackKeyPresent verifies
+// REQ-1's happy path: a config.json predating the Slack feature (no "slack" key)
+// loads to a zero-value SlackConfig, not an error.
+func TestLoadConfig_SlackConfig_DefaultsToZeroValue_When_NoSlackKeyPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, SlackConfig{}, cfg.Slack)
+}
+
+// TestLoadConfig_SlackConfig_PopulatesFields_When_SlackKeyPresent verifies REQ-1:
+// a stored "slack" block populates the corresponding SlackConfig fields.
+func TestLoadConfig_SlackConfig_PopulatesFields_When_SlackKeyPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"slack": {"notify_on_queue_item": true, "queue_depth_threshold": 5}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.Slack.NotifyOnQueueItem)
+	assert.Equal(t, 5, cfg.Slack.QueueDepthThreshold)
+}
+
+// TestLoadConfig_SlackEnvOverride_TakesPrecedenceOverStoredValue verifies REQ-2:
+// SLACK_WEBHOOK_URL, when set, wins over a stored (ciphertext) value —
+// mirroring ANTHROPIC_API_KEY's env-override precedence, per ADR-001.
+func TestLoadConfig_SlackEnvOverride_TakesPrecedenceOverStoredValue(t *testing.T) {
+	t.Setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/TEST")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"slack": {"webhook_url_encrypted": "dummy-ciphertext"}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, "https://hooks.slack.com/services/T0/B0/TEST", cfg.SlackWebhookURLOverride())
+	// The stored ciphertext is left untouched by the env override.
+	assert.Equal(t, "dummy-ciphertext", cfg.Slack.WebhookURLEncrypted)
+}
+
+// TestSlackWebhookURLOverride_ReturnsEmptyString_When_EnvVarUnset verifies REQ-2's
+// edge path: with no SLACK_WEBHOOK_URL in the environment, the override getter
+// returns "" rather than some stale/default value.
+func TestSlackWebhookURLOverride_ReturnsEmptyString_When_EnvVarUnset(t *testing.T) {
+	original, wasSet := os.LookupEnv("SLACK_WEBHOOK_URL")
+	os.Unsetenv("SLACK_WEBHOOK_URL")
+	defer func() {
+		if wasSet {
+			os.Setenv("SLACK_WEBHOOK_URL", original)
+		}
+	}()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, "", cfg.SlackWebhookURLOverride())
 }

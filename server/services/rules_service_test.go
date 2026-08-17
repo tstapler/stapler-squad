@@ -1076,6 +1076,89 @@ func TestExportRules_Roundtrip(t *testing.T) {
 	assert.Equal(t, `^git log`, r3.Rule.CommandPattern)
 }
 
+// TestMinSessionIdleMinutes_SurvivesRoundTrip is a dedicated regression test for
+// MinSessionIdleMinutes because it crosses several independent hand-written conversion
+// hops (ApprovalRuleProto -> RuleSpec -> ent-backed storage -> RuleSpec ->
+// classifier.Rule, and RuleSpec -> ApprovalRuleProto again via ListApprovalRules) with
+// no compile-time completeness check tying them together — a missed hop compiles fine
+// but silently drops the field. Mirrors the storage-backed setup used by
+// TestExportRules_Roundtrip, but additionally re-opens the RulesStore against the same
+// underlying ent storage to prove the value survived an actual DB round trip rather
+// than only the in-memory cache, inspects the rebuilt classifier's rules to prove the
+// RuleSpec -> classifier.Rule hop also preserved it, and calls ListApprovalRules to
+// prove the read-path proto conversion preserved it too (this is also what the
+// docs/registry/features/backend/approval/list-rules.json entry cites as covering
+// ListApprovalRules).
+func TestMinSessionIdleMinutes_SurvivesRoundTrip(t *testing.T) {
+	const ruleID = "user-idle-test"
+	const wantIdleMinutes = int32(60)
+
+	svc := newSimpleRulesService(t)
+
+	// Hop 1: ApprovalRuleProto -> RuleSpec -> ent storage (UpsertApprovalRule),
+	// then ent-persisted RuleSpec -> ApprovalRuleProto in the response.
+	upsertResp, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:                    ruleID,
+			Name:                  "Idle gate regression test",
+			ToolName:              "Bash",
+			Decision:              sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:               true,
+			Priority:              10,
+			MinSessionIdleMinutes: wantIdleMinutes,
+		},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, wantIdleMinutes, upsertResp.Msg.Rule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive proto->RuleSpec->ent->RuleSpec->proto in the upsert response")
+
+	// Hop 2: re-open a fresh RulesStore against the same ent storage to force a
+	// read from the DB row (session.ApprovalRuleData) rather than the in-memory
+	// cache, proving the ent read/write hop in session/ent_repository.go didn't
+	// drop the field.
+	reloaded, err := NewRulesStore(svc.rulesStore.storage)
+	require.NoError(t, err)
+	var persisted *RuleSpec
+	for _, r := range reloaded.All() {
+		if r.ID == ruleID {
+			rc := r
+			persisted = &rc
+		}
+	}
+	require.NotNil(t, persisted, "rule should be persisted in ent-backed storage")
+	assert.Equal(t, wantIdleMinutes, persisted.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the ApprovalRuleData<->ent round trip")
+
+	// Hop 3: RuleSpec -> classifier.Rule, exercised by rebuildClassifier (called
+	// internally by UpsertApprovalRule via specsToRules).
+	var classifierRule *classifier.Rule
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == ruleID {
+			rc := r
+			classifierRule = &rc
+		}
+	}
+	require.NotNil(t, classifierRule, "rule should be present in the rebuilt classifier")
+	assert.Equal(t, wantIdleMinutes, classifierRule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the RuleSpec->classifier.Rule conversion")
+
+	// Hop 4: RuleSpec -> ApprovalRuleProto via the ListApprovalRules RPC, proving the
+	// read-path conversion (specToProto, called from the list handler rather than the
+	// upsert response) also preserves the field.
+	listResp, err := svc.ListApprovalRules(context.Background(), connect.NewRequest(&sessionv1.ListApprovalRulesRequest{}))
+	require.NoError(t, err)
+	var listedRule *sessionv1.ApprovalRuleProto
+	for _, r := range listResp.Msg.Rules {
+		if r.Id == ruleID {
+			listedRule = r
+			break
+		}
+	}
+	require.NotNil(t, listedRule, "rule should be present in ListApprovalRules response")
+	assert.Equal(t, wantIdleMinutes, listedRule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the RuleSpec->proto conversion in ListApprovalRules")
+}
+
 // ── UT-BE-20: BulkUpsert 20 new rules ────────────────────────────────────────
 
 func TestBulkUpsertRules_InsertNew_20Rules(t *testing.T) {

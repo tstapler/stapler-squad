@@ -113,6 +113,12 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
 
+	// Must be read BEFORE client.Schema.Create() below, which is what adds the
+	// enabled column this signal depends on being absent — see
+	// workflow_enabled_field_migration.go's doc comment for why this exact
+	// signal (not a value-based heuristic) is required.
+	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
+
 	// Create Ent client with the existing database connection
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := ent.NewClient(ent.Driver(drv))
@@ -144,6 +150,23 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
+	}
+
+	// Same fix, same reason, for Workflow.updated_at — see
+	// workflow_updated_at_utc_migration.go. UpdateWorkflowRequest.expected_updated_at
+	// (webhook-triggers verify follow-ups AC9) is the same protobuf-Timestamp-derived
+	// CAS precondition class as TransitionBacklogItemStatusRequest's.
+	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
+	}
+
+	// One-time-per-database correction for rows that predate the enabled field
+	// — see workflow_enabled_field_migration.go's doc comment for why this
+	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
+	// unconditionally on every startup like its sibling backfills above.
+	if !workflowEnabledColumnAlreadyExisted {
+		runWorkflowEnabledFieldBackfill(context.Background(), repo)
 	}
 
 	// Populate github_pr_url for pre-existing sessions that have a known PR
@@ -1387,6 +1410,7 @@ func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error
 			PythonModes:           rule.PythonModes,
 			SafePythonImportsOnly: rule.SafePythonImportsOnly,
 			RequireCIPassing:      rule.RequireCiPassing,
+			MinSessionIdleMinutes: rule.MinSessionIdleMinutes,
 		}
 	}
 	return result, nil
@@ -1445,6 +1469,7 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetPythonModes(pythonModes).
 		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
 		SetRequireCiPassing(data.RequireCIPassing).
+		SetMinSessionIdleMinutes(data.MinSessionIdleMinutes).
 		OnConflictColumns(approvalrule.FieldRuleID).
 		UpdateNewValues().
 		Exec(ctx)

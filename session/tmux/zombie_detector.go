@@ -86,7 +86,10 @@ var scanZombiesFn = ScanZombies
 // alert threshold. This prevents a burst of spurious critical alerts on service restart
 // when a stable set of zombie children already exists.
 // wg.Add(1) is called before the goroutine starts, and the goroutine calls wg.Done() on exit
-// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait().
+// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait(). Closes the
+// signal-vs-join gap noted alongside StartForkPressureLogger (fork_metrics.go) and
+// PTYDiscovery.Stop() (session/pty_discovery.go); tracked as backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec.
 func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any), wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {

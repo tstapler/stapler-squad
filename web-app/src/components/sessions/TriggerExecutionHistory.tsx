@@ -4,7 +4,7 @@
 
 import { useMemo, useState } from "react";
 import { useTriggerFireEvents } from "@/lib/hooks/useTriggerFireEvents";
-import { TriggerFireEventProto } from "@/gen/session/v1/session_pb";
+import { protoTimestampToDate } from "@/lib/utils/timestamp";
 import {
   statusBadge, statusFiredSuccess, statusFiredFailed, statusRejected, statusNoMatch,
   historyCounter, historyList, historyEntry, historyTimestamp, historyError, historySessionLink,
@@ -29,11 +29,6 @@ function outcomeClass(outcome: string): string {
     case "no_match": return statusNoMatch;
     default: return statusNoMatch;
   }
-}
-
-function timestampToDate(ts: TriggerFireEventProto["createdAt"]): Date | null {
-  if (!ts) return null;
-  return new Date(Number(ts.seconds) * 1000 + Math.floor(ts.nanos / 1e6));
 }
 
 interface TriggerExecutionHistoryProps {
@@ -92,7 +87,7 @@ export function TriggerExecutionHistory({ workflowId }: TriggerExecutionHistoryP
       ) : (
         <ul className={historyList}>
           {visibleEvents.map((ev) => {
-            const date = timestampToDate(ev.createdAt);
+            const date = protoTimestampToDate(ev.createdAt);
             return (
               <li key={ev.id} className={historyEntry} data-testid={`trigger-history-entry-${ev.id}`}>
                 <span className={`${statusBadge} ${outcomeClass(ev.outcome)}`}>{outcomeLabel(ev.outcome)}</span>

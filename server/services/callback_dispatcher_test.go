@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,11 +17,24 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 )
 
-// permissiveValidator is a validateURL stub that always accepts, so tests can
-// exercise real HTTP delivery against an httptest.Server (necessarily loopback,
-// which the real ValidateCallbackURL — exercised directly in
-// webhook_ssrf_test.go — would always reject).
-func permissiveValidator(ctx context.Context, rawURL string) error { return nil }
+// permissiveValidator is a validateURL stub that always accepts, so tests can exercise
+// real HTTP delivery against an httptest.Server (necessarily loopback, which the real
+// ValidateCallbackURL — exercised directly in webhook_ssrf_test.go — would always
+// reject). When the URL's host is a literal IP (the httptest.Server case), that exact
+// IP is returned so tests also exercise the real DialContext pinning path (attempt
+// only pins when d.client uses the real Transport — see its doc comment — so this
+// placeholder is otherwise unused by tests injecting a custom RoundTripper, e.g.
+// callback_config_service_test.go's recordingRoundTripper).
+func permissiveValidator(ctx context.Context, rawURL string) (net.IP, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(parsed.Hostname()); ip != nil {
+		return ip, nil
+	}
+	return net.IPv4zero, nil
+}
 
 // testDispatcher builds a CallbackDispatcher with the webhook_triggers flag on,
 // a small in-flight cap, and a permissive SSRF validator, targeting the given
@@ -51,11 +66,18 @@ func testDispatcher(cap int, eventType, srvURL string) *CallbackDispatcher {
 // TestCallbackDispatcher_Dispatch_NonBlocking proves Dispatch returns to the caller
 // well before a hanging target ever responds (AC4/FR8 — the caller must never wait
 // on delivery).
+//
+// Explicitly waits for the background delivery goroutine to finish before returning
+// (rather than leaving it to run past the test via deferred cleanup) — otherwise it
+// keeps retrying/logging for up to ~1.5s (callbackRetryAttempts × backoff) after this
+// test function returns, racing a later test's log.Warn capture (captureInfoLog) on
+// the shared log buffer. This wait happens AFTER the non-blocking assertion below, so
+// it doesn't weaken what the test proves.
 func TestCallbackDispatcher_Dispatch_NonBlocking(t *testing.T) {
 	block := make(chan struct{})
-	defer close(block)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-block // never responds until the test releases it
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
@@ -66,6 +88,10 @@ func TestCallbackDispatcher_Dispatch_NonBlocking(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.Less(t, elapsed, 200*time.Millisecond, "Dispatch must return immediately, not wait for delivery")
+
+	close(block)
+	require.Eventually(t, func() bool { return len(d.inFlight) == 0 }, 2*time.Second, 10*time.Millisecond,
+		"the background delivery goroutine must finish before the test returns, or it leaks into later tests")
 }
 
 // TestCallbackDispatcher_Dispatch_DropsBeyondCapacity proves the semaphore drops a
@@ -221,6 +247,113 @@ func TestCallbackDispatcher_Deliver_RedactsURLOnFailure(t *testing.T) {
 	assert.NotContains(t, logOutput, "redact-me-pass", "credentials must never appear in a log line")
 	assert.NotContains(t, logOutput, secretURL, "the callback URL must never appear in a log line")
 	assert.Contains(t, logOutput, "delivery failed after retries")
+}
+
+// TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost proves AC8: attempt's
+// DialContext connects to validIP directly, ignoring whatever the request URL's own
+// host would otherwise resolve to. Uses a hostname under the reserved .invalid TLD
+// (RFC 2606) — guaranteed to never resolve — as the request URL's host: if attempt
+// dialed by re-resolving the URL's host (the pre-fix behavior), this would fail with a
+// DNS error; it only succeeds because the dial is pinned to validIP and never touches
+// DNS for "this-host-does-not-resolve.invalid" at all.
+func TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	srvURL, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	_, port, err := net.SplitHostPort(srvURL.Host)
+	require.NoError(t, err)
+
+	d := testDispatcher(20, "session_complete", srv.URL)
+	unresolvableURL := "http://this-host-does-not-resolve.invalid:" + port
+
+	ok := d.attempt(context.Background(), unresolvableURL, []byte("{}"), net.ParseIP("127.0.0.1"))
+
+	assert.True(t, ok, "the dial must reach the server at the pinned IP, ignoring the unresolvable URL host")
+}
+
+// TestCallbackDispatcher_Attempt_DoesNotLeakPinnedIPAcrossHosts proves the per-attempt
+// Transport isn't shared/pooled across different targets (AC8's shared-transport-
+// pooling risk called out in research/pitfalls.md): two attempts, pinned to two
+// genuinely DIFFERENT IPs (127.0.0.1 and 127.0.0.2, not just two ports on the same
+// IP — a prior version of this test used the identical IP literal for both calls,
+// which only port happened to separate and would not have caught a leaked/cached
+// validIP), must each reach their own server.
+func TestCallbackDispatcher_Attempt_DoesNotLeakPinnedIPAcrossHosts(t *testing.T) {
+	var hitsA, hitsB atomic.Int32
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitsA.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srvA.Close()
+
+	lnB, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Skipf("cannot bind 127.0.0.2 in this environment: %v", err)
+	}
+	srvB := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitsB.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	require.NoError(t, srvB.Listener.Close())
+	srvB.Listener = lnB
+	srvB.Start()
+	defer srvB.Close()
+
+	d := testDispatcher(20, "session_complete", srvA.URL)
+
+	okA := d.attempt(context.Background(), srvA.URL, []byte("{}"), net.ParseIP("127.0.0.1"))
+	okB := d.attempt(context.Background(), srvB.URL, []byte("{}"), net.ParseIP("127.0.0.2"))
+
+	assert.True(t, okA)
+	assert.True(t, okB)
+	assert.Equal(t, int32(1), hitsA.Load())
+	assert.Equal(t, int32(1), hitsB.Load())
+}
+
+// TestPinnedClientFor_should_DisableKeepAlives_When_BuildingRealTransport proves the
+// fix for the goroutine/socket leak found during sdd:6-verify's code-quality review:
+// a bare &http.Transport{} discarded after exactly one request, with keep-alives left
+// on (the zero value's default), parks its persistConn goroutine and open socket
+// waiting for a reuse that can never happen — DisableKeepAlives must be forced on.
+func TestPinnedClientFor_should_DisableKeepAlives_When_BuildingRealTransport(t *testing.T) {
+	client := pinnedClientFor(&http.Client{}, net.ParseIP("127.0.0.1"))
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok, "expected a real *http.Transport when base.Transport is nil")
+	assert.True(t, transport.DisableKeepAlives, "a Transport used for exactly one request must not pool the connection")
+}
+
+// TestPinnedClientFor_should_PreserveProxySettings_When_CloningBaseTransport proves
+// the fix for the proxy-support regression found during review: pinning must clone
+// the real base Transport (or http.DefaultTransport), not build a bare struct literal
+// that silently drops Proxy/TLS tuning a deployment might rely on for egress control.
+func TestPinnedClientFor_should_PreserveProxySettings_When_CloningBaseTransport(t *testing.T) {
+	proxyCalled := false
+	base := &http.Transport{
+		Proxy: func(*http.Request) (*url.URL, error) {
+			proxyCalled = true
+			return nil, nil //nolint:nilnil // http.Transport.Proxy's documented "no proxy" return, not the anti-pattern the linter targets
+		},
+		TLSHandshakeTimeout: 7 * time.Second,
+	}
+	client := pinnedClientFor(&http.Client{Transport: base}, net.ParseIP("127.0.0.1"))
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Equal(t, 7*time.Second, transport.TLSHandshakeTimeout, "cloned Transport must preserve tuning from the base")
+	require.NotNil(t, transport.Proxy)
+	_, _ = transport.Proxy(&http.Request{})
+	assert.True(t, proxyCalled, "cloned Transport must preserve the base's Proxy function")
+}
+
+// TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRoundTripper
+// proves the fix doesn't break test doubles that intercept before any dial happens.
+func TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRoundTripper(t *testing.T) {
+	base := &http.Client{Transport: &recordingRoundTripper{}}
+	client := pinnedClientFor(base, net.ParseIP("127.0.0.1"))
+	assert.Same(t, base, client, "a custom RoundTripper has no dial step to pin — base must be returned unmodified")
 }
 
 // TestCallbackDispatcher_Dispatch_NoopWhenFeatureFlagOff proves Task 8.2.1b's

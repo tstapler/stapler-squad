@@ -168,7 +168,9 @@ func ForkPressureSnapshot() ForkPressureStats {
 
 // StartForkPressureLogger starts a background goroutine that logs fork pressure stats periodically.
 // wg.Add(1) is called before the goroutine starts, and the goroutine calls wg.Done() on exit
-// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait().
+// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait(). This closes
+// the signal-vs-join gap noted alongside PTYDiscovery.Stop() (session/pty_discovery.go) and
+// tracked as backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec.
 func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any), wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {

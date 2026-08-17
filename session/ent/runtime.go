@@ -126,6 +126,10 @@ func init() {
 	approvalruleDescRequireCiPassing := approvalruleFields[24].Descriptor()
 	// approvalrule.DefaultRequireCiPassing holds the default value on creation for the require_ci_passing field.
 	approvalrule.DefaultRequireCiPassing = approvalruleDescRequireCiPassing.Default.(bool)
+	// approvalruleDescMinSessionIdleMinutes is the schema descriptor for min_session_idle_minutes field.
+	approvalruleDescMinSessionIdleMinutes := approvalruleFields[25].Descriptor()
+	// approvalrule.DefaultMinSessionIdleMinutes holds the default value on creation for the min_session_idle_minutes field.
+	approvalrule.DefaultMinSessionIdleMinutes = approvalruleDescMinSessionIdleMinutes.Default.(int32)
 	backlogitemFields := schema.BacklogItem{}.Fields()
 	_ = backlogitemFields
 	// backlogitemDescTitle is the schema descriptor for title field.
