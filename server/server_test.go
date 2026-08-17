@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -190,16 +191,90 @@ func Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRun
 	}
 }
 
+// goleakElidedStackPanicMarker is the exact, and only, panic message goleak
+// v1.3.0 (confirmed the latest published release via
+// `go list -m -versions go.uber.org/goleak`) produces when its stack-trace
+// parser can't handle a line the Go runtime itself truncated with a
+// "...N frames elided..." marker (go.uber.org/goleak@v1.3.0's
+// internal/stack/stacks.go:90, panicking rather than erroring, per that
+// package's own doc comment: "Well-formed stack traces should never fail to
+// parse... Panic so we can fix it"). Elision is Go's own runtime behavior
+// (runtime/traceback.go's tracebackInnerFrames + tracebackOuterFrames = 100
+// total frames per goroutine) — not something this codebase's ticker
+// goroutines can avoid by staying shallow, since any sufficiently deep
+// goroutine present anywhere in the process at capture time (e.g. under a
+// forked `ps` subprocess) triggers it for the whole capture.
+//
+// See backlog item 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e for full root cause.
+const goleakElidedStackPanicMarker = "Failed to parse stack trace"
+
+// runGoleakTolerant runs check (expected to invoke goleak.VerifyNone) and
+// converts goleak's known elided-stack-trace parser panic
+// (goleakElidedStackPanicMarker) into a t.Skip instead of letting it crash
+// the whole test binary — see backlog item
+// 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e. Any other panic is re-panicked
+// unchanged, so unrelated test failures are never swallowed.
+//
+// KNOWN GAP: goleak's parser panics before its leak-filtering logic runs, so
+// this cannot distinguish "a harmless goroutine happened to be deep enough to
+// trigger elision" from "a genuinely leaked goroutine that also happens to be
+// deep enough to trigger elision" — both hit the identical panic path. This
+// wrapper accepts that small risk of masking a real leak in the rare case it
+// coincides with elision; it is not a claim that the check remains fully
+// leak-safe in that case.
+func runGoleakTolerant(t *testing.T, check func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		msg := fmt.Sprint(r)
+		if !strings.Contains(msg, goleakElidedStackPanicMarker) {
+			// Not goleak's known elision-parser panic — propagate unchanged.
+			panic(r)
+		}
+		// Diagnostic capture (companion to the workaround, not a fix): the
+		// panic message already contains the full stack dump goleak
+		// captured, so logging it here — rather than letting the panic
+		// crash the binary before anyone sees it — gives a future
+		// root-causing attempt real data instead of another blind
+		// bisection. See backlog item 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e.
+		t.Logf("goleak hit its known elided-stack parser panic; full diagnostic dump for future root-causing (backlog 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e):\n%s", msg)
+		t.Skip("skipping: goleak's stack parser panicked on an elided (\"...N frames elided...\") stack trace — known goleak v1.3.0 limitation, see backlog 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e and the diagnostic dump logged above")
+	}()
+	check()
+}
+
+// verifyNoLeaksTolerant is goleak.VerifyNone wrapped by runGoleakTolerant.
+// Use this in place of a bare goleak.VerifyNone(t, baseline) call wherever a
+// test exercises goroutines whose stacks could plausibly grow deep enough to
+// trigger Go's own stack-trace elision (e.g. tests that fork subprocesses,
+// like tmux.StartZombieWatcher's `ps` calls). See
+// goleakElidedStackPanicMarker and runGoleakTolerant for the full rationale.
+func verifyNoLeaksTolerant(t *testing.T, baseline goleak.Option) {
+	t.Helper()
+	runGoleakTolerant(t, func() { goleak.VerifyNone(t, baseline) })
+}
+
 // TestServer_Shutdown_JoinsBackgroundTickers pins the regression this fix
 // addresses at the server level: the fork-pressure logger, zombie watcher,
 // and zombie reaper goroutines used to be signaled via serverCtx cancellation
 // but never joined, so Shutdown() could return while they were still running.
 // Wiring them directly to a short interval and to srv.backgroundTasksWG
 // (bypassing the full dependency graph, the same way newTestServer does)
-// drives several ticks before Shutdown() is called; goleak.VerifyNone
+// drives several ticks before Shutdown() is called; verifyNoLeaksTolerant
 // afterward confirms all three have actually exited by the time Shutdown()
 // returns — genuinely different coverage from the fake-goroutine test above,
 // since this exercises the real tmux.Start* functions end to end.
+//
+// Uses verifyNoLeaksTolerant rather than a bare goleak.VerifyNone: this test
+// exercises tmux.StartZombieWatcher, which forks a real `ps` subprocess, and
+// CI has observed goleak's stack-trace parser hard-panic (not a normal test
+// failure) when a goroutine's stack is deep enough to trigger Go's own
+// "...N frames elided..." truncation. See backlog item
+// 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e and goleakElidedStackPanicMarker's
+// doc comment for the full root cause.
 func TestServer_Shutdown_JoinsBackgroundTickers(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 
@@ -216,7 +291,7 @@ func TestServer_Shutdown_JoinsBackgroundTickers(t *testing.T) {
 		t.Fatalf("Shutdown() returned unexpected error: %v", err)
 	}
 
-	goleak.VerifyNone(t, baseline)
+	verifyNoLeaksTolerant(t, baseline)
 }
 
 // Test_Shutdown_should_NotBlockPastTimeout_When_BackgroundTaskNeverExits proves
@@ -265,4 +340,121 @@ func Test_Shutdown_should_NotPanic_When_CalledTwice(t *testing.T) {
 	if err := srv.Shutdown(); err != nil {
 		t.Fatalf("second Shutdown() returned unexpected error: %v", err)
 	}
+}
+
+// deepRecurse recurses depth times before invoking done, then blocks forever
+// on block. Used to synthesize a goroutine stack deep enough to trigger Go's
+// own "...N frames elided..." truncation (runtime/traceback.go's
+// tracebackInnerFrames + tracebackOuterFrames = 100 total frames per
+// goroutine) — the real trigger for goleak's parser panic, since no captured
+// real CI trace is available to replay. See backlog item
+// 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e.
+func deepRecurse(depth int, done func(), block <-chan struct{}) {
+	if depth <= 0 {
+		done()
+		<-block
+		return
+	}
+	deepRecurse(depth-1, done, block)
+}
+
+// Test_runGoleakTolerant_should_SkipInsteadOfCrash_When_GoleakHitsElidedStackTrace
+// covers AC0/AC1: a goroutine deep enough to trigger Go's own stack-trace
+// elision must make runGoleakTolerant skip the (sub)test rather than crash
+// the whole test binary via goleak's unrecovered parser panic.
+func Test_runGoleakTolerant_should_SkipInsteadOfCrash_When_GoleakHitsElidedStackTrace(t *testing.T) {
+	block := make(chan struct{})
+	ready := make(chan struct{})
+	exited := make(chan struct{})
+	// 150 frames comfortably exceeds the 100-frame elision threshold.
+	go func() {
+		defer close(exited)
+		deepRecurse(150, func() { close(ready) }, block)
+	}()
+	<-ready
+	time.Sleep(10 * time.Millisecond) // let the goroutine settle at its deepest frame
+
+	// Unblock and wait for the deep goroutine to fully exit before this test
+	// returns — otherwise it can still be mid-unwind (a still-deep, still-live
+	// goroutine) when a later test takes its own goleak.VerifyNone snapshot,
+	// spuriously tripping that unrelated test's elision panic.
+	defer func() {
+		close(block)
+		<-exited
+	}()
+
+	// t.Skip (called on the elision path) invokes runtime.Goexit, which only
+	// unwinds correctly inside a goroutine started by testing's own tRunner —
+	// a bare &testing.T{} isn't one, so the check must run inside a real
+	// t.Run subtest rather than against a manually constructed *testing.T.
+	// Goexit immediately abandons the rest of the closure's function body
+	// (only deferred calls still run), so capturing st.Skipped()/st.Failed()
+	// as a plain statement AFTER runGoleakTolerant returns never executes on
+	// the skip path — it must be captured in a defer instead.
+	var wasSkipped, wasFailed bool
+	t.Run("inner", func(st *testing.T) {
+		defer func() {
+			wasSkipped = st.Skipped()
+			wasFailed = st.Failed()
+		}()
+		runGoleakTolerant(st, func() { goleak.VerifyNone(st) })
+	})
+
+	if !wasSkipped {
+		t.Error("expected runGoleakTolerant to skip the test when goleak hits its elided-stack parser panic, but it did not skip")
+	}
+	if wasFailed {
+		t.Error("expected runGoleakTolerant's skip path to not also mark the test failed")
+	}
+}
+
+// Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs
+// covers AC1/AC3: a real leaked goroutine with a shallow (non-elided) stack
+// must still be reported as a normal test failure, proving the tolerant
+// wrapper doesn't mask genuine leaks in the common case.
+func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+
+	block := make(chan struct{})
+	// Deliberately never close block or wait for this goroutine — it leaks
+	// past the end of the test on purpose, with a shallow (unelided) stack.
+	go func() { <-block }()
+	t.Cleanup(func() { close(block) })
+
+	// goleak.VerifyNone's leak-found path only ever calls t.Error (never
+	// t.Fatal/t.Skip), which — unlike the elision-skip test above — never
+	// invokes runtime.Goexit, so a manually constructed *testing.T is safe
+	// here. Deliberately NOT using t.Run: a failing subtest also marks its
+	// parent failed (common.Fail's parent-chain propagation), which would
+	// make this meta-test itself report as failed in `go test` output even
+	// though observing the expected failure here is success.
+	sub := &testing.T{}
+	runGoleakTolerant(sub, func() { goleak.VerifyNone(sub, baseline) })
+
+	if !sub.Failed() {
+		t.Error("expected runGoleakTolerant to report a genuine, non-elided goroutine leak as a failure")
+	}
+	if sub.Skipped() {
+		t.Error("a genuine leak must fail the test, not be skipped")
+	}
+}
+
+// Test_runGoleakTolerant_should_RepanicUnrelatedPanics covers AC2: a panic
+// that doesn't match goleak's known elided-stack marker must propagate
+// unchanged, so runGoleakTolerant never silently swallows an unrelated
+// panic.
+func Test_runGoleakTolerant_should_RepanicUnrelatedPanics(t *testing.T) {
+	const unrelatedPanicMsg = "some unrelated panic, not goleak's elided-stack parser panic"
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected the unrelated panic to propagate out of runGoleakTolerant, but it did not panic")
+		}
+		if fmt.Sprint(r) != unrelatedPanicMsg {
+			t.Fatalf("expected the original unrelated panic message to propagate unchanged, got: %v", r)
+		}
+	}()
+
+	runGoleakTolerant(t, func() { panic(unrelatedPanicMsg) })
 }
