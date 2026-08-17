@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -493,4 +495,83 @@ func TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstanc
 
 	require.Equal(t, 0, cc.lastCtx.SessionIdleMinutes,
 		"no live instance found must leave SessionIdleMinutes at the Go zero value, never a sentinel")
+}
+
+// --------------------------------------------------------------------------
+// Slack notification wiring (Epic 1.3, Story 1.3.2)
+// --------------------------------------------------------------------------
+
+// TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNotifierWired
+// is the happy-path REQ-10 test (plan.md Story 1.3.2 AC1): a wired
+// *SlackNotifier, pointed (via SLACK_WEBHOOK_URL) at an httptest.Server, sees
+// exactly one webhook POST when broadcastApprovalNotification runs — proving
+// NotifyApprovalPending was invoked (it dispatches its own POST internally,
+// per Story 1.2.3's ownership model).
+func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNotifierWired(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("SLACK_WEBHOOK_URL", srv.URL)
+
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h.SetSlackNotifier(NewSlackNotifier())
+
+	approval := &PendingApproval{
+		ID:        "appr-1",
+		SessionID: "sess-1",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{},
+	}
+	h.broadcastApprovalNotification("sess-1", approval)
+
+	require.Eventually(t, func() bool {
+		return requestCount.Load() >= 1
+	}, 3*time.Second, 10*time.Millisecond, "expected NotifyApprovalPending to POST to the configured webhook")
+
+	// Give any accidental second dispatch a moment to land, then assert the
+	// count settled at exactly one call.
+	time.Sleep(100 * time.Millisecond)
+	require.EqualValues(t, 1, requestCount.Load(), "NotifyApprovalPending should be invoked exactly once")
+}
+
+// TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil is the
+// error/edge-path REQ-10 test (plan.md Story 1.3.2 AC2): an ApprovalHandler
+// that never calls SetSlackNotifier (h.slackNotifier == nil, e.g. every other
+// existing unit test in this file) must behave identically to the pre-feature
+// baseline — no panic, and the existing eventBus.Publish notification still
+// fires normally.
+func TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil(t *testing.T) {
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	// Deliberately never call h.SetSlackNotifier — h.slackNotifier stays nil.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	approval := &PendingApproval{
+		ID:        "appr-2",
+		SessionID: "sess-2",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{},
+	}
+
+	require.NotPanics(t, func() {
+		h.broadcastApprovalNotification("sess-2", approval)
+	})
+
+	select {
+	case ev := <-eventCh:
+		require.Equal(t, events.EventNotification, ev.Type, "baseline eventBus notification must still fire when slackNotifier is nil")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for baseline eventBus notification")
+	}
 }

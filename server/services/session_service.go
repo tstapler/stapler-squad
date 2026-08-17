@@ -137,6 +137,9 @@ type SessionService struct {
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
 
+	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
+	slackConfigSvc *SlackConfigService
+
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
 	callbackConfigSvc *CallbackConfigService
@@ -503,6 +506,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		pathCompletionSvc:  NewPathCompletionService(),
 		slashCommandSvc:    NewSlashCommandService(),
 		defaultsSvc:        NewDefaultsService(),
+		slackConfigSvc:     NewSlackConfigService(NewSlackNotifier()),
 		callbackConfigSvc:  NewCallbackConfigService(),
 		launcherPresetsSvc: NewLauncherPresetsService(),
 		projectSvc:         NewProjectService(concStorage),
@@ -1250,6 +1254,26 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 	s.configSvc = svc
 }
 
+// SetSlackNotifier rewires slackConfigSvc onto the given SlackNotifier
+// instance — intended for server/dependencies.go to call with the SAME
+// *services.SlackNotifier wired into ReactiveQueueManager/ApprovalHandler,
+// so GetSlackConfig's last_delivery reflects real production sends from
+// those trigger points, not only sends made via TestSlackWebhook. Optional:
+// if never called, slackConfigSvc keeps the private SlackNotifier instance
+// NewSessionService constructed for it.
+func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
+	s.slackConfigSvc = NewSlackConfigService(n)
+}
+
+// SlackNotifierForTest returns the SlackNotifier instance currently wired
+// into slackConfigSvc. Exported only so cross-package wiring regression
+// tests (server package) can assert pointer identity against the other
+// consumers (ReactiveQueueManager, ApprovalHandler) without restructuring
+// production code — not intended for any non-test caller.
+func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
+	return s.slackConfigSvc.slackNotifier
+}
+
 // SetFeatureController wires a runtime controller for the named feature flag.
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {
@@ -1761,9 +1785,10 @@ func (s *SessionService) CreateSession(
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
 	// Tracked via trackCleanup (not a bare `go func()`) so Shutdown blocks until this
 	// goroutine finishes — otherwise it can outlive the test that spawned it and touch a
-	// later test's STAPLER_SQUAD_TEST_DIR/tmux-exec-gate directory after that later test's
-	// t.TempDir() has already started tearing itself down (the cross-iteration
-	// "directory not empty" flake in TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
+	// later test's tempdirs/STAPLER_SQUAD_TEST_DIR/tmux-exec-gate directory after that
+	// later test's t.Cleanup has already torn them down, producing "sql: database is
+	// closed" errors and the cross-iteration "directory not empty" flake in
+	// TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent.
 	s.trackCleanup(func() {
 		// Wire callbacks before starting so rate-limit and status-change events fire.
 		s.wireCallbacks(instance)
@@ -3820,6 +3845,21 @@ func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Reque
 // UpdateGlobalDefaults replaces the global default fields.
 func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.Request[sessionv1.UpdateGlobalDefaultsRequest]) (*connect.Response[sessionv1.UpdateGlobalDefaultsResponse], error) {
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
+}
+
+// GetSlackConfig returns the current Slack notification configuration.
+func (s *SessionService) GetSlackConfig(ctx context.Context, req *connect.Request[sessionv1.GetSlackConfigRequest]) (*connect.Response[sessionv1.GetSlackConfigResponse], error) {
+	return s.slackConfigSvc.GetSlackConfig(ctx, req)
+}
+
+// UpdateSlackConfig updates the Slack notification configuration.
+func (s *SessionService) UpdateSlackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateSlackConfigRequest]) (*connect.Response[sessionv1.UpdateSlackConfigResponse], error) {
+	return s.slackConfigSvc.UpdateSlackConfig(ctx, req)
+}
+
+// TestSlackWebhook sends a synchronous test message and reports the outcome.
+func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Request[sessionv1.TestSlackWebhookRequest]) (*connect.Response[sessionv1.TestSlackWebhookResponse], error) {
+	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
 }
 
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every

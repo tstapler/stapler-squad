@@ -1294,11 +1294,21 @@ func (f *fakePaneSettleChecker) HasUpdated() (bool, bool) {
 // withShrunkPaneSettleTimers shrinks the package-level poll/deadline vars for
 // the duration of a test (restored via the returned func), so these tests run
 // in milliseconds instead of waiting out the real 150ms/2s production values.
+//
+// The margin between the 4-poll settle time (4*pollInterval) and the
+// half-deadline failure threshold used by
+// TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEarly
+// must absorb scheduler jitter from time.After firing late under concurrent
+// load (observed 70-120ms of jitter running with -count=20 alongside the rest
+// of the package's tests), not just the nominal poll cadence. 15ms/600ms
+// (60ms expected vs. a 300ms threshold, 240ms margin) replaced an earlier
+// 20ms/300ms pairing (80ms expected vs. a 150ms threshold, only 70ms margin)
+// that flaked under exactly that jitter.
 func withShrunkPaneSettleTimers(t *testing.T) {
 	t.Helper()
 	origInterval, origMax := paneSettlePollInterval, paneSettleMaxWait
-	paneSettlePollInterval = 5 * time.Millisecond
-	paneSettleMaxWait = 60 * time.Millisecond
+	paneSettlePollInterval = 15 * time.Millisecond
+	paneSettleMaxWait = 600 * time.Millisecond
 	t.Cleanup(func() {
 		paneSettlePollInterval, paneSettleMaxWait = origInterval, origMax
 	})
@@ -1318,8 +1328,13 @@ func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEar
 	waitForPaneSettle(context.Background(), checker)
 	elapsed := time.Since(start)
 
-	if elapsed >= paneSettleMaxWait {
-		t.Errorf("expected early return once settled, took %v (>= deadline %v)", elapsed, paneSettleMaxWait)
+	// A relative margin (half the deadline) rather than a thin absolute one:
+	// settling takes ~4 polls (paneSettlePollInterval*4), well under half of
+	// paneSettleMaxWait, so this still fails if early-return regresses toward
+	// waiting out the full deadline, without tripping on ordinary scheduler
+	// jitter under full-suite load.
+	if halfDeadline := paneSettleMaxWait / 2; elapsed >= halfDeadline {
+		t.Errorf("expected early return once settled, took %v (>= half of deadline %v)", elapsed, halfDeadline)
 	}
 	if checker.calls < 4 {
 		t.Errorf("expected at least 4 polls (2 changing + 2 stable), got %d", checker.calls)

@@ -254,6 +254,10 @@ var methodToID = map[string]string{
 	"CommitImportExternalSession":  "import:commit",
 	"ConfirmKillExternalSession":   "import:confirm_kill",
 	"CancelPendingKill":            "import:cancel_pending_kill",
+	// Slack notification config RPCs
+	"GetSlackConfig":    "slack-config:get",
+	"UpdateSlackConfig": "slack-config:update",
+	"TestSlackWebhook":  "slack-config:test-webhook",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

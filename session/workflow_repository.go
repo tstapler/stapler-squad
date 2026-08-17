@@ -12,6 +12,12 @@ import (
 type WorkflowRepository interface {
 	Create(ctx context.Context, w WorkflowCreateInput) (*ent.Workflow, error)
 	Update(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput) (*ent.Workflow, error)
+	// UpdateConditional applies a partial update only if the row's current updated_at
+	// exactly matches expectedUpdatedAt (optimistic-concurrency CAS, mirrors
+	// EntRepository.TransitionBacklogItemStatus's precondition pattern). Returns
+	// ErrPreconditionFailed if the row has been modified since expectedUpdatedAt was
+	// read, or ErrNotFound if the row doesn't exist.
+	UpdateConditional(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput, expectedUpdatedAt time.Time) (*ent.Workflow, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*ent.Workflow, error)
 	GetBySlug(ctx context.Context, slug string) (*ent.Workflow, error)
@@ -30,17 +36,23 @@ type WorkflowRepository interface {
 
 // WorkflowCreateInput holds the fields for creating a new workflow.
 type WorkflowCreateInput struct {
-	Slug              string
-	Name              string
-	Description       string
-	Command           string
-	TargetDirectory   string
-	InputTemplate     string
-	SessionType       string
-	Model             string
-	AgentType         string
-	CronExpression    string
-	CronEnabled       bool
+	Slug            string
+	Name            string
+	Description     string
+	Command         string
+	TargetDirectory string
+	InputTemplate   string
+	SessionType     string
+	Model           string
+	AgentType       string
+	CronExpression  string
+	CronEnabled     bool
+	// Enabled is the generic per-trigger enable gate. Pointer, not a bare bool: the
+	// schema default (true) only applies when the column is never explicitly set, so
+	// a bare bool would silently create a disabled workflow for any caller that
+	// forgets to set it (the zero value is false) — nil here means "use the schema
+	// default," matching every other optional-with-a-meaningful-default field's shape.
+	Enabled           *bool
 	KeepSessions      *int // nil = use default (0, disabled); 0 = keep all
 	ArchiveAfterHours *int // nil = use default (0, disabled); 0 = disabled
 
@@ -68,8 +80,9 @@ type WorkflowUpdateInput struct {
 	AgentType         *string
 	CronExpression    *string
 	CronEnabled       *bool
-	KeepSessions      *int // nil = do not update; 0 = keep all (disabled)
-	ArchiveAfterHours *int // nil = do not update; 0 = disabled
+	Enabled           *bool // generic per-trigger enable gate
+	KeepSessions      *int  // nil = do not update; 0 = keep all (disabled)
+	ArchiveAfterHours *int  // nil = do not update; 0 = disabled
 
 	// Trigger fields (webhook-triggers Epic 1.1).
 	TriggerType            *string
