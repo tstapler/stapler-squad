@@ -372,7 +372,12 @@ func Test_runGoleakTolerant_should_SkipInsteadOfCrash_When_GoleakHitsElidedStack
 		deepRecurse(150, func() { close(ready) }, block)
 	}()
 	<-ready
-	time.Sleep(10 * time.Millisecond) // let the goroutine settle at its deepest frame
+	// Not load-bearing: deepRecurse's done() callback (which closes ready)
+	// only fires once the goroutine has already reached full depth and is
+	// about to block on <-block, so the happens-before edge from closing
+	// ready already guarantees full depth here. This sleep is a defensive
+	// margin, not a synchronization point.
+	time.Sleep(10 * time.Millisecond)
 
 	// Unblock and wait for the deep goroutine to fully exit before this test
 	// returns — otherwise it can still be mid-unwind (a still-deep, still-live
