@@ -52,6 +52,7 @@ type PRInfo struct {
 	Title        string    `json:"title"`
 	Body         string    `json:"body"`
 	HeadRef      string    `json:"headRefName"`
+	HeadSHA      string    `json:"headRefOid"`
 	BaseRef      string    `json:"baseRefName"`
 	State        string    `json:"state"`
 	Author       string    `json:"author"`
@@ -90,6 +91,7 @@ type ghPRResponse struct {
 	Title        string `json:"title"`
 	Body         string `json:"body"`
 	HeadRefName  string `json:"headRefName"`
+	HeadRefOid   string `json:"headRefOid"`
 	BaseRefName  string `json:"baseRefName"`
 	State        string `json:"state"`
 	URL          string `json:"url"`
@@ -271,7 +273,7 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 	repoRef := fmt.Sprintf("%s/%s", owner, repo)
 	prRef := strconv.Itoa(prNumber)
 
-	fields := "number,title,body,headRefName,baseRefName,state,url,createdAt,updatedAt,isDraft,mergeable,additions,deletions,changedFiles,author,labels,reviews,reviewDecision,statusCheckRollup"
+	fields := "number,title,body,headRefName,headRefOid,baseRefName,state,url,createdAt,updatedAt,isDraft,mergeable,additions,deletions,changedFiles,author,labels,reviews,reviewDecision,statusCheckRollup"
 	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", prRef, "--repo", repoRef, "--json", fields)
 	output, err := cmd.Output()
 	if err != nil {
@@ -302,6 +304,7 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 		Title:                 resp.Title,
 		Body:                  resp.Body,
 		HeadRef:               resp.HeadRefName,
+		HeadSHA:               resp.HeadRefOid,
 		BaseRef:               resp.BaseRefName,
 		State:                 strings.ToLower(resp.State),
 		Author:                resp.Author.Login,
