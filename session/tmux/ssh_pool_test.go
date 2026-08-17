@@ -144,6 +144,121 @@ func TestSSHClientPool_DeadConnection_EvictedAndRedialed(t *testing.T) {
 	}
 }
 
+// TestSSHClientPool_Subscribe_PrimesWithCurrentClient verifies a subscriber
+// that attaches after a client is already pooled immediately receives it,
+// without needing to wait for a future reconnect.
+func TestSSHClientPool_Subscribe_PrimesWithCurrentClient(t *testing.T) {
+	srv := startTestSSHServer(t)
+	cfg := newTestClientConfig(t, srv.HostKey)
+	pool := NewSSHClientPool()
+	target := SSHTarget{Name: "subscribe-primed", Addr: srv.Addr}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, err := pool.GetOrDial(ctx, target, &cfg)
+	if err != nil {
+		t.Fatalf("GetOrDial() error: %v", err)
+	}
+
+	ch, unsubscribe := pool.Subscribe(target.Name)
+	defer unsubscribe()
+
+	select {
+	case got := <-ch:
+		if got != client {
+			t.Error("Subscribe() primed channel with a different *ssh.Client than the pooled one")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe() did not prime the channel with the already-pooled client")
+	}
+}
+
+// TestSSHClientPool_Subscribe_NotifiesOnRedial verifies a subscriber
+// receives the fresh *ssh.Client once a dead connection is evicted and
+// redialed -- the reconnect signal session/sshremote's RemoteApprovalRelay
+// depends on (plan.md Task 5.1.2a).
+func TestSSHClientPool_Subscribe_NotifiesOnRedial(t *testing.T) {
+	srv := startTestSSHServer(t)
+	cfg := newTestClientConfig(t, srv.HostKey)
+	pool := NewSSHClientPool()
+	target := SSHTarget{Name: "subscribe-redial", Addr: srv.Addr}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client1, err := pool.GetOrDial(ctx, target, &cfg)
+	if err != nil {
+		t.Fatalf("GetOrDial() error: %v", err)
+	}
+
+	ch, unsubscribe := pool.Subscribe(target.Name)
+	defer unsubscribe()
+
+	// Drain the priming notification for client1 before triggering the
+	// redial, so the next receive on ch unambiguously corresponds to the
+	// post-redial client.
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not receive the priming notification for client1")
+	}
+
+	_ = client1.Close() // simulate the connection dying
+	waitForPoolEviction(t, pool, target.Name)
+
+	client2, err := pool.GetOrDial(ctx, target, &cfg)
+	if err != nil {
+		t.Fatalf("GetOrDial() after dead-connection eviction: %v", err)
+	}
+
+	select {
+	case got := <-ch:
+		if got != client2 {
+			t.Error("Subscribe() notified with a different *ssh.Client than the redialed one")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe() did not notify after redial")
+	}
+}
+
+// TestSSHClientPool_Subscribe_UnsubscribeStopsFutureNotifies verifies
+// calling the unsubscribe func removes the channel from future notify
+// fan-out, so a subscriber that's done doesn't leak a permanently-blocked
+// (or silently-dropped) send target.
+func TestSSHClientPool_Subscribe_UnsubscribeStopsFutureNotifies(t *testing.T) {
+	srv := startTestSSHServer(t)
+	cfg := newTestClientConfig(t, srv.HostKey)
+	pool := NewSSHClientPool()
+	target := SSHTarget{Name: "subscribe-unsub", Addr: srv.Addr}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client1, err := pool.GetOrDial(ctx, target, &cfg)
+	if err != nil {
+		t.Fatalf("GetOrDial() error: %v", err)
+	}
+
+	ch, unsubscribe := pool.Subscribe(target.Name)
+	// Drain the priming notification.
+	<-ch
+	unsubscribe()
+
+	_ = client1.Close()
+	waitForPoolEviction(t, pool, target.Name)
+	if _, err := pool.GetOrDial(ctx, target, &cfg); err != nil {
+		t.Fatalf("GetOrDial() after dead-connection eviction: %v", err)
+	}
+
+	select {
+	case v, ok := <-ch:
+		t.Fatalf("received notify after unsubscribe: v=%v ok=%v", v, ok)
+	case <-time.After(200 * time.Millisecond):
+		// Expected: no notification after unsubscribe.
+	}
+}
+
 // TestSSHClientPool_GetOrDial_RespectsCtxTimeout verifies GetOrDial itself
 // is ctx-bounded (via dialSSHContext), matching Task 2.1.1f's requirement
 // at the pool layer where the actual dial happens.

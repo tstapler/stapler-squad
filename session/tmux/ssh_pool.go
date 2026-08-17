@@ -55,14 +55,91 @@ type pooledSSHClient struct {
 // the whole point of pooling is that the connection outlives any single
 // caller's use of it.
 type SSHClientPool struct {
-	mu      sync.Mutex
-	entries map[string]*pooledSSHClient
-	group   singleflight.Group
+	mu          sync.Mutex
+	entries     map[string]*pooledSSHClient
+	group       singleflight.Group
+	subscribers map[string][]chan *ssh.Client // +checklocks:mu
 }
 
 // NewSSHClientPool returns an empty pool.
 func NewSSHClientPool() *SSHClientPool {
 	return &SSHClientPool{entries: make(map[string]*pooledSSHClient)}
+}
+
+// Subscribe returns a channel that receives name's pooled *ssh.Client every
+// time register() installs one for it -- both the very first dial and every
+// subsequent redial after an Evict/dead-connection cycle. This is the
+// reconnect signal session/sshremote's RemoteApprovalRelay subscribes to in
+// order to re-open its direct-streamlocal channel against a fresh
+// connection after the underlying one drops and redials, per
+// project_plans/ssh-remote-workspaces/implementation/plan.md Story 5.1.2 /
+// Task 5.1.2a. Nothing in this package previously needed to observe a
+// reconnect after the fact -- SSHRunner only ever calls GetOrDial again
+// on-demand -- so this is new, minimal surface, not a pre-existing hook.
+//
+// The returned channel is buffered (capacity 1) and lossy by design: a
+// subscriber that hasn't drained the previous notification only cares about
+// the MOST RECENT client, so a notify that finds a full channel drops the
+// stale value and pushes the fresh one instead of blocking the notifier
+// (register, called from GetOrDial's caller) or growing unbounded.
+//
+// If a client is already pooled for name when Subscribe is called, the
+// channel is primed with it immediately -- a subscriber that attaches after
+// the first dial doesn't have to wait for the NEXT reconnect to learn about
+// the current client.
+//
+// The returned unsubscribe func must be called once the subscriber is done;
+// it removes the channel from the pool's subscriber list so future
+// notifies don't leak a send to a channel nobody reads anymore.
+func (p *SSHClientPool) Subscribe(name string) (<-chan *ssh.Client, func()) {
+	ch := make(chan *ssh.Client, 1)
+
+	p.mu.Lock()
+	if p.subscribers == nil {
+		p.subscribers = make(map[string][]chan *ssh.Client)
+	}
+	p.subscribers[name] = append(p.subscribers[name], ch)
+	if e, ok := p.entries[name]; ok {
+		ch <- e.client
+	}
+	p.mu.Unlock()
+
+	unsubscribe := func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		subs := p.subscribers[name]
+		for i, c := range subs {
+			if c == ch {
+				p.subscribers[name] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+	}
+	return ch, unsubscribe
+}
+
+// notifySubscribers delivers client to every current subscriber of name,
+// using the same non-blocking drop-stale-then-push pattern Subscribe's doc
+// comment describes. Must not be called while holding p.mu.
+func (p *SSHClientPool) notifySubscribers(name string, client *ssh.Client) {
+	p.mu.Lock()
+	subs := append([]chan *ssh.Client(nil), p.subscribers[name]...)
+	p.mu.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- client:
+		default:
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- client:
+			default:
+			}
+		}
+	}
 }
 
 // Peek returns the currently pooled client for name without dialing,
@@ -123,6 +200,8 @@ func (p *SSHClientPool) register(name string, client *ssh.Client) {
 	p.mu.Lock()
 	p.entries[name] = &pooledSSHClient{client: client}
 	p.mu.Unlock()
+
+	p.notifySubscribers(name, client)
 
 	go func() {
 		// Client.Wait blocks until the underlying connection closes, by any

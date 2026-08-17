@@ -17,7 +17,12 @@ const (
 	SourceTerminal ExternalApprovalSource = "Terminal"
 	SourceVSCode   ExternalApprovalSource = "VS Code"
 	SourceMux      ExternalApprovalSource = "mux"
-	SourceUnknown  ExternalApprovalSource = "Unknown"
+	// SourceRemote identifies an approval request relayed from a remote SSH
+	// session's agent process via session/sshremote's RemoteApprovalRelay
+	// (project_plans/ssh-remote-workspaces/implementation/plan.md Epic 5.1),
+	// as opposed to one detected locally by scraping a socket/tmux stream.
+	SourceRemote  ExternalApprovalSource = "Remote"
+	SourceUnknown ExternalApprovalSource = "Unknown"
 )
 
 // ExternalApprovalEvent represents an approval detected in an external session.
@@ -458,6 +463,72 @@ func (m *ExternalApprovalMonitor) MonitorSessionTmux(
 	log.Info("started tmux approval monitoring for external session", "title", title, "source", source)
 
 	return nil
+}
+
+// IngestRelayedApproval feeds a single approval request relayed from a
+// remote session (session/sshremote's RemoteApprovalRelay, per
+// project_plans/ssh-remote-workspaces/implementation/plan.md Task 5.1.1c)
+// into this monitor's existing pending-approvals model, keyed by
+// sessionKey exactly the way local socketPath-based sessions key their
+// entry in m.sessions -- so GetPendingApprovals/GetAllPendingApprovals/
+// MarkApprovalHandled and the local approval UI all treat a relayed request
+// identically to one detected locally.
+//
+// Unlike MonitorSession/MonitorSessionTmux, there is no streamer/tmuxStreamer
+// to register a consumer against: RemoteApprovalRelay pushes each request
+// directly as it's read off the remote socket, rather than this monitor
+// pulling from a continuously-streamed output buffer. The monitored session
+// entry for sessionKey is created lazily on first ingest and reused for
+// every subsequent relayed request on the same session.
+//
+// Idempotent by request ID: a request already pending under the same ID is
+// not re-appended or re-notified. This is deliberate, not incidental --
+// Story 5.1.2's chosen in-flight-request-survival behavior is agent-side
+// retry (the remote hook script reconnects and re-sends the SAME request,
+// same ID, until the relay's direct-streamlocal channel is back up after a
+// reconnect), so a redelivered request must be a safe no-op here rather
+// than surface as a duplicate pending approval in the UI.
+func (m *ExternalApprovalMonitor) IngestRelayedApproval(sessionKey, title string, request *detection.ApprovalRequest) {
+	if request == nil || request.ID == "" {
+		// A blank ID can never be deduped against itself (see the dedup loop
+		// below) and can never be targeted by MarkApprovalHandled, so
+		// accepting it would let a malformed or malicious relayed payload
+		// pile up an unbounded number of un-resolvable pending entries.
+		return
+	}
+	if request.Status == "" {
+		request.Status = detection.ApprovalPending
+	}
+	if request.Timestamp.IsZero() {
+		request.Timestamp = time.Now()
+	}
+
+	m.sessionsMu.Lock()
+	monitored, exists := m.sessions[sessionKey]
+	if !exists {
+		monitored = &monitoredSession{
+			title:   title,
+			source:  SourceRemote,
+			pending: make([]*detection.ApprovalRequest, 0),
+		}
+		m.sessions[sessionKey] = monitored
+	}
+	for _, existing := range monitored.pending {
+		if existing.ID == request.ID { // request.ID is guaranteed non-empty by the guard above
+			m.sessionsMu.Unlock()
+			return
+		}
+	}
+	monitored.lastDetect = time.Now()
+	monitored.pending = append(monitored.pending, request)
+	m.sessionsMu.Unlock()
+
+	m.notifyCallbacks(&ExternalApprovalEvent{
+		Request:      request,
+		SessionID:    sessionKey,
+		SessionTitle: title,
+		Source:       SourceRemote,
+	})
 }
 
 // createTmuxConsumer creates a consumer function for tmux-based streaming.
