@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -323,7 +324,7 @@ func (m *CapacityMonitor) queryGeminiUsageFromDB(uuid string) (input, output int
 		return 0, 0, 0, nil
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
 	if err != nil {
 		return 0, 0, 0, err
 	}

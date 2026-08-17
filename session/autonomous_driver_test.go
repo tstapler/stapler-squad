@@ -1294,11 +1294,19 @@ func (f *fakePaneSettleChecker) HasUpdated() (bool, bool) {
 // withShrunkPaneSettleTimers shrinks the package-level poll/deadline vars for
 // the duration of a test (restored via the returned func), so these tests run
 // in milliseconds instead of waiting out the real 150ms/2s production values.
+//
+// The 4-poll early-settle test needs only 4*pollInterval of wall-clock time to
+// complete, but leaving just that much margin against the deadline made the
+// test flaky: under scheduler contention (parallel test execution, GC pauses)
+// a single time.After(pollInterval) firing a few ms late was enough to blow
+// the deadline before the 4th poll landed, so the loop exited via the
+// deadline check with stableCount still short of 2. 30ms/500ms keeps tests
+// fast while giving ~20x headroom over the 4-poll minimum.
 func withShrunkPaneSettleTimers(t *testing.T) {
 	t.Helper()
 	origInterval, origMax := paneSettlePollInterval, paneSettleMaxWait
-	paneSettlePollInterval = 5 * time.Millisecond
-	paneSettleMaxWait = 60 * time.Millisecond
+	paneSettlePollInterval = 30 * time.Millisecond
+	paneSettleMaxWait = 500 * time.Millisecond
 	t.Cleanup(func() {
 		paneSettlePollInterval, paneSettleMaxWait = origInterval, origMax
 	})

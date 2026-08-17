@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
 
 	"connectrpc.com/connect"
@@ -224,7 +225,7 @@ func (ds *DatabaseService) MergeDatabase(
 // mergeSessions copies sessions from sourceDB into destDB.
 // Returns (imported, skipped, error).
 func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, error) {
-	db, err := sql.Open("sqlite", destDB+"?_timeout=5000")
+	db, err := sql.Open("sqlite", sqlitedsn.New(destDB).WithBusyTimeout(5000*time.Millisecond).Build())
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to open destination database: %w", err)
 	}
@@ -239,7 +240,7 @@ func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, erro
 	// Count sessions in source
 	var sourceTotal int
 	{
-		src, err := sql.Open("sqlite", sourceDB+"?_query_only=1&_timeout=5000")
+		src, err := sql.Open("sqlite", sqlitedsn.New(sourceDB).WithQueryOnly().WithBusyTimeout(5000*time.Millisecond).Build())
 		if err != nil {
 			return 0, 0, fmt.Errorf("failed to open source database: %w", err)
 		}
@@ -330,7 +331,7 @@ func countSessionsInDB(configDir string) int {
 		return 0
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_query_only=1&_journal_mode=WAL&_timeout=5000")
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithQueryOnly().WithWAL().WithBusyTimeout(5000*time.Millisecond).Build())
 	if err != nil {
 		return 0
 	}

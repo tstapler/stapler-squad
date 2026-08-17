@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/ent"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -31,7 +32,13 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	// modernc.org/sqlite only issues `PRAGMA busy_timeout` when the DSN sets
 	// _timeout/_busy_timeout, otherwise leaving SQLite's own default of 0 (immediate
 	// SQLITE_BUSY on lock contention) in effect.
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on&_timeout=5000&_pragma=wal_autocheckpoint(1000)", dbPath)
+	dsn := sqlitedsn.New("file:"+dbPath).
+		WithWAL().
+		WithSynchronousNormal().
+		WithForeignKeys().
+		WithBusyTimeout(5000 * time.Millisecond).
+		WithPragma("wal_autocheckpoint", "1000").
+		Build()
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

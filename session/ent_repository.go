@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
@@ -128,10 +129,12 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// driver's applyTimezone(t) -> t.In(time.UTC), which sets the Location to
 	// the exact singleton (time.LoadLocation("UTC") — what _timezone resolves
 	// through — special-cases "UTC" to return that singleton directly).
-	dbPath := expandedPath + "?_journal_mode=WAL&_timeout=5000&_fk=1&_texttotime=1&_time_format=sqlite&_timezone=UTC"
-	if strings.Contains(expandedPath, "?") {
-		dbPath = expandedPath + "&_timeout=5000&_fk=1&_texttotime=1&_time_format=sqlite&_timezone=UTC"
-	}
+	dbPath := sqlitedsn.New(expandedPath).
+		WithWAL().
+		WithBusyTimeout(5000 * time.Millisecond).
+		WithForeignKeysShort().
+		WithEntTimeCompat().
+		Build()
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
