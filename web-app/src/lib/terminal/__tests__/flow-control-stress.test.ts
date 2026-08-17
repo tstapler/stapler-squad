@@ -300,7 +300,10 @@ describe('Flow Control Stress Tests', () => {
       expect(completed).toBeGreaterThan(0);
       const metrics = tracker.getMetrics();
       expect(metrics.watermark).toBeLessThan(50000); // Should drain well
-    }, 10000);
+    }, 20000); // 60000->10000 wasn't safely below the 15000/30000/60000 values this
+    // test previously needed under --maxWorkers=4 contention with the old serial-await
+    // shape; 20000 keeps headroom over that history while still reflecting that the
+    // concurrent Promise.all drain is no longer bound by ~5000 sequential round trips.
   });
 
   describe('Watermark Behavior', () => {
