@@ -374,10 +374,13 @@ func buildFuzzSeedIdx() (data []byte, ok bool) {
 		// Bounded like gitRunErr in gogitstore_test.go: an unbounded
 		// context.Background() here leaves a wedged git subprocess blocking
 		// cmd.Run() forever, past go test's own -timeout (see gitCommandTimeout's
-		// doc comment for the reproduced hang this pattern fixes).
+		// doc comment for the reproduced hang this pattern fixes). CommandContextPG
+		// (not plain CommandContext) also SIGKILLs the whole process group on
+		// cancellation, matching gitRunErr's pattern so a detached grandchild
+		// holding stdout/stderr open can't outlive the deadline either.
 		ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
 		defer cancel()
-		cmd := safeexec.CommandContext(ctx, "git", args...)
+		cmd := safeexec.CommandContextPG(ctx, "git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",

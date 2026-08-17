@@ -1,6 +1,7 @@
 package gogitstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -103,6 +104,14 @@ func gitRun(t testing.TB, dir string, args ...string) {
 const gitCommandTimeout = 30 * time.Second
 
 func gitRunErr(logf func(format string, args ...any), dir string, args ...string) error {
+	return gitRunErrWithStdin(logf, dir, nil, args...)
+}
+
+// gitRunErrWithStdin is gitRunErr plus the ability to pipe stdin to the git
+// subprocess — needed for `git fast-import`, which reads its whole commit
+// stream from stdin rather than taking it as argv. A nil stdin behaves
+// identically to gitRunErr.
+func gitRunErrWithStdin(logf func(format string, args ...any), dir string, stdin []byte, args ...string) error {
 	const maxAttempts = 5
 	var lastErr error
 	var lastOut []byte
@@ -114,6 +123,9 @@ func gitRunErr(logf func(format string, args ...any), dir string, args ...string
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",
 			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.local",
 		)
+		if stdin != nil {
+			cmd.Stdin = bytes.NewReader(stdin)
+		}
 		out, err := cmd.CombinedOutput()
 		timedOut := ctx.Err() == context.DeadlineExceeded
 		cancel()
@@ -625,35 +637,27 @@ func buildPackedFixtureOnce(t testing.TB, dir string, numCommits int) error {
 		return err
 	}
 
-	// Every iteration rewrites the SAME 3 filenames (file0.txt..file2.txt),
-	// so only the first iteration ever introduces new (untracked) paths —
-	// from the second iteration on, `git commit -a` stages and commits the
-	// already-tracked modifications in one subprocess instead of a separate
-	// `git add .` + `git commit` pair. This halves the git-subprocess count
-	// of the dominant cost in this function (numCommits can be in the
-	// hundreds across the golden fixtures this builds), with no change to
-	// the resulting object graph: `-a` stages modifications to tracked
-	// files identically to `add .` would for these same paths.
-	for i := 0; i < numCommits; i++ {
-		for f := 0; f < 3; f++ {
-			path := filepath.Join(dir, fmt.Sprintf("file%d.txt", f))
-			content := fmt.Sprintf("commit %d file %d\n%s\n", i, f, strconvItoaPadded(i*7+f))
-			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", path, err)
-			}
-		}
-		if i == 0 {
-			if err := gitRunErr(t.Logf, dir, "add", "."); err != nil {
-				return err
-			}
-			if err := gitRunErr(t.Logf, dir, "commit", "-q", "-m", fmt.Sprintf("commit %d", i)); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := gitRunErr(t.Logf, dir, "commit", "-q", "-a", "-m", fmt.Sprintf("commit %d", i)); err != nil {
-			return err
-		}
+	// Every commit rewrites the SAME 3 filenames (file0.txt..file2.txt) with
+	// the same content strconvItoaPadded generated when this loop issued one
+	// `git commit` subprocess per iteration. That used to mean numCommits
+	// (up to 600 across this package's golden fixtures) sequential real git
+	// subprocess spawns — individually bounded by gitCommandTimeout, but with
+	// no bound on their sum: building just the 600-commit fixture alone was
+	// measured exceeding 5 minutes under `go test -race`, which is what
+	// actually blew the package's -timeout budget (the per-call hang
+	// gitCommandTimeout/safeexec.CommandContextPG guards against was NOT
+	// reproducing here — every individual call was completing, just too
+	// slowly in aggregate). `git fast-import` builds the identical commit
+	// history from a single stdin stream in one subprocess instead, cutting
+	// numCommits subprocess spawns down to one. The working tree is
+	// populated afterward via `checkout -f` since fast-import only writes
+	// the object database and updates refs, not the worktree.
+	stream := buildFastImportStream(numCommits)
+	if err := gitRunErrWithStdin(t.Logf, dir, stream, "fast-import", "--quiet"); err != nil {
+		return err
+	}
+	if err := gitRunErr(t.Logf, dir, "checkout", "-f", "-q", "main"); err != nil {
+		return err
 	}
 
 	// Force everything into a packfile (loose objects alone never touch
@@ -703,6 +707,36 @@ func countPacks(dir string) (int, error) {
 		return 0, err
 	}
 	return len(matches), nil
+}
+
+// buildFastImportStream renders numCommits sequential commits on refs/heads/main
+// as a single `git fast-import` input stream, for buildPackedFixtureOnce.
+// Object graph shape (file paths, per-blob content) is generated identically
+// to the old per-commit `git commit` loop this replaces; only the delivery
+// mechanism (one fast-import stdin stream vs. numCommits subprocess spawns)
+// changed. fast-import tracks each ref's current tip as it processes commands
+// in order, so a `commit` block with no explicit `from` chains onto the
+// previous commit already recorded against that same ref within this stream
+// (git-fast-import(1)) — exactly the same linear history the old loop built,
+// without needing to track and pass parent marks explicitly.
+func buildFastImportStream(numCommits int) []byte {
+	// Arbitrary fixed epoch: fast-import requires an explicit committer
+	// timestamp per commit (unlike `git commit`, which stamps wall-clock
+	// time), and nothing downstream depends on these fixtures' commit dates.
+	const baseTimestamp = 1700000000
+	var buf bytes.Buffer
+	for i := 0; i < numCommits; i++ {
+		msg := fmt.Sprintf("commit %d", i)
+		fmt.Fprintf(&buf, "commit refs/heads/main\n")
+		fmt.Fprintf(&buf, "committer test <test@test.local> %d +0000\n", baseTimestamp+i)
+		fmt.Fprintf(&buf, "data %d\n%s\n", len(msg), msg)
+		for f := 0; f < 3; f++ {
+			content := fmt.Sprintf("commit %d file %d\n%s\n", i, f, strconvItoaPadded(i*7+f))
+			fmt.Fprintf(&buf, "M 100644 inline file%d.txt\n", f)
+			fmt.Fprintf(&buf, "data %d\n%s\n", len(content), content)
+		}
+	}
+	return buf.Bytes()
 }
 
 // strconvItoaPadded pads i out to a few hundred bytes of repeated digits so
@@ -778,8 +812,17 @@ func TestSharedIndex_ParsesPackfileIndexExactlyOnce(t *testing.T) {
 		t.Skip("git binary not available")
 	}
 
-	const numWorktrees = 5
-	const numCommits = 250
+	// numCommits is deliberately small: this test's claim (IndexBuildCount
+	// stays at 1 across multiple worktree opens) doesn't depend on fixture
+	// size, and each commit costs a real `git commit` subprocess spawn via
+	// buildPackedFixtureOnce — at the previous numCommits=250/numWorktrees=5,
+	// this single test cost 641.89s (72% of this package's ~887s of other
+	// test time), pushing the whole suite's `-race` run past go test's own
+	// -timeout 15m in two separate, otherwise-idle runs. numWorktrees=3 is
+	// the minimum that still proves sharing (>1 worktree, with room to
+	// confirm it's not just "2 happens to work").
+	const numWorktrees = 3
+	const numCommits = 20
 
 	_, store, repos := sharedIndexFixture(t, t.TempDir(), numWorktrees, numCommits)
 
