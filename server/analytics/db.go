@@ -36,7 +36,7 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 		WithWAL().
 		WithSynchronousNormal().
 		WithForeignKeys().
-		WithBusyTimeout(5000 * time.Millisecond).
+		WithBusyTimeout(5000*time.Millisecond).
 		WithPragma("wal_autocheckpoint", "1000").
 		Build()
 
