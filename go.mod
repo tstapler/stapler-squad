@@ -2,6 +2,17 @@ module github.com/tstapler/stapler-squad
 
 go 1.26.3
 
+// CGO_ENABLED=1 (Makefile) is required for the cgo-only go-sqlite3 driver, but on
+// Darwin it also switches net's default resolver to the cgo-based one (getaddrinfo
+// via libSystem). That resolver spawns OS threads that can hold a libc lock at the
+// exact moment another goroutine calls os/exec (git, tmux, ...), deadlocking the
+// forked child before it execs — see TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoSyncConflicts,
+// which hung indefinitely under CGO_ENABLED=1 and passed immediately under
+// CGO_ENABLED=0 or with this godebug forcing the pure-Go resolver. This app has no
+// dependency on cgo-specific resolver behavior (mDNS/NSS), so force pure-Go DNS
+// unconditionally rather than risk the same deadlock in production subprocess calls.
+godebug netdns=go
+
 require (
 	connectrpc.com/connect v1.19.0
 	connectrpc.com/otelconnect v0.8.0
