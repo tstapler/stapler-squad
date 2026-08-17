@@ -35,15 +35,18 @@ type RulesService struct {
 	promptBuilder  RulePromptBuilder // nil = AI generation unavailable
 	aiClient       AIClient          // nil = AI generation unavailable
 
-	// rebuildMu serializes the two independent read-filter-replace rebuild paths
-	// (rebuildClassifier for DB-backed user rules, rebuildClaudeSettingsRules for
-	// claude-settings file rules) so a DB rule upsert and a claude-settings reload that
-	// happen at the same instant can never clobber each other. Each rebuild's read of
-	// rs.classifier.Rules(), its filtering, and the ReplaceRules call that publishes the
-	// result must run as one atomic unit relative to the other rebuild path — the
-	// classifier's own lock only makes ReplaceRules itself atomic, not the read-then-write
-	// sequence around it.
+	// rebuildMu serializes rebuildClassifier and rebuildClaudeSettingsRules — each does a
+	// read-filter-replace against the classifier that must run as one atomic unit relative
+	// to the other, which the classifier's own lock alone doesn't guarantee.
 	rebuildMu sync.Mutex
+
+	// testHook is a test-only synchronization point invoked (via afterRebuildReadHook, while
+	// rebuildMu is already held) right after each rebuild path's classifier read and before
+	// its write. Nil in production. A bug in rebuildMu is a lost-update race, not a data
+	// race — every individual field access is already protected by the classifier's own
+	// lock, so go test -race cannot detect it; only forcing a real pause mid-critical-section
+	// and observing the other path block on rebuildMu proves serialization actually holds.
+	testHook func()
 
 	// claudeSettingsWatcher owns the fsnotify watch + debounce + last-known-good cache for
 	// claude-settings files. Nil until SetClaudeSettingsWatcher is called (or if fsnotify
@@ -56,6 +59,13 @@ type RulesService struct {
 // SetHeadlessPool elsewhere in this package.
 func (rs *RulesService) SetClaudeSettingsWatcher(w *ClaudeSettingsWatcher) {
 	rs.claudeSettingsWatcher = w
+}
+
+// afterRebuildReadHook calls testHook if set (see field doc comment); a no-op in production.
+func (rs *RulesService) afterRebuildReadHook() {
+	if rs.testHook != nil {
+		rs.testHook()
+	}
 }
 
 // NewRulesService creates a RulesService.
@@ -510,6 +520,7 @@ func (rs *RulesService) rebuildClassifier() {
 
 	userRules := rs.rulesStore.ToRules()
 	existing := rs.classifier.Rules()
+	rs.afterRebuildReadHook() // test-only: see field doc comment
 	nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
 	rs.classifier.ReplaceRules(append(nonUser, userRules...))
 }
@@ -522,6 +533,7 @@ func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.R
 	defer rs.rebuildMu.Unlock()
 
 	existing := rs.classifier.Rules()
+	rs.afterRebuildReadHook() // test-only: see field doc comment
 	kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
 	rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
 }

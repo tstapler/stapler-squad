@@ -89,6 +89,35 @@ func TestClaudeSettingsWatcher_Reload_MalformedPath_KeepsLastKnownGood(t *testin
 	assert.NotEmpty(t, secondFailed)
 }
 
+// TestClaudeSettingsWatcher_Reload_FileDeleted_RevokesRules is a regression test found in
+// review: reloadLocked previously re-merged w.lastGood unconditionally for ANY error,
+// including ErrSettingsNotFound — so deleting a settings file never actually revoked the
+// auto-approval rules it had contributed; they lived on forever from the last-known-good
+// cache, and ReloadClaudeSettingsRules reported success (no failedPaths) even though nothing
+// was actually removed.
+func TestClaudeSettingsWatcher_Reload_FileDeleted_RevokesRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
+
+	spy := &reloadSpy{}
+	w := NewClaudeSettingsWatcher("", spy.callback())
+
+	firstCount, firstFailed := w.Reload(context.Background())
+	require.Equal(t, 1, firstCount)
+	require.Empty(t, firstFailed)
+
+	require.NoError(t, os.Remove(settingsPath))
+
+	secondCount, secondFailed := w.Reload(context.Background())
+
+	assert.Equal(t, 0, secondCount, "deleting the settings file must actually revoke its rules, not resurrect them from last-known-good")
+	assert.Empty(t, secondFailed, "a legitimately deleted file is not a parse failure")
+	resolved := resolveSettingsPathOrOriginal(settingsPath)
+	assert.Empty(t, w.lastGood[resolved], "lastGood must be cleared for a deleted path")
+}
+
 func TestClaudeSettingsWatcher_Reload_OnReloadCallbackInvokedWithRuleCountAndOrigin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -143,6 +172,56 @@ func TestClaudeSettingsWatcher_Reload_TagsOriginByChangedPathLabel(t *testing.T)
 	writeSettingsFile(t, projectPath, `{"permissions":{"allow":["Read","Edit"]}}`)
 	w.Reload(context.Background())
 	assert.Equal(t, "project", spy.last().origin)
+}
+
+// TestClaudeSettingsWatcher_Reload_BothPathsChanged_OriginIsMixed covers computeReloadOrigin's
+// "mixed" branch, which had zero test coverage (found in review).
+func TestClaudeSettingsWatcher_Reload_BothPathsChanged_OriginIsMixed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := t.TempDir()
+	globalPath := filepath.Join(home, ".claude", "settings.json")
+	projectPath := filepath.Join(projectDir, ".claude", "settings.json")
+	writeSettingsFile(t, globalPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
+	writeSettingsFile(t, projectPath, `{"permissions":{"allow":["Read"]}}`)
+
+	spy := &reloadSpy{}
+	w := NewClaudeSettingsWatcher(projectDir, spy.callback())
+	w.Reload(context.Background()) // baseline
+
+	writeSettingsFile(t, globalPath, `{"permissions":{"allow":["Bash(git *)","Write"]}}`)
+	writeSettingsFile(t, projectPath, `{"permissions":{"allow":["Read","Edit"]}}`)
+	w.Reload(context.Background())
+
+	assert.Equal(t, "mixed", spy.last().origin)
+}
+
+// TestClaudeSettingsWatcher_Reload_SameLengthPatternEdit_DetectedAsChanged is a security
+// regression test found in review: rulesEqual previously compared Rule.ID (positional —
+// "claude-settings-<label>-<index>") and Decision (always AutoAllow for every claude-settings
+// rule), which can never detect an in-place pattern edit at the same array index with the same
+// slice length. This silently broke computeReloadOrigin's security-visibility tagging for
+// exactly the case ADR-003 names as the threat model: a project-level settings.json edit (e.g.
+// from checking out an unreviewed PR branch) that changes what gets auto-allowed without
+// changing the array's length would be reported as no change at all, defaulting origin to
+// "global" — the opposite of reality.
+func TestClaudeSettingsWatcher_Reload_SameLengthPatternEdit_DetectedAsChanged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := t.TempDir()
+	projectPath := filepath.Join(projectDir, ".claude", "settings.json")
+	writeSettingsFile(t, projectPath, `{"permissions":{"allow":["Read"]}}`)
+
+	spy := &reloadSpy{}
+	w := NewClaudeSettingsWatcher(projectDir, spy.callback())
+	w.Reload(context.Background()) // baseline: 1 rule at index 0
+
+	// Same array length (1 entry), same index (0), but the pattern itself is now dangerous.
+	writeSettingsFile(t, projectPath, `{"permissions":{"allow":["Bash(*)"]}}`)
+	count, _ := w.Reload(context.Background())
+
+	require.Equal(t, 1, count)
+	assert.Equal(t, "project", spy.last().origin, "an in-place pattern edit must be detected as a real change, not silently defaulted to origin=global")
 }
 
 // TestClaudeSettingsWatcher_ConcurrentReloadCalls_NoRace regression-guards
@@ -280,4 +359,34 @@ func TestClaudeSettingsWatcher_Start_DetectsExternalFileEdit_ReloadsWithoutResta
 	case <-time.After(time.Second):
 		t.Fatal("watcher goroutine did not exit after context cancellation")
 	}
+}
+
+// TestClaudeSettingsWatcher_Start_IgnoresUnrelatedFileInWatchedDirectory is a regression test
+// found in review: fsnotify.Watcher.Add watches an entire directory, not a single file, but
+// run()'s event handling had no filename check — so any write anywhere in ~/.claude/ (a
+// directory Claude Code itself writes other files into) would trigger a full re-parse and a
+// notification-worthy reload, even though nothing about the actual settings files changed.
+// This deviated from the plan's own spec (Task 4.1.1c: "ignore unrelated files in the same
+// dir") and risked toast-spam that would undermine Requirement 5's "visible signal" framing.
+func TestClaudeSettingsWatcher_Start_IgnoresUnrelatedFileInWatchedDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
+
+	spy := &reloadSpy{}
+	w := NewClaudeSettingsWatcher("", spy.callback())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.Start(ctx)
+	require.Equal(t, 1, spy.count(), "priming reload")
+
+	// Write a file in the same directory that is NOT one of the watched settings filenames.
+	writeSettingsFile(t, filepath.Join(home, ".claude", "unrelated-state.json"), `{"noise":true}`)
+
+	// Give the debounce window (250ms) more than enough time to have fired if the write were
+	// (incorrectly) treated as relevant, then confirm no additional reload happened.
+	time.Sleep(400 * time.Millisecond)
+	assert.Equal(t, 1, spy.count(), "a write to an unrelated file in the same directory must not trigger a reload")
 }

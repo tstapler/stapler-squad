@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1607,103 +1607,71 @@ func TestDeleteApprovalRule_InvalidRuleID_LeavesExistingRulesIntact(t *testing.T
 	assert.True(t, found, "a failed delete of an unrelated rule must not clear existing rules")
 }
 
-// TestRebuildClassifier_ConcurrentWithClaudeSettingsRebuild_NeitherUpdateIsLost is the
-// Story 3.1.1 regression test: rebuildMu must serialize rebuildClassifier (DB-backed user
-// rules) and rebuildClaudeSettingsRules (claude-settings file rules) so a rule upsert and a
-// claude-settings reload happening at the same instant never clobber each other. Run with
-// -race.
-func TestRebuildClassifier_ConcurrentWithClaudeSettingsRebuild_NeitherUpdateIsLost(t *testing.T) {
+// TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes is the Story
+// 3.1.1 regression test, replacing two prior tests found in review to be vacuous:
+// TestRebuildClassifier_ConcurrentWithClaudeSettingsRebuild_NeitherUpdateIsLost and
+// TestClassify_DuringConcurrentReload_NeverObservesPartialRuleSet both still passed
+// identically with rebuildMu fully removed from the production code (verified in review by
+// deleting the Lock/Unlock calls and running both 5x under -race). The reason: a lost-update
+// race — goroutine A reads, B reads-and-writes, A's stale write clobbers B's — is a logical
+// race, not a memory race. Every individual field access here is already protected by
+// classifier.RuleBasedClassifier's own internal lock, so go test -race structurally cannot
+// see this class of bug; only forcing a genuine overlap and observing the mutex actually
+// block the second caller proves serialization holds. Uses the test-only testHook seam
+// (rs.testHook, called mid-critical-section) to do exactly that.
+func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t *testing.T) {
 	svc := newRulesService(t)
 
-	const n = 25
-	var wg sync.WaitGroup
-	wg.Add(n * 2)
-	for i := 0; i < n; i++ {
-		i := i
-		go func() {
-			defer wg.Done()
-			_, _ = svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
-				Rule: &sessionv1.ApprovalRuleProto{
-					Id:       fmt.Sprintf("user-rule-%d", i),
-					Name:     fmt.Sprintf("user rule %d", i),
-					ToolName: "Bash",
-					Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
-					Enabled:  true,
-					Source:   "user",
-				},
-			}))
-		}()
-		go func() {
-			defer wg.Done()
-			svc.rebuildClaudeSettingsRules([]classifier.Rule{{
-				ID:       fmt.Sprintf("claude-settings-rule-%d", i),
-				Name:     fmt.Sprintf("claude settings rule %d", i),
-				ToolName: "Read",
-				Decision: classifier.AutoAllow,
-				Enabled:  true,
-				Source:   "claude-settings",
-				Priority: 150,
-			}})
-		}()
-	}
-	wg.Wait()
-
-	var userCount, claudeSettingsCount int
-	for _, r := range svc.classifier.Rules() {
-		switch r.Source {
-		case "user":
-			userCount++
-		case "claude-settings":
-			claudeSettingsCount++
+	hookEntered := make(chan struct{})
+	releaseHook := make(chan struct{})
+	var hookCalls atomic.Int32
+	svc.testHook = func() {
+		// Only the FIRST call (guaranteed to be A's — B hasn't started yet) blocks. Any
+		// later call — B's, whether it arrives concurrently because rebuildMu is missing, or
+		// serially after A releases it because rebuildMu correctly blocked B's Lock() — must
+		// pass straight through, or this hook would itself force serialization regardless of
+		// whether the production mutex does.
+		if hookCalls.Add(1) == 1 {
+			close(hookEntered)
+			<-releaseHook
 		}
 	}
-	// The final rebuildClaudeSettingsRules call fully replaces claude-settings rules (by
-	// design — each call carries the complete current set), so exactly 1 survives; but all
-	// n concurrent user-rule upserts must be visible, since UpsertApprovalRule persists to
-	// the store first and rebuildClassifier reads the full store on every call.
-	assert.Equal(t, n, userCount, "no concurrent user-rule upsert should be lost")
-	assert.Equal(t, 1, claudeSettingsCount, "rebuildClaudeSettingsRules replaces wholesale by design")
-}
 
-// TestClassify_DuringConcurrentReload_NeverObservesPartialRuleSet guards REQ-3: a Classify
-// call racing a rebuild must see one full consistent rule snapshot, never a partial one. Run
-// with -race.
-func TestClassify_DuringConcurrentReload_NeverObservesPartialRuleSet(t *testing.T) {
-	svc := newRulesService(t)
-	ctx := context.Background()
-
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
+	// Goroutine A: rebuildClaudeSettingsRules acquires rebuildMu, reads, then blocks inside
+	// the hook — still holding rebuildMu — until releaseHook is closed.
+	aDone := make(chan struct{})
 	go func() {
-		defer wg.Done()
-		i := 0
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			svc.rebuildClaudeSettingsRules([]classifier.Rule{{
-				ID:       fmt.Sprintf("cs-%d", i),
-				ToolName: "Read",
-				Decision: classifier.AutoAllow,
-				Enabled:  true,
-				Source:   "claude-settings",
-				Priority: 150,
-			}})
-			i++
-		}
+		defer close(aDone)
+		svc.rebuildClaudeSettingsRules([]classifier.Rule{{
+			ID: "cs-a", ToolName: "Read", Decision: classifier.AutoAllow, Enabled: true,
+			Source: "claude-settings", Priority: 150,
+		}})
+	}()
+	<-hookEntered // A is now paused mid-critical-section, holding rebuildMu.
+
+	// Goroutine B: rebuildClassifier must block trying to acquire rebuildMu, since A holds it.
+	bDone := make(chan struct{})
+	go func() {
+		defer close(bDone)
+		svc.rebuildClassifier()
 	}()
 
-	for i := 0; i < 200; i++ {
-		result := svc.classifier.Classify(
-			classifier.PermissionRequestPayload{ToolName: "Read"},
-			classifier.ClassificationContext{},
-		)
-		_ = result // each call returns a decision computed against one consistent snapshot
+	select {
+	case <-bDone:
+		t.Fatal("rebuildClassifier completed while rebuildClaudeSettingsRules was mid-critical-section — rebuildMu is not serializing the two rebuild paths")
+	case <-time.After(150 * time.Millisecond):
+		// Expected: B is still blocked waiting on rebuildMu.
 	}
-	close(stop)
-	wg.Wait()
-	_ = ctx
+
+	close(releaseHook) // let A finish and release rebuildMu; B can then proceed.
+	<-aDone
+	<-bDone
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "cs-a" {
+			found = true
+		}
+	}
+	assert.True(t, found, "goroutine B's rebuildClassifier must not have clobbered A's claude-settings rule")
 }

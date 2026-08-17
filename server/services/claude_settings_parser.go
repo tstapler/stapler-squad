@@ -97,10 +97,9 @@ func settingsPaths(projectDir string) []settingsPath {
 }
 
 // resolveSettingsPathOrOriginal resolves path through any symlinks so a watcher targets the
-// real file's parent directory. On a resolution error (e.g. the file doesn't exist yet, or a
-// broken symlink), it logs and falls back to the original path unchanged — mirrors
-// config/defaults.go's evalSymlinksOrOriginal, which is unexported there and not importable
-// from this package.
+// real file's parent directory. Falls back to the original path unchanged on any resolution
+// error (missing file, broken symlink) — mirrors config/defaults.go's evalSymlinksOrOriginal,
+// unexported there and not importable from this package.
 func resolveSettingsPathOrOriginal(path string) string {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -178,7 +177,7 @@ func claudeAllowsToRules(allows []string, basePriority int, label string) []clas
 			Reason:    fmt.Sprintf("Allowed by Claude settings (%s): %s", label, pattern),
 			Priority:  basePriority,
 			Enabled:   true,
-			Source:    "claude-settings",
+			Source:    string(classifier.SourceClaudeSettings),
 		}
 
 		// Parse "ToolName(commandGlob)" or just "ToolName".
@@ -202,10 +201,21 @@ func claudeAllowsToRules(allows []string, basePriority int, label string) []clas
 	return rules
 }
 
-// globToRegex converts a simple glob pattern to a regex string.
-// Only * is supported (matches any sequence of characters).
+// globToRegex converts a simple glob pattern to a regex string, anchored at both ends unless
+// the pattern ends in *. Only * is supported (matches any sequence of characters).
+//
+// The end anchor matters for security: classifier.Rule.CommandPattern is matched via
+// MatchString, which succeeds on any substring match, not just a full match. Without a `$`,
+// "git status" (no trailing *) would compile to "^git status" and auto-allow any command with
+// that literal prefix — including "git status && rm -rf ~" — turning an intended exact-match
+// allow rule into an unbounded prefix match. Found in review: this was pre-existing dead code
+// (LoadClaudeSettingsRules had zero call sites) that this project activates for the first
+// time, so the bug had no live security impact until now.
 func globToRegex(glob string) string {
-	// Escape regex metacharacters, then replace escaped \* with .*
 	escaped := regexp.QuoteMeta(glob)
-	return "^" + strings.ReplaceAll(escaped, `\*`, `.*`)
+	pattern := strings.ReplaceAll(escaped, `\*`, `.*`)
+	if !strings.HasSuffix(glob, "*") {
+		pattern += "$"
+	}
+	return "^" + pattern
 }

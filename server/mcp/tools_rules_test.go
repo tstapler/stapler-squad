@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/server/services"
@@ -156,5 +159,35 @@ func TestDeleteApprovalRule_should_ReturnInvalidArgument_When_IdMissing(t *testi
 	out := parseResult(t, res)
 	if success, _ := out["success"].(bool); success {
 		t.Fatalf("expected success=false when id is missing, got: %+v", out)
+	}
+}
+
+func TestReloadClaudeSettingsRules_should_ReturnRuleCountAndMessage_When_SettingsFileValid(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatalf("failed to create temp .claude dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["Bash(git status)"]}}`), 0644); err != nil {
+		t.Fatalf("failed to write temp settings.json: %v", err)
+	}
+
+	h := newTestRulesHandlers(t)
+
+	res, err := h.reloadClaudeSettingsRules(context.Background(), makeToolReq(map[string]interface{}{}))
+	if err != nil {
+		t.Fatalf("reloadClaudeSettingsRules returned error: %v", err)
+	}
+	out := parseResult(t, res)
+	if success, _ := out["success"].(bool); !success {
+		t.Fatalf("expected success=true, got: %+v", out)
+	}
+	if out["rule_count"] != float64(1) { // JSON numbers decode as float64
+		t.Errorf("expected rule_count=1, got %v", out["rule_count"])
+	}
+	msg, _ := out["message"].(string)
+	if !strings.Contains(msg, "Reloaded 1 claude-settings rule(s)") {
+		t.Errorf("expected message to report the reload, got: %q", msg)
 	}
 }

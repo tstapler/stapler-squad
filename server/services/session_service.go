@@ -395,6 +395,21 @@ func newDefaultSearchEngine() *search.SearchEngine {
 	return searchEngine
 }
 
+// publishClaudeSettingsNotification is the shared publish call for both claude-settings
+// notification sites (startup activation and watcher reload) — see NewNotificationEvent.
+func publishClaudeSettingsNotification(eventBus *events.EventBus, title, message, origin string) {
+	if eventBus == nil {
+		return
+	}
+	eventBus.Publish(events.NewNotificationEvent(
+		"", "System", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		title, message,
+		map[string]string{"type": "claude_settings_reload", "origin": origin},
+	))
+}
+
 // loadClaudeSettingsRulesAtStartup parses ~/.claude/settings.json (and project-level
 // equivalents under cwd) and merges the resulting rules into classifierObj, publishing a
 // one-time notification if any were found. Extracted from NewSessionServiceWithSearchEngine
@@ -409,19 +424,9 @@ func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassif
 	}
 	classifierObj.AddRules(claudeSettingsRules)
 	log.Info("[ClaudeSettings] activated claude-settings rules at startup", "rule_count", len(claudeSettingsRules))
-	// First activation of previously-dead claude-settings rules must be a visible, one-time
-	// notification, not just a log line — these permissions.allow entries are about to
-	// silently become unattended stapler-squad auto-approval rules.
-	if eventBus != nil {
-		eventBus.Publish(events.NewNotificationEvent(
-			"", "System", uuid.New().String(),
-			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-			int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
-			"Claude Settings Rules Activated",
-			fmt.Sprintf("%d rule(s) from your Claude settings are now active as stapler-squad auto-approval rules.", len(claudeSettingsRules)),
-			map[string]string{"type": "claude_settings_reload", "origin": "startup"},
-		))
-	}
+	publishClaudeSettingsNotification(eventBus, "Claude Settings Rules Activated",
+		fmt.Sprintf("%d rule(s) from your Claude settings are now active as stapler-squad auto-approval rules.", len(claudeSettingsRules)),
+		"startup")
 }
 
 // NewSessionServiceWithSearchEngine is the dependency-injection seam for the search engine:
@@ -467,7 +472,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	analyticsStore := NewAnalyticsStore(concStorage)
 	analyticsStore.Start(context.Background())
 	classifierObj := classifier.NewRuleBasedClassifier()
-	// Merge user rules into the classifier.
+	// Merge user rules into the classifier. Safe to call AddRules directly (bypassing
+	// RulesService.rebuildMu) only because this and the claude-settings load below both run
+	// before ClaudeSettingsWatcher.Start() is ever invoked (that happens later, in
+	// wireDepsIntoServer) and before the server accepts RPCs — do not add a third AddRules
+	// call site here without going through rebuildMu once the watcher may already be running.
 	if userRules := rulesStore.ToRules(); len(userRules) > 0 {
 		classifierObj.AddRules(userRules)
 	}
@@ -482,17 +491,10 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		cwd = ""
 	}
 
-	// Load claude-settings (~/.claude/settings.json permissions.allow) rules into the
-	// classifier at startup. This was previously dead code — LoadClaudeSettingsRules had
-	// zero call sites — so these entries never took effect as auto-approval rules until now.
-	//
-	// Skipped under config.IsTestMode() (same guard newDefaultSearchEngine uses two lines
-	// above): unlike search persistence, this isn't about slow disk I/O — every one of the
-	// ~hundreds of pre-existing NewSessionService call sites in this repo's test suite would
-	// otherwise read the *developer's actual* ~/.claude/settings.json on every run, making
-	// unrelated tests' behavior depend on whatever happens to be in that file on that
-	// machine/CI runner. Real startup (the compiled binary, including e2e's spawned
-	// process) is unaffected — IsTestMode() is only true inside a `go test` binary.
+	// Loads claude-settings rules (previously dead code — LoadClaudeSettingsRules had zero
+	// call sites). Gated on IsTestMode() so tests don't read the developer's real
+	// ~/.claude/settings.json and become machine-dependent (same guard newDefaultSearchEngine
+	// uses two lines above).
 	if !config.IsTestMode() {
 		loadClaudeSettingsRulesAtStartup(classifierObj, cwd, eventBus)
 	}
@@ -528,16 +530,8 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		if !notify || len(rules) == 0 {
 			return
 		}
-		if eventBus != nil {
-			eventBus.Publish(events.NewNotificationEvent(
-				"", "System", uuid.New().String(),
-				int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-				int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
-				"Claude Settings Reloaded",
-				fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin),
-				map[string]string{"type": "claude_settings_reload", "origin": origin},
-			))
-		}
+		publishClaudeSettingsNotification(eventBus, "Claude Settings Reloaded",
+			fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin), origin)
 	})
 	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
 

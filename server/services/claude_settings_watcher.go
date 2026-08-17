@@ -37,6 +37,12 @@ type ClaudeSettingsWatcher struct {
 
 	watcher *fsnotify.Watcher
 	stopped chan struct{}
+
+	// watchedFilenames restricts run()'s event handling to the settings files themselves,
+	// ignoring other files fsnotify reports in the same watched directory (parent-dir
+	// watching is per-directory, not per-file — see Start). Set once in Start before the
+	// run goroutine starts; read-only afterward, so no separate lock is needed.
+	watchedFilenames map[string]bool
 }
 
 // NewClaudeSettingsWatcher creates a watcher for projectDir's claude-settings paths (see
@@ -52,14 +58,10 @@ func NewClaudeSettingsWatcher(projectDir string, onReload func(rules []classifie
 	}
 }
 
-// Reload re-parses every claude-settings path and merges the results, preserving
-// last-known-good rules for any path that fails to parse (a transient parse error — e.g. an
-// editor's mid-autosave truncated write — must never wipe rules that were already working).
-// Safe to call concurrently: the whole body runs under w.mu, so a debounced fsnotify-driven
-// reload and a manual RPC-driven reload can never interleave their reads/writes of lastGood.
-// Always notification-worthy — this is the fsnotify-loop and RPC-handler entry point. Start's
-// own initial priming reload uses the unexported reloadLocked directly instead, so it doesn't
-// fire a notification (see Start's doc comment).
+// Reload re-parses every claude-settings path, preserving last-known-good rules for any path
+// with a transient parse error. Safe for concurrent callers (fsnotify loop + RPC handler) —
+// see mu. Always notification-worthy; Start's own priming reload uses reloadLocked directly
+// to suppress that.
 func (w *ClaudeSettingsWatcher) Reload(ctx context.Context) (ruleCount int, failedPaths []string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -75,12 +77,21 @@ func (w *ClaudeSettingsWatcher) reloadLocked(ctx context.Context, notify bool) (
 	var merged []classifier.Rule
 	for _, result := range results {
 		if result.Err != nil {
-			// A missing file (most machines have no settings.local.json) is normal, not a
-			// failure — only a genuine parse error counts toward failedPaths/last-known-good.
-			if result.Err != ErrSettingsNotFound {
-				failedPaths = append(failedPaths, result.Path)
-				log.Warn("[ClaudeSettingsWatcher] path failed to parse, using last-known-good", "path", result.Path, "err", result.Err)
+			if result.Err == ErrSettingsNotFound {
+				// The file legitimately doesn't exist (never created, or just deleted) — it
+				// contributes zero rules. Forget any rules previously loaded from it so a
+				// deletion actually revokes them, instead of resurrecting stale rules from
+				// lastGood forever. If it previously had rules, that's a real change.
+				if len(w.lastGood[result.Path]) > 0 {
+					changedLabels[result.Label] = true
+				}
+				delete(w.lastGood, result.Path)
+				continue
 			}
+			// A genuine parse error (e.g. an editor's mid-autosave truncated write) — unlike a
+			// missing file, this must not wipe rules that were already working.
+			failedPaths = append(failedPaths, result.Path)
+			log.Warn("[ClaudeSettingsWatcher] path failed to parse, using last-known-good", "path", result.Path, "err", result.Err)
 			merged = append(merged, w.lastGood[result.Path]...)
 			continue
 		}
@@ -98,27 +109,34 @@ func (w *ClaudeSettingsWatcher) reloadLocked(ctx context.Context, notify bool) (
 	return len(merged), failedPaths
 }
 
-// rulesEqual reports whether two rule slices came from an identical settings source, using
-// each rule's ID (unique per pattern within a path — see claudeAllowsToRules) plus its
-// Decision, since a changed permission on the same pattern must still count as a change.
+// rulesEqual reports whether two rule slices from the same settings path represent the same
+// content. Compares ToolName/CommandPattern/Decision rather than Rule.ID: claudeAllowsToRules
+// assigns IDs positionally ("claude-settings-<label>-<index>"), so editing a pattern in place
+// (same array index, same slice length) would otherwise go undetected — which would silently
+// break computeReloadOrigin's security-visibility tagging for exactly the case it exists to
+// catch (a project-level settings edit that changes what gets auto-allowed).
 func rulesEqual(a, b []classifier.Rule) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i].ID != b[i].ID || a[i].Decision != b[i].Decision {
+		aPattern, bPattern := "", ""
+		if a[i].CommandPattern != nil {
+			aPattern = a[i].CommandPattern.String()
+		}
+		if b[i].CommandPattern != nil {
+			bPattern = b[i].CommandPattern.String()
+		}
+		if a[i].ToolName != b[i].ToolName || aPattern != bPattern || a[i].Decision != b[i].Decision {
 			return false
 		}
 	}
 	return true
 }
 
-// computeReloadOrigin tags a reload as "global", "project", or "mixed" based on which
-// settings-path labels actually changed, for security visibility: a project-level settings
-// change (e.g. from checking out an unreviewed PR branch) is distinguishable from the
-// operator's own global edit. Labels are those settingsPaths assigns ("global",
-// "global-local", "project", "project-local"); anything containing "project" counts as a
-// project-origin change.
+// computeReloadOrigin tags a reload "global", "project", or "mixed" from which settingsPaths
+// labels changed, so a project-level change (e.g. an unreviewed PR branch) is distinguishable
+// from an operator's own global edit.
 func computeReloadOrigin(changedLabels map[string]bool) string {
 	sawGlobal, sawProject := false, false
 	for label := range changedLabels {
@@ -138,15 +156,10 @@ func computeReloadOrigin(changedLabels map[string]bool) string {
 	}
 }
 
-// Start begins watching this watcher's claude-settings paths for changes. It performs an
-// initial synchronous priming reload (populating lastGood and re-applying to the classifier
-// via onReload, but WITHOUT notifying — the operator already saw a startup activation
-// notification from loadClaudeSettingsRulesAtStartup if any rules exist, and a "0
-// claude-settings rule(s) reloaded" toast on every restart when none are configured would be
-// pure noise) before entering the event loop, then debounces bursts of fsnotify events into
-// single (notification-worthy) reloads. Graceful degradation: if fsnotify is unavailable on
-// this platform, it logs a warning and returns without starting a goroutine — never blocks
-// startup. Exits when ctx is cancelled.
+// Start performs a synchronous, non-notifying priming reload (see notify param on
+// reloadLocked), then debounces fsnotify events into notification-worthy reloads. Degrades
+// gracefully — logs and returns without starting a goroutine if fsnotify is unavailable.
+// Exits when ctx is cancelled.
 func (w *ClaudeSettingsWatcher) Start(ctx context.Context) {
 	w.mu.Lock()
 	w.reloadLocked(ctx, false)
@@ -162,10 +175,13 @@ func (w *ClaudeSettingsWatcher) Start(ctx context.Context) {
 
 	// Watch each settings file's parent directory (not the file itself) — an editor's
 	// atomic-rename save changes the file's inode, which would silently stop a
-	// file-level fsnotify watch from firing on the next save.
+	// file-level fsnotify watch from firing on the next save. fsnotify reports every event
+	// in the watched directory, not just our files, so run() filters by watchedFilenames.
 	watchedDirs := make(map[string]bool)
+	w.watchedFilenames = make(map[string]bool)
 	for _, p := range settingsPaths(w.projectDir) {
 		dir := filepath.Dir(p.path)
+		w.watchedFilenames[filepath.Base(p.path)] = true
 		if watchedDirs[dir] {
 			continue
 		}
@@ -198,6 +214,9 @@ func (w *ClaudeSettingsWatcher) run(ctx context.Context) {
 		case event, ok := <-w.watcher.Events:
 			if !ok {
 				return
+			}
+			if !w.watchedFilenames[filepath.Base(event.Name)] {
+				continue
 			}
 			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
 				continue
