@@ -22,7 +22,8 @@ command files behind after a relink.
 | `backlogHandlers` | Existing MCP handler struct; gains one new optional field, `attacher SessionAttacher`. | `server/mcp/tools_backlog.go:91` |
 | `link_session_to_item` | New agent-facing MCP tool name. Thin-wraps `AttachSessionToItem` with an idempotency short-circuit and an exclusivity precheck. | New tool |
 | `get_linked_item` | New agent-facing MCP tool name. Read-only: resolves which item(s) the calling session is linked to. | New tool |
-| `activeWorkSessionOwner` | New helper in `server/mcp`: given `[]session.ItemSessionSummary` and the caller's UUID, returns the session UUID of a *different* live (`EndedAt == nil`, `Role == session.SessionRoleWork`) session on the item, if any. | New, mirrors `hasActiveWorkSession` (`server/services/backlog_service_triage.go:926`) without importing across the services→mcp boundary |
+| `activeWorkSessionOwner` | New helper in `server/mcp`: given `[]session.ItemSessionSummary`, the caller's UUID, and a liveness checker, returns the session UUID of a *different* row (`Role == session.SessionRoleWork`) on the item that is either still `EndedAt == nil` **and** liveness-checker-confirmed-alive (or no checker wired), if any. Rows with `EndedAt == nil` but a liveness checker that reports them dead are treated as stale, not a conflict — see pre-mortem.md #2 (P1). | New, mirrors `hasActiveWorkSession` (`server/services/backlog_service_triage.go:926`) without importing across the services→mcp boundary |
+| `liveCheck` | New optional `func(sessionUUID string) bool` field on `backlogHandlers`, same nil-tolerant-wiring pattern as `attacher`. Wraps the same liveness primitive the zombie-session reconciler already uses (`newSessionLivenessChecker`, `server/session_liveness_checker.go`) so `activeWorkSessionOwner` doesn't trust a stale `EndedAt == nil` row for a crashed session. Nil-safe: `activeWorkSessionOwner` treats "no checker wired" as "treat `EndedAt == nil` as live" (today's behavior), never a panic. | New, `server/mcp/tools_backlog.go` — addresses pre-mortem.md P1 #2 |
 | `actionablePermissionDenied` | New shared helper replacing the five bare `errResult(ErrPermissionDenied, "this session is not linked...", "")` call sites. Looks up the caller's current link via `GetItemSessionBySessionUUID` and names `link_session_to_item` in the remediation hint. | New, `server/mcp/tools_backlog.go` |
 | `ErrConflict` | New MCP error-code constant (`"CONFLICT"`) for "item already claimed by a different live work session." | New, alongside `ErrPermissionDenied` etc. (`tools_backlog.go:56-60`) |
 | `ErrUnavailable` | New MCP error-code constant (`"UNAVAILABLE"`) for "`link_session_to_item` is not wired on this transport" (stdio fallback with no `attacher`). | New |
@@ -34,6 +35,17 @@ command files behind after a relink.
 | `already_linked` | Response field (JSON bool) on `LinkSessionToItemResult` — `true` on the idempotent no-op path (same session, same item, row already exists). | New field name |
 | `slash_commands_regenerated` | Response field (JSON bool) on `LinkSessionToItemResult` — `true` only if the caller's session UUID was found in the live instance registry (`h.store`) before the attach call, which is the same condition `AttachSessionToItem` step 6 uses internally to decide whether to write files at all. | New field name |
 
+**Added post-triad-review (UX/PM gap, see Epic 1.5):** `BuildSessionInitialPrompt`
+(`session/backlog_context.go:124`) — the prompt builder used for normal (non-triage)
+implementation-mode session spawns (`session/backlog_commands.go:181`) — is confirmed by reading
+the source to never embed `item.ID` anywhere in its output, unlike the separate triage-mode
+prompt builder (`session/backlog_triage.go:46,108`), which already does via
+`fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)`. This is the literal mechanism behind pre-mortem.md
+failure #5: a normal session whose `item_sessions` row is later lost has no prompt-native,
+MCP-native, or branch-name-derived way to recover its own item id — `get_linked_item` requires a
+row that doesn't exist, and the UX reviewer independently confirmed the git branch does not
+contain it either (research/build-vs-buy.md).
+
 ---
 
 ## Pattern Decisions
@@ -43,6 +55,8 @@ command files behind after a relink.
 | MCP tool ↔ `AttachSessionToItem` reuse | Thin MCP tool wraps the existing RPC via a new narrow `SessionAttacher` interface (PoEAA: Service Layer facade over an existing Service Layer method, GoF: none needed — no new creational/structural problem here) | `.claude/rules/interface-pollution-checklist.md`; `reviewStopper`/`reviewTrigger` precedent (`tools_backlog.go:77-97`) | (B) Duplicate the attach logic directly inside the MCP handler | Violates Goal 1 ("reusing... rather than duplicating") and reintroduces the exact "2 independent callers can drift" regression `WriteSlashCommands`' own doc comment (`session/backlog_commands.go:27-30`) warns about — a second hand-rolled caller of `CreateItemSession`/`WriteSlashCommands`/`WriteBacklogContextFile` could silently diverge from `AttachSessionToItem`'s sequencing again. |
 | MCP tool ↔ `AttachSessionToItem` reuse | (same as above) | (same as above) | (C) Add the exclusivity/idempotency checks directly inside `AttachSessionToItem` itself | `AttachSessionToItem` is also called by `SpawnSessionFromItem`, an internal, already-serialized call site (atomic check-and-set at `backlog_service_triage.go:384`) that has no "hijack a live item" exposure — pushing agent-facing safety logic into the shared method would run unnecessary checks on a call site that doesn't need them, and couples an internal caller's behavior to an external-facing caller's safety requirements. |
 | Exclusivity check (pitfalls.md §1) | New precheck **in the MCP handler**, before calling `h.attacher.AttachSessionToItem` — reject with `ErrConflict` if a *different* session already holds a live work-role `ItemSession` on the item | — | Silently allowing the attach (status quo) | pitfalls.md §1: any live session, given only an `item_id` (not secret), could otherwise attach itself to an item another session is actively working, causing silent duplicate/conflicting work. Scoped to `Role == SessionRoleWork` only — `AttachSessionToItem` hardcodes `SessionRoleWork` for every attach today, so a same-role collision is the only case this tool can actually create. |
+| Exclusivity check race window (pre-mortem.md P2 #1) | Accepted, documented gap for this iteration — the `ListItemSessions` precheck → `AttachSessionToItem` call is check-then-act with no transaction/lock, matching `AttachSessionToItem`'s own pre-existing lack of a transactional guard (pitfalls.md §2). Not closed by a DB constraint or `ent.Tx` in this plan. | pre-mortem.md failure #1 | Wrap the precheck+attach sequence in a single `ent.Tx`, or add a partial unique index on `(item_id)` where `role=work AND ended_at IS NULL` | Deferred rather than fixed: doing this correctly requires either extending `AttachSessionToItem` itself (which Pattern Decision row 2 above already rejected, to avoid coupling an internal, already-serialized caller to an external-facing caller's safety requirements) or a schema change (out of this plan's stated Migration Plan of "N/A"). The race is narrow (two concurrent first-time links to the same item, a rare operational pattern for solo-user-per-item backlog work) and P2 (recoverable — a human or the reconciler can clean up duplicate rows), unlike P1 #2 above which reproduces the exact incident this feature exists to fix. Tracked as an explicit follow-up, not silently dropped. |
+| Exclusivity check liveness (pre-mortem.md P1 #2) | Thread the same `func(sessionUUID string) bool` liveness checker the zombie-session reconciler already uses (`newSessionLivenessChecker`, `server/session_liveness_checker.go`) into `backlogHandlers` as an optional `liveCheck` field; `activeWorkSessionOwner` only reports a conflict for an `EndedAt == nil` row if `liveCheck` is nil (checker unavailable — fall back to today's behavior) or reports the owning session alive | pre-mortem.md failure #2 | (a) No change — accept that a session resuming crashed/interrupted work gets `CONFLICT` with no override, exactly reproducing the incident Gap 1 exists to fix; (b) add a "force relink" override flag | (a) directly reproduces requirements.md's motivating incident and was rejected. (b) was already explicitly rejected in the original Non-Goals ("no force relink override") because an unconditional override reintroduces the hijack risk the exclusivity check exists to prevent — the liveness-aware check gets the same practical outcome (crashed sessions don't block resumption) without an escape hatch a live, healthy session could also invoke. |
 | Idempotency (pitfalls.md §4) | Precheck via `GetItemSessionBySessionAndItem` before calling `AttachSessionToItem`; short-circuit to a no-op success response if a row already exists for `(session_uuid, item_id)` | — | Making `AttachSessionToItem` itself upsert/dedupe | Would change `SpawnSessionFromItem`'s "always insert a fresh row" semantics, which its own ordering comment (`backlog_service_sync.go:65-67`) explicitly relies on — the "prior sessions" list must never transiently include the row being created. |
 | `SessionAttacher` interface location | Defined in `server/mcp` (the consumer package), scoped to the one method `linkSessionToItem` needs | `.claude/rules/interface-pollution-checklist.md` smell #2; `golang-structs-interfaces` skill | Importing `*services.BacklogService` concrete type directly into `backlogHandlers` | Matches the established `reviewStopper ReviewCompletionSignaler` / `reviewTrigger ReviewTrigger` pattern already in this exact struct — consistency, and avoids a wide concrete dependency for one method. |
 | Cross-transport wiring (stdio vs. HTTP) | Thread a new `backlogSvc *services.BacklogService` param through `NewCore`/`NewHTTPHandler`/`RunServer`; convert to the narrow `SessionAttacher` interface **inside** `NewCore` (nil-tolerant) | `liveFinder` guard precedent, `server/mcp/server.go:42-45` | Extending `server.BuildCoreDeps`/`main.go`'s `buildMCPDeps` to construct a full `*services.BacklogService` for the stdio fallback | architecture.md: would require pulling in `cfg`/`workflowEngine`/`pipelineEngine`/`pipelineModeRepo` for a rarely-hit degraded-mode path (daemon not up yet) that the codebase already tolerates gracefully elsewhere (nil `reviewStopper`/`reviewTrigger`). See ADR-001. |
@@ -51,6 +65,17 @@ command files behind after a relink.
 | 5 `PERMISSION_DENIED` sites | Shared `actionablePermissionDenied(ctx, callerUUID, wantItemID)` helper, called from all 5 sites | architecture.md (b) | Inlining the hint text at each of the 5 call sites | The 5 sites are byte-identical today (`errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", "")`) — a shared helper prevents the wording/hint from drifting across sites on the next edit, and centralizes the one extra `GetItemSessionBySessionUUID` lookup. |
 
 **Non-Goals cross-reference**: per requirements.md's Non-Goals, this plan does not implement branch-name parsing (superseded by `GetItemSessionBySessionUUID`, already resolved), does not add a "force relink" override for the exclusivity check, and does not fix `WriteSlashCommands`' per-file non-atomicity (temp+rename) — only its stale-file leak. Sessions that never call `link_session_to_item` are not retroactively fixed (pitfalls.md §6) — this is an explicit, accepted gap, not a defect of this plan.
+
+**Follow-up items from triad review round 2** (non-blocking — zero blockers reported either
+round — tracked for implementation-time awareness, not required to gate starting Phase 5):
+whether a session recreated after a crash/tmux-server-restart (`.claude/rules/tmux-keep-server-on-restart.md`)
+re-invokes `BuildSessionInitialPrompt` or resumes without it is unverified — if the latter, Epic
+1.5 doesn't reach that specific cold-start path. Confirm during Epic 1.5 implementation by tracing
+the tmux-restart reconciliation code path (`session/backlog_lifecycle.go`'s stuck/zombie handling)
+rather than assuming. The exclusivity race window (pre-mortem #1, P2, accepted-deferred) means two
+sessions racing to link a brand-new item can both silently succeed with no error to either side —
+acceptable for this iteration per the Pattern Decisions row above, but worth a follow-up item if
+concurrent first-link collisions are observed in practice.
 
 ---
 
@@ -92,7 +117,10 @@ Pattern Decisions above.
 
 None. Every item research/pitfalls flagged as blocking (ownership/exclusivity, idempotency,
 the stdio/HTTP transport gap, and the stale-file scope call) has an explicit decision recorded
-in Pattern Decisions above.
+in Pattern Decisions above. The Phase 4 pre-mortem (see `implementation/pre-mortem.md`) surfaced
+one P1 gap post-hoc — the exclusivity check could reject the exact "resume crashed work" scenario
+Gap 1 exists to fix — resolved via the liveness-aware `activeWorkSessionOwner` decision above and
+folded into Epic 1.1 (Task 1.1.1c) and Epic 1.2 (Task 1.2.1a, Story 1.2.1 AC) below.
 
 ## Dependency Visualization
 
@@ -115,6 +143,10 @@ Phase 1: MCP tool exposure (Gap 1 + Gap 2 wiring)
   Epic 1.4: actionable PERMISSION_DENIED hints (independent — can ship standalone)
    Story 1.4.1 (helper + 5 call sites) ──▶ Story 1.4.2 (tests)
 
+  Epic 1.5: item_id in normal-mode initial prompt (fully independent — different file,
+            session/backlog_context.go — no dependency on Epics 1.1-1.4)
+   Story 1.5.1 (one-line addition + test)
+
 Phase 2: Slash-command regeneration correctness (depends on nothing in Phase 1;
          Epic 1.2 exercises it end-to-end but does not require code changes here)
   Epic 2.1: prune stale done-N/fail-N files
@@ -123,7 +155,8 @@ Phase 2: Slash-command regeneration correctness (depends on nothing in Phase 1;
 
 Suggested execution order: Epic 1.1 → Epic 2.1 (small, unblocks nothing but is independent and
 quick) → Epic 1.2 → Epic 1.3 → Epic 1.4 (can run any time after Epic 1.1, even in parallel with
-1.2/1.3 since it touches only the 5 existing call sites).
+1.2/1.3 since it touches only the 5 existing call sites) → Epic 1.5 (fully independent, can run
+in parallel with anything — different file, no shared state).
 
 ---
 
@@ -176,6 +209,19 @@ stdio fallback transport (never has it, degrades gracefully) — see ADR-001.
 - Run `go build ./server/mcp/...` to confirm no existing literal needs updating.
 - Files: `server/mcp/tools_backlog.go`
 
+##### Task 1.1.1c: Add the `liveCheck` field to `backlogHandlers` and thread it alongside `attacher` (~4 min)
+- Addresses pre-mortem.md P1 #2. In `backlogHandlers` (same location as Task 1.1.1b), add:
+  ```go
+  liveCheck func(sessionUUID string) bool // optional; nil means treat every EndedAt==nil ItemSession row as live (today's behavior)
+  ```
+- Thread it through the same constructors touched in Story 1.1.2 (`NewCore`/`NewHTTPHandler`/
+  `RunServer`), reusing the existing `newSessionLivenessChecker` construction already available
+  wherever those constructors are called (`server/session_liveness_checker.go`) — do not build a
+  second liveness primitive. On the stdio fallback path (`main.go`), pass `nil` explicitly, same
+  as `attacher`, with a comment noting the fallback: `activeWorkSessionOwner` degrades to
+  "EndedAt==nil is live," matching pre-feature behavior exactly, not a new failure mode.
+- Files: `server/mcp/tools_backlog.go`, `server/mcp/server.go`, `server/server.go`, `main.go`
+
 #### Story 1.1.2: Thread `backlogSvc *services.BacklogService` through `NewCore`/`NewHTTPHandler`/`RunServer` and their call sites
 **As a** server operator, **I want** the HTTP-transport MCP server to wire the real
 `BacklogService` and the stdio fallback to safely wire nothing, **so that** `link_session_to_item`
@@ -227,6 +273,14 @@ fallback case.
   `NewHTTPHandler` and `RunServer`'s signatures, passing it straight through to their internal
   `NewCore(...)` calls. Update both functions' doc comments (one sentence each, matching the
   existing "storage is optional" style).
+- Files: `server/mcp/server.go`
+
+##### Task 1.1.2b.1: Log whether `attacher` ended up nil at HTTP-handler construction time (~2 min, pre-mortem.md P2 #3)
+- In `NewHTTPHandler` (`server/mcp/server.go`, right after the `NewCore` call added in Task
+  1.1.2b), add one `log.InfoLog.Printf("[mcp] link_session_to_item attacher wired: %v", attacher != nil)`
+  line so a misconfigured HTTP-transport wiring bug (attacher unexpectedly nil on the transport
+  that should always have it) is visible in startup logs immediately, rather than looking
+  identical to the intentional stdio-fallback `UNAVAILABLE` degradation until an agent hits it.
 - Files: `server/mcp/server.go`
 
 ##### Task 1.1.2c: Update the HTTP call site in `server/server.go` (~2 min)
@@ -285,6 +339,14 @@ access.
     `link_session_to_item(item_id="I2")`, *Then* the response is
     `{"success":false,"error":{"code":"CONFLICT","message":"item I2 already has a live work session (S_other)",...}}`
     and no new `ItemSession` row is created for `S_me`.
+- Calling the tool for an item whose existing live-looking row (`EndedAt == nil`) belongs to a
+  session `liveCheck` reports as dead succeeds instead of returning `ErrConflict` (pre-mortem.md
+  P1 #2 — resuming crashed/interrupted work must not be blocked by a stale row).
+  - *Given* item `I4` has an `ItemSession` row `(session_uuid=S_dead, role=work, ended_at=nil)`
+    and `h.liveCheck(S_dead)` returns `false`, *When* session `S_me` (≠ `S_dead`) calls
+    `link_session_to_item(item_id="I4")`, *Then* the response is
+    `{"success":true,"already_linked":false,...}` — `S_dead`'s stale row is not treated as a
+    conflict.
 - Calling the tool for an item id that doesn't exist returns `ErrItemNotFound`.
   - *Given* `item_id="00000000-0000-0000-0000-000000000000"` does not exist in the backlog,
     *When* any session calls `link_session_to_item(item_id="00000000-...")`, *Then* the
@@ -301,18 +363,26 @@ access.
     `{"success":false,"error":{"code":"UNAVAILABLE","message":"link_session_to_item is not available over this transport",...}}`.
 **Files**: `server/mcp/tools_backlog.go`, `server/mcp/types.go`
 
-##### Task 1.2.1a: Add `activeWorkSessionOwner` helper (~3 min)
+##### Task 1.2.1a: Add `activeWorkSessionOwner` helper (~5 min, was ~3 min — expanded for pre-mortem.md P1 #2)
 - In `server/mcp/tools_backlog.go`, add:
   ```go
-  // activeWorkSessionOwner returns the session UUID of a different, still-live
-  // (EndedAt == nil) work-role ItemSession on the given item, if one exists.
+  // activeWorkSessionOwner returns the session UUID of a different work-role ItemSession on the
+  // given item that is still genuinely live, if one exists. A row with EndedAt == nil is only
+  // treated as a conflict if liveCheck is nil (no liveness primitive wired — preserves
+  // pre-feature behavior) or liveCheck reports that session alive; a row whose owning session
+  // liveCheck reports dead is treated as stale, not a conflict, so a session resuming
+  // crashed/interrupted work is not blocked by a zombie row (pre-mortem.md #2, P1).
   // Mirrors hasActiveWorkSession's predicate (server/services/backlog_service_triage.go:926)
   // without crossing the services -> mcp package boundary.
-  func activeWorkSessionOwner(sessions []session.ItemSessionSummary, callerUUID string) (string, bool) {
+  func activeWorkSessionOwner(sessions []session.ItemSessionSummary, callerUUID string, liveCheck func(sessionUUID string) bool) (string, bool) {
       for _, s := range sessions {
-          if s.Role == session.SessionRoleWork && s.EndedAt == nil && s.SessionUUID != callerUUID {
-              return s.SessionUUID, true
+          if s.Role != session.SessionRoleWork || s.EndedAt != nil || s.SessionUUID == callerUUID {
+              continue
           }
+          if liveCheck != nil && !liveCheck(s.SessionUUID) {
+              continue // EndedAt not yet updated (crash/kill), but liveness check confirms it's dead — not a conflict
+          }
+          return s.SessionUUID, true
       }
       return "", false
   }
@@ -368,9 +438,16 @@ access.
   link and capture the caller's most-recent prior link (for the response field):
   ```go
   if existing, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID); linkErr == nil {
+      // Populate ItemStatus on the no-op path too (not just the fresh-link path) — an agent
+      // hitting already_linked=true needs the same "is this item still workable" signal a
+      // fresh link gets, without a second round trip (triad UX review finding).
+      status := ""
+      if item, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr == nil {
+          status = item.Status
+      }
       return okResult(LinkSessionToItemResult{
           ItemID: itemID, SessionUUID: callerUUID, ItemSessionID: existing.ID,
-          AlreadyLinked: true, SlashCommandsRegenerated: false, ItemStatus: "",
+          AlreadyLinked: true, SlashCommandsRegenerated: false, ItemStatus: status,
       }), nil
   }
   var previousItemID string
@@ -388,12 +465,16 @@ access.
   if listErr != nil && !errors.Is(listErr, session.ErrNotFound) {
       return errResult(ErrInternalError, fmt.Sprintf("list item sessions: %v", listErr), ""), nil
   }
-  if owner, conflict := activeWorkSessionOwner(itemSessions, callerUUID); conflict {
+  if owner, conflict := activeWorkSessionOwner(itemSessions, callerUUID, h.liveCheck); conflict {
       return errResult(ErrConflict,
           fmt.Sprintf("item %s already has a live work session (%s)", itemID, owner),
-          "Wait for that session to finish or check its status with get_linked_item before relinking."), nil
+          "get_linked_item only reports your own session's linkage, not other sessions' — it cannot resolve this. If you believe this is stale (the other session crashed or was force-restarted), wait for the backlog reconciler to clear it, or escalate to a human rather than retrying — this tool has no force-relink override by design."), nil
   }
   ```
+  (Second-round triad UX finding: the original remediation text pointed the agent at
+  `get_linked_item`, which is scoped to the caller's own linkage only and cannot report on
+  `owner`'s session — a dead end if followed literally. The corrected text above states that
+  limitation explicitly and gives an honest exit path instead of a false lead.)
 - Files: `server/mcp/tools_backlog.go`
 
 ##### Task 1.2.1f: Call the attacher, translate connect errors, build success response (~5 min)
@@ -436,7 +517,7 @@ access.
   ```go
   s.AddTool(
       mcpgo.NewTool("link_session_to_item",
-          mcpgo.WithDescription("Link (or relink) this session to a backlog item as a work session. Call this if a report_progress/request_review/submit_triage_result call fails with PERMISSION_DENIED and you've confirmed via get_linked_item or your own branch that this item is what you're actually working on. Rejects with CONFLICT if another live session already holds the item, and with FAILED_PRECONDITION if the item's status doesn't allow attaching (must be idea, ready, or in_progress)."),
+          mcpgo.WithDescription("Link (or relink) this session to a backlog item as a work session. Call this if a report_progress/request_review/submit_triage_result call fails with PERMISSION_DENIED. Get the item_id from the task/item description you were given at session start, or from get_linked_item if you have a prior link — do NOT infer it from your git branch name, which does not embed the item id in this repo. Rejects with CONFLICT if another live session already holds the item, and with FAILED_PRECONDITION if the item's status doesn't allow attaching (must be idea, ready, or in_progress)."),
           mcpgo.WithString("item_id",
               mcpgo.Description("UUID of the backlog item to link this session to"),
               mcpgo.Required(),
@@ -482,6 +563,14 @@ access.
 - Seed item `I2` with an `ItemSession` row `(S_other, I2, role=work, ended_at=nil)`. Call
   `linkSessionToItem(item_id=I2)` as `S_me`; assert `CONFLICT` and that no `ItemSession` row
   was created for `S_me` (query storage directly to confirm).
+- Files: `server/mcp/tools_backlog_test.go`
+
+##### Task 1.2.2d.1: Test relink succeeds when the conflicting row's owner is liveness-dead (~3 min, pre-mortem.md P1 #2)
+- Seed item `I4` with an `ItemSession` row `(S_dead, I4, role=work, ended_at=nil)`. Construct
+  `backlogHandlers` with `liveCheck: func(uuid string) bool { return uuid != "S_dead" }`. Call
+  `linkSessionToItem(item_id=I4)` as `S_me`; assert success (`already_linked=false`), not
+  `CONFLICT`. Also assert the `liveCheck == nil` case (Task 1.2.2d's existing test) still
+  returns `CONFLICT` — confirms the nil-checker fallback preserves pre-feature behavior.
 - Files: `server/mcp/tools_backlog_test.go`
 
 ##### Task 1.2.2e: Test relink-to-nonexistent-item and failed-precondition (~4 min)
@@ -703,6 +792,46 @@ wording doesn't silently regress to the old bare message.
   `tools_backlog_test.go` per the current 5-site behavior) to assert the new remediation text
   contains `"link_session_to_item"` instead of the old empty/generic string.
 - Files: `server/mcp/tools_backlog_test.go`
+
+---
+
+### Epic 1.5: Embed `item_id` in the normal-mode session initial prompt
+**Goal**: Close pre-mortem.md failure #5 and the triad UX review's matching finding for real,
+not just by documentation — a freshly-spawned implementation-mode session must have at least one
+reliable, MCP-independent channel to learn its own `item_id`, so that if its `item_sessions` row
+is ever lost it can still call `link_session_to_item` correctly instead of guessing from a stale
+slash-command file or a branch name that (per research/build-vs-buy.md) never contains it.
+
+#### Story 1.5.1: Add `item_id` to `BuildSessionInitialPrompt`'s output
+**As an** agent session spawned for backlog work, **I want** my own item id printed in my
+initial prompt, **so that** I can call `link_session_to_item`/`get_linked_item` correctly even
+if my `item_sessions` row is later lost or was never created.
+**Acceptance Criteria**:
+- The initial prompt for a normal (non-triage) backlog session contains its `item_id`, matching
+  the pattern the triage-mode prompt builder already uses.
+  - *Given* a backlog item with `ID="I7"`, *When* `BuildSessionInitialPrompt(item, nil)` is
+    called, *Then* the returned string contains the substring `item_id: I7` (or equivalent
+    clearly-labeled form), matching `session/backlog_triage.go:46`'s existing
+    `fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)` pattern for consistency across both prompt
+    builders.
+- `BuildTokenBudgetedPrompt`'s truncated-item fallback path (`backlog_context.go:229`) still
+  includes the id (the id is a fixed ~36-byte UUID, negligible against the token budget this
+  function manages).
+**Files**: `session/backlog_context.go`
+
+##### Task 1.5.1a: Add the `item_id` line to `BuildSessionInitialPrompt` (~2 min)
+- In `session/backlog_context.go`, at the top of `BuildSessionInitialPrompt` (line ~127, right
+  after the `"--- BACKLOG ITEM DATA ..."` header line), add:
+  ```go
+  fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
+  ```
+- Files: `session/backlog_context.go`
+
+##### Task 1.5.1b: Test (~3 min)
+- In `session/backlog_context_test.go`, add
+  `TestBuildSessionInitialPrompt_should_IncludeItemID_When_Called` asserting the output contains
+  `item_id: <the test item's ID>`.
+- Files: `session/backlog_context_test.go`
 
 ---
 

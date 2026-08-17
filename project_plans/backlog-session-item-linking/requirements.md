@@ -115,6 +115,11 @@ via the existing `WriteSlashCommands` path so Gap 2 cannot recur after a relink.
    SQLite access.
 7. Test coverage: unit test(s) for the new MCP tool (success, not-found item, already-linked
    idempotency) and for the slash-command regeneration side effect.
+8. A normal (non-triage) implementation-mode session's initial prompt (`BuildSessionInitialPrompt`)
+   includes its own `item_id`, matching the pattern the triage-mode prompt builder
+   (`session/backlog_triage.go`) already uses — added post-triad-review after confirming by
+   reading the source that the normal-mode prompt builder omits it entirely, which is the actual
+   mechanism behind the reported incident's "had to reconstruct the item id by hand" symptom.
 
 ## Constraints / Context
 
