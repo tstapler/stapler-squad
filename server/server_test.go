@@ -445,11 +445,26 @@ func Test_runGoleakTolerant_should_SkipInsteadOfCrash_When_GoleakHitsElidedStack
 	}
 }
 
+// assertGenuineLeakStillFails is the shared body behind
 // Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs
-// covers AC1/AC3: a real leaked goroutine with a shallow (non-elided) stack
-// must still be reported as a normal test failure, proving the tolerant
-// wrapper doesn't mask genuine leaks in the common case.
-func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t *testing.T) {
+// and Test_verifyNoLeaksTolerant_should_ForwardBaselineAndFailOnGenuineLeak:
+// both prove a real leaked goroutine with a shallow (non-elided) stack is
+// still reported as a genuine test failure when routed through goleak, not
+// masked or silently skipped. calleeName only affects the failure message
+// (naming whichever tolerant wrapper the calling test is documenting).
+//
+// It calls goleak.VerifyNone directly rather than runGoleakTolerant or
+// verifyNoLeaksTolerant themselves: those wrappers' own elision path calls
+// t.Skip, which invokes runtime.Goexit — legal only inside a goroutine
+// started by testing's own tRunner, which sub (below) is not. CI hit exactly
+// this: in a large test binary (hundreds of concurrently-running goroutines
+// under -race) goleak's whole-process capture can itself hit the
+// elided-stack parser panic (goleakElidedStackPanicMarker) regardless of how
+// shallow this test's own deliberately-leaked goroutine is — that capture
+// panic is recovered here directly, and skipped via the real t (safe: called
+// at the top level of this test's own tRunner goroutine), never via sub.
+func assertGenuineLeakStillFails(t *testing.T, calleeName string) {
+	t.Helper()
 	baseline := ignoreCurrentTolerant(t)
 
 	block := make(chan struct{})
@@ -459,23 +474,12 @@ func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t
 	t.Cleanup(func() { close(block) })
 
 	// goleak.VerifyNone's leak-found path only ever calls t.Error (never
-	// t.Fatal/t.Skip), which — unlike the elision-skip test above — never
-	// invokes runtime.Goexit, so a manually constructed *testing.T is safe
-	// to receive that call. Deliberately NOT using t.Run: a failing subtest
-	// also marks its parent failed (common.Fail's parent-chain propagation),
-	// which would make this meta-test itself report as failed in `go test`
-	// output even though observing the expected failure here is success.
-	//
-	// runGoleakTolerant itself is NOT used here (unlike the elision-skip test
-	// above): its own elision path calls t.Skip, which invokes
-	// runtime.Goexit — legal only inside a goroutine started by testing's own
-	// tRunner, which sub is not. CI hit exactly this: in a large test binary
-	// (hundreds of concurrently-running goroutines under -race) goleak's
-	// whole-process capture can itself hit the elided-stack parser panic
-	// (goleakElidedStackPanicMarker) regardless of how shallow this test's
-	// own deliberately-leaked goroutine is — that capture panic is recovered
-	// here directly, and skipped via the real t (safe: called at the top
-	// level of this test's own tRunner goroutine), never via sub.
+	// t.Fatal/t.Skip), which never invokes runtime.Goexit, so a manually
+	// constructed *testing.T is safe to receive that call. Deliberately NOT
+	// using t.Run: a failing subtest also marks its parent failed
+	// (common.Fail's parent-chain propagation), which would make this
+	// meta-test itself report as failed in `go test` output even though
+	// observing the expected failure here is success.
 	sub := &testing.T{}
 	elided := func() (elided bool) {
 		defer func() {
@@ -496,11 +500,19 @@ func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t
 	}
 
 	if !sub.Failed() {
-		t.Error("expected runGoleakTolerant to report a genuine, non-elided goroutine leak as a failure")
+		t.Errorf("expected %s to report a genuine, non-elided goroutine leak as a failure", calleeName)
 	}
 	if sub.Skipped() {
 		t.Error("a genuine leak must fail the test, not be skipped")
 	}
+}
+
+// Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs
+// covers AC1/AC3: a real leaked goroutine with a shallow (non-elided) stack
+// must still be reported as a normal test failure, proving the tolerant
+// wrapper doesn't mask genuine leaks in the common case.
+func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t *testing.T) {
+	assertGenuineLeakStillFails(t, "runGoleakTolerant")
 }
 
 // Test_verifyNoLeaksTolerant_should_ForwardBaselineAndFailOnGenuineLeak
@@ -509,45 +521,7 @@ func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t
 // actually forwards baseline into goleak.VerifyNone (a leaked goroutine not
 // present in baseline is reported) rather than, say, silently dropping it.
 func Test_verifyNoLeaksTolerant_should_ForwardBaselineAndFailOnGenuineLeak(t *testing.T) {
-	baseline := ignoreCurrentTolerant(t)
-
-	block := make(chan struct{})
-	// Deliberately leaked past the end of the test, same rationale as
-	// Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs.
-	go func() { <-block }()
-	t.Cleanup(func() { close(block) })
-
-	// See Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs's
-	// comment for why verifyNoLeaksTolerant is NOT called directly against sub
-	// here: its internal runGoleakTolerant call would call t.Skip on sub (a
-	// non-tRunner-managed *testing.T) if the whole-process capture hits
-	// goleak's elided-stack parser panic — a possibility independent of this
-	// test's own deliberately shallow leaked goroutine.
-	sub := &testing.T{}
-	elided := func() (elided bool) {
-		defer func() {
-			r := recover()
-			if r == nil {
-				return
-			}
-			if !strings.Contains(fmt.Sprint(r), goleakElidedStackPanicMarker) {
-				panic(r)
-			}
-			elided = true
-		}()
-		goleak.VerifyNone(sub, baseline)
-		return false
-	}()
-	if elided {
-		t.Skip("skipping: goleak's whole-process capture hit the elided-stack parser panic before it could check for the genuine leak this test injects — inconclusive rather than a real pass/fail, see backlog 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e")
-	}
-
-	if !sub.Failed() {
-		t.Error("expected verifyNoLeaksTolerant to report a genuine leak not present in baseline as a failure")
-	}
-	if sub.Skipped() {
-		t.Error("a genuine leak must fail the test, not be skipped")
-	}
+	assertGenuineLeakStillFails(t, "verifyNoLeaksTolerant")
 }
 
 // Test_runGoleakTolerant_should_RepanicUnrelatedPanics covers AC2: a panic
