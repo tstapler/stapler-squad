@@ -396,6 +396,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 //	  -run 'TestServer_should_Write.*(HookURL|MCPURL)' ./server/...
 //	kill %1 %2 %3
 func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	installFakeClaudeBinary(t)
 
 	deps, err := BuildDependencies()
@@ -456,7 +457,15 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 // The deterministic proof that the fix is correct is
 // TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized in session/tmux/tmux_test.go,
 // which forces the interleave directly instead of relying on timing.
+//
+// Sets STAPLER_SQUAD_TEST_DIR to its own t.TempDir(): under CI's -count=20 amplification
+// (same process, same PID), every repetition otherwise resolves to the same on-disk
+// sessions.db and leaks a never-closed *sql.DB pool per iteration, producing genuine
+// cross-pool SQLite lock contention that can exceed busy_timeout under -race. Do not
+// remove this without also removing the amplified -count run from CI, or the flake
+// (SQLITE_BUSY / "database is locked") will return.
 func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	installFakeClaudeBinary(t)
 	deps, err := BuildDependencies()
 	if err != nil {

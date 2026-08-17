@@ -131,7 +131,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// through — special-cases "UTC" to return that singleton directly).
 	dbPath := sqlitedsn.New(expandedPath).
 		WithWAL().
-		WithBusyTimeout(5000 * time.Millisecond).
+		WithBusyTimeout(15000 * time.Millisecond).
 		WithForeignKeysShort().
 		WithEntTimeCompat().
 		Build()
