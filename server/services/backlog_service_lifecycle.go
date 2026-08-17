@@ -486,6 +486,32 @@ func (s *BacklogService) ArchiveBacklogItem(
 	}), nil
 }
 
+// --- UnarchiveBacklogItem ---
+
+// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+// It does not attempt to recreate worktrees deleted at archive time.
+// +api: backlog:unarchive-item
+func (s *BacklogService) UnarchiveBacklogItem(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UnarchiveBacklogItemRequest],
+) (*connect.Response[sessionv1.UnarchiveBacklogItemResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	unarchived, err := s.storage.UnarchiveBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to unarchive backlog item: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.UnarchiveBacklogItemResponse{
+		Item: backlogItemToProto(unarchived, s.buildCostLookup()),
+	}), nil
+}
+
 // --- DeleteBacklogItem ---
 
 // DeleteBacklogItem permanently removes an item and all its child records.

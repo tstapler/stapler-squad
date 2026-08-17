@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -83,13 +84,23 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		expandedPath = filepath.Join(homeDir, expandedPath[2:])
 	}
 
-	// Create parent directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create database directory: %w", err)
+	// Create parent directory if it doesn't exist, unless expandedPath is a
+	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
+	// rather than a real filesystem path.
+	if !strings.HasPrefix(expandedPath, "file:") {
+		if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
+			return nil, fmt.Errorf("failed to create database directory: %w", err)
+		}
 	}
 
-	// Open database connection with WAL mode for better concurrency
+	// Open database connection. WAL mode is appended for on-disk databases for
+	// better concurrency; it's skipped for URI-style DSNs (e.g. shared-cache
+	// in-memory databases), which don't support WAL and already carry their
+	// own query string that a second "?" would corrupt.
 	dbPath := expandedPath + "?_journal_mode=WAL&_timeout=5000&_fk=1"
+	if strings.Contains(expandedPath, "?") {
+		dbPath = expandedPath + "&_timeout=5000&_fk=1"
+	}
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -101,6 +112,12 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
+
+	// Must be read BEFORE client.Schema.Create() below, which is what adds the
+	// enabled column this signal depends on being absent — see
+	// workflow_enabled_field_migration.go's doc comment for why this exact
+	// signal (not a value-based heuristic) is required.
+	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
 
 	// Create Ent client with the existing database connection
 	drv := entsql.OpenDB(dialect.SQLite, db)
@@ -133,6 +150,23 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
+	}
+
+	// Same fix, same reason, for Workflow.updated_at — see
+	// workflow_updated_at_utc_migration.go. UpdateWorkflowRequest.expected_updated_at
+	// (webhook-triggers verify follow-ups AC9) is the same protobuf-Timestamp-derived
+	// CAS precondition class as TransitionBacklogItemStatusRequest's.
+	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
+	}
+
+	// One-time-per-database correction for rows that predate the enabled field
+	// — see workflow_enabled_field_migration.go's doc comment for why this
+	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
+	// unconditionally on every startup like its sibling backfills above.
+	if !workflowEnabledColumnAlreadyExisted {
+		runWorkflowEnabledFieldBackfill(context.Background(), repo)
 	}
 
 	// Populate github_pr_url for pre-existing sessions that have a known PR
@@ -772,16 +806,10 @@ func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Conte
 // Get retrieves a single session by title
 func (r *EntRepository) Get(ctx context.Context, title string) (*InstanceData, error) {
 	// Find session with all relationships eagerly loaded
-	sess, err := r.client.Session.Query().
-		Where(session.Title(title)).
-		WithWorktree().
-		WithDiffStats().
-		WithTags().
-		WithProject().
-		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		}).
-		Only(ctx)
+	sess, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Title(title)),
+		LoadFull,
+	).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("session not found: %s", title)
@@ -793,42 +821,48 @@ func (r *EntRepository) Get(ctx context.Context, title string) (*InstanceData, e
 	return r.sessionToInstanceData(sess), nil
 }
 
+// listLoadOptions mirrors the eager-loading historically done by List/ListByStatus/ListByTag
+// (worktree, tags, project, claude session+metadata — but NOT diff stats, unlike Get).
+var listLoadOptions = LoadOptions{
+	LoadWorktree:      true,
+	LoadTags:          true,
+	LoadClaudeSession: true,
+}
+
+// applyLoadOptions conditionally chains eager-load edges onto a session query based on
+// options. WithProject() stays unconditional since LoadOptions has no corresponding field
+// and every existing caller expects the project edge to be populated.
+func applyLoadOptions(q *ent.SessionQuery, options LoadOptions) *ent.SessionQuery {
+	if options.LoadWorktree {
+		q = q.WithWorktree()
+	}
+	if options.LoadDiffStats || options.LoadDiffContent {
+		q = q.WithDiffStats()
+	}
+	if options.LoadTags {
+		q = q.WithTags()
+	}
+	q = q.WithProject()
+	if options.LoadClaudeSession {
+		q = q.WithClaudeSession(func(cq *ent.ClaudeSessionQuery) {
+			cq.WithMetadata()
+		})
+	}
+	return q
+}
+
 // List retrieves all sessions from the database
 func (r *EntRepository) List(ctx context.Context) ([]InstanceData, error) {
-	// Query all sessions with relationships
-	sessions, err := r.client.Session.Query().
-		WithWorktree().
-		WithTags().
-		WithProject().
-		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		}).
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions: %w", err)
-	}
-
-	// Convert to InstanceData
-	result := make([]InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *r.sessionToInstanceData(s)
-	}
-
-	return result, nil
+	return r.ListWithOptions(ctx, listLoadOptions)
 }
 
 // ListByStatus retrieves sessions filtered by status
 func (r *EntRepository) ListByStatus(ctx context.Context, status Status) ([]InstanceData, error) {
 	// Query sessions by status with relationships
-	sessions, err := r.client.Session.Query().
-		Where(session.Status(int(status))).
-		WithWorktree().
-		WithTags().
-		WithProject().
-		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		}).
-		All(ctx)
+	sessions, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Status(int(status))),
+		listLoadOptions,
+	).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions by status: %w", err)
 	}
@@ -845,15 +879,10 @@ func (r *EntRepository) ListByStatus(ctx context.Context, status Status) ([]Inst
 // ListByTag retrieves sessions that have a specific tag
 func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]InstanceData, error) {
 	// Query sessions that have the specified tag
-	sessions, err := r.client.Session.Query().
-		Where(session.HasTagsWith(tag.Name(tagName))).
-		WithWorktree().
-		WithTags().
-		WithProject().
-		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		}).
-		All(ctx)
+	sessions, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
+		listLoadOptions,
+	).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions by tag: %w", err)
 	}
@@ -1280,33 +1309,23 @@ func (r *EntRepository) UpdateSession(ctx context.Context, session *Session) err
 }
 
 // GetWithOptions retrieves a single session with selective child data loading.
-// EntRepository: Delegates to Get with full loading.
 func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options LoadOptions) (*InstanceData, error) {
-	return r.Get(ctx, title)
+	sess, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Title(title)),
+		options,
+	).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("session not found: %s", title)
+		}
+		return nil, fmt.Errorf("failed to query session: %w", err)
+	}
+	return r.sessionToInstanceData(sess), nil
 }
 
-// ListWithOptions retrieves all sessions with selective child data loading,
-// honoring the LoadOptions fields the caller requested rather than eager-loading
-// every edge unconditionally.
+// ListWithOptions retrieves all sessions with selective child data loading.
 func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
-	query := r.client.Session.Query().WithProject()
-
-	if options.LoadWorktree {
-		query = query.WithWorktree()
-	}
-	if options.LoadDiffStats || options.LoadDiffContent {
-		query = query.WithDiffStats()
-	}
-	if options.LoadTags {
-		query = query.WithTags()
-	}
-	if options.LoadClaudeSession {
-		query = query.WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		})
-	}
-
-	sessions, err := query.All(ctx)
+	sessions, err := applyLoadOptions(r.client.Session.Query(), options).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
 	}
@@ -1315,20 +1334,41 @@ func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions
 	for i, s := range sessions {
 		result[i] = *r.sessionToInstanceData(s)
 	}
-
 	return result, nil
 }
 
 // ListByStatusWithOptions retrieves sessions filtered by status with selective loading.
-// EntRepository: Delegates to ListByStatus with full loading.
 func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status Status, options LoadOptions) ([]InstanceData, error) {
-	return r.ListByStatus(ctx, status)
+	sessions, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Status(int(status))),
+		options,
+	).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions by status: %w", err)
+	}
+
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+	return result, nil
 }
 
 // ListByTagWithOptions retrieves sessions with a specific tag with selective loading.
-// EntRepository: Delegates to ListByTag with full loading.
-func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tag string, options LoadOptions) ([]InstanceData, error) {
-	return r.ListByTag(ctx, tag)
+func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string, options LoadOptions) ([]InstanceData, error) {
+	sessions, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
+		options,
+	).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions by tag: %w", err)
+	}
+
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+	return result, nil
 }
 
 // --- Permissions & Analytics --------------------------------------------------
@@ -1370,6 +1410,7 @@ func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error
 			PythonModes:           rule.PythonModes,
 			SafePythonImportsOnly: rule.SafePythonImportsOnly,
 			RequireCIPassing:      rule.RequireCiPassing,
+			MinSessionIdleMinutes: rule.MinSessionIdleMinutes,
 		}
 	}
 	return result, nil
@@ -1428,6 +1469,7 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetPythonModes(pythonModes).
 		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
 		SetRequireCiPassing(data.RequireCIPassing).
+		SetMinSessionIdleMinutes(data.MinSessionIdleMinutes).
 		OnConflictColumns(approvalrule.FieldRuleID).
 		UpdateNewValues().
 		Exec(ctx)

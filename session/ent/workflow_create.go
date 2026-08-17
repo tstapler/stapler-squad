@@ -154,6 +154,20 @@ func (_c *WorkflowCreate) SetNillableCronEnabled(v *bool) *WorkflowCreate {
 	return _c
 }
 
+// SetEnabled sets the "enabled" field.
+func (_c *WorkflowCreate) SetEnabled(v bool) *WorkflowCreate {
+	_c.mutation.SetEnabled(v)
+	return _c
+}
+
+// SetNillableEnabled sets the "enabled" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableEnabled(v *bool) *WorkflowCreate {
+	if v != nil {
+		_c.SetEnabled(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *WorkflowCreate) SetCreatedAt(v time.Time) *WorkflowCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -393,6 +407,10 @@ func (_c *WorkflowCreate) defaults() {
 		v := workflow.DefaultCronEnabled
 		_c.mutation.SetCronEnabled(v)
 	}
+	if _, ok := _c.mutation.Enabled(); !ok {
+		v := workflow.DefaultEnabled
+		_c.mutation.SetEnabled(v)
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := workflow.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -447,6 +465,9 @@ func (_c *WorkflowCreate) check() error {
 	}
 	if _, ok := _c.mutation.CronEnabled(); !ok {
 		return &ValidationError{Name: "cron_enabled", err: errors.New(`ent: missing required field "Workflow.cron_enabled"`)}
+	}
+	if _, ok := _c.mutation.Enabled(); !ok {
+		return &ValidationError{Name: "enabled", err: errors.New(`ent: missing required field "Workflow.enabled"`)}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "Workflow.created_at"`)}
@@ -533,6 +554,10 @@ func (_c *WorkflowCreate) createSpec() (*Workflow, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.CronEnabled(); ok {
 		_spec.SetField(workflow.FieldCronEnabled, field.TypeBool, value)
 		_node.CronEnabled = value
+	}
+	if value, ok := _c.mutation.Enabled(); ok {
+		_spec.SetField(workflow.FieldEnabled, field.TypeBool, value)
+		_node.Enabled = value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(workflow.FieldCreatedAt, field.TypeTime, value)
@@ -809,6 +834,18 @@ func (u *WorkflowUpsert) SetCronEnabled(v bool) *WorkflowUpsert {
 // UpdateCronEnabled sets the "cron_enabled" field to the value that was provided on create.
 func (u *WorkflowUpsert) UpdateCronEnabled() *WorkflowUpsert {
 	u.SetExcluded(workflow.FieldCronEnabled)
+	return u
+}
+
+// SetEnabled sets the "enabled" field.
+func (u *WorkflowUpsert) SetEnabled(v bool) *WorkflowUpsert {
+	u.Set(workflow.FieldEnabled, v)
+	return u
+}
+
+// UpdateEnabled sets the "enabled" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateEnabled() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldEnabled)
 	return u
 }
 
@@ -1285,6 +1322,20 @@ func (u *WorkflowUpsertOne) SetCronEnabled(v bool) *WorkflowUpsertOne {
 func (u *WorkflowUpsertOne) UpdateCronEnabled() *WorkflowUpsertOne {
 	return u.Update(func(s *WorkflowUpsert) {
 		s.UpdateCronEnabled()
+	})
+}
+
+// SetEnabled sets the "enabled" field.
+func (u *WorkflowUpsertOne) SetEnabled(v bool) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetEnabled(v)
+	})
+}
+
+// UpdateEnabled sets the "enabled" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateEnabled() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateEnabled()
 	})
 }
 
@@ -1965,6 +2016,20 @@ func (u *WorkflowUpsertBulk) SetCronEnabled(v bool) *WorkflowUpsertBulk {
 func (u *WorkflowUpsertBulk) UpdateCronEnabled() *WorkflowUpsertBulk {
 	return u.Update(func(s *WorkflowUpsert) {
 		s.UpdateCronEnabled()
+	})
+}
+
+// SetEnabled sets the "enabled" field.
+func (u *WorkflowUpsertBulk) SetEnabled(v bool) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetEnabled(v)
+	})
+}
+
+// UpdateEnabled sets the "enabled" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateEnabled() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateEnabled()
 	})
 }
 

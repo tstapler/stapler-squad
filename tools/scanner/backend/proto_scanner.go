@@ -134,10 +134,12 @@ var methodToID = map[string]string{
 	"ClearConversationState": "session:clear-conversation-state",
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
+	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
 	"ArchiveBacklogItem":          "backlog:archive-item",
+	"UnarchiveBacklogItem":        "backlog:unarchive-item",
 	"TransitionBacklogItemStatus": "backlog:transition-status",
 	"SpawnSessionFromItem":        "backlog:spawn-session",
 	"AttachSessionToItem":         "backlog:attach-session",
@@ -252,6 +254,10 @@ var methodToID = map[string]string{
 	"CommitImportExternalSession":  "import:commit",
 	"ConfirmKillExternalSession":   "import:confirm_kill",
 	"CancelPendingKill":            "import:cancel_pending_kill",
+	// Slack notification config RPCs
+	"GetSlackConfig":    "slack-config:get",
+	"UpdateSlackConfig": "slack-config:update",
+	"TestSlackWebhook":  "slack-config:test-webhook",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

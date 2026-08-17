@@ -1036,6 +1036,10 @@ export function ReviewQueuePanel({
 
   return (
     <div className={panel} data-testid="review-queue">
+      {/* Signals the initial fetch has resolved, independent of whether the
+          queue ended up empty — tests and other consumers use this to know
+          when it's safe to make assertions about queue contents. */}
+      {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
       {/* Screen reader live region for queue count changes */}
       <div aria-live="polite" aria-atomic="true" className={visuallyHidden}>
         {liveAnnouncement}
@@ -1378,7 +1382,6 @@ export function ReviewQueuePanel({
           )
         ) : (
           <>
-            {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
             {groupedItems ? (
               groupedItems.map((group) => (
                 <div key={group.groupKey} className={groupSection} data-testid={`review-group-${group.groupKey}`}>

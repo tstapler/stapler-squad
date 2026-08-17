@@ -79,6 +79,40 @@ describe("Detector", () => {
     });
   });
 
+  describe("ChatBacklogItemDetector", () => {
+    it("ChatBacklogItemDetector_should_detectBacklogPrefix_When_inputStartsWithBacklogColon", () => {
+      const result = registry.detect("backlog: add dark mode support");
+      expect(result.type).toBe(InputType.ChatBacklogItem);
+      expect(result.parsedValue).toBe("add dark mode support");
+    });
+
+    it("ChatBacklogItemDetector_should_beCaseInsensitive_When_prefixIsUppercase", () => {
+      const result = registry.detect("BACKLOG: fix the thing");
+      expect(result.type).toBe(InputType.ChatBacklogItem);
+      expect(result.parsedValue).toBe("fix the thing");
+    });
+
+    it("ChatBacklogItemDetector_should_returnNull_When_inputHasNoBacklogPrefix", () => {
+      const result = registry.detect("just some plain text");
+      expect(result.type).not.toBe(InputType.ChatBacklogItem);
+    });
+
+    it("ChatBacklogItemDetector_should_returnNull_When_messageAfterPrefixIsEmpty", () => {
+      const result = registry.detect("backlog:   ");
+      expect(result.type).not.toBe(InputType.ChatBacklogItem);
+    });
+
+    it("ChatBacklogItemDetector_should_notShadowGitHubPRDetector_When_inputIsAGitHubPRUrl", () => {
+      const result = registry.detect("https://github.com/owner/repo/pull/123");
+      expect(result.type).toBe(InputType.GitHubPR);
+    });
+
+    it("ChatBacklogItemDetector_should_notBeShadowedByNewSessionDetector_When_inputHasBacklogPrefix", () => {
+      const result = registry.detect("backlog: new session idea");
+      expect(result.type).toBe(InputType.ChatBacklogItem);
+    });
+  });
+
   // T-PITFALL-001
   describe("pitfall guards", () => {
     it("bare text does not resolve to Unknown (T-PITFALL-001)", () => {

@@ -966,6 +966,8 @@ type ApprovalRuleMutation struct {
 	appendpython_modes           []string
 	safe_python_imports_only     *bool
 	require_ci_passing           *bool
+	min_session_idle_minutes     *int32
+	addmin_session_idle_minutes  *int32
 	clearedFields                map[string]struct{}
 	done                         bool
 	oldValue                     func(context.Context) (*ApprovalRule, error)
@@ -2324,6 +2326,76 @@ func (m *ApprovalRuleMutation) ResetRequireCiPassing() {
 	m.require_ci_passing = nil
 }
 
+// SetMinSessionIdleMinutes sets the "min_session_idle_minutes" field.
+func (m *ApprovalRuleMutation) SetMinSessionIdleMinutes(i int32) {
+	m.min_session_idle_minutes = &i
+	m.addmin_session_idle_minutes = nil
+}
+
+// MinSessionIdleMinutes returns the value of the "min_session_idle_minutes" field in the mutation.
+func (m *ApprovalRuleMutation) MinSessionIdleMinutes() (r int32, exists bool) {
+	v := m.min_session_idle_minutes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMinSessionIdleMinutes returns the old "min_session_idle_minutes" field's value of the ApprovalRule entity.
+// If the ApprovalRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ApprovalRuleMutation) OldMinSessionIdleMinutes(ctx context.Context) (v int32, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMinSessionIdleMinutes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMinSessionIdleMinutes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMinSessionIdleMinutes: %w", err)
+	}
+	return oldValue.MinSessionIdleMinutes, nil
+}
+
+// AddMinSessionIdleMinutes adds i to the "min_session_idle_minutes" field.
+func (m *ApprovalRuleMutation) AddMinSessionIdleMinutes(i int32) {
+	if m.addmin_session_idle_minutes != nil {
+		*m.addmin_session_idle_minutes += i
+	} else {
+		m.addmin_session_idle_minutes = &i
+	}
+}
+
+// AddedMinSessionIdleMinutes returns the value that was added to the "min_session_idle_minutes" field in this mutation.
+func (m *ApprovalRuleMutation) AddedMinSessionIdleMinutes() (r int32, exists bool) {
+	v := m.addmin_session_idle_minutes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearMinSessionIdleMinutes clears the value of the "min_session_idle_minutes" field.
+func (m *ApprovalRuleMutation) ClearMinSessionIdleMinutes() {
+	m.min_session_idle_minutes = nil
+	m.addmin_session_idle_minutes = nil
+	m.clearedFields[approvalrule.FieldMinSessionIdleMinutes] = struct{}{}
+}
+
+// MinSessionIdleMinutesCleared returns if the "min_session_idle_minutes" field was cleared in this mutation.
+func (m *ApprovalRuleMutation) MinSessionIdleMinutesCleared() bool {
+	_, ok := m.clearedFields[approvalrule.FieldMinSessionIdleMinutes]
+	return ok
+}
+
+// ResetMinSessionIdleMinutes resets all changes to the "min_session_idle_minutes" field.
+func (m *ApprovalRuleMutation) ResetMinSessionIdleMinutes() {
+	m.min_session_idle_minutes = nil
+	m.addmin_session_idle_minutes = nil
+	delete(m.clearedFields, approvalrule.FieldMinSessionIdleMinutes)
+}
+
 // Where appends a list predicates to the ApprovalRuleMutation builder.
 func (m *ApprovalRuleMutation) Where(ps ...predicate.ApprovalRule) {
 	m.predicates = append(m.predicates, ps...)
@@ -2358,7 +2430,7 @@ func (m *ApprovalRuleMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ApprovalRuleMutation) Fields() []string {
-	fields := make([]string, 0, 25)
+	fields := make([]string, 0, 26)
 	if m.rule_id != nil {
 		fields = append(fields, approvalrule.FieldRuleID)
 	}
@@ -2434,6 +2506,9 @@ func (m *ApprovalRuleMutation) Fields() []string {
 	if m.require_ci_passing != nil {
 		fields = append(fields, approvalrule.FieldRequireCiPassing)
 	}
+	if m.min_session_idle_minutes != nil {
+		fields = append(fields, approvalrule.FieldMinSessionIdleMinutes)
+	}
 	return fields
 }
 
@@ -2492,6 +2567,8 @@ func (m *ApprovalRuleMutation) Field(name string) (ent.Value, bool) {
 		return m.SafePythonImportsOnly()
 	case approvalrule.FieldRequireCiPassing:
 		return m.RequireCiPassing()
+	case approvalrule.FieldMinSessionIdleMinutes:
+		return m.MinSessionIdleMinutes()
 	}
 	return nil, false
 }
@@ -2551,6 +2628,8 @@ func (m *ApprovalRuleMutation) OldField(ctx context.Context, name string) (ent.V
 		return m.OldSafePythonImportsOnly(ctx)
 	case approvalrule.FieldRequireCiPassing:
 		return m.OldRequireCiPassing(ctx)
+	case approvalrule.FieldMinSessionIdleMinutes:
+		return m.OldMinSessionIdleMinutes(ctx)
 	}
 	return nil, fmt.Errorf("unknown ApprovalRule field %s", name)
 }
@@ -2735,6 +2814,13 @@ func (m *ApprovalRuleMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetRequireCiPassing(v)
 		return nil
+	case approvalrule.FieldMinSessionIdleMinutes:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMinSessionIdleMinutes(v)
+		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule field %s", name)
 }
@@ -2752,6 +2838,9 @@ func (m *ApprovalRuleMutation) AddedFields() []string {
 	if m.addpriority != nil {
 		fields = append(fields, approvalrule.FieldPriority)
 	}
+	if m.addmin_session_idle_minutes != nil {
+		fields = append(fields, approvalrule.FieldMinSessionIdleMinutes)
+	}
 	return fields
 }
 
@@ -2766,6 +2855,8 @@ func (m *ApprovalRuleMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedRiskLevel()
 	case approvalrule.FieldPriority:
 		return m.AddedPriority()
+	case approvalrule.FieldMinSessionIdleMinutes:
+		return m.AddedMinSessionIdleMinutes()
 	}
 	return nil, false
 }
@@ -2795,6 +2886,13 @@ func (m *ApprovalRuleMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPriority(v)
+		return nil
+	case approvalrule.FieldMinSessionIdleMinutes:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMinSessionIdleMinutes(v)
 		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule numeric field %s", name)
@@ -2845,6 +2943,9 @@ func (m *ApprovalRuleMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(approvalrule.FieldPythonModes) {
 		fields = append(fields, approvalrule.FieldPythonModes)
+	}
+	if m.FieldCleared(approvalrule.FieldMinSessionIdleMinutes) {
+		fields = append(fields, approvalrule.FieldMinSessionIdleMinutes)
 	}
 	return fields
 }
@@ -2901,6 +3002,9 @@ func (m *ApprovalRuleMutation) ClearField(name string) error {
 		return nil
 	case approvalrule.FieldPythonModes:
 		m.ClearPythonModes()
+		return nil
+	case approvalrule.FieldMinSessionIdleMinutes:
+		m.ClearMinSessionIdleMinutes()
 		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule nullable field %s", name)
@@ -2984,6 +3088,9 @@ func (m *ApprovalRuleMutation) ResetField(name string) error {
 		return nil
 	case approvalrule.FieldRequireCiPassing:
 		m.ResetRequireCiPassing()
+		return nil
+	case approvalrule.FieldMinSessionIdleMinutes:
+		m.ResetMinSessionIdleMinutes()
 		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule field %s", name)
@@ -15530,6 +15637,7 @@ type ItemSessionMutation struct {
 	created_at                  *time.Time
 	estimated_cost_usd          *float64
 	addestimated_cost_usd       *float64
+	claimant_host_id            *string
 	clearedFields               map[string]struct{}
 	backlog_item                *uuid.UUID
 	clearedbacklog_item         bool
@@ -16587,6 +16695,55 @@ func (m *ItemSessionMutation) ResetEstimatedCostUsd() {
 	delete(m.clearedFields, itemsession.FieldEstimatedCostUsd)
 }
 
+// SetClaimantHostID sets the "claimant_host_id" field.
+func (m *ItemSessionMutation) SetClaimantHostID(s string) {
+	m.claimant_host_id = &s
+}
+
+// ClaimantHostID returns the value of the "claimant_host_id" field in the mutation.
+func (m *ItemSessionMutation) ClaimantHostID() (r string, exists bool) {
+	v := m.claimant_host_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClaimantHostID returns the old "claimant_host_id" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldClaimantHostID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClaimantHostID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClaimantHostID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClaimantHostID: %w", err)
+	}
+	return oldValue.ClaimantHostID, nil
+}
+
+// ClearClaimantHostID clears the value of the "claimant_host_id" field.
+func (m *ItemSessionMutation) ClearClaimantHostID() {
+	m.claimant_host_id = nil
+	m.clearedFields[itemsession.FieldClaimantHostID] = struct{}{}
+}
+
+// ClaimantHostIDCleared returns if the "claimant_host_id" field was cleared in this mutation.
+func (m *ItemSessionMutation) ClaimantHostIDCleared() bool {
+	_, ok := m.clearedFields[itemsession.FieldClaimantHostID]
+	return ok
+}
+
+// ResetClaimantHostID resets all changes to the "claimant_host_id" field.
+func (m *ItemSessionMutation) ResetClaimantHostID() {
+	m.claimant_host_id = nil
+	delete(m.clearedFields, itemsession.FieldClaimantHostID)
+}
+
 // SetBacklogItemID sets the "backlog_item" edge to the BacklogItem entity by id.
 func (m *ItemSessionMutation) SetBacklogItemID(id uuid.UUID) {
 	m.backlog_item = &id
@@ -16699,7 +16856,7 @@ func (m *ItemSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSessionMutation) Fields() []string {
-	fields := make([]string, 0, 20)
+	fields := make([]string, 0, 21)
 	if m.session_uuid != nil {
 		fields = append(fields, itemsession.FieldSessionUUID)
 	}
@@ -16760,6 +16917,9 @@ func (m *ItemSessionMutation) Fields() []string {
 	if m.estimated_cost_usd != nil {
 		fields = append(fields, itemsession.FieldEstimatedCostUsd)
 	}
+	if m.claimant_host_id != nil {
+		fields = append(fields, itemsession.FieldClaimantHostID)
+	}
 	return fields
 }
 
@@ -16808,6 +16968,8 @@ func (m *ItemSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.CreatedAt()
 	case itemsession.FieldEstimatedCostUsd:
 		return m.EstimatedCostUsd()
+	case itemsession.FieldClaimantHostID:
+		return m.ClaimantHostID()
 	}
 	return nil, false
 }
@@ -16857,6 +17019,8 @@ func (m *ItemSessionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldCreatedAt(ctx)
 	case itemsession.FieldEstimatedCostUsd:
 		return m.OldEstimatedCostUsd(ctx)
+	case itemsession.FieldClaimantHostID:
+		return m.OldClaimantHostID(ctx)
 	}
 	return nil, fmt.Errorf("unknown ItemSession field %s", name)
 }
@@ -17006,6 +17170,13 @@ func (m *ItemSessionMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetEstimatedCostUsd(v)
 		return nil
+	case itemsession.FieldClaimantHostID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClaimantHostID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown ItemSession field %s", name)
 }
@@ -17105,6 +17276,9 @@ func (m *ItemSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsession.FieldEstimatedCostUsd) {
 		fields = append(fields, itemsession.FieldEstimatedCostUsd)
 	}
+	if m.FieldCleared(itemsession.FieldClaimantHostID) {
+		fields = append(fields, itemsession.FieldClaimantHostID)
+	}
 	return fields
 }
 
@@ -17160,6 +17334,9 @@ func (m *ItemSessionMutation) ClearField(name string) error {
 		return nil
 	case itemsession.FieldEstimatedCostUsd:
 		m.ClearEstimatedCostUsd()
+		return nil
+	case itemsession.FieldClaimantHostID:
+		m.ClearClaimantHostID()
 		return nil
 	}
 	return fmt.Errorf("unknown ItemSession nullable field %s", name)
@@ -17228,6 +17405,9 @@ func (m *ItemSessionMutation) ResetField(name string) error {
 		return nil
 	case itemsession.FieldEstimatedCostUsd:
 		m.ResetEstimatedCostUsd()
+		return nil
+	case itemsession.FieldClaimantHostID:
+		m.ResetClaimantHostID()
 		return nil
 	}
 	return fmt.Errorf("unknown ItemSession field %s", name)
@@ -31290,6 +31470,7 @@ type WorkflowMutation struct {
 	agent_type               *string
 	cron_expression          *string
 	cron_enabled             *bool
+	enabled                  *bool
 	created_at               *time.Time
 	updated_at               *time.Time
 	keep_sessions            *int
@@ -31900,6 +32081,42 @@ func (m *WorkflowMutation) OldCronEnabled(ctx context.Context) (v bool, err erro
 // ResetCronEnabled resets all changes to the "cron_enabled" field.
 func (m *WorkflowMutation) ResetCronEnabled() {
 	m.cron_enabled = nil
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *WorkflowMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *WorkflowMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *WorkflowMutation) ResetEnabled() {
+	m.enabled = nil
 }
 
 // SetCreatedAt sets the "created_at" field.
@@ -32589,7 +32806,7 @@ func (m *WorkflowMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *WorkflowMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 25)
 	if m.slug != nil {
 		fields = append(fields, workflow.FieldSlug)
 	}
@@ -32622,6 +32839,9 @@ func (m *WorkflowMutation) Fields() []string {
 	}
 	if m.cron_enabled != nil {
 		fields = append(fields, workflow.FieldCronEnabled)
+	}
+	if m.enabled != nil {
+		fields = append(fields, workflow.FieldEnabled)
 	}
 	if m.created_at != nil {
 		fields = append(fields, workflow.FieldCreatedAt)
@@ -32692,6 +32912,8 @@ func (m *WorkflowMutation) Field(name string) (ent.Value, bool) {
 		return m.CronExpression()
 	case workflow.FieldCronEnabled:
 		return m.CronEnabled()
+	case workflow.FieldEnabled:
+		return m.Enabled()
 	case workflow.FieldCreatedAt:
 		return m.CreatedAt()
 	case workflow.FieldUpdatedAt:
@@ -32749,6 +32971,8 @@ func (m *WorkflowMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldCronExpression(ctx)
 	case workflow.FieldCronEnabled:
 		return m.OldCronEnabled(ctx)
+	case workflow.FieldEnabled:
+		return m.OldEnabled(ctx)
 	case workflow.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case workflow.FieldUpdatedAt:
@@ -32860,6 +33084,13 @@ func (m *WorkflowMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetCronEnabled(v)
+		return nil
+	case workflow.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
 		return nil
 	case workflow.FieldCreatedAt:
 		v, ok := value.(time.Time)
@@ -33171,6 +33402,9 @@ func (m *WorkflowMutation) ResetField(name string) error {
 		return nil
 	case workflow.FieldCronEnabled:
 		m.ResetCronEnabled()
+		return nil
+	case workflow.FieldEnabled:
+		m.ResetEnabled()
 		return nil
 	case workflow.FieldCreatedAt:
 		m.ResetCreatedAt()

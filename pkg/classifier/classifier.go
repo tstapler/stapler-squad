@@ -80,6 +80,11 @@ type ClassificationContext struct {
 	// "success"/"failure"/"pending"/"neutral"/"". "" means no PR or unknown
 	// (including stale data — see ApprovalHandler's staleness guard).
 	CIStatus string
+	// SessionIdleMinutes is the computed idle-minutes value for the session being
+	// classified. 0 (unset) means unknown/unavailable and must never accidentally
+	// satisfy a MinSessionIdleMinutes > 0 condition — see ApprovalHandler's population
+	// logic for how this is populated from a live instance.
+	SessionIdleMinutes int
 }
 
 // Classifier classifies a PermissionRequestPayload to determine the action to take.
@@ -372,10 +377,14 @@ type Rule struct {
 	// RequireCIPassing, when true, only matches if ClassificationContext.CIStatus == "success".
 	// ANDed with all other conditions on this rule.
 	RequireCIPassing bool
-	Decision         ClassificationDecision
-	RiskLevel        RiskLevel
-	Reason           string
-	Alternative      string
+	// MinSessionIdleMinutes matches only if ClassificationContext.SessionIdleMinutes >=
+	// MinSessionIdleMinutes. 0 = condition not applied. ANDed with all other conditions
+	// on this rule.
+	MinSessionIdleMinutes int32
+	Decision              ClassificationDecision
+	RiskLevel             RiskLevel
+	Reason                string
+	Alternative           string
 	// Priority determines rule evaluation order. Higher values are evaluated first.
 	Priority int
 	Enabled  bool
@@ -740,6 +749,10 @@ func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPa
 	}
 
 	if rule.RequireCIPassing && ctx.CIStatus != ciConclusionSuccess {
+		return false
+	}
+
+	if rule.MinSessionIdleMinutes > 0 && ctx.SessionIdleMinutes < int(rule.MinSessionIdleMinutes) {
 		return false
 	}
 

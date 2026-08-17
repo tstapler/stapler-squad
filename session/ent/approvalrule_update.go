@@ -448,6 +448,33 @@ func (_u *ApprovalRuleUpdate) SetNillableRequireCiPassing(v *bool) *ApprovalRule
 	return _u
 }
 
+// SetMinSessionIdleMinutes sets the "min_session_idle_minutes" field.
+func (_u *ApprovalRuleUpdate) SetMinSessionIdleMinutes(v int32) *ApprovalRuleUpdate {
+	_u.mutation.ResetMinSessionIdleMinutes()
+	_u.mutation.SetMinSessionIdleMinutes(v)
+	return _u
+}
+
+// SetNillableMinSessionIdleMinutes sets the "min_session_idle_minutes" field if the given value is not nil.
+func (_u *ApprovalRuleUpdate) SetNillableMinSessionIdleMinutes(v *int32) *ApprovalRuleUpdate {
+	if v != nil {
+		_u.SetMinSessionIdleMinutes(*v)
+	}
+	return _u
+}
+
+// AddMinSessionIdleMinutes adds value to the "min_session_idle_minutes" field.
+func (_u *ApprovalRuleUpdate) AddMinSessionIdleMinutes(v int32) *ApprovalRuleUpdate {
+	_u.mutation.AddMinSessionIdleMinutes(v)
+	return _u
+}
+
+// ClearMinSessionIdleMinutes clears the value of the "min_session_idle_minutes" field.
+func (_u *ApprovalRuleUpdate) ClearMinSessionIdleMinutes() *ApprovalRuleUpdate {
+	_u.mutation.ClearMinSessionIdleMinutes()
+	return _u
+}
+
 // Mutation returns the ApprovalRuleMutation object of the builder.
 func (_u *ApprovalRuleUpdate) Mutation() *ApprovalRuleMutation {
 	return _u.mutation
@@ -673,6 +700,15 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 	}
 	if value, ok := _u.mutation.RequireCiPassing(); ok {
 		_spec.SetField(approvalrule.FieldRequireCiPassing, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.MinSessionIdleMinutes(); ok {
+		_spec.SetField(approvalrule.FieldMinSessionIdleMinutes, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.AddedMinSessionIdleMinutes(); ok {
+		_spec.AddField(approvalrule.FieldMinSessionIdleMinutes, field.TypeInt32, value)
+	}
+	if _u.mutation.MinSessionIdleMinutesCleared() {
+		_spec.ClearField(approvalrule.FieldMinSessionIdleMinutes, field.TypeInt32)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -1113,6 +1149,33 @@ func (_u *ApprovalRuleUpdateOne) SetNillableRequireCiPassing(v *bool) *ApprovalR
 	return _u
 }
 
+// SetMinSessionIdleMinutes sets the "min_session_idle_minutes" field.
+func (_u *ApprovalRuleUpdateOne) SetMinSessionIdleMinutes(v int32) *ApprovalRuleUpdateOne {
+	_u.mutation.ResetMinSessionIdleMinutes()
+	_u.mutation.SetMinSessionIdleMinutes(v)
+	return _u
+}
+
+// SetNillableMinSessionIdleMinutes sets the "min_session_idle_minutes" field if the given value is not nil.
+func (_u *ApprovalRuleUpdateOne) SetNillableMinSessionIdleMinutes(v *int32) *ApprovalRuleUpdateOne {
+	if v != nil {
+		_u.SetMinSessionIdleMinutes(*v)
+	}
+	return _u
+}
+
+// AddMinSessionIdleMinutes adds value to the "min_session_idle_minutes" field.
+func (_u *ApprovalRuleUpdateOne) AddMinSessionIdleMinutes(v int32) *ApprovalRuleUpdateOne {
+	_u.mutation.AddMinSessionIdleMinutes(v)
+	return _u
+}
+
+// ClearMinSessionIdleMinutes clears the value of the "min_session_idle_minutes" field.
+func (_u *ApprovalRuleUpdateOne) ClearMinSessionIdleMinutes() *ApprovalRuleUpdateOne {
+	_u.mutation.ClearMinSessionIdleMinutes()
+	return _u
+}
+
 // Mutation returns the ApprovalRuleMutation object of the builder.
 func (_u *ApprovalRuleUpdateOne) Mutation() *ApprovalRuleMutation {
 	return _u.mutation
@@ -1368,6 +1431,15 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 	}
 	if value, ok := _u.mutation.RequireCiPassing(); ok {
 		_spec.SetField(approvalrule.FieldRequireCiPassing, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.MinSessionIdleMinutes(); ok {
+		_spec.SetField(approvalrule.FieldMinSessionIdleMinutes, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.AddedMinSessionIdleMinutes(); ok {
+		_spec.AddField(approvalrule.FieldMinSessionIdleMinutes, field.TypeInt32, value)
+	}
+	if _u.mutation.MinSessionIdleMinutesCleared() {
+		_spec.ClearField(approvalrule.FieldMinSessionIdleMinutes, field.TypeInt32)
 	}
 	_node = &ApprovalRule{config: _u.config}
 	_spec.Assign = _node.assignValues

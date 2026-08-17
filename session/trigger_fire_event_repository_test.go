@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 func TestEntTriggerFireEventRepository_Create_should_PersistAndRoundTrip_When_ValidInput(t *testing.T) {
@@ -209,6 +210,40 @@ func TestEntTriggerFireEventRepository_Create_should_AllowNilWorkflowID_When_Rej
 	require.Len(t, all, 1)
 	assert.Nil(t, all[0].WorkflowID)
 	assert.Equal(t, "rejected", all[0].Outcome)
+}
+
+// TestIsDuplicateDeliveryConstraintError_should_ReturnFalse_When_ConstraintErrorIsNotTheDeliveryIndex
+// proves Create's constraint-error mapping is narrowed to the specific
+// (workflow_id, delivery_id) unique index, not "any constraint error" — a genuine,
+// differently-shaped ent.ConstraintError (here: Workflow.Slug's own unique index) must
+// not be mis-reported as ErrDuplicateDelivery. Exercises a real *ent.ConstraintError
+// from the generated client (unexported fields prevent constructing one directly) via
+// an unrelated unique-index collision on Workflow.slug.
+func TestIsDuplicateDeliveryConstraintError_should_ReturnFalse_When_ConstraintErrorIsNotTheDeliveryIndex(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	client := storage.GetEntClient()
+	ctx := t.Context()
+
+	require.NoError(t, client.Workflow.Create().
+		SetSlug("dup-slug-wf").
+		SetName("Dup Slug WF").
+		SetCommand("cmd").
+		SetTargetDirectory("/tmp/test").
+		Exec(ctx))
+
+	err := client.Workflow.Create().
+		SetSlug("dup-slug-wf").
+		SetName("Dup Slug WF 2").
+		SetCommand("cmd").
+		SetTargetDirectory("/tmp/test").
+		Exec(ctx)
+	require.Error(t, err)
+	require.True(t, ent.IsConstraintError(err), "expected the Workflow.slug collision to be a real ent.ConstraintError")
+
+	assert.False(t, isDuplicateDeliveryConstraintError(err),
+		"a constraint error from an unrelated index must not be mapped to ErrDuplicateDelivery")
 }
 
 // TestEntTriggerFireEventRepository_ListByWorkflow_should_DefaultLimitAndOrderNewestFirst

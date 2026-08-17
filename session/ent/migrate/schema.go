@@ -81,6 +81,7 @@ var (
 		{Name: "python_modes", Type: field.TypeJSON, Nullable: true},
 		{Name: "safe_python_imports_only", Type: field.TypeBool, Default: false},
 		{Name: "require_ci_passing", Type: field.TypeBool, Default: false},
+		{Name: "min_session_idle_minutes", Type: field.TypeInt32, Nullable: true, Default: 0},
 	}
 	// ApprovalRulesTable holds the schema information for the "approval_rules" table.
 	ApprovalRulesTable = &schema.Table{
@@ -574,6 +575,7 @@ var (
 		{Name: "last_progress_at", Type: field.TypeTime, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "estimated_cost_usd", Type: field.TypeFloat64, Nullable: true, Default: 0},
+		{Name: "claimant_host_id", Type: field.TypeString, Nullable: true, Default: ""},
 		{Name: "backlog_item_item_sessions", Type: field.TypeUUID},
 	}
 	// ItemSessionsTable holds the schema information for the "item_sessions" table.
@@ -584,7 +586,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "item_sessions_backlog_items_item_sessions",
-				Columns:    []*schema.Column{ItemSessionsColumns[21]},
+				Columns:    []*schema.Column{ItemSessionsColumns[22]},
 				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -598,7 +600,7 @@ var (
 			{
 				Name:    "itemsession_created_at_backlog_item_item_sessions",
 				Unique:  false,
-				Columns: []*schema.Column{ItemSessionsColumns[19], ItemSessionsColumns[21]},
+				Columns: []*schema.Column{ItemSessionsColumns[19], ItemSessionsColumns[22]},
 			},
 		},
 	}
@@ -1057,6 +1059,7 @@ var (
 		{Name: "agent_type", Type: field.TypeString, Nullable: true},
 		{Name: "cron_expression", Type: field.TypeString, Nullable: true},
 		{Name: "cron_enabled", Type: field.TypeBool, Default: false},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "keep_sessions", Type: field.TypeInt, Nullable: true, Default: 0},
@@ -1090,17 +1093,17 @@ var (
 			{
 				Name:    "workflow_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{WorkflowsColumns[12]},
+				Columns: []*schema.Column{WorkflowsColumns[13]},
 			},
 			{
 				Name:    "workflow_webhook_slug",
 				Unique:  false,
-				Columns: []*schema.Column{WorkflowsColumns[19]},
+				Columns: []*schema.Column{WorkflowsColumns[20]},
 			},
 			{
 				Name:    "workflow_trigger_type",
 				Unique:  false,
-				Columns: []*schema.Column{WorkflowsColumns[16]},
+				Columns: []*schema.Column{WorkflowsColumns[17]},
 			},
 		},
 	}

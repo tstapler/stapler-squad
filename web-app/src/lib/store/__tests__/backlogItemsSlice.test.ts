@@ -15,7 +15,7 @@ import backlogItemsReducer, {
   selectBacklogItemsLiveVersionMap,
   makeSelectBacklogItemsByStatus,
 } from "../backlogItemsSlice";
-import { BacklogItem, BacklogItemSchema } from "@/gen/session/v1/backlog_pb";
+import { BacklogItem, BacklogItemSchema, ItemSessionSchema } from "@/gen/session/v1/backlog_pb";
 
 function makeStore() {
   return configureStore({
@@ -30,11 +30,17 @@ function makeStore() {
   });
 }
 
-function makeItem(id: string, status: string, updatedAtIso: string): BacklogItem {
+function makeItem(
+  id: string,
+  status: string,
+  updatedAtIso: string,
+  sessionIds: string[] = []
+): BacklogItem {
   return create(BacklogItemSchema, {
     id,
     status,
     updatedAt: timestampFromDate(new Date(updatedAtIso)),
+    itemSessions: sessionIds.map((sessionUuid) => create(ItemSessionSchema, { sessionUuid })),
   });
 }
 
@@ -110,6 +116,45 @@ describe("backlogItemsSlice", () => {
       store.dispatch(upsertItem(makeItem("item-1", "review", t1)));
       const state = store.getState() as any;
       expect(selectBacklogItemById(state, "item-1")?.status).toBe("in_progress");
+    });
+  });
+
+  // Backstop against a partially-loaded event push (item_sessions dropped by a
+  // non-eager-loaded publish/snapshot path) clobbering sessions already in the
+  // store — see backlogItemsSlice.ts's upsertItem doc comment.
+  describe("upsertItem — itemSessions backstop", () => {
+    it("preserves existing sessions when a newer update arrives with an empty itemSessions", () => {
+      const store = makeStore();
+      store.dispatch(
+        upsertItem(makeItem("item-1", "in_progress", "2026-07-21T10:00:00Z", ["session-a"]))
+      );
+      store.dispatch(upsertItem(makeItem("item-1", "review", "2026-07-21T10:00:05Z", [])));
+      const state = store.getState() as any;
+      const item = selectBacklogItemById(state, "item-1");
+      expect(item?.status).toBe("review");
+      expect(item?.itemSessions.map((s: any) => s.sessionUuid)).toEqual(["session-a"]);
+    });
+
+    it("replaces sessions when the incoming update carries its own non-empty itemSessions", () => {
+      const store = makeStore();
+      store.dispatch(
+        upsertItem(makeItem("item-1", "in_progress", "2026-07-21T10:00:00Z", ["session-a"]))
+      );
+      store.dispatch(
+        upsertItem(makeItem("item-1", "review", "2026-07-21T10:00:05Z", ["session-b"]))
+      );
+      const state = store.getState() as any;
+      expect(
+        selectBacklogItemById(state, "item-1")?.itemSessions.map((s: any) => s.sessionUuid)
+      ).toEqual(["session-b"]);
+    });
+
+    it("does not backstop when the store had no prior sessions to preserve", () => {
+      const store = makeStore();
+      store.dispatch(upsertItem(makeItem("item-1", "in_progress", "2026-07-21T10:00:00Z", [])));
+      store.dispatch(upsertItem(makeItem("item-1", "review", "2026-07-21T10:00:05Z", [])));
+      const state = store.getState() as any;
+      expect(selectBacklogItemById(state, "item-1")?.itemSessions).toEqual([]);
     });
   });
 

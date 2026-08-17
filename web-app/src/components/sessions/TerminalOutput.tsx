@@ -70,6 +70,15 @@ interface TerminalOutputProps {
   shellId?: string;
   /** Callback invoked when a ShellStatusUpdate is received for this shell. */
   onShellStatusChange?: (status: "running" | "stopped" | "error", exitCode?: number) => void;
+  /**
+   * Epic 6.1 (terminal:resync-stagger) — passed straight through to
+   * `useVisibilityResync`'s identically-named param. When
+   * `SessionDetailView.tsx` wires this in (flag on), it routes this
+   * instance's visibility/focus-triggered resync through its per-view
+   * stagger queue instead of firing immediately. Omitted (flag off)
+   * preserves exact pre-Epic-6.1 behavior — see useVisibilityResync.ts.
+   */
+  scheduleResync?: (fire: () => void, opts: { preempt: boolean }) => void;
 }
 
 // Minimum dimensions considered "real" — anything smaller is a transient value
@@ -88,7 +97,7 @@ const XTERM_DEFAULT_ROWS = 24;
 // Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
 const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
 
-export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
+export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync }: TerminalOutputProps) {
   const { track } = useAnalytics();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
@@ -450,20 +459,55 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // values) — referencing it directly in this dependency array would be a
   // temporal-dead-zone error. Same ref-mirror idiom used throughout this file
   // (e.g. sendFlowControlRef) and in useTerminalStream.ts (connectRef).
-  const notifyResyncOutputReceivedRef = useRef<() => void>(() => {});
+  const notifyResyncOutputReceivedRef = useRef<(resyncId?: string) => void>(() => {});
+
+  // Epic 3.1, Task 3.1.2.1 — shared between useTerminalStream (which forwards
+  // it to useTerminalFlowControl, where both the visibility- and
+  // resize-triggered resync paths register their resync_id) and this
+  // component's own handleOutput below (which checks/clears membership on
+  // each incoming TerminalOutput.resync_id). Lets either resync flow's stall
+  // watchdog be reset when a match arrives on ANY tracked request, without
+  // merging useVisibilityResync and useTerminalFlowControl into one hook.
+  //
+  // Task 3.1.2.4a — a plain `Set<string>` only records *membership*, not
+  // *when* an ID was added, so a resync whose own response silently hangs
+  // has no way to notice it's been outstanding too long if sibling resync
+  // traffic keeps resetting the shared stall watchdog. Map<resyncId, addedAtMs>
+  // keeps the same membership semantics (`.has`/`.delete` used by
+  // handleOutput below are unchanged) while letting useVisibilityResync's
+  // resetStallWatchdog (Task 3.1.2.4b) compute a specific ID's elapsed
+  // outstanding time and escalate past a 2x-timeout ceiling instead of
+  // resetting indefinitely.
+  const outstandingResyncIdsRef = useRef<Map<string, number>>(new Map());
+
+  // Ref-mirror for resetStallWatchdog (Epic 3.1, Task 3.1.2.2) — same
+  // temporal-dead-zone reason as notifyResyncOutputReceivedRef above:
+  // useVisibilityResync isn't called until after this handleOutput
+  // definition and the useTerminalStream call that consumes it.
+  const resetStallWatchdogRef = useRef<() => void>(() => {});
 
   // Callback to write output directly to terminal via TerminalStreamManager.
   // Task 4.2.2: Output is queued during RESIZING to prevent bytes at the old column width
   // from being written before the post-resize snapshot.
-  const handleOutput = useCallback((output: string) => {
+  const handleOutput = useCallback((output: string, resyncId?: string) => {
     if (!xtermRef.current) return;
+
+    // Epic 3.1 (AC2) — if this output is the reply to a correlation-ID-
+    // tagged resync request tracked via EITHER hook's resync flow (resize or
+    // visibility/focus), clear it here and reconcile the visibility hook's
+    // stall watchdog too, so a resize-triggered resync response doesn't
+    // leave a concurrently-pending visibility resync looking stalled.
+    if (resyncId && outstandingResyncIdsRef.current.has(resyncId)) {
+      outstandingResyncIdsRef.current.delete(resyncId);
+      resetStallWatchdogRef.current();
+    }
 
     // Signal resync receipt regardless of whether this output is written
     // immediately or queued for post-resize flush — a concurrent resize
     // (plausible on backgrounded-tab wakeup) must not make a pending
     // visibility/focus resync look stalled just because its response
     // arrived while RESIZING.
-    notifyResyncOutputReceivedRef.current();
+    notifyResyncOutputReceivedRef.current(resyncId);
 
     if (terminalStateRef.current === 'RESIZING') {
       pendingOutputDuringResizeRef.current.push(output);
@@ -533,10 +577,22 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     isExternal: isExternal,
     onInputDropped: reportDroppedInput,
     foreground: isVisible,
+    outstandingResyncIdsRef,
   });
 
-  const { notifyResyncOutputReceived } = useVisibilityResync({
+  const { notifyResyncOutputReceived, resetStallWatchdog } = useVisibilityResync({
     sessionId: effectiveSessionId,
+    // TerminalOutputProps.isVisible is optional (external callers may omit
+    // it entirely); useVisibilityResync's isVisible is required since its
+    // visibility-scoped resync gating (Task 6.1.1.3) needs a concrete
+    // boolean, not undefined. Default to false — matching the "external
+    // caller opted out of visibility awareness" behavior other isVisible
+    // call sites in this component already fall back to (e.g. line ~1785's
+    // `isVisible !== false` treats undefined as visible for rendering, but
+    // for resync-gating purposes treating "unknown" as "not visible" is the
+    // safer default: it defers resync-on-focus rather than risking one
+    // firing for a caller that never intended to opt in).
+    isVisible: isVisible ?? false,
     isConnected,
     terminalState,
     connect,
@@ -546,10 +602,15 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     markPaneResponseReceived,
     setShowReconnectButton,
     setShowReconnectBanner,
+    scheduleResync,
+    outstandingResyncIdsRef,
   });
   useEffect(() => {
     notifyResyncOutputReceivedRef.current = notifyResyncOutputReceived;
   }, [notifyResyncOutputReceived]);
+  useEffect(() => {
+    resetStallWatchdogRef.current = resetStallWatchdog;
+  }, [resetStallWatchdog]);
 
   // Sync terminalState into a ref so handleOutput can read it without recreating the callback.
   // Also flushes queued output when transitioning from RESIZING to STABLE (Task 4.2.2).
@@ -926,6 +987,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Auto-reconnect with exponential backoff
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") return; // hook-level reconnect handles it
+    // Must not fire once the hook has hard-failed (e.g. a non-retriable WS
+    // close code): the hook already set shouldReconnectRef.current = false
+    // in that case, but calling connect() below unconditionally resets it
+    // back to true (see useTerminalStream.ts's connect()), silently
+    // reconnecting right through the hard-fail and hiding the Retry banner.
+    if (isHardFailed) return;
     if (!isConnected && error && connectionAttempts > 0 && connectionAttempts < 5) {
       const backoffDelay = Math.min(1000 * Math.pow(2, connectionAttempts - 1), 10000);
       console.log(`[TerminalOutput] Auto-reconnecting in ${backoffDelay}ms (attempt ${connectionAttempts})`);
@@ -937,7 +1004,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
       return () => clearTimeout(timeout);
     }
-  }, [isConnected, error, connectionAttempts, connect]);
+  }, [isConnected, error, connectionAttempts, connect, isHardFailed]);
 
   // Initialize with cached dimensions on mount.
   // When cell pixel metrics are also cached, pre-calculate cols/rows from the
@@ -1717,12 +1784,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       )}
       <div className={styles.terminal} ref={terminalContainerRef}>
         {showReconnectBanner && !isHardFailed && (
-          <div className={styles.reconnectingBanner}>
+          <div
+            className={styles.reconnectingBanner}
+            role="status"
+            aria-live="polite"
+            aria-label="Reconnecting"
+          >
             Reconnecting terminal…
           </div>
         )}
         {showReconnectBanner && isHardFailed && (
-          <div className={styles.hardFailedBanner}>
+          <div className={styles.hardFailedBanner} role="alert">
             Connection lost — <button onClick={handleHookReconnect}>Retry</button>
           </div>
         )}

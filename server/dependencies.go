@@ -50,6 +50,11 @@ type ServerDependencies struct {
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
+	// SlackNotifier is the single shared Slack notifier instance, wired into
+	// both ReactiveQueueMgr (review-queue items) and ApprovalHandler (pending
+	// approvals) so GetDeliveryStatus reflects sends from both trigger points.
+	SlackNotifier *services.SlackNotifier
+
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
@@ -128,6 +133,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		ExternalApprovalMonitor: rt.ExternalApprovalMonitor,
 		HistoryLinker:           rt.HistoryLinker,
 		ErrorRegistry:           rt.ErrorRegistry,
+		SlackNotifier:           rt.SlackNotifier,
 		UnfinishedScanner:       rt.UnfinishedScanner,
 		UnfinishedStateStore:    rt.UnfinishedStateStore,
 		UnfinishedWorkService:   rt.UnfinishedWorkService,
@@ -399,6 +405,10 @@ type RuntimeDeps struct {
 	PRStatusPoller          *session.PRStatusPoller
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
+
+	// SlackNotifier is the single shared Slack notifier instance (see the
+	// identically-named field on ServerDependencies for its full doc comment).
+	SlackNotifier *services.SlackNotifier
 
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
@@ -835,6 +845,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// race window like SetHeadlessPool's had.
 	reactiveQueueMgr.SetOneShotRunner(sessionService)
 	log.Info("ReactiveQueueManager initialized")
+
+	// SlackNotifier (Epic 1.3, Story 1.3.1): a single shared instance, always
+	// constructed and wired — self-gating per-call when unconfigured (see
+	// slack_notifier.go's Notify*/MaybeNotify* no-op-when-unconfigured design),
+	// so no conditional construction is needed here.
+	slackNotifier := services.NewSlackNotifier()
+	reactiveQueueMgr.SetSlackNotifier(slackNotifier)
 
 	// CallbackDispatcher (webhook-triggers Phase 5, FR7-FR9): a single shared
 	// instance fires on_session_complete/on_session_stale/on_queue_item_created.
@@ -1425,6 +1442,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		PRStatusPoller:          svc.PRStatusPoller,
 		HistoryLinker:           historyLinker,
 		ErrorRegistry:           svc.ErrorRegistry,
+		SlackNotifier:           slackNotifier,
 		UnfinishedScanner:       unfinishedScanner,
 		UnfinishedStateStore:    unfinishedStateStore,
 		UnfinishedWorkService:   unfinishedWorkSvc,

@@ -19,8 +19,15 @@ const (
 	pathCompletionDefaultMax = 100
 	pathCompletionHardMax    = 500
 	pathCompletionTimeout    = 2 * time.Second
-	dirCacheMaxSize          = 256
-	dirCacheTTL              = 60 * time.Second
+	// listWorktreesTimeout is longer than pathCompletionTimeout: `git worktree
+	// list` stats every registered worktree (not just one path), so it scales
+	// with how many worktrees the repo has and is more exposed to transient
+	// disk/CPU contention from concurrently-running tests or other git
+	// subprocesses. Observed flaking at the tighter 2s bound under a loaded
+	// test suite (TestListWorktrees_EmptyPath, 2026-08-14).
+	listWorktreesTimeout = 5 * time.Second
+	dirCacheMaxSize      = 256
+	dirCacheTTL          = 60 * time.Second
 )
 
 // PathCompletionService handles RPC methods for filesystem path completion.
@@ -195,9 +202,8 @@ func (p *PathCompletionService) ListWorktrees(
 	expanded = strings.TrimRight(expanded, "/")
 
 	// Bound the git subprocess so a hung/slow filesystem can't block the
-	// omnibar's "existing worktree" dropdown forever — same guard as
-	// ListPathCompletions' pathCompletionTimeout.
-	listCtx, cancel := context.WithTimeout(ctx, pathCompletionTimeout)
+	// omnibar's "existing worktree" dropdown forever.
+	listCtx, cancel := context.WithTimeout(ctx, listWorktreesTimeout)
 	defer cancel()
 
 	cmd := safeexec.CommandContext(listCtx, "git", "worktree", "list", "--porcelain")
