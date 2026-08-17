@@ -82,6 +82,18 @@ func (t *TmuxSession) StartControlMode() error {
 	}
 	t.controlModeSubMu.Unlock()
 
+	// IsRemote is the seam this call site is gated on for now (Phase 1 of
+	// ssh-remote-workspaces, ADR-002): the process this spawns is tracked
+	// via TrackChildPID/UntrackChildPID and torn down via
+	// controlModeCmd.Process.Kill()/.Wait() below and in StopControlMode --
+	// OS-process semantics that have no SSH analog and that ADR-002
+	// deliberately keeps out of CommandRunner (see its "Alternatives
+	// Considered"). A remote-backed control-mode attach needs its own
+	// teardown design, which is Phase 2's job, not this local-only phase's.
+	if t.commandRunner().IsRemote() {
+		return fmt.Errorf("control mode is not yet supported over a remote CommandRunner (session %q)", t.sanitizedName)
+	}
+
 	// Build tmux -C attach command
 	cmd := t.buildTmuxCommand("-C", "attach-session", "-t", t.sanitizedName)
 
