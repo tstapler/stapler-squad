@@ -24,7 +24,9 @@ const claudeSettingsWatchDebounce = 250 * time.Millisecond
 // mirroring session.HistoryFileWatcher's shape.
 type ClaudeSettingsWatcher struct {
 	projectDir string
-	onReload   func(rules []classifier.Rule, origin string)
+	// onReload's notify parameter is false only for Start()'s initial priming reload — see
+	// that method's doc comment for why a notification there would be redundant or spurious.
+	onReload func(rules []classifier.Rule, origin string, notify bool)
 
 	// mu guards lastGood. Reload is reachable concurrently from the fsnotify debounce-timer
 	// goroutine (Start's loop) and from the ReloadClaudeSettingsRules RPC handler — without
@@ -39,9 +41,9 @@ type ClaudeSettingsWatcher struct {
 
 // NewClaudeSettingsWatcher creates a watcher for projectDir's claude-settings paths (see
 // settingsPaths). onReload is invoked after every reload — auto (fsnotify) or manual
-// (Reload called directly) — with the merged rule set and an origin tag ("global",
-// "project", or "mixed"; see computeReloadOrigin).
-func NewClaudeSettingsWatcher(projectDir string, onReload func(rules []classifier.Rule, origin string)) *ClaudeSettingsWatcher {
+// (Reload called directly) — with the merged rule set, an origin tag ("global", "project",
+// or "mixed"; see computeReloadOrigin), and whether this reload is notification-worthy.
+func NewClaudeSettingsWatcher(projectDir string, onReload func(rules []classifier.Rule, origin string, notify bool)) *ClaudeSettingsWatcher {
 	return &ClaudeSettingsWatcher{
 		projectDir: projectDir,
 		onReload:   onReload,
@@ -55,10 +57,18 @@ func NewClaudeSettingsWatcher(projectDir string, onReload func(rules []classifie
 // editor's mid-autosave truncated write — must never wipe rules that were already working).
 // Safe to call concurrently: the whole body runs under w.mu, so a debounced fsnotify-driven
 // reload and a manual RPC-driven reload can never interleave their reads/writes of lastGood.
+// Always notification-worthy — this is the fsnotify-loop and RPC-handler entry point. Start's
+// own initial priming reload uses the unexported reloadLocked directly instead, so it doesn't
+// fire a notification (see Start's doc comment).
 func (w *ClaudeSettingsWatcher) Reload(ctx context.Context) (ruleCount int, failedPaths []string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.reloadLocked(ctx, true)
+}
 
+// reloadLocked is Reload's implementation, callable with an explicit notify flag. Callers
+// must hold w.mu.
+func (w *ClaudeSettingsWatcher) reloadLocked(ctx context.Context, notify bool) (ruleCount int, failedPaths []string) {
 	results := LoadClaudeSettingsRulesDetailed(w.projectDir)
 
 	changedLabels := make(map[string]bool)
@@ -83,7 +93,7 @@ func (w *ClaudeSettingsWatcher) Reload(ctx context.Context) (ruleCount int, fail
 
 	origin := computeReloadOrigin(changedLabels)
 	if w.onReload != nil {
-		w.onReload(merged, origin)
+		w.onReload(merged, origin, notify)
 	}
 	return len(merged), failedPaths
 }
@@ -129,12 +139,18 @@ func computeReloadOrigin(changedLabels map[string]bool) string {
 }
 
 // Start begins watching this watcher's claude-settings paths for changes. It performs an
-// initial synchronous Reload before entering the event loop, then debounces bursts of
-// fsnotify events into single reloads. Graceful degradation: if fsnotify is unavailable on
+// initial synchronous priming reload (populating lastGood and re-applying to the classifier
+// via onReload, but WITHOUT notifying — the operator already saw a startup activation
+// notification from loadClaudeSettingsRulesAtStartup if any rules exist, and a "0
+// claude-settings rule(s) reloaded" toast on every restart when none are configured would be
+// pure noise) before entering the event loop, then debounces bursts of fsnotify events into
+// single (notification-worthy) reloads. Graceful degradation: if fsnotify is unavailable on
 // this platform, it logs a warning and returns without starting a goroutine — never blocks
 // startup. Exits when ctx is cancelled.
 func (w *ClaudeSettingsWatcher) Start(ctx context.Context) {
-	w.Reload(ctx)
+	w.mu.Lock()
+	w.reloadLocked(ctx, false)
+	w.mu.Unlock()
 
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {

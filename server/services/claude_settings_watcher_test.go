@@ -23,13 +23,14 @@ type reloadSpy struct {
 type reloadCall struct {
 	ruleCount int
 	origin    string
+	notify    bool
 }
 
-func (s *reloadSpy) callback() func(rules []classifier.Rule, origin string) {
-	return func(rules []classifier.Rule, origin string) {
+func (s *reloadSpy) callback() func(rules []classifier.Rule, origin string, notify bool) {
+	return func(rules []classifier.Rule, origin string, notify bool) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		s.calls = append(s.calls, reloadCall{ruleCount: len(rules), origin: origin})
+		s.calls = append(s.calls, reloadCall{ruleCount: len(rules), origin: origin, notify: notify})
 	}
 }
 
@@ -185,6 +186,7 @@ func TestClaudeSettingsWatcher_Start_DebouncesRapidWrites(t *testing.T) {
 	w.Start(ctx) // performs one synchronous Reload before entering the loop
 
 	require.Equal(t, 1, spy.count(), "Start's initial synchronous Reload should have fired once")
+	assert.False(t, spy.last().notify, "Start's initial priming reload must not be notification-worthy")
 
 	for i := 0; i < 5; i++ {
 		writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)","Read"]}}`)
@@ -195,6 +197,32 @@ func TestClaudeSettingsWatcher_Start_DebouncesRapidWrites(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return spy.count() == 2
 	}, time.Second, 10*time.Millisecond, "5 rapid writes should coalesce into exactly one additional reload")
+	assert.True(t, spy.last().notify, "a real fsnotify-triggered reload must be notification-worthy")
+}
+
+// TestClaudeSettingsWatcher_Start_InitialPrimingReload_NeverNotifies is the direct
+// regression test for the reviewed defect: Start()'s initial synchronous reload always
+// invoked onReload with no way to distinguish it from a real change, so the wired-up
+// callback in NewSessionServiceWithSearchEngine unconditionally published a "Claude
+// Settings Reloaded" notification on every single server startup — including a spurious
+// "0 claude-settings rule(s) reloaded" toast when no rules are configured at all, and a
+// redundant duplicate of the startup activation notification when rules do exist.
+func TestClaudeSettingsWatcher_Start_InitialPrimingReload_NeverNotifies(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// No settings files at all — mirrors the "zero rules configured" case the reviewer
+	// flagged as producing spurious noise on every restart.
+
+	spy := &reloadSpy{}
+	w := NewClaudeSettingsWatcher("", spy.callback())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.Start(ctx)
+
+	require.Equal(t, 1, spy.count())
+	assert.Equal(t, 0, spy.last().ruleCount)
+	assert.False(t, spy.last().notify, "the priming reload must never be notification-worthy, regardless of rule count")
 }
 
 func TestClaudeSettingsWatcher_Start_NoPanicWhenWatcherUnavailable(t *testing.T) {

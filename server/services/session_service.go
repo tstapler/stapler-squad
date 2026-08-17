@@ -517,9 +517,17 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
 	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
-	claudeSettingsWatcher := NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string) {
+	claudeSettingsWatcher := NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
 		rulesSvc.rebuildClaudeSettingsRules(rules)
 		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
+		// notify is false for Start()'s initial priming reload — the operator already saw a
+		// startup activation notification if any rules exist, and nothing meaningful
+		// happened for this callback to report otherwise. A zero-rule result is also
+		// never notification-worthy, on any call: "0 rules reloaded" is a no-op from the
+		// operator's perspective whether it's the priming reload or a later real one.
+		if !notify || len(rules) == 0 {
+			return
+		}
 		if eventBus != nil {
 			eventBus.Publish(events.NewNotificationEvent(
 				"", "System", uuid.New().String(),

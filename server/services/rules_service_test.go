@@ -1514,7 +1514,7 @@ func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *t
 	t.Setenv("HOME", home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
-	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string) {
+	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
 		svc.rebuildClaudeSettingsRules(rules)
 	}))
 
@@ -1532,7 +1532,7 @@ func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGood
 	t.Setenv("HOME", home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
-	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string) {
+	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
 		svc.rebuildClaudeSettingsRules(rules)
 	}))
 

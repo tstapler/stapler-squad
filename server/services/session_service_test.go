@@ -2545,3 +2545,50 @@ func TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSetting
 		assert.Equal(t, 1, count, "claude-settings rule %+v must not be duplicated when cwd == home", k)
 	}
 }
+
+// TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishesNoNotification
+// is the end-to-end regression test for the reviewed defect against the ACTUAL callback
+// wired up in NewSessionServiceWithSearchEngine (not just the isolated watcher unit test):
+// Start()'s initial priming reload must never publish a "Claude Settings Reloaded"
+// EventNotification, whether or not any claude-settings rules are configured. Covers both
+// halves the reviewer flagged: a spurious "0 claude-settings rule(s) reloaded" toast on
+// every restart with no rules configured, and a redundant duplicate of the startup
+// activation notification when rules do exist.
+func TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishesNoNotification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		withRules bool
+	}{
+		{name: "zero rules configured", withRules: false},
+		{name: "rules configured", withRules: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if tc.withRules {
+				writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+					`{"permissions":{"allow":["Bash(git log*)"]}}`)
+			}
+
+			storage := createTestStorage(t)
+			eventBus := events.NewEventBus(100)
+			svc := NewSessionService(storage, eventBus)
+			t.Cleanup(func() { svc.Shutdown() })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			eventCh, _ := eventBus.Subscribe(ctx)
+
+			watcher := svc.GetClaudeSettingsWatcher()
+			require.NotNil(t, watcher)
+			watcher.Start(ctx) // exercises the exact NewSessionServiceWithSearchEngine-wired callback
+
+			select {
+			case ev := <-eventCh:
+				t.Fatalf("Start's initial priming reload must not publish a notification, got: %+v", ev)
+			case <-time.After(200 * time.Millisecond):
+				// No notification observed within the window — expected.
+			}
+		})
+	}
+}
