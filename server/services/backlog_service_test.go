@@ -1181,6 +1181,14 @@ func initGitRepoWithCommit(t *testing.T, dir string) {
 // This test locks in that the real item content — not a generic fallback —
 // reaches the session-creation boundary.
 func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *testing.T) {
+	// Force an isolated worktree base dir — without this, config.GetConfigDirForDir's
+	// IsTestMode() branch scopes it by OS PID only (shared by every test in this binary),
+	// so a stale worktree/branch left by another server/services test can be "reused" by
+	// findExistingWorktreeForBranch, silently failing the async triage goroutine's git
+	// status check and leaving the item stuck below (never reaching "ready"). Same fix as
+	// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession, below.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	creator := &mockSessionCreator{}

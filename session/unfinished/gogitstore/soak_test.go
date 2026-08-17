@@ -30,14 +30,48 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"go.uber.org/goleak"
 )
+
+// soakWaitTimeout bounds how long the soak test waits on any single
+// sync.WaitGroup before giving up and failing with a full goroutine dump,
+// instead of relying on Go's 600s per-package test timeout (which kills the
+// whole test binary with only a partial/interleaved stack trace, and no
+// signal about which of the three WaitGroups was actually stuck). Set well
+// above soakDuration (so normal teardown never trips it) but far below 600s,
+// so a real hang is caught with time to spare and with output attributable
+// to a specific stage.
+const soakWaitTimeout = 45 * time.Second
+
+// waitBounded waits for wg with a soakWaitTimeout bound. On timeout, it
+// dumps every goroutine's complete stack (via pprof.Lookup("goroutine"),
+// which — unlike runtime.Stack — is not silently truncated by a fixed
+// buffer size) to t's log and fails the test, naming which wait stage
+// timed out so the dump can be correlated with what the test was doing.
+func waitBounded(t *testing.T, stage string, wg *sync.WaitGroup) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(soakWaitTimeout):
+		var buf strings.Builder
+		_ = pprof.Lookup("goroutine").WriteTo(&buf, 2)
+		t.Fatalf("soak test hung waiting on %s (exceeded %s) — full goroutine dump follows:\n%s", stage, soakWaitTimeout, buf.String())
+	}
+}
 
 // countOpenFDs returns this process's current open file descriptor count via
 // /proc/self/fd. Linux-specific (this project's documented deployment
@@ -92,10 +126,16 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 	// copy-based path.
 	reg := &Registry{UseMmapIndex: true, CacheMaxSize: 256 * 1024}
 
+	// goroutineBaseline snapshots the pre-test goroutine set via
+	// goleak.IgnoreCurrent() rather than asserting a bare process-wide
+	// goleak.VerifyNone() — this test runs inside the full `go test ./...`
+	// suite alongside every other package's own background goroutines (see
+	// session/actor_test.go's TestActorNoLeak for the same pattern).
+	goroutineBaseline := goleak.IgnoreCurrent()
+
 	runtime.GC()
 	var baselineMem runtime.MemStats
 	runtime.ReadMemStats(&baselineMem)
-	baselineGoroutines := runtime.NumGoroutine()
 	baselineFDs, fdSupported := countOpenFDs()
 
 	var opsDone atomic.Int64
@@ -224,10 +264,10 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 		}
 	}()
 
-	workerWG.Wait()
+	waitBounded(t, "workerWG (soak workers)", &workerWG)
 	close(stop)
-	repackWG.Wait()
-	prunerWG.Wait()
+	waitBounded(t, "repackWG (repacker goroutine)", &repackWG)
+	waitBounded(t, "prunerWG (pruner goroutine)", &prunerWG)
 
 	t.Logf("soak summary: opsDone=%d opErrorsStaleIndex(tolerated)=%d opErrorsUnexpected=%d repackCount=%d repackErrors=%d",
 		opsDone.Load(), opErrorsStaleIndex.Load(), opErrorsUnexpected.Load(), repackCount.Load(), repackErrors.Load())
@@ -268,22 +308,21 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 		t.Errorf("expected zero SharedObjectStores remaining after forced full TTL eviction, got %d — eviction is not actually reclaiming stores", remaining)
 	}
 
-	// Give any just-stopped watcher goroutines a moment to actually exit —
-	// stopPackWatch closes their stop channel, but goroutine scheduling
-	// isn't instantaneous — before measuring.
+	// Poll goleak.Find (rather than a bare single call, or goleak.VerifyNone
+	// — which would t.Fatal and skip the FD/mem checks below) to give
+	// just-stopped watcher goroutines (stopPackWatch closes their stop
+	// channel, but goroutine scheduling isn't instantaneous) time to actually
+	// exit before this fails.
 	grDeadline := time.Now().Add(5 * time.Second)
-	var afterGoroutines int
+	var leakErr error
 	for {
-		runtime.GC()
-		afterGoroutines = runtime.NumGoroutine()
-		if afterGoroutines <= baselineGoroutines+2 || time.Now().After(grDeadline) {
+		if leakErr = goleak.Find(goroutineBaseline); leakErr == nil || time.Now().After(grDeadline) {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Logf("goroutines: baseline=%d after-soak-and-full-eviction=%d", baselineGoroutines, afterGoroutines)
-	if afterGoroutines > baselineGoroutines+2 {
-		t.Errorf("goroutine count did not return to baseline after full eviction: baseline=%d after=%d (possible leak of ~%d goroutines)", baselineGoroutines, afterGoroutines, afterGoroutines-baselineGoroutines)
+	if leakErr != nil {
+		t.Errorf("goroutine leak after full eviction: %v", leakErr)
 	}
 
 	if fdSupported {

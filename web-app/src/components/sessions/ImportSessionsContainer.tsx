@@ -36,6 +36,13 @@ export function ImportSessionsContainer() {
   // reuse it across the whole chained flow (preview -> kill dialog), since
   // ConfirmKillDialog has no trigger of its own.
   const importTriggerRef = useRef<HTMLElement | null>(null);
+  // Persistent fallback for ConfirmKillDialog's triggerRef: the per-row
+  // Import button (captured into importTriggerRef) unmounts once the row's
+  // instanceType flips away from EXTERNAL as part of the same commit that
+  // produces pidIdentity/pendingKill (see ImportExternalSessionsPanel's
+  // EXTERNAL filter), so by the time the kill dialog opens that node can
+  // already be detached. This container div is always mounted.
+  const fallbackTriggerRef = useRef<HTMLDivElement | null>(null);
 
   // advanceQueue pulls the next candidate (if any) off importQueue and makes
   // it the active preview, or clears previewCandidate once the queue is
@@ -75,6 +82,9 @@ export function ImportSessionsContainer() {
         return;
       }
       if (result.pidIdentity) {
+        if (!importTriggerRef.current?.isConnected) {
+          importTriggerRef.current = fallbackTriggerRef.current;
+        }
         setPreviewCandidate(null);
         setPendingKill({
           instanceId: result.instanceId,
@@ -96,7 +106,12 @@ export function ImportSessionsContainer() {
   }, []);
 
   return (
-    <div className={styles.container} data-testid="import-sessions-container">
+    <div
+      ref={fallbackTriggerRef}
+      tabIndex={-1}
+      className={styles.container}
+      data-testid="import-sessions-container"
+    >
       {commitError && (
         <div className={styles.errorBanner} role="alert" data-testid="import-commit-error">
           {commitError}

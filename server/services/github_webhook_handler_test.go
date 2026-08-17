@@ -46,7 +46,7 @@ func newGitHubPushWorkflow(t *testing.T, infra *webhookTestInfra, slug, secret, 
 		GitHubBranch:           branch,
 		WebhookSecretEncrypted: infra.encryptSecret(t, secret),
 		PromptTemplate:         promptTemplate,
-		CronEnabled:            true,
+		Enabled:                boolPtr(true),
 	})
 	require.NoError(t, err)
 	return wf
@@ -113,6 +113,36 @@ func TestGitHubWebhookHandler_should_Return401AndRecordRejected_When_SignatureIn
 	// Rejected events are persisted with WorkflowID nil (per Task 2.2.1d) — not
 	// attributed to the specific workflow whose secret failed to verify.
 	assert.Empty(t, events)
+}
+
+// TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_EnabledIsFalse_EvenIfCronEnabledTrue
+// proves Enabled and CronEnabled are independent (webhook-triggers verify follow-ups
+// AC0-3): a github_push trigger with CronEnabled=true (vestigial for this trigger type)
+// but Enabled=false must not fire — it's filtered out of the repo-candidate list the
+// same way a repo mismatch would be, so it surfaces as no_match, not a 401/403.
+func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_EnabledIsFalse_EvenIfCronEnabledTrue(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	_, err := infra.workflowRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug:                   "gh-push-disabled",
+		Name:                   "GH Push Trigger",
+		Command:                "base instructions",
+		TriggerType:            "github_push",
+		GitHubRepo:             "tstapler/stapler-squad",
+		GitHubBranch:           "main",
+		WebhookSecretEncrypted: infra.encryptSecret(t, "s3cr3t"),
+		PromptTemplate:         "Review {{.head_commit.message}}",
+		CronEnabled:            true,
+		Enabled:                boolPtr(false),
+	})
+	require.NoError(t, err)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+
+	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
+
+	rec := doGitHubWebhookRequest(t, h, body, "delivery-disabled", "sha256=whatever")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, int32(0), infra.sessionSvc.callCount.Load())
 }
 
 func TestGitHubWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *testing.T) {
