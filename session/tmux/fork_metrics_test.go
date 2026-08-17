@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 // resetForkMonitor clears the forkMonitor state between tests to prevent bleed-over.
@@ -534,4 +536,33 @@ func TestStartForkPressureLogger_GoroutineFullyExits_When_WaitGroupIsJoined(t *t
 	if got := tickCount.Load(); got != countAtJoin {
 		t.Fatalf("tickCount kept increasing after wg join (from %d to %d) — goroutine did not fully exit", countAtJoin, got)
 	}
+}
+
+// TestStartForkPressureLogger_JoinsOnCtxCancel pins the regression this fix
+// addresses: StartForkPressureLogger used to be signaled via ctx cancellation
+// but never joined, so a caller had no way to know the goroutine had actually
+// exited. A short interval drives multiple ticks, and goleak.VerifyNone after
+// wg.Wait() confirms no goroutine survives cancellation.
+func TestStartForkPressureLogger_JoinsOnCtxCancel(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	StartForkPressureLogger(ctx, time.Millisecond, func(string, ...any) {}, &wg)
+
+	time.Sleep(20 * time.Millisecond) // let several ticks fire
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wg.Wait() did not return within 1s of ctx cancellation")
+	}
+
+	goleak.VerifyNone(t, baseline)
 }

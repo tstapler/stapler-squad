@@ -8,6 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"go.uber.org/goleak"
 )
 
 // newTestServer builds a minimal Server (bypassing BuildDependencies),
@@ -185,6 +188,35 @@ func Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRun
 	if !exited.Load() {
 		t.Fatal("Shutdown() returned before the background task finished — expected it to block until the task joined")
 	}
+}
+
+// TestServer_Shutdown_JoinsBackgroundTickers pins the regression this fix
+// addresses at the server level: the fork-pressure logger, zombie watcher,
+// and zombie reaper goroutines used to be signaled via serverCtx cancellation
+// but never joined, so Shutdown() could return while they were still running.
+// Wiring them directly to a short interval and to srv.backgroundTasksWG
+// (bypassing the full dependency graph, the same way newTestServer does)
+// drives several ticks before Shutdown() is called; goleak.VerifyNone
+// afterward confirms all three have actually exited by the time Shutdown()
+// returns — genuinely different coverage from the fake-goroutine test above,
+// since this exercises the real tmux.Start* functions end to end.
+func TestServer_Shutdown_JoinsBackgroundTickers(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+
+	srv, serverCtx := newServerBase("localhost:0")
+
+	noop := func(string, ...any) {}
+	tmux.StartForkPressureLogger(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
+	tmux.StartZombieWatcher(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
+	tmux.StartZombieReaper(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
+
+	time.Sleep(20 * time.Millisecond) // let several ticks fire
+
+	if err := srv.Shutdown(); err != nil {
+		t.Fatalf("Shutdown() returned unexpected error: %v", err)
+	}
+
+	goleak.VerifyNone(t, baseline)
 }
 
 // Test_Shutdown_should_NotBlockPastTimeout_When_BackgroundTaskNeverExits proves
