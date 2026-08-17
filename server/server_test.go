@@ -257,6 +257,38 @@ func verifyNoLeaksTolerant(t *testing.T, baseline goleak.Option) {
 	runGoleakTolerant(t, func() { goleak.VerifyNone(t, baseline) })
 }
 
+// ignoreCurrentTolerant is goleak.IgnoreCurrent wrapped in the same
+// elision-panic recovery as runGoleakTolerant. goleak.IgnoreCurrent snapshots
+// every goroutine alive anywhere in the process at call time (not just this
+// test's own goroutines) via the identical stack.All() -> getStackBuffer()
+// path goleak.VerifyNone uses, so it is exactly as exposed to the "...N
+// frames elided..." parser panic — a straggling deep-stack goroutine left
+// over from an earlier test can crash baseline capture before
+// runGoleakTolerant's recover() around the later VerifyNone call is ever
+// reached. CI hit this directly: the panic's own stack trace showed
+// goleak.IgnoreCurrent() itself as the panicking frame. See backlog item
+// 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e.
+func ignoreCurrentTolerant(t *testing.T) goleak.Option {
+	t.Helper()
+	var opt goleak.Option
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			msg := fmt.Sprint(r)
+			if !strings.Contains(msg, goleakElidedStackPanicMarker) {
+				panic(r)
+			}
+			t.Logf("goleak hit its known elided-stack parser panic while capturing a baseline; full diagnostic dump for future root-causing (backlog 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e):\n%s", msg)
+			t.Skip("skipping: goleak.IgnoreCurrent panicked on an elided (\"...N frames elided...\") stack trace before a baseline could be captured — known goleak v1.3.0 limitation, see backlog 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e and the diagnostic dump logged above")
+		}()
+		opt = goleak.IgnoreCurrent()
+	}()
+	return opt
+}
+
 // TestServer_Shutdown_JoinsBackgroundTickers pins the regression this fix
 // addresses at the server level: the fork-pressure logger, zombie watcher,
 // and zombie reaper goroutines used to be signaled via serverCtx cancellation
@@ -276,7 +308,7 @@ func verifyNoLeaksTolerant(t *testing.T, baseline goleak.Option) {
 // 5d164328-c8b4-4e96-ae6e-79c9a6b3dc4e and goleakElidedStackPanicMarker's
 // doc comment for the full root cause.
 func TestServer_Shutdown_JoinsBackgroundTickers(t *testing.T) {
-	baseline := goleak.IgnoreCurrent()
+	baseline := ignoreCurrentTolerant(t)
 
 	srv, serverCtx := newServerBase("localhost:0")
 
@@ -418,7 +450,7 @@ func Test_runGoleakTolerant_should_SkipInsteadOfCrash_When_GoleakHitsElidedStack
 // must still be reported as a normal test failure, proving the tolerant
 // wrapper doesn't mask genuine leaks in the common case.
 func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t *testing.T) {
-	baseline := goleak.IgnoreCurrent()
+	baseline := ignoreCurrentTolerant(t)
 
 	block := make(chan struct{})
 	// Deliberately never close block or wait for this goroutine — it leaks
@@ -450,7 +482,7 @@ func Test_runGoleakTolerant_should_StillFailOnGenuineLeak_When_NoElisionOccurs(t
 // actually forwards baseline into goleak.VerifyNone (a leaked goroutine not
 // present in baseline is reported) rather than, say, silently dropping it.
 func Test_verifyNoLeaksTolerant_should_ForwardBaselineAndFailOnGenuineLeak(t *testing.T) {
-	baseline := goleak.IgnoreCurrent()
+	baseline := ignoreCurrentTolerant(t)
 
 	block := make(chan struct{})
 	// Deliberately leaked past the end of the test, same rationale as
