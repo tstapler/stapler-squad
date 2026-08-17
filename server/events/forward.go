@@ -9,6 +9,7 @@ type EventBus = pkgevents.EventBus
 type Subscriber = pkgevents.Subscriber
 type BacklogChangeKind = pkgevents.BacklogChangeKind
 type BacklogItemEventPayload = pkgevents.BacklogItemEventPayload
+type RemoteHealthEventPayload = pkgevents.RemoteHealthEventPayload
 
 // Constants
 const (
@@ -20,6 +21,7 @@ const (
 	EventApprovalResponse    = pkgevents.EventApprovalResponse
 	EventNotification        = pkgevents.EventNotification
 	EventBacklogItemChanged  = pkgevents.EventBacklogItemChanged
+	EventRemoteHealthChanged = pkgevents.EventRemoteHealthChanged
 
 	// Metadata keys for session-scoped notifications (see SessionScopedMetadata).
 	MetadataKeySessionScoped = pkgevents.MetadataKeySessionScoped
@@ -50,5 +52,6 @@ var (
 	NewApprovalResponseEvent            = pkgevents.NewApprovalResponseEvent
 	NewNotificationEvent                = pkgevents.NewNotificationEvent
 	NewBacklogItemChangedEvent          = pkgevents.NewBacklogItemChangedEvent
+	NewRemoteHealthChangedEvent         = pkgevents.NewRemoteHealthChangedEvent
 	SessionScopedMetadata               = pkgevents.SessionScopedMetadata
 )

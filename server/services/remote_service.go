@@ -272,3 +272,36 @@ func probeHostKey(ctx context.Context, addr, user string) (ssh.PublicKey, error)
 		return nil, ctx.Err()
 	}
 }
+
+// BuildRemoteHealthProber constructs a sshremote.RemoteHealthProber for
+// remote, wiring its liveness-check tmux.SSHRunner the exact same way
+// TestRemoteConnection (above) and SessionService.CreateSession's
+// remote-target block (session_service.go) already build one: remoteAddr
+// for the dialable address and resolveIdentityAuthMethods for the stored
+// identity, kept here rather than duplicated since both helpers are
+// unexported to this package.
+//
+// pool MUST be the same SSHClientPool a session's own SSHRunner/
+// RemoteApprovalRelay for this remote shares (tmux.DefaultSSHClientPool()
+// in production) -- passing an isolated pool here would defeat
+// RemoteHealthProber's whole point of reusing the connection instead of
+// opening a dedicated one (see its doc comment). Exported for server.go's
+// startup wiring (Epic 6.4, Task 6.4.1c) -- the only caller outside this
+// package.
+func BuildRemoteHealthProber(
+	ctx context.Context,
+	remote *config.RemoteConfig,
+	pool *tmux.SSHClientPool,
+	knownHosts *sshremote.KnownHostsStore,
+	keyStore *sshremote.KeyStore,
+	publisher sshremote.HealthEventPublisher,
+) (*sshremote.RemoteHealthProber, error) {
+	target := tmux.SSHTarget{Name: remote.Name, Addr: remoteAddr(remote.Host)}
+	clientConfig := ssh.ClientConfig{
+		User:            remote.User,
+		Auth:            resolveIdentityAuthMethods(ctx, keyStore, remote.IdentityRef),
+		HostKeyCallback: knownHosts.HostKeyCallback(),
+	}
+	runner := tmux.NewSSHRunner(target, clientConfig, tmux.WithSSHClientPool(pool))
+	return sshremote.NewRemoteHealthProber(pool, runner, remote.Name, publisher)
+}

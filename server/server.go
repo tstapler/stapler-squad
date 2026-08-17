@@ -77,6 +77,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
+// healthEventPublisherFunc adapts a plain func to
+// sshremote.HealthEventPublisher -- RemoteHealthProber needs an interface
+// value (session/sshremote/health_prober.go can't import pkg/events itself;
+// see that file's doc comment for the import-cycle reason), while this
+// file's existing EventBus-publish callbacks (tmux.RegisterForkPressureAlert
+// / SetServerRecoveryCallback in wireDepsIntoServer) are plain funcs -- this
+// is the same "closure straight into deps.EventBus.Publish" pattern, just
+// wrapped to satisfy the one-method interface RemoteHealthProber's
+// constructor requires. Must be a package-level type (not declared inside a
+// function) since Go doesn't allow methods on function-local types.
+type healthEventPublisherFunc func(remoteName string, state, previousState sshremote.RemoteConnectionState)
+
+// PublishRemoteHealthChanged implements sshremote.HealthEventPublisher.
+func (f healthEventPublisherFunc) PublishRemoteHealthChanged(remoteName string, state, previousState sshremote.RemoteConnectionState) {
+	f(remoteName, state, previousState)
+}
+
 // newServerBase creates the base Server struct and returns it alongside the
 // connection context that drives active-stream cancellation on shutdown.
 // Both NewServer and NewServerWithDeps call this before wiring dependencies.
@@ -456,6 +473,38 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// this RemoteService's TOFU flow, with no separate wiring step.
 		if deps.SessionService != nil {
 			deps.SessionService.SetRemoteDeps(keyStore, knownHosts)
+		}
+
+		// Start one RemoteHealthProber per configured remote (ssh-remote-workspaces
+		// Epic 6.4, Task 6.4.1c), closing the loop for Epic 6.2's connection
+		// indicator: each prober shares tmux.DefaultSSHClientPool() -- the SAME
+		// process-wide pool a session's own SSHRunner/RemoteApprovalRelay for
+		// that remote already uses -- so this never opens a dedicated connection
+		// of its own (BuildRemoteHealthProber's doc comment). healthPublisher is
+		// a single shared adapter (defined below) wrapping deps.EventBus.Publish,
+		// reused across every remote since HealthEventPublisher.
+		// PublishRemoteHealthChanged already takes remoteName per call, mirroring
+		// the one-callback-many-callers shape of tmux.RegisterForkPressureAlert/
+		// SetServerRecoveryCallback elsewhere in this function.
+		//
+		// Only remotes present in config AT SERVER START are wired here --
+		// dynamically starting/stopping a prober when a remote is added/removed
+		// later via the Settings UI (Phase 6 Epic 6.1, not yet built) is out of
+		// scope for this task and left as a follow-up for whoever builds that UI.
+		healthPublisher := healthEventPublisherFunc(func(remoteName string, state, previousState sshremote.RemoteConnectionState) {
+			deps.EventBus.Publish(events.NewRemoteHealthChangedEvent(remoteName, state, previousState))
+		})
+		remotesCfg := config.LoadConfig().Remotes
+		for i := range remotesCfg {
+			remote := &remotesCfg[i]
+			prober, proberErr := services.BuildRemoteHealthProber(serverCtx, remote, tmux.DefaultSSHClientPool(), knownHosts, keyStore, healthPublisher)
+			if proberErr != nil {
+				log.Error("failed to build RemoteHealthProber, connection indicator will not update live for this remote", "remote", remote.Name, "err", proberErr)
+				continue
+			}
+			prober.Start(serverCtx)
+			srv.shutdownHooks = append(srv.shutdownHooks, prober.Stop)
+			log.Info("RemoteHealthProber started", "remote", remote.Name)
 		}
 	}
 
