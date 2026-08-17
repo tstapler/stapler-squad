@@ -2,6 +2,7 @@ package headless
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -274,15 +275,70 @@ func TestPool_Call_MultiLineOutput_StreamsInOrder(t *testing.T) {
 	assert.Equal(t, []string{"line1", "line2", "line3"}, lines)
 }
 
-// TestPool_CallBlocking_PropagatesSubprocessError verifies error propagation.
+// TestPool_CallBlocking_PropagatesSubprocessError verifies error propagation,
+// and that a runner-start failure (os.Pipe()/cmd.Start() failing — e.g. under fd
+// exhaustion or ENOMEM) is wrapped in ErrSubprocessStart so
+// classifyHeadlessCallError (server/services/backlog_service_triage.go) can
+// bucket it as "subprocess_start_error" instead of an undiagnosable "other".
 func TestPool_CallBlocking_PropagatesSubprocessError(t *testing.T) {
+	startErr := errors.New("start failed")
 	runner := &FakeRunner{
-		errors: []error{fmt.Errorf("start failed")},
+		errors: []error{startErr},
 	}
 	pool := newTestPool(PoolConfig{}, runner)
 
 	_, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSubprocessStart, "runner-start failures must be classifiable, not swallowed into a generic error")
+	assert.ErrorIs(t, err, startErr, "the underlying OS-level error must remain inspectable")
+}
+
+// partialErrReadCloser simulates a subprocess killed mid-write (e.g. OOM-killed):
+// it returns real, useful data on the first Read, then a non-EOF error on the next.
+type partialErrReadCloser struct {
+	data []byte
+	err  error
+	sent bool
+}
+
+func (r *partialErrReadCloser) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		n := copy(p, r.data)
+		return n, nil
+	}
+	return 0, r.err
+}
+
+func (r *partialErrReadCloser) Close() error { return nil }
+
+// partialErrRunner always returns a partialErrReadCloser from Run.
+type partialErrRunner struct {
+	data []byte
+	err  error
+}
+
+func (r *partialErrRunner) Run(_ context.Context, _ []string, _ io.Reader) (io.ReadCloser, func() error, error) {
+	return &partialErrReadCloser{data: r.data, err: r.err}, func() error { return nil }, nil
+}
+
+// TestPool_CallBlocking_ReadError_ReturnsPartialDataAsRaw_When_SubprocessKilledMidWrite
+// covers the fix mirroring the JSON-parse-failure branch's existing behavior:
+// when the subprocess is killed mid-write, any real output already read before
+// the pipe read failed must be delivered as a Text chunk before the terminal Err
+// chunk. Before the fix, that partial data was discarded, so CallBlocking's raw
+// return was always "" for this failure mode and captureHeadlessFailure
+// (server/services/backlog_service_triage.go) had nothing to persist for
+// diagnosis even though real output existed.
+func TestPool_CallBlocking_ReadError_ReturnsPartialDataAsRaw_When_SubprocessKilledMidWrite(t *testing.T) {
+	wantErr := errors.New("read |0: input/output error")
+	runner := &partialErrRunner{data: []byte("partial output before kill"), err: wantErr}
+	pool := NewPoolWithRunner(PoolConfig{}, runner)
+
+	raw, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, wantErr)
+	assert.Equal(t, "partial output before kill", raw)
 }
 
 // TestPool_DifferentKeys_RunInParallel verifies parallel execution on different keys.

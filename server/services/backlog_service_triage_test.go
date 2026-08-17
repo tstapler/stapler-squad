@@ -42,9 +42,8 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 29*time.Minute + 56*time.Second, "timeout"},
 		{"ctx canceled (shutdown)", context.Canceled, time.Minute, "shutdown"},
 		{"claude binary not found", headless.ErrClaudeNotFound, time.Second, "claude_not_found"},
-		{"llm error", headless.ErrLLMError, time.Minute, "process_error"},
-		{"usage error", headless.ErrUsageError, time.Second, "process_error"},
-		{"interrupted", headless.ErrInterrupted, time.Second, "process_error"},
+		{"subprocess start error", headless.ErrSubprocessStart, time.Minute, "subprocess_start_error"},
+		{"wrapped subprocess start error", fmt.Errorf("headless runner start: %w: %w", headless.ErrSubprocessStart, errors.New("fork/exec claude: resource temporarily unavailable")), time.Minute, "subprocess_start_error"},
 		{"unrelated error, short elapsed", errors.New("boom"), time.Minute, "other"},
 	}
 	for _, tc := range tests {

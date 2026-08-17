@@ -2322,11 +2322,26 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 //   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
 //     hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
 //   - "shutdown": server shutdown context cancelled mid-call, not a call failure.
-//   - "process_error": the claude subprocess ran and exited non-zero (bad prompt, LLM
-//     refusal, usage error) — see headless.ErrLLMError/ErrUsageError/ErrInterrupted.
 //   - "claude_not_found": the claude binary itself is missing from PATH — an environment
 //     problem, not a per-call one.
-//   - "other": anything else (e.g. a storage/DB error surfaced through the same path).
+//   - "subprocess_start_error": the claude subprocess itself failed to start (os.Pipe()
+//     or cmd.Start() failing — fd exhaustion, ENOMEM, ENOENT, EACCES) — see
+//     headless.ErrSubprocessStart. raw is always "" for this bucket: the failure happens
+//     before any output is produced, so there is nothing for captureHeadlessFailure to
+//     persist.
+//   - "other": anything else, including the claude subprocess running and exiting
+//     non-zero. There is deliberately no dedicated bucket for that today: the OS-level
+//     exit code is captured in the process audit log (executor/audit.go) but is never
+//     threaded back through ProcessRunner.Run/headless.Pool.call to the caller — the
+//     only per-call "failure" signal callBlocking's first-call path actually inspects is
+//     the CLI's own JSON is_error field, which is a distinct, app-level signal from the
+//     OS exit code. (An earlier version of this classifier had a "process_error" bucket
+//     matching headless.ErrLLMError/ErrUsageError/ErrInterrupted sentinels that no
+//     production code path ever constructed — dead code, removed. Wiring up real
+//     exit-code translation would require restructuring every error-return branch in
+//     Pool.call to consult the subprocess's actual exit status before sending; if that's
+//     ever worth doing, do it as its own change rather than reintroducing unused
+//     sentinels.)
 //
 // budget is the caller's own call timeout (e.g. triageCallBudget for TriggerTriage,
 // callTimeout for TriggerReReview) — the same classifier is shared across both headless
@@ -2339,8 +2354,8 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 		return "shutdown"
 	case errors.Is(err, headless.ErrClaudeNotFound):
 		return "claude_not_found"
-	case errors.Is(err, headless.ErrLLMError), errors.Is(err, headless.ErrUsageError), errors.Is(err, headless.ErrInterrupted):
-		return "process_error"
+	case errors.Is(err, headless.ErrSubprocessStart):
+		return "subprocess_start_error"
 	default:
 		return "other"
 	}
