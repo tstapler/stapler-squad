@@ -88,3 +88,53 @@ func (ks *KeyStore) GenerateAndStoreIdentity(ctx context.Context, remoteName str
 	}
 	return identity, nil
 }
+
+// GenerateOrDescribeIdentity is the idempotent entry point the Add Remote
+// form's "Test connection" flow (ssh-remote-workspaces Phase 6, Epic 6.1)
+// calls via RemoteService.GenerateRemoteIdentity: if remoteName already has
+// a stored identity, its public key text / authorized_keys line are
+// reconstructed from the stored private key instead of generating (and thus
+// silently rotating) a new keypair -- a user who clicks "Test connection"
+// more than once for the same not-yet-saved remote name must keep seeing
+// identical key material, since that's the line they were told to paste
+// onto the remote host. Falls through to GenerateAndStoreIdentity when
+// nothing is stored yet, or when the stored envelope can't be parsed as a
+// private key (treated the same as "nothing usable stored").
+//
+// The check (GetIdentity) and the write (GenerateAndStoreIdentity) are held
+// under ks.generateOrDescribeMu as a single atomic sequence: without it, two
+// concurrent calls for the same brand-new remote name (e.g. a rapid
+// double-click on "Test connection") could both miss the GetIdentity check
+// before either has stored anything, then both generate and store --
+// silently producing two different keypairs, with the second overwriting
+// the first and leaving the caller who received the first's response
+// holding a key that's no longer what's actually stored.
+func (ks *KeyStore) GenerateOrDescribeIdentity(ctx context.Context, remoteName string) (GeneratedIdentity, error) {
+	ks.generateOrDescribeMu.Lock()
+	defer ks.generateOrDescribeMu.Unlock()
+
+	kind, value, err := ks.GetIdentity(ctx, remoteName)
+	if err == nil && kind == IdentityKindPrivateKey {
+		if publicKeyText, authorizedKeysLine, describeErr := describeStoredIdentity(value); describeErr == nil {
+			return GeneratedIdentity{
+				PrivateKeyPEM:      value,
+				PublicKeyText:      publicKeyText,
+				AuthorizedKeysLine: authorizedKeysLine,
+			}, nil
+		}
+	}
+	return ks.GenerateAndStoreIdentity(ctx, remoteName)
+}
+
+// describeStoredIdentity parses a stored PEM-encoded private key (as
+// persisted by GenerateAndStoreIdentity) and reconstructs the public key
+// text + recommended authorized_keys line, without generating a new
+// keypair.
+func describeStoredIdentity(privateKeyPEM []byte) (publicKeyText, authorizedKeysLine string, err error) {
+	signer, err := ssh.ParsePrivateKey(privateKeyPEM)
+	if err != nil {
+		return "", "", fmt.Errorf("sshremote: parse stored private key: %w", err)
+	}
+	publicKeyText = strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(signer.PublicKey())), "\n")
+	return publicKeyText, formatAuthorizedKeysLine(publicKeyText), nil
+}

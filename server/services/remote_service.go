@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 
 	"connectrpc.com/connect"
 	"golang.org/x/crypto/ssh"
@@ -75,23 +76,18 @@ func (s *RemoteService) TestRemoteConnection(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TestRemoteConnectionRequest],
 ) (*connect.Response[sessionv1.TestRemoteConnectionResponse], error) {
-	remoteName := req.Msg.RemoteName
-	if remoteName == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("remote_name is required"))
+	target, err := s.resolveRemoteTarget(req.Msg.RemoteName, req.Msg.Draft)
+	if err != nil {
+		return nil, err
 	}
 
-	remote, ok := s.loadConfig().RemoteByName(remoteName)
-	if !ok {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no remote configured named %q", remoteName))
-	}
-
-	target := tmux.SSHTarget{Name: remote.Name, Addr: remoteAddr(remote.Host)}
+	sshTarget := tmux.SSHTarget{Name: target.name, Addr: target.addr}
 	clientConfig := ssh.ClientConfig{
-		User:            remote.User,
-		Auth:            s.resolveAuthMethods(ctx, remote),
+		User:            target.user,
+		Auth:            resolveIdentityAuthMethods(ctx, s.keyStore, target.identityRef),
 		HostKeyCallback: s.knownHosts.HostKeyCallback(),
 	}
-	runner := tmux.NewSSHRunner(target, clientConfig)
+	runner := tmux.NewSSHRunner(sshTarget, clientConfig)
 
 	if err := runner.Dial(ctx); err != nil {
 		var unknownErr *tmux.ErrUnknownHostKey
@@ -103,11 +99,73 @@ func (s *RemoteService) TestRemoteConnection(
 		}
 
 		return connect.NewResponse(&sessionv1.TestRemoteConnectionResponse{
-			ErrorMessage: hostKeyAwareErrorMessage(remote.Host, err),
+			ErrorMessage: hostKeyAwareErrorMessage(target.hostForTrust, err),
 		}), nil
 	}
 
 	return connect.NewResponse(&sessionv1.TestRemoteConnectionResponse{Success: true}), nil
+}
+
+// resolvedRemoteTarget is the common shape TestRemoteConnection and
+// TrustRemoteHostKey dial against, regardless of whether the caller supplied
+// an already-saved remote_name or an inline draft (see both requests' doc
+// comments in remote.proto).
+type resolvedRemoteTarget struct {
+	name string
+	// hostForTrust is the raw host string as stored (or as it WOULD be
+	// stored, for a draft) in config.RemoteConfig.Host -- e.g. "prod.example.com"
+	// or "prod.example.com:2222" for a non-default port, but never with the
+	// default port (22) appended. This is what KnownHostsStore.Trust is
+	// keyed on, matching what HostKeyCallback observes during the real dial
+	// (see hostWithPort's doc comment).
+	hostForTrust string
+	// addr is the dialable "host:port" form (default port folded in),
+	// matching remoteAddr's contract.
+	addr string
+	user string
+	// identityRef is the sshremote.KeyStore key for this target's SSH
+	// identity -- remote.IdentityRef for a saved remote, or the draft's name
+	// (identities generated via GenerateRemoteIdentity are keyed by name;
+	// see DraftRemoteTarget's doc comment).
+	identityRef string
+}
+
+// resolveRemoteTarget resolves either an already-saved remote (remoteName)
+// or inline draft connection coordinates (draft) into a resolvedRemoteTarget.
+// Exactly one of remoteName/draft must be set. The returned error is already
+// a connect.Error with the appropriate code (InvalidArgument/NotFound), so
+// callers can return it directly.
+func (s *RemoteService) resolveRemoteTarget(remoteName string, draft *sessionv1.DraftRemoteTarget) (*resolvedRemoteTarget, error) {
+	switch {
+	case remoteName != "" && draft != nil:
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("remote_name and draft are mutually exclusive"))
+	case remoteName != "":
+		remote, ok := s.loadConfig().RemoteByName(remoteName)
+		if !ok {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no remote configured named %q", remoteName))
+		}
+		return &resolvedRemoteTarget{
+			name:         remote.Name,
+			hostForTrust: remote.Host,
+			addr:         remoteAddr(remote.Host),
+			user:         remote.User,
+			identityRef:  remote.IdentityRef,
+		}, nil
+	case draft != nil:
+		if draft.Name == "" || draft.Host == "" || draft.User == "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("draft.name, draft.host, and draft.user are required"))
+		}
+		hostForTrust := hostWithPort(draft.Host, draft.Port)
+		return &resolvedRemoteTarget{
+			name:         draft.Name,
+			hostForTrust: hostForTrust,
+			addr:         remoteAddr(hostForTrust),
+			user:         draft.User,
+			identityRef:  draft.Name,
+		}, nil
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("one of remote_name or draft is required"))
+	}
 }
 
 // +api: remote:trust-host-key
@@ -131,24 +189,18 @@ func (s *RemoteService) TrustRemoteHostKey(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TrustRemoteHostKeyRequest],
 ) (*connect.Response[sessionv1.TrustRemoteHostKeyResponse], error) {
-	remoteName := req.Msg.RemoteName
-	if remoteName == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("remote_name is required"))
-	}
 	if req.Msg.Fingerprint == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("fingerprint is required"))
 	}
-
-	remote, ok := s.loadConfig().RemoteByName(remoteName)
-	if !ok {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no remote configured named %q", remoteName))
+	target, err := s.resolveRemoteTarget(req.Msg.RemoteName, req.Msg.Draft)
+	if err != nil {
+		return nil, err
 	}
 
-	addr := remoteAddr(remote.Host)
-	key, probeErr := probeHostKey(ctx, addr, remote.User)
+	key, probeErr := probeHostKey(ctx, target.addr, target.user)
 	if key == nil {
 		return connect.NewResponse(&sessionv1.TrustRemoteHostKeyResponse{
-			ErrorMessage: fmt.Sprintf("could not reach %s to verify its host key: %v", addr, probeErr),
+			ErrorMessage: fmt.Sprintf("could not reach %s to verify its host key: %v", target.addr, probeErr),
 		}), nil
 	}
 
@@ -157,25 +209,214 @@ func (s *RemoteService) TrustRemoteHostKey(
 		return connect.NewResponse(&sessionv1.TrustRemoteHostKeyResponse{
 			ErrorMessage: fmt.Sprintf(
 				"fingerprint mismatch: %s is currently presenting %s, not the %s you were shown -- refusing to trust; the key may have changed",
-				remote.Host, actual, req.Msg.Fingerprint,
+				target.hostForTrust, actual, req.Msg.Fingerprint,
 			),
 		}), nil
 	}
 
-	if err := s.knownHosts.Trust(remote.Host, key); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("trust host key for %q: %w", remoteName, err))
+	if err := s.knownHosts.Trust(target.hostForTrust, key); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("trust host key for %q: %w", target.name, err))
 	}
 	return connect.NewResponse(&sessionv1.TrustRemoteHostKeyResponse{Success: true}), nil
 }
 
-// resolveAuthMethods builds SSH auth methods for remote from its stored
-// identity (sshremote.KeyStore, Epic 3.2), if one is registered. See
-// resolveIdentityAuthMethods for the shared implementation (also used by
-// SessionService.CreateSession's remote-target mode-specific block, Epic
-// 4.2 -- extracted to a package-level function rather than duplicated so
-// the two call sites can't drift).
-func (s *RemoteService) resolveAuthMethods(ctx context.Context, remote *config.RemoteConfig) []ssh.AuthMethod {
-	return resolveIdentityAuthMethods(ctx, s.keyStore, remote.IdentityRef)
+// +api: remote:generate-identity
+// GenerateRemoteIdentity is the idempotent identity-generation step the Add
+// Remote form's "Test connection" flow calls before the remote exists in
+// config.json (ssh-remote-workspaces Phase 6, Epic 6.1) -- see
+// sshremote.KeyStore.GenerateOrDescribeIdentity's doc comment for the
+// idempotency guarantee (repeated clicks never rotate the key).
+func (s *RemoteService) GenerateRemoteIdentity(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GenerateRemoteIdentityRequest],
+) (*connect.Response[sessionv1.GenerateRemoteIdentityResponse], error) {
+	name := req.Msg.Name
+	if name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("name is required"))
+	}
+
+	identity, err := s.keyStore.GenerateOrDescribeIdentity(ctx, name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("generate identity for %q: %w", name, err))
+	}
+
+	return connect.NewResponse(&sessionv1.GenerateRemoteIdentityResponse{
+		PublicKeyText:      identity.PublicKeyText,
+		AuthorizedKeysLine: identity.AuthorizedKeysLine,
+	}), nil
+}
+
+// +api: remote:list
+// ListRemotes returns every configured remote, for the Settings -> Remotes
+// list view (ssh-remote-workspaces Phase 6, Epic 6.1, Task 6.1.1a).
+func (s *RemoteService) ListRemotes(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListRemotesRequest],
+) (*connect.Response[sessionv1.ListRemotesResponse], error) {
+	cfg := s.loadConfig()
+	remotes := make([]*sessionv1.RemoteConfigProto, 0, len(cfg.Remotes))
+	for i := range cfg.Remotes {
+		remotes = append(remotes, remoteConfigToProto(&cfg.Remotes[i]))
+	}
+	return connect.NewResponse(&sessionv1.ListRemotesResponse{Remotes: remotes}), nil
+}
+
+// +api: remote:create
+// CreateRemote persists a new RemoteConfig to config.json -- see its RPC
+// doc comment in remote.proto for when the frontend calls this (after a
+// draft-mode TestRemoteConnection/TrustRemoteHostKey has confirmed the
+// remote is reachable).
+//
+// TRACKED GAP: this handler does NOT itself verify the target host's key is
+// already present in s.knownHosts before saving -- the TOFU precondition
+// (TestRemoteConnection succeeded, or TrustRemoteHostKey was called) is
+// enforced only by caller/frontend flow discipline, not by this RPC's own
+// contract. A caller invoking CreateRemote directly, bypassing the
+// draft-mode Test/Trust sequence, would still fail SAFE the first time the
+// remote is actually dialed (SessionService.CreateSession's remote-target
+// path and this service's own TestRemoteConnection both build their
+// ssh.ClientConfig.HostKeyCallback from s.knownHosts.HostKeyCallback(),
+// which rejects an untrusted host key at the SSH layer) -- so this is a
+// missing defense-in-depth check at the API layer, not an exploitable gap
+// in the actual trust boundary. Not fixed here: the only meaningful
+// server-side check available without re-dialing the remote (parsing
+// known_hosts for a Host-name entry, independent of which key it pins)
+// wouldn't actually verify trust of the CURRENT key either, and re-dialing
+// from inside a "just save config" RPC would re-entangle it with the same
+// network-operation complexity Epic 3.3's TestRemoteConnection already
+// owns. Revisit if CreateRemote ever grows a caller other than this
+// feature's own draft-mode frontend flow.
+func (s *RemoteService) CreateRemote(
+	ctx context.Context,
+	req *connect.Request[sessionv1.CreateRemoteRequest],
+) (*connect.Response[sessionv1.CreateRemoteResponse], error) {
+	name := req.Msg.Name
+	if name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("name is required"))
+	}
+	if req.Msg.Host == "" || req.Msg.User == "" || req.Msg.BasePath == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("host, user, and base_path are required"))
+	}
+
+	cfg := s.loadConfig()
+	if _, ok := cfg.RemoteByName(name); ok {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("a remote named %q is already configured", name))
+	}
+
+	// The intended onboarding flow already generated an identity for name
+	// via GenerateRemoteIdentity (called from "Test connection"); generate
+	// one on demand here too so CreateRemote can never persist a
+	// RemoteConfig with a dangling IdentityRef.
+	if _, err := s.keyStore.GenerateOrDescribeIdentity(ctx, name); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("ensure identity for %q: %w", name, err))
+	}
+
+	remote := config.RemoteConfig{
+		Name:        name,
+		Host:        hostWithPort(req.Msg.Host, req.Msg.Port),
+		User:        req.Msg.User,
+		BasePath:    req.Msg.BasePath,
+		IdentityRef: name,
+	}
+	cfg.Remotes = append(cfg.Remotes, remote)
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.CreateRemoteResponse{Remote: remoteConfigToProto(&remote)}), nil
+}
+
+// +api: remote:delete
+// DeleteRemote removes name's config.json entry (if present) and its stored
+// SSH identity (if present) -- see its RPC doc comment in remote.proto for
+// why either alone is treated as success (it serves both the Remotes list's
+// "Delete" row action and the Add Remote form's Cancel-cleanup path, which
+// only ever has an orphaned identity to remove, never a config entry).
+func (s *RemoteService) DeleteRemote(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteRemoteRequest],
+) (*connect.Response[sessionv1.DeleteRemoteResponse], error) {
+	name := req.Msg.Name
+	if name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("name is required"))
+	}
+
+	cfg := s.loadConfig()
+	kept := make([]config.RemoteConfig, 0, len(cfg.Remotes))
+	removedFromConfig := false
+	for _, r := range cfg.Remotes {
+		if r.Name == name {
+			removedFromConfig = true
+			continue
+		}
+		kept = append(kept, r)
+	}
+
+	deletedIdentity := false
+	if err := s.keyStore.DeleteIdentity(ctx, name); err == nil {
+		deletedIdentity = true
+	} else if !errors.Is(err, sshremote.ErrIdentityNotFound) {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete identity for %q: %w", name, err))
+	}
+
+	if !removedFromConfig && !deletedIdentity {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no remote or stored identity found for %q", name))
+	}
+
+	if removedFromConfig {
+		cfg.Remotes = kept
+		if err := config.SaveConfig(cfg); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+		}
+	}
+
+	return connect.NewResponse(&sessionv1.DeleteRemoteResponse{}), nil
+}
+
+// remoteConfigToProto converts a config.RemoteConfig to its RPC transport
+// shape, splitting a non-default port back out of Host so the frontend never
+// has to parse a "host:port" string itself (see RemoteConfigProto's doc
+// comment).
+func remoteConfigToProto(remote *config.RemoteConfig) *sessionv1.RemoteConfigProto {
+	host, port := splitHostPort(remote.Host)
+	return &sessionv1.RemoteConfigProto{
+		Name:        remote.Name,
+		Host:        host,
+		User:        remote.User,
+		Port:        port,
+		BasePath:    remote.BasePath,
+		HasIdentity: remote.IdentityRef != "",
+	}
+}
+
+// hostWithPort folds a non-default port into a "host:port" string suitable
+// for storage as config.RemoteConfig.Host, matching that field's documented
+// shape (a bare host normally; an explicit "host:port" only for a
+// non-default port). port == 0 or port == defaultRemotePort's numeric value
+// (22) yields host unchanged.
+func hostWithPort(host string, port int32) string {
+	if port == 0 || strconv.Itoa(int(port)) == defaultRemotePort {
+		return host
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(port)))
+}
+
+// splitHostPort splits a config.RemoteConfig.Host value into a bare host and
+// an int32 port (0 when Host carries no explicit port -- the common,
+// default-22 case). Best-effort: a Host value net.SplitHostPort can't parse
+// falls back to returning it unchanged with port 0 rather than an error --
+// this runs on read paths (ListRemotes/CreateRemote's response) that must
+// always succeed.
+func splitHostPort(host string) (string, int32) {
+	h, p, err := net.SplitHostPort(host)
+	if err != nil {
+		return host, 0
+	}
+	portNum, err := strconv.Atoi(p)
+	if err != nil {
+		return host, 0
+	}
+	return h, int32(portNum)
 }
 
 // resolveIdentityAuthMethods builds SSH auth methods from identityRef's

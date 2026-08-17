@@ -122,6 +122,18 @@ func identityKey(remoteName string) string {
 // unavailable (per research/build-vs-buy.md §3: fail loud instead).
 type KeyStore struct {
 	timeout time.Duration
+	// generateOrDescribeMu serializes GenerateOrDescribeIdentity's full
+	// check-then-generate-then-store sequence (see that method's doc
+	// comment in keygen.go). This is DISTINCT from the package-level
+	// keyringMu: keyringMu only serializes each individual
+	// GetIdentity/SetIdentity call, not the multi-call sequence
+	// GenerateOrDescribeIdentity makes as a whole, so two concurrent callers
+	// for the same brand-new remote name could otherwise both miss the
+	// GetIdentity check before either's SetIdentity write lands. Locking
+	// keyringMu itself for the whole sequence isn't an option either --
+	// GetIdentity/SetIdentity each acquire it internally via raceKeyringOp,
+	// and sync.Mutex isn't reentrant, so that would deadlock.
+	generateOrDescribeMu sync.Mutex
 }
 
 // KeyStoreOption configures a KeyStore at construction time.

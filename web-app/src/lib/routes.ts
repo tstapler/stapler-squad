@@ -21,6 +21,7 @@ export const routes = {
   settingsFeatures: "/settings/features",
   settingsBacklogSources: "/settings/backlog-sources",
   settingsPipelineModes: "/settings/pipeline-modes",
+  settingsRemotes: "/settings/remotes",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
   sessionsImport: "/sessions/import",
