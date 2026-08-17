@@ -3,9 +3,11 @@ package tmux
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -213,6 +215,88 @@ func testSSHHandler(s gliderssh.Session) {
 		_, _ = fmt.Fprintf(s.Stderr(), "unknown test command: %v\n", cmd)
 		_ = s.Exit(127)
 	}
+}
+
+// startRealExecTestSSHServer starts a testSSHServer whose Handler actually
+// executes each exec request's raw command line via the host's real shell
+// (realExecSSHHandler), rather than testSSHHandler's small closed set of
+// builtin verbs (echo/cat/sleep/false). tmux_remote_test.go's integration
+// test needs this: SSHRunner sends real "tmux has-session"/"tmux
+// new-session -A"/"tmux list-sessions" invocations (wrapped in "env -u TMUX
+// TERM=..." by wrapRemoteCommand) and the test must prove the
+// existence-check-then-create logic behaves correctly against a real tmux
+// server, not a canned fake. Safe despite executing real, unsandboxed shell
+// commands: this listens on loopback and only the test process itself ever
+// connects to it, so there is no untrusted remote party (unlike a
+// production sshd, which must never do this).
+func startRealExecTestSSHServer(t *testing.T) *testSSHServer {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate host key: %v", err)
+	}
+	hostSigner, err := ssh.NewSignerFromSigner(priv)
+	if err != nil {
+		t.Fatalf("failed to build host signer: %v", err)
+	}
+
+	srv := &gliderssh.Server{
+		Handler: realExecSSHHandler,
+		PublicKeyHandler: func(gliderssh.Context, gliderssh.PublicKey) bool {
+			return true
+		},
+	}
+	srv.AddHostKey(hostSigner)
+
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() {
+		_ = srv.Close()
+		_ = ln.Close()
+	})
+
+	return &testSSHServer{
+		Addr:     ln.Addr().String(),
+		HostKey:  hostSigner.PublicKey(),
+		server:   srv,
+		listener: ln,
+	}
+}
+
+// realExecSSHHandler runs s.RawCommand() (the exact, unparsed command line
+// the client sent -- not s.Command()'s shlex-split view, which would need
+// lossy reassembly) through the host's real shell, wiring stdin/stdout/
+// stderr directly to the SSH session. This mirrors the exec-request
+// semantics a real sshd provides, which is exactly what SSHRunner's
+// buildRemoteCommand output (a single shell-quoted command-line string,
+// optionally "cd <dir> && "-prefixed) expects on the other end.
+func realExecSSHHandler(s gliderssh.Session) {
+	raw := s.RawCommand()
+	if raw == "" {
+		_ = s.Exit(0)
+		return
+	}
+
+	cmd := exec.CommandContext(s.Context(), "sh", "-c", raw)
+	cmd.Stdin = s
+	cmd.Stdout = s
+	cmd.Stderr = s.Stderr()
+
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			_ = s.Exit(exitErr.ExitCode())
+			return
+		}
+		_, _ = fmt.Fprintf(s.Stderr(), "exec error: %v\n", err)
+		_ = s.Exit(1)
+		return
+	}
+	_ = s.Exit(0)
 }
 
 // stallingListener accepts TCP connections and never speaks SSH on them --

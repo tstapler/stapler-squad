@@ -1331,6 +1331,124 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	return nil
 }
 
+// ErrEnsureRemoteSessionRequiresRemoteRunner is returned by EnsureRemoteSession
+// when t's CommandRunner is not remote. The local session-creation path
+// (start(), reached via Start/StartWithCleanup) already implements the
+// equivalent existence-check-then-create flow against t.cmdExec/PTY
+// machinery; EnsureRemoteSession exists specifically for the remote case,
+// where the connection itself (not just the command) can drop mid-flight.
+var ErrEnsureRemoteSessionRequiresRemoteRunner = errors.New("EnsureRemoteSession requires a remote CommandRunner")
+
+// EnsureRemoteSession creates the remote tmux session t.sanitizedName over
+// t.commandRunner() if it does not already exist, reusing it if it does.
+// This is Story 2.3.2's existence-check-before-create logic in isolation:
+// unlike start() (the local session-creation path), it does not set up a
+// PTY, control mode, or any of the other local-session machinery -- wiring
+// a remote TmuxSession into a full production session lifecycle is Phase
+// 4's job (project_plans/ssh-remote-workspaces/implementation/plan.md), not
+// this epic's.
+//
+// The failure mode this closes (research/pitfalls.md §1): an SSH channel
+// drop mid-command can be indistinguishable, from the caller's side, from
+// the remote command itself failing -- the remote tmux new-session may have
+// already succeeded even though Run() returned an error. A caller that
+// blindly retries plain "new-session" on that basis would get "duplicate
+// session" at best, or -- if the sanitized name were ever allowed to differ
+// between attempts -- a genuine duplicate at worst.
+//
+// This is NOT closed by "-A" (attach-if-exists) alone, despite that being
+// the obvious-looking fix: "-A" attaches to an already-existing session by
+// re-executing the client against it, which requires a PTY -- and
+// SSHRunner.Run never requests one (no RequestPty call anywhere in
+// ssh_runner.go, by design: Run is the one-shot "get combined output"
+// case, not an interactive attach). Confirmed empirically
+// (TestNewSessionA_AgainstExistingSession_FailsOverNonPTYChannel): "tmux
+// new-session -A -d" against an already-existing session, run over a
+// non-PTY SSH channel, fails with "open terminal failed: not a terminal"
+// (exit status 1) -- it does not silently attach. So "-A" alone still
+// leaves a caller-visible error in the exact race window this function
+// exists to close: has-session reports absent, a concurrent creator (a
+// prior dropped-connection retry, or a genuinely concurrent caller) wins
+// before this call's own new-session -A runs, and that new-session -A then
+// fails against the now-existing session for the PTY reason above.
+//
+// The actual sequence, each command run through wrapRemoteCommand (Story
+// 2.3.1) since t.commandRunner().IsRemote() is required to call this at
+// all:
+//  1. An explicit "has-session" check first (remoteHasSession), so a caller
+//     can distinguish "reused" from "created" without depending on
+//     new-session's exit code, and so the common case (no race) never
+//     issues a doomed-to-fail new-session -A against an existing session.
+//  2. If absent, "new-session -A -d ..." (createRemoteSession). "-A" still
+//     matters here even though it can't silently attach over a non-PTY
+//     channel: without it, a race-losing new-session would fail with
+//     "duplicate session" -- a different, but equally real, tmux-side error
+//     -- so this is not "assume -A works and skip everything else," it's
+//     "keep -A anyway (correct if a PTY caller ever attaches through this
+//     path) and add the recheck this channel actually needs."
+//  3. If step 2 fails, one more remoteHasSession recheck before surfacing
+//     the error: if the session now exists, that failure was the race
+//     above, not a real creation failure, and is treated as success.
+func (t *TmuxSession) EnsureRemoteSession(ctx context.Context, workDir string) error {
+	runner := t.commandRunner()
+	if !runner.IsRemote() {
+		return fmt.Errorf("%w (session %q)", ErrEnsureRemoteSessionRequiresRemoteRunner, t.sanitizedName)
+	}
+
+	if t.remoteHasSession(ctx, runner) {
+		log.Info("remote tmux session already exists, reusing", "session", t.sanitizedName)
+		return nil
+	}
+	log.Info("remote tmux session not found, will create", "session", t.sanitizedName)
+
+	if err := validateWorkDir(workDir); err != nil {
+		return fmt.Errorf("cannot start remote tmux session %s: %w", t.sanitizedName, err)
+	}
+
+	return t.createRemoteSession(ctx, runner, workDir)
+}
+
+// createRemoteSession runs "tmux new-session -A -d" for t.sanitizedName
+// over runner (already confirmed remote by the caller). See
+// EnsureRemoteSession's doc comment for why a new-session -A failure
+// triggers one more remoteHasSession recheck before being surfaced as an
+// error, rather than being trusted at face value: over SSHRunner's non-PTY
+// channel, "-A" against an already-existing session fails instead of
+// silently attaching, and that specific failure must not be reported as
+// "session creation failed" when the session in fact exists.
+func (t *TmuxSession) createRemoteSession(ctx context.Context, runner CommandRunner, workDir string) error {
+	newArgs := []string{"new-session", "-A", "-d", "-s", t.sanitizedName, "-c", workDir, t.program}
+	newArgs = Socket(t.serverSocket).Args(newArgs...)
+	newName, newArgs := wrapRemoteCommand(Binary(), newArgs)
+	newCtx, newCancel := context.WithTimeout(ctx, LongRunningCommandTimeout)
+	defer newCancel()
+	out, err := runner.Run(newCtx, "", newName, newArgs...)
+	if err != nil {
+		if t.remoteHasSession(ctx, runner) {
+			log.Info("remote tmux new-session -A failed but session exists (race with a concurrent creator), treating as success",
+				"session", t.sanitizedName, "newSessionErr", err, "newSessionOutput", strings.TrimSpace(string(out)))
+			return nil
+		}
+		return fmt.Errorf("failed to create/attach remote tmux session %s: %w (output: %s)", t.sanitizedName, err, out)
+	}
+
+	log.Info("remote tmux session ensured", "session", t.sanitizedName, "workDir", workDir)
+	return nil
+}
+
+// remoteHasSession runs "tmux has-session" for t.sanitizedName over runner
+// (already confirmed remote by the caller), bounded by
+// ExistenceCheckTimeout nested inside ctx, and reports whether it succeeded
+// (the session exists).
+func (t *TmuxSession) remoteHasSession(ctx context.Context, runner CommandRunner) bool {
+	hasArgs := Socket(t.serverSocket).Args("has-session", "-t", t.sanitizedName)
+	hasName, hasArgs := wrapRemoteCommand(Binary(), hasArgs)
+	hasCtx, hasCancel := context.WithTimeout(ctx, ExistenceCheckTimeout)
+	defer hasCancel()
+	_, err := runner.Run(hasCtx, "", hasName, hasArgs...)
+	return err == nil
+}
+
 // Restore attaches to an existing session and restores the window size
 func (t *TmuxSession) Restore() error {
 	return t.RestoreWithWorkDir("")
@@ -2203,7 +2321,19 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 		// "No sessions" (exit 1 when server running but empty) can cause false circuit
 		// breaker trips; the fallback ensures checks always work regardless of breaker state.
 		if errors.Is(err, executor.ErrCircuitOpen) {
-			output, err = t.commandRunner().Run(ctx, "", Binary(), cmdArgs...)
+			runner := t.commandRunner()
+			runName, runArgs := Binary(), cmdArgs
+			if runner.IsRemote() {
+				// Unset $TMUX and force a known-good $TERM before this
+				// command reaches a remote tmux server -- see
+				// wrapRemoteCommand's doc comment and
+				// research/pitfalls.md §2. IsRemote() is the single
+				// mechanism gating this, never a type switch on runner
+				// (architecture-review.md Blocker 1). Local commands
+				// (LocalRunner.IsRemote() == false) are unaffected.
+				runName, runArgs = wrapRemoteCommand(runName, runArgs)
+			}
+			output, err = runner.Run(ctx, "", runName, runArgs...)
 		}
 		return output, err
 	})
@@ -2361,6 +2491,17 @@ func (t *TmuxSession) RefreshClient() error {
 		panePID := strings.TrimSpace(string(output))
 		winchCtx, winchCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer winchCancel()
+		// Deliberately NOT wrapped via wrapRemoteCommand: "kill" never reads
+		// $TERM or $TMUX, so the wrapper closes no pitfall here (unlike the
+		// real tmux invocations in listSessionsRaw/EnsureRemoteSession) --
+		// wrapping it would be mechanical over-application of "every
+		// commandRunner() call gets wrapped" rather than "every tmux call
+		// gets wrapped". Separately, and pre-existing from Phase 1: panePID
+		// above is resolved via t.cmdExec, which is always local, so even
+		// when t.commandRunner() is remote this line already sends a local
+		// PID to a kill that would target the remote host -- a real
+		// incoherence, but one to resolve when Phase 4 actually wires
+		// RefreshClient into a live remote session, not here.
 		if _, err := t.commandRunner().Run(winchCtx, "", "kill", "-WINCH", panePID); err != nil {
 			return fmt.Errorf("failed to send SIGWINCH: %w", err)
 		}
