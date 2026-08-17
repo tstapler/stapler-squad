@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package session.v1;
+
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
+// RemoteService validates SSH connectivity to a configured remote host and
+// drives the app's TOFU (trust-on-first-use) host-key confirmation flow
+// (ssh-remote-workspaces Epic 3.3). Kept as its own proto file, separate
+// from session.proto: a remote is a distinct resource, not an extension of
+// CreateSessionRequest.
+service RemoteService {
+  // TestRemoteConnection attempts to dial a configured remote by name. If
+  // the remote's host key has never been seen before, this does NOT fail
+  // with an opaque RPC error -- it returns a structured response with
+  // host_key_unknown=true and the key's fingerprint, for the frontend to
+  // render as an explicit "Trust and connect" / "Cancel" confirmation
+  // dialog (see project_plans/ssh-remote-workspaces/research/ux.md §1). No
+  // session-creation capability is unlocked for the remote until the user
+  // calls TrustRemoteHostKey with that exact fingerprint.
+  rpc TestRemoteConnection(TestRemoteConnectionRequest) returns (TestRemoteConnectionResponse) {}
+
+  // TrustRemoteHostKey commits the TOFU decision the user made after seeing
+  // TestRemoteConnection's fingerprint. It independently re-verifies the
+  // remote's CURRENTLY presented host key and rejects the request if its
+  // fingerprint doesn't exactly match the one supplied -- defense against
+  // trusting a different key than the one actually displayed to the user
+  // (e.g. a stale fingerprint from an earlier call, or a key that changed
+  // in between).
+  rpc TrustRemoteHostKey(TrustRemoteHostKeyRequest) returns (TrustRemoteHostKeyResponse) {}
+}
+
+message TestRemoteConnectionRequest {
+  // remote_name is the RemoteConfig.Name of an already-saved remote (see
+  // config.Config.RemoteByName).
+  string remote_name = 1;
+}
+
+message TestRemoteConnectionResponse {
+  // success is true only when the full SSH connection -- host-key trust AND
+  // authentication -- succeeded.
+  bool success = 1;
+  // host_key_unknown is true when this attempt failed specifically because
+  // the remote's host key has never been trusted before. When true,
+  // fingerprint is populated and the frontend should offer
+  // TrustRemoteHostKey; success is always false in this case.
+  bool host_key_unknown = 2;
+  // fingerprint is the SHA256 host-key fingerprint (OpenSSH's "SHA256:..."
+  // display format) to show the user, populated whenever host_key_unknown
+  // is true. Empty otherwise.
+  string fingerprint = 3;
+  // error_message is populated for any other failure: a trusted host whose
+  // key just changed (a possible MITM signal -- deliberately reported here,
+  // never as host_key_unknown=true), auth rejected, network unreachable, no
+  // such remote configured, etc.
+  string error_message = 4;
+}
+
+message TrustRemoteHostKeyRequest {
+  // remote_name is the RemoteConfig.Name to trust a host key for.
+  string remote_name = 1;
+  // fingerprint must exactly match the fingerprint the remote is currently
+  // presenting (re-verified server-side, not merely echoed back) -- a
+  // mismatch is rejected rather than silently trusting a different key than
+  // the one shown to the user.
+  string fingerprint = 2;
+}
+
+message TrustRemoteHostKeyResponse {
+  bool success = 1;
+  // error_message is populated when success is false, e.g. a fingerprint
+  // mismatch or an unreachable remote.
+  string error_message = 2;
+}
