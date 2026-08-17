@@ -74,6 +74,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mux.ServeHTTP(w, r)
+}
 
 // newServerBase creates the base Server struct and returns it alongside the
 // connection context that drives active-stream cancellation on shutdown.
