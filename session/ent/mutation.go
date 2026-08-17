@@ -31470,6 +31470,7 @@ type WorkflowMutation struct {
 	agent_type               *string
 	cron_expression          *string
 	cron_enabled             *bool
+	enabled                  *bool
 	created_at               *time.Time
 	updated_at               *time.Time
 	keep_sessions            *int
@@ -32080,6 +32081,42 @@ func (m *WorkflowMutation) OldCronEnabled(ctx context.Context) (v bool, err erro
 // ResetCronEnabled resets all changes to the "cron_enabled" field.
 func (m *WorkflowMutation) ResetCronEnabled() {
 	m.cron_enabled = nil
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *WorkflowMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *WorkflowMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *WorkflowMutation) ResetEnabled() {
+	m.enabled = nil
 }
 
 // SetCreatedAt sets the "created_at" field.
@@ -32769,7 +32806,7 @@ func (m *WorkflowMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *WorkflowMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 25)
 	if m.slug != nil {
 		fields = append(fields, workflow.FieldSlug)
 	}
@@ -32802,6 +32839,9 @@ func (m *WorkflowMutation) Fields() []string {
 	}
 	if m.cron_enabled != nil {
 		fields = append(fields, workflow.FieldCronEnabled)
+	}
+	if m.enabled != nil {
+		fields = append(fields, workflow.FieldEnabled)
 	}
 	if m.created_at != nil {
 		fields = append(fields, workflow.FieldCreatedAt)
@@ -32872,6 +32912,8 @@ func (m *WorkflowMutation) Field(name string) (ent.Value, bool) {
 		return m.CronExpression()
 	case workflow.FieldCronEnabled:
 		return m.CronEnabled()
+	case workflow.FieldEnabled:
+		return m.Enabled()
 	case workflow.FieldCreatedAt:
 		return m.CreatedAt()
 	case workflow.FieldUpdatedAt:
@@ -32929,6 +32971,8 @@ func (m *WorkflowMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldCronExpression(ctx)
 	case workflow.FieldCronEnabled:
 		return m.OldCronEnabled(ctx)
+	case workflow.FieldEnabled:
+		return m.OldEnabled(ctx)
 	case workflow.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case workflow.FieldUpdatedAt:
@@ -33040,6 +33084,13 @@ func (m *WorkflowMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetCronEnabled(v)
+		return nil
+	case workflow.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
 		return nil
 	case workflow.FieldCreatedAt:
 		v, ok := value.(time.Time)
@@ -33351,6 +33402,9 @@ func (m *WorkflowMutation) ResetField(name string) error {
 		return nil
 	case workflow.FieldCronEnabled:
 		m.ResetCronEnabled()
+		return nil
+	case workflow.FieldEnabled:
+		m.ResetEnabled()
 		return nil
 	case workflow.FieldCreatedAt:
 		m.ResetCreatedAt()
