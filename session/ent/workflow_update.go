@@ -224,6 +224,20 @@ func (_u *WorkflowUpdate) SetNillableCronEnabled(v *bool) *WorkflowUpdate {
 	return _u
 }
 
+// SetEnabled sets the "enabled" field.
+func (_u *WorkflowUpdate) SetEnabled(v bool) *WorkflowUpdate {
+	_u.mutation.SetEnabled(v)
+	return _u
+}
+
+// SetNillableEnabled sets the "enabled" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableEnabled(v *bool) *WorkflowUpdate {
+	if v != nil {
+		_u.SetEnabled(*v)
+	}
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *WorkflowUpdate) SetUpdatedAt(v time.Time) *WorkflowUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -591,6 +605,9 @@ func (_u *WorkflowUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.CronEnabled(); ok {
 		_spec.SetField(workflow.FieldCronEnabled, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.Enabled(); ok {
+		_spec.SetField(workflow.FieldEnabled, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(workflow.FieldUpdatedAt, field.TypeTime, value)
 	}
@@ -878,6 +895,20 @@ func (_u *WorkflowUpdateOne) SetCronEnabled(v bool) *WorkflowUpdateOne {
 func (_u *WorkflowUpdateOne) SetNillableCronEnabled(v *bool) *WorkflowUpdateOne {
 	if v != nil {
 		_u.SetCronEnabled(*v)
+	}
+	return _u
+}
+
+// SetEnabled sets the "enabled" field.
+func (_u *WorkflowUpdateOne) SetEnabled(v bool) *WorkflowUpdateOne {
+	_u.mutation.SetEnabled(v)
+	return _u
+}
+
+// SetNillableEnabled sets the "enabled" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableEnabled(v *bool) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetEnabled(*v)
 	}
 	return _u
 }
@@ -1278,6 +1309,9 @@ func (_u *WorkflowUpdateOne) sqlSave(ctx context.Context) (_node *Workflow, err 
 	}
 	if value, ok := _u.mutation.CronEnabled(); ok {
 		_spec.SetField(workflow.FieldCronEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.Enabled(); ok {
+		_spec.SetField(workflow.FieldEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(workflow.FieldUpdatedAt, field.TypeTime, value)

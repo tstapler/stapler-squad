@@ -40,6 +40,8 @@ type Workflow struct {
 	CronExpression string `json:"cron_expression,omitempty"`
 	// CronEnabled holds the value of the "cron_enabled" field.
 	CronEnabled bool `json:"cron_enabled,omitempty"`
+	// Enabled holds the value of the "enabled" field.
+	Enabled bool `json:"enabled,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -74,7 +76,7 @@ func (*Workflow) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case workflow.FieldCronEnabled:
+		case workflow.FieldCronEnabled, workflow.FieldEnabled:
 			values[i] = new(sql.NullBool)
 		case workflow.FieldKeepSessions, workflow.FieldArchiveAfterHours:
 			values[i] = new(sql.NullInt64)
@@ -170,6 +172,12 @@ func (_m *Workflow) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field cron_enabled", values[i])
 			} else if value.Valid {
 				_m.CronEnabled = value.Bool
+			}
+		case workflow.FieldEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field enabled", values[i])
+			} else if value.Valid {
+				_m.Enabled = value.Bool
 			}
 		case workflow.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -318,6 +326,9 @@ func (_m *Workflow) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("cron_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CronEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Enabled))
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))
