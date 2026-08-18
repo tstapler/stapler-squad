@@ -1256,9 +1256,10 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	// 2. Trigger real triage. TriggerTriage returns immediately; the parse +
 	// persist + idea→ready transition happens in a goroutine (see
 	// backlog_service.go TriggerTriage), so wait for testTriageCompleteHook
-	// rather than polling GetBacklogItem's status — the goroutine performs a
-	// trailing storage write after flipping status to "ready", so polling
-	// status alone can race that trailing write (see the identical pattern
+	// rather than polling GetBacklogItem's status — the goroutine performs
+	// trailing storage writes (UpdateItemSessionEnded, triageInFlight.Delete,
+	// optional auto-spawn) after flipping status to "ready", so polling
+	// status alone can race those trailing writes (see the identical pattern
 	// and its rationale at TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession).
 	// Filter by item ID: a still-running goroutine from an earlier,
 	// unmigrated TriggerTriage test can fire this shared hook after this
