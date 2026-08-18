@@ -8,6 +8,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { DiffRenderer } from "@/components/shared/DiffRenderer";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import {
   backdrop,
   modal,
@@ -48,7 +49,7 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose }:
     client.getBacklogItemDiff({ itemId }).then((resp) => {
       setDiff({ content: resp.diff, added: resp.added, removed: resp.removed });
     }).catch((err: unknown) => {
-      setFetchError(err instanceof Error ? err.message : "Could not reach the server.");
+      setFetchError(getErrorMessage(err, "Could not reach the server."));
     }).finally(() => setLoading(false));
   }, [itemId]);
 
