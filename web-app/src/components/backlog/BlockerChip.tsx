@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import {
   getStuckReasonClass,
   getStuckReasonIcon,
@@ -58,7 +59,7 @@ export function BlockerChip({ item, variant, onTriggerRemediationNow }: BlockerC
       setRetryState("idle");
     } catch (err) {
       setRetryState("error");
-      setRetryErrorMessage(err instanceof Error ? err.message : "Retry failed");
+      setRetryErrorMessage(getErrorMessage(err, "Retry failed"));
     }
   }, [onTriggerRemediationNow, retryState, item.itemId, item.reason]);
 

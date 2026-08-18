@@ -21,10 +21,11 @@ import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
-// NOTE (backlog #488, 2026-08-17): this file's 28 `dispatch(setError(...))` sites
-// are deliberately NOT converted to the getErrorMessage() helper
+// NOTE (backlog #488, 2026-08-17): this file's other `dispatch(setError(...))`
+// sites are deliberately NOT converted to the getErrorMessage() helper
 // (web-app/src/lib/utils/connectError.ts) used everywhere in components/backlog/**.
 // `setError` here writes to the shared sessionsSlice Redux store, consumed by
 // non-backlog surfaces (the general session list/terminal views) — stripping the
@@ -32,6 +33,11 @@ import { useAppDispatch, useAppSelector } from "@/lib/store";
 // blast radius than the local useState catch-block conversions this PR made, and
 // is out of scope for a backlog-toast presentation fix. Tracked as a follow-up,
 // not fixed here.
+//
+// updateSession()'s setError call below is the one exception: BacklogItemDetail.tsx's
+// handleSteerSession reads this exact value back via selectSessionsError() and
+// re-throws it into a backlog action toast, so it IS a backlog-facing surface
+// this PR touches — stripped here to match.
 import {
   setSessions,
   upsertSession,
@@ -343,7 +349,7 @@ export function useSessionService(
         return response.session ?? null;
       } catch (err) {
         console.error("[useSessionService] updateSession failed:", err);
-        dispatch(setError(err instanceof Error ? err.message : "Failed to update session"));
+        dispatch(setError(getErrorMessage(err, "Failed to update session")));
         return null;
       }
     },
