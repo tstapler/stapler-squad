@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/github"
 )
 
 // These tests (both GitHubIssuesPlugin and GitHubPRsPlugin) rely on
@@ -24,13 +25,23 @@ import (
 // machine that has one stored.
 
 // withGitHubTestServer points githubAPIBaseURL at ts for the duration of the test.
+//
+// Also resets github.DefaultRateLimiter: it's a package-level global shared
+// by every test in this binary, and since rateLimitTransport.RoundTrip fails
+// fast when it's already limited (github/http_client.go), a test that
+// deliberately triggers a rate-limit response (e.g.
+// TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError) otherwise
+// poisons every GitHub-calling test that runs after it for up to 60s.
 func withGitHubTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(handler)
 	orig := githubAPIBaseURL
 	githubAPIBaseURL = ts.URL
+	origLimiter := github.DefaultRateLimiter
+	github.DefaultRateLimiter = &github.RateLimiter{}
 	t.Cleanup(func() {
 		githubAPIBaseURL = orig
+		github.DefaultRateLimiter = origLimiter
 		ts.Close()
 	})
 	return ts
@@ -137,6 +148,7 @@ func TestGitHubIssuesPlugin_Fetch_IncludesClosedIssues(t *testing.T) {
 }
 
 func TestGitHubIssuesPlugin_Fetch_RateLimited(t *testing.T) {
+	github.ResetRateLimiterForTest(t)
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	})
@@ -310,6 +322,7 @@ func TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField(t *testing.T) {
 // X-RateLimit-Remaining:0 response surfaces a descriptive error rather than
 // panicking.
 func TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError(t *testing.T) {
+	github.ResetRateLimiterForTest(t)
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.Header().Set("Retry-After", "60")
