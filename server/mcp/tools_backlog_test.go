@@ -5860,6 +5860,12 @@ func TestWaitForBacklogEvent_should_NotWake_When_ActivityNoteAddedFires(t *testi
 	ctx := context.Background()
 	bus := events.NewEventBus(32)
 
+	// Baseline captured after storage setup, mirroring
+	// TestWaitForBacklogEvent_NoGoroutineLeak's rationale: opening the
+	// sqlite-backed Storage starts its own long-lived pool goroutines that
+	// are test-infra noise, not something waitForBacklogEvent could leak.
+	baseline := goleak.IgnoreCurrent()
+
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Activity note should not wake wait_for_backlog_event",
 		Status: string(session.BacklogStatusInProgress),
@@ -5896,6 +5902,10 @@ func TestWaitForBacklogEvent_should_NotWake_When_ActivityNoteAddedFires(t *testi
 	case <-time.After(3 * time.Second):
 		t.Fatal("waitForBacklogEvent did not return within the timeout window")
 	}
+
+	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+		"the timed-out call must Unsubscribe on exit")
+	goleak.VerifyNone(t, baseline)
 }
 
 // TestWaitForBacklogEvent_should_StillWake_When_StatusTransitionFires proves
@@ -5905,6 +5915,10 @@ func TestWaitForBacklogEvent_should_StillWake_When_StatusTransitionFires(t *test
 	storage := newTestBacklogStorage(t)
 	ctx := context.Background()
 	bus := events.NewEventBus(32)
+
+	// See TestWaitForBacklogEvent_should_NotWake_When_ActivityNoteAddedFires's
+	// comment on why baseline is captured after storage setup.
+	baseline := goleak.IgnoreCurrent()
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Status transition should still wake wait_for_backlog_event",
@@ -5941,6 +5955,10 @@ func TestWaitForBacklogEvent_should_StillWake_When_StatusTransitionFires(t *test
 	case <-time.After(3 * time.Second):
 		t.Fatal("waitForBacklogEvent did not return after a genuine status-transition event")
 	}
+
+	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+		"the matched call must Unsubscribe on exit")
+	goleak.VerifyNone(t, baseline)
 }
 
 // --- get_backlog_item's "## Activity Log" rendering (Epic 8.6) ---
