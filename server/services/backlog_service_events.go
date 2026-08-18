@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -50,7 +51,31 @@ type backlogItemEventSender interface {
 // non-deterministic goroutine scheduling, which cannot be turned into a
 // reliable regression test. See backlog_service_events_test.go's
 // race-window test for the only caller.
-var testAfterSubscribeHook func()
+//
+// testAfterSubscribeHookMu guards concurrent read/write of the hook from a
+// test goroutine (setter) and every other parallel test's watchBacklogItems
+// call (reader) — required under -race since the t.Parallel() rollout made
+// this package's WatchBacklogItems tests run concurrently. Modeled on
+// backlog_service_triage.go's testTriageCompleteHook.
+var (
+	testAfterSubscribeHookMu sync.Mutex
+	testAfterSubscribeHook   func()
+)
+
+func setTestAfterSubscribeHook(hook func()) {
+	testAfterSubscribeHookMu.Lock()
+	defer testAfterSubscribeHookMu.Unlock()
+	testAfterSubscribeHook = hook
+}
+
+func callTestAfterSubscribeHook() {
+	testAfterSubscribeHookMu.Lock()
+	hook := testAfterSubscribeHook
+	testAfterSubscribeHookMu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
 
 // WatchBacklogItems streams real-time backlog item events. Sends an initial
 // snapshot (or, on reconnect via after_seq, a replay of buffered events)
@@ -83,9 +108,7 @@ func (s *BacklogService) watchBacklogItems(
 	eventCh, subID := s.eventBus.Subscribe(ctx)
 	defer s.eventBus.Unsubscribe(subID)
 
-	if testAfterSubscribeHook != nil {
-		testAfterSubscribeHook()
-	}
+	callTestAfterSubscribeHook()
 
 	costFor := s.buildCostLookup()
 

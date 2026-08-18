@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -48,14 +49,32 @@ var hookEventName = map[HookName]string{
 // SetHookBaseURLFn during real server wiring (server.go's wireDepsIntoServer) with a closure
 // that reads the server's real listen address lazily — e.g. via srv.GetAddr() — so hook URLs
 // are never snapshotted before the server has bound its real port (PORT=0 support).
-var hookBaseURLFn = func() string { return "http://localhost:8543" }
+//
+// hookBaseURLFnMu guards concurrent read/write of the closure from a test goroutine (setter)
+// and every other parallel test in this package that resolves hook URLs (reader) — required
+// under -race since the t.Parallel() rollout made this package's tests run concurrently.
+// Modeled on backlog_service_triage.go's testTriageCompleteHook.
+var (
+	hookBaseURLFnMu sync.Mutex
+	hookBaseURLFn   = func() string { return "http://localhost:8543" }
+)
 
 // SetHookBaseURLFn overrides the base URL function used when building hook endpoint URLs via
 // hookEndpoints. Call once during server wiring; passing nil is a no-op.
 func SetHookBaseURLFn(fn func() string) {
-	if fn != nil {
-		hookBaseURLFn = fn
+	if fn == nil {
+		return
 	}
+	hookBaseURLFnMu.Lock()
+	defer hookBaseURLFnMu.Unlock()
+	hookBaseURLFn = fn
+}
+
+// getHookBaseURLFn returns the currently-configured base URL closure.
+func getHookBaseURLFn() func() string {
+	hookBaseURLFnMu.Lock()
+	defer hookBaseURLFnMu.Unlock()
+	return hookBaseURLFn
 }
 
 // hookCommandReferencesURL reports whether curlCmd is the hook command built for url (see the
@@ -138,7 +157,7 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 
 	// Resolved once per InjectHooksConfig call (i.e. per-session, at hook-injection time), not
 	// cached at package-construction time, so it reflects the server's current base URL.
-	endpoints := hookEndpoints(hookBaseURLFn)
+	endpoints := hookEndpoints(getHookBaseURLFn())
 
 	for hookName := range wanted {
 		eventKey := hookEventName[hookName]
@@ -246,7 +265,7 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 		return fmt.Errorf("unmarshal hooks map: %w", err)
 	}
 
-	endpoints := hookEndpoints(hookBaseURLFn)
+	endpoints := hookEndpoints(getHookBaseURLFn())
 	changed := false
 
 	for _, hookName := range hooks {

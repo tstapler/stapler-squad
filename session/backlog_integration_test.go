@@ -636,8 +636,15 @@ func TestListBacklogItemSummaries(t *testing.T) {
 		require.Len(t, summaries, 2)
 	})
 
+	// Not t.Parallel(): ExcludeDone with no Statuses whitelist returns every
+	// non-done item, so this exact require.Len(1) assertion breaks the moment
+	// either sibling subtest below inserts its own non-done "Archived Item"/
+	// "Archived Item 2" into this same shared storage. Those siblings only
+	// assert Contains/NotContains on specific IDs (unaffected by insert
+	// order), so leaving this one subtest to run in the sequential pass
+	// (before any t.Parallel() subtest actually starts executing
+	// concurrently) is sufficient — no need to touch the siblings.
 	t.Run("ExcludeDone omits done item", func(t *testing.T) {
-		t.Parallel()
 		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
 			ExcludeDone: true,
 		})
