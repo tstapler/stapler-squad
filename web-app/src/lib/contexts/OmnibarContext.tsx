@@ -135,17 +135,20 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     };
   }, [launcherPresets]);
 
-  // Re-fetch presets each time the omnibar opens so a hand-edited launcher-presets.json
-  // change appears immediately, without a server restart (Success Criterion 1).
+  const { hosts: enterpriseHosts, refetch: refetchEnterpriseHosts } = useGitHubEnterpriseHosts();
+
+  // Re-fetch presets and GHE hosts each time the omnibar opens so a hand-edited
+  // launcher-presets.json change, or a GitHub Enterprise account added mid-session,
+  // appears immediately without a server restart or page reload (Success Criterion 1;
+  // same staleness problem for enterprise hosts as launcher presets).
   const prevOmnibarOpenRef = useRef(false);
   useEffect(() => {
     if (isOpen && !prevOmnibarOpenRef.current) {
       refetchLauncherPresets();
+      refetchEnterpriseHosts();
     }
     prevOmnibarOpenRef.current = isOpen;
-  }, [isOpen, refetchLauncherPresets]);
-
-  const enterpriseHosts = useGitHubEnterpriseHosts();
+  }, [isOpen, refetchLauncherPresets, refetchEnterpriseHosts]);
 
   // GitHubEnterpriseURLDetector is registered synchronously (with an empty host
   // list) inside createDefaultRegistry(), so the registry always has a slot for
