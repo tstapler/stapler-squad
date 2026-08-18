@@ -670,6 +670,15 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	errChan := make(chan error, 2)
 	doneChan := make(chan struct{})
 	var forwardingReady atomic.Bool
+	// resizeSettling mirrors forwardingReady but for the live (post-connect) resize path
+	// below: while a window-drag/panel-resize reflow is in flight, the TUI emits partial
+	// redraw frames at intermediate/old dimensions. Forwarding those live races the
+	// authoritative post-resize snapshot the resize handler sends once quiescence is
+	// reached, so xterm.js can end up compositing an in-progress reflow frame on top of
+	// (or interleaved with) that snapshot — the same "garbled overlapping-column
+	// rendering" the initial-connect forwardingReady gate above was added to prevent,
+	// just triggered by resizing instead of reconnecting.
+	var resizeSettling atomic.Bool
 
 	// Goroutine 1: Forward control mode updates to WebSocket.
 	// Coalesces back-to-back frames so rapid terminal bursts are batched into a
@@ -718,10 +727,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					return
 				}
 
-				if !forwardingReady.Load() {
-					// Still settling from the initial resize nudge: this frame is redraw
-					// noise from before the canonical initial snapshot has been captured.
-					// Drop it, but still count it toward quiescence below.
+				if !forwardingReady.Load() || resizeSettling.Load() {
+					// Either still settling from the initial resize nudge (frame is redraw
+					// noise from before the canonical initial snapshot has been captured),
+					// or a live resize reflow is in flight. Drop it, but still count it
+					// toward quiescence below.
 					select {
 					case quiescenceCh <- struct{}{}:
 					default:
@@ -956,8 +966,16 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					continue
 				}
 
+				// Suppress live forwarding for the duration of the reflow: the TUI's
+				// partial redraw frames at intermediate dimensions would otherwise race
+				// the authoritative post-resize snapshot sent below. Cleared once that
+				// snapshot has been sent, on every exit path (including early failure).
+				resizeSettling.Store(true)
+				resizeDone := func() { resizeSettling.Store(false) }
+
 				if err := instance.SetWindowSize(r.cols, r.rows); err != nil {
 					log.Error("[streamViaControlMode] failed to resize", "err", err)
+					resizeDone()
 					continue
 				}
 				last = lastResize{cols: r.cols, rows: r.rows, t: time.Now()}
@@ -1032,6 +1050,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					}
 				}
 
+				// Re-enable live forwarding now that the authoritative post-resize
+				// snapshot has been sent — must happen before the client-facing
+				// Resizing:false signal below, not after, or a live frame arriving in
+				// between would be forwarded while the client still thinks it's mid-reflow.
+				resizeDone()
+
 				// Signal client: reflow complete, stable snapshot sent (R1.4).
 				sendResizeQuiescence(false)
 			}
@@ -1088,7 +1112,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		// Handle a mid-stream CurrentPaneRequest (e.g. a client-initiated resync) via the
 		// same shared helper the initial handshake and streamViaTmuxCapturePane use.
 		return handleCurrentPaneRequest(sessionID, instance, req, currentResyncOptions())
-	})
+	}, &resizeSettling)
 
 	// Wait for either goroutine to error or complete.
 	// EndStream is sent by the caller (HandleWebSocket) after this function returns.
@@ -1152,6 +1176,9 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 	errChan := make(chan error, 2)
 	doneChan := make(chan struct{})
 	var forwardingReady atomic.Bool
+	// resizeSettling mirrors forwardingReady but for the live (post-connect) resize path
+	// below — see the identical field in streamViaControlMode for the full rationale.
+	var resizeSettling atomic.Bool
 
 	go func() {
 		defer close(doneChan)
@@ -1177,7 +1204,11 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 					return
 				}
 
-				if !forwardingReady.Load() {
+				if !forwardingReady.Load() || resizeSettling.Load() {
+					// Either still settling from the initial resize nudge, or a live
+					// resize reflow is in flight — see streamViaControlMode's identical
+					// check for the full rationale. Drop it, but still count it toward
+					// quiescence below.
 					select {
 					case quiescenceCh <- struct{}{}:
 					default:
@@ -1294,8 +1325,15 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 				if r.cols == last.cols && r.rows == last.rows && time.Since(last.t) < 50*time.Millisecond {
 					continue
 				}
+				// Suppress live forwarding for the duration of the reflow — see
+				// streamViaControlMode's identical gate for the full rationale.
+				// Cleared on every exit path, including early failure below.
+				resizeSettling.Store(true)
+				resizeDone := func() { resizeSettling.Store(false) }
+
 				if err := shellSess.SetWindowSize(r.cols, r.rows); err != nil {
 					log.Error("[streamShellViaControlMode] failed to resize", "err", err)
+					resizeDone()
 					continue
 				}
 				last = lastResize{cols: r.cols, rows: r.rows, t: time.Now()}
@@ -1347,6 +1385,13 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, snapBytes))
 					}
 				}
+
+				// Re-enable live forwarding now that the authoritative post-resize
+				// snapshot has been sent — must happen before the client-facing
+				// Resizing:false signal below, not after, or a live frame arriving
+				// in between would be forwarded while the client still thinks it's
+				// mid-reflow.
+				resizeDone()
 
 				sendResizeQuiescence(false)
 			}
@@ -1477,12 +1522,14 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 				// (this function predates that extraction and was never unified with it) —
 				// so this branch is added directly here rather than as a callback.
 				if paneReq := incomingData.GetCurrentPaneRequest(); paneReq != nil {
+					resizeSettling.Store(true)
 					output, handleErr := handleCurrentPaneRequest(sessionID, cursorTarget, paneReq, currentResyncOptions())
 					if handleErr != nil {
 						log.Error("[streamShellViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "shell", shellID, "err", handleErr)
 					} else {
 						writeCurrentPaneResponse(stream, sessionID, shellID, output)
 					}
+					resizeSettling.Store(false)
 				}
 			}
 		}
@@ -1771,6 +1818,7 @@ func runInputReadLoop(
 	onResize func(cols, rows int),
 	onScrollbackRequest func(startLine, endLine string) (string, error),
 	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
+	resizeSettling *atomic.Bool,
 ) {
 	for {
 		select {
@@ -1837,7 +1885,7 @@ func runInputReadLoop(
 			// this loop starts). This is how a client-initiated resync request — carrying
 			// a resync_id to correlate the reply — gets answered without a full reconnect.
 			if paneReq := incomingData.GetCurrentPaneRequest(); paneReq != nil {
-				handleCurrentPaneRequestFrame(stream, sessionID, paneReq, onCurrentPaneRequest)
+				handleCurrentPaneRequestFrame(stream, sessionID, paneReq, onCurrentPaneRequest, resizeSettling)
 			}
 
 			// Handle BatchedCurrentPaneRequest arriving mid-stream (Epic 5.2,
@@ -1848,7 +1896,7 @@ func runInputReadLoop(
 			// is still written as its own individually-resync_id-tagged frame rather
 			// than one combined response.
 			if batchReq := incomingData.GetBatchedCurrentPaneRequest(); batchReq != nil {
-				handleBatchedCurrentPaneRequestFrame(stream, sessionID, batchReq, onCurrentPaneRequest)
+				handleBatchedCurrentPaneRequestFrame(stream, sessionID, batchReq, onCurrentPaneRequest, resizeSettling)
 			}
 		}
 	}
@@ -1929,7 +1977,10 @@ func handleCurrentPaneRequestFrame(
 	sessionID string,
 	paneReq *sessionv1.CurrentPaneRequest,
 	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
+	resizeSettling *atomic.Bool,
 ) {
+	resizeSettling.Store(true)
+	defer resizeSettling.Store(false)
 	output, err := onCurrentPaneRequest(paneReq)
 	if err != nil {
 		log.Error("[streamViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "err", err)
@@ -2045,7 +2096,10 @@ func handleBatchedCurrentPaneRequestFrame(
 	sessionID string,
 	batchReq *sessionv1.BatchedCurrentPaneRequest,
 	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
+	resizeSettling *atomic.Bool,
 ) {
+	resizeSettling.Store(true)
+	defer resizeSettling.Store(false)
 	for _, output := range handleBatchedCurrentPaneRequest(sessionID, batchReq, onCurrentPaneRequest) {
 		writeCurrentPaneResponse(stream, sessionID, "", output)
 	}
@@ -2200,6 +2254,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	errChan := make(chan error, 2)
 	doneChan := make(chan struct{})
 
+	// paneCaptureSettling mirrors resizeSettling in streamViaControlMode/
+	// streamShellViaControlMode: it suppresses Goroutine 1's poll-forwarded frames while
+	// a mid-stream CurrentPaneRequest's authoritative handleCurrentPaneRequest snapshot is
+	// being captured and written, so the two writers can never interleave on the stream.
+	var paneCaptureSettling atomic.Bool
+
 	// Create output consumer for this WebSocket connection
 	// The tmux streamer sends full terminal content on each update
 	outputChan := make(chan string, 100)
@@ -2231,6 +2291,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 			case <-doneChan:
 				return
 			case content := <-outputChan:
+				if paneCaptureSettling.Load() {
+					// A mid-stream CurrentPaneRequest is currently capturing and writing its
+					// own authoritative snapshot — drop this poll tick rather than race it.
+					continue
+				}
 				// Send full terminal content with clear screen prefix
 				// Since tmux capture-pane returns full snapshots, we need to clear first.
 				// Must go through the same sanitize+CRLF-normalize treatment as the initial
@@ -2394,6 +2459,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				// handleCurrentPaneRequest helper (also used by streamViaControlMode and
 				// streamShellViaControlMode's mid-stream CurrentPaneRequest dispatch).
 				if currentPaneReq := incomingData.GetCurrentPaneRequest(); currentPaneReq != nil {
+					paneCaptureSettling.Store(true)
 					output, handleErr := handleCurrentPaneRequest(sessionID, target, currentPaneReq, currentResyncOptions())
 					if handleErr != nil {
 						log.Error("[streamViaTmuxCapture] failed to capture fresh pane content", "err", handleErr)
@@ -2406,6 +2472,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 					}
 
 					writeCurrentPaneResponse(stream, sessionID, "", output)
+					paneCaptureSettling.Store(false)
 					log.ForSession(sessionID).Debug("sent pane content", "bytes", len(output.Data))
 				}
 			}
