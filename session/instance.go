@@ -408,6 +408,11 @@ type Instance struct {
 	// commands through the mailbox without holding any other lock.
 	liveInstance atomic.Pointer[LiveInstance]
 
+	// promptFilePath tracks the most recently created temp-file-backed launch
+	// prompt (see promptArg), so Destroy can remove it immediately instead of
+	// relying solely on promptFileCleanupDelay's background timer.
+	promptFilePath atomic.Pointer[string]
+
 	// mu protects Instance's mutable data fields (Status, started, Tags,
 	// Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts, etc.).
 	// Use sendSyncErr / send for writes and Snapshot() for reads.
@@ -419,6 +424,24 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// driverWG tracks the SessionDriver goroutine (runSessionDriver or its
+	// handleDriverFailure-spawned restart) so tests can join it before
+	// t.TempDir() cleanup runs. See StartSessionDriver and JoinSessionDriver.
+	driverWG sync.WaitGroup
+	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
+	// goroutines so tests can join them before t.TempDir() cleanup runs.
+	// See JoinHibernation.
+	hibernateWG sync.WaitGroup
+
+	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
+	// its own teardown (session_driver.go's loop only self-terminates on a
+	// 25-minute wall-clock deadline or a detected terminal status, both of
+	// which can lag well behind Destroy() returning) notices on its very next
+	// driverPollInterval tick and exits immediately instead of continuing to
+	// call SendKeys/AcquireExecSlot against a torn-down session. Zero-value
+	// safe (false) so the many `&Instance{}` construction sites that bypass
+	// NewInstance need no changes.
+	destroyed atomic.Bool
 
 	// sessionGoal is the cached goal state for this session.
 	// Always use GetSessionGoal/SetSessionGoalCached accessors.
@@ -1367,12 +1390,30 @@ func (i *Instance) Kill() error {
 	return i.Destroy()
 }
 
+// destroyChainTimeout bounds Destroy()'s stopVNC/stopCDP/KillSession/
+// CleanupWorktree chain so a hung subsystem (e.g. a wedged x11vnc/CDP
+// process, or a git worktree removal stuck on a locked index) can't block
+// Destroy() indefinitely. KillSession's own tmux subprocess is already
+// independently bounded by killSessionTimeout in session/tmux/tmux.go — this
+// is the equivalent cap on the chain as a whole, matching that same 5s value
+// so no single Destroy() caller (e.g. SessionService.DeleteSession's
+// trackCleanup goroutine) can wait longer than the tmux-kill path already
+// tolerates. The chain keeps running in its goroutine after the timeout
+// fires — this bounds the wait, not the work.
+const destroyChainTimeout = 5 * time.Second
+
 // Destroy completely destroys the instance - both tmux session and worktree.
 // Fires EventStopped unconditionally (even if the instance was never started)
 // so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
 // ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
+	// Set first, before anything else: a leftover SessionDriver goroutine
+	// (session_driver.go) polls this every driverPollInterval and exits on
+	// seeing it, rather than continuing until its own 25-minute deadline.
+	i.destroyed.Store(true)
+
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
+	defer i.cleanupPromptFile()
 
 	if !i.started.Load() {
 		// If instance was never started, just return success
@@ -1382,6 +1423,22 @@ func (i *Instance) Destroy() error {
 	// Stop the controller first
 	i.StopController()
 
+	done := make(chan error, 1)
+	go func() {
+		done <- i.destroyChain()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(destroyChainTimeout):
+		return fmt.Errorf("timed out after %s waiting for session %q cleanup chain (stopVNC/stopCDP/KillSession/CleanupWorktree) to finish (still running in background)", destroyChainTimeout, i.Title)
+	}
+}
+
+// destroyChain runs the actual stopVNC/stopCDP/KillSession/CleanupWorktree
+// teardown sequence. Split out of Destroy() so it can be bounded by
+// destroyChainTimeout without losing track of the goroutine it runs in.
+func (i *Instance) destroyChain() error {
 	// Stop VNC before killing tmux (x11vnc must stop before Xvfb).
 	i.stopVNC()
 	// Stop CDP screencast goroutines and clean up wrapper scripts.

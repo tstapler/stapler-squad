@@ -44,6 +44,7 @@ const EMPTY: WorkflowFormData = {
   command: "",
   targetDirectory: "",
   cronEnabled: true,
+  enabled: true,
   triggerType: "github_push",
   githubRepo: "",
   githubBranch: "",
@@ -62,6 +63,7 @@ function protoToFormData(w: WorkflowProto): WorkflowFormData {
     command: w.command,
     targetDirectory: w.targetDirectory,
     cronEnabled: w.cronEnabled,
+    enabled: w.enabled,
     triggerType: (w.triggerType || "github_push") as TriggerType,
     githubRepo: w.githubRepo,
     githubBranch: w.githubBranch,
@@ -70,6 +72,7 @@ function protoToFormData(w: WorkflowProto): WorkflowFormData {
     eventFilter: w.eventFilter,
     labelFilter: w.labelFilter,
     promptTemplate: w.promptTemplate,
+    expectedUpdatedAt: w.updatedAt,
   };
 }
 
@@ -253,7 +256,12 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
       const shouldSendSecret = !isEdit || rotatingSecret;
       await onSave({
         ...formData,
+        // A cron trigger has no way to be "disabled" through this form (the checkbox
+        // is disabled+forced for triggerType==="cron" below) — both fields are forced
+        // true so the row both registers as a cron entry (cronEnabled) and passes the
+        // webhook-handler admission gate if it's ever repurposed (enabled).
         cronEnabled: formData.triggerType === "cron" ? true : formData.cronEnabled,
+        enabled: formData.triggerType === "cron" ? true : formData.enabled,
         webhookSecret: shouldSendSecret ? (generatedSecret ?? "") : "",
       });
       setLiveMessage(isEdit ? "Trigger updated." : "Trigger created.");
@@ -371,8 +379,8 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
               <label className={checkboxLabel}>
                 <input
                   type="checkbox"
-                  checked={formData.cronEnabled}
-                  onChange={(e) => setField("cronEnabled", e.target.checked)}
+                  checked={triggerType === "cron" ? true : (formData.enabled ?? true)}
+                  onChange={(e) => setField("enabled", e.target.checked)}
                   disabled={triggerType === "cron"}
                   data-testid="trigger-enabled-checkbox"
                 />

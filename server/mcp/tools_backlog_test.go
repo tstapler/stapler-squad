@@ -20,6 +20,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -5236,4 +5237,275 @@ func TestBuildMatchedWaitResult_MapsAllEventKinds(t *testing.T) {
 			tc.check(t, res)
 		})
 	}
+}
+
+// --- list_backlog_items ---
+
+// newTestListBacklogHandlers wires a *backlogHandlers with a real
+// *services.BacklogService, mirroring newTestWorkflowHandlers' shape for the
+// workflow tools — see server/mcp/tools_workflow_test.go.
+func newTestListBacklogHandlers(t *testing.T) *backlogHandlers {
+	t.Helper()
+	storage := newTestBacklogStorage(t)
+	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	return &backlogHandlers{storage: storage, backlogSvc: svc}
+}
+
+func createBacklogItemWithStatusAndPriority(t *testing.T, storage *session.Storage, title, status string, priority int) *session.BacklogItemData {
+	t.Helper()
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    title,
+		Status:   status,
+		Priority: priority,
+	})
+	require.NoError(t, err)
+	return item
+}
+
+func TestListBacklogItems_ReturnsFilteredItems_When_StatusFilterApplied(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "Ready 1", string(session.BacklogStatusReady), 3)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "In progress 1", string(session.BacklogStatusInProgress), 3)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "Done 1", string(session.BacklogStatusDone), 3)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"ready", "in_progress"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.True(t, out["success"].(bool))
+	items := out["items"].([]interface{})
+	require.Len(t, items, 2)
+	for _, raw := range items {
+		item := raw.(map[string]interface{})
+		require.NotEqual(t, "done", item["status"])
+	}
+}
+
+func TestListBacklogItems_ReturnsInvalidArgument_When_StatusValueUnknown(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"readdy"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.False(t, out["success"].(bool))
+	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+func TestListBacklogItems_ReturnsInvalidArgument_When_PriorityOutOfRange(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+
+	for _, bad := range []float64{0, 99} {
+		t.Run(fmt.Sprintf("priority=%v", bad), func(t *testing.T) {
+			res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+				"priority": []interface{}{bad},
+			}))
+			require.NoError(t, err)
+			out := parseResult(t, res)
+			require.False(t, out["success"].(bool), "priority=%v should be rejected", bad)
+			require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+		})
+	}
+}
+
+func TestListBacklogItems_ReturnsInvalidArgument_When_StatusEntryWrongType(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"ready", float64(1)},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.False(t, out["success"].(bool), "a non-string status entry must be rejected, not silently dropped")
+	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+func TestListBacklogItems_ReturnsInvalidArgument_When_PriorityEntryWrongType(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"priority": []interface{}{"3"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.False(t, out["success"].(bool), "a non-numeric priority entry must be rejected, not silently dropped")
+	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+// TestListBacklogItems_FiltersByValidPriority verifies priority values 1-5
+// actually reach the RPC and filter results — previously only the
+// out-of-range rejection path was tested, leaving the priorities/priorities32
+// wiring itself unverified.
+func TestListBacklogItems_FiltersByValidPriority(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "P1 item", string(session.BacklogStatusReady), 1)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "P3 item", string(session.BacklogStatusReady), 3)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "P5 item", string(session.BacklogStatusReady), 5)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"priority": []interface{}{float64(1), float64(5)},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.True(t, out["success"].(bool))
+	items := out["items"].([]interface{})
+	require.Len(t, items, 2)
+	for _, raw := range items {
+		p := raw.(map[string]interface{})["priority"].(float64)
+		require.Contains(t, []float64{1, 5}, p)
+	}
+}
+
+// TestListBacklogItems_PassesThroughIncludeTerminalIncludeArchivedSortBy
+// verifies include_terminal/include_archived/sort_by are actually threaded
+// into the RPC request rather than silently dropped or transposed.
+func TestListBacklogItems_PassesThroughIncludeTerminalIncludeArchivedSortBy(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "Done item", string(session.BacklogStatusDone), 3)
+	createBacklogItemWithStatusAndPriority(t, h.storage, "Archived item", string(session.BacklogStatusArchived), 3)
+
+	// Default (no include_terminal/include_archived): both terminal statuses hidden.
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.Empty(t, out["items"])
+
+	// include_terminal=true surfaces the done item but not the archived one.
+	res, err = h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"include_terminal": true,
+	}))
+	require.NoError(t, err)
+	out = parseResult(t, res)
+	items := out["items"].([]interface{})
+	require.Len(t, items, 1)
+	require.Equal(t, "Done item", items[0].(map[string]interface{})["title"])
+
+	// include_terminal=true + include_archived=true surfaces both, and sort_by
+	// is accepted without error (RPC-level sort correctness is exercised by
+	// BacklogService's own tests — this only verifies the field reaches the RPC).
+	res, err = h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"include_terminal": true,
+		"include_archived": true,
+		"sort_by":          "priority",
+	}))
+	require.NoError(t, err)
+	out = parseResult(t, res)
+	require.True(t, out["success"].(bool))
+	items = out["items"].([]interface{})
+	require.Len(t, items, 2)
+}
+
+// TestListBacklogItems_ClampsLimitAboveMax verifies a limit above the MCP
+// tool's own cap (50) is clamped rather than passed straight through.
+func TestListBacklogItems_ClampsLimitAboveMax(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	for i := 0; i < 60; i++ {
+		createBacklogItemWithStatusAndPriority(t, h.storage, fmt.Sprintf("Ready %d", i), string(session.BacklogStatusReady), 3)
+	}
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"ready"},
+		"limit":  float64(1000),
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	items := out["items"].([]interface{})
+	require.Len(t, items, 50, "limit must be clamped to the tool's max of 50")
+}
+
+func TestListBacklogItems_ReturnsDefaultLimitOf10_When_NoLimitArgGiven(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	for i := 0; i < 15; i++ {
+		createBacklogItemWithStatusAndPriority(t, h.storage, fmt.Sprintf("Ready %d", i), string(session.BacklogStatusReady), 3)
+	}
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"ready"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.True(t, out["success"].(bool))
+	items := out["items"].([]interface{})
+	require.Len(t, items, 10)
+	require.True(t, out["has_more"].(bool))
+	require.Equal(t, float64(15), out["total_count"])
+}
+
+func TestListBacklogItems_ReturnsUnavailable_When_BacklogSvcNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	h := &backlogHandlers{storage: storage} // backlogSvc left nil
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.False(t, out["success"].(bool))
+	require.Equal(t, ErrInternalError, out["error"].(map[string]interface{})["code"])
+}
+
+// TestListBacklogItems_OffsetPagesPastFirstLimit protects the new
+// offset/limit slicing logic — unlike get_notification_history/
+// search_claude_history, which pass offset straight through to an
+// already-tested RPC, list_backlog_items' pagination is new MCP-layer code
+// with no wire-level test coverage of its own.
+func TestListBacklogItems_OffsetPagesPastFirstLimit(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	for i := 0; i < 15; i++ {
+		createBacklogItemWithStatusAndPriority(t, h.storage, fmt.Sprintf("Ready %d", i), string(session.BacklogStatusReady), 3)
+	}
+
+	first, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"ready"},
+		"limit":  float64(10),
+		"offset": float64(0),
+	}))
+	require.NoError(t, err)
+	firstOut := parseResult(t, first)
+	firstItems := firstOut["items"].([]interface{})
+	require.Len(t, firstItems, 10)
+	require.True(t, firstOut["has_more"].(bool))
+
+	second, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"ready"},
+		"limit":  float64(10),
+		"offset": float64(10),
+	}))
+	require.NoError(t, err)
+	secondOut := parseResult(t, second)
+	secondItems := secondOut["items"].([]interface{})
+	require.Len(t, secondItems, 5)
+	require.False(t, secondOut["has_more"].(bool))
+
+	firstIDs := make(map[string]bool, len(firstItems))
+	for _, raw := range firstItems {
+		firstIDs[raw.(map[string]interface{})["id"].(string)] = true
+	}
+	for _, raw := range secondItems {
+		id := raw.(map[string]interface{})["id"].(string)
+		require.False(t, firstIDs[id], "second page must not repeat an item already returned on the first page")
+	}
+}
+
+// TestPaginateBacklogItems_SlicesAndReportsHasMore exercises the extracted
+// pagination helper directly, independent of the RPC/handler plumbing.
+func TestPaginateBacklogItems_SlicesAndReportsHasMore(t *testing.T) {
+	items := make([]*sessionv1.BacklogItem, 15)
+	for i := range items {
+		items[i] = &sessionv1.BacklogItem{Id: fmt.Sprintf("item-%d", i)}
+	}
+
+	page, hasMore := paginateBacklogItems(items, 10, 0)
+	require.Len(t, page, 10)
+	require.True(t, hasMore)
+	require.Equal(t, "item-0", page[0].Id)
+
+	page, hasMore = paginateBacklogItems(items, 10, 10)
+	require.Len(t, page, 5)
+	require.False(t, hasMore)
+	require.Equal(t, "item-10", page[0].Id)
+
+	page, hasMore = paginateBacklogItems(items, 10, 100)
+	require.Empty(t, page)
+	require.False(t, hasMore)
 }

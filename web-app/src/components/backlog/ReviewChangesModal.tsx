@@ -1,7 +1,7 @@
 "use client";
 // +feature: backlog:review-changes-modal
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
@@ -9,6 +9,7 @@ import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { DiffRenderer } from "@/components/shared/DiffRenderer";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
   backdrop,
   modal,
@@ -25,10 +26,12 @@ interface ReviewChangesModalProps {
   sessionId?: string;
   sessionTitle?: string;
   onClose: () => void;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
-export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose }: ReviewChangesModalProps) {
+export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose, triggerRef }: ReviewChangesModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, true, triggerRef);
   const [diff, setDiff] = useState<{ content: string; added: number; removed: number } | null>(null);
   const [loading, setLoading] = useState(true);
   // Distinct from a genuinely empty diff — a fetch failure must not render as
@@ -67,10 +70,6 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose }:
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [onClose]);
-
-  useEffect(() => {
-    modalRef.current?.focus();
-  }, []);
 
   if (typeof document === "undefined") return null;
 

@@ -284,6 +284,20 @@ func (_c *ApprovalRuleCreate) SetNillableRequireCiPassing(v *bool) *ApprovalRule
 	return _c
 }
 
+// SetMinSessionIdleMinutes sets the "min_session_idle_minutes" field.
+func (_c *ApprovalRuleCreate) SetMinSessionIdleMinutes(v int32) *ApprovalRuleCreate {
+	_c.mutation.SetMinSessionIdleMinutes(v)
+	return _c
+}
+
+// SetNillableMinSessionIdleMinutes sets the "min_session_idle_minutes" field if the given value is not nil.
+func (_c *ApprovalRuleCreate) SetNillableMinSessionIdleMinutes(v *int32) *ApprovalRuleCreate {
+	if v != nil {
+		_c.SetMinSessionIdleMinutes(*v)
+	}
+	return _c
+}
+
 // Mutation returns the ApprovalRuleMutation object of the builder.
 func (_c *ApprovalRuleCreate) Mutation() *ApprovalRuleMutation {
 	return _c.mutation
@@ -374,6 +388,10 @@ func (_c *ApprovalRuleCreate) defaults() {
 	if _, ok := _c.mutation.RequireCiPassing(); !ok {
 		v := approvalrule.DefaultRequireCiPassing
 		_c.mutation.SetRequireCiPassing(v)
+	}
+	if _, ok := _c.mutation.MinSessionIdleMinutes(); !ok {
+		v := approvalrule.DefaultMinSessionIdleMinutes
+		_c.mutation.SetMinSessionIdleMinutes(v)
 	}
 }
 
@@ -548,6 +566,10 @@ func (_c *ApprovalRuleCreate) createSpec() (*ApprovalRule, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.RequireCiPassing(); ok {
 		_spec.SetField(approvalrule.FieldRequireCiPassing, field.TypeBool, value)
 		_node.RequireCiPassing = value
+	}
+	if value, ok := _c.mutation.MinSessionIdleMinutes(); ok {
+		_spec.SetField(approvalrule.FieldMinSessionIdleMinutes, field.TypeInt32, value)
+		_node.MinSessionIdleMinutes = value
 	}
 	return _node, _spec
 }
@@ -988,6 +1010,30 @@ func (u *ApprovalRuleUpsert) SetRequireCiPassing(v bool) *ApprovalRuleUpsert {
 // UpdateRequireCiPassing sets the "require_ci_passing" field to the value that was provided on create.
 func (u *ApprovalRuleUpsert) UpdateRequireCiPassing() *ApprovalRuleUpsert {
 	u.SetExcluded(approvalrule.FieldRequireCiPassing)
+	return u
+}
+
+// SetMinSessionIdleMinutes sets the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsert) SetMinSessionIdleMinutes(v int32) *ApprovalRuleUpsert {
+	u.Set(approvalrule.FieldMinSessionIdleMinutes, v)
+	return u
+}
+
+// UpdateMinSessionIdleMinutes sets the "min_session_idle_minutes" field to the value that was provided on create.
+func (u *ApprovalRuleUpsert) UpdateMinSessionIdleMinutes() *ApprovalRuleUpsert {
+	u.SetExcluded(approvalrule.FieldMinSessionIdleMinutes)
+	return u
+}
+
+// AddMinSessionIdleMinutes adds v to the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsert) AddMinSessionIdleMinutes(v int32) *ApprovalRuleUpsert {
+	u.Add(approvalrule.FieldMinSessionIdleMinutes, v)
+	return u
+}
+
+// ClearMinSessionIdleMinutes clears the value of the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsert) ClearMinSessionIdleMinutes() *ApprovalRuleUpsert {
+	u.SetNull(approvalrule.FieldMinSessionIdleMinutes)
 	return u
 }
 
@@ -1488,6 +1534,34 @@ func (u *ApprovalRuleUpsertOne) SetRequireCiPassing(v bool) *ApprovalRuleUpsertO
 func (u *ApprovalRuleUpsertOne) UpdateRequireCiPassing() *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateRequireCiPassing()
+	})
+}
+
+// SetMinSessionIdleMinutes sets the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsertOne) SetMinSessionIdleMinutes(v int32) *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.SetMinSessionIdleMinutes(v)
+	})
+}
+
+// AddMinSessionIdleMinutes adds v to the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsertOne) AddMinSessionIdleMinutes(v int32) *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.AddMinSessionIdleMinutes(v)
+	})
+}
+
+// UpdateMinSessionIdleMinutes sets the "min_session_idle_minutes" field to the value that was provided on create.
+func (u *ApprovalRuleUpsertOne) UpdateMinSessionIdleMinutes() *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.UpdateMinSessionIdleMinutes()
+	})
+}
+
+// ClearMinSessionIdleMinutes clears the value of the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsertOne) ClearMinSessionIdleMinutes() *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.ClearMinSessionIdleMinutes()
 	})
 }
 
@@ -2154,6 +2228,34 @@ func (u *ApprovalRuleUpsertBulk) SetRequireCiPassing(v bool) *ApprovalRuleUpsert
 func (u *ApprovalRuleUpsertBulk) UpdateRequireCiPassing() *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateRequireCiPassing()
+	})
+}
+
+// SetMinSessionIdleMinutes sets the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsertBulk) SetMinSessionIdleMinutes(v int32) *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.SetMinSessionIdleMinutes(v)
+	})
+}
+
+// AddMinSessionIdleMinutes adds v to the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsertBulk) AddMinSessionIdleMinutes(v int32) *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.AddMinSessionIdleMinutes(v)
+	})
+}
+
+// UpdateMinSessionIdleMinutes sets the "min_session_idle_minutes" field to the value that was provided on create.
+func (u *ApprovalRuleUpsertBulk) UpdateMinSessionIdleMinutes() *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.UpdateMinSessionIdleMinutes()
+	})
+}
+
+// ClearMinSessionIdleMinutes clears the value of the "min_session_idle_minutes" field.
+func (u *ApprovalRuleUpsertBulk) ClearMinSessionIdleMinutes() *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.ClearMinSessionIdleMinutes()
 	})
 }
 

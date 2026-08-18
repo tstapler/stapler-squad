@@ -78,6 +78,7 @@ func entWorkflowToProto(w *ent.Workflow) *sessionv1.WorkflowProto {
 		AgentType:       w.AgentType,
 		CronExpression:  w.CronExpression,
 		CronEnabled:     w.CronEnabled,
+		Enabled:         w.Enabled,
 		CreatedAt:       timestamppb.New(w.CreatedAt),
 		UpdatedAt:       timestamppb.New(w.UpdatedAt),
 	}
@@ -112,18 +113,21 @@ func entWorkflowToProto(w *ent.Workflow) *sessionv1.WorkflowProto {
 // set (Task 1.1.1e, pre-mortem P1 #2). Called with the *effective* (already-defaulted
 // and, for updates, already-merged-with-the-existing-row) values.
 //
-// cronEnabled is intentionally NOT checked against triggerType here: Phase 2's webhook
-// handlers and Phase 7's TriggersPanel toggle both independently settled on reusing
+// cronEnabled is intentionally NOT checked against triggerType here. Historically
+// (webhook-triggers Phase 2/7), the webhook handlers and TriggersPanel toggle reused
 // CronEnabled as the generic per-trigger "is this trigger enabled" flag across every
-// trigger type (see GenericWebhookHandler.Handle's !wf.CronEnabled check), not something
-// exclusive to trigger_type=="cron". An earlier version of this function rejected
-// cron_enabled=true for any non-cron trigger_type, which made it impossible to ever
-// enable a webhook/github_push trigger through CreateWorkflow/UpdateWorkflow — found via
-// TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification's real end-to-end
-// path. Dual-registration (the original concern this function guards against) is still
-// prevented independently: Scheduler.addCronEntry/Reload only ever register a row as a
-// cron entry when BOTH cronEnabled AND triggerType=="cron" hold (scheduler.go:206,404),
-// so a cron_enabled=true webhook row can never register as a cron entry regardless.
+// trigger type, not something exclusive to trigger_type=="cron" — that reuse has since
+// been split out into a dedicated Enabled field (see WorkflowProto.enabled's doc
+// comment), which the handlers now gate on instead. This function's earlier version
+// rejected cron_enabled=true for any non-cron trigger_type, which made it impossible to
+// ever enable a webhook/github_push trigger through CreateWorkflow/UpdateWorkflow —
+// found via TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification's real
+// end-to-end path; the same "don't couple cron_enabled to trigger_type" reasoning now
+// applies equally to Enabled. Dual-registration (the original concern this function
+// guards against) is still prevented independently: Scheduler.addCronEntry/Reload only
+// ever register a row as a cron entry when BOTH cronEnabled AND triggerType=="cron"
+// hold (scheduler.go:222,432), so a cron_enabled=true webhook row can never register as
+// a cron entry regardless.
 func validateTriggerTypeFieldConsistency(triggerType string, webhookSlug, githubRepo string) error {
 	if triggerType != "webhook" && webhookSlug != "" {
 		return fmt.Errorf("webhook_slug requires trigger_type=%q, got trigger_type=%q", "webhook", triggerType)
@@ -250,6 +254,7 @@ func (s *WorkflowService) CreateWorkflow(
 		AgentType:       req.Msg.AgentType,
 		CronExpression:  req.Msg.CronExpression,
 		CronEnabled:     req.Msg.CronEnabled,
+		Enabled:         req.Msg.Enabled, // nil (unset) now correctly falls through to the schema default (true)
 		TriggerType:     triggerType,
 		GitHubRepo:      req.Msg.GithubRepo,
 		GitHubBranch:    req.Msg.GithubBranch,
@@ -393,6 +398,7 @@ func (s *WorkflowService) UpdateWorkflow(
 		AgentType:       req.Msg.AgentType,
 		CronExpression:  req.Msg.CronExpression,
 		CronEnabled:     req.Msg.CronEnabled,
+		Enabled:         req.Msg.Enabled,
 		TriggerType:     &effectiveTriggerType,
 		GitHubRepo:      req.Msg.GithubRepo,
 		GitHubBranch:    req.Msg.GithubBranch,
@@ -419,10 +425,23 @@ func (s *WorkflowService) UpdateWorkflow(
 		update.WebhookSecretEncrypted = &encrypted
 	}
 
-	wf, err := s.repo.Update(ctx, id, update)
+	// Optimistic-concurrency CAS (webhook-triggers verify follow-ups AC9): when the
+	// caller supplies expected_updated_at, the write is rejected unless the row's
+	// current updated_at still matches what the caller read — mirrors
+	// ClaimChainFire's SQL-level CAS (ent_repository_backlog.go). Omitted (nil) means
+	// no precondition, preserving prior single-writer callers' behavior.
+	var wf *ent.Workflow
+	if req.Msg.ExpectedUpdatedAt != nil {
+		wf, err = s.repo.UpdateConditional(ctx, id, update, req.Msg.ExpectedUpdatedAt.AsTime())
+	} else {
+		wf, err = s.repo.Update(ctx, id, update)
+	}
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
+		}
+		if errors.Is(err, session.ErrPreconditionFailed) {
+			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("workflow %s was changed concurrently, reload and retry", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update workflow: %w", err))
 	}

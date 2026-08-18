@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, us
 import { useRouter } from "next/navigation";
 import { Omnibar, OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { SessionType } from "@/gen/session/v1/types_pb";
@@ -58,6 +59,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const { createSession, runWorkflow: runWorkflowRPC } = useSessionService({
     enabled: !authLoading && (!authEnabled || authenticated),
   });
+  const { createBacklogItemFromChat } = useBacklogService();
   const { workflows } = useWorkflows();
 
   // Lean WorkflowEntry[] for the detector and @ autocomplete dropdown.
@@ -145,21 +147,15 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
 
   const enterpriseHosts = useGitHubEnterpriseHosts();
 
-  // Dynamically register/unregister GitHubEnterpriseURLDetector whenever the
-  // configured GHES host list changes.
-  const githubEnterpriseDetectorRef = useRef<GitHubEnterpriseURLDetector | null>(null);
+  // GitHubEnterpriseURLDetector is registered synchronously (with an empty host
+  // list) inside createDefaultRegistry(), so the registry always has a slot for
+  // it — no window where a GHES URL falls through to SessionSearch. This effect
+  // just keeps its host list in sync as the async RPC result changes.
   useEffect(() => {
-    const registry = getDefaultRegistry();
-    if (githubEnterpriseDetectorRef.current) {
-      registry.unregister(githubEnterpriseDetectorRef.current);
-    }
-    const detector = new GitHubEnterpriseURLDetector(enterpriseHosts);
-    registry.register(detector);
-    githubEnterpriseDetectorRef.current = detector;
-    return () => {
-      registry.unregister(detector);
-      githubEnterpriseDetectorRef.current = null;
-    };
+    const detector = getDefaultRegistry().find("GitHubEnterpriseURL") as
+      | GitHubEnterpriseURLDetector
+      | undefined;
+    detector?.setHosts(enterpriseHosts);
   }, [enterpriseHosts]);
 
   const open = useCallback(() => {
@@ -297,6 +293,19 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     [runWorkflowRPC, workflows, router]
   );
 
+  // Handle chat_backlog_item: create a backlog item from a free-text message with no
+  // structured form fields — title/description both come from the raw message, and the
+  // normal auto-triage pipeline (skipTriage defaults to false) takes it from there.
+  const handleCreateBacklogItemFromChat = useCallback(
+    async (text: string) => {
+      const result = await createBacklogItemFromChat(text);
+      if (result) {
+        router.push(`/backlog?item=${result.item.id}`);
+      }
+    },
+    [createBacklogItemFromChat, router]
+  );
+
   const value: OmnibarContextValue = {
     isOpen,
     open,
@@ -316,6 +325,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onNavigateToSession={handleNavigateToSession}
         onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
         onRunWorkflow={handleRunWorkflow}
+        onCreateBacklogItemFromChat={handleCreateBacklogItemFromChat}
         initialMode={initialMode}
         initialInput={initialInput}
         initialTitle={initialTitle}

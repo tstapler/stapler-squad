@@ -2,13 +2,13 @@ import { create } from "@bufbuild/protobuf";
 import { TurnTokenStatSchema, type TurnTokenStat } from "@/gen/session/v1/insights_pb";
 import { sortTurnsByTokensDesc, computeOutlierThreshold, isOutlierTurn } from "./turnTimelineUtils";
 
-function makeTurn(input: bigint, output: bigint): TurnTokenStat {
+function makeTurn(input: bigint, output: bigint, cacheCreation = 0n, cacheRead = 0n): TurnTokenStat {
   return create(TurnTokenStatSchema, {
     model: "claude-sonnet-4",
     inputTokens: input,
     outputTokens: output,
-    cacheCreationTokens: 0n,
-    cacheReadTokens: 0n,
+    cacheCreationTokens: cacheCreation,
+    cacheReadTokens: cacheRead,
     toolNames: [],
   });
 }
@@ -57,6 +57,13 @@ describe("isOutlierTurn", () => {
 
   it("isOutlierTurn_should_returnTrue_When_totalExceedsThreshold", () => {
     const turn = makeTurn(300n, 101n);
+    expect(isOutlierTurn(turn, 400)).toBe(true);
+  });
+
+  it("isOutlierTurn_should_countCacheTokens_When_turnIsCacheDominated", () => {
+    // input+output alone (10+10=20) is well under the threshold, but the huge
+    // cache read (1000) should push the turn's total over it.
+    const turn = makeTurn(10n, 10n, 0n, 1000n);
     expect(isOutlierTurn(turn, 400)).toBe(true);
   });
 });

@@ -23,6 +23,11 @@ const SYNTHETIC_KIND_ICON: Partial<Record<SessionKind, string>> = {
   manual_review_marker: "✍️",
 };
 
+function firstLine(message: string): string {
+  const newlineIndex = message.indexOf("\n");
+  return newlineIndex === -1 ? message : message.slice(0, newlineIndex);
+}
+
 export interface SessionsSectionProps {
   item: BacklogItem;
   pipelineModes: PipelineMode[];
@@ -134,7 +139,25 @@ export function SessionsSection({
     }
   };
 
-  if (item.linkedSessions.length === 0) return null;
+  // AC0 fix: previously `return null` here, which made a genuinely
+  // zero-session item and a live populated→empty transition (blanked-out
+  // event data, see WatchBacklogItems root cause) both look like the whole
+  // "Sessions" block vanished — indistinguishable from a UI bug. An explicit
+  // empty state (matching BacklogEmptyState.tsx's FooterNudge pattern) makes
+  // "no sessions" a legible, intentional state instead.
+  if (item.linkedSessions.length === 0) {
+    return (
+      <CollapsibleSection
+        sectionKey="sessions"
+        title="Sessions (0)"
+        defaultExpanded={defaultExpanded}
+      >
+        <div role="status" aria-live="polite" className={sectionStyles.emptyState}>
+          No sessions yet for this item.
+        </div>
+      </CollapsibleSection>
+    );
+  }
 
   const statusToRole: Record<string, string> = {
     idea: "triage",
@@ -359,6 +382,12 @@ export function SessionsSection({
                       </>
                     )}
                   </div>
+                  {!isSynthetic && (s.commitCountSinceSpawn ?? 0) > 0 && (
+                    <div className={styles.commitDetail} title={s.lastCommitMessage}>
+                      {s.commitCountSinceSpawn} commit{s.commitCountSinceSpawn === 1 ? "" : "s"}
+                      {s.lastCommitMessage && <> — {firstLine(s.lastCommitMessage)}</>}
+                    </div>
+                  )}
                   {/* Synthetic rows' reviewVerdict is shown inside the
                       collapsed SessionDiagnosticPanel above (BlockedNotice /
                       GateVerdictBox readOnly) — showing it again here,

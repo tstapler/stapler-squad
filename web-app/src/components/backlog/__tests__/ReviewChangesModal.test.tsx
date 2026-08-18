@@ -28,6 +28,7 @@ jest.mock("@connectrpc/connect", () => {
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));
+jest.mock("@/lib/hooks/useFocusTrap", () => ({ useFocusTrap: () => undefined }));
 
 describe("ReviewChangesModal", () => {
   beforeEach(() => {

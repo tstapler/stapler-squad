@@ -448,7 +448,7 @@ proto-clean: ## Clean generated protocol buffer code
 
 # Testing targets
 test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integration tests; use test-integration for full suite)
-	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short ./...
+	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m ./...
 
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
 	go test -short -v ./...
@@ -505,7 +505,7 @@ coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targe
 	@go tool cover -func=coverage.out | grep "^total"
 
 test-race: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with race detector enabled (skips slow integration tests)
-	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short ./...
+	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m ./...
 
 test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
 	# ./session and ./session/tmux are the only integration-tagged packages that
@@ -519,8 +519,8 @@ test-integration: ensure-tools proto-gen ## Run integration tests (requires real
 	# session/tmux/server_registry_integration_test.go). -p 1 serializes just
 	# these two packages against each other; everything else still runs in
 	# parallel via the second invocation.
-	go test -race -tags integration -p 1 ./session ./session/tmux
-	go test -race -tags integration $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
+	go test -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
+	go test -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
 	go test -v -tags=harness -run TestTriageHarness ./server/services/

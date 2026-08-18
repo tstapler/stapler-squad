@@ -93,16 +93,22 @@ if [[ ! -f "./configure" ]]; then
   # it over the submodule source with no-clobber (keeps our git-tracked files).
   TMUX_VERSION="3.4"
   TARBALL_URL="https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
-  TMPTAR="$(mktemp /tmp/tmux-XXXXXX.tar.gz)"
+  # BSD mktemp (macOS) does not substitute the XXXXXX run when it's followed
+  # by a dotted suffix like .tar.gz — it returns the literal template every
+  # time, which collides with any leftover file from a prior run. Use a
+  # mktemp -d directory instead, which substitutes correctly on both BSD and
+  # GNU mktemp, and name the file inside it.
+  TMPDIR_TAR="$(mktemp -d /tmp/tmux-tar-XXXXXX)"
+  TMPTAR="${TMPDIR_TAR}/tmux-${TMUX_VERSION}.tar.gz"
   log "Downloading generated build files from release tarball (${TARBALL_URL})..."
   if curl -fsSL -o "$TMPTAR" "$TARBALL_URL" 2>/dev/null && \
      tar xzf "$TMPTAR" -C /tmp "tmux-${TMUX_VERSION}" 2>/dev/null; then
     cp -rn "/tmp/tmux-${TMUX_VERSION}/." .
     chmod +x ./configure
-    rm -rf "$TMPTAR" "/tmp/tmux-${TMUX_VERSION}"
+    rm -rf "$TMPDIR_TAR" "/tmp/tmux-${TMUX_VERSION}"
     log "Generated build files extracted from release tarball"
   else
-    rm -f "$TMPTAR"
+    rm -rf "$TMPDIR_TAR"
     log "Tarball download failed; falling back to autoreconf -fi..."
     # autoreconf -fi uses local system copies of missing files (avoids network hang).
     ACLOCAL_PATH="/opt/homebrew/share/aclocal:/usr/share/aclocal" autoreconf -fi

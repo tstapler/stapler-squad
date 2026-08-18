@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -230,6 +232,18 @@ type Config struct {
 	// executor is the command executor used for shell command discovery.
 	// Set via NewConfigWithExecutor; defaults to a 5-second timeout executor.
 	executor CommandExecutor
+	// lazyMu guards the generate-on-first-use fields below (MachineEncryptionKey,
+	// ClaimantHostID) against concurrent first-callers racing to generate and
+	// persist their own value — see GetOrCreateEncryptionKey/GetOrCreateClaimantHostID.
+	lazyMu sync.Mutex
+	// slackWebhookURLOverride holds the SLACK_WEBHOOK_URL env var value, if
+	// set at load time. Never persisted to config.json — see ADR-001. Not
+	// serialized since the field is unexported; read via SlackWebhookURLOverride().
+	slackWebhookURLOverride string
+	// slackSigningSecretOverride holds the SLACK_SIGNING_SECRET env var value,
+	// if set at load time. Never persisted to config.json — see ADR-001. Not
+	// serialized since the field is unexported; read via SlackSigningSecretOverride().
+	slackSigningSecretOverride string
 	// ListenAddress is the address the HTTP server listens on.
 	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
 	ListenAddress string `json:"listen_address"`
@@ -299,6 +313,16 @@ type Config struct {
 	// MachineEncryptionKey is a base64-encoded 32-byte AES-256-GCM key for local data encryption.
 	// Generated on first run and persisted here. Used to encrypt sensitive token data in ItemSource configs.
 	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
+	// ClaimantHostID is a randomly generated identifier for THIS physical process/config
+	// directory, generated on first use and persisted here. Recorded on backlog ItemSession
+	// rows to show which host/process claimed or attached a session (see
+	// GetOrCreateClaimantHostID). Stable across restarts of this same process/config dir;
+	// distinct across different hosts and across different STAPLER_SQUAD_INSTANCE-namespaced
+	// config dirs on the same machine, since each gets its own config.json. Unrelated to
+	// STAPLER_SQUAD_INSTANCE (which only namespaces config/state directories on a single
+	// machine) and unrelated to session/contexts.go's CloudContext.InstanceID (a cloud
+	// provider's instance identifier, not populated for local/dev sessions).
+	ClaimantHostID string `json:"claimant_host_id,omitempty"`
 	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
 	// loop will spawn for a single item before leaving it for manual review. 0 = use the
 	// default (20). Individual items can also override this via
@@ -344,10 +368,16 @@ type Config struct {
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
 	SessionRetention SessionRetentionConfig `json:"session_retention,omitempty"`
+	// StaleSession holds configuration for stale-session detection (inactivity threshold
+	// and notify-on-stale toggle).
+	StaleSession StaleSessionConfig `json:"stale_session,omitempty"`
 	// Callbacks holds the global singleton outbound-callback URLs (webhook-triggers
 	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
 	// queue-item-created lifecycle events.
 	Callbacks CallbackConfig `json:"callbacks,omitempty"`
+	// Slack holds configuration for the Slack review-queue notification
+	// feature. Secret fields are ciphertext only — see ADR-001.
+	Slack SlackConfig `json:"slack,omitempty"`
 
 	// Escape analytics configuration
 
@@ -489,6 +519,12 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
 	}
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		cfg.slackWebhookURLOverride = v
+	}
+	if v := os.Getenv("SLACK_SIGNING_SECRET"); v != "" {
+		cfg.slackSigningSecretOverride = v
+	}
 	return cfg
 }
 
@@ -574,6 +610,17 @@ func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
 		return "", fmt.Errorf("cannot expand home dir: %w", err)
 	}
 	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+}
+
+// PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
+// session launch prompts (see Instance.promptArg). Always defaults to
+// "~/.stapler-squad/prompt-cache".
+func (c *Config) PromptCacheDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "prompt-cache"), nil
 }
 
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
@@ -823,6 +870,28 @@ func LoadConfig() *Config {
 	return cfg
 }
 
+// saveConfigMu serializes the write-tmp-then-rename sequence in saveConfig,
+// keyed per configPath. Without it, two concurrent callers targeting the same
+// tmpPath (e.g. two goroutines independently calling
+// GetOrCreateEncryptionKey/SaveConfig) can interleave: both os.WriteFile the
+// shared tmpPath, then both os.Rename it — the first rename succeeds and
+// consumes tmpPath, so the second fails with "no such file or directory" and,
+// in tighter interleavings, a torn write leaves config.json holding malformed
+// JSON that the next LoadConfig call silently falls back to DefaultConfig()
+// over (losing whatever was there). Keyed per path (rather than one global
+// mutex) so concurrent saves to different configPaths — e.g. distinct
+// per-instance state dirs under state-isolation, see .claude/docs/state-isolation.md
+// — aren't needlessly serialized against each other.
+var saveConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex, serializes concurrent saveConfig callers sharing the same tmpPath
+
+// saveConfigLockFor returns the *sync.Mutex guarding writes to configPath,
+// creating it on first use. LoadOrStore's atomicity is what makes this safe
+// under concurrent callers racing to lock the same never-before-seen path.
+func saveConfigLockFor(configPath string) *sync.Mutex {
+	lock, _ := saveConfigMu.LoadOrStore(configPath, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
 // saveConfig saves the configuration to disk atomically via a temp-file rename.
 // Accepts an optional explicit path; when omitted the path is derived from GetConfigDir().
 func saveConfig(config *Config, paths ...string) error {
@@ -845,10 +914,39 @@ func saveConfig(config *Config, paths ...string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// Write to a temp file in the same directory, then rename for atomicity.
-	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp config: %w", err)
+	pathLock := saveConfigLockFor(configPath)
+	pathLock.Lock()
+	defer pathLock.Unlock()
+
+	// Write to a uniquely-named temp file in the same directory, then rename
+	// for atomicity. The name must be unique per call (os.CreateTemp's random
+	// suffix) rather than a fixed "config.json.tmp": two concurrent saveConfig
+	// calls targeting the same directory previously raced on that shared name,
+	// each truncating the other's in-progress write via O_TRUNC, corrupting the
+	// JSON, and racing os.Rename against a tmpPath the other had already moved.
+	// The pathLock above still serializes callers so the final rename order
+	// matches call order instead of being left to goroutine scheduling.
+	tmpFile, err := os.CreateTemp(filepath.Dir(configPath), filepath.Base(configPath)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp config file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	// os.CreateTemp creates the file 0600; match the previous os.WriteFile mode
+	// so the renamed config.json keeps its historical permissions.
+	chmodErr := tmpFile.Chmod(0644)
+	_, writeErr := tmpFile.Write(data)
+	closeErr := tmpFile.Close()
+	if chmodErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to chmod temp config: %w", chmodErr)
+	}
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", closeErr)
 	}
 	if err := os.Rename(tmpPath, configPath); err != nil {
 		_ = os.Remove(tmpPath) // best-effort cleanup
@@ -940,6 +1038,12 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
 	}
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		cfg.slackWebhookURLOverride = v
+	}
+	if v := os.Getenv("SLACK_SIGNING_SECRET"); v != "" {
+		cfg.slackSigningSecretOverride = v
+	}
 
 	return &cfg, nil
 }
@@ -1009,6 +1113,9 @@ func (c *Config) RemoveKeyCategory(key string) {
 // GetOrCreateEncryptionKey returns the 32-byte AES-256-GCM key for local data encryption.
 // Generates and persists a new key on first call. Non-fatal errors during save are logged.
 func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
+	c.lazyMu.Lock()
+	defer c.lazyMu.Unlock()
+
 	if c.MachineEncryptionKey != "" {
 		data, err := base64.StdEncoding.DecodeString(c.MachineEncryptionKey)
 		if err == nil && len(data) == 32 {
@@ -1032,6 +1139,43 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 	}
 
 	return key, nil
+}
+
+// GetOrCreateClaimantHostID returns this process/config directory's stable ClaimantHostID,
+// generating and persisting a new random UUID on first call. See the ClaimantHostID field
+// doc comment for what this identifier is (and is not) used for.
+func (c *Config) GetOrCreateClaimantHostID() (string, error) {
+	c.lazyMu.Lock()
+	defer c.lazyMu.Unlock()
+
+	if c.ClaimantHostID != "" {
+		return c.ClaimantHostID, nil
+	}
+
+	c.ClaimantHostID = uuid.New().String()
+
+	// Persist to disk; non-fatal if it fails
+	if err := SaveConfig(c); err != nil {
+		log.WarningLog.Printf("[Config] failed to persist claimant host id: %v", err)
+	}
+
+	return c.ClaimantHostID, nil
+}
+
+// SlackWebhookURLOverride returns the SLACK_WEBHOOK_URL environment variable
+// value captured at load time, or "" if it was unset. Exported because
+// server/services (which resolves the effective Slack webhook URL per
+// ADR-001: env override first, else decrypt the stored ciphertext) cannot
+// read the unexported slackWebhookURLOverride field directly.
+func (c *Config) SlackWebhookURLOverride() string {
+	return c.slackWebhookURLOverride
+}
+
+// SlackSigningSecretOverride returns the SLACK_SIGNING_SECRET environment
+// variable value captured at load time, or "" if it was unset. See
+// SlackWebhookURLOverride for why this getter exists.
+func (c *Config) SlackSigningSecretOverride() string {
+	return c.slackSigningSecretOverride
 }
 
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.

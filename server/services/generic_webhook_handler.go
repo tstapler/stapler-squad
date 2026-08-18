@@ -3,9 +3,6 @@ package services
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -62,7 +59,7 @@ func (h *GenericWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// identically to "unknown slug" (404) rather than a distinguishable status, so an
 	// unauthenticated prober can't use the response to enumerate which slugs exist but
 	// are merely disabled/misconfigured.
-	if wf.TriggerType != "webhook" || !wf.CronEnabled {
+	if wf.TriggerType != "webhook" || !wf.Enabled {
 		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
 			WorkflowID: uuidPtr(wf.ID), Outcome: "no_match",
 		})
@@ -70,27 +67,8 @@ func (h *GenericWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, MaxWebhookBodyBytes)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
-			WorkflowID: uuidPtr(wf.ID), Outcome: "rejected", ErrorMessage: "failed to read request body",
-		})
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
-		return
-	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
-			WorkflowID: uuidPtr(wf.ID), Outcome: "rejected", ErrorMessage: "malformed JSON",
-		})
-		http.Error(w, "malformed JSON", http.StatusBadRequest)
+	payload, body, ok := readAndDecodeWebhookBody(w, r, h.fireEvents, "", uuidPtr(wf.ID))
+	if !ok {
 		return
 	}
 

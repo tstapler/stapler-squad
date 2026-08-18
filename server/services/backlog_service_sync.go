@@ -97,12 +97,14 @@ func (s *BacklogService) AttachSessionToItem(
 		attachPriorSessions = nil
 	}
 
-	// 5. Create ItemSession.
+	// 5. Create ItemSession. ClaimantHostID is the attaching process's own
+	// identity (s.cfg), never derived from req.Msg or the attached session.
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: req.Msg.SessionUuid,
-		SessionRole: session.SessionRoleWork,
-		AcSnapshot:  acSnapshot,
+		ItemID:         item.ID,
+		SessionUUID:    req.Msg.SessionUuid,
+		SessionRole:    session.SessionRoleWork,
+		AcSnapshot:     acSnapshot,
+		ClaimantHostID: s.claimantHostID(),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))

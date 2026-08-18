@@ -1,0 +1,16 @@
+{
+  "id": "backlog:unarchive-item",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "UnarchiveBacklogItem",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist",
+    "TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_ItemIsArchived",
+    "TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArchived"
+  ],
+  "lastModified": "2026-08-14T08:55:56.502720887-07:00"
+}

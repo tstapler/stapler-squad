@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -1095,6 +1096,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 		AcSnapshot:               acSnapshot,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: pipelineModeSnapshotHash,
+		ClaimantHostID:           s.claimantHostID(),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
@@ -2405,6 +2407,38 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 	return true
 }
 
+// testTriageCompleteHook, when non-nil, is invoked with the item's ID as the
+// last thing TriggerTriage's background goroutine does on every exit path.
+// Production code never sets this; it exists so tests can wait for the
+// goroutine to actually finish instead of polling item status, which flips
+// before the goroutine's trailing writes land. Callers must filter by item
+// ID themselves — this is one shared hook across all tests, and a leftover
+// goroutine from an unmigrated test can still fire it. Modeled on
+// backlog_service_events.go's testAfterSubscribeHook.
+var (
+	// testTriageCompleteHookMu guards concurrent read/write of the hook from
+	// a test goroutine (setter) and a still-running TriggerTriage goroutine
+	// (reader) — required under -race even though a stale read would often
+	// be harmless in practice.
+	testTriageCompleteHookMu sync.Mutex
+	testTriageCompleteHook   func(itemID string)
+)
+
+func setTestTriageCompleteHook(hook func(itemID string)) {
+	testTriageCompleteHookMu.Lock()
+	defer testTriageCompleteHookMu.Unlock()
+	testTriageCompleteHook = hook
+}
+
+func callTestTriageCompleteHook(itemID string) {
+	testTriageCompleteHookMu.Lock()
+	hook := testTriageCompleteHook
+	testTriageCompleteHookMu.Unlock()
+	if hook != nil {
+		hook(itemID)
+	}
+}
+
 // TriggerTriage kicks off a headless triage planning call for a backlog item.
 // Returns immediately after creating an ItemSession; actual triage runs in a goroutine.
 // +api: backlog:trigger-triage
@@ -2544,7 +2578,11 @@ func (s *BacklogService) TriggerTriage(
 	// the engine (Epic 1.5, Story 1.5.3).
 	var triagePrompt string
 	if feedback != "" {
-		triagePrompt = session.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		if req.Msg.ChatMode {
+			triagePrompt = session.BuildHeadlessChatRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		} else {
+			triagePrompt = session.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		}
 	} else {
 		triagePrompt = s.triagePromptFor(item, artifactAbsPath)
 	}
@@ -2580,6 +2618,11 @@ func (s *BacklogService) TriggerTriage(
 	iteration := nextIteration
 	triageStarted = true
 	go func() {
+		// Registered first so it runs last (defers are LIFO) — fires only after
+		// every other defer in this goroutine (semaphore release, cancel) has
+		// run, on every exit path. See testTriageCompleteHook's doc comment.
+		defer callTestTriageCompleteHook(itemID)
+
 		// Clears the triageInFlight entry set at 3a-i above no matter how this
 		// goroutine exits, so the item is never left permanently un-retriggerable.
 		defer s.triageInFlight.Delete(itemID)
@@ -2716,10 +2759,20 @@ func (s *BacklogService) TriggerTriage(
 			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, result.Title, triageWorktree)
 		}
 
+		// persistCtx gives post-git persistence writes their own fresh timeout
+		// budget, started after CommitChanges/retitle's ~30s-capable git
+		// subprocesses run rather than before — reusing cleanupCtx here produced
+		// an intermittent "expected: ready, actual: idea" flake under
+		// -race -count=5 when those git ops alone ate its budget. See
+		// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession's
+		// "Second root cause" comment for the full history.
+		persistCtx, persistCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
+		defer persistCancel()
+
 		payloadJSON, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] marshal triage result item=%s: %v", itemID, marshalErr)
-			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
 			return
 		}
 		// persistFailures accumulates which of the post-triage persistence steps below
@@ -2728,7 +2781,7 @@ func (s *BacklogService) TriggerTriage(
 		// surfaces a single operator-facing notification so a failure here is never silent.
 		var persistFailures []string
 
-		if updateErr := s.storage.UpdateItemSessionTriageResult(cleanupCtx, isID, string(payloadJSON)); updateErr != nil {
+		if updateErr := s.storage.UpdateItemSessionTriageResult(persistCtx, isID, string(payloadJSON)); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] persist triage result item=%s: %v", itemID, updateErr)
 			persistFailures = append(persistFailures, "saving the triage result")
 		}
@@ -2756,14 +2809,14 @@ func (s *BacklogService) TriggerTriage(
 			ClearPlanRejectedAt: true,
 		}
 		applyTriageResultToUpdate(&result, &update)
-		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
+		if _, updateErr := s.storage.UpdateBacklogItem(persistCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
 		}
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
-		if _, transErr := s.storage.TransitionBacklogItemStatus(cleanupCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
+		if _, transErr := s.storage.TransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
 			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")
@@ -2771,7 +2824,7 @@ func (s *BacklogService) TriggerTriage(
 		}
 
 		if len(persistFailures) > 0 {
-			s.notifyTriagePersistFailure(cleanupCtx, itemID, item.Title, persistFailures, statusAdvanced)
+			s.notifyTriagePersistFailure(persistCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
 
 		// Close out the ItemSession and release triageInFlight together, right here —
@@ -2786,7 +2839,7 @@ func (s *BacklogService) TriggerTriage(
 		// above), so moving one without the other would let a concurrent reconciliation
 		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
 		// simply between here and its final log line.
-		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
 		s.triageInFlight.Delete(itemID)
 
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
@@ -2795,7 +2848,7 @@ func (s *BacklogService) TriggerTriage(
 		// first, which is the whole point of this toggle (default false; existing manual
 		// flow is unchanged unless explicitly opted in).
 		if statusAdvanced && item.AutoSpawnSession {
-			if _, spawnErr := s.SpawnSessionFromItem(cleanupCtx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+			if _, spawnErr := s.SpawnSessionFromItem(persistCtx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
 				ItemId:     itemID,
 				Autonomous: true,
 			})); spawnErr != nil {

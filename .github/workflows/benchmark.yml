@@ -274,7 +274,7 @@ jobs:
   frontend-throughput:
     name: Frontend Terminal Throughput
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: frontend-bundle
     permissions:
       contents: read
@@ -308,7 +308,22 @@ jobs:
         run: buf generate proto
 
       - name: Install Playwright browsers
-        run: cd web-app && npx playwright install --with-deps chromium
+        # apt-get update (invoked internally by --with-deps) has stalled for
+        # ~29 minutes against Ubuntu archive mirrors before now — a transient
+        # CI network flake unrelated to this repo. Bound each attempt so a
+        # stall fails fast and retries against a fresh mirror connection
+        # instead of eating the whole job timeout.
+        run: |
+          cd web-app
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Build Next.js app
         run: cd web-app && pnpm run build
@@ -490,7 +505,7 @@ jobs:
   e2e-latency:
     name: E2E RPC Latency
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     needs: frontend-bundle
     permissions:
       contents: read
@@ -540,7 +555,22 @@ jobs:
         run: cp -r web-app/out server/web/dist
 
       - name: Install Playwright browsers
-        run: cd web-app && npx playwright install --with-deps chromium
+        # apt-get update (invoked internally by --with-deps) has stalled for
+        # ~29 minutes against Ubuntu archive mirrors before now — a transient
+        # CI network flake unrelated to this repo. Bound each attempt so a
+        # stall fails fast and retries against a fresh mirror connection
+        # instead of eating the whole job timeout.
+        run: |
+          cd web-app
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Build Go binary
         run: go build -o stapler-squad .

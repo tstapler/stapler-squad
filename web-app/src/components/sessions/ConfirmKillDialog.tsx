@@ -1,7 +1,7 @@
 "use client";
 // +feature: confirm-kill-dialog
 
-import { useRef, useState } from "react";
+import { useRef, useState, RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useImportSessionService } from "@/lib/hooks/useImportSessionService";
 import { KillStatus, type PIDIdentity } from "@/gen/session/v1/import_pb";
@@ -14,6 +14,13 @@ interface ConfirmKillDialogProps {
   program: string;
   onStatusChange: (status: ImportRowStatus) => void;
   onClose: () => void;
+  // ConfirmKillDialog has no live DOM trigger of its own: it opens as a
+  // chained continuation after ImportPreviewDialog unmounts (see
+  // ImportSessionsContainer.tsx), so there's no "Confirm Kill"-button click
+  // to capture. We deliberately reuse the import flow's triggerRef (the
+  // element that started the whole import) rather than leave focus
+  // restoration silently broken for this dialog.
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 export function ConfirmKillDialog({
@@ -22,9 +29,10 @@ export function ConfirmKillDialog({
   program,
   onStatusChange,
   onClose,
+  triggerRef,
 }: ConfirmKillDialogProps) {
   const modalRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(modalRef, true);
+  useFocusTrap(modalRef, true, triggerRef);
   const { confirmKill, cancelPendingKill } = useImportSessionService();
 
   const [isKilling, setIsKilling] = useState(false);
