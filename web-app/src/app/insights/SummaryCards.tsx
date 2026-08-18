@@ -12,6 +12,10 @@ interface Props {
 export function SummaryCards({ summary }: Props) {
   const sessionCount = summary.sessions.length;
   const orphanCount = summary.sessions.filter((s) => s.isOrphan).length;
+  const totalCacheCreationTokens = summary.sessions.reduce(
+    (sum, s) => sum + s.cacheCreationTokens,
+    0n,
+  );
 
   return (
     <div className={grid}>
@@ -41,7 +45,13 @@ export function SummaryCards({ summary }: Props) {
       <div className={card}>
         <span className={cardLabel}>Cache Hit Rate</span>
         <span className={cardValue}>{fmtPct(summary.overallCacheHitRate)}</span>
-        <span className={cardSub}>{fmtTokens(summary.totalCacheReadTokens)} cached</span>
+        <span className={cardSub}>{fmtTokens(summary.totalCacheReadTokens)} read</span>
+      </div>
+
+      <div className={card}>
+        <span className={cardLabel}>Cache Writes</span>
+        <span className={cardValue}>{fmtTokens(totalCacheCreationTokens)}</span>
+        <span className={cardSub}>tokens written to cache</span>
       </div>
 
       {orphanCount > 0 && (

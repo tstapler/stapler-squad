@@ -29,7 +29,7 @@ import {
   backlogLink,
   outlierCell,
 } from "./SessionDetailDrawer.css";
-import { fmtCost, fmtPct, fmtDate, shortId, computeCacheHitRate } from "./insightsFormatters";
+import { fmtCost, fmtPct, fmtTokens, fmtDate, shortId, computeCacheHitRate } from "./insightsFormatters";
 import { useSessionTurnTimeline } from "@/lib/hooks/useInsightsService";
 import {
   sortTurnsByTokensDesc,
@@ -107,6 +107,9 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
             <dt className={metaLabel}>Cache hit rate</dt>
             <dd className={metaValue}>{fmtPct(session.cacheHitRate)}</dd>
 
+            <dt className={metaLabel}>Cache writes</dt>
+            <dd className={metaValue}>{fmtTokens(session.cacheCreationTokens)}</dd>
+
             <dt className={metaLabel}>First message</dt>
             <dd className={metaValue}>{fmtDate(session.firstMessageAt)}</dd>
 
@@ -177,7 +180,10 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
                           {t.outputTokens.toString()}
                         </span>
                       </td>
-                      <td className={toolsTdRight}>
+                      <td
+                        className={toolsTdRight}
+                        title={`${fmtTokens(t.cacheReadTokens)} read, ${fmtTokens(t.cacheCreationTokens)} written`}
+                      >
                         {fmtPct(computeCacheHitRate(Number(t.inputTokens), Number(t.cacheReadTokens)))}
                       </td>
                       <td className={toolsTd}>{t.toolNames.join(", ") || "—"}</td>

@@ -5,6 +5,7 @@
 
 import { InputType, DetectionResult, GitHubRef } from "./types";
 import { CommandDetector } from "./detectors/CommandDetector";
+import { GitHubEnterpriseURLDetector } from "./detectors/GitHubEnterpriseURLDetector";
 import { toSessionSlug } from "./slugify";
 
 export interface Detector {
@@ -350,6 +351,11 @@ export class DetectorRegistry {
     this.detectors = this.detectors.filter((d) => d !== detector);
   }
 
+  /** Look up a registered detector by name (e.g. to mutate its state in place). */
+  find(name: string): Detector | undefined {
+    return this.detectors.find((d) => d.name === name);
+  }
+
   detect(input: string): DetectionResult {
     for (const detector of this.detectors) {
       try {
@@ -393,6 +399,7 @@ export function createDefaultRegistry(): DetectorRegistry {
   const registry = new DetectorRegistry();
   registry.register(new CommandDetector());
   registry.register(new GitHubPRDetector());
+  registry.register(new GitHubEnterpriseURLDetector());
   registry.register(new ChatBacklogItemDetector());
   registry.register(new GitHubBranchDetector());
   registry.register(new GitHubRepoDetector());
