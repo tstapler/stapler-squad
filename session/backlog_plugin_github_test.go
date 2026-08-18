@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/github"
 )
 
 // These tests (both GitHubIssuesPlugin and GitHubPRsPlugin) rely on
@@ -137,6 +138,7 @@ func TestGitHubIssuesPlugin_Fetch_IncludesClosedIssues(t *testing.T) {
 }
 
 func TestGitHubIssuesPlugin_Fetch_RateLimited(t *testing.T) {
+	github.ResetRateLimiterForTest(t)
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	})
@@ -310,6 +312,7 @@ func TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField(t *testing.T) {
 // X-RateLimit-Remaining:0 response surfaces a descriptive error rather than
 // panicking.
 func TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError(t *testing.T) {
+	github.ResetRateLimiterForTest(t)
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.Header().Set("Retry-After", "60")

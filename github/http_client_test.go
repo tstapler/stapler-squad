@@ -186,12 +186,12 @@ func TestGetGHToken_SingleflightCollapsesParallelCacheMissCallers(t *testing.T) 
 // now fails fast when it's already limited, one test's rate-limit fixture
 // otherwise poisons every test that runs after it in the same process (found
 // via TestGetCommit's "403 with Retry-After" subtest failing TestGetPR's
-// unrelated "200 success" subtest).
+// unrelated "200 success" subtest). This is a thin in-package alias for the
+// exported ResetRateLimiterForTest (testing.go), which consumer packages
+// (e.g. session's GitHub backlog plugin tests) call directly.
 func resetRateLimiterForTest(t *testing.T) {
 	t.Helper()
-	orig := DefaultRateLimiter
-	DefaultRateLimiter = &RateLimiter{}
-	t.Cleanup(func() { DefaultRateLimiter = orig })
+	ResetRateLimiterForTest(t)
 }
 
 // TestGhHTTPClient_UpdatesDefaultRateLimiter verifies ghHTTPClient's Transport
