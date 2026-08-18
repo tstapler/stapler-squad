@@ -167,10 +167,20 @@ func TestGetCloneURL_UsesHostSpecificURL(t *testing.T) {
 func TestGetCloneURL_EmbedsKeychainToken_When_HostHasStoredAccount(t *testing.T) {
 	// Not t.Parallel(): keyring.MockInit()/SetKeychainTokenForAccount below
 	// mutate process-global keychain mock state for "github.example-corp.com" —
-	// the same host literal TestGetCloneURL_UsesHostSpecificURL uses, so
-	// running both in parallel makes that test's GetCloneURL call
-	// nondeterministically pick up this test's stored token and fail.
+	// the same host literal TestGetCloneURL_UsesHostSpecificURL uses.
+	//
+	// Being non-parallel only controls *when* this test's body runs relative
+	// to t.Parallel() tests (fully before they resume, deterministically) —
+	// it does nothing to stop the global mock state it writes from being
+	// visible to those tests once they resume. Without the MockInit() reset
+	// in the cleanup below, TestGetCloneURL_UsesHostSpecificURL's later,
+	// parallel GetCloneURL call for the same host deterministically (not just
+	// "nondeterministically") picks up the stored "octocat" token and gets a
+	// credentialed URL back instead of the plain one it asserts on. Reset the
+	// mock keychain to a clean store once this test is done so the token
+	// doesn't leak into any other test in the package.
 	keyring.MockInit()
+	t.Cleanup(keyring.MockInit)
 	host := "github.example-corp.com"
 	if err := github.SetKeychainTokenForAccount(host, "octocat", "token-abc123"); err != nil {
 		t.Fatalf("SetKeychainTokenForAccount failed: %v", err)
