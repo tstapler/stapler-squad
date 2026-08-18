@@ -338,6 +338,54 @@ func TestLoadConfig(t *testing.T) {
 		assert.NotEmpty(t, config.BranchPrefix)
 	})
 
+	// This pins the LoadConfig TOCTOU fix's default-fallback save path for the
+	// shared-state case (STAPLER_SQUAD_INSTANCE=shared), which resolves straight
+	// to baseDir (HOME/.stapler-squad) per GetConfigDirForDir's Priority 2 —
+	// bypassing test-mode auto-detection (Priority 3), which is unconditionally
+	// true inside a `go test` binary and would otherwise make the real
+	// HOME-derived path unreachable here (see TestGetConfigDir's "uses shared
+	// state when STAPLER_SQUAD_INSTANCE=shared" subtest for the same pattern).
+	t.Run("returns default config and persists it when STAPLER_SQUAD_INSTANCE=shared", func(t *testing.T) {
+		originalHome := os.Getenv("HOME")
+		originalTestDir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
+		originalInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+		tempHome := t.TempDir()
+		os.Setenv("HOME", tempHome)
+		os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+		os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+		// The default-fallback save path doesn't MkdirAll the target directory
+		// (a pre-existing, separate gap from the TOCTOU fix under test) — create
+		// it up front, matching how the sibling "loads valid config file" and
+		// "backfills quota defaults" subtests below already pre-create their dirs.
+		require.NoError(t, os.MkdirAll(filepath.Join(tempHome, ".stapler-squad"), 0755))
+		defer func() {
+			os.Setenv("HOME", originalHome)
+			if originalTestDir == "" {
+				os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+			} else {
+				os.Setenv("STAPLER_SQUAD_TEST_DIR", originalTestDir)
+			}
+			if originalInstance == "" {
+				os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+			} else {
+				os.Setenv("STAPLER_SQUAD_INSTANCE", originalInstance)
+			}
+		}()
+
+		config := LoadConfig()
+
+		assert.NotNil(t, config)
+		assert.NotEmpty(t, config.DefaultProgram)
+		assert.False(t, config.AutoYes)
+
+		expectedPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+		data, err := os.ReadFile(expectedPath)
+		require.NoError(t, err, "default config should have been persisted to the HOME-derived path")
+		var persisted Config
+		require.NoError(t, json.Unmarshal(data, &persisted))
+		assert.Equal(t, config.DefaultProgram, persisted.DefaultProgram)
+	})
+
 	t.Run("loads valid config file", func(t *testing.T) {
 		// Create a temporary config directory
 		tempHome := t.TempDir()

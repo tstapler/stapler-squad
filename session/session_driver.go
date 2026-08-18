@@ -135,9 +135,22 @@ type sessionDriverStopper struct {
 // dialogs that mention this path are auto-approved.
 //
 // Calling StartSessionDriver twice on the same instance is safe: the second call
-// is a no-op (the idempotency guard uses atomic.Bool.CompareAndSwap).
+// is a no-op (the idempotency guard uses atomic.Bool.CompareAndSwap). Calling it
+// on an instance whose Destroy() has already run (or is running concurrently)
+// is also a no-op — see Instance.driverMu's doc comment — so a delayed caller
+// (e.g. CreateSession's async init goroutine racing a fast DeleteSession) can
+// never spawn a driver goroutine that nothing will ever be told to stop.
 func StartSessionDriver(inst *Instance, allowedPath string) {
+	inst.driverMu.Lock()
+	if inst.driverDestroyed {
+		inst.driverMu.Unlock()
+		log.Debug("SessionDriver: instance already destroyed, refusing to start driver",
+			"session", inst.Title,
+		)
+		return
+	}
 	if !inst.driverRunning.CompareAndSwap(false, true) {
+		inst.driverMu.Unlock()
 		log.Debug("SessionDriver: driver already running for session, skipping duplicate start",
 			"session", inst.Title,
 		)
@@ -145,6 +158,7 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 	}
 	stopper := &sessionDriverStopper{stop: make(chan struct{}), done: make(chan struct{})}
 	inst.driverStopper.Store(stopper)
+	inst.driverMu.Unlock()
 	go func() {
 		defer close(stopper.done)
 		defer inst.driverRunning.Store(false)
@@ -159,9 +173,16 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 // Preview() — which routes through the tmux exec gate's
 // appconfig.LoadConfig()/GetConfigDir() (session/tmux/exec_gate.go) — using
 // whatever STAPLER_SQUAD_TEST_DIR a later test has since set process-wide.
-// A no-op if the driver was never started.
+// Also marks inst as destroyed (under driverMu, alongside the stopper read)
+// so a StartSessionDriver call that is still in flight — or arrives later —
+// can never spawn a driver goroutine for this instance again; see
+// Instance.driverMu's doc comment. A no-op (beyond that marking) if the
+// driver was never started.
 func StopSessionDriver(inst *Instance) {
+	inst.driverMu.Lock()
+	inst.driverDestroyed = true
 	stopper := inst.driverStopper.Load()
+	inst.driverMu.Unlock()
 	if stopper == nil {
 		return
 	}

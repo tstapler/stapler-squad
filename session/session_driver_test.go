@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1188,5 +1189,84 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 				maxDialogAnswerAttempts)
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak
+// is the dedicated regression test for the config/session TOCTOU-and-goroutine-
+// lifecycle fix: StopSessionDriver (called from Instance.Destroy()) must return
+// within a bounded time even when it races a driver goroutine that is genuinely
+// alive and blocked in its poll loop, and must leave no goroutine behind.
+//
+// The driver goroutine's main loop (runSessionDriverWithPrompt, session_driver.go)
+// spends nearly all of its life parked at `select { case <-stop: case
+// <-ticker.C: }` — so letting StartSessionDriver run for one scheduler tick
+// before calling StopSessionDriver concurrently is sufficient to catch it there,
+// mirroring the real race between an in-flight poll and a session being
+// destroyed. This does not depend on real tmux: the fake ProcessManager below
+// never matches a dialog or produces terminal content, so the loop always falls
+// straight through to the ticker wait.
+func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak(t *testing.T) {
+	fakePM := &stuckDialogProcessManager{}
+
+	inst := &Instance{
+		Title:          "concurrent-stop-test",
+		UUID:           "test-uuid-concurrent-stop",
+		Status:         Running,
+		processManager: fakePM,
+		reviewQueue:    NewReviewQueue(),
+	}
+	inst.started.Store(true)
+
+	StartSessionDriver(inst, t.TempDir())
+
+	// Let the driver goroutine actually reach its poll-loop select before
+	// racing StopSessionDriver against it.
+	deadline := time.After(time.Second)
+	for !inst.driverRunning.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("driver goroutine never marked itself running")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	before := runtime.NumGoroutine()
+
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		StopSessionDriver(inst)
+	}()
+
+	select {
+	case <-stopDone:
+	case <-time.After(driverStopTimeout + 2*time.Second):
+		t.Fatal("StopSessionDriver did not return within its bounded timeout while racing an in-flight poll")
+	}
+
+	if inst.driverRunning.Load() {
+		t.Fatal("driverRunning still true after StopSessionDriver returned")
+	}
+
+	// A StartSessionDriver call arriving after Destroy() must be refused —
+	// driverDestroyed (set by StopSessionDriver) must permanently block it.
+	StartSessionDriver(inst, t.TempDir())
+	time.Sleep(20 * time.Millisecond)
+	if inst.driverRunning.Load() {
+		t.Fatal("StartSessionDriver spawned a new driver goroutine after the instance was destroyed")
+	}
+
+	// The stopped goroutine (and its stop-watcher child) must not leak.
+	leakDeadline := time.Now().Add(2 * time.Second)
+	for {
+		if runtime.NumGoroutine() <= before {
+			return
+		}
+		if time.Now().After(leakDeadline) {
+			t.Fatalf("goroutine count did not settle back to baseline: before=%d after=%d", before, runtime.NumGoroutine())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
