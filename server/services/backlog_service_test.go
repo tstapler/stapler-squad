@@ -1181,6 +1181,14 @@ func initGitRepoWithCommit(t *testing.T, dir string) {
 // This test locks in that the real item content — not a generic fallback —
 // reaches the session-creation boundary.
 func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *testing.T) {
+	// Force an isolated worktree base dir — without this, config.GetConfigDirForDir's
+	// IsTestMode() branch scopes it by OS PID only (shared by every test in this binary),
+	// so a stale worktree/branch left by another server/services test can be "reused" by
+	// findExistingWorktreeForBranch, silently failing the async triage goroutine's git
+	// status check and leaving the item stuck below (never reaching "ready"). Same fix as
+	// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession, below.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	creator := &mockSessionCreator{}
@@ -3305,15 +3313,38 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 	})
 	require.NoError(t, err)
 
+	// Wait on the hook, not just the status flip: TriggerTriage's background
+	// goroutine performs a trailing storage write after status becomes Ready
+	// (see the root-cause comment on
+	// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession
+	// below). Polling status alone lets this test return while that goroutine
+	// is still running, racing a later test's use of the same package-level
+	// hook variable under -race.
+	// Filter by item ID: a still-running goroutine from an earlier,
+	// unmigrated TriggerTriage test can fire this shared hook after this
+	// test registers its closure, delivering a false completion signal.
+	triageDone := make(chan string, 1)
+	setTestTriageCompleteHook(func(id string) {
+		if id != item.ID {
+			return
+		}
+		select {
+		case triageDone <- id:
+		default:
+		}
+	})
+	t.Cleanup(func() { setTestTriageCompleteHook(nil) })
+
 	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
 		ItemId: item.ID,
 	}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
-		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
-	}, 5*time.Second, 50*time.Millisecond)
+	select {
+	case <-triageDone:
+	case <-time.After(60 * time.Second):
+		t.Fatal("timed out waiting for TriggerTriage's background goroutine to complete")
+	}
 
 	workDir := pool.firstCall().workDir
 	require.NotEqual(t, repoPath, workDir)
@@ -3398,20 +3429,58 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
 
+	// Root cause of this test's former flakiness (require.Eventually polling
+	// only the item's "ready" status): TriggerTriage's background goroutine
+	// flips status to Ready and THEN performs a trailing storage write
+	// (UpdateItemSessionEnded, backlog_service_triage.go) before it actually
+	// finishes. Polling status alone let this test return — triggering
+	// createTestStorage's t.Cleanup(repo.Close()) — while that trailing write
+	// was still in flight, intermittently corrupting the test's own SQLite
+	// handle ("failed to insert into database" style errors) rather than
+	// merely timing out. testTriageCompleteHook (backlog_service_triage.go)
+	// closes the race by signaling true goroutine completion, not a proxy field.
+	//
+	// Second root cause, found via a 20x -count run (6/20 failures): the
+	// goroutine's real git worktree operations (fetch, checkout/reuse, commit)
+	// legitimately took as long as ~30s in this environment even on passing
+	// runs, but the wait below used to bound at 10s. When that bound fired,
+	// t.Fatal ended the test iteration WITHOUT cancelling or waiting for the
+	// still-running goroutine. Because the test base directory is scoped only
+	// to the OS PID (config.go's TestBaseDir, "test/test-<pid>"), it is shared
+	// across every repetition in a single `go test -count=N` process — so that
+	// leaked goroutine kept mutating the same on-disk worktree a subsequent
+	// -count iteration then reused ("found existing worktree ... reusing it"),
+	// producing cascading git corruption in later iterations ("invalid object
+	// ... for <path>", "not a git repository", "unable to read tree"). 60s
+	// gives headroom above the observed worst case (30.29s) so the test only
+	// ever fails on a genuine hang, not on ordinary latency variance.
+	// Filter by item ID: a still-running goroutine from an earlier,
+	// unmigrated TriggerTriage test can fire this shared hook after this
+	// test registers its closure, delivering a false completion signal.
+	triageDone := make(chan string, 1)
+	setTestTriageCompleteHook(func(id string) {
+		if id != itemID {
+			return
+		}
+		select {
+		case triageDone <- id:
+		default:
+		}
+	})
+	t.Cleanup(func() { setTestTriageCompleteHook(nil) })
+
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
 	require.NoError(t, err)
 
-	// 5s/50ms matches the sibling SDD-mode triage tests immediately above
-	// (TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
-	// et al.) rather than the tighter 2s/10ms this test previously used — under
-	// -race, observed passing runs of this exact test already take 3.5-4.2s end to
-	// end (worktree create+setup, fake headless call, commit, branch rename, DB
-	// writes), so the old 2s budget was undersized independent of the worktree
-	// test-isolation fix above.
-	require.Eventually(t, func() bool {
-		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
-		return getErr == nil && getResp.Msg.Item.Status == "ready"
-	}, 5*time.Second, 50*time.Millisecond)
+	select {
+	case <-triageDone:
+	case <-time.After(60 * time.Second):
+		t.Fatal("timed out waiting for TriggerTriage's background goroutine to complete")
+	}
+
+	getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, getErr)
+	require.Equal(t, "ready", getResp.Msg.Item.Status)
 
 	require.Equal(t, 1, pool.callCount())
 	triageWorktreePath := pool.firstCall().workDir
@@ -3424,7 +3493,11 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	require.NoError(t, err)
 
 	require.Len(t, creator.calls, 1)
-	assert.Equal(t, triageWorktreePath, creator.calls[0].path,
+	// git worktree list echoes back a realpath(3)-resolved path, so on macOS
+	// (/var -> /private/var) it textually differs from t.TempDir()'s raw form.
+	resolvedTriageWorktreePath, evalErr := filepath.EvalSymlinks(triageWorktreePath)
+	require.NoError(t, evalErr)
+	assert.Equal(t, resolvedTriageWorktreePath, creator.calls[0].path,
 		"SpawnSessionFromItem must reuse the exact worktree TriggerTriage created and committed its SDD docs into, not start a fresh one from main")
 
 	// The committed planning docs must still be present — proving this is a

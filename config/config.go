@@ -236,6 +236,14 @@ type Config struct {
 	// ClaimantHostID) against concurrent first-callers racing to generate and
 	// persist their own value — see GetOrCreateEncryptionKey/GetOrCreateClaimantHostID.
 	lazyMu sync.Mutex
+	// slackWebhookURLOverride holds the SLACK_WEBHOOK_URL env var value, if
+	// set at load time. Never persisted to config.json — see ADR-001. Not
+	// serialized since the field is unexported; read via SlackWebhookURLOverride().
+	slackWebhookURLOverride string
+	// slackSigningSecretOverride holds the SLACK_SIGNING_SECRET env var value,
+	// if set at load time. Never persisted to config.json — see ADR-001. Not
+	// serialized since the field is unexported; read via SlackSigningSecretOverride().
+	slackSigningSecretOverride string
 	// ListenAddress is the address the HTTP server listens on.
 	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
 	ListenAddress string `json:"listen_address"`
@@ -367,6 +375,9 @@ type Config struct {
 	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
 	// queue-item-created lifecycle events.
 	Callbacks CallbackConfig `json:"callbacks,omitempty"`
+	// Slack holds configuration for the Slack review-queue notification
+	// feature. Secret fields are ciphertext only — see ADR-001.
+	Slack SlackConfig `json:"slack,omitempty"`
 
 	// Escape analytics configuration
 
@@ -507,6 +518,12 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
+	}
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		cfg.slackWebhookURLOverride = v
+	}
+	if v := os.Getenv("SLACK_SIGNING_SECRET"); v != "" {
+		cfg.slackSigningSecretOverride = v
 	}
 	return cfg
 }
@@ -931,10 +948,39 @@ func saveConfigLocked(config *Config, configPath string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// Write to a temp file in the same directory, then rename for atomicity.
-	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp config: %w", err)
+	pathLock := saveConfigLockFor(configPath)
+	pathLock.Lock()
+	defer pathLock.Unlock()
+
+	// Write to a uniquely-named temp file in the same directory, then rename
+	// for atomicity. The name must be unique per call (os.CreateTemp's random
+	// suffix) rather than a fixed "config.json.tmp": two concurrent saveConfig
+	// calls targeting the same directory previously raced on that shared name,
+	// each truncating the other's in-progress write via O_TRUNC, corrupting the
+	// JSON, and racing os.Rename against a tmpPath the other had already moved.
+	// The pathLock above still serializes callers so the final rename order
+	// matches call order instead of being left to goroutine scheduling.
+	tmpFile, err := os.CreateTemp(filepath.Dir(configPath), filepath.Base(configPath)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp config file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	// os.CreateTemp creates the file 0600; match the previous os.WriteFile mode
+	// so the renamed config.json keeps its historical permissions.
+	chmodErr := tmpFile.Chmod(0644)
+	_, writeErr := tmpFile.Write(data)
+	closeErr := tmpFile.Close()
+	if chmodErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to chmod temp config: %w", chmodErr)
+	}
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", closeErr)
 	}
 	if err := os.Rename(tmpPath, configPath); err != nil {
 		_ = os.Remove(tmpPath) // best-effort cleanup
@@ -1025,6 +1071,12 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
+	}
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		cfg.slackWebhookURLOverride = v
+	}
+	if v := os.Getenv("SLACK_SIGNING_SECRET"); v != "" {
+		cfg.slackSigningSecretOverride = v
 	}
 
 	return &cfg, nil
@@ -1142,6 +1194,22 @@ func (c *Config) GetOrCreateClaimantHostID() (string, error) {
 	}
 
 	return c.ClaimantHostID, nil
+}
+
+// SlackWebhookURLOverride returns the SLACK_WEBHOOK_URL environment variable
+// value captured at load time, or "" if it was unset. Exported because
+// server/services (which resolves the effective Slack webhook URL per
+// ADR-001: env override first, else decrypt the stored ciphertext) cannot
+// read the unexported slackWebhookURLOverride field directly.
+func (c *Config) SlackWebhookURLOverride() string {
+	return c.slackWebhookURLOverride
+}
+
+// SlackSigningSecretOverride returns the SLACK_SIGNING_SECRET environment
+// variable value captured at load time, or "" if it was unset. See
+// SlackWebhookURLOverride for why this getter exists.
+func (c *Config) SlackSigningSecretOverride() string {
+	return c.slackSigningSecretOverride
 }
 
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.

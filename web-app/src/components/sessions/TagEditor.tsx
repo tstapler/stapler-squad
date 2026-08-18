@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, KeyboardEvent, useRef } from "react";
+import { useState, KeyboardEvent, useRef, RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import * as styles from "./TagEditor.css";
 
@@ -9,12 +9,13 @@ interface TagEditorProps {
   onSave: (tags: string[]) => void;
   onCancel: () => void;
   sessionTitle: string;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
-export function TagEditor({ tags, onSave, onCancel, sessionTitle }: TagEditorProps) {
+export function TagEditor({ tags, onSave, onCancel, sessionTitle, triggerRef }: TagEditorProps) {
   const [currentTags, setCurrentTags] = useState<string[]>([...tags]);
   const modalRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(modalRef, true);
+  useFocusTrap(modalRef, true, triggerRef);
   const [inputValue, setInputValue] = useState("");
   const [error, setError] = useState<string | null>(null);
 

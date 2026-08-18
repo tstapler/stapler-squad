@@ -147,21 +147,15 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
 
   const enterpriseHosts = useGitHubEnterpriseHosts();
 
-  // Dynamically register/unregister GitHubEnterpriseURLDetector whenever the
-  // configured GHES host list changes.
-  const githubEnterpriseDetectorRef = useRef<GitHubEnterpriseURLDetector | null>(null);
+  // GitHubEnterpriseURLDetector is registered synchronously (with an empty host
+  // list) inside createDefaultRegistry(), so the registry always has a slot for
+  // it — no window where a GHES URL falls through to SessionSearch. This effect
+  // just keeps its host list in sync as the async RPC result changes.
   useEffect(() => {
-    const registry = getDefaultRegistry();
-    if (githubEnterpriseDetectorRef.current) {
-      registry.unregister(githubEnterpriseDetectorRef.current);
-    }
-    const detector = new GitHubEnterpriseURLDetector(enterpriseHosts);
-    registry.register(detector);
-    githubEnterpriseDetectorRef.current = detector;
-    return () => {
-      registry.unregister(detector);
-      githubEnterpriseDetectorRef.current = null;
-    };
+    const detector = getDefaultRegistry().find("GitHubEnterpriseURL") as
+      | GitHubEnterpriseURLDetector
+      | undefined;
+    detector?.setHosts(enterpriseHosts);
   }, [enterpriseHosts]);
 
   const open = useCallback(() => {

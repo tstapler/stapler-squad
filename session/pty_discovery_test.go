@@ -408,26 +408,10 @@ func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 	goleak.VerifyNone(t, baseline, goleak.IgnoreTopFunction("os/exec.(*Cmd).watchCtx"))
 }
 
-// TestWaitGroupWithTimeout pins waitGroupWithTimeout's two branches directly,
-// mirroring server/services' TestWaitWithTimeout for the same helper shape.
-func TestWaitGroupWithTimeout(t *testing.T) {
-	t.Run("returns true when the group finishes in time", func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() { defer wg.Done() }()
-		if !waitGroupWithTimeout(&wg, time.Second) {
-			t.Error("waitGroupWithTimeout returned false, want true")
-		}
-	})
-
-	t.Run("returns false when the group doesn't finish in time", func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(1) // deliberately never Done()
-		if waitGroupWithTimeout(&wg, 10*time.Millisecond) {
-			t.Error("waitGroupWithTimeout returned true, want false")
-		}
-	})
-}
+// Coverage of the underlying timeout-bounded join primitive itself
+// (formerly waitGroupWithTimeout, tested here directly) now lives in
+// internal/syncutil/syncutil_test.go, shared with server/server.go instead
+// of duplicated here.
 
 func TestPTYDiscovery_OrganizeByCategory(t *testing.T) {
 	pd := NewPTYDiscovery()

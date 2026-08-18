@@ -1,7 +1,7 @@
 "use client";
 // +feature: import-preview-dialog
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useImportSessionService } from "@/lib/hooks/useImportSessionService";
 import {
@@ -19,6 +19,7 @@ interface ImportPreviewDialogProps {
     disambiguationChoice?: string;
   }) => Promise<void> | void;
   onCancel: () => void;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 const CONFIDENCE_LABEL: Record<CorrelationConfidence, string> = {
@@ -32,9 +33,10 @@ export function ImportPreviewDialog({
   candidate,
   onConfirm,
   onCancel,
+  triggerRef,
 }: ImportPreviewDialogProps) {
   const modalRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(modalRef, true);
+  useFocusTrap(modalRef, true, triggerRef);
   const { previewImport } = useImportSessionService();
 
   const [preview, setPreview] = useState<PreviewImportExternalSessionResponse | null>(

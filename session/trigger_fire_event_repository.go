@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -76,12 +77,39 @@ func (r *EntTriggerFireEventRepository) Create(ctx context.Context, input Trigge
 	}
 
 	if _, err := c.Save(ctx); err != nil {
-		if ent.IsConstraintError(err) {
+		if isDuplicateDeliveryConstraintError(err) {
 			return fmt.Errorf("%w: workflow_id=%v delivery_id=%q", ErrDuplicateDelivery, input.WorkflowID, input.DeliveryID)
 		}
 		return fmt.Errorf("create trigger fire event: %w", err)
 	}
 	return nil
+}
+
+// duplicateDeliveryIndexColumns are the two columns of the unique index ent generates
+// for index.Fields("workflow_id", "delivery_id").Unique() (schema/trigger_fire_event.go)
+// — the only constraint on this table today that legitimately means "duplicate
+// delivery." SQLite's constraint-failure message names "table.column" pairs (e.g.
+// "UNIQUE constraint failed: trigger_fire_events.workflow_id,
+// trigger_fire_events.delivery_id"), not the ent-generated index name, so both column
+// references are checked rather than the index identifier itself.
+var duplicateDeliveryIndexColumns = []string{"trigger_fire_events.workflow_id", "trigger_fire_events.delivery_id"}
+
+// isDuplicateDeliveryConstraintError reports whether err is specifically the
+// (workflow_id, delivery_id) unique index violation, not just any constraint failure —
+// ent.IsConstraintError also matches FK and CHECK violations, which would otherwise be
+// silently mis-reported as ErrDuplicateDelivery if such a constraint is ever added to
+// this table in the future.
+func isDuplicateDeliveryConstraintError(err error) bool {
+	if !ent.IsConstraintError(err) {
+		return false
+	}
+	msg := err.Error()
+	for _, col := range duplicateDeliveryIndexColumns {
+		if !strings.Contains(msg, col) {
+			return false
+		}
+	}
+	return true
 }
 
 // ListByWorkflow returns the most recent TriggerFireEvent rows for workflowID, newest
