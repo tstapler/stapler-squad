@@ -623,7 +623,7 @@ vet-rpc-markers: registry-generate-backend ## Check that all RPC handlers have a
 		echo "✅ All RPC handlers have +api: markers."; \
 	fi
 
-lint: ensure-tools proto-gen lint-custom ## Run golangci-lint with comprehensive checks
+lint: ensure-tools proto-gen lint-custom lint-shell ## Run golangci-lint with comprehensive checks
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
@@ -642,6 +642,17 @@ lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (hotpolllog, n
 $(LINTER_BIN):
 	@mkdir -p $(CURDIR)/bin
 	@go -C tools/lint build -o $(LINTER_BIN) ./cmd/linter
+
+# Excludes third_party/ (vendored tmux source — not ours to lint) and
+# node_modules/. Includes scripts/ssq-hook-handler, which has no .sh
+# extension but is a real bash script (installed as a hook handler).
+SHELL_SCRIPTS := $(shell find . -not -path "./third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+
+lint-shell: ## Run shellcheck over all first-party shell scripts
+	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)
+	@echo "Running shellcheck on $(words $(SHELL_SCRIPTS)) first-party shell script(s)..."
+	@shellcheck -x $(SHELL_SCRIPTS)
+	@echo "shellcheck: ok"
 
 actor-lint: ## Detect actor self-deadlock patterns using ast-grep (sg)
 	@which sg >/dev/null 2>&1 || (echo "sg (ast-grep) not installed; run: cargo install ast-grep" && exit 1)
