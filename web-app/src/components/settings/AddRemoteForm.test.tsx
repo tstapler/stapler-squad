@@ -15,7 +15,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AddRemoteForm } from "./AddRemoteForm";
 import { useRemotesService } from "@/lib/hooks/useRemotesService";
@@ -247,6 +247,54 @@ describe("AddRemoteForm", () => {
 
     // Focus returns to the control that triggered the dialog.
     await waitFor(() => expect(submitButton).toHaveFocus());
+  });
+
+  it("regression: cancelling the trust dialog while Trust and connect is still in flight never persists the remote once it resolves", async () => {
+    // Fix-first review finding (final sdd:6-verify holistic pass, MUST FIX
+    // 2): handleTrustCancel only cleared pendingFingerprint -- it never
+    // signaled the in-flight handleTrust call, which unconditionally
+    // persisted the remote and fired onSaved once trustRemoteHostKeyDraft
+    // resolved, even if the user had already clicked Cancel. The user sees
+    // the dialog close, believing nothing happened, while the remote is
+    // created behind their back moments later.
+    mockTestRemoteConnectionDraft.mockResolvedValue({
+      success: false,
+      hostKeyUnknown: true,
+      fingerprint: "SHA256:k3jd93kfDJKS93kdjfKSJDF93kdjf93k",
+      errorMessage: "",
+    });
+    let resolveTrust: (value: { success: boolean; errorMessage: string }) => void = () => {};
+    mockTrustRemoteHostKeyDraft.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTrust = resolve;
+      })
+    );
+    const onSaved = jest.fn();
+    const user = userEvent.setup();
+
+    render(<AddRemoteForm onSaved={onSaved} onCancel={jest.fn()} />);
+    await fillRequiredFields(user);
+    await user.click(screen.getByTestId("add-remote-submit"));
+    await screen.findByTestId("host-key-trust-overlay");
+
+    // Start the trust RPC (it never resolves until we say so below), then
+    // cancel while it's still pending.
+    await user.click(screen.getByTestId("host-key-trust-confirm"));
+    await waitFor(() => expect(mockTrustRemoteHostKeyDraft).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByTestId("host-key-trust-cancel"));
+    expect(screen.queryByTestId("host-key-trust-overlay")).not.toBeInTheDocument();
+
+    // Now let the RPC resolve successfully, well after Cancel, and flush the
+    // resulting handleTrust continuation (await -> cancellation check ->
+    // any setState calls) before asserting.
+    await act(async () => {
+      resolveTrust({ success: true, errorMessage: "" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockCreateRemote).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
   });
 
   it("form Cancel: with an identity already generated, deletes the orphaned identity before calling onCancel", async () => {

@@ -1032,6 +1032,20 @@ func InjectHookConfigRemote(ctx context.Context, runner tmux.CommandRunner, root
 	if err != nil {
 		return fmt.Errorf("start remote write for %s: %w", settingsPath, err)
 	}
+	// wait() must run on every exit path once Start has succeeded -- per
+	// SSHRunner.Start's doc comment, skipping it leaks the connection pool's
+	// reference count (acquire/Release never balance) and leaves the remote
+	// session/channel open. waited tracks whether the explicit call below
+	// (the happy path, which also surfaces the remote script's real exit
+	// error) already ran it, so this deferred call is purely a safety net
+	// for an earlier return -- a stdin.Write/Close failure -- and never
+	// double-invokes wait() on the same path.
+	waited := false
+	defer func() {
+		if !waited {
+			_ = wait()
+		}
+	}()
 	if _, err := stdin.Write(out); err != nil {
 		_ = stdin.Close()
 		return fmt.Errorf("write remote settings %s: %w", settingsPath, err)
@@ -1042,6 +1056,7 @@ func InjectHookConfigRemote(ctx context.Context, runner tmux.CommandRunner, root
 	if stdout != nil {
 		_, _ = io.Copy(io.Discard, stdout) // drain, best-effort; the script has no meaningful stdout
 	}
+	waited = true
 	if err := wait(); err != nil {
 		return fmt.Errorf("remote write %s failed: %w", settingsPath, err)
 	}

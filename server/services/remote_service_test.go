@@ -66,11 +66,23 @@ func newRemoteTestKey(t *testing.T) ssh.PublicKey {
 }
 
 // newTestRemoteService builds a RemoteService backed by a real
-// KnownHostsStore/KeyStore (both test-isolated: KnownHostsStore via
-// config.GetConfigDir()'s test-mode auto-detection, KeyStore via go-keyring's
-// mock backend) and a fixed config.Config.
+// KnownHostsStore/KeyStore (both test-isolated: KnownHostsStore via a
+// per-test STAPLER_SQUAD_TEST_DIR, KeyStore via go-keyring's mock backend)
+// and a fixed config.Config.
 func newTestRemoteService(t *testing.T, cfg *config.Config) (*RemoteService, *sshremote.KnownHostsStore, *sshremote.KeyStore) {
 	t.Helper()
+	// config.GetConfigDirForDir's IsTestMode() auto-isolation keys only on
+	// PID, so every test in this binary shares one known_hosts file by
+	// default. That's not test-isolated across tests in this file: each
+	// test's throwaway SSH server (startRemoteTestSSHServer) binds an
+	// OS-assigned ephemeral port, and a later test can be handed a port an
+	// earlier test already trusted a *different* host key for once the OS
+	// recycles it -- e.g. TestTestRemoteConnection_ReportsMismatch_...
+	// intentionally trusts a stale key for its addr and expects
+	// TestRemoteConnection to reject it, which silently passes for the
+	// wrong reason if that addr already carried a real trusted entry left
+	// over from another test. A per-test temp dir removes the shared file.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	keyring.MockInit()
 
 	knownHosts, err := sshremote.NewKnownHostsStore()

@@ -266,6 +266,21 @@ type SessionService struct {
 	// test call sites.
 	testTmuxServerSocket string
 
+	// testSSHClientPool, when non-nil, is shared by every tmux.SSHRunner and
+	// sshremote.RemoteApprovalRelay this service constructs for a remote
+	// session, in place of the process-wide tmux.DefaultSSHClientPool().
+	// tmux.SSHClientPool keys pooled *ssh.Client connections by remote NAME
+	// alone, not by dialed address (see SSHTarget's doc comment) -- so tests
+	// across this package that all name their fixture remote "test-remote"
+	// but spin up a fresh in-process sshd on a new ephemeral port each time
+	// would otherwise share ONE process-wide pool entry and intermittently
+	// reuse a stale *ssh.Client left over from a previous test's
+	// already-torn-down server, surfacing as a garbled "ssh: unexpected
+	// packet in response to channel open" failure. Set automatically by
+	// NewSessionServiceWithSearchEngine under config.IsTestMode(), same
+	// service-wide test-hook rationale as testTmuxServerSocket above.
+	testSSHClientPool *tmux.SSHClientPool
+
 	// remoteKeyStore and remoteKnownHosts back CreateSession's remote-target
 	// mode-specific block (ssh-remote-workspaces Phase 4, Epic 4.2): resolving
 	// a remote's stored SSH identity and verifying its host key, mirroring
@@ -546,6 +561,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 
 	if config.IsTestMode() {
 		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))
+		svc.testSSHClientPool = tmux.NewSSHClientPool()
 	}
 
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
@@ -671,6 +687,19 @@ func (s *SessionService) GetStorage() *session.Storage {
 // GetInstanceStore returns the InstanceStore interface, suitable for both production and test code.
 func (s *SessionService) GetInstanceStore() session.InstanceStore {
 	return s.storage
+}
+
+// sshClientPool returns the SSHClientPool every remote-session SSHRunner/
+// RemoteApprovalRelay this service constructs must share -- s.testSSHClientPool
+// under test (see its doc comment), otherwise the process-wide production
+// default. Never construct a tmux.SSHRunner or sshremote.RemoteApprovalRelay
+// for a remote session by calling tmux.DefaultSSHClientPool() directly; use
+// this instead so tests stay isolated from each other and from production.
+func (s *SessionService) sshClientPool() *tmux.SSHClientPool {
+	if s.testSSHClientPool != nil {
+		return s.testSSHClientPool
+	}
+	return tmux.DefaultSSHClientPool()
 }
 
 // FindLiveInstance returns the live in-memory instance held by the ReviewQueuePoller,
@@ -1785,7 +1814,7 @@ func (s *SessionService) CreateSession(
 			Auth:            resolveIdentityAuthMethods(ctx, s.remoteKeyStore, resolvedRemote.IdentityRef),
 			HostKeyCallback: s.remoteKnownHosts.HostKeyCallback(),
 		}
-		runner := tmux.NewSSHRunner(target, clientConfig)
+		runner := tmux.NewSSHRunner(target, clientConfig, tmux.WithSSHClientPool(s.sshClientPool()))
 		if dialErr := runner.Dial(ctx); dialErr != nil {
 			return nil, connect.NewError(connect.CodeUnavailable,
 				fmt.Errorf("failed to connect to remote %q: %w", resolvedRemote.Name, dialErr))
@@ -2068,7 +2097,7 @@ func (s *SessionService) setupRemoteApprovalHooks(instance *session.Instance, ro
 		return fmt.Errorf("instance.IsRemote() true but ExecutionTarget is %T, not session.RemoteExecutionTarget", instance.GetExecutionTarget())
 	}
 
-	relay, err := sshremote.NewRemoteApprovalRelay(tmux.DefaultSSHClientPool(), s.permissionRequestHandler, sshremote.RemoteApprovalRelayTarget{
+	relay, err := sshremote.NewRemoteApprovalRelay(s.sshClientPool(), s.permissionRequestHandler, sshremote.RemoteApprovalRelayTarget{
 		RemoteName:      remoteTarget.Target().Name,
 		BasePath:        rootDir,
 		StableSessionID: instance.GetStableID(),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ConnectError } from "@connectrpc/connect";
 import {
   useRemotesService,
@@ -54,6 +54,16 @@ export function AddRemoteForm({ onSaved, onCancel }: AddRemoteFormProps) {
   // the dialog is rendered whenever this is non-empty.
   const [pendingFingerprint, setPendingFingerprint] = useState<string | null>(null);
   const [trustBusy, setTrustBusy] = useState(false);
+
+  // Guards against handleTrust acting on a stale result after the user has
+  // already clicked Cancel while trustRemoteHostKeyDraft was still in
+  // flight -- without this, the dialog visibly closes on Cancel but the
+  // remote is still persisted (and onSaved still fires) once the pending
+  // RPC resolves behind the user's back. A ref rather than a `cancelled`
+  // local (useConfiguredRemotes.ts's equivalent idiom) because the
+  // cancellation and the in-flight await live in two different callbacks
+  // (handleTrustCancel vs. handleTrust), not one effect and its own cleanup.
+  const trustCancelledRef = useRef(false);
 
   const canSubmit = Boolean(name.trim()) && Boolean(host.trim()) && Boolean(user.trim()) && Boolean(basePath.trim()) && !testing;
 
@@ -121,10 +131,16 @@ export function AddRemoteForm({ onSaved, onCancel }: AddRemoteFormProps) {
 
   const handleTrust = useCallback(async () => {
     if (!pendingFingerprint) return;
+    trustCancelledRef.current = false;
     setTrustBusy(true);
     setError(null);
     try {
       const trustResult = await trustRemoteHostKeyDraft(currentDraft(), pendingFingerprint);
+      // Bail out if the user clicked Cancel while this RPC was still in
+      // flight -- otherwise a resolve-after-cancel would silently persist
+      // the remote (and fire onSaved) even though the dialog already closed.
+      // See trustCancelledRef's declaration above.
+      if (trustCancelledRef.current) return;
       if (trustResult.success) {
         setPendingFingerprint(null);
         await persistRemote();
@@ -133,6 +149,7 @@ export function AddRemoteForm({ onSaved, onCancel }: AddRemoteFormProps) {
         setError(trustResult.errorMessage || "Trusting the host key failed.");
       }
     } catch (err) {
+      if (trustCancelledRef.current) return;
       setPendingFingerprint(null);
       setError(errorMessage(err));
     } finally {
@@ -141,6 +158,10 @@ export function AddRemoteForm({ onSaved, onCancel }: AddRemoteFormProps) {
   }, [pendingFingerprint, trustRemoteHostKeyDraft, currentDraft, persistRemote]);
 
   const handleTrustCancel = useCallback(() => {
+    // Signal any in-flight handleTrust call to bail out once its await
+    // resolves, instead of silently persisting the remote after the user
+    // already closed the dialog -- see handleTrust's trustCancelledRef check.
+    trustCancelledRef.current = true;
     // Remote was never saved (CreateRemote is only called after a
     // successful Trust) -- closing the dialog just returns to the still-
     // editable Add Remote form. Per ux.md Surface 3 step 4, this is not a

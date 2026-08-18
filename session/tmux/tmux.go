@@ -1174,6 +1174,21 @@ func (t *TmuxSession) preconfigureServerBeforeSession() {
 
 // start is the internal implementation for Start and StartWithCleanup
 func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupFunc) error {
+	// This method unconditionally builds and runs a LOCAL *exec.Cmd via
+	// t.cmdExec -- unlike EnsureRemoteSession, it has no CommandRunner-routed
+	// remote path. Refuse loudly for a remote-backed session instead of
+	// silently operating against the wrong host, matching the same
+	// commandRunner().IsRemote() guard SetWindowSize/RefreshClient already
+	// have. This is cheap defense-in-depth, not a fix for the underlying
+	// gap: today the only way this path is reached for a remote session is
+	// the not-yet-implemented resume-after-restart flow (see commit
+	// 808e70eee's "Known gap" note and session/instance.go's resume path) --
+	// EnsureRemoteSession is the correct entry point for starting a fresh
+	// remote session.
+	if t.commandRunner().IsRemote() {
+		return fmt.Errorf("start: no local-subprocess fallback for remote session %q -- use EnsureRemoteSession instead", t.sanitizedName)
+	}
+
 	// Use a no-cache check here to detect stale sessions from previous server runs.
 	// The registry only tracks sessions from the current run, so a session left over
 	// from a crashed/restarted server would not be in the registry and DoesSessionExist()
@@ -1437,7 +1452,9 @@ func (t *TmuxSession) EnsureRemoteSession(ctx context.Context, workDir string) e
 	if workDir == "" {
 		return fmt.Errorf("cannot start remote tmux session %s: working directory not set: %w", t.sanitizedName, ErrWorkDirMissing)
 	}
-	if out, err := runner.Run(ctx, "", "test", "-d", workDir); err != nil {
+	existsCtx, existsCancel := context.WithTimeout(ctx, ExistenceCheckTimeout)
+	defer existsCancel()
+	if out, err := runner.Run(existsCtx, "", "test", "-d", workDir); err != nil {
 		return fmt.Errorf("cannot start remote tmux session %s: working directory %q is not accessible on remote host: %w: %s",
 			t.sanitizedName, workDir, ErrWorkDirMissing, strings.TrimSpace(string(out)))
 	}

@@ -156,8 +156,8 @@ func (b *sshBackoff) allowAttempt() error {
 	}
 }
 
-// recordResult records the outcome of a dial attempt permitted by
-// allowAttempt, driving state transitions and (on failure) increasing the
+// recordResult records the outcome of a GetOrDial call, driving state
+// transitions and (on failure) increasing the
 // backoff.
 func (b *sshBackoff) recordResult(success bool) {
 	b.mu.Lock()

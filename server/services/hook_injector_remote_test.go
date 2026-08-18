@@ -33,6 +33,15 @@ type fakeRemoteCommandRunner struct {
 	waitErr     error
 	startCalls  []string
 	writtenData []byte
+	waitCalls   int
+
+	// writeErr/closeErr, when set, make the io.WriteCloser returned by Start
+	// fail on Write/Close respectively -- used by
+	// TestInjectHookConfigRemote_CallsWait_EvenWhenStdinWriteOrCloseFails to
+	// prove wait() still runs (and releases the connection pool reference)
+	// on that early-return path.
+	writeErr error
+	closeErr error
 }
 
 func (f *fakeRemoteCommandRunner) commandKey(name string, args ...string) string {
@@ -51,24 +60,32 @@ func (f *fakeRemoteCommandRunner) Start(_ context.Context, _ string, name string
 		return nil, nil, nil, f.startErr
 	}
 	f.startCalls = append(f.startCalls, f.commandKey(name, args...))
-	return &captureWriteCloser{f: f}, nil, func() error { return f.waitErr }, nil
+	return &captureWriteCloser{f: f}, nil, func() error {
+		f.waitCalls++
+		return f.waitErr
+	}, nil
 }
 
 func (f *fakeRemoteCommandRunner) IsRemote() bool { return true }
 
 // captureWriteCloser records everything written to it into the owning
 // fakeRemoteCommandRunner's writtenData, standing in for the piped stdin
-// InjectHookConfigRemote writes the merged settings JSON to.
+// InjectHookConfigRemote writes the merged settings JSON to. If writeErr/
+// closeErr is set on the owning fake, Write/Close fail instead -- see
+// TestInjectHookConfigRemote_CallsWait_EvenWhenStdinWriteOrCloseFails.
 type captureWriteCloser struct {
 	f *fakeRemoteCommandRunner
 }
 
 func (c *captureWriteCloser) Write(p []byte) (int, error) {
+	if c.f.writeErr != nil {
+		return 0, c.f.writeErr
+	}
 	c.f.writtenData = append(c.f.writtenData, p...)
 	return len(p), nil
 }
 
-func (c *captureWriteCloser) Close() error { return nil }
+func (c *captureWriteCloser) Close() error { return c.f.closeErr }
 
 func TestInjectHookConfigRemote_WritesFreshSettings_WhenNoneExist(t *testing.T) {
 	runner := &fakeRemoteCommandRunner{runOutput: map[string][]byte{}} // "if [ -e ... ]" is false, script exits 0 with empty output (file doesn't exist)
@@ -210,6 +227,63 @@ func TestInjectHookConfigRemote_PropagatesWriteError(t *testing.T) {
 	if !strings.Contains(err.Error(), "boom") {
 		t.Errorf("error = %v, want it to wrap the underlying write failure", err)
 	}
+}
+
+// TestInjectHookConfigRemote_CallsWait_EvenWhenStdinWriteOrCloseFails is a
+// regression guard for a review-caught resource leak (final sdd:6-verify
+// holistic pass, MUST FIX 1): after a successful runner.Start, wait() was
+// only called on the happy path -- if the subsequent stdin.Write or
+// stdin.Close failed, InjectHookConfigRemote returned immediately without
+// ever calling wait(), leaking the SSH connection pool's reference count
+// (acquire/Release never balance) and leaving the remote session/channel
+// open, per SSHRunner.Start's own doc comment. wait() must now run on every
+// exit path once Start has succeeded.
+func TestInjectHookConfigRemote_CallsWait_EvenWhenStdinWriteOrCloseFails(t *testing.T) {
+	target := RemoteHookTarget{SocketPath: "/x/.sock", BearerToken: "t"}
+
+	t.Run("write fails", func(t *testing.T) {
+		runner := &fakeRemoteCommandRunner{
+			runOutput: map[string][]byte{},
+			writeErr:  errors.New("boom: stdin write failed"),
+		}
+		err := InjectHookConfigRemote(context.Background(), runner, "/home/agent/work", "session-1", target)
+		if err == nil {
+			t.Fatal("InjectHookConfigRemote() error = nil, want the stdin write failure to propagate")
+		}
+		if !strings.Contains(err.Error(), "boom") {
+			t.Errorf("error = %v, want it to wrap the underlying write failure", err)
+		}
+		if runner.waitCalls != 1 {
+			t.Errorf("wait() called %d times, want 1 (must still run to release the pool reference and remote channel)", runner.waitCalls)
+		}
+	})
+
+	t.Run("close fails", func(t *testing.T) {
+		runner := &fakeRemoteCommandRunner{
+			runOutput: map[string][]byte{},
+			closeErr:  errors.New("boom: stdin close failed"),
+		}
+		err := InjectHookConfigRemote(context.Background(), runner, "/home/agent/work", "session-1", target)
+		if err == nil {
+			t.Fatal("InjectHookConfigRemote() error = nil, want the stdin close failure to propagate")
+		}
+		if !strings.Contains(err.Error(), "boom") {
+			t.Errorf("error = %v, want it to wrap the underlying close failure", err)
+		}
+		if runner.waitCalls != 1 {
+			t.Errorf("wait() called %d times, want 1 (must still run to release the pool reference and remote channel)", runner.waitCalls)
+		}
+	})
+
+	t.Run("happy path calls wait exactly once", func(t *testing.T) {
+		runner := &fakeRemoteCommandRunner{runOutput: map[string][]byte{}}
+		if err := InjectHookConfigRemote(context.Background(), runner, "/home/agent/work", "session-1", target); err != nil {
+			t.Fatalf("InjectHookConfigRemote() error: %v", err)
+		}
+		if runner.waitCalls != 1 {
+			t.Errorf("wait() called %d times, want exactly 1 (not skipped, and not double-invoked by the safety-net defer)", runner.waitCalls)
+		}
+	})
 }
 
 // jsonQuote returns s as a JSON-quoted string literal (with surrounding
