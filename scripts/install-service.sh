@@ -1,4 +1,12 @@
 #!/bin/sh
+# shellcheck shell=bash
+#
+# This targets bash specifically (it uses 'local', a bash extension not in
+# POSIX sh) despite the #!/bin/sh shebang: on every platform this script
+# actually runs on (macOS, and Linux with a systemd user session), /bin/sh
+# resolves to bash or another shell with 'local' support, so the shebang
+# stays POSIX-portable-looking while the directive above tells shellcheck to
+# check it as bash rather than flag every 'local' as non-POSIX (SC3043).
 #
 # install-service.sh — Install stapler-squad as a system service
 #
@@ -526,7 +534,7 @@ wait_for_health() {
     crash_hint_bin="$2"
     elapsed=0
     url="http://localhost:8543/health"
-    printf "==> Waiting for service to be healthy (up to ${max_wait}s)"
+    printf '==> Waiting for service to be healthy (up to %ss)' "$max_wait"
     while [ "$elapsed" -lt "$max_wait" ]; do
         if curl -sf "$url" >/dev/null 2>&1; then
             printf "\n"
