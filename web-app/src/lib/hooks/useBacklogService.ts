@@ -774,7 +774,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] createBacklogItemFromChat:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to create backlog item from chat.")));
         return null;
       }
     },
@@ -833,7 +833,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] unarchiveBacklogItem:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to unarchive backlog item.")));
       throw err;
     }
   }, []);
