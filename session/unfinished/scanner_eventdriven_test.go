@@ -21,6 +21,7 @@ import (
 // ---- nil-safe fallback (fsnotify unavailable) -----------------------------
 
 func TestScanner_AddRepoRemoveRepo_should_notPanic_When_FsWatcherNil(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{scanQueue: make(chan scanTask, 50)}
 	require.Nil(t, s.fsWatcher)
 
@@ -41,6 +42,7 @@ func newRepoWithGitDir(t *testing.T) string {
 }
 
 func TestScanner_watchRepo_should_registerGitDirWithWatcher_When_FsWatcherPresent(t *testing.T) {
+	t.Parallel()
 	w, err := fsnotify.NewWatcher()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
@@ -54,6 +56,7 @@ func TestScanner_watchRepo_should_registerGitDirWithWatcher_When_FsWatcherPresen
 }
 
 func TestScanner_unwatchRepo_should_removeGitDirFromWatcher_When_Called(t *testing.T) {
+	t.Parallel()
 	w, err := fsnotify.NewWatcher()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
@@ -69,6 +72,7 @@ func TestScanner_unwatchRepo_should_removeGitDirFromWatcher_When_Called(t *testi
 }
 
 func TestScanner_AddRepo_should_registerFsnotifyWatch_When_FsWatcherPresent(t *testing.T) {
+	t.Parallel()
 	w, err := fsnotify.NewWatcher()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
@@ -84,6 +88,7 @@ func TestScanner_AddRepo_should_registerFsnotifyWatch_When_FsWatcherPresent(t *t
 // ---- end-to-end: a real .git write triggers a targeted rescan -------------
 
 func TestScanner_fsnotifyLoop_should_enqueueTargetedRescan_When_GitDirFileWritten(t *testing.T) {
+	t.Parallel()
 	w, err := fsnotify.NewWatcher()
 	require.NoError(t, err)
 
@@ -174,6 +179,7 @@ func TestEnqueueRepo_should_clearWarningFlag_When_PressureSubsides(t *testing.T)
 // repo auto-spidered from a session must stop being watched once that
 // session is deleted and nothing else still points at the same repo root.
 func TestScanner_forgetSessionRepo_should_removeRepo_When_NoOtherSessionReferencesIt(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{scanQueue: make(chan scanTask, 50)}
 	s.sessionRepos.Store("session-uuid-1", "/repo/a")
 	s.repoSet.Store("/repo/a", true)
@@ -191,6 +197,7 @@ func TestScanner_forgetSessionRepo_should_removeRepo_When_NoOtherSessionReferenc
 // in the same project) don't have scanning cut out from under the surviving
 // one when only one of them is deleted.
 func TestScanner_forgetSessionRepo_should_keepRepo_When_AnotherSessionStillReferencesIt(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{scanQueue: make(chan scanTask, 50)}
 	s.sessionRepos.Store("session-uuid-1", "/repo/shared")
 	s.sessionRepos.Store("session-uuid-2", "/repo/shared")
@@ -209,6 +216,7 @@ func TestScanner_forgetSessionRepo_should_keepRepo_When_AnotherSessionStillRefer
 // was disabled, or it's a pinned repo with no session at all) doesn't panic
 // or otherwise misbehave.
 func TestScanner_forgetSessionRepo_should_beNoOp_When_SessionNeverTracked(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{scanQueue: make(chan scanTask, 50)}
 	assert.NotPanics(t, func() {
 		s.forgetSessionRepo("never-seen-uuid")
@@ -223,6 +231,7 @@ func TestScanner_forgetSessionRepo_should_beNoOp_When_SessionNeverTracked(t *tes
 // subscribeToSessionEvents and remove the repo, exactly mirroring how
 // EventSessionCreated already adds one.
 func TestScanner_subscribeToSessionEvents_should_removeRepo_When_SessionDeletedEventReceived(t *testing.T) {
+	t.Parallel()
 	bus := pkgevents.NewEventBus(4)
 	s := &Scanner{scanQueue: make(chan scanTask, 50), eventBus: bus}
 	s.autoSpiderEnabled.Store(true)

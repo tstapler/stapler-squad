@@ -10,6 +10,7 @@ import (
 )
 
 func TestSanitizeBranchName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -141,6 +142,7 @@ func TestSanitizeBranchName(t *testing.T) {
 // filepath.Join(worktreeDir, sanitizeBranchName(input)) can never escape
 // worktreeDir, for malicious inputs designed to traverse out of it.
 func TestSanitizeBranchName_StaysWithinWorktreeDir(t *testing.T) {
+	t.Parallel()
 	worktreeDir := "/var/lib/stapler-squad/worktrees"
 
 	maliciousInputs := []string{
@@ -175,6 +177,7 @@ func TestSanitizeBranchName_StaysWithinWorktreeDir(t *testing.T) {
 // filepath.Join(worktreeDir, sanitizedName) call site: it must return an error
 // (never a path) for any name that would resolve outside baseDir.
 func TestJoinWithinDir(t *testing.T) {
+	t.Parallel()
 	baseDir := "/var/lib/stapler-squad/worktrees"
 
 	t.Run("normal name stays within baseDir", func(t *testing.T) {

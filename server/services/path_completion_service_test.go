@@ -35,6 +35,7 @@ func newReq[T any](msg *T) *connect.Request[T] {
 }
 
 func TestListPathCompletions_BasicListing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "alpha"))
 	makeDir(t, filepath.Join(dir, "beta"))
@@ -60,6 +61,7 @@ func TestListPathCompletions_BasicListing(t *testing.T) {
 }
 
 func TestListPathCompletions_FilterByPrefix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "alpha"))
 	makeDir(t, filepath.Join(dir, "apple"))
@@ -79,6 +81,7 @@ func TestListPathCompletions_FilterByPrefix(t *testing.T) {
 }
 
 func TestListPathCompletions_DirectoriesOnly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "subdir"))
 	makeFile(t, filepath.Join(dir, "afile.txt"))
@@ -98,6 +101,7 @@ func TestListPathCompletions_DirectoriesOnly(t *testing.T) {
 }
 
 func TestListPathCompletions_HiddenFilesHidden(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, ".hidden"))
 	makeDir(t, filepath.Join(dir, "visible"))
@@ -114,6 +118,7 @@ func TestListPathCompletions_HiddenFilesHidden(t *testing.T) {
 }
 
 func TestListPathCompletions_HiddenFilesShownWhenPrefixStartsWithDot(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, ".hidden"))
 	makeDir(t, filepath.Join(dir, "visible"))
@@ -134,6 +139,7 @@ func TestListPathCompletions_HiddenFilesShownWhenPrefixStartsWithDot(t *testing.
 }
 
 func TestListPathCompletions_PathExists(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	existingSubDir := filepath.Join(dir, "existing")
 	makeDir(t, existingSubDir)
@@ -156,6 +162,7 @@ func TestListPathCompletions_PathExists(t *testing.T) {
 }
 
 func TestListPathCompletions_NonexistentBaseDir(t *testing.T) {
+	t.Parallel()
 	svc := NewPathCompletionService()
 	resp, err := svc.ListPathCompletions(context.Background(), newReq(&sessionv1.ListPathCompletionsRequest{
 		PathPrefix: "/nonexistent/path/that/does/not/exist/prefix",
@@ -166,6 +173,7 @@ func TestListPathCompletions_NonexistentBaseDir(t *testing.T) {
 }
 
 func TestListPathCompletions_Truncation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	for i := 0; i < 10; i++ {
 		makeDir(t, filepath.Join(dir, string(rune('a'+i))+"dir"))
@@ -182,6 +190,7 @@ func TestListPathCompletions_Truncation(t *testing.T) {
 }
 
 func TestListPathCompletions_NoTruncationUnderLimit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "adir"))
 	makeDir(t, filepath.Join(dir, "bdir"))
@@ -196,6 +205,7 @@ func TestListPathCompletions_NoTruncationUnderLimit(t *testing.T) {
 }
 
 func TestListPathCompletions_Symlink_ToDirectory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "realdir")
 	link := filepath.Join(dir, "linkdir")
@@ -220,6 +230,7 @@ func TestListPathCompletions_Symlink_ToDirectory(t *testing.T) {
 }
 
 func TestListPathCompletions_BrokenSymlink_Skipped(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	link := filepath.Join(dir, "brokenlink")
 	require.NoError(t, os.Symlink("/nonexistent/target", link))
@@ -236,6 +247,7 @@ func TestListPathCompletions_BrokenSymlink_Skipped(t *testing.T) {
 }
 
 func TestListPathCompletions_TildeExpansion(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
@@ -249,6 +261,7 @@ func TestListPathCompletions_TildeExpansion(t *testing.T) {
 }
 
 func TestListPathCompletions_TildeAlone(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
@@ -262,6 +275,7 @@ func TestListPathCompletions_TildeAlone(t *testing.T) {
 }
 
 func TestListPathCompletions_MaxResultsHardCap(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	for i := 0; i < 10; i++ {
 		makeDir(t, filepath.Join(dir, string(rune('a'+i))+"dir"))
@@ -280,6 +294,7 @@ func TestListPathCompletions_MaxResultsHardCap(t *testing.T) {
 }
 
 func TestListPathCompletions_DefaultMaxResults(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Create fewer than the default maximum (100) to verify no truncation.
 	for i := 0; i < 5; i++ {
@@ -298,6 +313,7 @@ func TestListPathCompletions_DefaultMaxResults(t *testing.T) {
 }
 
 func TestListPathCompletions_Symlink_ToFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "realfile.txt")
 	link := filepath.Join(dir, "linkfile")
@@ -322,6 +338,7 @@ func TestListPathCompletions_Symlink_ToFile(t *testing.T) {
 }
 
 func TestListPathCompletions_Symlink_ToFile_ExcludedByDirOnly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "realfile.txt")
 	link := filepath.Join(dir, "linkfile")
@@ -341,6 +358,7 @@ func TestListPathCompletions_Symlink_ToFile_ExcludedByDirOnly(t *testing.T) {
 }
 
 func TestListPathCompletions_PathExists_FileIsNotDir(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fileInDir := filepath.Join(dir, "somefile.txt")
 	makeFile(t, fileInDir)
@@ -355,6 +373,7 @@ func TestListPathCompletions_PathExists_FileIsNotDir(t *testing.T) {
 }
 
 func TestListPathCompletions_EntryPathCorrectness(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "mydir"))
 
@@ -372,6 +391,7 @@ func TestListPathCompletions_EntryPathCorrectness(t *testing.T) {
 }
 
 func TestListPathCompletions_BaseDirInResponse(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "sub"))
 
@@ -385,6 +405,7 @@ func TestListPathCompletions_BaseDirInResponse(t *testing.T) {
 }
 
 func TestListPathCompletions_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "sub"))
 
@@ -419,6 +440,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 }
 
 func TestListWorktrees_BasicListing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-q")
 	runGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
@@ -433,6 +455,7 @@ func TestListWorktrees_BasicListing(t *testing.T) {
 }
 
 func TestListWorktrees_NotAGitRepo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	svc := NewPathCompletionService()
@@ -472,6 +495,7 @@ func TestListWorktrees_TimesOutOnHungGitCommand(t *testing.T) {
 // Unit tests for helper functions.
 
 func TestExpandTilde(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
@@ -496,6 +520,7 @@ func TestExpandTilde(t *testing.T) {
 }
 
 func TestSplitPathPrefix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		input      string
 		wantBase   string

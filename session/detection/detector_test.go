@@ -9,6 +9,7 @@ import (
 )
 
 func TestNewStatusDetector(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	if sd == nil {
 		t.Fatal("NewStatusDetector() returned nil")
@@ -34,6 +35,7 @@ func TestNewStatusDetector(t *testing.T) {
 }
 
 func TestStatusDetector_DetectReady(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Test catch-all ready pattern with generic output that doesn't match other patterns.
@@ -47,6 +49,7 @@ func TestStatusDetector_DetectReady(t *testing.T) {
 }
 
 func TestStatusDetector_DetectIdle(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	testCases := []string{
@@ -64,6 +67,7 @@ func TestStatusDetector_DetectIdle(t *testing.T) {
 }
 
 func TestStatusDetector_DetectActive(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	testCases := []string{
@@ -82,6 +86,7 @@ func TestStatusDetector_DetectActive(t *testing.T) {
 }
 
 func TestStatusDetector_DetectSuccess(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	testCases := []string{
@@ -104,6 +109,7 @@ func TestStatusDetector_DetectSuccess(t *testing.T) {
 }
 
 func TestStatusDetector_DetectWaitingForAgent(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	testCases := []string{
@@ -128,6 +134,7 @@ func TestStatusDetector_DetectWaitingForAgent(t *testing.T) {
 }
 
 func TestStatusDetector_DetectWaitingForAgent_NegativeCases(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	noMatch := []string{
 		"Waiting for 1 background agent to finish",   // missing bullet prefix
@@ -150,6 +157,7 @@ func TestStatusDetector_DetectWaitingForAgent_NegativeCases(t *testing.T) {
 // follow-up backlog item tracks live-capture verification; a temporary canary log
 // (detector.go's compactingCanary) flags any unmatched "compact" line in the interim.
 func TestStatusDetector_DetectCompacting(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	data, err := os.ReadFile(filepath.Join("testdata", "claude_compacting.txt"))
@@ -173,6 +181,7 @@ func TestStatusDetector_DetectCompacting(t *testing.T) {
 // and must NOT be classified as StatusCompacting, which is reserved for the distinct
 // in-progress compaction line.
 func TestStatusDetector_DetectActive_NotCompacting_ApproachingThresholdFixtures(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	fixtures := []string{
@@ -198,6 +207,7 @@ func TestStatusDetector_DetectActive_NotCompacting_ApproachingThresholdFixtures(
 }
 
 func TestStatusDetector_DetectFromLines_WaitingForAgent(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	// Stale success in scrollback, current waiting line at top — waiting wins
 	lines := []string{
@@ -211,6 +221,7 @@ func TestStatusDetector_DetectFromLines_WaitingForAgent(t *testing.T) {
 }
 
 func TestStatusDetector_DetectFromLines_MonitorsStillRunning(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	// Stale success in scrollback, monitors line above — WaitingForAgent wins.
 	// Regression guard: matchLocked checks WaitingForAgent before Success, so
@@ -226,6 +237,7 @@ func TestStatusDetector_DetectFromLines_MonitorsStillRunning(t *testing.T) {
 }
 
 func TestStatusDetector_DetectWithContextAndCountFromLines_should_returnCount_When_singleWaitingLine(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	lines := []string{"✻ Cogitated for 18m 41s · 1 monitor still running"}
 	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
@@ -238,6 +250,7 @@ func TestStatusDetector_DetectWithContextAndCountFromLines_should_returnCount_Wh
 }
 
 func TestStatusDetector_DetectWithContextAndCountFromLines_should_returnZeroCount_When_statusIsNotWaitingForAgent(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	lines := []string{"✻ Baked for 3s"}
 	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
@@ -250,6 +263,7 @@ func TestStatusDetector_DetectWithContextAndCountFromLines_should_returnZeroCoun
 }
 
 func TestStatusDetector_DetectWithContextAndCountFromLines_should_notSumAcrossLines_When_multiplePatternsMatchDifferentLines(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	// Both lines independently match a WaitingForAgent pattern. Per the "winning line wins"
 	// decision, the count must come from whichever line the reverse-scan actually returns —
@@ -271,6 +285,7 @@ func TestStatusDetector_DetectWithContextAndCountFromLines_should_notSumAcrossLi
 }
 
 func TestStatusDetector_DetectWithContextAndCountFromLines_should_carryCount_When_lineContainsCRSegments(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	// A single terminal line with an embedded \r (spinner redraw) where the segment after
 	// the final \r is the one that matches WaitingForAgent — the count must survive the
@@ -286,6 +301,7 @@ func TestStatusDetector_DetectWithContextAndCountFromLines_should_carryCount_Whe
 }
 
 func TestStatusDetector_DetectWithContextAndCountFromLines_should_dropCount_When_laterStatusExecutingOverridesWaitingForAgent(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	// An earlier (higher, i.e. more recent in reverse-scan order) StatusExecuting-candidate
 	// line overrides the WaitingForAgent match found scanning further up — bestCount must
@@ -304,6 +320,7 @@ func TestStatusDetector_DetectWithContextAndCountFromLines_should_dropCount_When
 }
 
 func TestStatusDetector_DetectMonitorsStillRunning(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	testCases := []string{
@@ -324,6 +341,7 @@ func TestStatusDetector_DetectMonitorsStillRunning(t *testing.T) {
 }
 
 func TestStatusDetector_DetectMonitorsStillRunning_NegativeCases(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	noMatch := []string{
@@ -346,6 +364,7 @@ func TestStatusDetector_DetectMonitorsStillRunning_NegativeCases(t *testing.T) {
 }
 
 func TestStatusDetector_DetectProcessing(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	testCases := []string{
@@ -367,6 +386,7 @@ func TestStatusDetector_DetectProcessing(t *testing.T) {
 }
 
 func TestStatusDetector_DetectNeedsApproval(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	testCases := []string{
@@ -387,6 +407,7 @@ func TestStatusDetector_DetectNeedsApproval(t *testing.T) {
 }
 
 func TestStatusDetector_DetectError(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	testCases := []string{
@@ -409,6 +430,7 @@ func TestStatusDetector_DetectError(t *testing.T) {
 }
 
 func TestStatusDetector_PriorityOrder(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	cases := []struct {
@@ -445,6 +467,7 @@ func TestStatusDetector_PriorityOrder(t *testing.T) {
 }
 
 func TestStatusDetector_DetectWithContext(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	output := []byte("Error: connection refused")
@@ -465,6 +488,7 @@ func TestStatusDetector_DetectWithContext(t *testing.T) {
 }
 
 func TestStatusDetector_DetectUnknown_NoPatterns(t *testing.T) {
+	t.Parallel()
 	// Build a detector from a minimal YAML with no patterns in any category.
 	tmpDir := t.TempDir()
 	emptyPath := filepath.Join(tmpDir, "empty.yaml")
@@ -483,6 +507,7 @@ func TestStatusDetector_DetectUnknown_NoPatterns(t *testing.T) {
 }
 
 func TestStatusDetector_EmptyOutputMatchesReadyCatchAll(t *testing.T) {
+	t.Parallel()
 	// The default '.*' Ready catch-all matches the empty string — this is intentional.
 	// After Epic 2, the catch-all returns StatusUnknown (renders no badge), not StatusReady.
 	sd := NewStatusDetector()
@@ -493,6 +518,7 @@ func TestStatusDetector_EmptyOutputMatchesReadyCatchAll(t *testing.T) {
 }
 
 func TestStatusDetector_LoadPatterns(t *testing.T) {
+	t.Parallel()
 	// Create temporary YAML file
 	tmpDir := t.TempDir()
 	patternsFile := filepath.Join(tmpDir, "patterns.yaml")
@@ -551,6 +577,7 @@ error:
 }
 
 func TestNewStatusDetectorFromFile(t *testing.T) {
+	t.Parallel()
 	// Create temporary YAML file
 	tmpDir := t.TempDir()
 	patternsFile := filepath.Join(tmpDir, "patterns.yaml")
@@ -583,6 +610,7 @@ error: []
 }
 
 func TestStatusDetector_LoadPatternsInvalidFile(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	err := sd.LoadPatterns("/nonexistent/patterns.yaml")
 	if err == nil {
@@ -591,6 +619,7 @@ func TestStatusDetector_LoadPatternsInvalidFile(t *testing.T) {
 }
 
 func TestStatusDetector_LoadPatternsInvalidYAML(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	patternsFile := filepath.Join(tmpDir, "invalid.yaml")
 
@@ -610,6 +639,7 @@ ready: [this is not valid yaml
 }
 
 func TestStatusDetector_LoadPatternsInvalidRegex(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	patternsFile := filepath.Join(tmpDir, "invalid_regex.yaml")
 
@@ -637,6 +667,7 @@ error: []
 }
 
 func TestStatusDetector_ExportPatterns(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	tmpDir := t.TempDir()
@@ -665,6 +696,7 @@ func TestStatusDetector_ExportPatterns(t *testing.T) {
 }
 
 func TestStatusDetector_GetPatternNames(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	readyNames := sd.GetPatternNames(StatusReady)
@@ -697,12 +729,14 @@ func TestStatusDetector_GetPatternNames(t *testing.T) {
 }
 
 func TestStatusCompacting_StatusString_should_returnCompacting(t *testing.T) {
+	t.Parallel()
 	if got := StatusCompacting.String(); got != "Compacting" {
 		t.Errorf("StatusCompacting.String() = %q, want %q", got, "Compacting")
 	}
 }
 
 func TestStatusDetector_DetectFromString(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	status := sd.DetectFromString("Error occurred")
@@ -712,6 +746,7 @@ func TestStatusDetector_DetectFromString(t *testing.T) {
 }
 
 func TestStatusDetector_DetectFromLines(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -739,6 +774,7 @@ func TestStatusDetector_DetectFromLines(t *testing.T) {
 }
 
 func TestStatusDetector_DetectRecent(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	output := []byte("Some old output that we don't care about. Error: failed")
@@ -758,6 +794,7 @@ func TestStatusDetector_DetectRecent(t *testing.T) {
 }
 
 func TestStatusDetector_HasPattern(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Test existing pattern
@@ -777,6 +814,7 @@ func TestStatusDetector_HasPattern(t *testing.T) {
 }
 
 func TestStatusString(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		status   DetectedStatus
 		expected string
@@ -801,6 +839,7 @@ func TestStatusString(t *testing.T) {
 }
 
 func TestStatusDetector_MultilinePatterns(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Test that patterns work across multiple lines
@@ -817,6 +856,7 @@ Yes or no
 }
 
 func TestStatusDetector_EmptyOutput(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	status := sd.Detect([]byte(""))
@@ -828,6 +868,7 @@ func TestStatusDetector_EmptyOutput(t *testing.T) {
 }
 
 func TestStatusDetector_CaseInsensitivity(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Test case variations
@@ -873,6 +914,7 @@ func Benchmark_StatusDetector_DetectWithContext(b *testing.B) {
 // patterns exist in getDefaultPatterns() and that distinctive agy TUI strings are
 // classified correctly by the standard detector.
 func TestGeminiPatterns_AgyCoverage(t *testing.T) {
+	t.Parallel()
 	patterns := getDefaultPatterns()
 
 	// Count gemini_* patterns across all categories.
@@ -916,6 +958,7 @@ func TestGeminiPatterns_AgyCoverage(t *testing.T) {
 // GeminiPatterns_should_returnNeedsApproval_When_permissionPromptPresent
 // Ensures the gemini_permission pattern fires for the agy "Yes, allow once" permission prompt.
 func TestGeminiPatterns_NeedsApprovalState(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	// These strings appear in both Gemini CLI and agy (shared TUI codebase).
 	permissionLines := []string{
@@ -937,6 +980,7 @@ func TestGeminiPatterns_NeedsApprovalState(t *testing.T) {
 // STAR) — Claude Code's primary thinking spinner — is detected as StatusExecuting.
 // Regression test for the gap where claude_thinking_verb lacked ✦ in its char class.
 func TestStatusDetector_DetectActive_StarFourPointed(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	testCases := []struct {
 		input string
@@ -977,6 +1021,7 @@ func TestStatusDetector_DetectActive_StarFourPointed(t *testing.T) {
 // not followed by \n) and ANSI cursor-up sequences are detected as StatusExecuting when
 // no text-based pattern matched. This catches spinner-based TUIs that animate via CR.
 func TestStatusDetector_DetectActive_ScreenOverwrite(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	t.Run("pure CR spinner — no keywords", func(t *testing.T) {
@@ -1019,6 +1064,7 @@ func TestStatusDetector_DetectActive_ScreenOverwrite(t *testing.T) {
 
 // TestRecentEvents verifies the detection event ring buffer and SetSessionID.
 func TestRecentEvents(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	sd.SetSessionID("test-session")
 
@@ -1063,6 +1109,7 @@ func TestRecentEvents(t *testing.T) {
 // RecentEvents do not trigger data races on the ring buffer or the sessionID field.
 // Run with: go test ./session/detection/... -race
 func TestEventRing_ConcurrentPushRecent(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	sd.SetSessionID("race-test")
 
@@ -1081,6 +1128,7 @@ func TestEventRing_ConcurrentPushRecent(t *testing.T) {
 }
 
 func TestDetectForProgram_should_useRegisteredPatterns_When_binaryKnown(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// "aider" binary: only has aider_permission in NeedsApproval.
@@ -1092,6 +1140,7 @@ func TestDetectForProgram_should_useRegisteredPatterns_When_binaryKnown(t *testi
 }
 
 func TestDetectForProgram_should_fallBack_When_binaryUnknown(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// An unregistered binary falls back to sd.Detect() which uses getDefaultPatterns().
@@ -1103,6 +1152,7 @@ func TestDetectForProgram_should_fallBack_When_binaryUnknown(t *testing.T) {
 }
 
 func TestEventRingCap_should_be2000(t *testing.T) {
+	t.Parallel()
 	if EventRingCap != 2000 {
 		t.Errorf("EventRingCap = %d, want 2000", EventRingCap)
 	}

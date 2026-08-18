@@ -99,6 +99,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 // against a socket with no server running returns (0, nil) rather than an error --
 // it runs unconditionally at every startup, including the very first one.
 func TestKillOrphanedControlModeClients_NoServerIsNotAnError(t *testing.T) {
+	t.Parallel()
 	killed, err := KillOrphanedControlModeClients(fmt.Sprintf("test_killcm_noserver_%d_%d", os.Getpid(), time.Now().UnixNano()))
 	require.NoError(t, err)
 	require.Equal(t, 0, killed)

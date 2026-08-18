@@ -6,6 +6,7 @@ import (
 )
 
 func TestNewPatternSet_should_returnError_When_invalidRegexProvided(t *testing.T) {
+	t.Parallel()
 	p := StatusPatterns{
 		Ready: []StatusPattern{{Name: "bad", Pattern: "(?P<invalid", Description: "invalid"}},
 	}
@@ -16,6 +17,7 @@ func TestNewPatternSet_should_returnError_When_invalidRegexProvided(t *testing.T
 }
 
 func TestPatternSet_MatchLines_should_returnError_When_errorStringPresent(t *testing.T) {
+	t.Parallel()
 	ps, err := NewPatternSet(getDefaultPatterns())
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +32,7 @@ func TestPatternSet_MatchLines_should_returnError_When_errorStringPresent(t *tes
 }
 
 func TestPatternSet_MatchLines_should_returnUnknown_When_noMatchAndCatchAll(t *testing.T) {
+	t.Parallel()
 	// After Epic 2, the .* catch-all in the Ready category returns StatusUnknown
 	// so that unrecognized output renders no badge (not "Ready").
 	ps, err := NewPatternSet(getDefaultPatterns())
@@ -43,6 +46,7 @@ func TestPatternSet_MatchLines_should_returnUnknown_When_noMatchAndCatchAll(t *t
 }
 
 func TestPatternSet_MatchLines_should_returnCount_When_waitingForBackgroundAgentMatches(t *testing.T) {
+	t.Parallel()
 	ps, err := NewPatternSet(getDefaultPatterns())
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +61,7 @@ func TestPatternSet_MatchLines_should_returnCount_When_waitingForBackgroundAgent
 }
 
 func TestPatternSet_MatchLines_should_returnCount_When_shellsStillRunningMatches(t *testing.T) {
+	t.Parallel()
 	ps, err := NewPatternSet(getDefaultPatterns())
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +76,7 @@ func TestPatternSet_MatchLines_should_returnCount_When_shellsStillRunningMatches
 }
 
 func TestPatternSet_MatchLines_should_returnZero_When_noWaitingForAgentPatternMatches(t *testing.T) {
+	t.Parallel()
 	ps, err := NewPatternSet(getDefaultPatterns())
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +88,7 @@ func TestPatternSet_MatchLines_should_returnZero_When_noWaitingForAgentPatternMa
 }
 
 func TestPatternSet_MatchLines_should_beRaceFree_When_calledConcurrently(t *testing.T) {
+	t.Parallel()
 	ps, err := NewPatternSet(getDefaultPatterns())
 	if err != nil {
 		t.Fatal(err)

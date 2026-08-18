@@ -2,19 +2,51 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
+// initTestRepoForReviewQueue creates and commits a minimal git repository for the
+// uncommitted-changes detection tests below.
+//
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
+func initTestRepoForReviewQueue(t *testing.T, repoPath string) {
+	t.Helper()
+	repo, err := gogit.PlainInit(repoPath, false)
+	if err != nil {
+		t.Fatalf("Failed to initialize git repo: %v", err)
+	}
+
+	testFile := filepath.Join(repoPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("initial content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Failed to get worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Failed to git add: %v", err)
+	}
+	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Failed to git commit: %v", err)
+	}
+}
+
 // TestReviewQueue_UncommittedChangesDetection verifies that uncommitted changes are detected
 func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
+	t.Parallel()
 	// Create temporary git repository for testing
 	tempDir := t.TempDir()
 	repoPath := filepath.Join(tempDir, "test-repo")
@@ -24,30 +56,8 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	// Initialize git repo
-	if err := runGitCommand(repoPath, "init"); err != nil {
-		t.Fatalf("Failed to initialize git repo: %v", err)
-	}
-
-	// Configure git user
-	if err := runGitCommand(repoPath, "config", "user.name", "Test User"); err != nil {
-		t.Fatalf("Failed to configure git user.name: %v", err)
-	}
-	if err := runGitCommand(repoPath, "config", "user.email", "test@example.com"); err != nil {
-		t.Fatalf("Failed to configure git user.email: %v", err)
-	}
-
-	// Create initial commit
-	testFile := filepath.Join(repoPath, "test.txt")
-	if err := os.WriteFile(testFile, []byte("initial content"), 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-	if err := runGitCommand(repoPath, "add", "."); err != nil {
-		t.Fatalf("Failed to git add: %v", err)
-	}
-	if err := runGitCommand(repoPath, "commit", "-m", "Initial commit"); err != nil {
-		t.Fatalf("Failed to git commit: %v", err)
-	}
+	// Initialize git repo, configure user, and create initial commit
+	initTestRepoForReviewQueue(t, repoPath)
 
 	// Create worktree for testing
 	worktree, branchName, err := git.NewGitWorktree(repoPath, "test-session")
@@ -60,7 +70,9 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 	if err := worktree.Setup(); err != nil {
 		t.Fatalf("Failed to setup worktree: %v", err)
 	}
-	defer worktree.Cleanup()
+	// t.Cleanup, not defer: subtests below are t.Parallel(), so a plain
+	// defer here would tear down the worktree before they actually execute.
+	t.Cleanup(func() { worktree.Cleanup() })
 
 	// Create test instance with worktree
 	now := time.Now()
@@ -84,6 +96,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Test 1: Clean worktree (no uncommitted changes) should not be added to queue
 	t.Run("clean_worktree_not_added", func(t *testing.T) {
+		t.Parallel()
 		poller.checkSession(instance, nil)
 		if queue.Has(instance.Title) {
 			t.Error("Expected clean worktree to not be in review queue")
@@ -92,6 +105,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Test 2: Add uncommitted changes - should be detected
 	t.Run("uncommitted_changes_detected", func(t *testing.T) {
+		t.Parallel()
 		// Modify file to create uncommitted changes
 		modifiedFile := filepath.Join(worktreePath, "modified.txt")
 		if err := os.WriteFile(modifiedFile, []byte("uncommitted content"), 0644); err != nil {
@@ -130,6 +144,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Test 3: After committing changes, should be removed from queue
 	t.Run("committed_changes_removed", func(t *testing.T) {
+		t.Parallel()
 		// Commit the changes
 		if err := worktree.CommitChanges("Test commit"); err != nil {
 			t.Fatalf("Failed to commit changes: %v", err)
@@ -149,6 +164,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 // TestReviewQueue_UncommittedChanges_Priority verifies priority ordering
 func TestReviewQueue_UncommittedChanges_Priority(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		existingReason   AttentionReason
@@ -201,6 +217,7 @@ func TestReviewQueue_UncommittedChanges_Priority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// Verify priority mapping
 			priority := reasonToPriority(tt.existingReason)
 			if priority != tt.existingPriority {
@@ -213,6 +230,7 @@ func TestReviewQueue_UncommittedChanges_Priority(t *testing.T) {
 
 // TestReviewQueue_UncommittedChanges_ReasonString verifies string conversion
 func TestReviewQueue_UncommittedChanges_ReasonString(t *testing.T) {
+	t.Parallel()
 	reason := ReasonUncommittedChanges
 	expected := "Uncommitted Changes"
 	if reason.String() != expected {
@@ -223,6 +241,7 @@ func TestReviewQueue_UncommittedChanges_ReasonString(t *testing.T) {
 
 // TestReviewQueue_UncommittedChanges_NoWorktree verifies behavior without worktree
 func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
+	t.Parallel()
 	// Create test instance WITHOUT worktree (directory session)
 	now := time.Now()
 	instance := &Instance{
@@ -262,6 +281,7 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 // to immediately re-check after a git commit rather than waiting for the next
 // poll tick. Tracked: session/review_queue_uncommitted_changes_test.go:368
 func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
+	t.Parallel()
 	// Create temporary git repository
 	tempDir := t.TempDir()
 	repoPath := filepath.Join(tempDir, "integration-repo")
@@ -271,28 +291,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	if err := runGitCommand(repoPath, "init"); err != nil {
-		t.Fatalf("Failed to initialize git repo: %v", err)
-	}
-
-	if err := runGitCommand(repoPath, "config", "user.name", "Test User"); err != nil {
-		t.Fatalf("Failed to configure git user.name: %v", err)
-	}
-	if err := runGitCommand(repoPath, "config", "user.email", "test@example.com"); err != nil {
-		t.Fatalf("Failed to configure git user.email: %v", err)
-	}
-
-	// Create initial commit
-	testFile := filepath.Join(repoPath, "test.txt")
-	if err := os.WriteFile(testFile, []byte("initial"), 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-	if err := runGitCommand(repoPath, "add", "."); err != nil {
-		t.Fatalf("Failed to git add: %v", err)
-	}
-	if err := runGitCommand(repoPath, "commit", "-m", "Initial commit"); err != nil {
-		t.Fatalf("Failed to git commit: %v", err)
-	}
+	initTestRepoForReviewQueue(t, repoPath)
 
 	// Create worktree
 	worktree, branchName, err := git.NewGitWorktree(repoPath, "integration-session")
@@ -304,7 +303,9 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	if err := worktree.Setup(); err != nil {
 		t.Fatalf("Failed to setup worktree: %v", err)
 	}
-	defer worktree.Cleanup()
+	// t.Cleanup, not defer: subtests below are t.Parallel(), so a plain
+	// defer here would tear down the worktree before they actually execute.
+	t.Cleanup(func() { worktree.Cleanup() })
 
 	// Create instance
 	now := time.Now()
@@ -407,14 +408,4 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 			t.Error("Expected committed changes to remove UncommittedChanges reason from queue")
 		}
 	}
-}
-
-// Helper function to run git commands
-func runGitCommand(dir string, args ...string) error {
-	cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git command failed: %s (%w)", output, err)
-	}
-	return nil
 }

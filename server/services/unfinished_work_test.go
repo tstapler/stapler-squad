@@ -4,10 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -49,6 +52,7 @@ func setupUWSFixture(t *testing.T) (svc *UnfinishedWorkService, cleanup func()) 
 // TestGetUnfinishedWorkConfig_ReturnsConfig verifies that GetUnfinishedWorkConfig
 // returns a valid config without error on a fresh service.
 func TestGetUnfinishedWorkConfig_ReturnsConfig(t *testing.T) {
+	t.Parallel()
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -68,6 +72,7 @@ func TestGetUnfinishedWorkConfig_ReturnsConfig(t *testing.T) {
 // TestUpdateUnfinishedWorkConfig_NilConfigReturnsError verifies that passing a
 // nil config returns CodeInvalidArgument.
 func TestUpdateUnfinishedWorkConfig_NilConfigReturnsError(t *testing.T) {
+	t.Parallel()
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -87,6 +92,7 @@ func TestUpdateUnfinishedWorkConfig_NilConfigReturnsError(t *testing.T) {
 // TestUpdateUnfinishedWorkConfig_ValidConfig verifies that a well-formed config
 // update succeeds and the returned config reflects the submitted values.
 func TestUpdateUnfinishedWorkConfig_ValidConfig(t *testing.T) {
+	t.Parallel()
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -115,6 +121,7 @@ func TestUpdateUnfinishedWorkConfig_ValidConfig(t *testing.T) {
 // TestGetWorktreeAISummary_UnknownWorktree verifies that requesting an AI
 // summary for a worktree that has not been scanned returns CodeNotFound.
 func TestGetWorktreeAISummary_UnknownWorktree(t *testing.T) {
+	t.Parallel()
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -139,6 +146,7 @@ func TestGetWorktreeAISummary_UnknownWorktree(t *testing.T) {
 // TestQuickCommitPush_EmptyCommitMessage verifies that an empty commit message
 // returns CodeInvalidArgument.
 func TestQuickCommitPush_EmptyCommitMessage(t *testing.T) {
+	t.Parallel()
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -160,6 +168,7 @@ func TestQuickCommitPush_EmptyCommitMessage(t *testing.T) {
 // TestQuickCommitPush_UnknownWorktree verifies that a valid commit message but
 // an untracked worktree returns CodeNotFound.
 func TestQuickCommitPush_UnknownWorktree(t *testing.T) {
+	t.Parallel()
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -194,28 +203,34 @@ func TestQuickCommitPush_UnknownWorktree(t *testing.T) {
 // at the level QuickCommitPush actually delegates to — a deliberate scope
 // decision rather than an oversight.
 func TestQuickCommitPush_SkipsIgnoredTrackedFiles(t *testing.T) {
+	t.Parallel()
 	repoDir := t.TempDir()
 
-	runGit := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = repoDir
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
-	}
-	runGit("init")
-	runGit("config", "user.email", "test@example.com")
-	runGit("config", "user.name", "Test User")
+	// Uses go-git directly rather than shelling out — see
+	// .claude/rules/prefer-go-git-over-subshells.md.
+	repo, err := gogit.PlainInitWithOptions(repoDir, &gogit.PlainInitOptions{
+		InitOptions: gogit.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Test"), 0o644))
-	runGit("add", ".")
-	runGit("commit", "-m", "initial commit")
-	runGit("branch", "-M", "main")
+	repoWt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = repoWt.Add(".")
+	require.NoError(t, err)
+	_, err = repoWt.Commit("initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
 
 	// Simulate a stale branch that already committed the scaffolding file.
 	contextPath := filepath.Join(repoDir, ".backlog-context.md")
 	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
-	runGit("add", ".backlog-context.md")
-	runGit("commit", "-m", "stale: commit scaffolding file")
+	_, err = repoWt.Add(".backlog-context.md")
+	require.NoError(t, err)
+	_, err = repoWt.Commit("stale: commit scaffolding file", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
 
 	// A real change alongside it, as a live session would produce.
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Updated"), 0o644))
@@ -248,6 +263,7 @@ func TestQuickCommitPush_SkipsIgnoredTrackedFiles(t *testing.T) {
 // TestUndismissWorktree_NoOpOnUnknown verifies that undismissing a worktree
 // that was never dismissed returns no error (it is a no-op).
 func TestUndismissWorktree_NoOpOnUnknown(t *testing.T) {
+	t.Parallel()
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 

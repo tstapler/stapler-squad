@@ -61,6 +61,7 @@ func writeSampleTranscript(t *testing.T, path string) {
 }
 
 func TestImportService_PreviewImportExternalSession_ReturnsResolved_When_PIDExactMatch(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	uuid := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 	projectPath := "/Users/alice/myproject"
@@ -95,6 +96,7 @@ func TestImportService_PreviewImportExternalSession_ReturnsResolved_When_PIDExac
 }
 
 func TestImportService_PreviewImportExternalSession_ReturnsAmbiguous_When_MultipleHistoryFiles(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	projectPath := "/Users/alice/ambiguousproject"
 	projectDir := session.ClaudeProjectDirName(projectPath)
@@ -133,6 +135,7 @@ func TestImportService_PreviewImportExternalSession_ReturnsAmbiguous_When_Multip
 }
 
 func TestImportService_PreviewImportExternalSession_ReturnsNotFound_When_NoHistoryFileExists(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	inspector := &fakeProcessFileInspector{openFiles: nil}
 	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
@@ -155,6 +158,7 @@ func TestImportService_PreviewImportExternalSession_ReturnsNotFound_When_NoHisto
 }
 
 func TestImportService_PreviewImportExternalSession_ReturnsInvalidArgument_When_CandidateNil(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	detector := session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, tmpHome)
 	svc := NewImportService(detector, &fakeCreateTimeReader{})
@@ -167,6 +171,7 @@ func TestImportService_PreviewImportExternalSession_ReturnsInvalidArgument_When_
 }
 
 func TestImportService_PreviewImportExternalSession_OmitsPidIdentity_When_ProcessDied(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	inspector := &fakeProcessFileInspector{openFiles: nil}
 	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
@@ -187,6 +192,7 @@ func TestImportService_PreviewImportExternalSession_OmitsPidIdentity_When_Proces
 }
 
 func TestImportService_CommitImportExternalSession_ReturnsInvalidArgument_When_CandidateNil(t *testing.T) {
+	t.Parallel()
 	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.CommitImportExternalSession(context.Background(), connect.NewRequest(&sessionv1.CommitImportExternalSessionRequest{}))
 	require.Error(t, err)
@@ -194,6 +200,7 @@ func TestImportService_CommitImportExternalSession_ReturnsInvalidArgument_When_C
 }
 
 func TestImportService_ConfirmKillExternalSession_ReturnsInvalidArgument_When_InstanceIdEmpty(t *testing.T) {
+	t.Parallel()
 	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.ConfirmKillExternalSession(context.Background(), connect.NewRequest(&sessionv1.ConfirmKillExternalSessionRequest{}))
 	require.Error(t, err)
@@ -201,6 +208,7 @@ func TestImportService_ConfirmKillExternalSession_ReturnsInvalidArgument_When_In
 }
 
 func TestImportService_CancelPendingKill_ReturnsInvalidArgument_When_InstanceIdEmpty(t *testing.T) {
+	t.Parallel()
 	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.CancelPendingKill(context.Background(), connect.NewRequest(&sessionv1.CancelPendingKillRequest{}))
 	require.Error(t, err)
@@ -259,6 +267,7 @@ func (f *fakeAliveChecker) IsAlive(pid int32, expectedCreateTimeMs int64) bool {
 // this drives a real domain-level outcome (ErrPathAlreadyManaged) rather than
 // only hitting the request-validation guard.
 func TestImportService_CommitImportExternalSession_ReturnsFailedStatus_When_PathAlreadyManaged(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	collidingPath := t.TempDir()
 	store := &fakeImportCollisionStore{
@@ -407,6 +416,7 @@ func newGatedImportTestServer(t *testing.T, flagEnabled func() bool) sessionv1co
 // but clarified to make explicit that "three" refers to the mutating set,
 // not "all" RPCs.
 func TestImportService_ThreeMutatingRPCs_ReturnUnimplemented_When_FeatureFlagUnset(t *testing.T) {
+	t.Parallel()
 	client := newGatedImportTestServer(t, func() bool { return false })
 
 	_, err := client.CommitImportExternalSession(context.Background(), connect.NewRequest(&sessionv1.CommitImportExternalSessionRequest{}))
@@ -428,6 +438,7 @@ func TestImportService_ThreeMutatingRPCs_ReturnUnimplemented_When_FeatureFlagUns
 // mutating RPCs are gated -- it must never be swept up by the same
 // interceptor.
 func TestImportService_PreviewImportExternalSession_AlwaysExecutes_When_FeatureFlagUnset(t *testing.T) {
+	t.Parallel()
 	client := newGatedImportTestServer(t, func() bool { return false })
 
 	_, err := client.PreviewImportExternalSession(context.Background(), connect.NewRequest(&sessionv1.PreviewImportExternalSessionRequest{
@@ -446,6 +457,7 @@ func TestImportService_PreviewImportExternalSession_AlwaysExecutes_When_FeatureF
 // no-op for every RPC (mutating or not), which is the scenario worth
 // asserting now that Preview is unconditionally ungated.
 func TestImportService_AllFourRPCs_ExecuteNormally_When_FeatureFlagTrue(t *testing.T) {
+	t.Parallel()
 	client := newGatedImportTestServer(t, func() bool { return true })
 
 	_, err := client.PreviewImportExternalSession(context.Background(), connect.NewRequest(&sessionv1.PreviewImportExternalSessionRequest{

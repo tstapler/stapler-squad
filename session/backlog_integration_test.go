@@ -12,6 +12,7 @@ import (
 // IT-001: Create item → transition to ready → spawn marker → verify in_progress
 // Tests the full lifecycle from idea through creating an ItemSession that marks the item in_progress.
 func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -63,6 +64,7 @@ func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) 
 // Tests that when a work session exits, the item transitions from in_progress to review,
 // and the ItemSession records the exit time.
 func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -113,6 +115,7 @@ func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T)
 // IT-003: skip_review_gate → done on session exit
 // Tests that when SkipReviewGate=true, the item transitions directly to done (not review).
 func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -161,6 +164,7 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 // Tests that AC criteria can be updated via storage.UpdateAcCriterionStatus
 // and the updated value survives a reload.
 func TestBacklogIntegration_IT004_AcCriterionUpdateRoundtrip(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -202,6 +206,7 @@ func TestBacklogIntegration_IT004_AcCriterionUpdateRoundtrip(t *testing.T) {
 // IT-005: ReconcileStuckItems finds and transitions stuck item
 // Tests that ReconcileStuckItems identifies items with ended sessions and transitions them to review.
 func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -257,6 +262,7 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 
 // Archiving a backlog item creates a BacklogStatusEvent audit row with TriggeredByUser.
 func TestBacklogIntegration_ArchiveRecordsStatusEvent(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -289,6 +295,7 @@ func TestBacklogIntegration_ArchiveRecordsStatusEvent(t *testing.T) {
 // TransitionBacklogItemStatus records the triggeredBy value the caller passes,
 // covering both a user-initiated and a system-initiated transition.
 func TestBacklogIntegration_TransitionRecordsTriggeredBy(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -319,6 +326,7 @@ func TestBacklogIntegration_TransitionRecordsTriggeredBy(t *testing.T) {
 // IT-006: Review session exit does NOT transition item (recursion guard)
 // Tests that when a review session exits, the item status does NOT change (preventing infinite loops).
 func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -365,6 +373,7 @@ func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.
 // IT-007: Multiple ItemSessions for same item
 // Tests that an item can have multiple ItemSessions (e.g., work → review → work again).
 func TestBacklogIntegration_IT007_MultipleItemSessionsPerItem(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -433,6 +442,7 @@ func TestBacklogIntegration_IT007_MultipleItemSessionsPerItem(t *testing.T) {
 // IT-008: ItemSession.AcSnapshot captures AC at time of session creation
 // Tests that AcSnapshot preserves AC criteria at the moment the work session starts.
 func TestBacklogIntegration_IT008_AcSnapshotCapture(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -480,6 +490,7 @@ func TestBacklogIntegration_IT008_AcSnapshotCapture(t *testing.T) {
 // IT-009: GetItemSessionBySessionAndItem validates session-item link
 // Tests that GetItemSessionBySessionAndItem correctly verifies a session is linked to a specific item.
 func TestBacklogIntegration_IT009_GetItemSessionBySessionAndItem(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -529,6 +540,7 @@ func TestBacklogIntegration_IT009_GetItemSessionBySessionAndItem(t *testing.T) {
 // IT-010: ItemSession.LastCommitSha can be updated
 // Tests that LastCommitSha is persisted and retrievable (used for review gate diffs).
 func TestBacklogIntegration_IT010_ItemSessionLastCommitSha(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -574,8 +586,11 @@ func TestBacklogIntegration_IT010_ItemSessionLastCommitSha(t *testing.T) {
 // TestListBacklogItemSummaries verifies that ListBacklogItemSummaries returns
 // lightweight projections with ItemSessions eagerly loaded and status filters applied.
 func TestListBacklogItemSummaries(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
-	defer cleanup()
+	// t.Cleanup, not defer: subtests below are t.Parallel(), so a plain
+	// defer here would run (closing storage) before they actually execute.
+	t.Cleanup(cleanup)
 
 	ctx := context.Background()
 
@@ -613,6 +628,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("returns both items when IncludeTerminal", func(t *testing.T) {
+		t.Parallel()
 		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
 			Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusDone)},
 		})
@@ -621,6 +637,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	})
 
 	t.Run("ExcludeDone omits done item", func(t *testing.T) {
+		t.Parallel()
 		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
 			ExcludeDone: true,
 		})
@@ -630,6 +647,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	})
 
 	t.Run("ExcludeDone alone does not omit an archived item", func(t *testing.T) {
+		t.Parallel()
 		archivedItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 			Title:    "Archived Item",
 			Priority: 3,
@@ -651,6 +669,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	})
 
 	t.Run("ExcludeArchived omits archived item but keeps done item", func(t *testing.T) {
+		t.Parallel()
 		archivedItem2, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 			Title:    "Archived Item 2",
 			Priority: 3,
@@ -672,6 +691,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	})
 
 	t.Run("active item has lightweight scalar fields and ItemSessions loaded", func(t *testing.T) {
+		t.Parallel()
 		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
 			Statuses: []string{string(BacklogStatusInProgress)},
 		})
@@ -700,6 +720,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	})
 
 	t.Run("done item has no ItemSessions", func(t *testing.T) {
+		t.Parallel()
 		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
 			Statuses: []string{string(BacklogStatusDone)},
 		})
@@ -710,6 +731,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	})
 
 	t.Run("limit and offset work", func(t *testing.T) {
+		t.Parallel()
 		// Both items visible — limit 1 returns one.
 		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
 			Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusDone)},
@@ -731,6 +753,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 
 	// Ensure timestamps are populated (guards against nullable-time scan bugs).
 	t.Run("timestamps are not zero", func(t *testing.T) {
+		t.Parallel()
 		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
 			Statuses: []string{string(BacklogStatusInProgress)},
 		})
@@ -745,6 +768,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 // survive and are returned in created_at order, proving the second append does NOT
 // overwrite the first (unlike UpdateAcCriterionStatus, which is overwrite-in-place).
 func TestBacklogIntegration_IT011_ProgressNoteAppendOnlyHistory(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 

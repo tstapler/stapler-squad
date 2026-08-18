@@ -6,6 +6,7 @@ import (
 )
 
 func TestNormalizeNudgeText_should_CollapseWhitespaceAndLowercase_When_GivenMixedCaseAndSpacing(t *testing.T) {
+	t.Parallel()
 	got := normalizeNudgeText("  Please   Continue\n\tWorking  ")
 	want := "please continue working"
 	if got != want {
@@ -14,6 +15,7 @@ func TestNormalizeNudgeText_should_CollapseWhitespaceAndLowercase_When_GivenMixe
 }
 
 func TestIsDuplicateNudge_should_ReturnFalse_When_NoPriorNudgeSent(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	if isDuplicateNudge("please continue", lastNudge{}, now, "") {
 		t.Fatal("expected false for zero-value lastNudge")
@@ -21,6 +23,7 @@ func TestIsDuplicateNudge_should_ReturnFalse_When_NoPriorNudgeSent(t *testing.T)
 }
 
 func TestIsDuplicateNudge_should_ReturnFalse_When_CandidateIsEmpty(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	prior := lastNudge{text: "", at: now.Add(-time.Second)}
 	if isDuplicateNudge("", prior, now, "") {
@@ -29,6 +32,7 @@ func TestIsDuplicateNudge_should_ReturnFalse_When_CandidateIsEmpty(t *testing.T)
 }
 
 func TestIsDuplicateNudge_should_ReturnTrue_When_TextIsIdentical(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	prior := lastNudge{text: "please continue", at: now.Add(-time.Minute)}
 	if !isDuplicateNudge("please continue", prior, now, "") {
@@ -37,6 +41,7 @@ func TestIsDuplicateNudge_should_ReturnTrue_When_TextIsIdentical(t *testing.T) {
 }
 
 func TestIsDuplicateNudge_should_ReturnTrue_When_TextDiffersOnlyByWhitespaceOrCase(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	prior := lastNudge{text: "Please Continue Working", at: now.Add(-time.Minute)}
 	if !isDuplicateNudge("  please   continue working  ", prior, now, "") {
@@ -45,6 +50,7 @@ func TestIsDuplicateNudge_should_ReturnTrue_When_TextDiffersOnlyByWhitespaceOrCa
 }
 
 func TestIsDuplicateNudge_should_ReturnFalse_When_TextIsDistinct(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	prior := lastNudge{text: "please continue", at: now.Add(-time.Minute)}
 	if isDuplicateNudge("please run the tests now", prior, now, "") {
@@ -53,6 +59,7 @@ func TestIsDuplicateNudge_should_ReturnFalse_When_TextIsDistinct(t *testing.T) {
 }
 
 func TestIsDuplicateNudge_should_ReturnFalse_When_CooldownHasElapsed(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	prior := lastNudge{text: "please continue", at: now.Add(-(nudgeCooldown + time.Second))}
 	if isDuplicateNudge("please continue", prior, now, "") {
@@ -61,6 +68,7 @@ func TestIsDuplicateNudge_should_ReturnFalse_When_CooldownHasElapsed(t *testing.
 }
 
 func TestIsDuplicateNudge_should_ReturnTrue_When_WithinCooldownBoundary(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	prior := lastNudge{text: "please continue", at: now.Add(-nudgeCooldown + time.Second)}
 	if !isDuplicateNudge("please continue", prior, now, "") {
@@ -69,6 +77,7 @@ func TestIsDuplicateNudge_should_ReturnTrue_When_WithinCooldownBoundary(t *testi
 }
 
 func TestIsDuplicateNudge_should_ReturnFalse_When_PaneHasNewOutputSinceLastNudge(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	prior := lastNudge{text: "please continue", at: now.Add(-time.Minute), pane: "old pane tail"}
 	if isDuplicateNudge("please continue", prior, now, "new pane tail with fresh output") {
@@ -77,6 +86,7 @@ func TestIsDuplicateNudge_should_ReturnFalse_When_PaneHasNewOutputSinceLastNudge
 }
 
 func TestIsDuplicateNudge_should_ReturnTrue_When_PaneUnchangedModuloWhitespace(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1000, 0)
 	prior := lastNudge{text: "please continue", at: now.Add(-time.Minute), pane: "same pane tail"}
 	if !isDuplicateNudge("please continue", prior, now, "  same   pane\ttail  ") {
@@ -92,6 +102,7 @@ func TestIsDuplicateNudge_should_ReturnTrue_When_PaneUnchangedModuloWhitespace(t
 // check could wrongly suppress a genuinely new message that never actually
 // reached the session.
 func TestNextLastNudge_should_LeavePrevUnchanged_When_DeliveryFailed(t *testing.T) {
+	t.Parallel()
 	prev := lastNudge{text: "please continue", at: time.Unix(1000, 0)}
 	got := nextLastNudge(prev, "please run the tests now", false, "")
 	if got != prev {
@@ -100,6 +111,7 @@ func TestNextLastNudge_should_LeavePrevUnchanged_When_DeliveryFailed(t *testing.
 }
 
 func TestNextLastNudge_should_RecordNewNudge_When_DeliverySucceeded(t *testing.T) {
+	t.Parallel()
 	prev := lastNudge{text: "please continue", at: time.Unix(1000, 0)}
 	got := nextLastNudge(prev, "please run the tests now", true, "")
 	if got.text != "please run the tests now" {

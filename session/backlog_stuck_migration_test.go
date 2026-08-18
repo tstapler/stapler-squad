@@ -21,6 +21,7 @@ import (
 // reason) raw insert conflicts. This is exactly the target MarkStuck's
 // OnConflictColumns(item_id, reason) upsert relies on.
 func TestBacklogStuckStateSchema_should_createTableAndUniqueIndex_When_FreshClient(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -62,6 +63,7 @@ func TestBacklogStuckStateSchema_should_createTableAndUniqueIndex_When_FreshClie
 // that deleting a BacklogItem cascade-deletes its BacklogStuckState rows,
 // mirroring the existing status_events cascade.
 func TestBacklogStuckState_should_cascadeDelete_When_ParentItemDeleted(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -93,6 +95,7 @@ func TestBacklogStuckState_should_cascadeDelete_When_ParentItemDeleted(t *testin
 // when run twice, and the additive backlog_stuck_states table coexists
 // cleanly with its sibling tables (backlog_items, backlog_status_events).
 func Test_migration_should_be_reversible(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test-migration-reversible.db")
 
@@ -107,10 +110,15 @@ func Test_migration_should_be_reversible(t *testing.T) {
 	ctx := context.Background()
 
 	// First Schema.Create call: creates all tables including backlog_stuck_states.
+	// Serialized via EntSchemaCreateMu — see its doc comment: Atlas has
+	// package-level state that races under t.Parallel() across independent
+	// clients.
+	EntSchemaCreateMu.Lock()
 	require.NoError(t, client.Schema.Create(ctx))
 
 	// Second Schema.Create call must be idempotent — no error, no duplicate index.
 	require.NoError(t, client.Schema.Create(ctx))
+	EntSchemaCreateMu.Unlock()
 
 	// Sibling tables remain intact and queryable — the additive table did not
 	// disturb them.

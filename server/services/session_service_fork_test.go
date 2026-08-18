@@ -41,6 +41,22 @@ func setupForkTestFixture(t *testing.T) *forkTestFixture {
 
 	bus := events.NewEventBus(16)
 	svc := NewSessionService(storage, bus)
+
+	// t.Cleanup runs in LIFO order, so registering the repo/bus/tmpdir teardown
+	// here — before svc.Shutdown()'s cleanup below — guarantees Shutdown() (which
+	// blocks on any in-flight trackCleanup-tracked goroutines, e.g. from
+	// DeleteSession/Destroy()) always runs BEFORE the repo is closed and tmpDir
+	// removed out from under it. Callers historically invoked the returned
+	// cleanup field themselves (via t.Cleanup(fix.cleanup) or defer
+	// fix.cleanup()) which raced ahead of Shutdown's own t.Cleanup — see
+	// TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible's
+	// "Fail in goroutine after test has completed" panic. The field is now a
+	// no-op so those existing call sites remain harmless.
+	t.Cleanup(func() {
+		bus.Close()
+		repo.Close()
+		os.RemoveAll(tmpDir)
+	})
 	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire the ReviewQueuePoller so findInstance() can resolve instances.
@@ -49,18 +65,12 @@ func setupForkTestFixture(t *testing.T) *forkTestFixture {
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
-	cleanup := func() {
-		bus.Close()
-		repo.Close()
-		os.RemoveAll(tmpDir)
-	}
-
 	return &forkTestFixture{
 		svc:     svc,
 		bus:     bus,
 		storage: storage,
 		poller:  poller,
-		cleanup: cleanup,
+		cleanup: func() {},
 	}
 }
 
@@ -94,6 +104,7 @@ func makeInstanceWithCheckpoint(title string) (*session.Instance, string) {
 // --------------------------------------------------------------------------
 
 func TestForkSession_MissingSessionID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -109,6 +120,7 @@ func TestForkSession_MissingSessionID(t *testing.T) {
 }
 
 func TestForkSession_MissingCheckpointID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -124,6 +136,7 @@ func TestForkSession_MissingCheckpointID(t *testing.T) {
 }
 
 func TestForkSession_MissingNewTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -139,6 +152,7 @@ func TestForkSession_MissingNewTitle(t *testing.T) {
 }
 
 func TestForkSession_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -154,6 +168,7 @@ func TestForkSession_SessionNotFound(t *testing.T) {
 }
 
 func TestForkSession_DuplicateTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -175,6 +190,7 @@ func TestForkSession_DuplicateTitle(t *testing.T) {
 }
 
 func TestForkSession_CheckpointNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -195,6 +211,7 @@ func TestForkSession_CheckpointNotFound(t *testing.T) {
 }
 
 func TestForkSession_Success(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -219,6 +236,7 @@ func TestForkSession_Success(t *testing.T) {
 // incoming session ID via UUID using the ReviewQueuePoller's MatchesID check.
 // Before the fix, only Title was matched, so UUID callers got CodeNotFound.
 func TestGetSessionDiff_FindsByUUID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -244,6 +262,7 @@ func TestGetSessionDiff_FindsByUUID(t *testing.T) {
 // TestGetSessionDiff_FindsByTitle verifies that legacy Title-based lookups
 // still work after the UUID migration.
 func TestGetSessionDiff_FindsByTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -265,6 +284,7 @@ func TestGetSessionDiff_FindsByTitle(t *testing.T) {
 // TestGetSessionDiff_UnknownIDReturnsNotFound verifies that an ID matching no
 // session UUID or Title produces CodeNotFound.
 func TestGetSessionDiff_UnknownIDReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -287,6 +307,7 @@ func TestGetSessionDiff_UnknownIDReturnsNotFound(t *testing.T) {
 // DiffStats{} — this must fail against that pre-fix code (no else-if branch
 // at all) and pass now that one exists.
 func TestGetSessionDiff_CompletedDirectoryModeSessionReturnsRealDiff(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 

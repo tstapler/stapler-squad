@@ -74,6 +74,7 @@ func testDispatcher(cap int, eventType, srvURL string) *CallbackDispatcher {
 // the shared log buffer. This wait happens AFTER the non-blocking assertion below, so
 // it doesn't weaken what the test proves.
 func TestCallbackDispatcher_Dispatch_NonBlocking(t *testing.T) {
+	t.Parallel()
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-block // never responds until the test releases it
@@ -102,6 +103,8 @@ func TestCallbackDispatcher_Dispatch_NonBlocking(t *testing.T) {
 // server's request count never exceeds cap even after the held requests are
 // released and given time to complete.
 func TestCallbackDispatcher_Dispatch_DropsBeyondCapacity(t *testing.T) {
+	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	const cap = 3
 	const extra = 5
 
@@ -143,6 +146,7 @@ func TestCallbackDispatcher_Dispatch_DropsBeyondCapacity(t *testing.T) {
 // TestCallbackDispatcher_Deliver_RetriesThenSucceeds proves a transient failure is
 // retried and a later success stops the retry loop.
 func TestCallbackDispatcher_Deliver_RetriesThenSucceeds(t *testing.T) {
+	t.Parallel()
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if attempts.Add(1) < 2 {
@@ -180,6 +184,7 @@ func TestCallbackDispatcher_Deliver_RetriesThenSucceeds(t *testing.T) {
 // metadata) host. Before the fix, the zero-value http.Client transparently
 // followed up to 10 redirects, so the redirect target was never re-validated.
 func TestCallbackDispatcher_Deliver_DoesNotFollowRedirect(t *testing.T) {
+	t.Parallel()
 	var finalHits atomic.Int32
 	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		finalHits.Add(1)
@@ -217,6 +222,8 @@ func TestCallbackDispatcher_Deliver_DoesNotFollowRedirect(t *testing.T) {
 // (retries exhausted) never logs the target URL — the URL may carry embedded
 // credentials in its userinfo component.
 func TestCallbackDispatcher_Deliver_RedactsURLOnFailure(t *testing.T) {
+	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -257,6 +264,7 @@ func TestCallbackDispatcher_Deliver_RedactsURLOnFailure(t *testing.T) {
 // DNS error; it only succeeds because the dial is pinned to validIP and never touches
 // DNS for "this-host-does-not-resolve.invalid" at all.
 func TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -283,6 +291,7 @@ func TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost(t *testing.T)
 // which only port happened to separate and would not have caught a leaked/cached
 // validIP), must each reach their own server.
 func TestCallbackDispatcher_Attempt_DoesNotLeakPinnedIPAcrossHosts(t *testing.T) {
+	t.Parallel()
 	var hitsA, hitsB atomic.Int32
 	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hitsA.Add(1)
@@ -320,6 +329,7 @@ func TestCallbackDispatcher_Attempt_DoesNotLeakPinnedIPAcrossHosts(t *testing.T)
 // on (the zero value's default), parks its persistConn goroutine and open socket
 // waiting for a reuse that can never happen — DisableKeepAlives must be forced on.
 func TestPinnedClientFor_should_DisableKeepAlives_When_BuildingRealTransport(t *testing.T) {
+	t.Parallel()
 	client := pinnedClientFor(&http.Client{}, net.ParseIP("127.0.0.1"))
 	transport, ok := client.Transport.(*http.Transport)
 	require.True(t, ok, "expected a real *http.Transport when base.Transport is nil")
@@ -331,6 +341,7 @@ func TestPinnedClientFor_should_DisableKeepAlives_When_BuildingRealTransport(t *
 // the real base Transport (or http.DefaultTransport), not build a bare struct literal
 // that silently drops Proxy/TLS tuning a deployment might rely on for egress control.
 func TestPinnedClientFor_should_PreserveProxySettings_When_CloningBaseTransport(t *testing.T) {
+	t.Parallel()
 	proxyCalled := false
 	base := &http.Transport{
 		Proxy: func(*http.Request) (*url.URL, error) {
@@ -351,6 +362,7 @@ func TestPinnedClientFor_should_PreserveProxySettings_When_CloningBaseTransport(
 // TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRoundTripper
 // proves the fix doesn't break test doubles that intercept before any dial happens.
 func TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRoundTripper(t *testing.T) {
+	t.Parallel()
 	base := &http.Client{Transport: &recordingRoundTripper{}}
 	client := pinnedClientFor(base, net.ParseIP("127.0.0.1"))
 	assert.Same(t, base, client, "a custom RoundTripper has no dial step to pin — base must be returned unmodified")
@@ -360,6 +372,7 @@ func TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRound
 // defense-in-depth gate: Dispatch is a no-op when webhook_triggers is disabled,
 // even if a URL is configured.
 func TestCallbackDispatcher_Dispatch_NoopWhenFeatureFlagOff(t *testing.T) {
+	t.Parallel()
 	var received atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received.Add(1)
@@ -386,6 +399,7 @@ func TestCallbackDispatcher_Dispatch_NoopWhenFeatureFlagOff(t *testing.T) {
 // TestCallbackDispatcher_Dispatch_NoopWhenURLUnconfigured proves Dispatch is a
 // no-op (and does not reserve an in-flight slot) for an event type with no URL set.
 func TestCallbackDispatcher_Dispatch_NoopWhenURLUnconfigured(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{FeatureFlags: map[string]bool{"webhook_triggers": true}}
 	d := &CallbackDispatcher{
 		client:      &http.Client{},
@@ -401,6 +415,7 @@ func TestCallbackDispatcher_Dispatch_NoopWhenURLUnconfigured(t *testing.T) {
 // *CallbackDispatcher never panics — matches the nil-safety convention used by
 // callers like ReactiveQueueManager and EntRepository.dispatchCallback.
 func TestCallbackDispatcher_Dispatch_NilReceiverSafe(t *testing.T) {
+	t.Parallel()
 	var d *CallbackDispatcher
 	assert.NotPanics(t, func() {
 		d.Dispatch("session_complete", map[string]any{})

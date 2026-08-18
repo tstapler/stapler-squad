@@ -6,7 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
@@ -1198,34 +1202,34 @@ func configureGitUser(t *testing.T, dir string) {
 	}
 }
 
+// initGitRepoWithCommit initialises a git repo on branch "main" with one commit.
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func initGitRepoWithCommit(t *testing.T, dir string) {
 	t.Helper()
 
-	// Initialize git repo
-	cmd := safeexec.CommandContext(context.Background(), "git", "init", "-b", "main")
-	cmd.Dir = dir
-	if err := cmd.Run(); err != nil {
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
 		t.Fatalf("Failed to init git repo: %v", err)
 	}
 
-	// Configure git user
-	configureGitUser(t, dir)
-
-	// Create and commit a test file
 	testFile := filepath.Join(dir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("test content"), 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	cmd = safeexec.CommandContext(context.Background(), "git", "add", ".")
-	cmd.Dir = dir
-	if err := cmd.Run(); err != nil {
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Failed to get worktree: %v", err)
+	}
+	if _, err := wt.Add("test.txt"); err != nil {
 		t.Fatalf("Failed to add file: %v", err)
 	}
-
-	cmd = safeexec.CommandContext(context.Background(), "git", "commit", "-m", "initial commit")
-	cmd.Dir = dir
-	if err := cmd.Run(); err != nil {
+	if _, err := wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
 		t.Fatalf("Failed to commit: %v", err)
 	}
 }

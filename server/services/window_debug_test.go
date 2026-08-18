@@ -19,6 +19,7 @@ import (
 // The localhost origin check passes because no X-Real-IP / X-Forwarded-For
 // header is set (direct connect path → allowed).
 func TestFocusWindow_EmptyID(t *testing.T) {
+	t.Parallel()
 	svc := setupUtilityService()
 
 	_, err := svc.FocusWindow(context.Background(), connect.NewRequest(&sessionv1.FocusWindowRequest{
@@ -36,6 +37,7 @@ func TestFocusWindow_EmptyID(t *testing.T) {
 // On Linux (the CI platform) the call must not error; it returns a graceful
 // "not supported" message instead.
 func TestFocusWindow_NonDarwinPlatform(t *testing.T) {
+	t.Parallel()
 	svc := setupUtilityService()
 
 	appName := "SomeApp"
@@ -65,6 +67,7 @@ func TestFocusWindow_NonDarwinPlatform(t *testing.T) {
 // snapshot file and returns a non-empty file path. The poller is nil so
 // instances defaults to an empty list; the call must still succeed.
 func TestCreateDebugSnapshot_Succeeds(t *testing.T) {
+	t.Parallel()
 	svc := setupUtilityService()
 
 	resp, err := svc.CreateDebugSnapshot(context.Background(), connect.NewRequest(&sessionv1.CreateDebugSnapshotRequest{}))
@@ -78,6 +81,7 @@ func TestCreateDebugSnapshot_Succeeds(t *testing.T) {
 // TestCreateDebugSnapshot_WithNote verifies that CreateDebugSnapshot accepts
 // an optional note without error.
 func TestCreateDebugSnapshot_WithNote(t *testing.T) {
+	t.Parallel()
 	svc := setupUtilityService()
 
 	note := "test note for snapshot"

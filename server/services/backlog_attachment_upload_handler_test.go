@@ -50,6 +50,7 @@ func buildBacklogAttachmentRequest(t *testing.T, filename string, body []byte) *
 }
 
 func TestBacklogAttachmentUpload_PNG_Success(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -79,6 +80,7 @@ func TestBacklogAttachmentUpload_PNG_Success(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_JPEG_Success(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -95,6 +97,7 @@ func TestBacklogAttachmentUpload_JPEG_Success(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_GIF_Success(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -118,6 +121,7 @@ func TestBacklogAttachmentUpload_GIF_Success(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_WebP_Success(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -141,6 +145,7 @@ func TestBacklogAttachmentUpload_WebP_Success(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_SpoofedExtension_Rejected(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -159,6 +164,7 @@ func TestBacklogAttachmentUpload_SpoofedExtension_Rejected(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_SVG_Rejected(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -176,6 +182,7 @@ func TestBacklogAttachmentUpload_SVG_Rejected(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_PathTraversalFilename(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -199,6 +206,7 @@ func TestBacklogAttachmentUpload_PathTraversalFilename(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_OversizedFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -218,6 +226,7 @@ func TestBacklogAttachmentUpload_OversizedFile(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_EmptyFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {
@@ -234,6 +243,7 @@ func TestBacklogAttachmentUpload_EmptyFile(t *testing.T) {
 }
 
 func TestBacklogAttachmentUpload_MissingFileField(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	h, err := NewBacklogAttachmentUploadHandler(dir)
 	if err != nil {

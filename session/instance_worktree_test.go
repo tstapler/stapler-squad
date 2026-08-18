@@ -13,6 +13,7 @@ import (
 // behavior the inline SessionTypeDirectory/CreateIfMissing branch had before this
 // logic was extracted into an exported, reusable function.
 func TestEnsureDirectorySessionPath_CreatesAndGitInitsMissingDirectory(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	target := filepath.Join(base, "new-repo")
 
@@ -33,6 +34,7 @@ func TestEnsureDirectorySessionPath_CreatesAndGitInitsMissingDirectory(t *testin
 // session and rely on the spawn's own CreateIfMissing check finding the directory
 // already present.
 func TestEnsureDirectorySessionPath_NoopWhenAlreadyExists(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	target := filepath.Join(base, "existing-repo")
 
@@ -50,6 +52,7 @@ func TestEnsureDirectorySessionPath_NoopWhenAlreadyExists(t *testing.T) {
 // treated as "already exists, no-op" — a real path a plain os.IsNotExist check
 // would otherwise mask.
 func TestEnsureDirectorySessionPath_ReturnsErrorOnNonNotExistStatFailure(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	fileAsParent := filepath.Join(base, "not-a-dir")
 	require.NoError(t, os.WriteFile(fileAsParent, []byte("x"), 0o644))
@@ -69,6 +72,7 @@ func TestEnsureDirectorySessionPath_ReturnsErrorOnNonNotExistStatFailure(t *test
 // file-collision error, because the exists-check short-circuits first. This
 // matches the original inline SessionTypeDirectory/CreateIfMissing logic exactly.
 func TestEnsureDirectorySessionPath_NoopWhenPathIsAnExistingFile(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	target := filepath.Join(base, "not-a-dir")
 	require.NoError(t, os.WriteFile(target, []byte("x"), 0o644))
@@ -87,6 +91,7 @@ func TestEnsureDirectorySessionPath_NoopWhenPathIsAnExistingFile(t *testing.T) {
 // history_linker_test.go), which requires the raw path regardless of whether
 // the directory is actually present on disk.
 func TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk(t *testing.T) {
+	t.Parallel()
 	repoPath := t.TempDir()
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 
@@ -105,6 +110,7 @@ func TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk(t *test
 // exists, while GetEffectiveRootDir itself stays unchanged (see the test
 // above) for HistoryLinker's path-string correlation use case.
 func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testing.T) {
+	t.Parallel()
 	repoPath := t.TempDir()
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 
@@ -120,6 +126,7 @@ func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testin
 // NOT fall back when the worktree path genuinely exists — the fallback must
 // be a real disk-existence check, not an unconditional preference for RepoRoot.
 func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
+	t.Parallel()
 	repoPath := t.TempDir()
 	worktreePath := t.TempDir()
 

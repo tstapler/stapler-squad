@@ -18,6 +18,7 @@ import (
 
 // TestEntRepository_CreateAndGet tests basic create and get operations
 func TestEntRepository_CreateAndGet(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -45,6 +46,7 @@ func TestEntRepository_CreateAndGet(t *testing.T) {
 
 // TestEntRepository_CreateDuplicate tests duplicate title handling
 func TestEntRepository_CreateDuplicate(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -63,6 +65,7 @@ func TestEntRepository_CreateDuplicate(t *testing.T) {
 
 // TestEntRepository_Update tests updating an existing session
 func TestEntRepository_Update(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -92,6 +95,7 @@ func TestEntRepository_Update(t *testing.T) {
 
 // TestEntRepository_Delete tests session deletion
 func TestEntRepository_Delete(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -112,6 +116,7 @@ func TestEntRepository_Delete(t *testing.T) {
 }
 
 func TestEntRepository_Delete_WithShells(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -141,6 +146,7 @@ func TestEntRepository_Delete_WithShells(t *testing.T) {
 
 // TestEntRepository_List tests listing all sessions
 func TestEntRepository_List(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -163,6 +169,7 @@ func TestEntRepository_List(t *testing.T) {
 
 // TestEntRepository_ListByStatus tests filtering sessions by status
 func TestEntRepository_ListByStatus(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -194,6 +201,7 @@ func TestEntRepository_ListByStatus(t *testing.T) {
 
 // TestEntRepository_Tags tests tag operations
 func TestEntRepository_Tags(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -220,6 +228,7 @@ func TestEntRepository_Tags(t *testing.T) {
 
 // TestEntRepository_Worktree tests worktree persistence
 func TestEntRepository_Worktree(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -250,6 +259,7 @@ func TestEntRepository_Worktree(t *testing.T) {
 // ListWithOptions honors LoadOptions.LoadWorktree instead of always
 // eager-loading every edge regardless of the requested options.
 func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -285,6 +295,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
 // TestEntRepository_ListWithOptions_RespectsLoadTags verifies that
 // ListWithOptions only loads session tags when LoadOptions.LoadTags is set.
 func TestEntRepository_ListWithOptions_RespectsLoadTags(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -311,6 +322,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadTags(t *testing.T) {
 // ListWithOptions only loads diff stats when LoadOptions.LoadDiffStats (or
 // LoadDiffContent) is set.
 func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -343,6 +355,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 // ListWithOptions only loads Claude session data (and its metadata) when
 // LoadOptions.LoadClaudeSession is set.
 func TestEntRepository_ListWithOptions_RespectsLoadClaudeSession(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -380,6 +393,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadClaudeSession(t *testing.T) {
 
 // TestEntRepository_DiffStats tests diff stats persistence
 func TestEntRepository_DiffStats(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -406,6 +420,7 @@ func TestEntRepository_DiffStats(t *testing.T) {
 
 // TestEntRepository_ClaudeSession tests Claude session persistence
 func TestEntRepository_ClaudeSession(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -445,6 +460,7 @@ func TestEntRepository_ClaudeSession(t *testing.T) {
 
 // TestEntRepository_UpdateTimestamps tests efficient timestamp updates
 func TestEntRepository_UpdateTimestamps(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -474,6 +490,7 @@ func TestEntRepository_UpdateTimestamps(t *testing.T) {
 // TestEntRepository_UpdateTimestamps_NotFound verifies that UpdateTimestamps returns an
 // error when the session title does not exist (n==0 from the direct UPDATE).
 func TestEntRepository_UpdateTimestamps_NotFound(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -488,6 +505,7 @@ func TestEntRepository_UpdateTimestamps_NotFound(t *testing.T) {
 // restart" bug: the Ent schema previously had no uuid column, so every restart
 // assigned a new random UUID, invalidating all client-stored session IDs.
 func TestEntRepository_UUID_PersistAndLoad(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -506,6 +524,7 @@ func TestEntRepository_UUID_PersistAndLoad(t *testing.T) {
 // TestEntRepository_UUID_UpdatePreservesUUID verifies that updating a session
 // preserves (or overwrites) the UUID field correctly.
 func TestEntRepository_UUID_UpdatePreservesUUID(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -560,6 +579,7 @@ func TestEntRepository_UUID_SurvivesDBReopen(t *testing.T) {
 // created without a UUID (legacy rows that pre-date UUID assignment) are
 // listed correctly with an empty UUID rather than causing errors.
 func TestEntRepository_UUID_EmptyDefaultDoesNotBreakList(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -594,6 +614,7 @@ func TestEntRepository_UUID_EmptyDefaultDoesNotBreakList(t *testing.T) {
 // 2026-05-30 profiling session). An ent query interceptor counts any SELECT fired
 // against the Session table; the count must be 0 after the call.
 func TestUpdateReviewQueueState_SingleStatement(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -629,6 +650,7 @@ func TestUpdateReviewQueueState_SingleStatement(t *testing.T) {
 // single direct UPDATE and does NOT perform a SELECT first, and that it does not create a
 // worktree/diffstats/tags/claude_session row as a side effect (unlike the full Update path).
 func TestUpdateSessionMetadata_SingleStatement(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -672,6 +694,7 @@ func TestUpdateSessionMetadata_SingleStatement(t *testing.T) {
 // unconditional SetNote(data.Note) semantics for the same reason (an empty note is a
 // meaningful cleared state).
 func TestUpdateSessionMetadata_ClearsNoteToEmpty(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -693,6 +716,7 @@ func TestUpdateSessionMetadata_ClearsNoteToEmpty(t *testing.T) {
 // pointer for category/workingDir leaves the existing DB value untouched — the guarded
 // "not provided" semantics the four sibling narrow-update methods all share.
 func TestUpdateSessionMetadata_NilFieldsLeaveExistingValuesUntouched(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -716,6 +740,7 @@ func TestUpdateSessionMetadata_NilFieldsLeaveExistingValuesUntouched(t *testing.
 // TestUpdateSessionMetadata_SessionNotFound verifies the same not-found error shape as its
 // sibling narrow-update methods when the row doesn't exist.
 func TestUpdateSessionMetadata_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 

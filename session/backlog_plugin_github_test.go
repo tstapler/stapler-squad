@@ -48,6 +48,7 @@ func withGitHubTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Serv
 }
 
 func TestGitHubIssuesPlugin_PluginID(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "github_issues", NewGitHubIssuesPlugin().PluginID())
 }
 
@@ -57,6 +58,7 @@ func TestGitHubIssuesPlugin_PluginID(t *testing.T) {
 // of "". If MockInit is ever dropped from TestMain, this test starts failing
 // on any machine with a real GitHub account connected.
 func TestGitHubIssuesPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubIssuesPlugin()
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, cursor, err := p.Fetch(context.Background(), cfg, "old-cursor")
@@ -66,6 +68,7 @@ func TestGitHubIssuesPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
 }
 
 func TestGitHubIssuesPlugin_Fetch_ErrorsWhenOwnerOrRepoMissing(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubIssuesPlugin()
 	cfg := PluginConfig{Raw: `{"token":"tok"}`}
 	_, _, err := p.Fetch(context.Background(), cfg, "")
@@ -233,6 +236,7 @@ func TestGitHubIssuesPlugin_FetchAll_SetsPossiblyIncompleteWhenCapHit(t *testing
 // Fetch's "disabled source" contract: FetchAll must not attempt any request
 // when no token is configured.
 func TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubIssuesPlugin()
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, cursor, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "old-cursor")
@@ -243,6 +247,7 @@ func TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing(t *testing.T) 
 }
 
 func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubIssuesPlugin()
 	longTitle := make([]byte, 300)
 	longDesc := make([]byte, 3000)
@@ -383,10 +388,12 @@ func TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody(t *testing.T) {
 }
 
 func TestGitHubPRsPlugin_PluginID(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "github_prs", NewGitHubPRsPlugin().PluginID())
 }
 
 func TestGitHubPRsPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubPRsPlugin()
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, _, err := p.Fetch(context.Background(), cfg, "")
@@ -489,6 +496,7 @@ func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.
 }
 
 func TestGitHubPRsPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubPRsPlugin()
 	longTitle := make([]byte, 300)
 	for i := range longTitle {

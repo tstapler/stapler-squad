@@ -22,6 +22,7 @@ import (
 // history format is not the Antigravity storage AgyAdapter reads/writes, so it must resolve as
 // unmatched rather than being silently misrouted through AgyAdapter).
 func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		old, new_ string
@@ -32,6 +33,7 @@ func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			inst := &Instance{Title: "test-session"}
 			err := PortSessionHistory(context.Background(), tt.old, tt.new_, inst)
 			if !errors.Is(err, ErrNoHistoryAdapter) {
@@ -42,6 +44,7 @@ func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) 
 }
 
 func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
+	t.Parallel()
 	// Create temporary directory for home
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -221,6 +224,7 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 }
 
 func TestPortSessionHistory_AgyToClaude(t *testing.T) {
+	t.Parallel()
 	// Create temporary directory for home
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -351,6 +355,7 @@ func TestPortSessionHistory_AgyToClaude(t *testing.T) {
 }
 
 func TestPortSessionHistory_LiveClaude(t *testing.T) {
+	t.Parallel()
 	// Parse actual real Claude JSONL session if present in the home directory.
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -432,6 +437,7 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 }
 
 func TestPortSessionHistory_LiveAgy(t *testing.T) {
+	t.Parallel()
 	// Parse actual real Antigravity JSONL session if present in the home directory.
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -549,6 +555,7 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 // Antigravity conversation databases (verified from live .db files).
 // Without the full schema, Antigravity may fail on first open.
 func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tempHome)
@@ -641,6 +648,7 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 }
 
 func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tempHome)

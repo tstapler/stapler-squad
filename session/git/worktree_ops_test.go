@@ -31,6 +31,7 @@ func corruptPackedRefs(t *testing.T, repoDir string) {
 }
 
 func TestBranchRefExists_ReturnsFalseNil_When_BranchAbsent(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	repo, err := git.PlainOpen(repoDir)
 	require.NoError(t, err)
@@ -41,6 +42,7 @@ func TestBranchRefExists_ReturnsFalseNil_When_BranchAbsent(t *testing.T) {
 }
 
 func TestBranchRefExists_ReturnsTrueNil_When_BranchExists(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	cmd := safeexec.CommandContext(context.Background(), "git", "branch", "existing-feature")
 	cmd.Dir = repoDir
@@ -55,6 +57,7 @@ func TestBranchRefExists_ReturnsTrueNil_When_BranchExists(t *testing.T) {
 }
 
 func TestBranchRefExists_ReturnsError_When_PackedRefsCorrupted(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	corruptPackedRefs(t, repoDir)
 
@@ -78,6 +81,7 @@ func TestBranchRefExists_ReturnsError_When_PackedRefsCorrupted(t *testing.T) {
 // sentinel check is what actually pins this test to branchRefExists's own classification
 // rather than to whichever call site happens to fail first on this fixture.
 func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	branchName := "backlog/fix-typo-abc123"
@@ -115,6 +119,7 @@ func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 // proves, via a fault injected below the packed-refs layer, that a real branch ref actually
 // still resolves after the classification helper both call sites share returns this error.
 func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	branchName := "backlog/fix-typo-abc123"
@@ -170,6 +175,7 @@ func (s *refFailStorer) Reference(name plumbing.ReferenceName) (*plumbing.Refere
 // independently verifiable: a freshly-opened, unwrapped repo confirms the branch ref still
 // resolves to its original commit after the forced error.
 func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	branchName := "existing-feature-fault-injected"
@@ -213,6 +219,7 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 // resolving origin/main's fetched tip). This asserts the worktree is branched from the
 // pre-set commit even though repoPath's own HEAD has since moved past it.
 func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	firstCommit, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "HEAD").CombinedOutput()
@@ -256,6 +263,7 @@ func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
 // short-circuit straight to setupFromExistingBranch and never reach setupNewWorktree() at
 // all when the branch already exists).
 func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	branchName := "existing-feature-direct"
@@ -298,6 +306,7 @@ func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) 
 // self-healed — only on the invariant the fix guarantees: neither concurrent caller may
 // hard-fail.
 func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/concurrent-race-fixture"
 
@@ -342,6 +351,7 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 // the public, now-lock-wrapped Setup() to verify WithRepoWorktreeLock actually prevents the
 // metadata race rather than merely tolerating one branch-create collision.
 func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	const n = 8
 

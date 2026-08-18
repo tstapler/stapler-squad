@@ -3,6 +3,7 @@ package services
 import "testing"
 
 func TestScanForSecrets_NoFalsePositives(t *testing.T) {
+	t.Parallel()
 	// Shell variable references must NOT be flagged as plaintext secrets.
 	safeCommands := []struct {
 		name string
@@ -45,6 +46,7 @@ func TestScanForSecrets_NoFalsePositives(t *testing.T) {
 
 	for _, tc := range safeCommands {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			result := ScanForSecrets(tc.cmd)
 			if result.Found {
 				t.Errorf("false positive: %q flagged as %q", tc.name, result.PatternName)
@@ -54,6 +56,7 @@ func TestScanForSecrets_NoFalsePositives(t *testing.T) {
 }
 
 func TestScanForSecrets_TruePositives(t *testing.T) {
+	t.Parallel()
 	// Real plaintext secrets MUST still be caught.
 	secretCommands := []struct {
 		name        string
@@ -106,6 +109,7 @@ func TestScanForSecrets_TruePositives(t *testing.T) {
 
 	for _, tc := range secretCommands {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			result := ScanForSecrets(tc.cmd)
 			if !result.Found {
 				t.Errorf("missed secret: %q should have been flagged", tc.name)

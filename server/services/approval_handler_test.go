@@ -30,6 +30,7 @@ import (
 // must reflect whatever baseURLFn() returns at *their* point of use -- never a
 // value snapshotted once at ApprovalHandler construction time.
 func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSitesInvoked(t *testing.T) {
+	t.Parallel()
 	// hookApprovalURL() delegates to hook_injector.go's shared hookBaseURLFn (set via
 	// SetHookBaseURLFn) -- the same mechanism InjectHooksConfig uses -- rather than a
 	// separate ApprovalHandler-owned mechanism. Save/restore it so this test's
@@ -182,6 +183,7 @@ func waitForFirstApprovalThenResolve(t *testing.T, store *ApprovalStore, capture
 // with the static fallback sentence and EscalationCategory "no-match" (plan.md Task
 // 5.1.1b, validation.md AC1 "end-to-end capture at source" row).
 func TestHandlePermissionRequest_EscalationReason_NoMatch(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
@@ -204,6 +206,7 @@ func TestHandlePermissionRequest_EscalationReason_NoMatch(t *testing.T) {
 // Reason text verbatim and EscalationCategory "explicit-rule" (plan.md Story 2.1.2's
 // example, validation.md AC1 row).
 func TestHandlePermissionRequest_EscalationReason_ExplicitRule(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
@@ -245,6 +248,7 @@ func (f *fakeRDAPTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
 // worked example, validation.md AC1 row). This path short-circuits via `goto
 // createApproval` before the classifier ever runs, so no classifier is configured here.
 func TestHandlePermissionRequest_EscalationReason_DomainAge(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 
 	checker := NewDomainAgeChecker(true)
@@ -288,6 +292,7 @@ func (fakeCriticalEscalateClassifier) BuildContext(_ string) classifier.Classifi
 // covers plan.md Task 1.1.1/1.1.2: a classified Escalate result's RiskLevel must be threaded
 // onto PendingApproval.RiskLevel via riskLevelString, not dropped.
 func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesRiskCriticalRule(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(fakeCriticalEscalateClassifier{})
 
@@ -306,6 +311,7 @@ func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatches
 // seed-escalate-git-push, an Escalate+RiskHigh rule, so RiskLevel must be "high", mirroring
 // the existing EscalationReason_ExplicitRule test's structure.
 func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesSeedRule(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
@@ -325,6 +331,7 @@ func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatches
 // naively return "low" (RiskLow is the Go zero value), silently mislabeling an unclassified
 // request as genuinely safe. RiskLevel must be "" (not recorded), never "low".
 func TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	// Deliberately no h.SetClassifier(...) call -- h.classifier stays nil.
 
@@ -343,6 +350,7 @@ func TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation(
 // EscalationReasonText routinely produces strings containing multi-byte UTF-8 (e.g. the
 // em dash "—" in the no-match/domain-age sentences) and the result is persisted to disk.
 func TestTruncateEscalationReason(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   string
@@ -374,6 +382,7 @@ func TestTruncateEscalationReason(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := truncateEscalationReason(tt.in)
 			if !utf8.ValidString(got) {
 				t.Fatalf("truncateEscalationReason(%d runes) produced invalid UTF-8: %q", len([]rune(tt.in)), got)
@@ -408,6 +417,7 @@ func (fakeUnrecognizedDecisionClassifier) BuildContext(_ string) classifier.Clas
 // bucketed as "no-match" in the Escalation Reasons table while the review-queue card correctly
 // showed "unexpected" for the same request.
 func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
@@ -454,6 +464,7 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 // unconditionally inside the liveFinder nil-guard (not nested under the GitHubPRNumber > 0
 // check next to it) because idle time is independent of whether the session has an open PR.
 func TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance(t *testing.T) {
+	t.Parallel()
 	h, storage := newHandlerWithStorage(t)
 	cc := &capturingClassifier{}
 	h.SetClassifier(cc)
@@ -485,6 +496,7 @@ func TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance(t 
 // set to a sentinel "unknown"/"infinite" value, so it can never accidentally satisfy a
 // MinSessionIdleMinutes > 0 rule condition.
 func TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstance(t *testing.T) {
+	t.Parallel()
 	h, _ := newHandlerWithStorage(t)
 	cc := &capturingClassifier{}
 	h.SetClassifier(cc)
@@ -548,6 +560,7 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 // baseline — no panic, and the existing eventBus.Publish notification still
 // fires normally.
 func TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(4)
 	defer bus.Close()
 	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)

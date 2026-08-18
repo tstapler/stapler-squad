@@ -83,12 +83,14 @@ func assertWarnLogContainsUnresolved(t *testing.T, logOutput, itemID, mode strin
 // ─── Story 1.3.1: interface shape ───────────────────────────────────────────
 
 func TestPipelineEngine_should_CompileWithSingleConcreteImplementation_When_CachingPipelineEngineSatisfiesInterface(t *testing.T) {
+	t.Parallel()
 	var _ PipelineEngine = (*CachingPipelineEngine)(nil)
 }
 
 // ─── Story 1.3.2: pipelineModeCache concurrency ─────────────────────────────
 
 func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_ConcurrentInvalidateRunsUnderRace(t *testing.T) {
+	t.Parallel()
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
@@ -156,6 +158,7 @@ func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_Concurr
 }
 
 func TestPipelineModeCache_Get_should_ReturnFalse_When_SlugNotPresent(t *testing.T) {
+	t.Parallel()
 	cache := &pipelineModeCache{}
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
@@ -176,6 +179,7 @@ func TestPipelineModeCache_Get_should_ReturnFalse_When_SlugNotPresent(t *testing
 }
 
 func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_ConcurrentInvalidateCallsRaceWithAsymmetricLatency(t *testing.T) {
+	t.Parallel()
 	cache := &pipelineModeCache{}
 
 	repoA := &fakePipelineModeRepository{
@@ -220,6 +224,7 @@ func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_C
 }
 
 func TestPipelineModeCache_Load_should_ComputeContentHash_When_BuildingResolvedPipelineMode(t *testing.T) {
+	t.Parallel()
 	mode := &ent.PipelineMode{
 		Slug:                  "quick",
 		Name:                  "Quick Fix",
@@ -284,6 +289,7 @@ func TestPipelineModeCache_Load_should_ComputeContentHash_When_BuildingResolvedP
 // ─── Story 1.3.3: CachingPipelineEngine fail-closed resolution ─────────────
 
 func TestCachingPipelineEngine_SlashCommandSet_should_ShortCircuitCacheAndDB_When_ModeIsDefault(t *testing.T) {
+	t.Parallel()
 	// A zero-value CachingPipelineEngine has a nil cache and nil repo. If
 	// SlashCommandSet ever touched e.cache.Get for a default-mode item, the
 	// nil *pipelineModeCache receiver would panic and fail this test — that
@@ -306,6 +312,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_ShortCircuitCacheAndDB_Whe
 }
 
 func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWarnLog_When_ModeSlugUnresolvable(t *testing.T) {
+	t.Parallel()
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return nil, nil // no modes: "deleted-mode" can never resolve
@@ -325,6 +332,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	}
 
 	t.Run("SlashCommandSet", func(t *testing.T) {
+		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got, err := engine.SlashCommandSet(item)
@@ -342,6 +350,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("TriagePromptFor", func(t *testing.T) {
+		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got := engine.TriagePromptFor(item, "/tmp/plan.md")
@@ -353,6 +362,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("ReviewPromptFor", func(t *testing.T) {
+		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got := engine.ReviewPromptFor(item, nil, "diff content", false, "notes", ReviewContextExtras{})
@@ -364,6 +374,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InteractiveReviewPromptFor", func(t *testing.T) {
+		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got := engine.InteractiveReviewPromptFor(item, nil, "diff content", false, "review-session-id", "notes")
@@ -375,6 +386,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InitialPromptFor", func(t *testing.T) {
+		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got := engine.InitialPromptFor(item, nil)
@@ -387,6 +399,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 }
 
 func TestCachingPipelineEngine_ContentHashFor_should_ReturnEmptyAndFalse_When_ModeIsDefaultOrUnresolved(t *testing.T) {
+	t.Parallel()
 	engine := &CachingPipelineEngine{cache: &pipelineModeCache{}}
 
 	hash, ok := engine.ContentHashFor(PipelineModeDefault)
@@ -406,6 +419,7 @@ func TestCachingPipelineEngine_ContentHashFor_should_ReturnEmptyAndFalse_When_Mo
 }
 
 func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_When_InitialCacheLoadFails(t *testing.T) {
+	t.Parallel()
 	buf := swapWarningLog(t)
 
 	repo := &fakePipelineModeRepository{
@@ -449,6 +463,7 @@ func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_Whe
 }
 
 func TestNewPipelineEngine_should_PopulateCacheFromRepository_When_ListEnabledSucceeds(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
@@ -480,6 +495,7 @@ func TestNewPipelineEngine_should_PopulateCacheFromRepository_When_ListEnabledSu
 // ─── Story 1.3.3d/1.3.3e: renderTemplate + resolved-mode rendering ─────────
 
 func TestCachingPipelineEngine_SlashCommandSet_should_RenderModeTemplates_When_ModeResolves(t *testing.T) {
+	t.Parallel()
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
@@ -543,6 +559,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_RenderModeTemplates_When_M
 // placeholders + criteria_count ReviewPromptFor uses), not the hardcoded
 // BuildReviewPrompt content.
 func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTemplate_When_ModeResolves(t *testing.T) {
+	t.Parallel()
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
@@ -592,6 +609,7 @@ func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTem
 // triggering triage produces the Warn-log-and-default-fallback behavior, not a
 // crash."
 func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugInjectedDirectlyViaSQL(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 

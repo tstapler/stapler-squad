@@ -19,6 +19,7 @@ import (
 // creates a backlog item with a non-default PipelineMode and verifies GetBacklogItem
 // reads back the same slug — the ent create+read mapping round trip (Story 1.4.1/1.4.3).
 func TestEntRepositoryBacklog_should_RoundTripPipelineMode_When_ItemCreatedWithNonDefaultSlug(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -39,6 +40,7 @@ func TestEntRepositoryBacklog_should_RoundTripPipelineMode_When_ItemCreatedWithN
 // is the zero-regression baseline: an item created without setting PipelineMode reads
 // back PipelineMode == "" (the built-in default pipeline), per Story 1.4.1.
 func TestEntRepositoryBacklog_should_DefaultPipelineModeToEmptyString_When_NotSpecifiedAtCreate(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -62,6 +64,7 @@ func TestEntRepositoryBacklog_should_DefaultPipelineModeToEmptyString_When_NotSp
 // hash (case b: mode content edited). Reading the ItemSession back must show the ORIGINAL
 // spawn-time slug + hash, unaffected by either later mutation.
 func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassignedAfterSessionStart(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -139,6 +142,7 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 // with no down-migration to execute, "reversible" is verified as "old rows are
 // unaffected and new/optional columns default safely."
 func TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFields(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -201,6 +205,7 @@ func TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFie
 // against a real ent-backed Storage, confirming the ent_repository_backlog.go mapping
 // (both the update-builder and the read-mapper) round-trips correctly end-to-end.
 func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedStorage(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -245,6 +250,7 @@ func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedS
 // path for the new nullable pr_feedback_addressed_at column (fresh schema
 // creation includes it).
 func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -287,6 +293,7 @@ func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.
 // ent's field.Strings(...).Optional() JSON-column scan handles a NULL/empty
 // column safely.
 func TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -315,6 +322,7 @@ func TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow(t *testing.T) {
 // check that the pre-existing ApprovePlan/RejectPlan round trip is
 // unaffected by the additive columns.
 func TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -375,6 +383,7 @@ func TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible(
 // update it with a timestamp, re-fetch, assert it round-trips exactly, then
 // confirm ClearGitHubSyncedIssueUpdatedAt explicitly clears it back to nil.
 func TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -415,6 +424,7 @@ func TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip(t *tes
 // is the baseline "still blocked" case: a blocker sitting at a non-terminal
 // status (in_progress) must keep its dependent out of the eligible set.
 func TestUnresolvedBlockerItemIDs_should_ReportStillBlocked_When_BlockerNotYetResolved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -442,6 +452,7 @@ func TestUnresolvedBlockerItemIDs_should_ReportStillBlocked_When_BlockerNotYetRe
 // is the regression baseline for the pre-existing intended behavior: a
 // blocker that ships (reaches BacklogStatusDone) must unblock its dependent.
 func TestUnresolvedBlockerItemIDs_should_ResolveDependency_When_BlockerReachesDone(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -475,6 +486,7 @@ func TestUnresolvedBlockerItemIDs_should_ResolveDependency_When_BlockerReachesDo
 // permanently strand its dependent. Per research/pitfalls.md's Pitfall 4,
 // archived must count as resolved just like done.
 func TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_BlockerNeverShipped(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -505,6 +517,7 @@ func TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_Blo
 // TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEqualsBlocked
 // covers AC6: an item cannot be marked as depending on itself.
 func TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEqualsBlocked(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -523,6 +536,7 @@ func TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEquals
 // covers AC5's 2-node case: A already blocks B, so adding B blocks A would
 // close a cycle and must be rejected before any storage write.
 func TestAddBacklogItemDependency_should_RejectCycle_When_TwoNodeCycleWouldClose(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -542,6 +556,7 @@ func TestAddBacklogItemDependency_should_RejectCycle_When_TwoNodeCycleWouldClose
 // covers AC5's longer-chain case: A blocks B blocks C, so adding C blocks A
 // would close a 3-node cycle and must be rejected.
 func TestAddBacklogItemDependency_should_RejectCycle_When_LongerCycleWouldClose(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -570,6 +585,7 @@ func TestAddBacklogItemDependency_should_RejectCycle_When_LongerCycleWouldClose(
 // (TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_BlockerNeverShipped)
 // and is the intended outcome, not an oversight.
 func TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDeleted(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -604,6 +620,7 @@ func TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDele
 // the upsert semantics: adding an already-existing (blocker, blocked) pair
 // must succeed silently rather than erroring on the unique-index conflict.
 func TestAddBacklogItemDependency_should_NoOp_When_SamePairAddedTwice(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -625,6 +642,7 @@ func TestAddBacklogItemDependency_should_NoOp_When_SamePairAddedTwice(t *testing
 // conflict under ent.IsConstraintError, and would silently succeed instead
 // of surfacing as a not-found error.
 func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerDoesNotExist(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -642,6 +660,7 @@ func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerDoesNotExist
 // TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockedDoesNotExist
 // is the mirror of the above for the blocked side of the edge.
 func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockedDoesNotExist(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()

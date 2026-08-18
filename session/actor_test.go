@@ -58,6 +58,7 @@ func newActorTestInstance(t *testing.T) *Instance {
 // depending on run order/scheduling (observed in CI, not reproducible with
 // -run isolating just this test locally).
 func TestActorNoLeak(t *testing.T) {
+	t.Parallel()
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
@@ -69,6 +70,7 @@ func TestActorNoLeak(t *testing.T) {
 // TestActorSendSync confirms that sendSync enqueues a command, the actor
 // executes it, and the atomic snapshot is updated afterwards.
 func TestActorSendSync(t *testing.T) {
+	t.Parallel()
 	inst := newActorTestInstance(t)
 	li := NewLiveInstance(inst)
 	defer li.Stop()
@@ -89,6 +91,7 @@ func TestActorSendSync(t *testing.T) {
 // See TestActorNoLeak for why this baselines via goleak.IgnoreCurrent()
 // instead of a bare process-wide goleak.VerifyNone().
 func TestActorStopIdempotent(t *testing.T) {
+	t.Parallel()
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
