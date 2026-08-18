@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -55,7 +56,14 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	client := ent.NewClient(ent.Driver(drv))
 
 	// Auto-migrate the AnalyticsEvent table (and any future schema additions).
-	if err := client.Schema.Create(ctx); err != nil {
+	// Serialized via session.EntSchemaCreateMu — see its doc comment for why:
+	// entgo.io/ent/dialect/sql/schema.(*Atlas) has package-level state that
+	// races when multiple goroutines run schema creation concurrently, even
+	// across independent *ent.Client instances.
+	session.EntSchemaCreateMu.Lock()
+	err = client.Schema.Create(ctx)
+	session.EntSchemaCreateMu.Unlock()
+	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("analytics db: schema migration: %w", err)
 	}

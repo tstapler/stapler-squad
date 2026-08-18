@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
@@ -27,6 +28,16 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
+
+// EntSchemaCreateMu serializes calls to (*ent.Client).Schema.Create across the
+// whole process, including from other packages that migrate their own
+// *ent.Client against this same generated ent package (e.g.
+// server/analytics.OpenAnalyticsDB). entgo.io/ent/dialect/sql/schema.(*Atlas)
+// has internal package-level state that data-races when multiple goroutines
+// run schema migration concurrently (e.g. `go test -parallel` spinning up
+// many independent repositories/clients at once) — each instance's SQLite
+// connection is isolated, but Atlas itself is not safe for concurrent use.
+var EntSchemaCreateMu sync.Mutex
 
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
@@ -157,8 +168,15 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := ent.NewClient(ent.Driver(drv))
 
-	// Run automatic schema migration
-	if err := client.Schema.Create(context.Background()); err != nil {
+	// Run automatic schema migration. entSchemaCreateMu serializes this call
+	// process-wide: even though each caller opens its own isolated SQLite
+	// connection, entgo.io/ent/dialect/sql/schema.(*Atlas) has internal
+	// package-level state that races under `go test -parallel` when many
+	// NewEntRepository calls run schema creation concurrently.
+	EntSchemaCreateMu.Lock()
+	err = client.Schema.Create(context.Background())
+	EntSchemaCreateMu.Unlock()
+	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
