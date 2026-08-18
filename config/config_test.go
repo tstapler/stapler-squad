@@ -445,6 +445,60 @@ func TestLoadConfig(t *testing.T) {
 	})
 }
 
+// TestLoadConfig_FallbackSave_UsesResolvedConfigPathNotLiveEnvReRead pins the
+// LoadConfig TOCTOU fix: the fallback path (config file doesn't exist yet)
+// must save the default config to the SAME path it just resolved and found
+// missing, not re-derive the path via a second GetConfigDir() call.
+//
+// GetConfigDirForDir does a live, uncached os.Getenv("STAPLER_SQUAD_TEST_DIR")
+// read on every call (config.go:127). Two overlapping test iterations sharing
+// this process each t.Setenv the same env var to their own isolated dir; if
+// LoadConfig's fallback save re-resolves the path instead of reusing the one
+// it already computed, a repoint that lands between the first iteration's
+// os.ReadFile/IsNotExist check and its saveConfig call makes that call write
+// a profile-less DefaultConfig() into the SECOND iteration's just-created
+// config.json — silently clobbering the profile the second iteration already
+// wrote (the observed `--verbose` -> "" symptom). This test forces that exact
+// interleaving deterministically via two explicit t.Setenv calls, rather than
+// relying on -count=N statistical reproduction.
+func TestLoadConfig_FallbackSave_UsesResolvedConfigPathNotLiveEnvReRead(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+
+	// Iteration A: resolve its config path (mirrors the top of LoadConfig)
+	// and confirm the file doesn't exist yet, just like the fallback branch does.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", dirA)
+	configDirA, err := GetConfigDir()
+	require.NoError(t, err)
+	configPathA := filepath.Join(configDirA, ConfigFileName)
+	_, err = os.ReadFile(configPathA)
+	require.True(t, os.IsNotExist(err), "precondition: iteration A's config must not exist yet")
+
+	// Before iteration A's saveConfig fallback call runs, a concurrent
+	// iteration B repoints the shared env var and writes its own
+	// profile-bearing config to its own (different) path.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", dirB)
+	configDirB, err := GetConfigDir()
+	require.NoError(t, err)
+	configPathB := filepath.Join(configDirB, ConfigFileName)
+	require.NoError(t, saveConfig(&Config{DefaultProgram: "claude --verbose"}, configPathB))
+
+	// Iteration A's fallback save now runs. The fix threads the already-resolved
+	// configPathA through explicitly; the bug re-derived the path via a second
+	// GetConfigDir() call, which (with the env var now pointing at dirB) would
+	// silently overwrite iteration B's config instead.
+	require.NoError(t, saveConfig(DefaultConfig(), configPathA))
+
+	if _, statErr := os.Stat(configPathA); statErr != nil {
+		t.Fatalf("iteration A's fallback save must land at its own resolved configPath (%s): %v", configPathA, statErr)
+	}
+
+	loadedB, err := LoadConfigFromPath(configPathB)
+	require.NoError(t, err)
+	assert.Equal(t, "claude --verbose", loadedB.DefaultProgram,
+		"iteration B's config must not be clobbered by iteration A's stale fallback save")
+}
+
 func TestSaveConfig(t *testing.T) {
 	t.Run("saves config to file", func(t *testing.T) {
 		// Create a temporary config directory

@@ -281,12 +281,17 @@ func (s *SessionService) trackCleanup(fn func()) {
 
 // deleteSessionCleanupTimeout bounds how long DeleteSession's background
 // liveInst.Destroy() cleanup (tmux kill, git diff stats, and worktree
-// filesystem cleanup) is awaited before Shutdown/deleteCleanupWG.Wait() gives
-// up on it. Destroy() takes no context and cannot be forcibly cancelled, so a
-// timed-out cleanup keeps running in its own goroutine (untracked by the
-// WaitGroup) after this deadline — only the *wait* is bounded, not the
-// underlying work (see BUG-072 for threading a real context.Context through
-// the cleanup chain so the timeout can cancel the work itself). Matches
+// filesystem cleanup) runs before a warning is logged that it's taking
+// longer than expected. Destroy() takes no context and cannot be forcibly
+// cancelled (see BUG-072 for threading a real context.Context through the
+// cleanup chain so this could cancel the work itself), so this only bounds
+// *when a warning fires* — deleteCleanupWG.Done() (and thus
+// Shutdown/deleteCleanupWG.Wait()) still waits for Destroy() to actually
+// finish regardless of this timeout. That matters for tests: an early Done()
+// at this timeout would let Destroy() (and the SessionDriver goroutine it
+// stops) outlive Shutdown() and the test that called it, free to interfere
+// with whatever state (e.g. a later -count iteration's t.Setenv-scoped
+// STAPLER_SQUAD_TEST_DIR) reuses the process next. Matches
 // KillTmuxSessionByTitle's 5s cap on the same kill-session subprocess.
 const deleteSessionCleanupTimeout = 5 * time.Second
 
@@ -2493,8 +2498,27 @@ func (s *SessionService) DeleteSession(
 	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
 		s.trackCleanup(func() {
-			if err := destroyWithTimeout(liveInst.Destroy, deleteSessionCleanupTimeout); err != nil {
-				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
+			// Log early via destroyWithTimeout's bounded wait, but don't let
+			// trackCleanup's Done() fire until Destroy() has actually
+			// finished. destroyWithTimeout abandons (doesn't cancel) its
+			// inner goroutine on timeout — if Done() fired at that timeout
+			// instead of at real completion, deleteCleanupWG.Wait() (used by
+			// Shutdown) would return while Destroy() was still running,
+			// letting it survive Shutdown()/the test that spawned it and
+			// interfere with whatever reuses that state next (e.g. the next
+			// -count iteration's t.Setenv-scoped STAPLER_SQUAD_TEST_DIR).
+			done := make(chan error, 1)
+			go func() { done <- liveInst.Destroy() }()
+			select {
+			case err := <-done:
+				if err != nil {
+					log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
+				}
+			case <-time.After(deleteSessionCleanupTimeout):
+				log.Warn("session cleanup still running in background after timeout", "session", req.Msg.Id, "timeout", deleteSessionCleanupTimeout)
+				if err := <-done; err != nil {
+					log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
+				}
 			}
 		})
 	} else {

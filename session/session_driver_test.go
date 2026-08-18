@@ -362,7 +362,7 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	var retried atomic.Bool
 	retried.Store(true) // already retried once
 
-	handleDriverFailure(inst, "/tmp", &retried, "unexpected exit")
+	handleDriverFailure(inst, "/tmp", &retried, "unexpected exit", make(chan struct{}))
 
 	// ReviewQueue should have an entry for this session.
 	item, found := rq.Get(inst.UUID)
@@ -802,7 +802,7 @@ func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried)
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
 	}()
 
 	// 6 ticks — double Phase 0's original 3-tick window — to prove the count
@@ -860,7 +860,7 @@ func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried)
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
 	}()
 
 	time.Sleep(driverPollInterval*6 + 500*time.Millisecond)
@@ -1151,7 +1151,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried)
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
 	}()
 	defer func() {
 		inst.mu.Lock()

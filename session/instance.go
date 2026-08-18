@@ -424,6 +424,11 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// driverStopper carries the stop/done signaling pair for the current
+	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
+	// read by StopSessionDriver (called from Destroy) to signal and join the
+	// driver goroutine so it cannot outlive Destroy().
+	driverStopper atomic.Pointer[sessionDriverStopper]
 
 	// sessionGoal is the cached goal state for this session.
 	// Always use GetSessionGoal/SetSessionGoalCached accessors.
@@ -1396,6 +1401,11 @@ func (i *Instance) Destroy() error {
 		// If instance was never started, just return success
 		return nil
 	}
+
+	// Stop any running SessionDriver goroutine and wait for it to exit before
+	// proceeding, so it cannot keep polling Preview() (and thus re-resolving
+	// config via the tmux exec gate) after Destroy() returns.
+	StopSessionDriver(i)
 
 	// Stop the controller first
 	i.StopController()

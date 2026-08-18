@@ -15,10 +15,12 @@ package session
 // this driver covers everything else that requires interactive input.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -69,6 +71,16 @@ const (
 	// A hash change (a genuinely new/different dialog) resets the counter, so
 	// this does not bound legitimate re-answering of a later, different dialog.
 	maxDialogAnswerAttempts = 3
+
+	// driverStopTimeout bounds how long StopSessionDriver blocks waiting for a
+	// running driver goroutine to observe the stop signal and exit. The driver
+	// loop derives a context.Context from stop (see runSessionDriverWithPrompt)
+	// and polls via Instance.PreviewContext, so closing stop cancels an
+	// in-flight CapturePaneContent subprocess directly rather than merely
+	// waiting for one to finish naturally. driverStopTimeout stays above
+	// execGateAcquireTimeout (5s, session/tmux/exec_gate.go) as a margin for
+	// process teardown after cancellation, not as the primary wait mechanism.
+	driverStopTimeout = 6 * time.Second
 )
 
 // dialogLatchStatus is the DialogAnswerLatch state machine (ADR-001):
@@ -104,6 +116,17 @@ type dialogAnswerState struct {
 	attempts int
 }
 
+// sessionDriverStopper carries the stop/done signaling pair for one
+// StartSessionDriver run (including any handleDriverFailure restart
+// continuations of that same run, which reuse the same stopper — see
+// handleDriverFailure). once guards against a racing double-close if
+// StopSessionDriver is ever called concurrently.
+type sessionDriverStopper struct {
+	stop chan struct{}
+	done chan struct{}
+	once sync.Once
+}
+
 // StartSessionDriver launches a background goroutine that drives the session
 // through its startup dialogs, fires the initial task prompt, and monitors
 // for approval dialogs throughout the session lifetime.
@@ -120,10 +143,36 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		)
 		return
 	}
+	stopper := &sessionDriverStopper{stop: make(chan struct{}), done: make(chan struct{})}
+	inst.driverStopper.Store(stopper)
 	go func() {
+		defer close(stopper.done)
 		defer inst.driverRunning.Store(false)
-		runSessionDriver(inst, allowedPath)
+		runSessionDriver(inst, allowedPath, stopper.stop)
 	}()
+}
+
+// StopSessionDriver signals a running SessionDriver goroutine (started by
+// StartSessionDriver on inst) to exit at its next poll tick, and blocks up to
+// driverStopTimeout for it to actually do so. Called from Instance.Destroy()
+// so no driver goroutine can survive past Destroy() and keep polling
+// Preview() — which routes through the tmux exec gate's
+// appconfig.LoadConfig()/GetConfigDir() (session/tmux/exec_gate.go) — using
+// whatever STAPLER_SQUAD_TEST_DIR a later test has since set process-wide.
+// A no-op if the driver was never started.
+func StopSessionDriver(inst *Instance) {
+	stopper := inst.driverStopper.Load()
+	if stopper == nil {
+		return
+	}
+	stopper.once.Do(func() { close(stopper.stop) })
+	select {
+	case <-stopper.done:
+	case <-time.After(driverStopTimeout):
+		log.Warn("SessionDriver: timed out waiting for driver goroutine to stop",
+			"session", inst.Title,
+		)
+	}
 }
 
 // sanitizeInitialPromptForTmux strips characters that would corrupt the tmux
@@ -148,7 +197,7 @@ func sanitizeInitialPromptForTmux(s string) string {
 
 // runSessionDriver is the thin wrapper that creates the retried flag and
 // delegates to runSessionDriverWithPrompt.
-func runSessionDriver(inst *Instance, allowedPath string) {
+func runSessionDriver(inst *Instance, allowedPath string, stop <-chan struct{}) {
 	var retried atomic.Bool
 	var initialPrompt string
 	if inst.InitialPrompt != "" {
@@ -157,13 +206,15 @@ func runSessionDriver(inst *Instance, allowedPath string) {
 			initialPrompt = sanitized
 		}
 	}
-	runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, &retried)
+	runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, &retried, stop)
 }
 
 // runSessionDriverWithPrompt is the core driver loop. It accepts a custom initial
-// prompt (used by the retry path to inject a JSONL-derived continuation) and a
-// pointer to the retried flag so the retry goroutine does not spawn a third generation.
-func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPrompt string, retried *atomic.Bool) {
+// prompt (used by the retry path to inject a JSONL-derived continuation), a
+// pointer to the retried flag so the retry goroutine does not spawn a third
+// generation, and the stop channel from this run's sessionDriverStopper so
+// StopSessionDriver (called by Instance.Destroy()) can end the loop early.
+func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPrompt string, retried *atomic.Bool, stop <-chan struct{}) {
 	// CONCERN-3 fix: panic recovery inside this function so the retry goroutine is
 	// also protected (the retry goroutine does NOT go through the StartSessionDriver wrapper).
 	defer func() {
@@ -172,6 +223,20 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 				"session", inst.Title,
 				"panic", r,
 			)
+		}
+	}()
+
+	// ctx is cancelled the moment stop closes, so a Preview poll blocked inside
+	// an in-flight capture-pane subprocess is interrupted directly instead of
+	// StopSessionDriver only waiting out driverStopTimeout for it to finish on
+	// its own — see PreviewContext's doc comment (instance_terminal.go).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-stop:
+			cancel()
+		case <-ctx.Done():
 		}
 	}()
 
@@ -199,7 +264,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	} else {
 		// Check if the prompt was already delivered in a previous service run.
 		// Use live terminal output first (no disk latency), then fall back to JSONL file.
-		if startOutput, err := inst.Preview(); err == nil && outputShowsConversationStarted(startOutput) {
+		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
 		} else if _, err := FindConversationFilePath(inst.GetStableID()); err == nil {
@@ -224,7 +289,13 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	// closures.
 	sendAnswerKey := func() error { return inst.SendKeys("1\n") }
 
-	for range ticker.C {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+
 		if time.Now().After(totalDeadline) {
 			return
 		}
@@ -250,7 +321,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 				log.Warn("SessionDriver: session exited before initial prompt sent",
 					"session", inst.Title,
 				)
-				handleDriverFailure(inst, allowedPath, retried, "exit before initial prompt")
+				handleDriverFailure(inst, allowedPath, retried, "exit before initial prompt", stop)
 				return
 			}
 			// Stopped after initial prompt was sent.
@@ -288,13 +359,13 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			log.Warn("SessionDriver: unexpected session exit after initial prompt",
 				"session", inst.Title,
 			)
-			handleDriverFailure(inst, allowedPath, retried, "unexpected exit")
+			handleDriverFailure(inst, allowedPath, retried, "unexpected exit", stop)
 			return
 		}
 
 		// Always check Preview for startup dialogs that appear before the status
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
-		output, previewErr := inst.Preview()
+		output, previewErr := inst.PreviewContext(ctx)
 		hasOutput := previewErr == nil && output != ""
 		// Tail-slice once per tick: Preview() returns the entire accumulated PTY
 		// buffer (not a tailed "current screen" snapshot, despite its doc comment),
@@ -396,7 +467,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 				// Snapshot terminal content immediately before sending so we can verify
 				// that the keystrokes were actually received (read-back confirmation).
-				contentBefore, _ := inst.Preview()
+				contentBefore, _ := inst.PreviewContext(ctx)
 
 				if err := inst.SendKeys(initialPrompt + EnterKeySequence); err != nil {
 					log.Warn("SessionDriver: failed to send initial prompt",
@@ -429,7 +500,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 					if claudeAtPrompt && sendAttempts < 3 {
 						// Wait for PTY echo + pane-capture latency before reading back.
 						time.Sleep(500 * time.Millisecond)
-						contentAfter, verifyErr := inst.Preview()
+						contentAfter, verifyErr := inst.PreviewContext(ctx)
 						if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
 							// Terminal content identical to before the send — the
 							// keystrokes were likely swallowed before readline consumed
@@ -494,7 +565,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 					"session", inst.Title,
 					"inactivity", idle.Round(time.Second),
 				)
-				handleDriverFailure(inst, allowedPath, retried, "inactivity timeout")
+				handleDriverFailure(inst, allowedPath, retried, "inactivity timeout", stop)
 				return
 			}
 		}
@@ -573,7 +644,7 @@ func attemptBacklogNudge(inst *Instance, idle time.Duration) time.Time {
 // On second call (retried == true): adds the session to the ReviewQueue and exits.
 //
 // The caller must return immediately after calling handleDriverFailure.
-func handleDriverFailure(inst *Instance, allowedPath string, retried *atomic.Bool, reason string) {
+func handleDriverFailure(inst *Instance, allowedPath string, retried *atomic.Bool, reason string, stop <-chan struct{}) {
 	if !retried.CompareAndSwap(false, true) {
 		// Already retried once. Mark for human attention.
 		log.Warn("SessionDriver: session failed twice; marking for attention",
@@ -633,7 +704,7 @@ func handleDriverFailure(inst *Instance, allowedPath string, retried *atomic.Boo
 
 	// Start a new driver goroutine for the restarted session.
 	// The new goroutine inherits the retried flag so it will not retry a second time.
-	go runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, retried)
+	go runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, retried, stop)
 }
 
 // markSessionNeedsAttention adds the instance to its ReviewQueue (if any)
