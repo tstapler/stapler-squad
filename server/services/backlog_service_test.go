@@ -839,6 +839,7 @@ func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMod
 func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent(t *testing.T) {
 	t.Parallel()
 	note := "auto-reopened after FAIL verdict"
+	activityCreatedAt := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	item := &session.BacklogItemData{
 		ID:    "item-1",
 		Title: "item with audit history",
@@ -848,6 +849,14 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 		},
 		ProgressNotes: []session.ProgressNoteData{
 			{ID: "pn-1", CriterionIndex: 0, Note: "implemented the dedent fix", Status: "done"},
+		},
+		// [validation.md Gap 2 / Epic 8.7] proves the OTHER read path — the
+		// eager-load -> BacklogItemData.ActivityNotes -> backlogItemToProto
+		// mapper chain — actually carries ActivityNotes, distinct from
+		// get_backlog_item's rendering (Epic 8.6), which never touches this
+		// mapper at all.
+		ActivityNotes: []session.ActivityNoteData{
+			{ID: "an-1", Message: "posted via post_backlog_update", AuthorSessionUUID: "sess-9", AuthorSessionTitle: "Helper", CreatedAt: activityCreatedAt},
 		},
 	}
 
@@ -863,6 +872,14 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 	assert.Equal(t, int32(0), p.ProgressNotes[0].CriterionIndex)
 	assert.Equal(t, "implemented the dedent fix", p.ProgressNotes[0].Note)
 	assert.Equal(t, "done", p.ProgressNotes[0].Status)
+
+	require.Len(t, p.ActivityNotes, 1)
+	assert.Equal(t, "an-1", p.ActivityNotes[0].Id)
+	assert.Equal(t, "posted via post_backlog_update", p.ActivityNotes[0].Message)
+	assert.Equal(t, "sess-9", p.ActivityNotes[0].AuthorSessionUuid)
+	assert.Equal(t, "Helper", p.ActivityNotes[0].AuthorSessionTitle)
+	require.NotNil(t, p.ActivityNotes[0].CreatedAt)
+	assert.True(t, p.ActivityNotes[0].CreatedAt.AsTime().Equal(activityCreatedAt))
 }
 
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────

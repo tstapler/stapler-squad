@@ -318,6 +318,16 @@ func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID str
 			},
 		}
 
+	case events.BacklogChangeActivityNoteAdded:
+		// Deliberately never touches protoItem (ADR-002): this event's payload
+		// carries only the new note, never a full item snapshot.
+		out.Event = &sessionv1.BacklogItemEvent_ActivityNoteAdded{
+			ActivityNoteAdded: &sessionv1.BacklogItemActivityNoteAddedEvent{
+				ItemId: itemID,
+				Note:   activityNoteDataToProto(payload.ActivityNote),
+			},
+		}
+
 	case events.BacklogChangeItemArchived:
 		archived := &sessionv1.BacklogItemArchivedEvent{
 			ItemId:     itemID,
@@ -352,6 +362,25 @@ func backlogItemToProtoOrNil(item *session.BacklogItemData, costFor func(tmuxUUI
 		return nil
 	}
 	return backlogItemToProto(item, costFor)
+}
+
+// activityNoteDataToProto converts a session.ActivityNoteData (the payload
+// carried by BacklogChangeActivityNoteAdded) to the wire
+// sessionv1.BacklogActivityNote. Nil-safe: BacklogItemChange.ActivityNote is
+// only guaranteed non-nil when Kind == ChangeActivityNoteAdded, but this is
+// called unconditionally from that switch case, so a defensive nil check
+// still guards against a caller bug rather than trusting the invariant.
+func activityNoteDataToProto(n *session.ActivityNoteData) *sessionv1.BacklogActivityNote {
+	if n == nil {
+		return nil
+	}
+	return &sessionv1.BacklogActivityNote{
+		Id:                 n.ID,
+		Message:            n.Message,
+		AuthorSessionUuid:  n.AuthorSessionUUID,
+		AuthorSessionTitle: n.AuthorSessionTitle,
+		CreatedAt:          timestamppb.New(n.CreatedAt),
+	}
 }
 
 // reviewVerdictDataToProto converts a session.ReviewVerdictData (the payload

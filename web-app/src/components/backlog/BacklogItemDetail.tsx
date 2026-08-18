@@ -55,6 +55,7 @@ import { SessionsSection } from "./detail/SessionsSection";
 import { AutonomousHealthStrip } from "./detail/AutonomousHealthStrip";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
+import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import * as styles from "./BacklogItemDetail.css";
@@ -362,6 +363,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [sessionsExpanded, setSessionsExpanded] = useSectionExpandState(itemId, "sessions", true);
   const [workflowExpanded, setWorkflowExpanded] = useSectionExpandState(itemId, "workflow", false);
   const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
+  const [activityLogExpanded, setActivityLogExpanded] = useSectionExpandState(itemId, "activity-log", false);
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
   const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
   const [sourceExpanded, setSourceExpanded] = useSectionExpandState(itemId, "source", false);
@@ -422,6 +424,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ["sessions", sessionsExpanded, setSessionsExpanded],
     ["workflow", workflowExpanded, setWorkflowExpanded],
     ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
+    ["activity-log", activityLogExpanded, setActivityLogExpanded],
     ["notes", notesExpanded, setNotesExpanded],
     ["source", sourceExpanded, setSourceExpanded],
     ["manual-override", manualOverrideExpanded, setManualOverrideExpanded],
@@ -1571,6 +1574,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />
 
           <ProgressHistorySection item={item} defaultExpanded={progressHistoryExpanded} />
+
+          <ActivityLogSection item={item} defaultExpanded={activityLogExpanded} />
 
           <NotesSection
             item={item}

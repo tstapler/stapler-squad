@@ -1334,6 +1334,26 @@ func (s *Storage) ListProgressNotesForItem(ctx context.Context, itemID string) (
 	return er.ListProgressNotesForItem(ctx, itemID)
 }
 
+// AppendActivityNote records a single post_backlog_update call as an immutable,
+// append-only history entry — the ungated sibling to AppendProgressNote (ADR-001).
+func (s *Storage) AppendActivityNote(ctx context.Context, itemID, authorSessionUUID, authorSessionTitle, message string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("activity note history not supported by this storage backend")
+	}
+	return er.AppendActivityNote(ctx, itemID, authorSessionUUID, authorSessionTitle, message)
+}
+
+// ListActivityNotesForItem returns the full append-only activity-note history for
+// a backlog item, ordered by created_at ascending.
+func (s *Storage) ListActivityNotesForItem(ctx context.Context, itemID string) ([]ActivityNoteData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.ListActivityNotesForItem(ctx, itemID)
+}
+
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
 func (s *Storage) CreateItemSession(ctx context.Context, data ItemSessionData) (ItemSessionSummary, error) {
 	er, ok := s.repo.(*EntRepository)
