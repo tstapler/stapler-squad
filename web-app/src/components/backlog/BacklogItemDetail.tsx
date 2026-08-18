@@ -26,6 +26,7 @@ import { selectSessionsError } from "@/lib/store/sessionsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -452,7 +453,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
       }
     } catch (e) {
-      if (mountedRef.current) setError(e instanceof Error ? e.message : "Failed to load item.");
+      if (mountedRef.current) setError(getErrorMessage(e, "Failed to load item."));
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -486,7 +487,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Session deleted.", "success", toastKey);
         await load();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to delete session.";
+        const msg = getErrorMessage(err, "Failed to delete session.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
       } finally {
@@ -520,7 +521,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
         showActionToast("Steering message sent.", "success", toastKey);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to steer session.";
+        const msg = getErrorMessage(err, "Failed to steer session.");
         showActionToast(msg, "error", toastKey);
         throw err instanceof Error ? err : new Error(msg);
       } finally {
@@ -668,7 +669,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(successMessage, "success", toastKey);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Action failed.";
+        const msg = getErrorMessage(e, "Action failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
       } finally {
@@ -693,7 +694,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setManualReviewOutcome("PASS");
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Submit failed.";
+      const msg = getErrorMessage(e, "Submit failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -798,7 +799,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Triage cancelled.", "success", toastKey);
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Cancel failed.";
+      const msg = getErrorMessage(e, "Cancel failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -816,7 +817,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       await load();
     } catch (e) {
       console.error("[BacklogItemDetail] retrigger triage failed", e);
-      const msg = e instanceof Error ? e.message : "Triage re-trigger failed.";
+      const msg = getErrorMessage(e, "Triage re-trigger failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -847,7 +848,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Revisions requested.", "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "Reject failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "Reject failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -904,7 +905,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Undo applied.", "success", `${item.id}:undo_triage_apply`);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Undo failed.";
+        const msg = getErrorMessage(e, "Undo failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", `${item.id}:undo_triage_apply`);
       }
@@ -931,7 +932,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Approved.", "success", toastKey);
       await load();
     } catch (e) {
-      showActionToast(e instanceof Error ? e.message : "Approve failed.", "error", toastKey);
+      showActionToast(getErrorMessage(e, "Approve failed."), "error", toastKey);
       throw e;
     } finally {
       if (mountedRef.current) setActionLoading(null);
@@ -955,7 +956,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Reopened — new session started.", "success", toastKey);
       await load();
     } catch (e) {
-      showActionToast(e instanceof Error ? e.message : "Reopen failed.", "error", toastKey);
+      showActionToast(getErrorMessage(e, "Reopen failed."), "error", toastKey);
       throw e;
     } finally {
       if (mountedRef.current) setActionLoading(null);
@@ -979,7 +980,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Overridden to done.", "success", toastKey);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Override failed.";
+        const msg = getErrorMessage(e, "Override failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
         throw e;
@@ -1021,7 +1022,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(`Status manually overridden to ${toStatus}.`, "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "Status override failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "Status override failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -1045,7 +1046,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(`PR #${prNumber} linked — item moved to pr_pending.`, "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "PR association failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "PR association failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -1075,7 +1076,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Gate skipped — marked done.", "success", toastKey);
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Skip gate failed.";
+      const msg = getErrorMessage(e, "Skip gate failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
       throw e;
