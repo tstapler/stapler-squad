@@ -485,6 +485,28 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// sanitizeTriageTitle turns an LLM-supplied HeadlessTriageResult.Title into a
+// value safe to use as a filepath.Join path segment, a commit message
+// fragment, and branch-name input. ParseHeadlessTriageResult
+// (session/backlog_triage.go) unmarshals Title straight from the triage LLM's
+// JSON output and never sanitizes it — used raw, a crafted title such as
+// "../../../etc/passwd" resolves outside triageWorkDir when joined into
+// PlanArtifactsPath, which readPlanFile (session/backlog_review.go) later
+// opens: an arbitrary-file-read primitive if a backlog item's content can
+// steer the triage LLM's output (this repo already treats triage-time prompt
+// injection as a realistic threat, not hypothetical). slugify already strips
+// everything but lowercase alnum/hyphen, which rules out ".." and any path
+// separator, so it doubles as the sanitizer here; callers must use this
+// return value (not result.Title) everywhere the title reaches a path,
+// commit message, or branch name. Falls back to a short itemID-derived slug
+// when the title sanitizes away to nothing (empty, or all punctuation/symbols).
+func sanitizeTriageTitle(title, itemID string) string {
+	if s := slugify(title); s != "" {
+		return s
+	}
+	return "item-" + itemID[:min(len(itemID), 8)]
+}
+
 // triageShortTitle extracts the triage-suggested short title from the most recent
 // completed triage ItemSession, falling back to a truncated slug of itemTitle.
 func triageShortTitle(sessions []session.ItemSessionSummary, itemTitle string) string {
@@ -2760,6 +2782,25 @@ func (s *BacklogService) TriggerTriage(
 		result.Iteration = iteration
 		result.Feedback = feedback
 
+		// result.Title is LLM-controlled (ParseHeadlessTriageResult never
+		// sanitizes it) and reaches a commit message, a branch name, and — below
+		// — a filepath.Join path segment (PlanArtifactsPath), so it must be
+		// sanitized once, up front, and every downstream use must go through
+		// sanitizedTitle rather than the raw field. See sanitizeTriageTitle's
+		// doc comment for the path-traversal primitive this closes.
+		//
+		// result.Title itself is overwritten with sanitizedTitle below, not just
+		// read from it: result is JSON-marshaled and persisted as the item's
+		// TriageResult a few lines down, and triageShortTitle/backlogWorkBranchSlug
+		// later read Title back out of that persisted JSON to recompute the
+		// work-session branch name. If the persisted Title stayed raw, that
+		// spawn-time branch computation would diverge from the sanitizedTitle
+		// already used above to create the worktree/branch here — reintroducing
+		// the worktree/branch drift regression backlogWorkBranchSlug's doc
+		// comment says was already fixed once.
+		sanitizedTitle := sanitizeTriageTitle(result.Title, itemID)
+		result.Title = sanitizedTitle
+
 		// Commit whatever the triage prompt wrote (project_plans/<name>/ for SDD
 		// mode; nothing for default mode, which writes to artifactAbsPath instead
 		// — CommitChanges no-ops when the worktree isn't dirty) so the docs
@@ -2768,10 +2809,10 @@ func (s *BacklogService) TriggerTriage(
 		// names). Only when triageWorktree is non-nil — the itemRepoPath fallback
 		// path must never auto-commit into a repo this code didn't create.
 		if triageWorktree != nil {
-			if commitErr := triageWorktree.CommitChanges(fmt.Sprintf("chore(sdd): planning artifacts for %s", result.Title)); commitErr != nil {
+			if commitErr := triageWorktree.CommitChanges(fmt.Sprintf("chore(sdd): planning artifacts for %s", sanitizedTitle)); commitErr != nil {
 				log.WarningLog.Printf("[TriggerTriage] failed to commit triage artifacts item=%s worktree=%s: %v", itemID, triageWorkDir, commitErr)
 			}
-			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, result.Title, triageWorktree)
+			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, sanitizedTitle, triageWorktree)
 		}
 
 		// persistCtx gives post-git persistence writes their own fresh timeout
@@ -2813,7 +2854,7 @@ func (s *BacklogService) TriggerTriage(
 		// triageWorkDir == itemRepoPath — and still needs pap to find it there.
 		pap := artifactAbsPath
 		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
-			pap = filepath.Join(triageWorkDir, "project_plans", result.Title, "implementation")
+			pap = filepath.Join(triageWorkDir, "project_plans", sanitizedTitle, "implementation")
 		}
 		approvalReset := false
 		clearedReason := ""
