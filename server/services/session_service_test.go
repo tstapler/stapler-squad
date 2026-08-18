@@ -2345,6 +2345,35 @@ func filterEventsByType(all []*events.Event, typ events.EventType) []*events.Eve
 	return matched
 }
 
+// newRateLimitHiddenTestFixture builds an isolated storage/eventBus/service
+// triple plus a Hidden test instance for the rate-limit Hidden-gate tests
+// below. Each caller must get its own fixture rather than sharing one across
+// t.Parallel() subtests: the eventBus broadcasts every publish to every
+// subscriber, so a shared instance let a sibling subtest's SessionUpdated
+// event land in another subtest's channel and flip an exact-count assertion
+// (see TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden's
+// doc comment for the flake this caused).
+func newRateLimitHiddenTestFixture(t *testing.T, title string) (*SessionService, *events.EventBus, *session.Instance) {
+	t.Helper()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	inst := &session.Instance{
+		Title:     title,
+		UUID:      title + "-uuid",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		Hidden:    true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	return svc, eventBus, inst
+}
+
 // TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden verifies
 // the Epic 5 Story 5.1 Hidden gate: a Hidden instance (e.g. a headless review
 // session spawned via SpawnReviewSession) must never receive a rate-limit
@@ -2354,35 +2383,9 @@ func filterEventsByType(all []*events.Event, typ events.EventType) []*events.Eve
 func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *testing.T) {
 	t.Parallel()
 
-	newHiddenInstance := func(t *testing.T, storage *session.Storage, title string) *session.Instance {
-		inst := &session.Instance{
-			Title:     title,
-			UUID:      title + "-uuid",
-			Path:      "/tmp/test",
-			Status:    session.Paused,
-			Program:   "claude",
-			Hidden:    true,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		}
-		require.NoError(t, storage.AddInstance(inst))
-		return inst
-	}
-
-	// Each subtest gets its own storage/eventBus/service so that running them
-	// with t.Parallel() can't leak events across subtests: the shared eventBus
-	// used previously broadcast every publish to every subscriber, so a
-	// SessionUpdated event from one subtest could land in another subtest's
-	// channel and flip an exact-count assertion (see
-	// TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden's
-	// doc comment for the failure this caused).
 	t.Run("onDetected", func(t *testing.T) {
 		t.Parallel()
-		storage := createTestStorage(t)
-		eventBus := events.NewEventBus(8)
-		svc := NewSessionService(storage, eventBus)
-		t.Cleanup(func() { svc.Shutdown() })
-		inst := newHiddenInstance(t, storage, "rl-hidden-detected")
+		svc, eventBus, inst := newRateLimitHiddenTestFixture(t, "rl-hidden-detected")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -2395,11 +2398,7 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 
 	t.Run("onRecovery", func(t *testing.T) {
 		t.Parallel()
-		storage := createTestStorage(t)
-		eventBus := events.NewEventBus(8)
-		svc := NewSessionService(storage, eventBus)
-		t.Cleanup(func() { svc.Shutdown() })
-		inst := newHiddenInstance(t, storage, "rl-hidden-recovery")
+		svc, eventBus, inst := newRateLimitHiddenTestFixture(t, "rl-hidden-recovery")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
