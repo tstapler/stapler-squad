@@ -948,10 +948,6 @@ func saveConfigLocked(config *Config, configPath string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	pathLock := saveConfigLockFor(configPath)
-	pathLock.Lock()
-	defer pathLock.Unlock()
-
 	// Write to a uniquely-named temp file in the same directory, then rename
 	// for atomicity. The name must be unique per call (os.CreateTemp's random
 	// suffix) rather than a fixed "config.json.tmp": two concurrent saveConfig
