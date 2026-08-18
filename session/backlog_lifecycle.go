@@ -1461,8 +1461,10 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	}
 	if wt.WorktreePath != "" {
 		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
-			if branch, branchErr := git.GetCurrentBranchName(wt.WorktreePath); branchErr == nil && (wt.BranchName == "" || branch == wt.BranchName) {
-				if sha, headErr := GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+			branch, branchErr := git.GetCurrentBranchName(wt.WorktreePath)
+			if branchErr == nil && (wt.BranchName == "" || branch == wt.BranchName) {
+				sha, headErr := GetGitHeadSHA(wt.WorktreePath)
+				if headErr == nil && sha != "" {
 					return sha
 				}
 			} else if branchErr == nil {

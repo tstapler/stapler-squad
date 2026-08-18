@@ -89,7 +89,7 @@ func seedBacklogItems(t *testing.T, repo *session.EntRepository, ctx context.Con
 // countRows returns COUNT(*) for the given table in the sqlite file at dbPath.
 func countRows(t *testing.T, dbPath, table string) int {
 	t.Helper()
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
 	defer db.Close()
 

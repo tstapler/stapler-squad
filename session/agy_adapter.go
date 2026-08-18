@@ -12,7 +12,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 type AgyAdapter struct{}
@@ -290,7 +291,7 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 		return err
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
 	if err != nil {
 		return err
 	}

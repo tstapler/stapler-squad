@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
@@ -24,7 +25,7 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
@@ -97,11 +98,44 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// better concurrency; it's skipped for URI-style DSNs (e.g. shared-cache
 	// in-memory databases), which don't support WAL and already carry their
 	// own query string that a second "?" would corrupt.
-	dbPath := expandedPath + "?_journal_mode=WAL&_timeout=5000&_fk=1"
-	if strings.Contains(expandedPath, "?") {
-		dbPath = expandedPath + "&_timeout=5000&_fk=1"
-	}
-	db, err := sql.Open("sqlite3", dbPath)
+	//
+	// _texttotime is required because ent's generated UPDATE...RETURNING
+	// statements produce result columns with an empty SQLite decltype (unlike
+	// plain SELECTs, which report DATETIME and auto-convert without this
+	// flag) — modernc.org/sqlite only upgrades those empty-decltype TEXT
+	// values to time.Time when this DSN param is set, otherwise Scan fails
+	// with "unsupported Scan...storing driver.Value type string into type
+	// *time.Time".
+	//
+	// _time_format=sqlite is required alongside it: without it, the driver
+	// writes time.Time values using Go's time.Time.String() (e.g. "2006-01-02
+	// 15:04:05.999999999 -0700 MST"), which its own read-side parser
+	// (parseTimeFormats in modernc.org/sqlite) never matches — the offset is
+	// space-separated with a zone abbreviation, not the colon-separated
+	// "-07:00" the parser expects. That mismatch makes every read fall back
+	// to the raw string, hitting the same Scan error above even when
+	// _texttotime successfully triggers a parse attempt. _time_format=sqlite
+	// makes the driver write with parseTimeFormats[0], the exact layout its
+	// own reader tries first.
+	//
+	// _timezone=UTC is required on top of both: without it, a parsed time.Time
+	// carries a distinct, driver-synthesized zero-offset *time.Location (empty
+	// name, its own internal zone/tx tables) rather than the time.UTC package
+	// singleton. The instant is correct either way, but assert.Equal(t,
+	// time.UTC, x.Location()) — used throughout this package's tests, e.g.
+	// TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned
+	// — does a deep struct comparison and fails on that Location identity
+	// mismatch. Setting _timezone=UTC makes every read run through the
+	// driver's applyTimezone(t) -> t.In(time.UTC), which sets the Location to
+	// the exact singleton (time.LoadLocation("UTC") — what _timezone resolves
+	// through — special-cases "UTC" to return that singleton directly).
+	dbPath := sqlitedsn.New(expandedPath).
+		WithWAL().
+		WithBusyTimeout(5000 * time.Millisecond).
+		WithForeignKeysShort().
+		WithEntTimeCompat().
+		Build()
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}

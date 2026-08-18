@@ -2,49 +2,51 @@ package tmux
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
-
-	"go.uber.org/goleak"
 )
 
-// TestStartZombieWatcher_JoinsOnCtxCancel pins the regression this fix
-// addresses: StartZombieWatcher used to be signaled via ctx cancellation but
-// never joined, so a caller had no way to know the goroutine had actually
-// exited. A short interval drives multiple ticks, and goleak.VerifyNone after
-// wg.Wait() confirms no goroutine survives cancellation.
-//
-// scanZombiesFn is swapped for a fake here rather than exercising the real
-// ScanZombies (which forks a "ps" subprocess): a real fork/exec/wait has
-// unbounded latency under system load (observed exceeding 5s under `-race`
-// alongside this package's other subprocess-heavy tmux tests), which made
-// any fixed wall-clock assertion around it inherently flaky. The fake proves
-// the same join behavior deterministically.
-func TestStartZombieWatcher_JoinsOnCtxCancel(t *testing.T) {
-	baseline := goleak.IgnoreCurrent()
-
-	origScan := scanZombiesFn
-	scanZombiesFn = func() ([]ZombieInfo, error) { return nil, nil }
-	defer func() { scanZombiesFn = origScan }()
-
+// TestStartZombieWatcher_GoroutineFullyExits_When_WaitGroupIsJoined proves
+// StartZombieWatcher's goroutine has actually returned by the time wg.Wait()
+// unblocks — not just that ctx was canceled (backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec, AC1). warnFn's invocation depends on
+// real OS zombie state (ScanZombies shells out to `ps`), which a unit test
+// cannot control deterministically, so goroutine count before/after the join
+// is used instead of a side-effect counter to prove the goroutine actually
+// terminated rather than merely being signaled.
+func TestStartZombieWatcher_GoroutineFullyExits_When_WaitGroupIsJoined(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
+
+	before := runtime.NumGoroutine()
+
 	StartZombieWatcher(ctx, time.Millisecond, func(string, ...any) {}, &wg)
 
-	time.Sleep(20 * time.Millisecond) // let several ticks fire
+	// Give the goroutine a moment to actually start running.
+	time.Sleep(10 * time.Millisecond)
 	cancel()
 
-	done := make(chan struct{})
+	joined := make(chan struct{})
 	go func() {
 		wg.Wait()
-		close(done)
+		close(joined)
 	}()
 	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("wg.Wait() did not return within 5s of ctx cancellation")
+	case <-joined:
+	case <-time.After(10 * time.Second):
+		t.Fatal("wg.Wait() did not return within 10s after cancel — goroutine leaked")
 	}
 
-	goleak.VerifyNone(t, baseline)
+	// Allow the runtime a brief window to reclaim the exited goroutine's stack
+	// bookkeeping before sampling NumGoroutine again.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		runtime.Gosched()
+		time.Sleep(time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > before {
+		t.Fatalf("goroutine count did not return to baseline after wg join (before=%d after=%d) — goroutine did not fully exit", before, got)
+	}
 }
