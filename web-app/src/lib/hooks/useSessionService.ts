@@ -23,6 +23,15 @@ import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
+// NOTE (backlog #488, 2026-08-17): this file's 28 `dispatch(setError(...))` sites
+// are deliberately NOT converted to the getErrorMessage() helper
+// (web-app/src/lib/utils/connectError.ts) used everywhere in components/backlog/**.
+// `setError` here writes to the shared sessionsSlice Redux store, consumed by
+// non-backlog surfaces (the general session list/terminal views) — stripping the
+// ConnectRPC `[code]` prefix there is a behavior change with a materially larger
+// blast radius than the local useState catch-block conversions this PR made, and
+// is out of scope for a backlog-toast presentation fix. Tracked as a follow-up,
+// not fixed here.
 import {
   setSessions,
   upsertSession,
