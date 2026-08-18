@@ -32,6 +32,31 @@
 // we give that goroutine a short grace period to observe EOF, and if it
 // hasn't, we forcibly close our read end to unblock it and proceed with
 // whatever was captured, explicitly marking the result incomplete.
+//
+// A third hang, reproduced 2026-08-17 (-count=20, 1 hang in 20 runs, killed
+// only by the test binary's own 5m -timeout), showed this still wasn't
+// enough: the goroutine dump caught cmd.Wait() itself blocked in wait4(),
+// never having returned, well past crashSubprocessTimeout. ctx expiring
+// only triggers our cmd.Cancel override (SIGKILL of the process group) —
+// it does not bound cmd.Wait() itself. Signaling a process is not the same
+// as reaping it: if something (plausibly an OS crash reporter, per the
+// original comment above) leaves the child stopped/traced instead of
+// exited, wait4() can block forever regardless of how hard we signal it.
+// cmd.Wait() below therefore runs in its own goroutine so it can be bounded
+// independently, the same way the output-drain goroutine already is.
+//
+// Validation (2026-08-17): `go test -run TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection
+// -count=20` completed cleanly in 551.763s with zero hangs. A full-package
+// `-race` run at both 300s and 1200s timeouts instead failed on an unrelated,
+// pre-existing hang in this package's git-fixture-building test helpers
+// (buildPackedFixtureOnce/gitRunErr in gogitstore_test.go, also stuck in
+// cmd.Wait() — the same failure class as this file's own history, but a
+// different code path never touched here); that is tracked separately as
+// backlog item 9083b3a8-b23a-484f-8940-d8ff7d788ccd. A `-race` run scoped to
+// just this file's three tests (-run matching all three
+// runBoundedCrashSubprocess callers) passed cleanly in 91.764s: each
+// correctly logged its own 30s-timeout inconclusive-SKIP path rather than
+// hanging, confirming the bound above holds under race-detector overhead.
 package gogitstore
 
 import (
@@ -59,6 +84,17 @@ const crashSubprocessTimeout = 30 * time.Second
 // is what bounds the parent if a detached process outside our process
 // group (e.g. an OS crash reporter) still holds the pipe's write end open.
 const crashSubprocessDrainGrace = 2 * time.Second
+
+// crashSubprocessWaitGrace bounds how long, after ctx's crashSubprocessTimeout
+// expires and fires our cmd.Cancel SIGKILL override, the parent additionally
+// waits for cmd.Wait() to return before giving up on it too. SIGKILL is a
+// request, not a guarantee: if the OS leaves the child stopped/traced
+// instead of exited (observed with a hung, never-returning cmd.Wait() during
+// -count=20 reproduction), wait4() blocks forever with nothing else to bound
+// it. This grace is intentionally short — a successful kill reaps almost
+// immediately — so a genuine hang here is classified as timed-out rather
+// than silently absorbed into a longer wait.
+const crashSubprocessWaitGrace = 5 * time.Second
 
 // crashSubprocessOutcome classifies how a deliberate-crash subprocess ended.
 type crashSubprocessOutcome int
@@ -157,7 +193,30 @@ func runBoundedCrashSubprocess(t *testing.T, testName string, env string) crashS
 		}
 	}()
 
-	waitErr := cmd.Wait()
+	// cmd.Wait() is bounded independently of ctx: ctx expiring only fires
+	// our cmd.Cancel override (a SIGKILL request), it does not itself bound
+	// Wait(). If the OS never actually reaps the child — e.g. a crash
+	// reporter left it stopped/traced instead of exited, reproduced during
+	// -count=20 stress as a Wait() that never returned — wait4() blocks
+	// forever with nothing else to stop it.
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- cmd.Wait()
+	}()
+
+	var (
+		waitErr      error
+		waitTimedOut bool
+	)
+	select {
+	case waitErr = <-waitDone:
+	case <-time.After(crashSubprocessTimeout + crashSubprocessWaitGrace):
+		// The SIGKILL already fired when ctx expired but the child was
+		// never reaped. Give up on Wait() rather than blocking
+		// indefinitely; the goroutine above is abandoned and will finish,
+		// if ever, sometime after this test returns.
+		waitTimedOut = true
+	}
 
 	complete := true
 	select {
@@ -166,9 +225,10 @@ func runBoundedCrashSubprocess(t *testing.T, testName string, env string) crashS
 	case <-time.After(crashSubprocessDrainGrace):
 		// Something is still holding the write end open past both the
 		// subprocess's own exit/kill and our grace period — most likely a
-		// detached process outside our process group. Force-close our read
-		// end to unblock the goroutine's Read() and move on with whatever
-		// was captured rather than hanging indefinitely.
+		// detached process outside our process group, or (if waitTimedOut)
+		// the subprocess never actually exited. Force-close our read end to
+		// unblock the goroutine's Read() and move on with whatever was
+		// captured rather than hanging indefinitely.
 		complete = false
 		readEnd.Close()
 		<-readDone
@@ -180,6 +240,11 @@ func runBoundedCrashSubprocess(t *testing.T, testName string, env string) crashS
 
 	if !complete {
 		t.Logf("output reader abandoned after %s past subprocess exit — a process outside our group may still hold the output pipe open; output below may be truncated:\n%s", crashSubprocessDrainGrace, out)
+	}
+
+	if waitTimedOut {
+		t.Logf("cmd.Wait() never returned within %s of this test's own SIGKILL — inconclusive, NOT proof of the crash/recovery this test exists to demonstrate; output captured before giving up:\n%s", crashSubprocessTimeout+crashSubprocessWaitGrace, out)
+		return crashSubprocessResult{Outcome: crashSubprocessTimedOut, Output: out, Err: waitErr, OutputComplete: complete}
 	}
 
 	if ctx.Err() == context.DeadlineExceeded {
