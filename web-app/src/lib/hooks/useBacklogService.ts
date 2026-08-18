@@ -6,6 +6,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import {
   BacklogService,
   BacklogItem as BacklogItemProto,
@@ -752,7 +753,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] createBacklogItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to create backlog item.")));
         return null;
       }
     },
@@ -773,7 +774,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] createBacklogItemFromChat:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to create backlog item from chat.")));
         return null;
       }
     },
@@ -806,7 +807,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] updateBacklogItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to update backlog item.")));
         return null;
       }
     },
@@ -820,7 +821,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] archiveBacklogItem:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to archive backlog item.")));
       throw err;
     }
   }, []);
@@ -832,7 +833,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] unarchiveBacklogItem:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to unarchive backlog item.")));
       throw err;
     }
   }, []);
@@ -844,7 +845,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] deleteBacklogItem:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to delete backlog item.")));
       throw err;
     }
   }, []);
@@ -874,7 +875,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] transitionStatus:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to transition backlog item status.")));
         throw err;
       }
     },
@@ -894,7 +895,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return { sessionUuid: resp.sessionUuid, queued: resp.queued };
       } catch (err) {
         console.error("[useBacklogService] spawnSessionFromItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to spawn session from item.")));
         throw err;
       }
     },
@@ -909,7 +910,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return { itemSessionId: resp.itemSession?.id ?? "" };
       } catch (err) {
         console.error("[useBacklogService] triggerTriage:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to trigger triage.")));
         throw err;
       }
     },
@@ -923,7 +924,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.cancelled;
     } catch (err) {
       console.error("[useBacklogService] cancelTriage:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to cancel triage.")));
       throw err;
     }
   }, []);
@@ -935,7 +936,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.item ? mapBacklogItem(resp.item) : null;
     } catch (err) {
       console.error("[useBacklogService] approvePlan:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to approve plan.")));
       throw err;
     }
   }, []);
@@ -947,7 +948,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.item ? mapBacklogItem(resp.item) : null;
     } catch (err) {
       console.error("[useBacklogService] rejectPlan:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to reject plan.")));
       throw err;
     }
   }, []);
@@ -964,7 +965,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return true;
       } catch (err) {
         console.error("[useBacklogService] overrideVerdict:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to override verdict.")));
         throw err;
       }
     },
@@ -978,7 +979,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] triggerReReview:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to trigger re-review.")));
       throw err;
     }
   }, []);
@@ -999,7 +1000,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return { prUrl: resp.prUrl };
     } catch (err) {
       console.error("[useBacklogService] triggerShipPR:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to ship PR.")));
       throw err;
     }
   }, []);
@@ -1013,7 +1014,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] submitManualReview:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to submit manual review.")));
         throw err;
       }
     },
@@ -1126,7 +1127,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] importGitHubIssue:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to import GitHub issue.")));
         return null;
       }
     },

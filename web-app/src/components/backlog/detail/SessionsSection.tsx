@@ -8,6 +8,7 @@ import { classifySessionKind, isSteerable, type SessionKind } from "@/lib/backlo
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
 import { useShowMore } from "@/lib/hooks/useShowMore";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { SessionMonitor } from "../SessionMonitor";
 import { SessionDiagnosticPanel } from "./SessionDiagnosticPanel";
 import * as styles from "../BacklogItemDetail.css";
@@ -134,7 +135,7 @@ export function SessionsSection({
     } catch (err) {
       // Keep the composer open and surface the error inline — don't close
       // optimistically on a failed RPC call.
-      setSteerError(err instanceof Error ? err.message : "Failed to steer session.");
+      setSteerError(getErrorMessage(err, "Failed to steer session."));
     }
   };
 
