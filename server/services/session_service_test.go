@@ -2353,12 +2353,8 @@ func filterEventsByType(all []*events.Event, typ events.EventType) []*events.Eve
 // unconditional on Hidden, matching Epic 3's generic done/stuck notifier.
 func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
-	eventBus := events.NewEventBus(8)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
 
-	newHiddenInstance := func(title string) *session.Instance {
+	newHiddenInstance := func(t *testing.T, storage *session.Storage, title string) *session.Instance {
 		inst := &session.Instance{
 			Title:     title,
 			UUID:      title + "-uuid",
@@ -2373,9 +2369,20 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 		return inst
 	}
 
+	// Each subtest gets its own storage/eventBus/service so that running them
+	// with t.Parallel() can't leak events across subtests: the shared eventBus
+	// used previously broadcast every publish to every subscriber, so a
+	// SessionUpdated event from one subtest could land in another subtest's
+	// channel and flip an exact-count assertion (see
+	// TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden's
+	// doc comment for the failure this caused).
 	t.Run("onDetected", func(t *testing.T) {
 		t.Parallel()
-		inst := newHiddenInstance("rl-hidden-detected")
+		storage := createTestStorage(t)
+		eventBus := events.NewEventBus(8)
+		svc := NewSessionService(storage, eventBus)
+		t.Cleanup(func() { svc.Shutdown() })
+		inst := newHiddenInstance(t, storage, "rl-hidden-detected")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -2388,7 +2395,11 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 
 	t.Run("onRecovery", func(t *testing.T) {
 		t.Parallel()
-		inst := newHiddenInstance("rl-hidden-recovery")
+		storage := createTestStorage(t)
+		eventBus := events.NewEventBus(8)
+		svc := NewSessionService(storage, eventBus)
+		t.Cleanup(func() { svc.Shutdown() })
+		inst := newHiddenInstance(t, storage, "rl-hidden-recovery")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -2410,12 +2421,8 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 // and must still fire unmodified for Hidden instances.
 func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
-	eventBus := events.NewEventBus(8)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
 
-	newHiddenInstance := func(title string) *session.Instance {
+	newHiddenInstance := func(t *testing.T, storage *session.Storage, title string) *session.Instance {
 		inst := &session.Instance{
 			Title:     title,
 			UUID:      title + "-uuid",
@@ -2430,9 +2437,19 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		return inst
 	}
 
+	// Each subtest gets its own storage/eventBus/service — see the matching
+	// comment in TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden.
+	// This test's exact require.Len(updates, 1) assertion is what actually
+	// surfaced the shared-eventBus crosstalk as a flake: a sibling subtest's
+	// SessionUpdated publish would occasionally land in this subtest's channel
+	// before it drained, making the count 2 instead of 1.
 	t.Run("onDetected", func(t *testing.T) {
 		t.Parallel()
-		inst := newHiddenInstance("rl-hidden-detected-sync")
+		storage := createTestStorage(t)
+		eventBus := events.NewEventBus(8)
+		svc := NewSessionService(storage, eventBus)
+		t.Cleanup(func() { svc.Shutdown() })
+		inst := newHiddenInstance(t, storage, "rl-hidden-detected-sync")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -2452,7 +2469,11 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 
 	t.Run("onRecovery", func(t *testing.T) {
 		t.Parallel()
-		inst := newHiddenInstance("rl-hidden-recovery-sync")
+		storage := createTestStorage(t)
+		eventBus := events.NewEventBus(8)
+		svc := NewSessionService(storage, eventBus)
+		t.Cleanup(func() { svc.Shutdown() })
+		inst := newHiddenInstance(t, storage, "rl-hidden-recovery-sync")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
