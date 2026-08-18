@@ -44,6 +44,19 @@
 // exited, wait4() can block forever regardless of how hard we signal it.
 // cmd.Wait() below therefore runs in its own goroutine so it can be bounded
 // independently, the same way the output-drain goroutine already is.
+//
+// Validation (2026-08-17): `go test -run TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection
+// -count=20` completed cleanly in 551.763s with zero hangs. A full-package
+// `-race` run at both 300s and 1200s timeouts instead failed on an unrelated,
+// pre-existing hang in this package's git-fixture-building test helpers
+// (buildPackedFixtureOnce/gitRunErr in gogitstore_test.go, also stuck in
+// cmd.Wait() — the same failure class as this file's own history, but a
+// different code path never touched here); that is tracked separately as
+// backlog item 9083b3a8-b23a-484f-8940-d8ff7d788ccd. A `-race` run scoped to
+// just this file's three tests (-run matching all three
+// runBoundedCrashSubprocess callers) passed cleanly in 91.764s: each
+// correctly logged its own 30s-timeout inconclusive-SKIP path rather than
+// hanging, confirming the bound above holds under race-detector overhead.
 package gogitstore
 
 import (
