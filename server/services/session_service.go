@@ -227,9 +227,10 @@ type SessionService struct {
 	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
 	registry *session.Registry
 
-	// deleteCleanupWG tracks DeleteSession's background tmux/worktree cleanup
-	// goroutines so Shutdown can await them instead of letting them outlive the
-	// process (or, in tests, outlive the test that spawned them).
+	// deleteCleanupWG tracks session lifecycle cleanup/startup goroutines
+	// (DeleteSession's background tmux/worktree cleanup, and CreateSession's
+	// async-start path) so Shutdown can await them instead of letting them
+	// outlive the process (or, in tests, outlive the test that spawned them).
 	deleteCleanupWG sync.WaitGroup
 
 	// deleteCleanupMu guards deleteCleanupClosed and serializes it against

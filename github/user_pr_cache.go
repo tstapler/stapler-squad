@@ -213,10 +213,7 @@ func (c *UserPRCache) Unsubscribe(id string) {
 // caller adds one) — the static singleflight key "login" would otherwise
 // coalesce a Refresh arriving right after this call into that stale call's
 // empty result. Including the generation in the key forces a genuinely new
-// call instead. Confirmed live via go test -race: TestListGitHubAccounts_
-// AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts saw
-// EnterpriseHosts come back empty because its Refresh() joined the
-// just-started cache's own stale zero-token fetch.
+// call instead.
 func (c *UserPRCache) InvalidateLoginCache() {
 	c.loginGen.Add(1)
 	c.loginState.Store(loginResult{})
