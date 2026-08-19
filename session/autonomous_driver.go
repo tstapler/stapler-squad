@@ -45,6 +45,31 @@ func WithStartupTimeout(d time.Duration) DriverOption {
 	return func(a *AutonomousDriver) { a.startupTimeout = d }
 }
 
+// WithIdleSettlePollInterval overrides the default 500ms poll interval used
+// while waiting for the idle-settle window (see idleSettleWindow doc comment
+// on the AutonomousDriver struct). Tests use this to shrink real timers
+// instead of waiting them out.
+func WithIdleSettlePollInterval(d time.Duration) DriverOption {
+	return func(a *AutonomousDriver) { a.idleSettlePollInterval = d }
+}
+
+// WithIdleSettleWindow overrides the default 60s idle-settle debounce window.
+func WithIdleSettleWindow(d time.Duration) DriverOption {
+	return func(a *AutonomousDriver) { a.idleSettleWindow = d }
+}
+
+// WithPaneSettlePollInterval overrides the default 150ms poll interval used
+// by waitForPaneSettle.
+func WithPaneSettlePollInterval(d time.Duration) DriverOption {
+	return func(a *AutonomousDriver) { a.paneSettlePollInterval = d }
+}
+
+// WithPaneSettleMaxWait overrides the default 2s max wait used by
+// waitForPaneSettle.
+func WithPaneSettleMaxWait(d time.Duration) DriverOption {
+	return func(a *AutonomousDriver) { a.paneSettleMaxWait = d }
+}
+
 // panePreviewer is the narrow interface AutonomousDriver needs to read the
 // current pane content. *Instance satisfies it directly via Preview().
 // Extracted (mirroring paneSettleChecker below) so driver-level tests can
@@ -67,12 +92,30 @@ type AutonomousDriver struct {
 	turnCb         TurnCallback
 	driverRunning  atomic.Bool
 	cancel         context.CancelFunc
-	mu             sync.Mutex
+	// done is closed when run() has fully exited (including via the
+	// panic-recovery path), giving Wait() a real join point instead of
+	// polling driverRunning. Set fresh in Start(); a driver that has never
+	// been started has a nil done, which Wait() treats as "nothing to wait
+	// for."
+	done chan struct{}
+	mu   sync.Mutex
 	// previewer overrides pane content reads when set (used by tests to
 	// script pane content across turns). nil (the zero value, including for
 	// every existing struct-literal-constructed test in this package) falls
 	// back to d.inst.Preview() via previewPane() below.
 	previewer panePreviewer
+
+	// idleSettlePollInterval and idleSettleWindow default to 500ms/60s (set in
+	// NewAutonomousDriver) and can be overridden via WithIdleSettlePollInterval/
+	// WithIdleSettleWindow — instance fields (not package vars) so tests shrink
+	// them per-driver instead of mutating shared state races could read
+	// concurrently with a still-running driver goroutine.
+	idleSettlePollInterval time.Duration
+	idleSettleWindow       time.Duration
+	// paneSettlePollInterval and paneSettleMaxWait default to 150ms/2s and can
+	// be overridden via WithPaneSettlePollInterval/WithPaneSettleMaxWait.
+	paneSettlePollInterval time.Duration
+	paneSettleMaxWait      time.Duration
 }
 
 // previewPane returns the current pane content, preferring d.previewer when
@@ -104,6 +147,18 @@ func NewAutonomousDriver(inst *Instance, pool HeadlessPoolClient, goal string, m
 	}
 	if d.startupTimeout == 0 {
 		d.startupTimeout = 60 * time.Second
+	}
+	if d.idleSettlePollInterval == 0 {
+		d.idleSettlePollInterval = 500 * time.Millisecond
+	}
+	if d.idleSettleWindow == 0 {
+		d.idleSettleWindow = 60 * time.Second
+	}
+	if d.paneSettlePollInterval == 0 {
+		d.paneSettlePollInterval = 150 * time.Millisecond
+	}
+	if d.paneSettleMaxWait == 0 {
+		d.paneSettleMaxWait = 2 * time.Second
 	}
 	return d
 }
@@ -142,18 +197,22 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	d.mu.Lock()
 	d.cancel = cancel
+	d.done = done
 	d.controller = d.inst.GetController()
 	d.mu.Unlock()
 
 	if d.controller == nil {
 		d.driverRunning.Store(false)
 		cancel()
+		close(done)
 		return fmt.Errorf("AutonomousDriver: no controller available for session %q", d.inst.Title)
 	}
 
 	go func() {
+		defer close(done)
 		defer d.driverRunning.Store(false)
 		defer cancel()
 		d.run(ctx)
@@ -165,6 +224,7 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 // Context cancellation propagates into CallBlocking: the headless pool passes ctx
 // to runner.Run (which kills the subprocess) and the stream reader selects on ctx.Done,
 // so Stop returns control to the caller nearly immediately — no blocking LLM call delay.
+// Stop does not wait for the goroutine to exit — use Wait for that.
 func (d *AutonomousDriver) Stop() {
 	d.mu.Lock()
 	cancel := d.cancel
@@ -173,6 +233,31 @@ func (d *AutonomousDriver) Stop() {
 		cancel()
 	}
 	d.driverRunning.Store(false)
+}
+
+// Wait blocks until the run() goroutine started by Start has fully exited
+// (including via the panic-recovery path), or ctx is done, whichever comes
+// first. It returns true if run() exited, false if ctx expired first. A
+// driver that was never started has a nil done channel and returns true
+// immediately, since there is nothing to wait for.
+//
+// One known best-effort gap: the SendKeys calls in run() are not
+// ctx-cancellable, so a PTY write that blocks forever (e.g. a full kernel
+// pipe buffer) can keep run() from exiting even after Stop(); Wait() still
+// returns false once its own ctx expires in that case rather than hanging.
+func (d *AutonomousDriver) Wait(ctx context.Context) bool {
+	d.mu.Lock()
+	done := d.done
+	d.mu.Unlock()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // run is the main driver loop. Must only be called from Start's goroutine.
@@ -207,7 +292,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	// first idle signal after launch, not debounce against a background
 	// fork — nothing has been injected yet, so there's no premature-nudge
 	// risk to guard against.
-	if !waitForIdle(startupCtx, statusCh, d.controller, 0) {
+	if !waitForIdle(startupCtx, statusCh, d.controller, 0, d.idleSettlePollInterval) {
 		startupCancel()
 		log.Warn("AutonomousDriver: timed out waiting for initial idle state", "session", sessionName)
 		d.fireCompletion(sessionName, AutonomousDriverOutcome{Stuck: true, Reason: "startup timeout"})
@@ -286,7 +371,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			// re-checks the cooldown next turn) and lets the orchestrator re-poll
 			// promptly rather than stalling on an arbitrary fixed timer.
 			turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
-			idleReached := waitForIdle(turnCtx, statusCh, d.controller, idleSettleWindow)
+			idleReached := waitForIdle(turnCtx, statusCh, d.controller, d.idleSettleWindow, d.idleSettlePollInterval)
 			turnCancel()
 			if !idleReached {
 				log.Warn("AutonomousDriver: session did not become idle after suppressed turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
@@ -313,7 +398,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			log.Warn("AutonomousDriver: SendKeys failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
-		waitForPaneSettle(ctx, d.inst)
+		waitForPaneSettle(ctx, d.inst, d.paneSettlePollInterval, d.paneSettleMaxWait)
 		if sendErr := d.inst.SendKeys(EnterKeySequence); sendErr != nil {
 			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
@@ -337,7 +422,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 
 		// Wait for idle before the next turn.
 		turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
-		idleReached := waitForIdle(turnCtx, statusCh, d.controller, idleSettleWindow)
+		idleReached := waitForIdle(turnCtx, statusCh, d.controller, d.idleSettleWindow, d.idleSettlePollInterval)
 		turnCancel()
 		if !idleReached {
 			log.Warn("AutonomousDriver: session did not become idle after turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
@@ -360,30 +445,23 @@ type paneSettleChecker interface {
 	HasUpdated() (updated bool, hasPrompt bool)
 }
 
-// paneSettlePollInterval and paneSettleMaxWait are vars (not consts) so tests
-// can shrink them instead of waiting out real timers.
-var (
-	paneSettlePollInterval = 150 * time.Millisecond
-	paneSettleMaxWait      = 2 * time.Second
-)
-
 // waitForPaneSettle polls inst until its pane content stops changing for two
-// consecutive polls, or paneSettleMaxWait elapses — whichever first. Used
-// between writing a turn's content and sending the submit keystroke (BUG-031):
-// a large paste can still be landing/rendering in the TUI's paste-detection
+// consecutive polls, or maxWait elapses — whichever first. Used between
+// writing a turn's content and sending the submit keystroke (BUG-031): a
+// large paste can still be landing/rendering in the TUI's paste-detection
 // window when a follow-up "\r" arrives, so giving the pane a chance to settle
 // first shrinks the race that folds the submit keystroke into the paste block
 // instead of ending it. Best-effort: a pane that never settles (e.g. a
 // permanently busy session) is left alone once the deadline passes — the
 // caller still sends "\r" either way.
-func waitForPaneSettle(ctx context.Context, inst paneSettleChecker) {
-	deadline := time.Now().Add(paneSettleMaxWait)
+func waitForPaneSettle(ctx context.Context, inst paneSettleChecker, pollInterval, maxWait time.Duration) {
+	deadline := time.Now().Add(maxWait)
 	stableCount := 0
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(paneSettlePollInterval):
+		case <-time.After(pollInterval):
 		}
 		updated, _ := inst.HasUpdated()
 		if updated {
@@ -443,14 +521,6 @@ func (d *AutonomousDriver) fireCompletion(sessionName string, outcome Autonomous
 	}
 }
 
-// idleSettlePollInterval and idleSettleWindow are vars (not consts) so tests
-// can shrink them instead of waiting out real timers, matching the
-// waitForPaneSettle pattern above.
-var (
-	idleSettlePollInterval = 500 * time.Millisecond
-	idleSettleWindow       = 60 * time.Second
-)
-
 // waitForIdle blocks until the session needs a new orchestrator turn, or ctx
 // is cancelled. Two paths satisfy it:
 //   - An explicit status arrives (approval pending, input required, error,
@@ -470,7 +540,7 @@ var (
 // redirection (confirmed live 2026-08-02 on stapler-squad-backlog-self-resolve).
 //
 // Returns true if a turn is warranted, false if ctx expired first.
-func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController, settleWindow time.Duration) bool {
+func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController, settleWindow, pollInterval time.Duration) bool {
 	if settleWindow <= 0 {
 		if cc.IsIdle() {
 			return true
@@ -497,7 +567,7 @@ func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, 
 			return true
 		}
 
-		wait := idleSettlePollInterval
+		wait := pollInterval
 		if !idleSince.IsZero() {
 			if remaining := settleWindow - time.Since(idleSince); remaining < wait {
 				wait = remaining
