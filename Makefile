@@ -623,7 +623,7 @@ vet-rpc-markers: registry-generate-backend ## Check that all RPC handlers have a
 		echo "✅ All RPC handlers have +api: markers."; \
 	fi
 
-lint: ensure-tools proto-gen lint-custom lint-shell ## Run golangci-lint with comprehensive checks
+lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## Run golangci-lint with comprehensive checks
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
@@ -782,6 +782,30 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Run 'make help' to see available commands"
 
 ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+
+# ready: everything `make ci` runs, plus the CI-only checks that have no local
+# equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
+# gocognit/funlen/revive, new-code-only) and web-app's ESLint/CSS lint/scanner/
+# ci-gates suites. Skips checks that need live PR/GH-Action context with no
+# local equivalent (the external go-test-coverage action, the E2E-coverage PR
+# comment) — those only run in CI. `--new-from-rev=origin/main` requires a
+# reachable origin/main; `git fetch origin main` first if it's stale.
+ready: ci ready-complexity-gate ## Local approximation of every required PR check (make ci + complexity gate + web-app lint/scanner suites)
+	cd web-app && npx next lint
+	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
+	cd tools/scanner && go test ./...
+	cd tools/ci-gates && pnpm install --silent && pnpm test
+	@echo "✅ ready: local approximation of PR checks complete"
+
+ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive gate, mirroring lint.yml's PR-only complexity check
+	@GOBIN=$$(go env GOBIN); \
+	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
+	if ! which golangci-lint >/dev/null 2>&1; then \
+		echo "Installing golangci-lint v2..."; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
+	fi; \
+	golangci-lint run --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 \
+		--enable=gocyclo,gocognit,funlen,revive --new-from-rev=origin/main
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
