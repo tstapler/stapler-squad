@@ -5,6 +5,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -192,8 +193,19 @@ func (i *Instance) PreviewContext(ctx context.Context) (string, error) {
 
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		if tpm, ok := tb.mgr.(*TmuxProcessManager); ok {
-			if content, err := tpm.CapturePaneContentContext(ctx); err == nil {
+			content, err := tpm.CapturePaneContentContext(ctx)
+			if err == nil {
 				return content, nil
+			}
+			// A cancellation/deadline means the caller no longer wants this
+			// result — falling back to the non-cancellable Preview() here
+			// would silently ignore that and block on a fresh subprocess
+			// call anyway, defeating the whole point of threading ctx
+			// through in the first place (see doc comment above). Only
+			// fall back for genuine capture failures (e.g. subprocess
+			// error, no pane).
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return "", ctx.Err()
 			}
 		}
 	}

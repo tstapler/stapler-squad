@@ -2346,7 +2346,12 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 // the wait for one — see session/session_driver.go's stop/join mechanism.
 func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, error) {
 	if t.cmEnabledForBackground() {
-		cmCtx, cancel := cmCtx()
+		// Derived from the caller's ctx (not cmCtx()'s independent
+		// context.Background()) so a caller cancellation propagates into this
+		// branch too, while the 3s bound still caps worst-case latency — see
+		// this method's doc comment on why callers need cancellation to reach
+		// an in-flight capture, not just the exec-gate wait.
+		cmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		body, cmErr := t.sendCMCommand(cmCtx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 		if cmErr == nil {
@@ -2372,7 +2377,12 @@ func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, er
 			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
 		}
 		log.Warn("failed to capture pane content for session", logArgs...)
-		return "", fmt.Errorf("error capturing pane content for session '%s': %v", t.sanitizedName, err)
+		// %w (not %v): preserves the error chain so a caller-side
+		// errors.Is(err, context.Canceled/DeadlineExceeded) check (e.g.
+		// Instance.PreviewContext) can still see through this wrap when the
+		// underlying failure was ctx cancellation rather than a genuine
+		// subprocess/capture error.
+		return "", fmt.Errorf("error capturing pane content for session '%s': %w", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil
 }

@@ -117,14 +117,23 @@ type dialogAnswerState struct {
 	attempts int
 }
 
-// sessionDriverStopper carries the stop/done signaling pair for one
-// StartSessionDriver run (including any handleDriverFailure restart
-// continuations of that same run, which reuse the same stopper — see
-// handleDriverFailure). once guards against a racing double-close if
-// StopSessionDriver is ever called concurrently.
+// sessionDriverStopper carries the stop signal for one StartSessionDriver run
+// (including any handleDriverFailure restart continuations of that same run,
+// which reuse the same stopper — see handleDriverFailure). once guards
+// against a racing double-close if StopSessionDriver is ever called
+// concurrently.
+//
+// This previously also carried a `done` channel that StopSessionDriver waited
+// on, but that channel was only closed by the *original* run's goroutine
+// (StartSessionDriver's defer) — a handleDriverFailure-spawned retry
+// goroutine is untracked by it, so StopSessionDriver could observe `done`
+// closed and return while a retry continuation was still alive, reintroducing
+// the goroutine-outlives-Destroy() bug this type exists to prevent. inst's
+// driverWG (Add/Done'd across both the initial run and every retry
+// continuation) is the correct join point — see StopSessionDriver and
+// JoinSessionDriver, which both wait on it instead.
 type sessionDriverStopper struct {
 	stop chan struct{}
-	done chan struct{}
 	once sync.Once
 }
 
@@ -157,12 +166,11 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		)
 		return
 	}
-	stopper := &sessionDriverStopper{stop: make(chan struct{}), done: make(chan struct{})}
+	stopper := &sessionDriverStopper{stop: make(chan struct{})}
 	inst.driverStopper.Store(stopper)
 	inst.driverMu.Unlock()
 	inst.driverWG.Add(1)
 	go func() {
-		defer close(stopper.done)
 		defer inst.driverWG.Done()
 		defer inst.driverRunning.Store(false)
 		runSessionDriver(inst, allowedPath, stopper.stop)
@@ -171,9 +179,10 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 
 // StopSessionDriver signals a running SessionDriver goroutine (started by
 // StartSessionDriver on inst) to exit at its next poll tick, and blocks up to
-// driverStopTimeout for it to actually do so. Called from Instance.Destroy()
-// so no driver goroutine can survive past Destroy() and keep polling
-// Preview() — which routes through the tmux exec gate's
+// driverStopTimeout for it — and any handleDriverFailure-spawned retry
+// continuation of it — to actually do so. Called from Instance.Destroy() so
+// no driver goroutine can survive past Destroy() and keep polling Preview()
+// — which routes through the tmux exec gate's
 // appconfig.LoadConfig()/GetConfigDir() (session/tmux/exec_gate.go) — using
 // whatever STAPLER_SQUAD_TEST_DIR a later test has since set process-wide.
 // Also marks inst as destroyed (under driverMu, alongside the stopper read)
@@ -181,6 +190,12 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 // can never spawn a driver goroutine for this instance again; see
 // Instance.driverMu's doc comment. A no-op (beyond that marking) if the
 // driver was never started.
+//
+// Waits on inst.driverWG rather than a per-run "done" channel: driverWG is
+// Add(1)/Done()'d across both the initial run (StartSessionDriver) and every
+// handleDriverFailure retry continuation, so this can't return early while a
+// retry goroutine spawned after the stop signal was sent is still running —
+// see JoinSessionDriver, which uses the identical wait for the same reason.
 func StopSessionDriver(inst *Instance) {
 	inst.driverMu.Lock()
 	inst.driverDestroyed = true
@@ -190,9 +205,7 @@ func StopSessionDriver(inst *Instance) {
 		return
 	}
 	stopper.once.Do(func() { close(stopper.stop) })
-	select {
-	case <-stopper.done:
-	case <-time.After(driverStopTimeout):
+	if !syncutil.WaitWithTimeout(&inst.driverWG, driverStopTimeout) {
 		log.Warn("SessionDriver: timed out waiting for driver goroutine to stop",
 			"session", inst.Title,
 		)
