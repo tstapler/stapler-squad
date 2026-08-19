@@ -39,14 +39,10 @@ func (m *mockScheduler) FireNow(_ context.Context, _ *ent.Workflow, _ string) (s
 	return "test-session-id", nil
 }
 
-// createTestEntClient opens an in-process SQLite database with full migrations.
+// createTestEntClient opens an in-memory SQLite database with full migrations.
 func createTestEntClient(t *testing.T) *session.EntRepository {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(testDir + "/workflow_test.db"))
-	require.NoError(t, err, "createTestEntClient: failed to open database")
-	t.Cleanup(func() { repo.Close() })
-	return repo
+	return session.NewTestEntRepository(t)
 }
 
 // createTestWorkflowService wires up a SessionService + WorkflowService with

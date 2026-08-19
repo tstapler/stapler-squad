@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -104,12 +103,7 @@ func (p *fakeNonCloserPlugin) MapToBacklogItem(_ session.ExternalItem, _ string)
 // backlog_item_event_publisher_test.go.
 func newForwardSyncTestStorage(t *testing.T) *session.Storage {
 	t.Helper()
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("forward-sync-%d.db", time.Now().UnixNano()))
-
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)

@@ -3,8 +3,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -37,12 +35,7 @@ type workspaceTestFixture struct {
 func setupWorkspaceTestFixture(t *testing.T) *workspaceTestFixture {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "workspace-svc-test-*")
-	require.NoError(t, err)
-
-	dbPath := fmt.Sprintf("%s/sessions.db", tmpDir)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
@@ -52,12 +45,6 @@ func setupWorkspaceTestFixture(t *testing.T) *workspaceTestFixture {
 
 	cleanup := func() {
 		bus.Close()
-		if err := repo.Close(); err != nil {
-			t.Logf("cleanup: repo.Close: %v", err)
-		}
-		if err := os.RemoveAll(tmpDir); err != nil {
-			t.Logf("cleanup: os.RemoveAll: %v", err)
-		}
 	}
 
 	return &workspaceTestFixture{

@@ -2,8 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -18,14 +16,9 @@ import (
 func setupRQSFixture(t *testing.T) (rqs *ReviewQueueService, poller *session.ReviewQueuePoller, storage *session.Storage, cleanup func()) {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "rqs-test-*")
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
-	dbPath := fmt.Sprintf("%s/sessions.db", tmpDir)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-
-	storage, err = session.NewStorageWithRepository(repo)
+	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
 	bus := events.NewEventBus(16)
@@ -38,8 +31,6 @@ func setupRQSFixture(t *testing.T) (rqs *ReviewQueueService, poller *session.Rev
 
 	cleanup = func() {
 		bus.Close()
-		repo.Close()
-		os.RemoveAll(tmpDir)
 	}
 	return
 }

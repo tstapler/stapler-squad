@@ -2601,10 +2601,7 @@ func attachPRFixWorkSession(t *testing.T, storage *session.Storage, repo *sessio
 // via the low-level repo.Create path.
 func createTestStorageWithRepo(t *testing.T) (*session.Storage, *session.EntRepository) {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(testDir + "/sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 	return storage, repo

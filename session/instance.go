@@ -413,6 +413,13 @@ type Instance struct {
 	// relying solely on promptFileCleanupDelay's background timer.
 	promptFilePath atomic.Pointer[string]
 
+	// promptFileCleanupDelayOverride, when non-zero, replaces
+	// defaultPromptFileCleanupDelay for this instance's promptArg calls. It
+	// exists so tests can shrink the cleanup delay without a shared
+	// package-level var, which would race across t.Parallel() tests (each
+	// test gets its own Instance, so there is nothing to synchronize).
+	promptFileCleanupDelayOverride time.Duration
+
 	// mu protects Instance's mutable data fields (Status, started, Tags,
 	// Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts, etc.).
 	// Use sendSyncErr / send for writes and Snapshot() for reads.
