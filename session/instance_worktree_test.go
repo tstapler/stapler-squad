@@ -133,7 +133,14 @@ func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
 	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
+	// NewGitWorktreeFromStorage canonicalizes worktreePath via
+	// CanonicalizeWorktreePath since the directory exists on disk (e.g. macOS's
+	// /var -> /private/var), so the expected value must go through the same
+	// resolution rather than comparing against the raw t.TempDir() string.
+	resolvedWorktreePath, err := filepath.EvalSymlinks(worktreePath)
+	require.NoError(t, err)
+
 	ws := inst.Workspace()
-	require.Equal(t, worktreePath, ws.EffectivePath)
+	require.Equal(t, resolvedWorktreePath, ws.EffectivePath)
 	require.Equal(t, repoPath, ws.RepoRoot)
 }
