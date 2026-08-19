@@ -766,6 +766,9 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     await act(async () => { streams[0].end(); });
     await waitFor(() => expect(result.current.isConnected).toBe(false));
 
+    // Cancel any pending backoff timer from the natural reconnect
+    await act(async () => { jest.advanceTimersByTime(0); });
+
     const callCountBefore = callCount;
 
     // Fire an online event
