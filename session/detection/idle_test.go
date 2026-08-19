@@ -403,7 +403,7 @@ func TestIdleDetector_GetStateInfo(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test-session", buffer, config)
+	detector, _ := newDetectorWithFakeClock("test-session", buffer, config)
 
 	buffer.Write([]byte("— INSERT —"))
 	detector.DetectState()
