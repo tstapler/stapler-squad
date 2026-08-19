@@ -43,8 +43,21 @@ func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) 
 	}
 }
 
+// Not t.Parallel(): this test (and its siblings below —
+// TestPortSessionHistory_AgyToClaude, _LiveClaude, _LiveAgy,
+// TestPortClaudeToAgy_SchemaMatchesRealDB,
+// TestPortSessionHistory_WithInhibitionEngineRedaction) all override the
+// process-global HOME env var via a raw os.Setenv rather than t.Setenv
+// (t.Setenv panics when combined with t.Parallel(), so someone worked around
+// that by reaching for os.Setenv directly — which reintroduces exactly the
+// race t.Setenv's restriction exists to prevent: HOME is one process-wide
+// value, so whichever of these tests' HOME happens to be active when another
+// resolves its Claude/Antigravity projects directory wins). Confirmed by
+// reproduction: a full `go test ./session/...` run failed
+// TestPortSessionHistory_WithInhibitionEngineRedaction looking for its
+// transcript inside TestPortClaudeToAgy_SchemaMatchesRealDB's t.TempDir() —
+// this test's HOME was still active when that one's path-resolution ran.
 func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
-	t.Parallel()
 	// Create temporary directory for home
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -223,8 +236,9 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	}
 }
 
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortSessionHistory_AgyToClaude(t *testing.T) {
-	t.Parallel()
 	// Create temporary directory for home
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -354,8 +368,9 @@ func TestPortSessionHistory_AgyToClaude(t *testing.T) {
 	}
 }
 
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortSessionHistory_LiveClaude(t *testing.T) {
-	t.Parallel()
 	// Parse actual real Claude JSONL session if present in the home directory.
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -436,8 +451,9 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 	}
 }
 
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortSessionHistory_LiveAgy(t *testing.T) {
-	t.Parallel()
 	// Parse actual real Antigravity JSONL session if present in the home directory.
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -554,8 +570,9 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 // produced by portClaudeToAgy has all tables and indexes present in real
 // Antigravity conversation databases (verified from live .db files).
 // Without the full schema, Antigravity may fail on first open.
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
-	t.Parallel()
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tempHome)
@@ -647,8 +664,9 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 	t.Logf("Schema OK: found %d objects (%v)", len(got), got)
 }
 
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
-	t.Parallel()
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tempHome)

@@ -94,9 +94,18 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 	poller := NewReviewQueuePoller(queue, statusManager, nil)
 	poller.AddInstance(instance)
 
+	// Tests 1-3 below are NOT t.Parallel(): they form a single required
+	// narrative sequence (clean -> dirty -> committed) sharing one queue,
+	// poller, instance, and git worktree. t.Parallel() here previously let
+	// "uncommitted_changes_detected" write modified.txt into the shared
+	// worktree before "clean_worktree_not_added" had run its
+	// checkSession/queue assertion, intermittently failing the "clean"
+	// check — the subtests were never actually independent, so removing
+	// t.Parallel() (rather than trying to isolate the shared worktree per
+	// subtest) is the correct, scoped fix.
+
 	// Test 1: Clean worktree (no uncommitted changes) should not be added to queue
 	t.Run("clean_worktree_not_added", func(t *testing.T) {
-		t.Parallel()
 		poller.checkSession(instance, nil)
 		if queue.Has(instance.Title) {
 			t.Error("Expected clean worktree to not be in review queue")
@@ -105,7 +114,6 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Test 2: Add uncommitted changes - should be detected
 	t.Run("uncommitted_changes_detected", func(t *testing.T) {
-		t.Parallel()
 		// Modify file to create uncommitted changes
 		modifiedFile := filepath.Join(worktreePath, "modified.txt")
 		if err := os.WriteFile(modifiedFile, []byte("uncommitted content"), 0644); err != nil {
@@ -144,7 +152,6 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Test 3: After committing changes, should be removed from queue
 	t.Run("committed_changes_removed", func(t *testing.T) {
-		t.Parallel()
 		// Commit the changes
 		if err := worktree.CommitChanges("Test commit"); err != nil {
 			t.Fatalf("Failed to commit changes: %v", err)

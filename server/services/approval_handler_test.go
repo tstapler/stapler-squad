@@ -37,8 +37,8 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	// deliberately-unstable stub base URL doesn't leak into other tests in this
 	// package that call hookApprovalURL()/InjectHookConfig and expect the stable
 	// default.
-	original := hookBaseURLFn
-	t.Cleanup(func() { hookBaseURLFn = original })
+	original := getHookBaseURLFn()
+	t.Cleanup(func() { SetHookBaseURLFn(original) })
 
 	calls := 0
 	nextAddr := func() string {

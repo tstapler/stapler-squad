@@ -8,7 +8,6 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/zalando/go-keyring"
 )
 
 // stapler-squad#152 security review: GitHub owner/repo regexes only exclude
@@ -165,26 +164,32 @@ func TestGetCloneURL_UsesHostSpecificURL(t *testing.T) {
 // fix (host/owner/repo-only logging, post-clone `git remote set-url`
 // stripping, sanitizeCloneOutput) depends on actually firing.
 func TestGetCloneURL_EmbedsKeychainToken_When_HostHasStoredAccount(t *testing.T) {
-	// Not t.Parallel(): keyring.MockInit()/SetKeychainTokenForAccount below
-	// mutate process-global keychain mock state for "github.example-corp.com" —
-	// the same host literal TestGetCloneURL_UsesHostSpecificURL uses.
-	//
-	// Being non-parallel only controls *when* this test's body runs relative
-	// to t.Parallel() tests (fully before they resume, deterministically) —
-	// it does nothing to stop the global mock state it writes from being
-	// visible to those tests once they resume. Without the MockInit() reset
-	// in the cleanup below, TestGetCloneURL_UsesHostSpecificURL's later,
-	// parallel GetCloneURL call for the same host deterministically (not just
-	// "nondeterministically") picks up the stored "octocat" token and gets a
-	// credentialed URL back instead of the plain one it asserts on. Reset the
-	// mock keychain to a clean store once this test is done so the token
-	// doesn't leak into any other test in the package.
-	keyring.MockInit()
-	t.Cleanup(keyring.MockInit)
+	// Not t.Parallel(): SetKeychainTokenForAccount below mutates process-global
+	// keychain mock state (TestMain's keyring.MockInit()) for
+	// "github.example-corp.com" — the same host literal
+	// TestGetCloneURL_UsesHostSpecificURL uses, so running both in parallel
+	// makes that test's GetCloneURL call nondeterministically pick up this
+	// test's stored token and fail. The t.Cleanup below removes the token
+	// again afterward — without it, the leak persists past this (non-parallel)
+	// test's own execution window into the batch of t.Parallel() tests that
+	// run once the sequential pass finishes, causing the same failure even
+	// with the two tests never truly running concurrently.
 	host := "github.example-corp.com"
 	if err := github.SetKeychainTokenForAccount(host, "octocat", "token-abc123"); err != nil {
 		t.Fatalf("SetKeychainTokenForAccount failed: %v", err)
 	}
+	// The keychain mock (TestMain's keyring.MockInit()) is one process-global
+	// store shared by every test in this binary — not reset between tests.
+	// Without this cleanup, the stored token for this host leaks into
+	// TestGetCloneURL_UsesHostSpecificURL (same host literal), which resumes
+	// as a t.Parallel() test only after this non-parallel test has already
+	// completed and its GetCloneURL call would then nondeterministically pick
+	// up this test's token.
+	t.Cleanup(func() {
+		if err := github.DeleteKeychainTokenForAccount(host, "octocat"); err != nil {
+			t.Logf("cleanup: DeleteKeychainTokenForAccount(%q): %v", host, err)
+		}
+	})
 
 	m := NewRepoPathManagerWithBase("/tmp/repos-base")
 	url := m.GetCloneURL(&GitHubRef{Host: host, Owner: "engineering", Repo: "widget-service"})

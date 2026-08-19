@@ -394,8 +394,16 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 // racing a test's t.TempDir() cleanup (RemoveAll) that runs right after Stop
 // returns. A short refreshRate drives multiple ticks during the test, and
 // goleak.VerifyNone after Stop confirms no monitorLoop goroutine survives it.
+// Not t.Parallel(): same reasoning as session.TestActorNoLeak.
+// goleak.IgnoreCurrent()'s baseline only covers goroutines alive at capture
+// time; a sibling top-level test's own t.Parallel() call spawns a goroutine
+// parked in testing.(*testState).waitParallel, and if that dispatch happens
+// during this test's baseline-to-VerifyNone window, goleak.VerifyNone flags
+// it as an unexpected leak (observed in a full-package run: parked
+// wait-goroutines from unrelated tests elsewhere in this file/package).
+// Running non-parallel prevents the test runner from dispatching any other
+// top-level test while this window is open.
 func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
-	t.Parallel()
 	baseline := goleak.IgnoreCurrent()
 
 	// A healthy fakeSessionLister avoids starting the real process-global
