@@ -28,6 +28,10 @@ func NewTestEntRepository(t testing.TB) *EntRepository {
 	if err != nil {
 		t.Fatalf("NewTestEntRepository: %v", err)
 	}
-	t.Cleanup(func() { repo.Close() })
+	t.Cleanup(func() {
+		if err := repo.Close(); err != nil {
+			t.Logf("NewTestEntRepository cleanup: repo.Close: %v", err)
+		}
+	})
 	return repo
 }
