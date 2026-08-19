@@ -55,10 +55,11 @@ func TestBuildSessionInitialPrompt_ContainsTaskProtocolBlock(t *testing.T) {
 
 // TestBuildSessionInitialPrompt_ContainsShipEscapeHatch verifies the task
 // protocol block gives the agent an explicit, bounded instruction to run
-// /backlog/ship both on a PASS verdict and after MaxSameSessionReviewAttempts
-// review cycles without one — closing the gap where the original protocol told
-// agents to loop on /backlog/review forever with no escape hatch and never
-// mentioned /backlog/ship (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
+// /backlog/ship both on a PASS verdict and once the server-tracked attempt
+// count (MaxSameSessionReviewAttempts) reports the cap is hit — closing the
+// gap where the original protocol told agents to loop on /backlog/review
+// forever with no escape hatch and never mentioned /backlog/ship (see
+// de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
 func TestBuildSessionInitialPrompt_ContainsShipEscapeHatch(t *testing.T) {
 	t.Parallel()
 	ac := `[{"index":0,"text":"Write unit tests","status":"pending"}]`
@@ -68,7 +69,7 @@ func TestBuildSessionInitialPrompt_ContainsShipEscapeHatch(t *testing.T) {
 
 	cases := []string{
 		"/backlog/ship",
-		fmt.Sprintf("%d review cycles", MaxSameSessionReviewAttempts),
+		fmt.Sprintf("%d allowed in THIS session", MaxSameSessionReviewAttempts),
 	}
 	for _, want := range cases {
 		if !strings.Contains(out, want) {

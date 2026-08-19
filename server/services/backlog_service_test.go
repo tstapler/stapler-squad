@@ -839,6 +839,7 @@ func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMod
 func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent(t *testing.T) {
 	t.Parallel()
 	note := "auto-reopened after FAIL verdict"
+	activityCreatedAt := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	item := &session.BacklogItemData{
 		ID:    "item-1",
 		Title: "item with audit history",
@@ -848,6 +849,14 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 		},
 		ProgressNotes: []session.ProgressNoteData{
 			{ID: "pn-1", CriterionIndex: 0, Note: "implemented the dedent fix", Status: "done"},
+		},
+		// [validation.md Gap 2 / Epic 8.7] proves the OTHER read path — the
+		// eager-load -> BacklogItemData.ActivityNotes -> backlogItemToProto
+		// mapper chain — actually carries ActivityNotes, distinct from
+		// get_backlog_item's rendering (Epic 8.6), which never touches this
+		// mapper at all.
+		ActivityNotes: []session.ActivityNoteData{
+			{ID: "an-1", Message: "posted via post_backlog_update", AuthorSessionUUID: "sess-9", AuthorSessionTitle: "Helper", CreatedAt: activityCreatedAt},
 		},
 	}
 
@@ -863,6 +872,14 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 	assert.Equal(t, int32(0), p.ProgressNotes[0].CriterionIndex)
 	assert.Equal(t, "implemented the dedent fix", p.ProgressNotes[0].Note)
 	assert.Equal(t, "done", p.ProgressNotes[0].Status)
+
+	require.Len(t, p.ActivityNotes, 1)
+	assert.Equal(t, "an-1", p.ActivityNotes[0].Id)
+	assert.Equal(t, "posted via post_backlog_update", p.ActivityNotes[0].Message)
+	assert.Equal(t, "sess-9", p.ActivityNotes[0].AuthorSessionUuid)
+	assert.Equal(t, "Helper", p.ActivityNotes[0].AuthorSessionTitle)
+	require.NotNil(t, p.ActivityNotes[0].CreatedAt)
+	assert.True(t, p.ActivityNotes[0].CreatedAt.AsTime().Equal(activityCreatedAt))
 }
 
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
@@ -1174,6 +1191,15 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 // that git worktree operations (which require at least one commit) work in tests.
 // Uses go-git directly rather than shelling out — see
 // .claude/rules/prefer-go-git-over-subshells.md.
+//
+// Also sets a local (repo-scoped, not --global) user.name/user.email via go-git's
+// config API. The initial commit below always supplies its own go-git CommitOptions
+// Author, so it doesn't need this — but several tests reuse this repo (or a clone of
+// it, e.g. setupPRFixSyncRepo's originDir) for further commits made via the plain git
+// CLI (runGitTestCmd), which reads identity from git config rather than any argument.
+// That works on a dev machine with a global identity configured, but CI runners have
+// none, and fail with "Author identity unknown" — setting it here once, locally, fixes
+// every downstream CLI commit against this repo.
 func initGitRepoWithCommit(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test Repo\n"), 0o644); err != nil {
@@ -1182,6 +1208,15 @@ func initGitRepoWithCommit(t *testing.T, dir string) {
 	repo, err := git.PlainInit(dir, false)
 	if err != nil {
 		t.Skipf("git init: %v", err)
+	}
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Skipf("git config: %v", err)
+	}
+	cfg.User.Name = "Test User"
+	cfg.User.Email = "test@example.com"
+	if err := repo.SetConfig(cfg); err != nil {
+		t.Skipf("git set config: %v", err)
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
@@ -1255,19 +1290,40 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 
 	// 2. Trigger real triage. TriggerTriage returns immediately; the parse +
 	// persist + idea→ready transition happens in a goroutine (see
-	// backlog_service.go TriggerTriage), so poll for the real transition.
+	// backlog_service.go TriggerTriage), so wait for testTriageCompleteHook
+	// rather than polling GetBacklogItem's status — the goroutine performs
+	// trailing storage writes (UpdateItemSessionEnded, triageInFlight.Delete,
+	// optional auto-spawn) after flipping status to "ready", so polling
+	// status alone can race those trailing writes (see the identical pattern
+	// and its rationale at TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession).
+	// Filter by item ID: a still-running goroutine from an earlier,
+	// unmigrated TriggerTriage test can fire this shared hook after this
+	// test registers its closure, delivering a false completion signal.
+	triageDone := make(chan string, 1)
+	setTestTriageCompleteHook(func(id string) {
+		if id != itemID {
+			return
+		}
+		select {
+		case triageDone <- id:
+		default:
+		}
+	})
+	t.Cleanup(func() { setTestTriageCompleteHook(nil) })
+
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
 	require.NoError(t, err)
 
-	var readyItem *sessionv1.BacklogItem
-	require.Eventually(t, func() bool {
-		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
-		if getErr != nil || getResp.Msg.Item.Status != "ready" {
-			return false
-		}
-		readyItem = getResp.Msg.Item
-		return true
-	}, 2*time.Second, 10*time.Millisecond, "item should reach 'ready' after real headless triage completes")
+	select {
+	case <-triageDone:
+	case <-time.After(60 * time.Second):
+		t.Fatal("timed out waiting for TriggerTriage's background goroutine to complete")
+	}
+
+	getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, getErr)
+	require.Equal(t, "ready", getResp.Msg.Item.Status)
+	readyItem := getResp.Msg.Item
 
 	require.Equal(t, 1, pool.callCount(), "TriggerTriage should have made exactly one real headless call")
 	require.NotEmpty(t, readyItem.PlanArtifactsPath, "TriggerTriage should persist plan_artifacts_path")
@@ -3575,11 +3631,13 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	require.NoError(t, err)
 
 	require.Len(t, creator.calls, 1)
-	// git worktree list echoes back a realpath(3)-resolved path, so on macOS
-	// (/var -> /private/var) it textually differs from t.TempDir()'s raw form.
-	resolvedTriageWorktreePath, evalErr := filepath.EvalSymlinks(triageWorktreePath)
-	require.NoError(t, evalErr)
-	assert.Equal(t, resolvedTriageWorktreePath, creator.calls[0].path,
+	// Both sides are already canonicalized by production code (session/git's
+	// getWorktreeDirectory/CanonicalizeWorktreePath), so this must be a strict,
+	// byte-identical raw-string comparison -- not normalized on the test side via
+	// filepath.EvalSymlinks -- to actually prove the fix for the /var vs
+	// /private/var (macOS) path-inconsistency bug: a regression that reintroduces
+	// a raw, unresolved path on either side must fail this assertion.
+	assert.Equal(t, triageWorktreePath, creator.calls[0].path,
 		"SpawnSessionFromItem must reuse the exact worktree TriggerTriage created and committed its SDD docs into, not start a fresh one from main")
 
 	// The committed planning docs must still be present — proving this is a

@@ -206,6 +206,52 @@ func TestJoinWithinDir(t *testing.T) {
 	}
 }
 
+// TestCanonicalizeWorktreePath_NonexistentPath verifies AC2: a path that doesn't
+// exist on disk (the pre-`git worktree add` case for a freshly-computed
+// worktreePath) must never error or panic — EvalSymlinks fails with ENOENT here,
+// and the function must fall back to filepath.Clean rather than propagate that.
+func TestCanonicalizeWorktreePath_NonexistentPath(t *testing.T) {
+	t.Parallel()
+	nonexistent := filepath.Join(t.TempDir(), "does-not-exist", "leaf_1234")
+	got := CanonicalizeWorktreePath(nonexistent)
+	want := filepath.Clean(nonexistent)
+	if got != want {
+		t.Errorf("CanonicalizeWorktreePath(%q) = %q, want %q (filepath.Clean fallback)", nonexistent, got, want)
+	}
+}
+
+// TestCanonicalizeWorktreePath_EmptyString verifies the empty-string short-circuit
+// returns the input unchanged rather than resolving cwd (EvalSymlinks("") behavior
+// is platform-dependent and not what any caller here wants).
+func TestCanonicalizeWorktreePath_EmptyString(t *testing.T) {
+	t.Parallel()
+	if got := CanonicalizeWorktreePath(""); got != "" {
+		t.Errorf("CanonicalizeWorktreePath(\"\") = %q, want empty string", got)
+	}
+}
+
+// TestCanonicalizeWorktreePath_ResolvesSymlink verifies the real-path case: a
+// symlinked directory canonicalizes to its resolved target, matching what git
+// itself reports via `git worktree list --porcelain`.
+func TestCanonicalizeWorktreePath_ResolvesSymlink(t *testing.T) {
+	t.Parallel()
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link-to-real")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	resolvedReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatalf("failed to resolve real dir: %v", err)
+	}
+
+	got := CanonicalizeWorktreePath(link)
+	if got != resolvedReal {
+		t.Errorf("CanonicalizeWorktreePath(%q) = %q, want %q", link, got, resolvedReal)
+	}
+}
+
 // TestPreviewWorktreePath_RejectsTraversal exercises PreviewWorktreePath end-to-end
 // against a real git repository, confirming a malicious sessionName can never
 // produce a path outside the configured worktree directory (AC5).

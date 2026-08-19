@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
+	"github.com/tstapler/stapler-squad/session/ent/backlogactivitynote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
@@ -101,6 +102,7 @@ func checkColumn(t, c string) error {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			analyticsevent.Table:          analyticsevent.ValidColumn,
 			approvalrule.Table:            approvalrule.ValidColumn,
+			backlogactivitynote.Table:     backlogactivitynote.ValidColumn,
 			backlogitem.Table:             backlogitem.ValidColumn,
 			backlogitemdependency.Table:   backlogitemdependency.ValidColumn,
 			backlogprogressnote.Table:     backlogprogressnote.ValidColumn,
