@@ -6,6 +6,7 @@ import (
 )
 
 func TestNewInvertedIndex(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	if idx == nil {
 		t.Fatal("NewInvertedIndex returned nil")
@@ -28,6 +29,7 @@ func TestNewInvertedIndex(t *testing.T) {
 }
 
 func TestAddDocument_SingleDocument(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 
 	tokens := []string{"hello", "world"}
@@ -72,6 +74,7 @@ func TestAddDocument_SingleDocument(t *testing.T) {
 }
 
 func TestAddDocument_MultipleDocuments(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 
 	// Add first document
@@ -107,6 +110,7 @@ func TestAddDocument_MultipleDocuments(t *testing.T) {
 }
 
 func TestAddDocument_RepeatedTerms(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 
 	// Document with repeated term
@@ -129,6 +133,7 @@ func TestAddDocument_RepeatedTerms(t *testing.T) {
 }
 
 func TestSearch_NonExistentTerm(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello", "world"})
 
@@ -139,6 +144,7 @@ func TestSearch_NonExistentTerm(t *testing.T) {
 }
 
 func TestSearchMultiple(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello", "world"})
 	idx.AddDocumentSimple(2, []string{"world", "peace"})
@@ -161,6 +167,7 @@ func TestSearchMultiple(t *testing.T) {
 }
 
 func TestGetters(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello", "world", "test"})
 	idx.AddDocumentSimple(2, []string{"world"})
@@ -199,6 +206,7 @@ func TestGetters(t *testing.T) {
 }
 
 func TestHasDocument(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello"})
 
@@ -211,6 +219,7 @@ func TestHasDocument(t *testing.T) {
 }
 
 func TestRemoveDocument(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello", "world"})
 	idx.AddDocumentSimple(2, []string{"world", "peace"})
@@ -255,6 +264,7 @@ func TestRemoveDocument(t *testing.T) {
 }
 
 func TestRemoveDocument_NonExistent(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello"})
 
@@ -268,6 +278,7 @@ func TestRemoveDocument_NonExistent(t *testing.T) {
 }
 
 func TestClear(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello", "world"})
 	idx.AddDocumentSimple(2, []string{"world", "peace"})
@@ -292,6 +303,7 @@ func TestClear(t *testing.T) {
 }
 
 func TestGetAllTerms(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello", "world"})
 	idx.AddDocumentSimple(2, []string{"world", "peace"})
@@ -314,6 +326,7 @@ func TestGetAllTerms(t *testing.T) {
 }
 
 func TestGetStats(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	idx.AddDocumentSimple(1, []string{"hello", "world"})
 	idx.AddDocumentSimple(2, []string{"world", "peace"})
@@ -340,6 +353,7 @@ func TestGetStats(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 
 	var wg sync.WaitGroup
@@ -382,6 +396,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestPositionTracking(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 
 	tokens := []string{"the", "quick", "brown", "fox", "quick"}

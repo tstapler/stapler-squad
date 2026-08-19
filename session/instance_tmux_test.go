@@ -25,6 +25,7 @@ import (
 // pre-fix behavior (which appended "\n") and passes against
 // BuildSubmittableInput's use of EnterKeySequence ("\r").
 func TestBuildSubmittableInput_UsesCarriageReturnNotNewline(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		input      string
@@ -37,6 +38,7 @@ func TestBuildSubmittableInput_UsesCarriageReturnNotNewline(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := BuildSubmittableInput(tc.input, tc.pressEnter)
 			if got != tc.want {
 				t.Errorf("BuildSubmittableInput(%q, %v) = %q, want %q", tc.input, tc.pressEnter, got, tc.want)
@@ -56,6 +58,7 @@ func TestBuildSubmittableInput_UsesCarriageReturnNotNewline(t *testing.T) {
 }
 
 func TestIsClaude(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		program string
 		want    bool
@@ -74,6 +77,7 @@ func TestIsClaude(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
+			t.Parallel()
 			got := isClaude(tc.program)
 			if got != tc.want {
 				t.Errorf("isClaude(%q) = %v, want %v", tc.program, got, tc.want)
@@ -83,6 +87,7 @@ func TestIsClaude(t *testing.T) {
 }
 
 func TestClassifyProgram(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		program string
 		want    string // "claude" or "plain"
@@ -96,6 +101,7 @@ func TestClassifyProgram(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
+			t.Parallel()
 			switch classifyProgram(tc.program).(type) {
 			case claudeProgram:
 				if tc.want != "claude" {
@@ -111,6 +117,7 @@ func TestClassifyProgram(t *testing.T) {
 }
 
 func TestBuildLaunchCommand_NonClaudeProgramUnmodified(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Program:      "aider",
 		Prompt:       "do something",
@@ -127,6 +134,7 @@ func TestBuildLaunchCommand_NonClaudeProgramUnmodified(t *testing.T) {
 }
 
 func TestBuildLaunchCommand_ClaudeSessionResume(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "claude"}
 	got := inst.buildLaunchCommand("conv-abc123")
 	expected := "claude --resume 'conv-abc123'"
@@ -136,6 +144,7 @@ func TestBuildLaunchCommand_ClaudeSessionResume(t *testing.T) {
 }
 
 func TestBuildLaunchCommand_ClaudeEnvWrapper(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "env -u PROXY claude"}
 	got := inst.buildLaunchCommand("conv-xyz")
 	if got == "env -u PROXY claude" {
@@ -147,30 +156,35 @@ func TestBuildLaunchCommand_ClaudeEnvWrapper(t *testing.T) {
 }
 
 func TestYoloFlagFor_should_ReturnDangerouslySkipPermissions_When_ProgramIsClaude(t *testing.T) {
+	t.Parallel()
 	if got := yoloFlagFor("claude"); got != "--dangerously-skip-permissions" {
 		t.Errorf("yoloFlagFor(%q) = %q, want --dangerously-skip-permissions", "claude", got)
 	}
 }
 
 func TestYoloFlagFor_should_ReturnYesAlways_When_ProgramIsAider(t *testing.T) {
+	t.Parallel()
 	if got := yoloFlagFor("aider --model ollama_chat/gemma3:1b"); got != "--yes-always" {
 		t.Errorf("yoloFlagFor(...) = %q, want --yes-always", got)
 	}
 }
 
 func TestYoloFlagFor_should_ReturnEmpty_When_ProgramUnsupported(t *testing.T) {
+	t.Parallel()
 	if got := yoloFlagFor("codex"); got != "" {
 		t.Errorf("yoloFlagFor(%q) = %q, want empty", "codex", got)
 	}
 }
 
 func TestAutoApproveSupported_should_ReturnFalse_When_ProgramUnsupported(t *testing.T) {
+	t.Parallel()
 	if AutoApproveSupported("codex") {
 		t.Error("AutoApproveSupported(\"codex\") = true, want false")
 	}
 }
 
 func TestBuildLaunchCommand_should_AppendYoloFlag_When_AutoApproveTrueAndAgentSupported(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		program string
@@ -181,6 +195,7 @@ func TestBuildLaunchCommand_should_AppendYoloFlag_When_AutoApproveTrueAndAgentSu
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			inst := &Instance{Program: tc.program, AutoApprove: true}
 			got := inst.buildLaunchCommand("")
 			if !strings.HasSuffix(got, tc.want) {
@@ -191,6 +206,7 @@ func TestBuildLaunchCommand_should_AppendYoloFlag_When_AutoApproveTrueAndAgentSu
 }
 
 func TestBuildLaunchCommand_should_NotAppendFlag_When_AutoApproveTrueButAgentUnsupported(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "codex", AutoApprove: true}
 	got := inst.buildLaunchCommand("")
 	if got != "'codex'" {
@@ -199,6 +215,7 @@ func TestBuildLaunchCommand_should_NotAppendFlag_When_AutoApproveTrueButAgentUns
 }
 
 func TestBuildLaunchCommand_should_NotDoubleAppendFlag_When_AutoApproveAndAutoYesBothTrue(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "claude", AutoApprove: true, AutoYes: true}
 	got := inst.buildLaunchCommand("")
 	if n := strings.Count(got, "--dangerously-skip-permissions"); n != 1 {
@@ -218,6 +235,7 @@ func TestBuildLaunchCommand_should_NotDoubleAppendFlag_When_AutoApproveAndAutoYe
 // instead, exercising the dominant creation path (a newly-created session with an initial
 // prompt, claudeSessionID == "").
 func TestBuildLaunchCommand_should_InjectYoloFlagBeforePromptSeparator_When_ClaudeHasInitialPrompt(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "claude", AutoApprove: true, Prompt: "do the thing"}
 	got := inst.buildLaunchCommand("")
 
@@ -235,6 +253,7 @@ func TestBuildLaunchCommand_should_InjectYoloFlagBeforePromptSeparator_When_Clau
 }
 
 func TestShellQuote(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		input string
@@ -252,6 +271,7 @@ func TestShellQuote(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := shellQuote(tc.input)
 			if got != tc.want {
 				t.Errorf("shellQuote(%q) = %q, want %q", tc.input, got, tc.want)
@@ -261,6 +281,7 @@ func TestShellQuote(t *testing.T) {
 }
 
 func TestBuildClaudeCommand_PromptWithShellMetacharactersIsSafe(t *testing.T) {
+	t.Parallel()
 	// Regression test for the backlog/triage launch bug: the backlog prompt is
 	// full of backtick-wrapped tokens and begins with "--- BACKLOG ITEM DATA ---".
 	// Both must be neutralized: single-quoting stops backtick/$()/$VAR expansion,
@@ -284,6 +305,7 @@ func TestBuildClaudeCommand_PromptWithShellMetacharactersIsSafe(t *testing.T) {
 }
 
 func TestBuildClaudeCommand_AppendSystemPromptWithShellMetacharactersIsSafe(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Program:            "claude",
 		AppendSystemPrompt: "be `helpful` and $(honest)",
@@ -298,6 +320,7 @@ func TestBuildClaudeCommand_AppendSystemPromptWithShellMetacharactersIsSafe(t *t
 }
 
 func TestBuildClaudeCommand_AllowedToolsWithShellMetacharactersIsSafe(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Program:      "claude",
 		AllowedTools: "Bash(`whoami`),Bash($(id))",
@@ -310,6 +333,7 @@ func TestBuildClaudeCommand_AllowedToolsWithShellMetacharactersIsSafe(t *testing
 }
 
 func TestBuildClaudeCommand_PermissionModeWithShellMetacharactersIsSafe(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Program:        "claude",
 		PermissionMode: "plan; `touch /tmp/pwned`",
@@ -322,6 +346,7 @@ func TestBuildClaudeCommand_PermissionModeWithShellMetacharactersIsSafe(t *testi
 }
 
 func TestBuildClaudeCommand_ResumeIdWithShellMetacharactersIsSafe(t *testing.T) {
+	t.Parallel()
 	// claudeSessionID comes from the client-supplied resume_id RPC field with no
 	// format validation, so it needs the same shell-quoting as any other
 	// interpolated flag value.
@@ -334,6 +359,7 @@ func TestBuildClaudeCommand_ResumeIdWithShellMetacharactersIsSafe(t *testing.T) 
 }
 
 func TestBuildLaunchCommand_PlainProgramIgnoresClaudeFlags(t *testing.T) {
+	t.Parallel()
 	// Proves the type boundary: a non-claude program receives no flag injection
 	// even when all Instance fields that would produce claude flags are set.
 	inst := &Instance{
@@ -353,6 +379,7 @@ func TestBuildLaunchCommand_PlainProgramIgnoresClaudeFlags(t *testing.T) {
 }
 
 func TestBuildLaunchCommand_CLIFlagsAreShellQuoted(t *testing.T) {
+	t.Parallel()
 	// CLIFlags comes from the client-supplied cli_flags RPC field and must be
 	// shell-quoted to prevent injection. Each whitespace-delimited token is quoted
 	// individually so that multi-token flag strings (--flag1 --flag2=val) still work.
@@ -380,6 +407,7 @@ func TestBuildLaunchCommand_CLIFlagsAreShellQuoted(t *testing.T) {
 // quoted tokens that a shell still word-splits into program + arg, exactly as it did before this
 // feature existed.
 func TestBuildLaunchCommand_should_PreserveMultiWordProgramExecution_When_ProgramHasNoMetacharacters(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "sleep 300"}
 	got := inst.buildLaunchCommand("")
 	want := shellQuote("sleep") + " " + shellQuote("300")
@@ -395,6 +423,7 @@ func TestBuildLaunchCommand_should_PreserveMultiWordProgramExecution_When_Progra
 // argv: ["true; touch /tmp/pwned"] must not let the semicolon terminate the command and inject a
 // second one.
 func TestBuildLaunchCommand_should_PreventCommandInjection_When_ProgramContainsShellMetacharacters(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "true; touch /tmp/pwned"}
 	got := inst.buildLaunchCommand("")
 	if strings.Contains(got, "; touch") {
@@ -415,6 +444,7 @@ func TestBuildLaunchCommand_should_PreventCommandInjection_When_ProgramContainsS
 // command fragment) must survive as a single shell-quoted unit, not be re-split into several argv
 // positions.
 func TestBuildLaunchCommand_should_QuoteEachExtraArgAsOneToken_When_ElementContainsSpacesAndShellMetacharacters(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "ssh", ExtraArgs: []string{"-t", "host", "cd ~/repo && exec claude"}}
 	got := inst.buildLaunchCommand("")
 	want := strings.Join([]string{
@@ -429,6 +459,7 @@ func TestBuildLaunchCommand_should_QuoteEachExtraArgAsOneToken_When_ElementConta
 // backward-compatibility guard: sessions created before this feature (or any non-preset flow)
 // never set ExtraArgs, and must see no trailing space or empty-quote artifact.
 func TestBuildLaunchCommand_should_ProduceByteIdenticalCommand_When_ExtraArgsIsNil(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "claude", CLIFlags: "--verbose"}
 	got := inst.buildLaunchCommand("")
 	want := "claude " + shellQuote("--verbose")
@@ -440,6 +471,7 @@ func TestBuildLaunchCommand_should_ProduceByteIdenticalCommand_When_ExtraArgsIsN
 // TestBuildLaunchCommand_should_AppendExtraArgsAfterCLIFlags_When_BothArePresent covers Story
 // 2.2.1's ordering AC: ExtraArgs (from a selected preset) must come after CLIFlags-derived flags.
 func TestBuildLaunchCommand_should_AppendExtraArgsAfterCLIFlags_When_BothArePresent(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Program: "claude", CLIFlags: "--verbose", ExtraArgs: []string{"--model", "gpt-5"}}
 	got := inst.buildLaunchCommand("")
 	want := "claude " + strings.Join([]string{shellQuote("--verbose"), shellQuote("--model"), shellQuote("gpt-5")}, " ")
@@ -464,6 +496,7 @@ func withShortPromptFileCleanupDelay(t *testing.T) {
 }
 
 func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
+	t.Parallel()
 	// Regression test for the review-gate spawn bug: BacklogLifecycle kept
 	// re-spawning the identical review session every ~8 minutes and tmux
 	// rejected every single attempt with "command too long" because the large
@@ -523,6 +556,7 @@ func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 }
 
 func TestBuildClaudeCommand_LargePromptTempFileIsCleanedUpAfterDelay(t *testing.T) {
+	t.Parallel()
 	withShortPromptFileCleanupDelay(t)
 
 	prompt := strings.Repeat("y", maxInlinePromptBytes+1)
@@ -549,6 +583,7 @@ func TestBuildClaudeCommand_LargePromptTempFileIsCleanedUpAfterDelay(t *testing.
 }
 
 func TestBuildClaudeCommand_LargePromptTempFileContentIsExactExcludingTrailingNewline(t *testing.T) {
+	t.Parallel()
 	// Documents an accepted, deliberate caveat of the temp-file/command-
 	// substitution path (see promptArg's doc comment): POSIX command
 	// substitution strips ALL trailing newlines from its output, so a prompt
@@ -583,6 +618,7 @@ func TestBuildClaudeCommand_LargePromptTempFileContentIsExactExcludingTrailingNe
 }
 
 func TestBuildClaudeCommand_PromptJustUnderThresholdStaysInline(t *testing.T) {
+	t.Parallel()
 	// Boundary check: a prompt one byte under the threshold must keep the
 	// existing (pre-fix) inline shell-quoted form.
 	prompt := strings.Repeat("z", maxInlinePromptBytes-1)
@@ -595,6 +631,7 @@ func TestBuildClaudeCommand_PromptJustUnderThresholdStaysInline(t *testing.T) {
 }
 
 func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Program:      "claude",
 		MCPServerURL: "http://localhost:8543/mcp",

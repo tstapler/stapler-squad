@@ -54,6 +54,7 @@ func createTestData() (*InvertedIndex, *DocumentStore) {
 }
 
 func TestNewIndexStore(t *testing.T) {
+	t.Parallel()
 	store, indexDir := setupTestIndexStore(t)
 
 	if store == nil {
@@ -105,12 +106,14 @@ func TestNewIndexStore_TestMode_UsesIsolatedDir_NotRealHomeDir(t *testing.T) {
 }
 
 func TestNewIndexStore_TestMode_True(t *testing.T) {
+	t.Parallel()
 	if !config.IsTestMode() {
 		t.Fatal("config.IsTestMode() = false inside a go test binary; NewIndexStore's test-mode isolation would silently not apply")
 	}
 }
 
 func TestIndexStore_SaveAndLoad(t *testing.T) {
+	t.Parallel()
 	store, _ := setupTestIndexStore(t)
 	idx, docStore := createTestData()
 
@@ -164,6 +167,7 @@ func TestIndexStore_SaveAndLoad(t *testing.T) {
 }
 
 func TestIndexStore_Exists(t *testing.T) {
+	t.Parallel()
 	store, _ := setupTestIndexStore(t)
 
 	// Initially doesn't exist
@@ -184,6 +188,7 @@ func TestIndexStore_Exists(t *testing.T) {
 }
 
 func TestIndexStore_GetVersion(t *testing.T) {
+	t.Parallel()
 	store, _ := setupTestIndexStore(t)
 	idx, docStore := createTestData()
 
@@ -208,6 +213,7 @@ func TestIndexStore_GetVersion(t *testing.T) {
 }
 
 func TestIndexStore_Delete(t *testing.T) {
+	t.Parallel()
 	store, _ := setupTestIndexStore(t)
 	idx, docStore := createTestData()
 
@@ -230,6 +236,7 @@ func TestIndexStore_Delete(t *testing.T) {
 }
 
 func TestIndexStore_LoadNonExistent(t *testing.T) {
+	t.Parallel()
 	store, _ := setupTestIndexStore(t)
 
 	_, _, err := store.Load()
@@ -239,6 +246,7 @@ func TestIndexStore_LoadNonExistent(t *testing.T) {
 }
 
 func TestIndexStore_AtomicWrites(t *testing.T) {
+	t.Parallel()
 	store, indexDir := setupTestIndexStore(t)
 	idx, docStore := createTestData()
 
@@ -260,6 +268,7 @@ func TestIndexStore_AtomicWrites(t *testing.T) {
 }
 
 func TestIndexStore_MultipleSaves(t *testing.T) {
+	t.Parallel()
 	store, _ := setupTestIndexStore(t)
 	idx, docStore := createTestData()
 
@@ -301,6 +310,7 @@ func TestIndexStore_MultipleSaves(t *testing.T) {
 
 // Test document store separately
 func TestDocumentStore_Basic(t *testing.T) {
+	t.Parallel()
 	ds := NewDocumentStore()
 
 	doc := &Document{
@@ -333,6 +343,7 @@ func TestDocumentStore_Basic(t *testing.T) {
 }
 
 func TestDocumentStore_GetBySession(t *testing.T) {
+	t.Parallel()
 	ds := NewDocumentStore()
 
 	// Add documents to session-1
@@ -355,6 +366,7 @@ func TestDocumentStore_GetBySession(t *testing.T) {
 }
 
 func TestDocumentStore_RemoveBySession(t *testing.T) {
+	t.Parallel()
 	ds := NewDocumentStore()
 
 	ds.Add(&Document{SessionID: "session-1", Content: "doc1"})
@@ -375,6 +387,7 @@ func TestDocumentStore_RemoveBySession(t *testing.T) {
 }
 
 func TestDocumentStore_Clear(t *testing.T) {
+	t.Parallel()
 	ds := NewDocumentStore()
 
 	ds.Add(&Document{SessionID: "session-1", Content: "doc1"})

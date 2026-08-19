@@ -16,11 +16,15 @@ import { ReviewChangesModal } from "../ReviewChangesModal";
 
 const getBacklogItemDiff = jest.fn();
 
-jest.mock("@connectrpc/connect", () => ({
-  createClient: () => ({
-    getBacklogItemDiff: (...args: unknown[]) => getBacklogItemDiff(...args),
-  }),
-}));
+jest.mock("@connectrpc/connect", () => {
+  const actual = jest.requireActual("@connectrpc/connect");
+  return {
+    ...actual,
+    createClient: () => ({
+      getBacklogItemDiff: (...args: unknown[]) => getBacklogItemDiff(...args),
+    }),
+  };
+});
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));

@@ -14,6 +14,7 @@ import (
 // ---- ParseAllWorktrees ---------------------------------------------------
 
 func TestParseAllWorktrees_Normal(t *testing.T) {
+	t.Parallel()
 	input := `worktree /home/user/project
 HEAD abc123
 branch refs/heads/main
@@ -35,6 +36,7 @@ branch refs/heads/feature-auth
 }
 
 func TestParseAllWorktrees_Bare(t *testing.T) {
+	t.Parallel()
 	input := `worktree /srv/repo.git
 HEAD 0000000000000000000000000000000000000000
 bare
@@ -47,6 +49,7 @@ bare
 }
 
 func TestParseAllWorktrees_Detached(t *testing.T) {
+	t.Parallel()
 	input := `worktree /tmp/wt-detached
 HEAD deadbeef
 detached
@@ -59,6 +62,7 @@ detached
 }
 
 func TestParseAllWorktrees_Prunable(t *testing.T) {
+	t.Parallel()
 	input := `worktree /tmp/wt-prunable
 HEAD cafebabe
 branch refs/heads/old-branch
@@ -72,6 +76,7 @@ prunable gitdir file points to non-existent location
 }
 
 func TestParseAllWorktrees_Locked(t *testing.T) {
+	t.Parallel()
 	input := `worktree /tmp/wt-locked
 HEAD 1234abcd
 branch refs/heads/locked-branch
@@ -84,6 +89,7 @@ locked
 }
 
 func TestParseAllWorktrees_Empty(t *testing.T) {
+	t.Parallel()
 	results := ParseAllWorktrees("")
 	assert.Empty(t, results)
 }
@@ -91,26 +97,31 @@ func TestParseAllWorktrees_Empty(t *testing.T) {
 // ---- ScanResult.IsUnfinished --------------------------------------------
 
 func TestIsUnfinished_Uncommitted(t *testing.T) {
+	t.Parallel()
 	r := ScanResult{HasUncommitted: true}
 	assert.True(t, r.IsUnfinished())
 }
 
 func TestIsUnfinished_Ahead(t *testing.T) {
+	t.Parallel()
 	r := ScanResult{AheadCount: 3}
 	assert.True(t, r.IsUnfinished())
 }
 
 func TestIsUnfinished_Behind(t *testing.T) {
+	t.Parallel()
 	r := ScanResult{BehindCount: 5}
 	assert.True(t, r.IsUnfinished())
 }
 
 func TestIsUnfinished_None(t *testing.T) {
+	t.Parallel()
 	r := ScanResult{}
 	assert.False(t, r.IsUnfinished())
 }
 
 func TestIsUnfinished_AllCriteria(t *testing.T) {
+	t.Parallel()
 	table := []struct {
 		name           string
 		hasUncommitted bool
@@ -139,6 +150,7 @@ func TestIsUnfinished_AllCriteria(t *testing.T) {
 // ---- parseDiffShortstat -------------------------------------------------
 
 func TestParseDiffShortstat(t *testing.T) {
+	t.Parallel()
 	t.Run("full stats", func(t *testing.T) {
 		d := parseDiffShortstat("3 files changed, 142 insertions(+), 28 deletions(-)")
 		assert.Equal(t, 3, d.Files)
@@ -164,6 +176,7 @@ func TestParseDiffShortstat(t *testing.T) {
 // ---- SortByLastModified -------------------------------------------------
 
 func TestSortByLastModified(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	results := []ScanResult{
 		{Branch: "a", LastModified: now.Add(-5 * time.Minute)},
@@ -177,6 +190,7 @@ func TestSortByLastModified(t *testing.T) {
 }
 
 func TestSortByLastModified_Stable(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	// Equal times — sort by RepoPath+Branch.
 	results := []ScanResult{
@@ -192,6 +206,7 @@ func TestSortByLastModified_Stable(t *testing.T) {
 // ---- worktreeCache TTL --------------------------------------------------
 
 func TestWorktreeCacheTTL(t *testing.T) {
+	t.Parallel()
 	c := &worktreeCache{ttl: 30 * time.Millisecond}
 	r := ScanResult{Branch: "main", HasUncommitted: true}
 	c.Set(r)
@@ -212,6 +227,7 @@ func TestWorktreeCacheTTL(t *testing.T) {
 }
 
 func TestWorktreeCacheInvalidate(t *testing.T) {
+	t.Parallel()
 	c := &worktreeCache{ttl: time.Minute}
 	c.Set(ScanResult{Branch: "feature"})
 	c.Invalidate()
@@ -222,6 +238,7 @@ func TestWorktreeCacheInvalidate(t *testing.T) {
 // ---- Circuit breaker ----------------------------------------------------
 
 func TestCircuitBreaker_BackoffAfterThreeTimeouts(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{}
 	repoPath := "/tmp/test-repo"
 
@@ -236,6 +253,7 @@ func TestCircuitBreaker_BackoffAfterThreeTimeouts(t *testing.T) {
 }
 
 func TestCircuitBreaker_ResetOnSuccess(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{}
 	repoPath := "/tmp/test-repo-2"
 
@@ -275,6 +293,7 @@ func (r *staleTestReader) DiffShortstat(worktreePath string) (DiffStat, error) {
 }
 
 func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
+	t.Parallel()
 	repoPath := t.TempDir()
 	reader := &staleTestReader{worktreePath: repoPath, hasUncommitted: true}
 	bus := pkgevents.NewEventBus(10)
@@ -327,6 +346,7 @@ func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
 // reading its own independent per-worktree cache anyway — leaving a
 // user-triggered scan (Refresh button) queued but still returning stale data.
 func TestScanRepo_ForceBypassesPerWorktreeCache(t *testing.T) {
+	t.Parallel()
 	repoPath := t.TempDir()
 	reader := &staleTestReader{worktreePath: repoPath, hasUncommitted: true}
 	s := NewScannerWithReader(pkgevents.NewEventBus(10), nil, reader)

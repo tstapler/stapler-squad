@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -50,7 +51,31 @@ type backlogItemEventSender interface {
 // non-deterministic goroutine scheduling, which cannot be turned into a
 // reliable regression test. See backlog_service_events_test.go's
 // race-window test for the only caller.
-var testAfterSubscribeHook func()
+//
+// testAfterSubscribeHookMu guards concurrent read/write of the hook from a
+// test goroutine (setter) and every other parallel test's watchBacklogItems
+// call (reader) — required under -race since the t.Parallel() rollout made
+// this package's WatchBacklogItems tests run concurrently. Modeled on
+// backlog_service_triage.go's testTriageCompleteHook.
+var (
+	testAfterSubscribeHookMu sync.Mutex
+	testAfterSubscribeHook   func()
+)
+
+func setTestAfterSubscribeHook(hook func()) {
+	testAfterSubscribeHookMu.Lock()
+	defer testAfterSubscribeHookMu.Unlock()
+	testAfterSubscribeHook = hook
+}
+
+func callTestAfterSubscribeHook() {
+	testAfterSubscribeHookMu.Lock()
+	hook := testAfterSubscribeHook
+	testAfterSubscribeHookMu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
 
 // WatchBacklogItems streams real-time backlog item events. Sends an initial
 // snapshot (or, on reconnect via after_seq, a replay of buffered events)
@@ -83,9 +108,7 @@ func (s *BacklogService) watchBacklogItems(
 	eventCh, subID := s.eventBus.Subscribe(ctx)
 	defer s.eventBus.Unsubscribe(subID)
 
-	if testAfterSubscribeHook != nil {
-		testAfterSubscribeHook()
-	}
+	callTestAfterSubscribeHook()
 
 	costFor := s.buildCostLookup()
 
@@ -295,6 +318,16 @@ func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID str
 			},
 		}
 
+	case events.BacklogChangeActivityNoteAdded:
+		// Deliberately never touches protoItem (ADR-002): this event's payload
+		// carries only the new note, never a full item snapshot.
+		out.Event = &sessionv1.BacklogItemEvent_ActivityNoteAdded{
+			ActivityNoteAdded: &sessionv1.BacklogItemActivityNoteAddedEvent{
+				ItemId: itemID,
+				Note:   activityNoteDataToProto(payload.ActivityNote),
+			},
+		}
+
 	case events.BacklogChangeItemArchived:
 		archived := &sessionv1.BacklogItemArchivedEvent{
 			ItemId:     itemID,
@@ -329,6 +362,25 @@ func backlogItemToProtoOrNil(item *session.BacklogItemData, costFor func(tmuxUUI
 		return nil
 	}
 	return backlogItemToProto(item, costFor)
+}
+
+// activityNoteDataToProto converts a session.ActivityNoteData (the payload
+// carried by BacklogChangeActivityNoteAdded) to the wire
+// sessionv1.BacklogActivityNote. Nil-safe: BacklogItemChange.ActivityNote is
+// only guaranteed non-nil when Kind == ChangeActivityNoteAdded, but this is
+// called unconditionally from that switch case, so a defensive nil check
+// still guards against a caller bug rather than trusting the invariant.
+func activityNoteDataToProto(n *session.ActivityNoteData) *sessionv1.BacklogActivityNote {
+	if n == nil {
+		return nil
+	}
+	return &sessionv1.BacklogActivityNote{
+		Id:                 n.ID,
+		Message:            n.Message,
+		AuthorSessionUuid:  n.AuthorSessionUUID,
+		AuthorSessionTitle: n.AuthorSessionTitle,
+		CreatedAt:          timestamppb.New(n.CreatedAt),
+	}
 }
 
 // reviewVerdictDataToProto converts a session.ReviewVerdictData (the payload

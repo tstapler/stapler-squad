@@ -17,6 +17,7 @@ var failLookup = func(string) (string, error) { return "", errors.New("not found
 // TestFindClaudeBinary_LookPathSucceeds verifies the common case: PATH lookup
 // succeeds and fallback locations are never consulted.
 func TestFindClaudeBinary_LookPathSucceeds(t *testing.T) {
+	t.Parallel()
 	lookPath := func(name string) (string, error) {
 		require.Equal(t, "claude", name)
 		return "/usr/bin/claude", nil
@@ -32,6 +33,7 @@ func TestFindClaudeBinary_LookPathSucceeds(t *testing.T) {
 // was reinstalled) must not silently disable the headless pool when claude is
 // findable at the standard $HOME/.local/bin user-install location.
 func TestFindClaudeBinary_FallsBackToHomeLocalBin(t *testing.T) {
+	t.Parallel()
 	homeDir := t.TempDir()
 	localBin := filepath.Join(homeDir, ".local", "bin")
 	require.NoError(t, os.MkdirAll(localBin, 0o755))
@@ -47,6 +49,7 @@ func TestFindClaudeBinary_FallsBackToHomeLocalBin(t *testing.T) {
 // file at the fallback location is correctly rejected rather than returned as
 // a usable binary path.
 func TestFindClaudeBinary_FallbackFileNotExecutable(t *testing.T) {
+	t.Parallel()
 	homeDir := t.TempDir()
 	localBin := filepath.Join(homeDir, ".local", "bin")
 	require.NoError(t, os.MkdirAll(localBin, 0o755))
@@ -61,6 +64,7 @@ func TestFindClaudeBinary_FallbackFileNotExecutable(t *testing.T) {
 // directory literally named "claude" at the fallback location is not
 // mistaken for the binary.
 func TestFindClaudeBinary_FallbackDirectoryNamedClaudeIgnored(t *testing.T) {
+	t.Parallel()
 	homeDir := t.TempDir()
 	localBin := filepath.Join(homeDir, ".local", "bin")
 	require.NoError(t, os.MkdirAll(filepath.Join(localBin, "claude"), 0o755))
@@ -72,6 +76,7 @@ func TestFindClaudeBinary_FallbackDirectoryNamedClaudeIgnored(t *testing.T) {
 // TestFindClaudeBinary_NoneFoundAnywhere verifies a clear error when claude is
 // absent from both PATH and every fallback location.
 func TestFindClaudeBinary_NoneFoundAnywhere(t *testing.T) {
+	t.Parallel()
 	homeDir := t.TempDir() // empty; no .local/bin/claude
 	_, err := findClaudeBinary(failLookup, homeDir, nil)
 	require.Error(t, err)
@@ -81,6 +86,7 @@ func TestFindClaudeBinary_NoneFoundAnywhere(t *testing.T) {
 // (e.g. os.UserHomeDir() failed) does not panic and simply skips the
 // home-based fallback, still trying the caller-supplied fallback dirs.
 func TestFindClaudeBinary_EmptyHomeDirSkipsHomeFallback(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	claudePath := filepath.Join(tmpDir, "claude")
 	require.NoError(t, os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o755))
@@ -94,6 +100,7 @@ func TestFindClaudeBinary_EmptyHomeDirSkipsHomeFallback(t *testing.T) {
 // home-based fallback takes priority over the caller-supplied system
 // fallback dirs when both would resolve to a valid binary.
 func TestFindClaudeBinary_HomeFallbackCheckedBeforeSystemDirs(t *testing.T) {
+	t.Parallel()
 	homeDir := t.TempDir()
 	localBin := filepath.Join(homeDir, ".local", "bin")
 	require.NoError(t, os.MkdirAll(localBin, 0o755))
@@ -112,6 +119,7 @@ func TestFindClaudeBinary_HomeFallbackCheckedBeforeSystemDirs(t *testing.T) {
 // TestFindClaudeBinary_NilFallbackDirsDoesNotPanic verifies a nil fallbackDirs
 // slice (the zero value, not an explicitly empty slice) is handled safely.
 func TestFindClaudeBinary_NilFallbackDirsDoesNotPanic(t *testing.T) {
+	t.Parallel()
 	_, err := findClaudeBinary(failLookup, "", nil)
 	require.Error(t, err)
 }

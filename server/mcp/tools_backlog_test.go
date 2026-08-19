@@ -5509,3 +5509,621 @@ func TestPaginateBacklogItems_SlicesAndReportsHasMore(t *testing.T) {
 	require.Empty(t, page)
 	require.False(t, hasMore)
 }
+
+// --- post_backlog_update (Epic 8.3) ---
+
+// TestPostBacklogUpdate_should_Succeed_When_SessionLinkedToItem mirrors a
+// gated tool's happy path, but via the new ungated tool.
+func TestPostBacklogUpdate_should_Succeed_When_SessionLinkedToItem(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item for linked post_backlog_update test",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, store: &stubStore{}}
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "made progress",
+	})
+
+	result, err := handler.postBacklogUpdate(WithSessionUUID(ctx, sessionUUID), req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Posted activity update")
+
+	notes, err := storage.ListActivityNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	assert.Equal(t, sessionUUID, notes[0].AuthorSessionUUID)
+	assert.Equal(t, "made progress", notes[0].Message)
+}
+
+// TestPostBacklogUpdate_should_Succeed_When_SessionNotLinkedToItem is the
+// core behavior difference from every gated tool: unlike report_progress/
+// request_review (which require GetItemSessionBySessionAndItem to succeed),
+// post_backlog_update has no item-linkage check at all.
+func TestPostBacklogUpdate_should_Succeed_When_SessionNotLinkedToItem(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item for unlinked post_backlog_update test",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	// Deliberately no CreateItemSession call.
+	sessionUUID := uuid.New().String()
+	handler := &backlogHandlers{storage: storage, store: &stubStore{}}
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "an unlinked note",
+	})
+
+	result, err := handler.postBacklogUpdate(WithSessionUUID(ctx, sessionUUID), req)
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Posted activity update")
+
+	notes, err := storage.ListActivityNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	assert.Equal(t, sessionUUID, notes[0].AuthorSessionUUID, "the note must be attributed to the caller even though it is not linked to the item")
+}
+
+// TestPostBacklogUpdate_should_Succeed_When_NoSessionUUIDPresent verifies a
+// manual/external MCP client (no STAPLER_SESSION_UUID at all) is a
+// legitimate caller — the note's author falls back to the "manual" sentinel,
+// not an error. Note: this deliberately does not assert an empty
+// AuthorSessionUUID — callerSessionUUIDForAudit (tools_backlog.go) returns
+// the literal string "manual" (manualCallerSentinel), not "", when no
+// session UUID is present in context.
+func TestPostBacklogUpdate_should_Succeed_When_NoSessionUUIDPresent(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title: "item for no-session-uuid post_backlog_update test",
+	})
+	require.NoError(t, err)
+
+	// No store needed: the manualCallerSentinel path never calls h.store.
+	handler := &backlogHandlers{storage: storage}
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "a manual note",
+	})
+
+	result, err := handler.postBacklogUpdate(context.Background(), req)
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Posted activity update")
+
+	notes, err := storage.ListActivityNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	assert.Equal(t, manualCallerSentinel, notes[0].AuthorSessionUUID, "with no session context, provenance falls back to the \"manual\" sentinel, not an error")
+}
+
+// TestPostBacklogUpdate_should_UseSessionIDParamForProvenance_When_Provided
+// verifies an explicit session_id param overrides the context's caller UUID
+// for attribution (mirrors set_session_goal's pattern).
+func TestPostBacklogUpdate_should_UseSessionIDParamForProvenance_When_Provided(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item for session_id override test"})
+	require.NoError(t, err)
+
+	namedUUID := uuid.New().String()
+	store := &stubStore{instances: []*session.Instance{
+		{Title: "named-session", UUID: namedUUID},
+	}}
+	handler := &backlogHandlers{storage: storage, store: store}
+
+	callerUUID := uuid.New().String() // different from named-session's UUID
+	req := makeToolReq(map[string]interface{}{
+		"item_id":    item.ID,
+		"message":    "note attributed to a named session",
+		"session_id": "named-session",
+	})
+
+	result, err := handler.postBacklogUpdate(WithSessionUUID(ctx, callerUUID), req)
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Posted activity update")
+
+	notes, err := storage.ListActivityNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	assert.Equal(t, namedUUID, notes[0].AuthorSessionUUID, "session_id param must override the context's caller UUID for provenance")
+	assert.Equal(t, "named-session", notes[0].AuthorSessionTitle)
+}
+
+// TestPostBacklogUpdate_should_RejectMessage_When_EmptyOrWhitespaceOnly
+// covers the message-required validation, including the trim-then-check
+// order (a whitespace-only message must not slip through as "non-empty").
+func TestPostBacklogUpdate_should_RejectMessage_When_EmptyOrWhitespaceOnly(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		message interface{}
+	}{
+		{"empty string", ""},
+		{"whitespace only", "   \n\t  "},
+		{"missing entirely", nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			storage := newTestBacklogStorage(t)
+			ctx := context.Background()
+			item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item"})
+			require.NoError(t, err)
+
+			handler := &backlogHandlers{storage: storage}
+			args := map[string]interface{}{"item_id": item.ID}
+			if tc.message != nil {
+				args["message"] = tc.message
+			}
+
+			result, err := handler.postBacklogUpdate(ctx, makeToolReq(args))
+			require.NoError(t, err)
+			m := parseResult(t, result)
+			require.False(t, m["success"].(bool))
+			errObj := m["error"].(map[string]interface{})
+			assert.Equal(t, ErrInvalidArgument, errObj["code"])
+		})
+	}
+}
+
+// TestPostBacklogUpdate_should_RejectMessage_When_OverMaxLength mirrors
+// request_review's 2000-char cap and confirms the over-length message is
+// never persisted.
+func TestPostBacklogUpdate_should_RejectMessage_When_OverMaxLength(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item"})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": strings.Repeat("a", maxPostBacklogUpdateMessageLen+1),
+	})
+
+	result, err := handler.postBacklogUpdate(ctx, req)
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrInvalidArgument, errObj["code"])
+
+	notes, err := storage.ListActivityNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Empty(t, notes, "an over-length message must never be persisted")
+}
+
+// TestPostBacklogUpdate_should_ReturnErrItemNotFound_When_ItemIDDoesNotExist
+// [Concern 2 fix] proves ent.IsConstraintError detection in AppendActivityNote
+// and the handler's errors.Is mapping work end to end: a nonexistent item_id
+// must map to ITEM_NOT_FOUND, not a raw INTERNAL_ERROR.
+func TestPostBacklogUpdate_should_ReturnErrItemNotFound_When_ItemIDDoesNotExist(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": uuid.New().String(),
+		"message": "a note for an item that doesn't exist",
+	})
+
+	result, err := handler.postBacklogUpdate(context.Background(), req)
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrItemNotFound, errObj["code"], "a nonexistent item_id must map to ITEM_NOT_FOUND, not INTERNAL_ERROR")
+}
+
+// TestPostBacklogUpdate_should_StripHTMLTagsBeforePersisting_When_MessageContainsMarkup
+// [Concern 1 fix] proves sanitization happens before Create(), not only at
+// get_backlog_item render time — reads the note back via
+// ListActivityNotesForItem and asserts the persisted message has the tag
+// stripped.
+func TestPostBacklogUpdate_should_StripHTMLTagsBeforePersisting_When_MessageContainsMarkup(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item"})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "<script>alert(1)</script>hello",
+	})
+
+	result, err := handler.postBacklogUpdate(context.Background(), req)
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Posted activity update")
+
+	notes, err := storage.ListActivityNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	assert.NotContains(t, notes[0].Message, "<script>", "HTML tags must be stripped before Create(), not only at get_backlog_item render time")
+	assert.NotContains(t, notes[0].Message, "</script>")
+	assert.Contains(t, notes[0].Message, "alert(1)hello")
+}
+
+// TestPostBacklogUpdateFeature_should_NotLoosenGatedToolsPermissions_When_SessionUnlinkedOrAbsent
+// is the regression guard requirements.md calls for: proves this feature did
+// not loosen report_progress/request_review's existing gates by exercising
+// both tools under the same unlinked/no-session-UUID conditions
+// post_backlog_update is deliberately exempt from, on a handler that also
+// has post_backlog_update wired.
+func TestPostBacklogUpdateFeature_should_NotLoosenGatedToolsPermissions_When_SessionUnlinkedOrAbsent(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item for gated-tools regression guard",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+
+	assertPermissionDenied := func(t *testing.T, result *mcpgo.CallToolResult, callErr error) {
+		t.Helper()
+		require.NoError(t, callErr)
+		m := parseResult(t, result)
+		require.False(t, m["success"].(bool))
+		errObj := m["error"].(map[string]interface{})
+		assert.Equal(t, ErrPermissionDenied, errObj["code"])
+	}
+
+	t.Run("report_progress: no session UUID", func(t *testing.T) {
+		req := makeToolReq(map[string]interface{}{
+			"item_id":        item.ID,
+			"criteria_index": float64(0),
+			"status":         "pass",
+		})
+		result, callErr := handler.reportProgress(context.Background(), req)
+		assertPermissionDenied(t, result, callErr)
+	})
+
+	t.Run("report_progress: unlinked session UUID", func(t *testing.T) {
+		req := makeToolReq(map[string]interface{}{
+			"item_id":        item.ID,
+			"criteria_index": float64(0),
+			"status":         "pass",
+		})
+		result, callErr := handler.reportProgress(WithSessionUUID(ctx, uuid.New().String()), req)
+		assertPermissionDenied(t, result, callErr)
+	})
+
+	t.Run("request_review: no session UUID", func(t *testing.T) {
+		req := makeToolReq(map[string]interface{}{
+			"item_id": item.ID,
+			"message": "done",
+		})
+		result, callErr := handler.requestReview(context.Background(), req)
+		assertPermissionDenied(t, result, callErr)
+	})
+
+	t.Run("request_review: unlinked session UUID", func(t *testing.T) {
+		req := makeToolReq(map[string]interface{}{
+			"item_id": item.ID,
+			"message": "done",
+		})
+		result, callErr := handler.requestReview(WithSessionUUID(ctx, uuid.New().String()), req)
+		assertPermissionDenied(t, result, callErr)
+	})
+}
+
+// --- wait_for_backlog_event exclusion of activity notes (Epic 8.4 / Blocker 3) ---
+
+// TestWaitForBacklogEvent_should_NotWake_When_ActivityNoteAddedFires is the
+// regression test for Epic 4.4's early-skip: an activity-note-posted event
+// must never satisfy any event_type filter, including the default "any".
+// Mirrors TestWaitForBacklogEvent_FiltersByEventType's harness (subscribe,
+// wait for SubscriberCount, publish).
+func TestWaitForBacklogEvent_should_NotWake_When_ActivityNoteAddedFires(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	// Baseline captured after storage setup, mirroring
+	// TestWaitForBacklogEvent_NoGoroutineLeak's rationale: opening the
+	// sqlite-backed Storage starts its own long-lived pool goroutines that
+	// are test-infra noise, not something waitForBacklogEvent could leak.
+	baseline := goleak.IgnoreCurrent()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Activity note should not wake wait_for_backlog_event",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(1)})
+
+	resultCh := make(chan waitCallOutcome, 1)
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, req)
+		resultCh <- waitCallOutcome{res: res, err: callErr}
+	}()
+
+	waitSubscriberCount(t, bus, 1)
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind:         events.BacklogChangeActivityNoteAdded,
+			Item:         &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusInProgress)},
+			ActivityNote: &session.ActivityNoteData{Message: "an informal note"},
+		},
+	})
+
+	select {
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
+		out := decodeWaitResult(t, outcome.res)
+		require.True(t, out.Success)
+		assert.False(t, out.EventReceived, "an activity-note event must never satisfy wait_for_backlog_event, even with event_type=\"any\"")
+		require.NotNil(t, out.Error)
+		assert.Equal(t, "WAIT_TIMEOUT", out.Error.Code)
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForBacklogEvent did not return within the timeout window")
+	}
+
+	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+		"the timed-out call must Unsubscribe on exit")
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestWaitForBacklogEvent_should_StillWake_When_StatusTransitionFires proves
+// Epic 4.4's exclusion is targeted, not a rewrite: a real status-transition
+// event on the same item still wakes the waiter exactly as before.
+func TestWaitForBacklogEvent_should_StillWake_When_StatusTransitionFires(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	bus := events.NewEventBus(32)
+
+	// See TestWaitForBacklogEvent_should_NotWake_When_ActivityNoteAddedFires's
+	// comment on why baseline is captured after storage setup.
+	baseline := goleak.IgnoreCurrent()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Status transition should still wake wait_for_backlog_event",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage, eventBus: bus}
+	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(5)})
+
+	resultCh := make(chan waitCallOutcome, 1)
+	go func() {
+		res, callErr := handler.waitForBacklogEvent(ctx, req)
+		resultCh <- waitCallOutcome{res: res, err: callErr}
+	}()
+
+	waitSubscriberCount(t, bus, 1)
+	bus.Publish(&events.Event{
+		Type: events.EventBacklogItemChanged,
+		BacklogItemPayload: &events.BacklogItemEventPayload{
+			Kind:      events.BacklogChangeStatusTransition,
+			Item:      &session.BacklogItemData{ID: item.ID, Status: string(session.BacklogStatusReview)},
+			OldStatus: string(session.BacklogStatusInProgress),
+			NewStatus: string(session.BacklogStatusReview),
+		},
+	})
+
+	select {
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
+		out := decodeWaitResult(t, outcome.res)
+		require.True(t, out.EventReceived)
+		assert.Equal(t, "status_changed", out.EventKind)
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForBacklogEvent did not return after a genuine status-transition event")
+	}
+
+	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+		"the matched call must Unsubscribe on exit")
+	goleak.VerifyNone(t, baseline)
+}
+
+// --- get_backlog_item's "## Activity Log" rendering (Epic 8.6) ---
+
+// TestGetBacklogItem_should_RenderActivityLogAfterVerdict_When_BothPresent
+// verifies heading placement: "## Activity Log" appears after "## Latest
+// Review Verdict" and before the role-aware guidance block.
+func TestGetBacklogItem_should_RenderActivityLogAfterVerdict_When_BothPresent(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item with verdict and activity log",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewOutcomePass,
+		Summary:        "lgtm",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, storage.AppendActivityNote(ctx, item.ID, "", "worker-1", "a note about progress"))
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	text := tc.Text
+
+	verdictIdx := strings.Index(text, "## Latest Review Verdict")
+	activityIdx := strings.Index(text, "## Activity Log")
+	toolsIdx := strings.Index(text, "## Available MCP Tools")
+	require.NotEqual(t, -1, verdictIdx, "expected the verdict section to be present")
+	require.NotEqual(t, -1, activityIdx, "expected the activity log section to be present")
+	require.NotEqual(t, -1, toolsIdx, "expected the role-aware guidance block to be present")
+	assert.Less(t, verdictIdx, activityIdx, "Activity Log must come after Latest Review Verdict")
+	assert.Less(t, activityIdx, toolsIdx, "Activity Log must come before the role-aware guidance block")
+}
+
+// TestGetBacklogItem_should_OmitActivityLogSection_When_NoNotesExist matches
+// the "## Latest Review Verdict" section's own only-if-present convention.
+func TestGetBacklogItem_should_OmitActivityLogSection_When_NoNotesExist(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item with no notes"})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	text := result.Content[0].(mcpgo.TextContent).Text
+
+	assert.NotContains(t, text, "## Activity Log")
+}
+
+// TestGetBacklogItem_should_RenderEachActivityNoteEntry_When_AuthorFallbackVaries
+// verifies the "- note from %s at %s: %s" format and the author-fallback
+// chain (title -> raw UUID -> "manual").
+func TestGetBacklogItem_should_RenderEachActivityNoteEntry_When_AuthorFallbackVaries(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item"})
+	require.NoError(t, err)
+
+	require.NoError(t, storage.AppendActivityNote(ctx, item.ID, "uuid-with-title", "Worker One", "note with a title"))
+	require.NoError(t, storage.AppendActivityNote(ctx, item.ID, "uuid-only-1234", "", "note with only a uuid"))
+	require.NoError(t, storage.AppendActivityNote(ctx, item.ID, "", "", "a fully manual note"))
+
+	notes, err := storage.ListActivityNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 3)
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	text := result.Content[0].(mcpgo.TextContent).Text
+
+	assert.Contains(t, text, fmt.Sprintf("- note from Worker One at %s: note with a title", notes[0].CreatedAt.Format(time.RFC3339)))
+	assert.Contains(t, text, fmt.Sprintf("- note from uuid-only-1234 at %s: note with only a uuid", notes[1].CreatedAt.Format(time.RFC3339)))
+	assert.Contains(t, text, fmt.Sprintf("- note from manual at %s: a fully manual note", notes[2].CreatedAt.Format(time.RFC3339)))
+}
+
+// TestGetBacklogItem_should_CapActivityLogAtTwentyEntries_When_MoreThanTwentyPosted
+// verifies the maxActivityLogEntriesRendered cap and its
+// "(N older entries not shown)" line.
+func TestGetBacklogItem_should_CapActivityLogAtTwentyEntries_When_MoreThanTwentyPosted(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item with many notes"})
+	require.NoError(t, err)
+
+	const total = maxActivityLogEntriesRendered + 3
+	for i := 0; i < total; i++ {
+		require.NoError(t, storage.AppendActivityNote(ctx, item.ID, "", "", fmt.Sprintf("note number %d", i)))
+	}
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	text := result.Content[0].(mcpgo.TextContent).Text
+
+	assert.Contains(t, text, "(3 older entries not shown)")
+	// Trailing "\n" (every rendered entry ends the line right after the message)
+	// makes each check exact — without it, e.g. "note number 1" would be a false
+	// substring match against the still-present "note number 10".
+	for i := 0; i < 3; i++ {
+		assert.NotContains(t, text, fmt.Sprintf("note number %d\n", i))
+	}
+	for i := 3; i < total; i++ {
+		assert.Contains(t, text, fmt.Sprintf("note number %d\n", i))
+	}
+}
+
+// TestGetBacklogItem_should_SanitizeActivityLogEntry_When_MessageContainsHTML
+// proves session.SanitizeForAgentContext is applied at render time,
+// independent of post_backlog_update's own persist-time stripping — the note
+// is written directly via storage.AppendActivityNote, bypassing the handler
+// entirely, so any stripping observed here can only be render-time.
+func TestGetBacklogItem_should_SanitizeActivityLogEntry_When_MessageContainsHTML(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item"})
+	require.NoError(t, err)
+
+	require.NoError(t, storage.AppendActivityNote(ctx, item.ID, "", "", "<b>bold</b> note"))
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	text := result.Content[0].(mcpgo.TextContent).Text
+
+	assert.NotContains(t, text, "<b>")
+	assert.NotContains(t, text, "</b>")
+	assert.Contains(t, text, "bold note")
+}
+
+// TestGetBacklogItem_should_NotUseVerdictFormatStrings_When_NoVerdictExists
+// proves no accidental format collision with the verdict section: the
+// activity log section's own output never contains "Outcome:" or
+// "Criterion " when no review verdict exists.
+func TestGetBacklogItem_should_NotUseVerdictFormatStrings_When_NoVerdictExists(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item"})
+	require.NoError(t, err)
+	require.NoError(t, storage.AppendActivityNote(ctx, item.ID, "", "", "just a note"))
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	text := result.Content[0].(mcpgo.TextContent).Text
+
+	assert.NotContains(t, text, "Outcome:")
+	assert.NotContains(t, text, "Criterion ")
+}

@@ -26,6 +26,7 @@ import (
 )
 
 func TestBacklogItemEvent_should_exposeCorrectOneofVariant_When_StatusChangedIsSet(t *testing.T) {
+	t.Parallel()
 	event := &sessionv1.BacklogItemEvent{
 		Event: &sessionv1.BacklogItemEvent_StatusChanged{
 			StatusChanged: &sessionv1.BacklogItemStatusChangedEvent{
@@ -45,6 +46,7 @@ func TestBacklogItemEvent_should_exposeCorrectOneofVariant_When_StatusChangedIsS
 }
 
 func TestBacklogItemEvent_should_returnNilForUnsetOneofVariant_When_NoVariantIsSet(t *testing.T) {
+	t.Parallel()
 	event := &sessionv1.BacklogItemEvent{}
 
 	if got := event.GetStatusChanged(); got != nil {
@@ -139,6 +141,7 @@ func requireCleanReturn(t *testing.T, cancel context.CancelFunc, done <-chan err
 // ─── Story 3.2.1: fresh-snapshot branch (Task 3.2.1b) ─────────────────────
 
 func TestWatchBacklogItems_should_sendSnapshotEventsForAllItems_When_AfterSeqIsZero(t *testing.T) {
+	t.Parallel()
 	svc, storage, _ := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -180,6 +183,7 @@ func TestWatchBacklogItems_should_sendSnapshotEventsForAllItems_When_AfterSeqIsZ
 // test asserts the actual, current, correct behavior (is_snapshot: true on
 // every replayed event) rather than the stale bullet text.
 func TestWatchBacklogItems_should_replayBufferedEventsInSeqOrder_When_AfterSeqIsGreaterThanZero(t *testing.T) {
+	t.Parallel()
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -243,6 +247,7 @@ func TestWatchBacklogItems_should_replayBufferedEventsInSeqOrder_When_AfterSeqIs
 // is a minimal test-only seam added specifically to make this race
 // reproducible on every run rather than only occasionally.
 func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_When_PublishedBetweenSubscribeAndEventsSince(t *testing.T) {
+	t.Parallel()
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -264,10 +269,10 @@ func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_Wh
 		IsSnapshot:    false, // as originally published — must not be trusted verbatim by the replay branch
 	})
 
-	testAfterSubscribeHook = func() {
+	setTestAfterSubscribeHook(func() {
 		bus.Publish(raceEvent)
-	}
-	t.Cleanup(func() { testAfterSubscribeHook = nil })
+	})
+	t.Cleanup(func() { setTestAfterSubscribeHook(nil) })
 
 	sender := &fakeBacklogItemEventSender{}
 	runCtx, cancel := context.WithCancel(ctx)
@@ -302,6 +307,7 @@ func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_Wh
 // ─── Live fan-out (no filters) ─────────────────────────────────────────────
 
 func TestWatchBacklogItems_should_forwardLiveEvent_When_PublishedWhileStreamIsLive(t *testing.T) {
+	t.Parallel()
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -340,6 +346,7 @@ func TestWatchBacklogItems_should_forwardLiveEvent_When_PublishedWhileStreamIsLi
 // ─── Filters (status_filter / category_filter) ────────────────────────────
 
 func TestWatchBacklogItems_should_excludeNonMatchingItems_When_StatusFilterAppliedToSnapshot(t *testing.T) {
+	t.Parallel()
 	svc, storage, _ := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -380,6 +387,7 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_StatusFilterAppli
 // snapshot_complete marker in this case so the client has *something* to
 // unblock on; this test asserts that corrected behavior instead.
 func TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNoItems(t *testing.T) {
+	t.Parallel()
 	svc, storage, _ := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -412,6 +420,7 @@ func TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNo
 // sends the marker promptly and the stream is otherwise indistinguishable
 // from a healthy connection with real items.
 func TestWatchBacklogItems_should_sendSnapshotCompleteMarker_When_BacklogIsGenuinelyEmpty(t *testing.T) {
+	t.Parallel()
 	svc, _, _ := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -432,6 +441,7 @@ func TestWatchBacklogItems_should_sendSnapshotCompleteMarker_When_BacklogIsGenui
 }
 
 func TestWatchBacklogItems_should_excludeNonMatchingItems_When_CategoryFilterAppliedToSnapshot(t *testing.T) {
+	t.Parallel()
 	svc, storage, _ := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -454,6 +464,7 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_CategoryFilterApp
 }
 
 func TestWatchBacklogItems_should_onlyForwardMatchingLiveEvents_When_StatusFilterIsSet(t *testing.T) {
+	t.Parallel()
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -502,6 +513,7 @@ func TestWatchBacklogItems_should_onlyForwardMatchingLiveEvents_When_StatusFilte
 // ─── Degraded mode: nil eventBus ───────────────────────────────────────────
 
 func TestWatchBacklogItems_should_returnUnimplemented_When_EventBusIsNil(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil) // eventBus left nil (no SetEventBus call)
 
@@ -516,6 +528,7 @@ func TestWatchBacklogItems_should_returnUnimplemented_When_EventBusIsNil(t *test
 // ─── Context cancellation / clean unsubscribe ─────────────────────────────
 
 func TestWatchBacklogItems_should_unsubscribeAndReturn_When_ContextIsCanceled(t *testing.T) {
+	t.Parallel()
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
@@ -548,6 +561,7 @@ func TestWatchBacklogItems_should_unsubscribeAndReturn_When_ContextIsCanceled(t 
 // ─── convertEventToBacklogItemEvent: all 6 BacklogChangeKind variants ─────
 
 func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_KindVaries(t *testing.T) {
+	t.Parallel()
 	fixedTime := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	item := &session.BacklogItemData{ID: "item-1", Title: "T", Status: "review", CreatedAt: fixedTime, UpdatedAt: fixedTime}
 	archivedAt := fixedTime
@@ -649,14 +663,58 @@ func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_Ki
 				assert.Equal(t, "deleted by user", rm.GetReason())
 			},
 		},
+		{
+			// [validation.md Correction #1] Appended to this existing table
+			// rather than a new standalone test function — see Epic 8.4,
+			// Task 8.4.1b.
+			name: "activity_note_added",
+			payload: &events.BacklogItemEventPayload{
+				Kind: events.BacklogChangeActivityNoteAdded, Item: item,
+				ActivityNote: &session.ActivityNoteData{
+					ID: "note-1", Message: "a note", AuthorSessionUUID: "sess-1", AuthorSessionTitle: "Worker",
+				},
+			},
+			check: func(t *testing.T, ev *sessionv1.BacklogItemEvent) {
+				an := ev.GetActivityNoteAdded()
+				require.NotNil(t, an, "the oneof must never be left empty for this kind (Blocker 3's original risk)")
+				assert.Equal(t, "item-1", an.GetItemId())
+				require.NotNil(t, an.GetNote())
+				assert.Equal(t, "note-1", an.GetNote().GetId())
+				assert.Equal(t, "a note", an.GetNote().GetMessage())
+				assert.Equal(t, "sess-1", an.GetNote().GetAuthorSessionUuid())
+				assert.Equal(t, "Worker", an.GetNote().GetAuthorSessionTitle())
+			},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			evt := &events.Event{Type: events.EventBacklogItemChanged, Timestamp: fixedTime, BacklogItemPayload: tc.payload}
 			out := convertEventToBacklogItemEvent(evt, nil)
 			require.NotNil(t, out)
 			tc.check(t, out)
 		})
 	}
+}
+
+// TestBacklogItemMatchesFilters_should_MatchActivityNoteEvent_When_StatusFilterSet
+// (Epic 8.4, Story 8.4.3 / Blocker 2 fix) documents the bug the fix closes,
+// not just the fixed state in isolation: a sparse pre-fix snapshot (only ID
+// set) would have been silently dropped by any non-empty status_filter/
+// category_filter, since backlogItemMatchesFilters treats a zero-value
+// Status/RepoPath as a non-match. AppendActivityNote's Blocker-2 fix
+// populates Status/RepoPath before publishing, so the post-fix shape passes.
+func TestBacklogItemMatchesFilters_should_MatchActivityNoteEvent_When_StatusFilterSet(t *testing.T) {
+	t.Parallel()
+	msg := &sessionv1.WatchBacklogItemsRequest{
+		StatusFilter:   []string{"in_progress"},
+		CategoryFilter: []string{"/repo/a"},
+	}
+
+	populated := &session.BacklogItemData{ID: "item-1", Status: "in_progress", RepoPath: "/repo/a"}
+	assert.True(t, backlogItemMatchesFilters(populated, msg), "an activity-note event with Status/RepoPath populated must match a non-empty filter")
+
+	sparse := &session.BacklogItemData{ID: "item-1"}
+	assert.False(t, backlogItemMatchesFilters(sparse, msg), "a sparse snapshot with no Status/RepoPath (the pre-fix shape) would have been silently dropped by a non-empty filter")
 }

@@ -11,6 +11,7 @@ import (
 )
 
 func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
+	t.Parallel()
 	cp := Checkpoint{
 		ID:             "550e8400-e29b-41d4-a716-446655440000",
 		SessionID:      "test-session-id",
@@ -39,6 +40,7 @@ func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
 }
 
 func TestInstanceData_BackwardCompatNilCheckpoints(t *testing.T) {
+	t.Parallel()
 	// Old format without checkpoints field
 	oldJSON := `{"title":"test","path":"/tmp","status":0}`
 	var data InstanceData
@@ -49,6 +51,7 @@ func TestInstanceData_BackwardCompatNilCheckpoints(t *testing.T) {
 }
 
 func TestCheckpointList_FindByID(t *testing.T) {
+	t.Parallel()
 	cl := CheckpointList{
 		{ID: "id-1", Label: "first"},
 		{ID: "id-2", Label: "second"},
@@ -64,6 +67,7 @@ func TestCheckpointList_FindByID(t *testing.T) {
 }
 
 func TestCheckpointList_FindByLabel(t *testing.T) {
+	t.Parallel()
 	cl := CheckpointList{
 		{ID: "id-1", Label: "first"},
 		{ID: "id-2", Label: "second"},
@@ -79,6 +83,7 @@ func TestCheckpointList_FindByLabel(t *testing.T) {
 }
 
 func TestCheckpointList_Latest(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	cl := CheckpointList{
 		{ID: "id-1", Timestamp: now.Add(-2 * time.Hour)},
@@ -92,6 +97,7 @@ func TestCheckpointList_Latest(t *testing.T) {
 }
 
 func TestCheckpointList_Latest_Empty(t *testing.T) {
+	t.Parallel()
 	var cl CheckpointList
 	latest := cl.Latest()
 	assert.Nil(t, latest)
@@ -100,6 +106,7 @@ func TestCheckpointList_Latest_Empty(t *testing.T) {
 // --- Story 1.3.2d: Instance.CreateCheckpoint tests ---
 
 func TestCreateCheckpoint_UnstartedInstance_ReturnsError(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	// inst.started == false by default
 
@@ -111,6 +118,7 @@ func TestCreateCheckpoint_UnstartedInstance_ReturnsError(t *testing.T) {
 }
 
 func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title: "test-session",
 	}
@@ -136,6 +144,7 @@ func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 }
 
 func TestCreateCheckpoint_IdIsValidUUID(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
 
@@ -147,6 +156,7 @@ func TestCreateCheckpoint_IdIsValidUUID(t *testing.T) {
 }
 
 func TestCreateCheckpoint_MultipleCheckpoints_AppendCorrectly(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
 
@@ -163,6 +173,7 @@ func TestCreateCheckpoint_MultipleCheckpoints_AppendCorrectly(t *testing.T) {
 }
 
 func TestCreateCheckpoint_ActiveCheckpointUpdated(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
 
@@ -174,6 +185,7 @@ func TestCreateCheckpoint_ActiveCheckpointUpdated(t *testing.T) {
 }
 
 func TestCreateCheckpoint_NoConversationUUID_EmptyField(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
 	// claudeSession is nil — no UUID available yet.

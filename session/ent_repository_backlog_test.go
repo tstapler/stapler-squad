@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -13,12 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver, for the raw-connection schema surgery below
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // TestEntRepositoryBacklog_should_RoundTripPipelineMode_When_ItemCreatedWithNonDefaultSlug
 // creates a backlog item with a non-default PipelineMode and verifies GetBacklogItem
 // reads back the same slug — the ent create+read mapping round trip (Story 1.4.1/1.4.3).
 func TestEntRepositoryBacklog_should_RoundTripPipelineMode_When_ItemCreatedWithNonDefaultSlug(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -39,6 +42,7 @@ func TestEntRepositoryBacklog_should_RoundTripPipelineMode_When_ItemCreatedWithN
 // is the zero-regression baseline: an item created without setting PipelineMode reads
 // back PipelineMode == "" (the built-in default pipeline), per Story 1.4.1.
 func TestEntRepositoryBacklog_should_DefaultPipelineModeToEmptyString_When_NotSpecifiedAtCreate(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -62,6 +66,7 @@ func TestEntRepositoryBacklog_should_DefaultPipelineModeToEmptyString_When_NotSp
 // hash (case b: mode content edited). Reading the ItemSession back must show the ORIGINAL
 // spawn-time slug + hash, unaffected by either later mutation.
 func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassignedAfterSessionStart(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -139,6 +144,7 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 // with no down-migration to execute, "reversible" is verified as "old rows are
 // unaffected and new/optional columns default safely."
 func TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFields(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -201,6 +207,7 @@ func TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFie
 // against a real ent-backed Storage, confirming the ent_repository_backlog.go mapping
 // (both the update-builder and the read-mapper) round-trips correctly end-to-end.
 func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedStorage(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -245,6 +252,7 @@ func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedS
 // path for the new nullable pr_feedback_addressed_at column (fresh schema
 // creation includes it).
 func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -287,6 +295,7 @@ func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.
 // ent's field.Strings(...).Optional() JSON-column scan handles a NULL/empty
 // column safely.
 func TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -315,6 +324,7 @@ func TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow(t *testing.T) {
 // check that the pre-existing ApprovePlan/RejectPlan round trip is
 // unaffected by the additive columns.
 func TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -375,6 +385,7 @@ func TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible(
 // update it with a timestamp, re-fetch, assert it round-trips exactly, then
 // confirm ClearGitHubSyncedIssueUpdatedAt explicitly clears it back to nil.
 func TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -415,6 +426,7 @@ func TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip(t *tes
 // is the baseline "still blocked" case: a blocker sitting at a non-terminal
 // status (in_progress) must keep its dependent out of the eligible set.
 func TestUnresolvedBlockerItemIDs_should_ReportStillBlocked_When_BlockerNotYetResolved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -442,6 +454,7 @@ func TestUnresolvedBlockerItemIDs_should_ReportStillBlocked_When_BlockerNotYetRe
 // is the regression baseline for the pre-existing intended behavior: a
 // blocker that ships (reaches BacklogStatusDone) must unblock its dependent.
 func TestUnresolvedBlockerItemIDs_should_ResolveDependency_When_BlockerReachesDone(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -475,6 +488,7 @@ func TestUnresolvedBlockerItemIDs_should_ResolveDependency_When_BlockerReachesDo
 // permanently strand its dependent. Per research/pitfalls.md's Pitfall 4,
 // archived must count as resolved just like done.
 func TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_BlockerNeverShipped(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -505,6 +519,7 @@ func TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_Blo
 // TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEqualsBlocked
 // covers AC6: an item cannot be marked as depending on itself.
 func TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEqualsBlocked(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -523,6 +538,7 @@ func TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEquals
 // covers AC5's 2-node case: A already blocks B, so adding B blocks A would
 // close a cycle and must be rejected before any storage write.
 func TestAddBacklogItemDependency_should_RejectCycle_When_TwoNodeCycleWouldClose(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -542,6 +558,7 @@ func TestAddBacklogItemDependency_should_RejectCycle_When_TwoNodeCycleWouldClose
 // covers AC5's longer-chain case: A blocks B blocks C, so adding C blocks A
 // would close a 3-node cycle and must be rejected.
 func TestAddBacklogItemDependency_should_RejectCycle_When_LongerCycleWouldClose(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -570,6 +587,7 @@ func TestAddBacklogItemDependency_should_RejectCycle_When_LongerCycleWouldClose(
 // (TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_BlockerNeverShipped)
 // and is the intended outcome, not an oversight.
 func TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDeleted(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -604,6 +622,7 @@ func TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDele
 // the upsert semantics: adding an already-existing (blocker, blocked) pair
 // must succeed silently rather than erroring on the unique-index conflict.
 func TestAddBacklogItemDependency_should_NoOp_When_SamePairAddedTwice(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -625,6 +644,7 @@ func TestAddBacklogItemDependency_should_NoOp_When_SamePairAddedTwice(t *testing
 // conflict under ent.IsConstraintError, and would silently succeed instead
 // of surfacing as a not-found error.
 func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerDoesNotExist(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -642,6 +662,7 @@ func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerDoesNotExist
 // TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockedDoesNotExist
 // is the mirror of the above for the blocked side of the edge.
 func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockedDoesNotExist(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -711,3 +732,131 @@ func TestNewEntRepository_should_MigrateExistingDatabaseSuccessfully_When_Backlo
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
+
+// --- Activity note history (ADR-001) — Phase 8 tests ---
+
+// TestBacklogActivityNote_should_CascadeDelete_When_ParentItemDeleted (Epic
+// 8.1) proves the entsql.OnDelete(Cascade) annotation on BacklogItem's
+// activity_notes edge (session/ent/schema/backlog_item.go) removes
+// activity-note rows along with their parent item, mirroring
+// TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDeleted's
+// GetEntClient().<Type>.Query().Count(ctx) idiom above.
+func TestBacklogActivityNote_should_CascadeDelete_When_ParentItemDeleted(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item with an activity note"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "", "", "a note"))
+
+	count, err := repo.GetEntClient().BacklogActivityNote.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "expected the note row to exist before the parent item is deleted")
+
+	require.NoError(t, repo.DeleteBacklogItem(ctx, item.ID))
+
+	count, err = repo.GetEntClient().BacklogActivityNote.Query().Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "expected the activity note row to be cascade-deleted along with its parent item")
+}
+
+// TestAppendActivityNote_should_PersistAndBeListable_When_Called (Epic 8.2,
+// Task 8.2.1a) appends two notes and confirms ListActivityNotesForItem
+// returns both, ordered created_at ascending.
+func TestAppendActivityNote_should_PersistAndBeListable_When_Called(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for activity-note list test"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "session-uuid-1", "worker-1", "first note"))
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "session-uuid-2", "worker-2", "second note"))
+
+	notes, err := repo.ListActivityNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 2)
+
+	assert.Equal(t, "first note", notes[0].Message)
+	assert.Equal(t, "session-uuid-1", notes[0].AuthorSessionUUID)
+	assert.Equal(t, "worker-1", notes[0].AuthorSessionTitle)
+
+	assert.Equal(t, "second note", notes[1].Message)
+	assert.Equal(t, "session-uuid-2", notes[1].AuthorSessionUUID)
+	assert.Equal(t, "worker-2", notes[1].AuthorSessionTitle)
+
+	assert.False(t, notes[1].CreatedAt.Before(notes[0].CreatedAt), "expected notes ordered created_at ascending")
+}
+
+// TestGetBacklogItem_should_ReturnActivityNotes_When_ItemHasThem (Epic 8.2,
+// Task 8.2.1d / validation.md Gap 2) proves GetBacklogItem's
+// WithActivityNotes(...) eager-load actually populates
+// BacklogItemData.ActivityNotes — a distinct code path from get_backlog_item's
+// MCP-tool rendering (Epic 8.6), which calls ListActivityNotesForItem
+// directly and never exercises this eager-load at all.
+func TestGetBacklogItem_should_ReturnActivityNotes_When_ItemHasThem(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for eager-load test"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "", "", "first"))
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "", "", "second"))
+
+	fetched, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, fetched.ActivityNotes, 2, "GetBacklogItem's WithActivityNotes eager-load must populate ActivityNotes")
+	assert.Equal(t, "first", fetched.ActivityNotes[0].Message)
+	assert.Equal(t, "second", fetched.ActivityNotes[1].Message)
+}
+
+// TestMapAppendActivityNoteCreateError_should_ReturnErrNotFound_When_ErrIsConstraintViolation
+// and its sibling below unit-test mapAppendActivityNoteCreateError directly
+// (Epic 8.2, Task 8.2.1e / validation.md Gap 1) instead of trying to
+// reproduce the delete-between-steps race the FK-violation branch actually
+// guards against, which is real but impractical to trigger deterministically.
+func TestMapAppendActivityNoteCreateError_should_ReturnErrNotFound_When_ErrIsConstraintViolation(t *testing.T) {
+	t.Parallel()
+	// *ent.ConstraintError's fields are all unexported, but a zero-value
+	// composite literal is still constructible from another package — its
+	// Error() string ("ent: constraint failed: ") is irrelevant here, only
+	// its type matters to ent.IsConstraintError's errors.As check.
+	constraintErr := fmt.Errorf("create failed: %w", &ent.ConstraintError{})
+
+	got := mapAppendActivityNoteCreateError(constraintErr, "item-1")
+
+	require.Error(t, got)
+	assert.True(t, errors.Is(got, ErrNotFound), "a constraint-violation error must map to ErrNotFound")
+}
+
+func TestMapAppendActivityNoteCreateError_should_WrapPlainError_When_ErrIsNotConstraintViolation(t *testing.T) {
+	t.Parallel()
+	plain := errors.New("boom")
+
+	got := mapAppendActivityNoteCreateError(plain, "item-1")
+
+	require.Error(t, got)
+	assert.False(t, errors.Is(got, ErrNotFound), "a non-constraint error must not be misclassified as ErrNotFound")
+	assert.True(t, errors.Is(got, plain), "the original error must remain unwrappable")
+}
+
+// Note: the "AppendActivityNote publishes ChangeActivityNoteAdded" and
+// "...populates Status/RepoPath on the published snapshot" behaviors (Epic
+// 8.2, Tasks 8.2.1b/8.2.1c) are tested in the external session_test package
+// instead of here — see TestAppendActivityNote_should_PublishActivityNoteAddedEvent_When_Called
+// and TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_When_Called
+// in session/ent_repository_backlog_events_test.go, which mirror this
+// repo's established precedent for this exact kind of assertion
+// (TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionStatusChanges,
+// same file) by wiring the real server/services.BacklogItemEventPublisher
+// adapter rather than a package-internal recording double — an internal
+// session-package test file cannot import server/services without an
+// import cycle, since server/services itself imports session.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -278,6 +279,33 @@ func (s *BacklogService) PipelineEngine() session.PipelineEngine {
 // *config.Config pointer.
 func (s *BacklogService) ConfigMu() *sync.RWMutex {
 	return &s.cfgMu
+}
+
+// EnterpriseHosts returns the statically-configured GitHub Enterprise
+// hostnames (normalized, github.com excluded), for callers that need to
+// recognize GHE PR/issue URLs — e.g. server/mcp/tools_backlog.go's
+// reportPRCreated and importGitHubIssue, which otherwise fall back to
+// session.ParseGitHubURL's github.com-only matching and silently fail to
+// recognize any GHE host. Mirrors SessionService.enterpriseHosts, minus that
+// method's additional union with cached-account hosts (BacklogService has no
+// UserPRCache dependency) — extend this if/when that's needed here too.
+// Read under cfgMu's read lock for the same reason as
+// maxConcurrentBacklogWorkItems below.
+func (s *BacklogService) EnterpriseHosts() []string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	configuredHosts := s.cfg.GetGitHubEnterpriseHosts()
+	hosts := make([]string, 0, len(configuredHosts))
+	seen := make(map[string]bool, len(configuredHosts))
+	for _, h := range configuredHosts {
+		host := githubpkg.NormalizeHost(h.Host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	return hosts
 }
 
 // maxConcurrentBacklogWorkItems reads cfg.MaxConcurrentBacklogWorkItemsOrDefault()
@@ -794,6 +822,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 			}
 		}
 		p.ProgressNotes = protoNotes
+	}
+
+	// Populate activity notes (the ungated post_backlog_update log) when they
+	// were eagerly loaded.
+	if len(item.ActivityNotes) > 0 {
+		protoActivityNotes := make([]*sessionv1.BacklogActivityNote, len(item.ActivityNotes))
+		for i := range item.ActivityNotes {
+			protoActivityNotes[i] = activityNoteDataToProto(&item.ActivityNotes[i])
+		}
+		p.ActivityNotes = protoActivityNotes
 	}
 
 	return p

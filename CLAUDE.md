@@ -169,7 +169,7 @@ go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent
 go run entgo.io/ent/cmd/ent generate ./session/ent/schema
 ```
 
-Workflow: edit schema → run correct generate → `go build ./...` → commit all `session/ent/` changes together.
+Workflow: edit schema → run correct generate → `go build ./...` to confirm it compiles. **Do not commit the generated output** — `.gitignore` deliberately excludes `session/ent/*.go` and `session/ent/*/` (everything except `schema/` and `generate.go`, which are hand-written), the same policy as the `gen/`-prefixed proto output above. Every Make target that needs it (`build`, `test`, `lint`) already depends on `ent-gen`, which regenerates from a stamp file — commit only the `session/ent/schema/` change itself. Force-adding generated ent code (`git add -f`) has caused real breakage before (missing/incomplete package left main broken until someone ran `make ent-gen` and noticed) — don't do it even to unblock a build.
 
 ## Feature Registry
 

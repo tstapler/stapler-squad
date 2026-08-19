@@ -31,6 +31,7 @@ func writeJSONLLine(f *os.File, text string) error {
 }
 
 func TestScanFile_IncrementalOffset(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	f, err := os.Create(path)
@@ -121,6 +122,7 @@ func TestScanFile_IncrementalOffset(t *testing.T) {
 // C-2: TestScanFile_SkipsAgentFiles checks the queue channel directly rather than
 // relying on a worker running. An agent- file must never be enqueued.
 func TestScanFile_SkipsAgentFiles(t *testing.T) {
+	t.Parallel()
 	ae := NewArtifactExtractor(
 		func(title, blob string) error { t.Error("storeFn must not be called for agent- files"); return nil },
 		func(title string) (string, error) { return "", nil },
@@ -137,6 +139,7 @@ func TestScanFile_SkipsAgentFiles(t *testing.T) {
 
 // C-2 (second test): non-agent .jsonl files must be enqueued.
 func TestOnHistoryFileChanged_EnqueuesNonAgentJSONL(t *testing.T) {
+	t.Parallel()
 	ae := NewArtifactExtractor(
 		func(title, blob string) error { return nil },
 		func(title string) (string, error) { return "", nil },
@@ -156,6 +159,7 @@ func TestOnHistoryFileChanged_EnqueuesNonAgentJSONL(t *testing.T) {
 
 // C-3: TestScanFile_CallsOnScanComplete verifies the OnScanComplete callback fires.
 func TestScanFile_CallsOnScanComplete(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	f, err := os.Create(path)
@@ -195,6 +199,7 @@ func TestScanFile_CallsOnScanComplete(t *testing.T) {
 
 // C-4: TestSeedOffsets_RestoresOffsetFromStoredBlob verifies startup hydration.
 func TestSeedOffsets_RestoresOffsetFromStoredBlob(t *testing.T) {
+	t.Parallel()
 	storedBlob := SessionArtifactsBlob{
 		PRURLs:          []string{"https://github.com/o/r/pull/1"},
 		ScanOffsetBytes: 1234,
@@ -220,6 +225,7 @@ func TestSeedOffsets_RestoresOffsetFromStoredBlob(t *testing.T) {
 
 // C-4 (second test): SeedOffsets silently skips sessions with no stored blob.
 func TestSeedOffsets_IgnoresMissingBlob(t *testing.T) {
+	t.Parallel()
 	ae := NewArtifactExtractor(
 		func(title, blob string) error { return nil },
 		func(title string) (string, error) { return "", nil },
@@ -237,6 +243,7 @@ func TestSeedOffsets_IgnoresMissingBlob(t *testing.T) {
 // M-9: TestMergeAndPersist_ExternalURLCapAt50 verifies the 50-URL cap is enforced
 // at merge time (not in ExtractFromToolResult).
 func TestMergeAndPersist_ExternalURLCapAt50(t *testing.T) {
+	t.Parallel()
 	// Seed 30 existing URLs in the stored blob.
 	existing := make([]string, 30)
 	for i := range existing {
@@ -265,6 +272,7 @@ func TestMergeAndPersist_ExternalURLCapAt50(t *testing.T) {
 // M-11: TestScanFile_AdvancesOffsetWhenNoArtifactsFound verifies offset advances even
 // when no artifacts are found, so the same bytes are not re-scanned.
 func TestScanFile_AdvancesOffsetWhenNoArtifactsFound(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	f, _ := os.Create(path)
@@ -296,6 +304,7 @@ func TestScanFile_AdvancesOffsetWhenNoArtifactsFound(t *testing.T) {
 // M-12: TestScanFile_DoesNotAdvanceOffsetOnStoreFnError verifies that offset is NOT
 // committed when storeFn fails, so the next scan can retry (M-2 fix).
 func TestScanFile_DoesNotAdvanceOffsetOnStoreFnError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	f, _ := os.Create(path)
@@ -321,6 +330,7 @@ func TestScanFile_DoesNotAdvanceOffsetOnStoreFnError(t *testing.T) {
 // M-17: TestEnqueue_DeduplicatesInflightPaths verifies inflight dedup prevents
 // the same path from being enqueued twice.
 func TestEnqueue_DeduplicatesInflightPaths(t *testing.T) {
+	t.Parallel()
 	ae := NewArtifactExtractor(
 		func(title, blob string) error { return nil },
 		func(title string) (string, error) { return "", nil },

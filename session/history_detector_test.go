@@ -29,6 +29,7 @@ func (m *mockProcessInspector) IsAlive(pid int32, expectedCreateTimeMs int64) bo
 }
 
 func TestHistoryFileDetector_Detect_MatchesClaudePattern(t *testing.T) {
+	t.Parallel()
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 
@@ -55,6 +56,7 @@ func TestHistoryFileDetector_Detect_MatchesClaudePattern(t *testing.T) {
 }
 
 func TestHistoryFileDetector_Detect_NoJSONLReturnsNilNil(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{
 		files: []string{
 			"/dev/null",
@@ -70,6 +72,7 @@ func TestHistoryFileDetector_Detect_NoJSONLReturnsNilNil(t *testing.T) {
 }
 
 func TestHistoryFileDetector_Detect_FiltersAgentJSONL(t *testing.T) {
+	t.Parallel()
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 
@@ -87,6 +90,7 @@ func TestHistoryFileDetector_Detect_FiltersAgentJSONL(t *testing.T) {
 }
 
 func TestHistoryFileDetector_ExtractsUUIDFromFilename(t *testing.T) {
+	t.Parallel()
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 
@@ -119,6 +123,7 @@ func TestHistoryFileDetector_ExtractsUUIDFromFilename(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			projectDir := "-Users-alice-myproject"
 			historyPath := filepath.Join(homeDir, ".claude", "projects", projectDir, tc.uuid+".jsonl")
 
@@ -141,6 +146,7 @@ func TestHistoryFileDetector_ExtractsUUIDFromFilename(t *testing.T) {
 }
 
 func TestHistoryFileDetector_ProcessDeadReturnsNilNil(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{
 		err: fmt.Errorf("process 9999999 not found"),
 	}
@@ -153,6 +159,7 @@ func TestHistoryFileDetector_ProcessDeadReturnsNilNil(t *testing.T) {
 }
 
 func TestClaudeProjectDirName(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		path string
 		want string
@@ -175,6 +182,7 @@ func TestClaudeProjectDirName(t *testing.T) {
 }
 
 func TestHistoryFileDetector_DetectByPath_MissingDirReturnsNil(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	detector := NewHistoryFileDetectorWithHomeDir(nil, tmpHome)
 	info, err := detector.DetectByPath("/nonexistent/path/xyz123abc")
@@ -183,6 +191,7 @@ func TestHistoryFileDetector_DetectByPath_MissingDirReturnsNil(t *testing.T) {
 }
 
 func TestHistoryFileDetector_DetectByPath_FiltersAgentFiles(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	projectPath := "/Users/alice/agenttest"
 	projectDir := ClaudeProjectDirName(projectPath)
@@ -200,6 +209,7 @@ func TestHistoryFileDetector_DetectByPath_FiltersAgentFiles(t *testing.T) {
 }
 
 func TestHistoryFileDetector_DetectByPath_PicksMostRecentWhenMultiple(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	projectPath := "/Users/alice/multitest"
 	projectDir := ClaudeProjectDirName(projectPath)
@@ -229,6 +239,7 @@ func TestHistoryFileDetector_DetectByPath_PicksMostRecentWhenMultiple(t *testing
 }
 
 func TestHistoryFileDetector_DetectByPath_StillReturnsSingleMostRecent_When_DetectAllByPathAdded(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	projectPath := "/Users/alice/regressiontest"
 	projectDir := ClaudeProjectDirName(projectPath)
@@ -267,6 +278,7 @@ func TestHistoryFileDetector_DetectByPath_StillReturnsSingleMostRecent_When_Dete
 }
 
 func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
+	t.Parallel()
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 
@@ -290,6 +302,7 @@ func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
 }
 
 func TestHistoryFileDetector_ResolveFilePath_ReconstructsPath_When_HomeDirOverridden(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	detector := NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, tmpHome)
 
@@ -309,6 +322,7 @@ func TestHistoryFileDetector_ResolveFilePath_ReconstructsPath_When_HomeDirOverri
 }
 
 func TestHistoryFileDetector_ResolveFilePath_UsesRealHomeDir_When_NoOverride(t *testing.T) {
+	t.Parallel()
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 

@@ -41,6 +41,7 @@ func createBacklogItemForEvents(t *testing.T, repo *session.EntRepository, ctx c
 // asserts CreateItemSession publishes ChangeSessionAttached with the correct
 // SessionID (Task 2.2.4a/c, R8 happy path).
 func TestCreateItemSession_should_publishSessionAttachedWithSessionID_When_SessionIsCreated(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -76,6 +77,7 @@ func TestCreateItemSession_should_publishSessionAttachedWithSessionID_When_Sessi
 // itemSessionID returns an error and never reaches the publish call (Task
 // 2.2.4b, R8 error path).
 func TestUpdateItemSessionSessionUUID_should_notPublish_When_ItemSessionIDDoesNotExist(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -103,6 +105,7 @@ func TestUpdateItemSessionSessionUUID_should_notPublish_When_ItemSessionIDDoesNo
 // ChangeSessionAttached events in order, each with the correct SessionID/UUID
 // (Task 2.2.4c, R8 integration).
 func TestDequeueSweep_should_publishTwoSessionAttachedEvents_When_CreateThenUpdateUUIDBothRun(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -151,6 +154,7 @@ func TestDequeueSweep_should_publishTwoSessionAttachedEvents_When_CreateThenUpda
 // populated directly from the write, not derived by re-reading item_sessions
 // (Task 2.2.3a/c, R7 happy path).
 func TestSaveReviewVerdict_should_publishVerdictInlineOnPayload_When_VerdictIsSaved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -198,6 +202,7 @@ func TestSaveReviewVerdict_should_publishVerdictInlineOnPayload_When_VerdictIsSa
 // DB write happens) and asserts the method returns its error and no event is
 // published (Task 2.2.3a, R7 error path).
 func TestSaveReviewVerdict_should_notPublish_When_UnderlyingWriteFails(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -228,6 +233,7 @@ func TestSaveReviewVerdict_should_notPublish_When_UnderlyingWriteFails(t *testin
 // ChangeVerdictRecorded events with correctly populated Verdict fields (Task
 // 2.2.3c, R7 integration).
 func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCPPathBothRun(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -302,6 +308,7 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 // the received event's Kind/UpdatedFields/Item.ID (Task 2.2.5b, mirroring
 // 2.2.3c/2.2.4c's style).
 func TestUpdateItemSessionTriageResult_should_publishTriageProgressUpdated_When_TriageResultIsSaved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()

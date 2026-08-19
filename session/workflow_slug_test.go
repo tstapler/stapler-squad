@@ -7,6 +7,7 @@ import (
 )
 
 func TestValidateWorkflowSlug(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		slug    string
@@ -33,6 +34,7 @@ func TestValidateWorkflowSlug(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := session.ValidateWorkflowSlug(tt.slug)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateWorkflowSlug(%q) error = %v, wantErr %v", tt.slug, err, tt.wantErr)

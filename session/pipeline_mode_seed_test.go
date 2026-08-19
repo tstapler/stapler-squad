@@ -14,6 +14,7 @@ import (
 // seed creates a "sdd" PipelineMode row with the expected slug/name/enabled
 // state against a real ent-backed repository.
 func TestEnsureDefaultSDDPipelineMode_should_CreateRow_When_Missing(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	repo := NewEntPipelineModeRepository(storage.GetEntClient())
@@ -36,6 +37,7 @@ func TestEnsureDefaultSDDPipelineMode_should_CreateRow_When_Missing(t *testing.T
 // operator's later hand-edit via the pipeline-modes settings UI must survive
 // every subsequent server restart (ADR-001's runtime-editability guarantee).
 func TestEnsureDefaultSDDPipelineMode_should_BeNoOp_When_AlreadyExists(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	repo := NewEntPipelineModeRepository(storage.GetEntClient())
@@ -68,6 +70,7 @@ func TestEnsureDefaultSDDPipelineMode_should_BeNoOp_When_AlreadyExists(t *testin
 // so this test is the only thing standing between a typo'd placeholder or an
 // accidental shell metacharacter and a permanently-broken seed in production.
 func TestEnsureDefaultSDDPipelineMode_should_PassContentValidation(t *testing.T) {
+	t.Parallel()
 	input := defaultSDDPipelineModeInput()
 
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
@@ -90,6 +93,7 @@ func TestEnsureDefaultSDDPipelineMode_should_PassContentValidation(t *testing.T)
 // nil-repo degrade-gracefully path (mirrors how every other PipelineEngine
 // call site nil-checks and falls back rather than panicking).
 func TestEnsureDefaultSDDPipelineMode_should_ReturnNil_When_NilRepo(t *testing.T) {
+	t.Parallel()
 	assert.NoError(t, EnsureDefaultSDDPipelineMode(context.Background(), nil))
 }
 
@@ -104,6 +108,7 @@ func TestEnsureDefaultSDDPipelineMode_should_ReturnNil_When_NilRepo(t *testing.T
 // future edit to this template must not silently drop the guidance with zero
 // test failure.
 func TestSDDTriagePromptTemplate_WarnsAgainstBackgroundStatusPlaceholder(t *testing.T) {
+	t.Parallel()
 	assert.Contains(t, sddTriagePromptTemplate, "single, non-interactive call")
 	assert.Contains(t, sddTriagePromptTemplate, "no later turn")
 }
@@ -114,6 +119,7 @@ func TestSDDTriagePromptTemplate_WarnsAgainstBackgroundStatusPlaceholder(t *test
 // it) — the seed must treat that as success, not a fatal boot error, since
 // the row exists either way.
 func TestEnsureDefaultSDDPipelineMode_should_NotError_When_CreateRaceLoses(t *testing.T) {
+	t.Parallel()
 	repo := &raceLosingPipelineModeRepo{}
 	err := EnsureDefaultSDDPipelineMode(t.Context(), repo)
 	assert.NoError(t, err)

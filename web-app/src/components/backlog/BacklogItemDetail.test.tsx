@@ -272,6 +272,7 @@ function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
     updatedAt: "2026-07-12T14:02:00Z",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
   };
 }

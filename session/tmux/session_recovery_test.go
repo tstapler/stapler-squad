@@ -433,6 +433,7 @@ func TestRecoverFromServerFailure_EnsureRunningFails(t *testing.T) {
 
 // TestSessionRecoveryCommandSequence verifies the correct command sequence for session recovery
 func TestSessionRecoveryCommandSequence(t *testing.T) {
+	t.Parallel()
 	ptyFactory := NewMockPtyFactory(t)
 	worktreeDir := t.TempDir()
 

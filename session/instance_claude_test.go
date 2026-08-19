@@ -13,6 +13,7 @@ import (
 // the next incidental full SaveInstances sweep — a tmux pane killed before
 // that sweep ran would resume with no conversation UUID to pass to --resume.
 func TestInstance_SetHistoryInfo_FiresCallback_When_UUIDChanges(t *testing.T) {
+	t.Parallel()
 	inst := makeTestInstance("history-info-callback")
 	fired := 0
 	inst.SetClaudeSessionIDSavedCallback(func() { fired++ })
@@ -28,6 +29,7 @@ func TestInstance_SetHistoryInfo_FiresCallback_When_UUIDChanges(t *testing.T) {
 // no-op path (same UUID and history path) does not re-fire the persistence
 // callback — mirrors SetClaudeConversationUUID's existing no-op guard.
 func TestInstance_SetHistoryInfo_SkipsCallback_When_UUIDUnchanged(t *testing.T) {
+	t.Parallel()
 	inst := makeTestInstance("history-info-noop")
 	fired := 0
 	inst.SetClaudeSessionIDSavedCallback(func() { fired++ })
@@ -42,6 +44,7 @@ func TestInstance_SetHistoryInfo_SkipsCallback_When_UUIDUnchanged(t *testing.T) 
 // verifies the callback is scoped to UUID changes specifically: a history
 // file path update alone (UUID unchanged) must not trigger a redundant save.
 func TestInstance_SetHistoryInfo_SkipsCallback_When_OnlyHistoryPathChanges(t *testing.T) {
+	t.Parallel()
 	inst := makeTestInstance("history-info-path-only")
 	fired := 0
 	inst.SetClaudeSessionIDSavedCallback(func() { fired++ })

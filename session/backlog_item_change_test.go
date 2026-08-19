@@ -27,6 +27,7 @@ func (p *recordingItemChangePublisher) PublishItemChanged(item *BacklogItemData,
 // precedent) so the publisher actually lands on the struct that owns the 9
 // hooked mutation methods.
 func TestStorageSetItemChangePublisher_should_forwardToConcreteEntRepository_When_RepoIsEntBacked(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -44,6 +45,7 @@ func TestStorageSetItemChangePublisher_should_forwardToConcreteEntRepository_Whe
 // additive/best-effort per the Risk Control section, never a precondition for
 // the underlying mutation to succeed (Story 1.3.1 AC).
 func TestEntRepository_should_noOpPublish_When_ItemChangePublisherIsNil(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()

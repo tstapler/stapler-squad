@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { BacklogItem, TriageResult, TriageTask, AcCriterion } from "@/lib/hooks/useBacklogService";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { TriageDiffSection } from "./TriageDiffSection";
 import { TriageErrorBanner } from "./TriageErrorBanner";
 import { TriageRelatedWorkSection } from "./TriageRelatedWorkSection";
@@ -122,8 +123,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
       // Auto-dismiss undo toast after 7s
       setTimeout(() => setShowUndoToast(false), 7000);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setApplyError(msg || "Failed to apply suggestions. The item may have been updated by another process. Reload and try again.");
+      setApplyError(getErrorMessage(err, "Failed to apply suggestions. The item may have been updated by another process. Reload and try again."));
       setApplyState("error");
     }
   }, [item.acCriteria, item.id, onApply]);
@@ -139,8 +139,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
       setRefineFeedback("");
       setRefineState("idle");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setRefineError(msg || "Failed to submit feedback. Please try again.");
+      setRefineError(getErrorMessage(err, "Failed to submit feedback. Please try again."));
       setRefineState("error");
     }
   }, [refineFeedback, onRefine]);

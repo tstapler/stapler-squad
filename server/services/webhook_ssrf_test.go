@@ -21,18 +21,22 @@ func withFakeResolver(t *testing.T, fn func(ctx context.Context, host string) ([
 // Test host literals: net.Resolver.LookupIPAddr resolves an already-numeric host
 // without a real DNS lookup, so these are deterministic and network-independent.
 func TestValidateCallbackURL_RejectsNonHTTPScheme(t *testing.T) {
+	t.Parallel()
 	err := ValidateCallbackURL(context.Background(), "ftp://8.8.8.8/")
 	assert.Error(t, err)
 }
 
 func TestValidateCallbackURL_RejectsMalformedURL(t *testing.T) {
+	t.Parallel()
 	err := ValidateCallbackURL(context.Background(), "://not a url")
 	assert.Error(t, err)
 }
 
 func TestValidateCallbackURL_RejectsLoopback(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{"http://127.0.0.1/", "http://localhost/", "http://[::1]/"} {
 		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
 			err := ValidateCallbackURL(context.Background(), raw)
 			assert.Error(t, err, "expected loopback target to be rejected")
 		})
@@ -40,11 +44,13 @@ func TestValidateCallbackURL_RejectsLoopback(t *testing.T) {
 }
 
 func TestValidateCallbackURL_RejectsLinkLocal(t *testing.T) {
+	t.Parallel()
 	err := ValidateCallbackURL(context.Background(), "http://169.254.1.1/")
 	assert.Error(t, err)
 }
 
 func TestValidateCallbackURL_RejectsCloudMetadataAddress(t *testing.T) {
+	t.Parallel()
 	// AC11 calls this address out explicitly, even though it's already covered by
 	// the link-local check above — assert it independently so a future refactor of
 	// the link-local branch can't silently stop covering it.
@@ -58,8 +64,10 @@ func TestValidateCallbackURL_RejectsCloudMetadataAddress(t *testing.T) {
 // for the callback host's domain could return 0.0.0.0 and sail past a filter that only
 // checks loopback/link-local/private ranges.
 func TestValidateCallbackURL_RejectsUnspecifiedAddress(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{"http://0.0.0.0/", "http://[::]/"} {
 		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
 			err := ValidateCallbackURL(context.Background(), raw)
 			assert.Error(t, err, "expected the unspecified address to be rejected")
 		})
@@ -71,17 +79,20 @@ func TestValidateCallbackURL_RejectsUnspecifiedAddress(t *testing.T) {
 // 6598 shared address space (100.64.0.0/10), which several cloud providers use for
 // internal-only addressing.
 func TestValidateCallbackURL_RejectsCGNATRange(t *testing.T) {
+	t.Parallel()
 	err := ValidateCallbackURL(context.Background(), "http://100.64.0.1/")
 	assert.Error(t, err)
 }
 
 func TestValidateCallbackURL_RejectsPrivateRanges(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{
 		"http://10.0.0.5/",
 		"http://172.16.5.5/",
 		"http://192.168.1.1/",
 	} {
 		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
 			err := ValidateCallbackURL(context.Background(), raw)
 			assert.Error(t, err, "expected private-range target to be rejected")
 		})
@@ -89,6 +100,7 @@ func TestValidateCallbackURL_RejectsPrivateRanges(t *testing.T) {
 }
 
 func TestValidateCallbackURL_AcceptsPublicAddress(t *testing.T) {
+	t.Parallel()
 	// 8.8.8.8 (Google DNS) is a stable, well-known public IP literal — used here
 	// purely as "not loopback/link-local/private", no actual network call is made
 	// for a POST, and LookupIPAddr on an IP literal doesn't touch the network either.
@@ -97,6 +109,7 @@ func TestValidateCallbackURL_AcceptsPublicAddress(t *testing.T) {
 }
 
 func TestValidateCallbackURL_RejectsEmptyHost(t *testing.T) {
+	t.Parallel()
 	err := ValidateCallbackURL(context.Background(), "http:///path")
 	assert.Error(t, err)
 }
@@ -107,6 +120,7 @@ func TestValidateCallbackURL_RejectsEmptyHost(t *testing.T) {
 // "safe" address from a mixed result set, since a rebinding attacker controls which
 // address the actual dial would reach.
 func TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet(t *testing.T) {
+	t.Parallel()
 	withFakeResolver(t, func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		return []net.IPAddr{
 			{IP: net.ParseIP("8.8.8.8")},  // public — would pass alone
@@ -122,6 +136,7 @@ func TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet(t *testing.T
 // CallbackDispatcher pins its dial to (AC8) is genuinely the one that was checked, not
 // a placeholder.
 func TestResolveAndValidateCallbackHost_ReturnsTheValidatedIP(t *testing.T) {
+	t.Parallel()
 	withFakeResolver(t, func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
 	})
@@ -140,6 +155,7 @@ func TestResolveAndValidateCallbackHost_ReturnsTheValidatedIP(t *testing.T) {
 // TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost in
 // callback_dispatcher_test.go).
 func TestResolveAndValidateCallbackHost_RejectsWhenSecondLookupWouldDiffer(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	withFakeResolver(t, func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		calls++

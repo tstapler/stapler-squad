@@ -16,6 +16,7 @@ import (
 
 // TestMultiplexer_BroadcastToClients verifies that PTY output is sent to ALL connected clients.
 func TestMultiplexer_BroadcastToClients(t *testing.T) {
+	t.Parallel()
 	m := &Multiplexer{
 		clients: make(map[net.Conn]struct{}),
 	}
@@ -138,6 +139,7 @@ func newTestMultiplexer(t *testing.T) (*Multiplexer, context.CancelFunc) {
 // TestMultiplexer_StartSessionMonitor_ChannelBased verifies that when a
 // PaneExitSubscriber is configured, firing pane exit triggers Shutdown.
 func TestMultiplexer_StartSessionMonitor_ChannelBased(t *testing.T) {
+	t.Parallel()
 	m, cancel := newTestMultiplexer(t)
 	t.Cleanup(cancel)
 
@@ -172,6 +174,7 @@ func TestMultiplexer_StartSessionMonitor_ChannelBased(t *testing.T) {
 // TestMultiplexer_StartSessionMonitor_FallbackWhenNilSubscriber verifies that
 // when paneExitSub is nil the polling goroutine is started (wg incremented).
 func TestMultiplexer_StartSessionMonitor_FallbackWhenNilSubscriber(t *testing.T) {
+	t.Parallel()
 	m, cancel := newTestMultiplexer(t)
 	defer cancel()
 
@@ -202,6 +205,7 @@ func TestMultiplexer_StartSessionMonitor_FallbackWhenNilSubscriber(t *testing.T)
 // multiplexer context before pane exit causes the monitor goroutine to exit
 // cleanly with no goroutine leak.
 func TestMultiplexer_StartSessionMonitor_ContextCancel(t *testing.T) {
+	t.Parallel()
 	m, cancel := newTestMultiplexer(t)
 
 	fake := newFakePaneExitSubscriber()
@@ -230,6 +234,7 @@ func TestMultiplexer_StartSessionMonitor_ContextCancel(t *testing.T) {
 //   - PTY output → broadcast to all clients (read-only fan-out)
 //   - Client input → written to PTY only (isolated write-path)
 func TestMultiplexer_InputIsolation(t *testing.T) {
+	t.Parallel()
 	m := &Multiplexer{
 		clients: make(map[net.Conn]struct{}),
 	}

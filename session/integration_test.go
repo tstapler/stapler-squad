@@ -13,11 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
 )
@@ -143,38 +144,51 @@ func waitForContent(t *testing.T, getter func() (string, error), expectedText st
 // TestSessionRecoveryScenarios tests the real-world session recovery scenarios
 // that happen when tmux sessions are killed and need to be restored
 func TestSessionRecoveryScenarios(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration tests that start real tmux sessions")
 	}
 	// Create a temporary git repository for testing
 	tempRepo := setupTestRepository(t)
-	defer os.RemoveAll(tempRepo)
+	// t.Cleanup, not defer: subtests below are t.Parallel() and spawn real
+	// tmux sessions against tempRepo, so a plain defer here would remove it
+	// while they're still running — observed hanging a full test binary for
+	// minutes rather than failing cleanly (git/tmux blocking on I/O against
+	// a repo path that vanished mid-operation).
+	t.Cleanup(func() { os.RemoveAll(tempRepo) })
 
 	t.Run("SessionRestoredInCorrectWorktreeAfterKill", func(t *testing.T) {
+		t.Parallel()
 		testSessionRestoredInCorrectWorktree(t)
 	})
 
 	t.Run("MultipleSessionsRestoreIndependently", func(t *testing.T) {
+		t.Parallel()
 		testMultipleSessionsRestoreIndependently(t)
 	})
 
 	t.Run("SessionRecoveryWithExistingChanges", func(t *testing.T) {
+		t.Parallel()
 		testSessionRecoveryWithExistingChanges(t)
 	})
 
 	t.Run("FailsLoudlyWhenWorktreePathMissing", func(t *testing.T) {
+		t.Parallel()
 		testFailsLoudlyWhenWorktreePathMissing(t)
 	})
 
 	t.Run("ExistingSessionResumption", func(t *testing.T) {
+		t.Parallel()
 		testExistingSessionResumption(t, tempRepo)
 	})
 
 	t.Run("ExistingWorktreeResumption", func(t *testing.T) {
+		t.Parallel()
 		testExistingWorktreeResumption(t, tempRepo)
 	})
 
 	t.Run("FullResumptionScenario", func(t *testing.T) {
+		t.Parallel()
 		testFullResumptionScenario(t, tempRepo)
 	})
 }
@@ -484,37 +498,26 @@ func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 }
 
 // setupTestRepository creates a temporary git repository for testing
+//
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func setupTestRepository(t *testing.T) string {
 	tempDir := t.TempDir()
 
-	// Initialize git repo
-	cmd := safeexec.CommandContext(context.Background(), "git", "init")
-	cmd.Dir = tempDir
-	err := cmd.Run()
+	repo, err := git.PlainInit(tempDir, false)
 	require.NoError(t, err)
 
-	// Configure git
-	configCmd := safeexec.CommandContext(context.Background(), "git", "config", "user.email", "test@example.com")
-	configCmd.Dir = tempDir
-	_ = configCmd.Run()
-
-	configCmd2 := safeexec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
-	configCmd2.Dir = tempDir
-	_ = configCmd2.Run()
-
-	// Create initial commit
 	readmeFile := filepath.Join(tempDir, "README.md")
 	err = os.WriteFile(readmeFile, []byte("# Test Repository"), 0644)
 	require.NoError(t, err)
 
-	addCmd := safeexec.CommandContext(context.Background(), "git", "add", ".")
-	addCmd.Dir = tempDir
-	err = addCmd.Run()
+	wt, err := repo.Worktree()
 	require.NoError(t, err)
-
-	commitCmd := safeexec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
-	commitCmd.Dir = tempDir
-	err = commitCmd.Run()
+	_, err = wt.Add(".")
+	require.NoError(t, err)
+	_, err = wt.Commit("Initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	})
 	require.NoError(t, err)
 
 	return tempDir
@@ -842,31 +845,31 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 	}
 }
 
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func setupTestRepositoryBench(b *testing.B) string {
 	tempDir := b.TempDir()
 
-	cmd := safeexec.CommandContext(context.Background(), "git", "init")
-	cmd.Dir = tempDir
-	_ = cmd.Run()
-
-	configCmd := safeexec.CommandContext(context.Background(), "git", "config", "user.email", "test@example.com")
-	configCmd.Dir = tempDir
-	_ = configCmd.Run()
-
-	configCmd2 := safeexec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
-	configCmd2.Dir = tempDir
-	_ = configCmd2.Run()
+	repo, err := git.PlainInit(tempDir, false)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	readmeFile := filepath.Join(tempDir, "README.md")
 	_ = os.WriteFile(readmeFile, []byte("# Benchmark Repository"), 0644)
 
-	addCmd := safeexec.CommandContext(context.Background(), "git", "add", ".")
-	addCmd.Dir = tempDir
-	_ = addCmd.Run()
-
-	commitCmd := safeexec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
-	commitCmd.Dir = tempDir
-	_ = commitCmd.Run()
+	wt, err := repo.Worktree()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	}); err != nil {
+		b.Fatal(err)
+	}
 
 	return tempDir
 }
