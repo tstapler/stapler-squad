@@ -81,6 +81,7 @@ var (
 		{Name: "python_modes", Type: field.TypeJSON, Nullable: true},
 		{Name: "safe_python_imports_only", Type: field.TypeBool, Default: false},
 		{Name: "require_ci_passing", Type: field.TypeBool, Default: false},
+		{Name: "min_session_idle_minutes", Type: field.TypeInt32, Nullable: true, Default: 0},
 	}
 	// ApprovalRulesTable holds the schema information for the "approval_rules" table.
 	ApprovalRulesTable = &schema.Table{
@@ -1058,6 +1059,7 @@ var (
 		{Name: "agent_type", Type: field.TypeString, Nullable: true},
 		{Name: "cron_expression", Type: field.TypeString, Nullable: true},
 		{Name: "cron_enabled", Type: field.TypeBool, Default: false},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "keep_sessions", Type: field.TypeInt, Nullable: true, Default: 0},
@@ -1091,17 +1093,17 @@ var (
 			{
 				Name:    "workflow_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{WorkflowsColumns[12]},
+				Columns: []*schema.Column{WorkflowsColumns[13]},
 			},
 			{
 				Name:    "workflow_webhook_slug",
 				Unique:  false,
-				Columns: []*schema.Column{WorkflowsColumns[19]},
+				Columns: []*schema.Column{WorkflowsColumns[20]},
 			},
 			{
 				Name:    "workflow_trigger_type",
 				Unique:  false,
-				Columns: []*schema.Column{WorkflowsColumns[16]},
+				Columns: []*schema.Column{WorkflowsColumns[17]},
 			},
 		},
 	}

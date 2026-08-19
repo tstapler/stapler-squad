@@ -11,6 +11,7 @@ import (
 )
 
 func TestNormalizeModelFamily_WhenDateSuffixedID_ExpectStripped(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		input    string
 		expected string
@@ -32,6 +33,7 @@ func TestNormalizeModelFamily_WhenDateSuffixedID_ExpectStripped(t *testing.T) {
 }
 
 func TestEstimateCost_WhenKnownModel_ExpectExactPrice(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -54,6 +56,7 @@ func TestEstimateCost_WhenKnownModel_ExpectExactPrice(t *testing.T) {
 // family with no PricingTable entry must be flagged unpriced, not silently
 // reported as $0 indistinguishable from genuinely-free usage.
 func TestEstimateCost_WhenUnknownModel_ExpectZeroCostAndFamilyFlaggedUnpriced(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -69,6 +72,7 @@ func TestEstimateCost_WhenUnknownModel_ExpectZeroCostAndFamilyFlaggedUnpriced(t 
 }
 
 func TestEstimateCost_WhenCacheReadTokens_ExpectCacheRateIncluded(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -85,6 +89,7 @@ func TestEstimateCost_WhenCacheReadTokens_ExpectCacheRateIncluded(t *testing.T) 
 }
 
 func TestEstimateCost_WhenSonnet5Model_ExpectExactPrice(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -119,6 +124,7 @@ func TestEstimateCost_WhenSonnet5Model_ExpectExactPrice(t *testing.T) {
 }
 
 func TestDefaultPricingTable_WhenSonnet5EntryPresent_ExpectAllRateFieldsPopulated(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	entry, ok := pt.Prices["claude-sonnet-5"]
@@ -140,6 +146,7 @@ func TestDefaultPricingTable_WhenSonnet5EntryPresent_ExpectAllRateFieldsPopulate
 // result — the gap adversarial-review.md flagged: no prior test covered a
 // mix of priced and unpriced families in one TurnTimeline.
 func TestModelFamilyCost_WhenMixedKnownAndUnknownFamilies_ExpectKnownPricedAndUnknownFlagged(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -171,6 +178,7 @@ var knownActiveClaudeFamilies = []string{
 }
 
 func TestDefaultPricingTable_WhenKnownActiveFamily_ExpectPricingEntryExists(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 	for _, family := range knownActiveClaudeFamilies {
 		_, ok := pt.Prices[family]
@@ -179,6 +187,7 @@ func TestDefaultPricingTable_WhenKnownActiveFamily_ExpectPricingEntryExists(t *t
 }
 
 func TestPricingTable_WhenIsStale_Expect31DaysReturnTrue(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 	// Override all effective dates to 31 days ago.
 	oldDate := time.Now().AddDate(0, 0, -31).Format("2006-01-02")
@@ -193,6 +202,7 @@ func TestPricingTable_WhenIsStale_Expect31DaysReturnTrue(t *testing.T) {
 }
 
 func TestPricingTable_WhenIsStale_Expect29DaysReturnFalse(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 	// Override all effective dates to 29 days ago.
 	recentDate := time.Now().UTC().AddDate(0, 0, -29).Format("2006-01-02")
@@ -207,6 +217,7 @@ func TestPricingTable_WhenIsStale_Expect29DaysReturnFalse(t *testing.T) {
 }
 
 func TestDefaultPricingTable_WhenVerifiedAsOfDate_ExpectNoEntryAlreadyStale(t *testing.T) {
+	t.Parallel()
 	// Regression guard: DefaultPricingTable()'s own entries must not ship
 	// already past IsStale()'s 30-day window, or the startup warning becomes
 	// permanent noise instead of a signal (this bit us once — see
@@ -231,6 +242,7 @@ func TestDefaultPricingTable_WhenVerifiedAsOfDate_ExpectNoEntryAlreadyStale(t *t
 }
 
 func TestLoadPricingOverride_WhenValidConfigJSON_ExpectOverridesApplied(t *testing.T) {
+	t.Parallel()
 	// Write a temp override file.
 	override := map[string]ModelPricing{
 		"claude-sonnet-4": {
@@ -262,6 +274,7 @@ func TestLoadPricingOverride_WhenValidConfigJSON_ExpectOverridesApplied(t *testi
 }
 
 func TestLoadPricingOverride_WhenMalformedJSON_ExpectErrorReturnedDefaultsUntouched(t *testing.T) {
+	t.Parallel()
 	// Write a temp override file containing malformed JSON (trailing comma).
 	malformed := []byte(`{"claude-sonnet-5": {"InputPricePerMTok": 2.00,},}`)
 

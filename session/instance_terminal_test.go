@@ -18,6 +18,7 @@ import (
 // dismissed. Preview() must only see a bounded recent tail, matching its own doc comment
 // ("current visible terminal content").
 func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "stale-preview-session", Status: Running}
 	inst.started.Store(true)
 
@@ -60,6 +61,7 @@ func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
 // byte stream cannot by itself distinguish "answered dialog now overwritten" from
 // "current output" without re-implementing terminal emulation; tmux already does this.
 func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{capturePaneReturn: "tmux rendered screen"}
 	inst := &Instance{Title: "tmux-preview-session", Status: Running, processManager: NewTmuxBackend(mock)}
 	inst.started.Store(true)
@@ -87,6 +89,7 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 // capture-pane failure (e.g. the tmux session died mid-poll) falls back to the
 // in-memory PTY buffer rather than surfacing an error or returning stale/empty content.
 func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{capturePaneErr: fmt.Errorf("no such tmux session")}
 	inst := &Instance{Title: "tmux-preview-fallback", Status: Running, processManager: NewTmuxBackend(mock)}
 	inst.started.Store(true)

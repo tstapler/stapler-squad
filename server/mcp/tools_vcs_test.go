@@ -7,25 +7,43 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
 )
 
 // initGitRepo creates a temporary directory with an initialised git repository
-// that has at least one commit so that git commands succeed.
+// that has at least one commit so that git commands succeed. Uses go-git
+// directly rather than shelling out — see .claude/rules/prefer-go-git-over-subshells.md.
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	runGit(t, dir, "init")
-	runGit(t, dir, "config", "user.email", "test@test.com")
-	runGit(t, dir, "config", "user.name", "Test")
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("git init: %v", err)
+	}
 	writeFile(t, dir, "README.md", "# Test\n")
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-m", "initial")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add("README.md"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := wt.Commit("initial", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
 	return dir
 }
 
+// runGit runs an arbitrary git subcommand against dir. Used for git operations
+// go-git doesn't cover directly (e.g. rev-parse); prefer go-git per
+// .claude/rules/prefer-go-git-over-subshells.md when a native call exists.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := safeexec.CommandContext(context.Background(), "git", args...)

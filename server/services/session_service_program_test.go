@@ -82,6 +82,7 @@ func findInstanceByTitle(t *testing.T, loaded []*session.Instance, title string)
 // or load — see addHibernatedThenForceActive's doc comment for why a real-success
 // assertion was deliberately avoided here).
 func TestUpdateSession_ProgramUpdate_ActiveSession_RestartFailure_ReturnsInternal(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -111,6 +112,7 @@ func TestUpdateSession_ProgramUpdate_ActiveSession_RestartFailure_ReturnsInterna
 // program on a Stopped (non-Active) session persists the new value without attempting a
 // restart, and the request succeeds.
 func TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -151,6 +153,7 @@ func TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart(t *testing.T) {
 // program string ("System default") resolves to the configured default program rather
 // than being stored as "" or silently dropped.
 func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -190,6 +193,7 @@ func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault(t *testing.T) {
 // session already has is a no-op: no restart, no "program" field in updatedFields, and no
 // event published.
 func TestUpdateSession_ProgramUpdate_SameValue_NoOp(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -221,6 +225,7 @@ func TestUpdateSession_ProgramUpdate_SameValue_NoOp(t *testing.T) {
 // request that changes both program and another field (title) must publish exactly one
 // SessionUpdated event covering both fields, not two separate events.
 func TestUpdateSession_ProgramAndOtherField_SinglePublish(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -264,6 +269,7 @@ collectLoop:
 // (not capacity_monitor_test.go's mockSessionSwitcher), verifying the program change
 // persists to storage.
 func TestUpdateSessionProgram_RealInstance_SwitchesAndPersists(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -282,6 +288,7 @@ func TestUpdateSessionProgram_RealInstance_SwitchesAndPersists(t *testing.T) {
 // (not a panic or a connect error type), matching the SessionSwitcher interface's plain
 // `error` return.
 func TestUpdateSessionProgram_NotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -297,6 +304,7 @@ func TestUpdateSessionProgram_NotFound(t *testing.T) {
 // when no statusManager is wired — parity with pre-refactor behavior for the common case
 // (capacity monitor fires before any controller-status wiring is relevant).
 func TestUpdateSessionProgram_PublishesPlainEvent_WhenStatusManagerNil(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -323,6 +331,7 @@ func TestUpdateSessionProgram_PublishesPlainEvent_WhenStatusManagerNil(t *testin
 // is wired but no controller is registered for the instance (IsControllerActive=false) —
 // the other half of AC0/AC1's "controller inactive" parity requirement.
 func TestUpdateSessionProgram_PublishesPlainEvent_WhenControllerNotRegistered(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 	fix.svc.SetStatusManager(session.NewInstanceStatusManager())

@@ -68,6 +68,7 @@ func createTestWorkflowService(t *testing.T) (*SessionService, *WorkflowService)
 
 // TestCreateWorkflow_HappyPath checks that a valid workflow is persisted.
 func TestCreateWorkflow_HappyPath(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -85,8 +86,58 @@ func TestCreateWorkflow_HappyPath(t *testing.T) {
 	assert.NotEmpty(t, resp.Msg.Workflow.Id)
 }
 
+// TestCreateWorkflow_Enabled_DefaultsTrueAndRoundTrips verifies the dedicated Enabled
+// field (webhook-triggers verify follow-ups AC0-3): a create request that never sets
+// enabled defaults to true, and an explicit false round-trips unchanged — independent
+// of cron_enabled, which is left at its own zero-value default (false) here.
+func TestCreateWorkflow_Enabled_DefaultsTrueAndRoundTrips(t *testing.T) {
+	t.Parallel()
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	defaulted, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug: "enabled-default-wf", Name: "Defaulted", Command: "cmd", TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	assert.True(t, defaulted.Msg.Workflow.Enabled, "enabled must default to true when the request doesn't set it")
+
+	explicit, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug: "enabled-explicit-false-wf", Name: "Explicit False", Command: "cmd", TargetDirectory: "/tmp/test",
+		Enabled: proto.Bool(false),
+	}))
+	require.NoError(t, err)
+	assert.False(t, explicit.Msg.Workflow.Enabled, "an explicit enabled=false must round-trip, not be silently overridden to true")
+	assert.False(t, explicit.Msg.Workflow.CronEnabled, "cronEnabled is unaffected by enabled and keeps its own default")
+}
+
+// TestUpdateWorkflow_Enabled_IndependentOfCronEnabled verifies UpdateWorkflow can flip
+// enabled without touching cronEnabled and vice versa — the two fields must not be
+// coupled at the RPC layer (webhook-triggers verify follow-ups AC0-3).
+func TestUpdateWorkflow_Enabled_IndependentOfCronEnabled(t *testing.T) {
+	t.Parallel()
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	created, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug: "enabled-independent-wf", Name: "Independent", Command: "cmd", TargetDirectory: "/tmp/test",
+		TriggerType: "webhook", WebhookSlug: "enabled-independent-slug", CronEnabled: true,
+	}))
+	require.NoError(t, err)
+	id := created.Msg.Workflow.Id
+	require.True(t, created.Msg.Workflow.Enabled)
+	require.True(t, created.Msg.Workflow.CronEnabled)
+
+	resp, err := svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Enabled: proto.Bool(false),
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Workflow.Enabled, "enabled must be updatable")
+	assert.True(t, resp.Msg.Workflow.CronEnabled, "cronEnabled must be untouched by an enabled-only update")
+}
+
 // TestCreateWorkflow_InvalidSlug verifies that a slug with uppercase is rejected.
 func TestCreateWorkflow_InvalidSlug(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -103,6 +154,7 @@ func TestCreateWorkflow_InvalidSlug(t *testing.T) {
 
 // TestCreateWorkflow_DuplicateSlug verifies AlreadyExists is returned.
 func TestCreateWorkflow_DuplicateSlug(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -128,6 +180,7 @@ func TestCreateWorkflow_DuplicateSlug(t *testing.T) {
 
 // TestListWorkflows verifies workflows are listed after creation.
 func TestListWorkflows(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -149,6 +202,7 @@ func TestListWorkflows(t *testing.T) {
 
 // TestDeleteWorkflow verifies a workflow is removed.
 func TestDeleteWorkflow(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -171,6 +225,7 @@ func TestDeleteWorkflow(t *testing.T) {
 
 // TestUpdateWorkflow verifies that a workflow's name is updated.
 func TestUpdateWorkflow(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -191,8 +246,73 @@ func TestUpdateWorkflow(t *testing.T) {
 	assert.Equal(t, "Updated", updateResp.Msg.Workflow.Name)
 }
 
+// TestUpdateWorkflow_ConcurrentWrites_SecondCallerGetsConflict verifies the
+// optimistic-concurrency CAS (webhook-triggers verify follow-ups AC9): two
+// UpdateWorkflow calls built from the same expected_updated_at — the shape of two
+// browser tabs both loading the same row, then both saving — must not both silently
+// apply. The first succeeds; the second, still holding the pre-first-write
+// updated_at, is rejected with CodeAborted rather than overwriting the first caller's
+// change.
+func TestUpdateWorkflow_ConcurrentWrites_SecondCallerGetsConflict(t *testing.T) {
+	t.Parallel()
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	created, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug: "cas-rpc-wf", Name: "Original", Command: "cmd", TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := created.Msg.Workflow.Id
+	staleUpdatedAt := created.Msg.Workflow.UpdatedAt
+
+	first, err := svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Name: proto.String("First Writer"), ExpectedUpdatedAt: staleUpdatedAt,
+	}))
+	require.NoError(t, err, "the first caller, whose expected_updated_at matches, must succeed")
+	assert.Equal(t, "First Writer", first.Msg.Workflow.Name)
+
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Name: proto.String("Second Writer"), ExpectedUpdatedAt: staleUpdatedAt,
+	}))
+	require.Error(t, err, "the second caller, still holding the pre-first-write updated_at, must be rejected")
+	assert.Equal(t, connect.CodeAborted, connect.CodeOf(err))
+
+	// The row must reflect the first (accepted) write only.
+	final, err := svc.repo.GetByID(ctx, uuid.MustParse(id))
+	require.NoError(t, err)
+	assert.Equal(t, "First Writer", final.Name)
+}
+
+// TestUpdateWorkflow_NoExpectedUpdatedAt_AlwaysWrites_LikeBeforeCAS proves an existing
+// single-writer caller that never sends expected_updated_at keeps working exactly as
+// before AC9 — no precondition, always writes, including twice in a row against the
+// same original snapshot.
+func TestUpdateWorkflow_NoExpectedUpdatedAt_AlwaysWrites_LikeBeforeCAS(t *testing.T) {
+	t.Parallel()
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	created, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug: "no-cas-wf", Name: "Original", Command: "cmd", TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := created.Msg.Workflow.Id
+
+	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Name: proto.String("First"),
+	}))
+	require.NoError(t, err)
+
+	second, err := svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id: id, Name: proto.String("Second"),
+	}))
+	require.NoError(t, err, "omitting expected_updated_at must apply no precondition, matching pre-CAS behavior")
+	assert.Equal(t, "Second", second.Msg.Workflow.Name)
+}
+
 // TestCreateWorkflow_MissingCommand verifies validation catches empty command.
 func TestCreateWorkflow_MissingCommand(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -210,6 +330,7 @@ func TestCreateWorkflow_MissingCommand(t *testing.T) {
 // TestCreateWorkflow_MalformedModel verifies a whitespace-bearing model value is
 // rejected at save time rather than silently accepted to fail later at fire time.
 func TestCreateWorkflow_MalformedModel(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -227,6 +348,7 @@ func TestCreateWorkflow_MalformedModel(t *testing.T) {
 
 // TestCreateWorkflow_ValidFamilyModel verifies a namespaced family alias is accepted.
 func TestCreateWorkflow_ValidFamilyModel(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -245,6 +367,7 @@ func TestCreateWorkflow_ValidFamilyModel(t *testing.T) {
 // TestUpdateWorkflow_MalformedModel verifies UpdateWorkflow applies the same
 // save-time model validation as CreateWorkflow.
 func TestUpdateWorkflow_MalformedModel(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -266,6 +389,7 @@ func TestUpdateWorkflow_MalformedModel(t *testing.T) {
 
 // TestSessionService_DelegatesListWorkflows verifies the delegation from SessionService.
 func TestSessionService_DelegatesListWorkflows(t *testing.T) {
+	t.Parallel()
 	sessSvc, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -286,6 +410,7 @@ func TestSessionService_DelegatesListWorkflows(t *testing.T) {
 // TestCreateWorkflow_WithCronEnabled_CallsReload verifies that creating a cron-enabled
 // workflow invokes Reload on the scheduler.
 func TestCreateWorkflow_WithCronEnabled_CallsReload(t *testing.T) {
+	t.Parallel()
 	_, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -307,6 +432,7 @@ func TestCreateWorkflow_WithCronEnabled_CallsReload(t *testing.T) {
 // TestDeleteWorkflow_CallsSchedulerRemove verifies that deleting a workflow
 // invokes Remove on the scheduler.
 func TestDeleteWorkflow_CallsSchedulerRemove(t *testing.T) {
+	t.Parallel()
 	_, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -329,6 +455,7 @@ func TestDeleteWorkflow_CallsSchedulerRemove(t *testing.T) {
 
 // TestRunWorkflow_HappyPath verifies that RunWorkflow returns the session ID from FireNow.
 func TestRunWorkflow_HappyPath(t *testing.T) {
+	t.Parallel()
 	_, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -355,6 +482,7 @@ func TestRunWorkflow_HappyPath(t *testing.T) {
 
 // TestRunWorkflow_NotFound verifies that RunWorkflow returns CodeNotFound for unknown IDs.
 func TestRunWorkflow_NotFound(t *testing.T) {
+	t.Parallel()
 	_, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -373,6 +501,7 @@ func TestRunWorkflow_NotFound(t *testing.T) {
 // validation: a request whose populated match-criteria fields don't match the
 // declared trigger_type is rejected with CodeInvalidArgument.
 func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		req  *sessionv1.CreateWorkflowRequest
@@ -405,6 +534,7 @@ func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, svc := createTestWorkflowService(t)
 			ctx := context.Background()
 
@@ -417,15 +547,17 @@ func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 
 // TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted proves the fix for a
 // bug found during Phase 7 review: validateTriggerTypeFieldConsistency originally
-// rejected cron_enabled=true for any non-"cron" trigger_type, but Phase 2's webhook
-// handlers and Phase 7's TriggersPanel toggle both independently reuse CronEnabled as
-// the generic per-trigger "enabled" flag across every trigger type — the old check made
-// it impossible to ever enable a webhook/github_push trigger through this RPC. This must
-// be accepted, and (per TestScheduler_Start_DoesNotRegisterMismatchedTriggerAsCron /
+// rejected cron_enabled=true for any non-"cron" trigger_type. cron_enabled has since
+// been decoupled from the generic per-trigger enable flag (that role now belongs to
+// the dedicated Enabled field — webhook-triggers verify follow-ups AC0-3), but the
+// original validation bug this test guards against was never about the flag's
+// *meaning* — it was that the check rejected the field/type combination outright. This
+// must still be accepted, and (per TestScheduler_Start_DoesNotRegisterMismatchedTriggerAsCron /
 // TestScheduler_Reload_DoesNotRegisterMismatchedTriggerAsCron in scheduler_test.go)
 // never causes the resulting row to register as a cron entry, since that gate
 // independently requires trigger_type=="cron" too.
 func TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -436,9 +568,9 @@ func TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted(t *testing.T
 		TargetDirectory: "/tmp/test",
 		TriggerType:     "webhook",
 		WebhookSlug:     "enabled-webhook",
-		CronEnabled:     true, // the generic "enabled" flag, not a claim this is a cron trigger
+		CronEnabled:     true, // vestigial for this trigger type — must not be rejected
 	}))
-	require.NoError(t, err, "cron_enabled=true must be accepted for a non-cron trigger_type — it is the generic enable flag")
+	require.NoError(t, err, "cron_enabled=true must be accepted for a non-cron trigger_type")
 	assert.True(t, resp.Msg.Workflow.CronEnabled)
 	assert.Equal(t, "webhook", resp.Msg.Workflow.TriggerType)
 }
@@ -447,6 +579,7 @@ func TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted(t *testing.T
 // acceptance criteria: a Workflow row created with trigger_type="webhook" and a
 // webhook_slug is retrievable via GetByWebhookSlug.
 func TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -474,6 +607,7 @@ func TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug(t *testing.T) {
 // to UpdateWorkflow, evaluated against the *effective* (existing-row-merged-with-
 // request) state — not just the request's own fields in isolation.
 func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -491,8 +625,8 @@ func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 	// Flip trigger_type to "manual" while leaving the existing webhook_slug populated —
 	// the effective state (trigger_type=manual, webhook_slug=existing-slug) is a genuine
 	// mismatch: a manual trigger has no business retaining a webhook routing slug.
-	// (cron_enabled=true alone is NOT tested here as a mismatch — it's the reused
-	// generic per-trigger enabled flag, valid for any trigger_type; see
+	// (cron_enabled=true alone is NOT tested here as a mismatch — it's accepted for any
+	// trigger_type, vestigial-but-harmless outside "cron"; see
 	// TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType below.)
 	_, err = svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
 		Id:          id,
@@ -504,9 +638,11 @@ func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 
 // TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType is the UpdateWorkflow
 // sibling of TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted: setting
-// cron_enabled=true on an existing non-cron trigger (enabling it) must succeed, not be
-// rejected as a trigger-type mismatch.
+// cron_enabled=true on an existing non-cron trigger must succeed, not be rejected as a
+// trigger-type mismatch — cron_enabled no longer gates whether the trigger fires (see
+// Enabled), but validateTriggerTypeFieldConsistency must still accept the combination.
 func TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -535,6 +671,7 @@ func TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType(t *testing
 // UpdateWorkflow call touching only an unrelated field (not any trigger field) is not
 // rejected by the trigger-type consistency check.
 func TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -562,6 +699,7 @@ func TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected(t *testing.T)
 // TestListTriggerFireEvents_ReturnsEventsForWorkflow verifies Task 1.2.1d's minimal
 // query-only RPC round-trips TriggerFireEvent rows recorded against a workflow.
 func TestListTriggerFireEvents_ReturnsEventsForWorkflow(t *testing.T) {
+	t.Parallel()
 	sessSvc, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -600,6 +738,7 @@ func TestListTriggerFireEvents_ReturnsEventsForWorkflow(t *testing.T) {
 // TestListTriggerFireEvents_NilRepo_ReturnsEmptyList verifies the nil-degradation
 // convention matching this file's other RPCs (e.g. ListWorkflows with a nil repo).
 func TestListTriggerFireEvents_NilRepo_ReturnsEmptyList(t *testing.T) {
+	t.Parallel()
 	sessSvc, _ := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -613,6 +752,7 @@ func TestListTriggerFireEvents_NilRepo_ReturnsEmptyList(t *testing.T) {
 // TestUpdateWorkflow_MultipleFields verifies that multiple fields can be updated
 // simultaneously and that unaffected fields remain unchanged.
 func TestUpdateWorkflow_MultipleFields(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -664,6 +804,7 @@ func TestCreateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // TestCreateWorkflow_ValidPromptTemplate_Accepted is the control case: a syntactically
 // valid prompt_template is accepted and persisted.
 func TestCreateWorkflow_ValidPromptTemplate_Accepted(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -715,10 +856,12 @@ func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // GenericWebhookHandler.Handle end-to-end — this was blocked until
 // validateTriggerTypeFieldConsistency's cron_enabled/trigger_type conflation bug was
 // fixed (found via this exact gap): the check originally rejected cron_enabled=true for
-// any non-"cron" trigger_type, but GenericWebhookHandler.Handle gates on wf.CronEnabled
-// as the generic per-trigger enabled flag — making it impossible to ever enable (and
-// therefore ever successfully fire) a webhook/github_push trigger created through the
-// real RPC. See validateTriggerTypeFieldConsistency's doc comment for the fix.
+// any non-"cron" trigger_type, and at the time GenericWebhookHandler.Handle gated on
+// wf.CronEnabled as the generic per-trigger enabled flag (since replaced by the
+// dedicated Enabled field — webhook-triggers verify follow-ups AC0-3) — making it
+// impossible to ever enable (and therefore ever successfully fire) a webhook/
+// github_push trigger created through the real RPC. See
+// validateTriggerTypeFieldConsistency's doc comment for the original fix.
 
 // TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification proves the gap
 // closed by CreateWorkflowRequest.webhook_secret: a plaintext secret set via the RPC is
@@ -834,11 +977,12 @@ func TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret(t *testing.T) 
 }
 
 // TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip is the true end-to-end proof: a
-// webhook trigger created and enabled entirely through the public RPC surface
-// (CreateWorkflow with webhook_secret + cron_enabled=true) actually fires when a real
-// HTTP request signed with that secret hits GenericWebhookHandler.Handle — not merely
-// "the secret is stored and the standalone verify function accepts it" (already covered
-// above), but the full stack an operator using TriggerFormModal would exercise.
+// webhook trigger created entirely through the public RPC surface (CreateWorkflow with
+// webhook_secret, enabled defaulted to true since the request never sets it) actually
+// fires when a real HTTP request signed with that secret hits
+// GenericWebhookHandler.Handle — not merely "the secret is stored and the standalone
+// verify function accepts it" (already covered above), but the full stack an operator
+// using TriggerFormModal would exercise.
 func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	svc := NewWorkflowService(infra.workflowRepo, infra.scheduler, nil)
@@ -855,10 +999,9 @@ func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
 		EventFilter:     "issue_created",
 		LabelFilter:     "urgent",
 		PromptTemplate:  "Triage {{.issue.key}}: {{.issue.summary}}",
-		CronEnabled:     true, // the generic enabled flag — must be settable and honored
 	}))
 	require.NoError(t, err)
-	assert.True(t, createResp.Msg.Workflow.CronEnabled, "the trigger must come back enabled")
+	assert.True(t, createResp.Msg.Workflow.Enabled, "enabled must default to true when the create request doesn't set it")
 
 	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)

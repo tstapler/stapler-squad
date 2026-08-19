@@ -69,6 +69,21 @@ func callerSessionUUIDForAudit(ctx context.Context) string {
 	return manualCallerSentinel
 }
 
+// enterpriseHosts returns the configured GitHub Enterprise hostnames via
+// h.backlogSvc, or nil if backlogSvc isn't wired (tests, or a server started
+// without backlog support) — nil is exactly what
+// session.ParseGitHubURL/githubpkg.ParseGitHubRef already default to, so
+// every GitHub URL/ref parse in this file should route through this instead
+// of hardcoding nil, or a configured GHE host (e.g. github.netflix.net)
+// silently fails to parse everywhere in this file even though the server
+// itself has it registered.
+func (h *backlogHandlers) enterpriseHosts() []string {
+	if h.backlogSvc == nil {
+		return nil
+	}
+	return h.backlogSvc.EnterpriseHosts()
+}
+
 // uuidRe validates UUID format (8-4-4-4-12 hex with dashes).
 var uuidRe = regexp.MustCompile(`^[0-9a-f-]{36}$`)
 
@@ -96,6 +111,68 @@ func featureDisabledResult(enabledCheck func() bool) *mcpgo.CallToolResult {
 		return errResult(ErrFeatureDisabled, "the backlog feature is disabled", "Enable it via Settings → Features.")
 	}
 	return nil
+}
+
+// --- list_backlog_items validation ---
+
+// validBacklogStatuses is the whitelist list_backlog_items validates the
+// status filter against, matching session.BacklogStatus's full value set.
+var validBacklogStatuses = []session.BacklogStatus{
+	session.BacklogStatusIdea,
+	session.BacklogStatusRefining,
+	session.BacklogStatusReady,
+	session.BacklogStatusQueued,
+	session.BacklogStatusInProgress,
+	session.BacklogStatusReview,
+	session.BacklogStatusPRPending,
+	session.BacklogStatusDone,
+	session.BacklogStatusArchived,
+}
+
+// validateBacklogStatus rejects a typo'd status value fast instead of letting
+// it silently fall through to an empty result (the RPC applies no validation
+// of its own).
+func validateBacklogStatus(statuses []string) error {
+	valid := make(map[string]bool, len(validBacklogStatuses))
+	names := make([]string, len(validBacklogStatuses))
+	for i, s := range validBacklogStatuses {
+		valid[string(s)] = true
+		names[i] = string(s)
+	}
+	for _, s := range statuses {
+		if !valid[s] {
+			return fmt.Errorf("invalid status %q — must be one of: %s", s, strings.Join(names, ", "))
+		}
+	}
+	return nil
+}
+
+// validateBacklogPriority rejects an out-of-range priority value fast, same
+// rationale as validateBacklogStatus.
+func validateBacklogPriority(priorities []int32) error {
+	for _, p := range priorities {
+		if p < 1 || p > 5 {
+			return fmt.Errorf("invalid priority %d — must be between 1 and 5", p)
+		}
+	}
+	return nil
+}
+
+// paginateBacklogItems applies list_backlog_items' MCP-layer offset/limit
+// pagination to the full result set ListBacklogItems returns (the RPC has no
+// server-side pagination of its own — see plan.md's Pattern Decisions).
+// Extracted as its own function so this slicing logic is independently
+// unit-testable rather than only reachable through the full handler.
+func paginateBacklogItems(items []*sessionv1.BacklogItem, limit, offset int) (page []*sessionv1.BacklogItem, hasMore bool) {
+	if offset > len(items) {
+		offset = len(items)
+	}
+	items = items[offset:]
+
+	if len(items) > limit {
+		return items[:limit], true
+	}
+	return items, false
 }
 
 // --- Self-resolve source-status validation ---
@@ -601,6 +678,103 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 			return okResult(buildMatchedWaitResult(itemID, payload)), nil
 		}
 	}
+}
+
+// --- list_backlog_items ---
+
+// listBacklogItems lists/filters backlog items via the existing
+// BacklogService.ListBacklogItems RPC (Pattern A — call the in-process RPC
+// handler, don't reimplement its filter logic). The RPC has no server-side
+// pagination, so limit/offset are applied here by slicing the full result.
+func (h *backlogHandlers) listBacklogItems(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	args := req.GetArguments()
+
+	var statuses []string
+	if raw, ok := args["status"].([]interface{}); ok {
+		for _, v := range raw {
+			s, ok := v.(string)
+			if !ok {
+				return errResult(ErrInvalidArgument, fmt.Sprintf("status entries must be strings, got %T", v), ""), nil
+			}
+			statuses = append(statuses, s)
+		}
+	}
+	if err := validateBacklogStatus(statuses); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	var priorities []int32
+	if raw, ok := args["priority"].([]interface{}); ok {
+		for _, v := range raw {
+			f, ok := v.(float64)
+			if !ok {
+				return errResult(ErrInvalidArgument, fmt.Sprintf("priority entries must be numbers, got %T", v), ""), nil
+			}
+			priorities = append(priorities, int32(f))
+		}
+	}
+	if err := validateBacklogPriority(priorities); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	sortBy, _ := args["sort_by"].(string)
+	includeTerminal, _ := args["include_terminal"].(bool)
+	includeArchived, _ := args["include_archived"].(bool)
+
+	limit := 10
+	if lf, ok := args["limit"].(float64); ok && lf > 0 {
+		limit = int(lf)
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	offset := 0
+	if of, ok := args["offset"].(float64); ok && of > 0 {
+		offset = int(of)
+	}
+
+	if h.backlogSvc == nil {
+		return errResult(ErrInternalError, "backlog service unavailable on this server configuration", ""), nil
+	}
+
+	resp, err := h.backlogSvc.ListBacklogItems(ctx, connect.NewRequest(&sessionv1.ListBacklogItemsRequest{
+		Status:          statuses,
+		Priority:        priorities,
+		SortBy:          sortBy,
+		IncludeTerminal: includeTerminal,
+		IncludeArchived: includeArchived,
+	}))
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("failed to list backlog items: %v", err), ""), nil
+	}
+
+	totalCount := len(resp.Msg.Items)
+	items, hasMore := paginateBacklogItems(resp.Msg.Items, limit, offset)
+
+	summaries := make([]BacklogItemSummaryResult, len(items))
+	for i, item := range items {
+		var createdAt time.Time
+		if item.CreatedAt != nil {
+			createdAt = item.CreatedAt.AsTime()
+		}
+		summaries[i] = BacklogItemSummaryResult{
+			ID:        item.Id,
+			Title:     item.Title,
+			Status:    item.Status,
+			Priority:  int(item.Priority),
+			CreatedAt: createdAt,
+		}
+	}
+
+	return okResult(ListBacklogItemsResult{
+		MCPResult:  MCPResult{Success: true},
+		Items:      summaries,
+		TotalCount: totalCount,
+		HasMore:    hasMore,
+	}), nil
 }
 
 // --- report_progress ---
@@ -1392,7 +1566,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		// failure below — this is the one check the tool description
 		// promises has no override, so an unparseable stored PrURL must
 		// never silently skip it and let the reassignment through.
-		curRef, curParseErr := session.ParseGitHubURL(item.PrURL)
+		curRef, curParseErr := session.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
 		if curParseErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf(
 				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
@@ -1413,7 +1587,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	// Parse the reported URL to extract owner/repo, and cross-check it
 	// against the reported pr_number — a typo'd URL/number pair fails fast
 	// here, before any network call.
-	ref, parseErr := session.ParseGitHubURL(prURL)
+	ref, parseErr := session.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", parseErr), ""), nil
 	}
@@ -1663,7 +1837,7 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 	repoPath, _ := args["repo_path"].(string)
 	skipTriage, _ := args["skip_triage"].(bool)
 
-	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(issueURL, nil)
+	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(issueURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Type != githubpkg.RefTypeIssue {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", parseErr), ""), nil
 	}
@@ -1853,7 +2027,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 
 	// Parse + type-validate duplicate_ref before any network call (mirrors
 	// report_pr_created's pre-network sanity check).
-	ref, parseErr := githubpkg.ParseGitHubRef(duplicateRef)
+	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
 	if parseErr != nil {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref is not a recognizable GitHub PR/issue/commit URL: %v", parseErr), ""), nil
 	}
@@ -2157,6 +2331,48 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.getBacklogItem,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("list_backlog_items",
+			mcpgo.WithDescription("List and filter backlog items by status/priority, without a raw RPC call. Default limit is 10 to avoid filling LLM context; use offset to page past the first page."),
+			mcpgo.WithArray("status",
+				mcpgo.Description("Filter to items with any of these statuses"),
+				mcpgo.Items(map[string]any{
+					"type": "string",
+					"enum": []string{"idea", "refining", "ready", "queued", "in_progress", "review", "pr_pending", "done", "archived"},
+				}),
+			),
+			mcpgo.WithArray("priority",
+				mcpgo.Description("Filter to items with any of these priorities (1=critical .. 5=trivial)"),
+				mcpgo.Items(map[string]any{
+					"type":    "number",
+					"minimum": 1,
+					"maximum": 5,
+				}),
+			),
+			mcpgo.WithString("sort_by",
+				mcpgo.Description("Sort order for results (matches the web UI's sort options)"),
+			),
+			mcpgo.WithBoolean("include_terminal",
+				mcpgo.Description("Include 'done' items in the default (no explicit status filter) result set"),
+			),
+			mcpgo.WithBoolean("include_archived",
+				mcpgo.Description("Include 'archived' items in the default (no explicit status filter) result set"),
+			),
+			mcpgo.WithNumber("limit",
+				mcpgo.Description("Max items per page (default 10, max 50)"),
+				mcpgo.DefaultNumber(10),
+				mcpgo.Min(1),
+				mcpgo.Max(50),
+			),
+			mcpgo.WithNumber("offset",
+				mcpgo.Description("Number of items to skip, for pagination past the first page"),
+				mcpgo.DefaultNumber(0),
+				mcpgo.Min(0),
+			),
+		),
+		h.listBacklogItems,
 	)
 
 	s.AddTool(

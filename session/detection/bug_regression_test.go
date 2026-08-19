@@ -11,6 +11,7 @@ import (
 // Before fix: (?m)^[spinner] required the spinner at column 0; "  ✽ Roosting…" failed.
 // After fix:  (?m)^\s*[spinner] allows any leading whitespace.
 func TestBug1_IndentedSpinner(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	cases := []struct {
 		name  string
@@ -36,6 +37,7 @@ func TestBug1_IndentedSpinner(t *testing.T) {
 // TestBug1_IndentedSpinner_NoRegression ensures that non-spinner content with
 // leading whitespace does not become a false-positive Active.
 func TestBug1_IndentedSpinner_NoRegression(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	cases := []struct {
 		name  string
@@ -69,6 +71,7 @@ func TestBug1_IndentedSpinner_NoRegression(t *testing.T) {
 //	(↑/↓ to select → Ready) doesn't short-circuit; earlier segment
 //	(esc to interrupt → Active) is returned.
 func TestBug1_CRCollapse_EscToInterrupt_Preserved(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Simulate the raw PTY line: esc-to-interrupt bar overwritten by task manager
@@ -88,6 +91,7 @@ func TestBug1_CRCollapse_EscToInterrupt_Preserved(t *testing.T) {
 // CR-overwritten by "? for shortcuts" (session completed its turn), the result
 // is Idle, not Active.  This guards against a regression in the reverse-segment fix.
 func TestBug1_CRCollapse_IdleStillIdle(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	crLine := "esc to interrupt · ↓ to manage  ● main\r? for shortcuts"
@@ -106,6 +110,7 @@ func TestBug1_CRCollapse_IdleStillIdle(t *testing.T) {
 // full terminal content (spinner in task manager + esc to interrupt + old completion
 // line) correctly returns StatusExecuting by scanning bottom-up.
 func TestBug1_FullContent_ActiveWithTaskManager(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Simulate the full terminal content with:
@@ -138,6 +143,7 @@ func TestBug1_FullContent_ActiveWithTaskManager(t *testing.T) {
 // TestBug1_WithContextFromLines_ActiveWithTaskManager mirrors the above but uses
 // DetectWithContextFromLines (the path taken by GetCurrentStatus).
 func TestBug1_WithContextFromLines_ActiveWithTaskManager(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -165,6 +171,7 @@ func TestBug1_WithContextFromLines_ActiveWithTaskManager(t *testing.T) {
 // words instead of literal spaces. Before the fix, stripANSI would collapse words into
 // "esctointterrupt" which the esc_to_interrupt regex couldn't match.
 func TestBug2_CursorForwardStripping_EscToInterrupt(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Exact byte sequence Claude Code v2.x writes to the status bar:
@@ -183,6 +190,7 @@ func TestBug2_CursorForwardStripping_EscToInterrupt(t *testing.T) {
 // modern Claude Code encodes "✽ Transmuting…" with \x1b[C instead of a literal space
 // after the spinner character.
 func TestBug2_CursorForwardStripping_ThinkingVerb(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Raw spinner + \x1b[1X (erase) + color + \x1b[C + verb (as written by Claude Code v2)
@@ -203,6 +211,7 @@ func TestBug2_CursorForwardStripping_ThinkingVerb(t *testing.T) {
 // of an active spinner; real active sessions are distinguished by spinner verbs handled
 // by HasClaudeSpinnerActivity in GetCurrentStatus Cases A and B.
 func TestBug2_AbsoluteCursorPositioning_NotFalsePositive(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Pure cursor-position updates with no spinner verbs must NOT be detected as Active.
@@ -226,6 +235,7 @@ func TestBug2_AbsoluteCursorPositioning_NotFalsePositive(t *testing.T) {
 // Success is higher priority.  DetectFromLines should return StatusInputRequired
 // because it scans bottom-up and finds ❯ 1. before ✻ Baked.
 func TestBug2_InputRequired_WithSuccessScrollback(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -254,6 +264,7 @@ func TestBug2_InputRequired_WithSuccessScrollback(t *testing.T) {
 
 // TestBug2_WithContextFromLines_InputRequired mirrors the above for GetCurrentStatus path.
 func TestBug2_WithContextFromLines_InputRequired(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -279,6 +290,7 @@ func TestBug2_WithContextFromLines_InputRequired(t *testing.T) {
 // in a selection dialog footer does NOT match the esc_to_interrupt Active pattern.
 // If it did match Active, the scan would stop before finding ❯ 1. (InputRequired).
 func TestBug2_EscToCancel_NotActive(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// This is the footer line of a selection dialog
@@ -300,6 +312,7 @@ func TestBug2_EscToCancel_NotActive(t *testing.T) {
 // EARLIER segment was Active and the last was Ready.  Here the LAST segment is
 // Success, which must be authoritative even though an earlier segment was Active.
 func TestCRCollapse_LastSegmentSuccessIsAuthoritative(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Last segment (✻ Baked for 5s) overwrites the active indicator — session is done.
@@ -316,6 +329,7 @@ func TestCRCollapse_LastSegmentSuccessIsAuthoritative(t *testing.T) {
 // TestMapStatusToIdleState_ExplicitCoverage verifies that all DetectedStatus values
 // are handled explicitly in mapStatusToIdleState (no silent fall-through to default).
 func TestMapStatusToIdleState_ExplicitCoverage(t *testing.T) {
+	t.Parallel()
 	id := NewIdleDetector("test", nil)
 
 	cases := []struct {
@@ -373,6 +387,7 @@ func TestMapStatusToIdleState_ExplicitCoverage(t *testing.T) {
 // `gh pr checks 149 --watch=false`, then hit the python3 tool permission dialog.
 // The session list displayed the wrong status instead of needs-input.
 func TestBug_ToolPermissionDialog_DetectedAsInputRequired(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Scrollback: a prior failed command ("Error: Exit code 1"), then the tool dialog.
@@ -421,6 +436,7 @@ func TestBug_ToolPermissionDialog_DetectedAsInputRequired(t *testing.T) {
 // DetectFromLines (bottom-up) must return StatusInputRequired from "❯ 1. Yes" without
 // being intercepted by the readline cursor line higher in the pane.
 func TestBug_ToolPermissionDialog_WithConcurrentWaiting(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -482,6 +498,7 @@ func TestBug_ToolPermissionDialog_WithConcurrentWaiting(t *testing.T) {
 //	❯ ──────────────────────────────────────────────────────────────────────────
 //	  esc to interrupt                                    ✘ Auto-update failed
 func TestBug3_BoxDrawingSeparator_NotReadlineTyping(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -516,6 +533,7 @@ func TestBug3_BoxDrawingSeparator_NotReadlineTyping(t *testing.T) {
 // TestBug3_BoxDrawingSeparator_ReadlineTypingStillWorks verifies that the box-drawing
 // exclusion does not break detection of actual user typing at the ❯ prompt.
 func TestBug3_BoxDrawingSeparator_ReadlineTypingStillWorks(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// These must still be detected as readline typing (StatusIdle), overriding
@@ -557,6 +575,7 @@ func TestBug3_BoxDrawingSeparator_ReadlineTypingStillWorks(t *testing.T) {
 // A Claude Code status bar of "esc to interrupt" captured mid-display appears as
 // "▊sc to interrupt", which the old pattern (starting with literal 'e') did not match.
 func TestBug_CursorBlockReplacingEsc(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	cases := []struct {
@@ -592,6 +611,7 @@ func TestBug_CursorBlockReplacingEsc(t *testing.T) {
 // line and returned StatusSuccess even though the session had pending background
 // work. The shells_still_running WaitingForAgent pattern must fire first.
 func TestBug_ShellsStillRunning(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	cases := []struct {
@@ -642,6 +662,7 @@ func TestBug_ShellsStillRunning(t *testing.T) {
 // The surrounding terminal content also contains a bare ❯ cursor line and a
 // "esc to interrupt" status bar, so DetectFromLines must pick up Active from one of them.
 func TestBug_ThinkingWithStillThinkingSuffix(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -679,6 +700,7 @@ func TestBug_ThinkingWithStillThinkingSuffix(t *testing.T) {
 //
 // All three were incorrectly reported as StatusSuccess instead of StatusIdle.
 func TestBug4_NonBreakingSpace_ReadlineTyping(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// The exact terminal layout from staplersquad_Slowing (captured 2026-06-15).
@@ -708,6 +730,7 @@ func TestBug4_NonBreakingSpace_ReadlineTyping(t *testing.T) {
 // TestBug4_NonBreakingSpace_OtherLayouts verifies the fix against the
 // other two live-session layouts that triggered the same bug.
 func TestBug4_NonBreakingSpace_OtherLayouts(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	cases := []struct {
@@ -759,6 +782,7 @@ func TestBug4_NonBreakingSpace_OtherLayouts(t *testing.T) {
 // (switching to ASCII G0 charset) which, if not stripped, breaks word-boundary patterns:
 // "t\x1b(Bh\x1b(Bi\x1b(Bn\x1b(Bk\x1b(Bi\x1b(Bn\x1b(Bg" can never match "thinking".
 func TestBug5_CharsetDesignator_Stripped(t *testing.T) {
+	t.Parallel()
 	// Simulates Claude Code writing a styled verb with \x1b(B between each character.
 	withDesignators := "✽\x1b(B \x1b(Bt\x1b(Bh\x1b(Bi\x1b(Bn\x1b(Bk\x1b(Bi\x1b(Bn\x1b(Bg"
 	got := stripANSI(withDesignators)
@@ -778,6 +802,7 @@ func TestBug5_CharsetDesignator_Stripped(t *testing.T) {
 // class leaves these sequences' raw bytes in the text, breaking word-boundary matches
 // the same way the unstripped \x1b(B charset designators did (TestBug5, above).
 func TestBug6_CSINonLetterTerminator_Stripped(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -804,6 +829,7 @@ func TestBug6_CSINonLetterTerminator_Stripped(t *testing.T) {
 // filterTmuxMetadata would remove) but contains spinner verb text interleaved on the
 // same line.  This guards the Case A fallback in GetCurrentStatus.
 func TestBug5_SpinnerVerbFallback_FilteredEmpty(t *testing.T) {
+	t.Parallel()
 	// Simulates tail after tailContent \n-snap: starts with "[staplersq ...]",
 	// then cursor-position codes jumping back to the spinner row, then "thinking".
 	activeTail := "[staplersq 0:claude (0,0) \"✦ Extract\" 18:19]\x1b[42;3H\x1b(B✽\x1b[1X\x1b[38;5;180m\x1b[Cthinking\x1b[42;3H]"
@@ -836,6 +862,7 @@ func TestBug5_SpinnerVerbFallback_FilteredEmpty(t *testing.T) {
 // "esc to interrupt · ↓ to manage" status bar, but the session list displayed the generic
 // Active chip instead of the ⌛ WaitingForAgent chip.
 func TestBug_WaitingForAgent_AboveEscToInterrupt(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -861,6 +888,7 @@ func TestBug_WaitingForAgent_AboveEscToInterrupt(t *testing.T) {
 
 // TestBug_WaitingForAgent_WithContextFromLines mirrors the above for the GetCurrentStatus path.
 func TestBug_WaitingForAgent_WithContextFromLines(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -882,6 +910,7 @@ func TestBug_WaitingForAgent_WithContextFromLines(t *testing.T) {
 // regress the normal Active case: when there is NO WaitingForAgent line and only
 // "esc to interrupt" is visible, the result must still be StatusExecuting.
 func TestBug_WaitingForAgent_ActiveStillWinsWhenNoWaitingLine(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -905,6 +934,7 @@ func TestBug_WaitingForAgent_ActiveStillWinsWhenNoWaitingLine(t *testing.T) {
 // This guards against a regression where the new Active-continues-scanning logic could
 // allow a stale "✻ Baked for 5s" to win over "esc to interrupt".
 func TestBug_WaitingForAgent_SuccessDoesNotOverrideActive(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{
@@ -925,6 +955,7 @@ func TestBug_WaitingForAgent_SuccessDoesNotOverrideActive(t *testing.T) {
 // TestBug4_AcceptEditsPattern verifies that the ⏵⏵ accept-edits status bar is recognized
 // as StatusIdle when it is the only status indicator visible (no typed readline message).
 func TestBug4_AcceptEditsPattern(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	// Session where the user has not yet started typing — only the ⏵⏵ bar is visible.
@@ -967,6 +998,7 @@ func TestBug4_AcceptEditsPattern(t *testing.T) {
 // with a mid-line period, like the claude_cost_summary.txt fixture's "I've completed the
 // implementation. Here's a summary..." line, from false-matching).
 func TestBug_BatchedToolCallSummary_NotClassifiedIdle(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	cases := []struct {
@@ -1021,6 +1053,7 @@ func TestBug_BatchedToolCallSummary_NotClassifiedIdle(t *testing.T) {
 // caught in code review as reachable via ordinary single- and multi-sentence bullet completions
 // (e.g. "Added 3 new tests..." and "Fixed 3 bugs." are both common Claude output, not contrived).
 func TestBug_BatchedToolCallSummary_ProseNotFalsePositive(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	cases := []struct {
@@ -1076,6 +1109,7 @@ func TestBug_BatchedToolCallSummary_ProseNotFalsePositive(t *testing.T) {
 // the batched summary line followed by a separate "esc to interrupt" footer line, replayed
 // through DetectFromLines/DetectWithContextFromLines like a live autonomous-driver poll would.
 func TestBug_BatchedToolCallSummary_WithContextFromLines(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 
 	lines := []string{

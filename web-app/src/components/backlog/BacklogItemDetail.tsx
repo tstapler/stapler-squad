@@ -2,6 +2,7 @@
 // +feature: backlog:item-detail
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import type { MouseEvent } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -26,6 +27,7 @@ import { selectSessionsError } from "@/lib/store/sessionsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -77,6 +79,7 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   re_review: "Re-review triggered.",
   ship_pr: "PR created.",
   archive: "Archived.",
+  unarchive: "Unarchived — back in the idea column. Needs a fresh session.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
   send_back_refining: "Sent back to refining.",
@@ -99,6 +102,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     triggerShipPR,
     submitManualReview,
     archiveBacklogItem,
+    unarchiveBacklogItem,
     deleteBacklogItem,
     updateBacklogItem,
     listPipelineModes,
@@ -167,9 +171,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
   // Review changes modal
   const [showChangesModal, setShowChangesModal] = useState(false);
+  const changesModalTriggerRef = useRef<HTMLElement | null>(null);
 
   // File browser modal
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const fileBrowserTriggerRef = useRef<HTMLElement | null>(null);
 
   // Manual review form
   const [showManualReview, setShowManualReview] = useState(false);
@@ -189,7 +195,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // than LifecycleSummary standing up its own transport/client and 60s poll
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
-  const { items: stuckItems } = useStuckBacklogItems();
+  const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
   const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
 
   // Version control state for the most recent work session's worktree.
@@ -455,7 +461,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
       }
     } catch (e) {
-      if (mountedRef.current) setError(e instanceof Error ? e.message : "Failed to load item.");
+      if (mountedRef.current) setError(getErrorMessage(e, "Failed to load item."));
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -489,7 +495,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Session deleted.", "success", toastKey);
         await load();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to delete session.";
+        const msg = getErrorMessage(err, "Failed to delete session.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
       } finally {
@@ -523,7 +529,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
         showActionToast("Steering message sent.", "success", toastKey);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to steer session.";
+        const msg = getErrorMessage(err, "Failed to steer session.");
         showActionToast(msg, "error", toastKey);
         throw err instanceof Error ? err : new Error(msg);
       } finally {
@@ -646,7 +652,16 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             setShowManualReview(true);
             return;
           case "archive":
+            if (
+              !confirm(
+                "Archive this item? It will be hidden from the default view. Its git worktree (if any) will be deleted from disk and cannot be recreated by unarchiving.",
+              )
+            )
+              return;
             await archiveBacklogItem(item.id);
+            break;
+          case "unarchive":
+            await unarchiveBacklogItem(item.id);
             break;
           case "delete":
             if (!confirm("Permanently delete this item and all its history? This cannot be undone.")) return;
@@ -671,14 +686,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(successMessage, "success", toastKey);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Action failed.";
+        const msg = getErrorMessage(e, "Action failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
       } finally {
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, transitionStatus, triggerTriage, retriggerTriageCore, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
+    [item, transitionStatus, triggerTriage, retriggerTriageCore, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, unarchiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
   // Extracted verbatim from the inline manual-review-submit onClick handler
@@ -696,7 +711,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setManualReviewOutcome("PASS");
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Submit failed.";
+      const msg = getErrorMessage(e, "Submit failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -801,7 +816,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Triage cancelled.", "success", toastKey);
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Cancel failed.";
+      const msg = getErrorMessage(e, "Cancel failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -819,7 +834,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       await load();
     } catch (e) {
       console.error("[BacklogItemDetail] retrigger triage failed", e);
-      const msg = e instanceof Error ? e.message : "Triage re-trigger failed.";
+      const msg = getErrorMessage(e, "Triage re-trigger failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -865,7 +880,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Revisions requested.", "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "Reject failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "Reject failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -922,7 +937,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Undo applied.", "success", `${item.id}:undo_triage_apply`);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Undo failed.";
+        const msg = getErrorMessage(e, "Undo failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", `${item.id}:undo_triage_apply`);
       }
@@ -949,7 +964,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Approved.", "success", toastKey);
       await load();
     } catch (e) {
-      showActionToast(e instanceof Error ? e.message : "Approve failed.", "error", toastKey);
+      showActionToast(getErrorMessage(e, "Approve failed."), "error", toastKey);
       throw e;
     } finally {
       if (mountedRef.current) setActionLoading(null);
@@ -973,7 +988,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Reopened — new session started.", "success", toastKey);
       await load();
     } catch (e) {
-      showActionToast(e instanceof Error ? e.message : "Reopen failed.", "error", toastKey);
+      showActionToast(getErrorMessage(e, "Reopen failed."), "error", toastKey);
       throw e;
     } finally {
       if (mountedRef.current) setActionLoading(null);
@@ -997,7 +1012,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Overridden to done.", "success", toastKey);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Override failed.";
+        const msg = getErrorMessage(e, "Override failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
         throw e;
@@ -1039,7 +1054,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(`Status manually overridden to ${toStatus}.`, "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "Status override failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "Status override failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -1063,7 +1078,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(`PR #${prNumber} linked — item moved to pr_pending.`, "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "PR association failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "PR association failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -1093,7 +1108,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Gate skipped — marked done.", "success", toastKey);
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Skip gate failed.";
+      const msg = getErrorMessage(e, "Skip gate failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
       throw e;
@@ -1284,7 +1299,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
         {/* Always-visible lifecycle summary — the single authoritative
             status display, replacing the old standalone status badge (D1). */}
-        <LifecycleSummary item={item} pipelineDisplay={pipelineDisplay} stuckItem={stuckItem} />
+        <LifecycleSummary
+          item={item}
+          pipelineDisplay={pipelineDisplay}
+          stuckItem={stuckItem}
+          onTriggerRemediationNow={triggerRemediationNow}
+        />
       </div>
 
       <div className={styles.scrollArea}>
@@ -1397,6 +1417,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             sessionId={latestWorkSession?.sessionId}
             sessionTitle={item.title}
             onClose={() => setShowChangesModal(false)}
+            triggerRef={changesModalTriggerRef}
           />
         )}
 
@@ -1405,6 +1426,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             sessionId={latestWorkSession.sessionId}
             sessionTitle={item.title}
             onClose={() => setShowFileBrowser(false)}
+            triggerRef={fileBrowserTriggerRef}
           />
         )}
 
@@ -1476,7 +1498,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               workSession={latestWorkSession}
               actionLoading={actionLoading}
               defaultExpanded={reviewingExpanded}
-              onViewChanges={() => setShowChangesModal(true)}
+              onViewChanges={(event: MouseEvent<HTMLButtonElement>) => {
+                changesModalTriggerRef.current = event.currentTarget;
+                setShowChangesModal(true);
+              }}
               onGateApprove={handleGateApprove}
               onGateReopen={handleGateReopen}
               onGateOverride={handleGateOverride}
@@ -1520,8 +1545,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             activeSessionCount={activeWorkSessionCount}
             worktreePath={latestWorkSession?.worktreePath}
             defaultExpanded={versionControlExpanded}
-            onViewDiff={() => setShowChangesModal(true)}
-            onBrowseFiles={() => setShowFileBrowser(true)}
+            onViewDiff={(event: MouseEvent<HTMLButtonElement>) => {
+              changesModalTriggerRef.current = event.currentTarget;
+              setShowChangesModal(true);
+            }}
+            onBrowseFiles={(event: MouseEvent<HTMLButtonElement>) => {
+              fileBrowserTriggerRef.current = event.currentTarget;
+              setShowFileBrowser(true);
+            }}
           />
 
           <AutonomousHealthStrip item={item} />

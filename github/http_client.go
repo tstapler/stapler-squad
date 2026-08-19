@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // ghHTTPClient is the shared HTTP client used for all native GitHub REST and
@@ -35,6 +37,16 @@ type rateLimitTransport struct {
 }
 
 func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Fail fast instead of dispatching: every native GitHub call (GetPR,
+	// GetIssue, GetCommit, etc.) previously fired unconditionally even when
+	// DefaultRateLimiter already knew — from a prior response, possibly made
+	// by an unrelated concurrent session sharing the same token — that the
+	// token was rate limited. A caller retrying (e.g. report_duplicate's
+	// GitHub verification, manually re-invoked by an agent) just re-drew an
+	// identical 403 every time instead of getting an actionable resume time.
+	if limited, until := DefaultRateLimiter.IsLimited(); limited {
+		return nil, fmt.Errorf("github: rate limited until %s, skipping request to avoid another guaranteed failure", until.Format(time.RFC3339))
+	}
 	resp, err := t.next.RoundTrip(req)
 	if resp != nil {
 		DefaultRateLimiter.Update(resp)
@@ -51,6 +63,7 @@ var GhBaseURL = "https://api.github.com/"
 var (
 	ghTokenCacheVal atomic.Value // stores string
 	ghTokenCacheAt  atomic.Int64 // unix-nanosecond timestamp of last fetch
+	ghTokenSF       singleflight.Group
 )
 
 const ghTokenCacheTTL = time.Minute
@@ -58,7 +71,11 @@ const ghTokenCacheTTL = time.Minute
 // getGHToken returns a GitHub personal access token for native HTTP calls.
 // Precedence: GITHUB_TOKEN env → GH_TOKEN env → OS keychain (cached 1 min).
 // Returns an empty string (not an error) when no token source is available so
-// callers can decide whether to degrade gracefully.
+// callers can decide whether to degrade gracefully. Cache-miss keychain reads
+// are coalesced via ghTokenSF: concurrent callers that miss the TTL cache at
+// the same time (e.g. a burst of parallel API calls right after the 1-minute
+// cache expires) share one keychain round-trip instead of each serializing on
+// keychainMu (github/keychain.go) for their own redundant read.
 func getGHToken(_ context.Context) string {
 	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
 		return tok
@@ -72,7 +89,10 @@ func getGHToken(_ context.Context) string {
 			return tok
 		}
 	}
-	tok := GetKeychainToken()
+	tokVal, _, _ := ghTokenSF.Do("keychain-token", func() (any, error) {
+		return GetKeychainToken(), nil
+	})
+	tok := tokVal.(string)
 	if tok != "" {
 		ghTokenCacheVal.Store(tok)
 		ghTokenCacheAt.Store(now)

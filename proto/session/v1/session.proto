@@ -263,6 +263,23 @@ service SessionService {
   // UpdateGlobalDefaults replaces the global default fields.
   rpc UpdateGlobalDefaults(UpdateGlobalDefaultsRequest) returns (UpdateGlobalDefaultsResponse) {}
 
+  // GetSlackConfig returns the current Slack notification configuration.
+  // Secret fields (webhook URL, signing secret) are never returned in
+  // plaintext or ciphertext — only booleans reporting whether each is
+  // configured.
+  rpc GetSlackConfig(GetSlackConfigRequest) returns (GetSlackConfigResponse) {}
+
+  // UpdateSlackConfig updates the Slack notification configuration. Empty
+  // string on webhook_url/signing_secret means "leave unchanged"; the
+  // corresponding clear_webhook_url/clear_signing_secret bool means
+  // "explicitly remove this secret".
+  rpc UpdateSlackConfig(UpdateSlackConfigRequest) returns (UpdateSlackConfigResponse) {}
+
+  // TestSlackWebhook sends a canned test message to the given webhook URL
+  // (or, if webhook_url is empty, the currently-saved one) and reports
+  // whether the send succeeded, synchronously.
+  rpc TestSlackWebhook(TestSlackWebhookRequest) returns (TestSlackWebhookResponse) {}
+
   // UpsertProfile creates or updates a named profile.
   rpc UpsertProfile(UpsertProfileRequest) returns (UpsertProfileResponse) {}
 
@@ -1825,6 +1842,11 @@ message SessionDefaultsConfig {
   // Max backlog items that may be in_progress at once. 0 in a request means
   // "use the server default (2)"; the response always echoes the resolved value.
   int32 max_concurrent_backlog_work_items = 11;
+  // Minutes of no meaningful output before a main-list session is flagged stale.
+  // Always the resolved value (never 0) in responses.
+  int32 stale_session_threshold_minutes = 12;
+  // Whether crossing the stale threshold also emits a notification.
+  bool stale_session_notify_enabled = 13;
 }
 
 // GetSessionDefaults
@@ -1885,10 +1907,87 @@ message UpdateGlobalDefaultsRequest {
   int32 max_auto_rework_iterations = 8;
   // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
   int32 max_concurrent_backlog_work_items = 9;
+  // 0 = use the server default. See SessionDefaultsConfig.stale_session_threshold_minutes.
+  int32 stale_session_threshold_minutes = 10;
+  bool stale_session_notify_enabled = 11;
 }
 
 message UpdateGlobalDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
+}
+
+// ─── Slack Notification Config Messages ─────────────────────────────────────
+//
+// SlackConfigProto reports booleans only for secret fields — the webhook URL
+// and signing secret are never echoed back in plaintext or ciphertext by any
+// RPC, matching CallbackConfigProto's masked-boolean-not-value convention
+// above.
+
+// SlackDeliveryStatus is the notifier's most recent send outcome, surfaced
+// passively on the settings panel so a silently-failing webhook is
+// discoverable without sending a fresh test message.
+message SlackDeliveryStatus {
+  // attempted is false until the first send has ever completed.
+  bool attempted = 1;
+  bool success = 2;
+  // error is the sanitized failure message (never contains the webhook URL).
+  string error = 3;
+  google.protobuf.Timestamp attempted_at = 4;
+}
+
+message SlackConfigProto {
+  bool webhook_configured = 1;
+  bool signing_secret_configured = 2;
+  bool notify_on_queue_item = 3;
+  int32 queue_depth_threshold = 4;
+  bool approval_enabled = 5;
+  string dashboard_base_url = 6;
+  SlackDeliveryStatus last_delivery = 7;
+}
+
+message GetSlackConfigRequest {}
+
+message GetSlackConfigResponse {
+  SlackConfigProto config = 1;
+}
+
+message UpdateSlackConfigRequest {
+  // Empty string means "leave the stored webhook unchanged"; set
+  // clear_webhook_url to explicitly remove it instead.
+  string webhook_url = 1;
+  // Empty string means "leave the stored signing secret unchanged"; set
+  // clear_signing_secret to explicitly remove it instead.
+  string signing_secret = 2;
+  bool notify_on_queue_item = 3;
+  int32 queue_depth_threshold = 4;
+  bool approval_enabled = 5;
+  string dashboard_base_url = 6;
+  // Explicitly clears the stored webhook URL, regardless of webhook_url's
+  // content. Distinct from leaving webhook_url empty (which means
+  // "unchanged") — this is the only way to reach the "cleared" state.
+  bool clear_webhook_url = 7;
+  // Explicitly clears the stored signing secret, regardless of
+  // signing_secret's content. Same "unchanged" vs "cleared" distinction as
+  // clear_webhook_url.
+  bool clear_signing_secret = 8;
+}
+
+message UpdateSlackConfigResponse {
+  SlackConfigProto config = 1;
+}
+
+message TestSlackWebhookRequest {
+  // The webhook URL currently typed in the settings form — tested as-is,
+  // even if not yet saved. Empty string falls back to testing the
+  // already-saved (decrypted) webhook URL.
+  string webhook_url = 1;
+}
+
+message TestSlackWebhookResponse {
+  bool success = 1;
+  // error is Slack's actual response text where available (e.g.
+  // "slack returned 404: no_service"), not a generic failure message.
+  string error = 2;
 }
 
 // Callback Config (webhook-triggers Phase 5, FR7)
@@ -2656,6 +2755,10 @@ message WorkflowProto {
   string prompt_template = 23;
   // Last time this trigger successfully fired a session. Unset if never fired.
   optional google.protobuf.Timestamp last_fired_at = 24;
+  // enabled is the generic per-trigger-type "is this trigger active" gate, read by
+  // both webhook handlers and written by TriggersPanel.tsx's toggle — distinct from
+  // cron_enabled, which is the literal cron-schedule flag only.
+  bool enabled = 25;
 }
 
 message CreateWorkflowRequest {
@@ -2694,6 +2797,10 @@ message CreateWorkflowRequest {
   // reject every delivery until one is set. Never echoed back by any RPC, matching
   // WorkflowProto.trigger_type's doc comment on webhook_secret_encrypted above.
   string webhook_secret = 21;
+  // enabled gates whether this trigger fires (see WorkflowProto.enabled). optional so
+  // an unset request defaults to the schema default (true), matching the create-time
+  // "enabled unless explicitly disabled" convention.
+  optional bool enabled = 22;
 }
 
 message CreateWorkflowResponse {
@@ -2735,6 +2842,14 @@ message UpdateWorkflowRequest {
   // never-cleared-implicitly fields). Only a non-empty value rotates the stored
   // secret. See CreateWorkflowRequest.webhook_secret's doc comment.
   string webhook_secret = 21;
+  // enabled gates whether this trigger fires (see WorkflowProto.enabled).
+  optional bool enabled = 22;
+  // Optimistic-concurrency precondition (CAS): when set, the update is rejected with
+  // CodeAborted unless the row's current updated_at exactly matches this value —
+  // mirrors ClaimChainFire's SQL-level CAS (ent_repository_backlog.go). Left unset,
+  // there is no precondition and the write always applies, preserving prior
+  // single-writer callers' behavior during rollout.
+  optional google.protobuf.Timestamp expected_updated_at = 23;
 }
 
 message UpdateWorkflowResponse {

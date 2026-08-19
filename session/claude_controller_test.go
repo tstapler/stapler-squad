@@ -14,6 +14,7 @@ import (
 )
 
 func TestNewClaudeController(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -33,6 +34,7 @@ func TestNewClaudeController(t *testing.T) {
 }
 
 func TestNewClaudeController_NilInstance(t *testing.T) {
+	t.Parallel()
 	_, err := NewClaudeController(nil)
 	if err == nil {
 		t.Error("NewClaudeController(nil) should fail")
@@ -40,6 +42,7 @@ func TestNewClaudeController_NilInstance(t *testing.T) {
 }
 
 func TestNewClaudeController_EmptyTitle(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "",
 	}
@@ -51,12 +54,14 @@ func TestNewClaudeController_EmptyTitle(t *testing.T) {
 }
 
 func TestClaudeController_Initialize(t *testing.T) {
+	t.Parallel()
 	// Skip this test as it requires a fully initialized instance with PTY
 	// This would be tested in integration tests
 	t.Skip("Requires full instance initialization")
 }
 
 func TestClaudeController_IsStarted(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -72,6 +77,7 @@ func TestClaudeController_IsStarted(t *testing.T) {
 }
 
 func TestClaudeController_GetSessionName(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -87,6 +93,7 @@ func TestClaudeController_GetSessionName(t *testing.T) {
 }
 
 func TestClaudeController_GetInstance(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -102,6 +109,7 @@ func TestClaudeController_GetInstance(t *testing.T) {
 }
 
 func TestClaudeController_StopWithoutStart(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -118,6 +126,7 @@ func TestClaudeController_StopWithoutStart(t *testing.T) {
 }
 
 func TestClaudeController_SendCommandWithoutStart(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -134,6 +143,7 @@ func TestClaudeController_SendCommandWithoutStart(t *testing.T) {
 }
 
 func TestClaudeController_SendCommandImmediateWithoutStart(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -150,6 +160,7 @@ func TestClaudeController_SendCommandImmediateWithoutStart(t *testing.T) {
 }
 
 func TestClaudeController_GetExecutionOptions(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -167,6 +178,7 @@ func TestClaudeController_GetExecutionOptions(t *testing.T) {
 }
 
 func TestClaudeController_SetExecutionOptions(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -190,6 +202,7 @@ func TestClaudeController_SetExecutionOptions(t *testing.T) {
 }
 
 func TestClaudeController_ClearHistoryWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -206,6 +219,7 @@ func TestClaudeController_ClearHistoryWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_ClearQueueWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -222,6 +236,7 @@ func TestClaudeController_ClearQueueWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_GetRecentOutputWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -238,6 +253,7 @@ func TestClaudeController_GetRecentOutputWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_GetCurrentStatusWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -258,6 +274,7 @@ func TestClaudeController_GetCurrentStatusWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_SubscribeWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -274,6 +291,7 @@ func TestClaudeController_SubscribeWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_UnsubscribeWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -290,6 +308,7 @@ func TestClaudeController_UnsubscribeWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_GetCommandStatusNoCommand(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -307,6 +326,7 @@ func TestClaudeController_GetCommandStatusNoCommand(t *testing.T) {
 }
 
 func TestClaudeController_CancelCommandWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -322,6 +342,7 @@ func TestClaudeController_CancelCommandWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_GetCurrentCommandWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -338,6 +359,7 @@ func TestClaudeController_GetCurrentCommandWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_GetQueuedCommandsWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -354,6 +376,7 @@ func TestClaudeController_GetQueuedCommandsWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_GetCommandHistoryWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -370,6 +393,7 @@ func TestClaudeController_GetCommandHistoryWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_SearchHistoryWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -386,6 +410,7 @@ func TestClaudeController_SearchHistoryWithoutInit(t *testing.T) {
 }
 
 func TestClaudeController_GetHistoryStatisticsWithoutInit(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{
 		Title: "test-session",
 	}
@@ -402,6 +427,7 @@ func TestClaudeController_GetHistoryStatisticsWithoutInit(t *testing.T) {
 }
 
 func TestGenerateCommandID(t *testing.T) {
+	t.Parallel()
 	id1 := generateCommandID()
 	if id1 == "" {
 		t.Error("generateCommandID() returned empty string")
@@ -417,6 +443,7 @@ func TestGenerateCommandID(t *testing.T) {
 }
 
 func TestGetPersistDir(t *testing.T) {
+	t.Parallel()
 	dir := getPersistDir()
 	if dir == "" {
 		t.Error("getPersistDir() returned empty string")
@@ -424,6 +451,7 @@ func TestGetPersistDir(t *testing.T) {
 }
 
 func TestGetQueuePersistDir(t *testing.T) {
+	t.Parallel()
 	dir := getQueuePersistDir()
 	if dir == "" {
 		t.Error("getQueuePersistDir() returned empty string")
@@ -431,6 +459,7 @@ func TestGetQueuePersistDir(t *testing.T) {
 }
 
 func TestGetHistoryPersistDir(t *testing.T) {
+	t.Parallel()
 	dir := getHistoryPersistDir()
 	if dir == "" {
 		t.Error("getHistoryPersistDir() returned empty string")
@@ -439,6 +468,7 @@ func TestGetHistoryPersistDir(t *testing.T) {
 
 // Integration test - requires full setup
 func TestClaudeController_FullLifecycle(t *testing.T) {
+	t.Parallel()
 	t.Skip("Integration test - requires full instance with PTY")
 
 	// This test would verify:
@@ -516,6 +546,7 @@ var tmuxOutputLarge = func() string {
 // ---------------------------------------------------------------------------
 
 func TestTailContent_ShorterThanWindow(t *testing.T) {
+	t.Parallel()
 	s := "hello\nworld\n"
 	got := tailContent(s, 4096)
 	if got != s {
@@ -524,6 +555,7 @@ func TestTailContent_ShorterThanWindow(t *testing.T) {
 }
 
 func TestTailContent_LongerThanWindow(t *testing.T) {
+	t.Parallel()
 	// Build a string with 10 lines; keep only the last 3.
 	content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
 	// Window large enough to capture last ~3 lines but not all.
@@ -539,6 +571,7 @@ func TestTailContent_LongerThanWindow(t *testing.T) {
 }
 
 func TestTailContent_ExactlyWindowSize(t *testing.T) {
+	t.Parallel()
 	s := strings.Repeat("x", statusDetectionTailBytes)
 	got := tailContent(s, statusDetectionTailBytes)
 	if got != s {
@@ -547,6 +580,7 @@ func TestTailContent_ExactlyWindowSize(t *testing.T) {
 }
 
 func TestTailContent_NoNewlineInTail(t *testing.T) {
+	t.Parallel()
 	// Content that after slicing has no newline — entire tail is one line.
 	prefix := strings.Repeat("a\n", 200) // lots of short lines
 	suffix := strings.Repeat("b", 100)   // no newline, fits in window
@@ -563,6 +597,7 @@ func TestTailContent_NoNewlineInTail(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHashString_SameInputSameHash(t *testing.T) {
+	t.Parallel()
 	h1 := hashString("hello")
 	h2 := hashString("hello")
 	if h1 != h2 {
@@ -571,12 +606,14 @@ func TestHashString_SameInputSameHash(t *testing.T) {
 }
 
 func TestHashString_DifferentInputDifferentHash(t *testing.T) {
+	t.Parallel()
 	if hashString("hello") == hashString("world") {
 		t.Error("different inputs must (almost certainly) produce different hashes")
 	}
 }
 
 func TestHashString_EmptyString(t *testing.T) {
+	t.Parallel()
 	// Should not panic and should return a consistent value.
 	h1 := hashString("")
 	h2 := hashString("")
@@ -656,6 +693,7 @@ func newControllerWithMock(content string) (*ClaudeController, *mockInstance) {
 // and its settleWindow>0 post-turn path call cc.IsIdle() once to seed their decision). After the
 // fix, the same text classifies as StatusExecuting, which maps to IdleStateActive.
 func TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryDisplayed(t *testing.T) {
+	t.Parallel()
 	batchedSummary := "✻ Searching for 9 patterns, reading 2 files, running 7 shell commands…"
 	cc, _ := newControllerWithMock(batchedSummary)
 
@@ -832,6 +870,7 @@ func TestClaudeController_Start_FallsBackToDefaultDetector_WhenProgramUnregister
 }
 
 func TestGetCurrentStatus_CacheHit(t *testing.T) {
+	t.Parallel()
 	cc, inst := newControllerWithMock(tmuxOutputSmall)
 
 	status1, desc1 := cc.GetCurrentStatus()
@@ -850,6 +889,7 @@ func TestGetCurrentStatus_CacheHit(t *testing.T) {
 }
 
 func TestGetCurrentStatus_ThenGetStatusAndIdleInfo_should_shareSubagentCount_When_sameTailHash(t *testing.T) {
+	t.Parallel()
 	cc, _ := newControllerWithMock("✻ Waiting for 2 background agents to finish")
 
 	// GetCurrentStatus populates the shared statusCache first.
@@ -874,6 +914,7 @@ func TestGetCurrentStatus_ThenGetStatusAndIdleInfo_should_shareSubagentCount_Whe
 }
 
 func TestGetStatusAndIdleInfo_should_returnZeroCount_When_statusIsNotWaitingForAgent(t *testing.T) {
+	t.Parallel()
 	cc, _ := newControllerWithMock("✻ Baked for 3s")
 
 	status, _, _, count := cc.GetStatusAndIdleInfo()
@@ -886,6 +927,7 @@ func TestGetStatusAndIdleInfo_should_returnZeroCount_When_statusIsNotWaitingForA
 }
 
 func TestGetCurrentStatus_CacheMissOnChange(t *testing.T) {
+	t.Parallel()
 	cc, _ := newControllerWithMock(tmuxOutputSmall)
 	_, _ = cc.GetCurrentStatus()
 	var firstHash uint64
@@ -910,6 +952,7 @@ func TestGetCurrentStatus_CacheMissOnChange(t *testing.T) {
 }
 
 func TestGetCurrentStatus_EmptyContent(t *testing.T) {
+	t.Parallel()
 	cc, _ := newControllerWithMock("")
 	status, _ := cc.GetCurrentStatus()
 	if status != detection.StatusUnknown {
@@ -918,6 +961,7 @@ func TestGetCurrentStatus_EmptyContent(t *testing.T) {
 }
 
 func TestGetCurrentStatus_NilInstance(t *testing.T) {
+	t.Parallel()
 	cc := &ClaudeController{sessionName: "test"}
 	cc.statusDetector.Store(detection.NewStatusDetector())
 	status, msg := cc.GetCurrentStatus()
@@ -930,6 +974,7 @@ func TestGetCurrentStatus_NilInstance(t *testing.T) {
 }
 
 func TestGetCurrentStatus_TailOnlyProcessed(t *testing.T) {
+	t.Parallel()
 	// Build content where the tail contains "esc to interrupt" (Active) but the
 	// body only has "Thinking" (Processing).  We expect Active to win, proving
 	// that the tail — not the full buffer — is what the detector sees.
@@ -948,6 +993,7 @@ func TestGetCurrentStatus_TailOnlyProcessed(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetIdleState_CacheHit(t *testing.T) {
+	t.Parallel()
 	cc, _ := newControllerWithMock(tmuxOutputSmall)
 
 	state1, _ := cc.GetIdleState()
@@ -962,6 +1008,7 @@ func TestGetIdleState_CacheHit(t *testing.T) {
 }
 
 func TestGetIdleState_CacheMissOnChange(t *testing.T) {
+	t.Parallel()
 	cc, _ := newControllerWithMock(tmuxOutputSmall)
 	_, _ = cc.GetIdleState()
 	var firstHash uint64
@@ -1084,6 +1131,7 @@ func newControllerWithMockAndChannel(preview string) (*ClaudeController, *mockIn
 // TestClaudeController_StatusChangeListener_FiresOnStatusChange verifies that
 // the listener is invoked when a status transition is detected after an output signal.
 func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T) {
+	t.Parallel()
 	// Use content that produces a known status (StatusExecuting via "esc to interrupt").
 	preview := tmuxOutputSmall // contains "esc to interrupt" → StatusExecuting
 	cc, _, ctx, cancel := newControllerWithMockAndChannel(preview)
@@ -1116,6 +1164,7 @@ func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T)
 // TestClaudeController_StatusChangeListener_SuppressedOnNoChange verifies that
 // the listener fires only once when the status doesn't change across two signals.
 func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T) {
+	t.Parallel()
 	preview := tmuxOutputSmall
 	cc, _, ctx, cancel := newControllerWithMockAndChannel(preview)
 	defer cancel()
@@ -1168,6 +1217,7 @@ checkResult:
 // TestClaudeController_StatusChangeListener_NotCalledAfterStop verifies that
 // the listener is not called after the context is cancelled (Stop).
 func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) {
+	t.Parallel()
 	preview := tmuxOutputSmall
 	cc, _, ctx, cancel := newControllerWithMockAndChannel(preview)
 

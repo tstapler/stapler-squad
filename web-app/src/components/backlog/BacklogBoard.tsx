@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { filterBacklogItems, type BacklogFilterState } from "@/lib/hooks/useBacklogFilters";
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { BacklogItemCard } from "./BacklogItemCard";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -17,7 +18,12 @@ import * as styles from "./BacklogBoard.css";
 // column at all (BUG-037: those items rendered nowhere on the board — no
 // error, no count, no way to tell they existed short of opening item
 // detail). Archived items are excluded from the board, same as before this
-// fix (archived never matched any of the 5 literal statuses either).
+// fix (archived never matched any of the 5 literal statuses either). This is
+// also the defined behavior for the shared `showArchived` filter (AC 7):
+// toggling it changes what filterBacklogItems() lets through, but an
+// archived item still resolves to no Stage here, so it never renders in any
+// column regardless of the toggle — there is no archived column on the
+// board, by design, not by oversight.
 function stageOf(status: BacklogItemStatus): Stage | null {
   const { activeStage, archived } = deriveStageDisplay(status);
   return archived ? null : activeStage;
@@ -33,6 +39,14 @@ interface BacklogBoardProps {
    * distributed per card by itemId here — not re-fetched per card.
    */
   stuckItems?: StuckBacklogItem[];
+  /**
+   * Shared filter state from useBacklogFilters() (AC 0, 1, 2). Applied only
+   * to each column's settled items — the raw useWatchBacklogItems() stream
+   * stays unfiltered so the Epic 6.4 exit/enter animation tracking keeps
+   * seeing every status transition. Omitted in existing tests to preserve
+   * prior unfiltered behavior.
+   */
+  filters?: BacklogFilterState;
 }
 
 const COLUMNS: { status: BacklogItemStatus; label: string }[] = [
@@ -70,6 +84,7 @@ function BoardColumn({
   isLoading,
   pending,
   stuckItemsById,
+  isEmptyDueToFilter,
 }: {
   column: { status: BacklogItemStatus; label: string };
   items: BacklogItem[];
@@ -82,6 +97,8 @@ function BoardColumn({
   isLoading: boolean;
   pending: Record<string, string>;
   stuckItemsById: Map<string, StuckBacklogItem>;
+  /** True when this column has items upstream but the active filter excluded all of them (AC 5). */
+  isEmptyDueToFilter: boolean;
 }) {
   // The column count badge should reflect genuinely present items, not a
   // still-fading departure that's only rendered for the exit transition.
@@ -106,6 +123,10 @@ function BoardColumn({
             <SkeletonCard />
             <SkeletonCard />
           </>
+        ) : items.length === 0 && isEmptyDueToFilter ? (
+          <p className={styles.emptyColumn} data-testid="backlog-column-empty-filtered">
+            No items match filter
+          </p>
         ) : items.length === 0 ? (
           <p className={styles.emptyColumn}>No items</p>
         ) : (
@@ -142,6 +163,7 @@ export function BacklogBoard({
   onItemClick,
   pending = {},
   stuckItems = [],
+  filters,
 }: BacklogBoardProps) {
   // Epic 5.2 (backlog-event-driven-updates): the board subscribes to the
   // same live stream/normalized store as the list page (ux.md §2, "no
@@ -299,7 +321,14 @@ export function BacklogBoard({
         data-testid="backlog-board"
       >
         {COLUMNS.map((column) => {
-          const baseItems = items.filter((i) => stageOf(i.status) === column.status);
+          // Filtering (AC 0, 1, 2) applies only to this column's settled
+          // items — `items` itself stays unfiltered so the exit/enter
+          // animation tracking above keeps seeing every status transition
+          // regardless of the active filter. Sort/group-by are list-only
+          // (AC 6) and never reach the board.
+          const unfilteredBaseItems = items.filter((i) => stageOf(i.status) === column.status);
+          const baseItems = filters ? filterBacklogItems(unfilteredBaseItems, filters) : unfilteredBaseItems;
+          const isEmptyDueToFilter = baseItems.length === 0 && unfilteredBaseItems.length > 0;
           const baseIds = new Set(baseItems.map((i) => i.id));
           const exitingForColumn = Array.from(exitingItems.values()).filter(
             (e) => stageOf(e.fromStatus) === column.status && !baseIds.has(e.item.id)
@@ -322,6 +351,7 @@ export function BacklogBoard({
               isLoading={isLoading}
               pending={pending}
               stuckItemsById={stuckItemsById}
+              isEmptyDueToFilter={isEmptyDueToFilter}
             />
           );
         })}

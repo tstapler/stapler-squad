@@ -198,6 +198,29 @@ func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 	return content, nil
 }
 
+// CapturePaneContentPriority mirrors CapturePaneContent but routes the
+// subprocess call through the resync exec-gate fast lane instead of the
+// default pool (Epic 4.2, terminal:resync-exec-gate-fast-lane), and always
+// captures fresh — it deliberately bypasses the capturePaneCacheTTL cache
+// since resync's whole point is an up-to-date snapshot, not the cached value
+// a concurrent poll tick may have populated.
+func (tm *TmuxProcessManager) CapturePaneContentPriority() (string, error) {
+	s := tm.session.Load()
+	if s == nil {
+		return "", fmt.Errorf("tmux session not initialized")
+	}
+	content, err := s.CapturePaneContentPriority()
+	if err != nil {
+		return "", err
+	}
+
+	tm.mu.Lock()
+	tm.captureContent = content
+	tm.captureContentAt = time.Now()
+	tm.mu.Unlock()
+	return content, nil
+}
+
 // CapturePaneContentRaw returns pane content with ANSI escape codes preserved.
 func (tm *TmuxProcessManager) CapturePaneContentRaw() (string, error) {
 	s := tm.session.Load()
@@ -277,6 +300,17 @@ func (tm *TmuxProcessManager) RefreshClient() error {
 		return nil
 	}
 	return s.RefreshClient()
+}
+
+// RefreshClientPriority mirrors RefreshClient but routes the subprocess call
+// through the resync exec-gate fast lane instead of the default pool
+// (Epic 4.2, terminal:resync-exec-gate-fast-lane).
+func (tm *TmuxProcessManager) RefreshClientPriority() error {
+	s := tm.session.Load()
+	if s == nil {
+		return nil
+	}
+	return s.RefreshClientPriority()
 }
 
 // TapEnter sends an Enter key to the session.
@@ -466,6 +500,7 @@ type TmuxManager interface {
 	SetDetachedSize(width, height int, instanceTitle string) error
 	Attach() (chan struct{}, error)
 	CapturePaneContent() (string, error)
+	CapturePaneContentPriority() (string, error)
 	CapturePaneContentRaw() (string, error)
 	CapturePaneContentWithOptions(startLine, endLine string) (string, error)
 	GetPaneDimensions() (width, height int, err error)
@@ -474,6 +509,7 @@ type TmuxManager interface {
 	SendKeys(keys string) (int, error)
 	SetWindowSize(cols, rows int) error
 	RefreshClient() error
+	RefreshClientPriority() error
 	TapEnter() error
 	HasUpdated() (updated bool, hasPrompt bool, content string)
 	RestoreWithWorkDir(workDir string) error

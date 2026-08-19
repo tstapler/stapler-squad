@@ -32,6 +32,7 @@ import (
 // (item 5 references pre-mortem #4; the HasSession()-reuse gap itself is a distinct,
 // separately-scoped follow-up — see ADR-001) rather than fixed in this plan.
 func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

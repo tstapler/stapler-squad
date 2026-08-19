@@ -6,6 +6,7 @@ import (
 )
 
 func TestApprove_FromActive_Fails(t *testing.T) {
+	t.Parallel()
 	// Active→Active is a self-transition and is not allowed.
 	inst := &Instance{
 		Title:  "test-approve-active",
@@ -28,6 +29,7 @@ func TestApprove_FromActive_Fails(t *testing.T) {
 }
 
 func TestApprove_FromPaused(t *testing.T) {
+	t.Parallel()
 	// Paused→Active is valid.
 	inst := &Instance{
 		Title:  "test-approve-paused",
@@ -46,6 +48,7 @@ func TestApprove_FromPaused(t *testing.T) {
 }
 
 func TestDeny_FromActive(t *testing.T) {
+	t.Parallel()
 	// Active→Paused is valid, so Deny from Active should succeed.
 	inst := &Instance{
 		Title:  "test-deny-active",
@@ -64,6 +67,7 @@ func TestDeny_FromActive(t *testing.T) {
 }
 
 func TestDeny_FromPaused_Fails(t *testing.T) {
+	t.Parallel()
 	// Paused→Paused is NOT a valid transition (self-transition not allowed).
 	inst := &Instance{
 		Title:  "test-deny-paused",
@@ -83,6 +87,7 @@ func TestDeny_FromPaused_Fails(t *testing.T) {
 }
 
 func TestApprove_FromStopped_Succeeds(t *testing.T) {
+	t.Parallel()
 	// Stopped→Active is valid for session revival.
 	inst := &Instance{
 		Title:  "test-approve-stopped",
@@ -100,6 +105,7 @@ func TestApprove_FromStopped_Succeeds(t *testing.T) {
 }
 
 func TestDeny_FromStopped_Fails(t *testing.T) {
+	t.Parallel()
 	// Stopped→Paused is not a valid transition.
 	inst := &Instance{
 		Title:  "test-deny-stopped",
@@ -119,6 +125,7 @@ func TestDeny_FromStopped_Fails(t *testing.T) {
 }
 
 func TestApprove_FromHibernated_Succeeds(t *testing.T) {
+	t.Parallel()
 	// Hibernated→Active is valid (resume from hibernation).
 	inst := &Instance{
 		Title:  "test-approve-hibernated",
@@ -144,6 +151,7 @@ func TestApprove_FromHibernated_Succeeds(t *testing.T) {
 }
 
 func TestApprove_ErrorMessageFormat(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:  "test-err-format",
 		Status: Active,
@@ -163,6 +171,7 @@ func TestApprove_ErrorMessageFormat(t *testing.T) {
 }
 
 func TestDeny_ErrorMessageFormat(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:  "test-err-format",
 		Status: Stopped,
@@ -182,6 +191,7 @@ func TestDeny_ErrorMessageFormat(t *testing.T) {
 }
 
 func TestApprove_AllSourceStatuses(t *testing.T) {
+	t.Parallel()
 	// Table-driven: test Approve() (transition to Active) from every status in the 5-state model.
 	tests := []struct {
 		name       string
@@ -197,6 +207,7 @@ func TestApprove_AllSourceStatuses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			inst := &Instance{
 				Title:  "test",
 				Status: tt.from,
@@ -221,6 +232,7 @@ func TestApprove_AllSourceStatuses(t *testing.T) {
 }
 
 func TestDeny_AllSourceStatuses(t *testing.T) {
+	t.Parallel()
 	// Table-driven: test Deny() (transition to Paused) from every status in the 5-state model.
 	tests := []struct {
 		name       string
@@ -236,6 +248,7 @@ func TestDeny_AllSourceStatuses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			inst := &Instance{
 				Title:  "test",
 				Status: tt.from,

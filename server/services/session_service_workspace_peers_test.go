@@ -82,6 +82,7 @@ func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExi
 }
 
 func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_RepoPathIsEmpty(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })

@@ -64,6 +64,7 @@ func (panickingItemChangePublisher) PublishItemChanged(item *session.BacklogItem
 // a subscriber receives a BacklogItemChanged event with the correct old/new status
 // after a successful CAS transition (Task 2.1.1b, R4 happy path).
 func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucceeds(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -102,6 +103,7 @@ func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucce
 // reaches the subscriber — the precondition-failed path must never publish
 // (Task 2.1.1c, R4 error path).
 func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -144,6 +146,7 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 // against a raw ItemChangePublisher implementation that has no recover() of
 // its own).
 func TestTransitionBacklogItemStatus_should_returnSuccessAndPersistRow_When_ItemChangePublisherPanics(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -173,6 +176,7 @@ func TestTransitionBacklogItemStatus_should_returnSuccessAndPersistRow_When_Item
 // updates only the Title field and asserts the published event's
 // UpdatedFields contains exactly "title" (Task 2.2.1b, R5 happy path).
 func TestUpdateBacklogItem_should_publishChangedFieldNames_When_TitleIsUpdated(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -210,6 +214,7 @@ func TestUpdateBacklogItem_should_publishChangedFieldNames_When_TitleIsUpdated(t
 // UpdatedFields list (if an event is published at all) must be empty
 // (Task 2.2.1a, R5 error/edge path).
 func TestUpdateBacklogItem_should_notPublishMisleadingFieldList_When_NoParamsAreSet(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -244,6 +249,7 @@ func TestUpdateBacklogItem_should_notPublishMisleadingFieldList_When_NoParamsAre
 // "planText" example — there is no PlanText field on BacklogItemUpdate in this
 // codebase, so Notes stands in as the third real field.
 func TestUpdateBacklogItem_should_deliverEventThroughRealBus_When_MultipleFieldsChange(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -287,6 +293,7 @@ func TestUpdateBacklogItem_should_deliverEventThroughRealBus_When_MultipleFields
 // archives a done item and asserts the published event carries a non-nil
 // ArchivedAt timestamp (Task 2.2.2a/c, R6 happy path).
 func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArchived(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -316,10 +323,121 @@ func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArc
 	}
 }
 
+// TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist confirms
+// an unarchive against a nonexistent item id returns ErrNotFound and never
+// reaches the publish call, mirroring TestDeleteBacklogItem's not-found case
+// (backlog item "Archiving a backlog item is irreversible", criterion 3).
+func TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	bus := pkgevents.NewEventBus(10)
+	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+
+	sub, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	_, err := repo.UnarchiveBacklogItem(ctx, uuid.NewString())
+	require.Error(t, err)
+	require.ErrorIs(t, err, session.ErrNotFound)
+
+	select {
+	case ev := <-sub:
+		t.Fatalf("expected no event when unarchiving a nonexistent item, got: %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+		// Expected: no event within the timeout.
+	}
+}
+
+// TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_ItemIsArchived
+// covers the documented happy path: an archived item's archived_at is cleared,
+// its status is restored to "idea", and a full ChangeStatusTransition event
+// (not the lightweight ChangeItemArchived shape) is published so live list
+// views update without a manual refresh (criteria 2 and 5).
+func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_ItemIsArchived(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	bus := pkgevents.NewEventBus(10)
+	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+
+	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item to unarchive",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	_, err = repo.ArchiveBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	sub, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	unarchived, err := repo.UnarchiveBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusIdea), unarchived.Status)
+	assert.Nil(t, unarchived.ArchivedAt)
+
+	select {
+	case ev := <-sub:
+		require.NotNil(t, ev.BacklogItemPayload)
+		assert.Equal(t, pkgevents.BacklogChangeStatusTransition, ev.BacklogItemPayload.Kind)
+		assert.Equal(t, string(session.BacklogStatusArchived), ev.BacklogItemPayload.OldStatus)
+		assert.Equal(t, string(session.BacklogStatusIdea), ev.BacklogItemPayload.NewStatus)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for BacklogItemChanged event")
+	}
+}
+
+// TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArchived
+// documents and locks in the idempotency decision recorded on
+// EntRepository.UnarchiveBacklogItem: calling unarchive on an item that is not
+// currently archived still succeeds and unconditionally flips it to "idea",
+// matching UnarchiveSession's precedent (server/services/session_service.go)
+// rather than erroring or no-op'ing (criterion 3).
+func TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArchived(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	bus := pkgevents.NewEventBus(10)
+	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+
+	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item never archived",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sub, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	unarchived, err := repo.UnarchiveBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusIdea), unarchived.Status)
+	assert.Nil(t, unarchived.ArchivedAt)
+
+	select {
+	case ev := <-sub:
+		require.NotNil(t, ev.BacklogItemPayload)
+		assert.Equal(t, pkgevents.BacklogChangeStatusTransition, ev.BacklogItemPayload.Kind)
+		assert.Equal(t, string(session.BacklogStatusReady), ev.BacklogItemPayload.OldStatus)
+		assert.Equal(t, string(session.BacklogStatusIdea), ev.BacklogItemPayload.NewStatus)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for BacklogItemChanged event")
+	}
+}
+
 // TestDeleteBacklogItem_should_notPublish_When_ItemIDDoesNotExist confirms a
 // delete against a nonexistent item id returns its existing not-found error
 // and never reaches the publish call (Task 2.2.2b, R6 error path).
 func TestDeleteBacklogItem_should_notPublish_When_ItemIDDoesNotExist(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -348,6 +466,7 @@ func TestDeleteBacklogItem_should_notPublish_When_ItemIDDoesNotExist(t *testing.
 // handler will route this to a BacklogItemRemovedEvent (a delete signal), not
 // an upsert (Task 2.2.2c, R6 integration).
 func TestDeleteBacklogItem_should_publishRemovedNotUpdated_When_ExistingItemIsDeleted(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -395,6 +514,7 @@ func TestDeleteBacklogItem_should_publishRemovedNotUpdated_When_ExistingItemIsDe
 // one that created the session/verdict — must still carry that session (with
 // its verdict inline) in Item.ItemSessions.
 func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemHasReviewVerdict(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -468,6 +588,7 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 // field. Asserts a subscriber now receives a ChangeItemUpdated event carrying the
 // updated acceptance criteria JSON after a criterion's status changes.
 func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionStatusChanges(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -519,6 +640,7 @@ func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionSt
 // TransitionBacklogItemStatus and were unaffected). This asserts the fix: a subscriber
 // receives a BacklogItemStatusChangedEvent (in_progress -> review) after the sweep.
 func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitionsToReview(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -575,6 +697,7 @@ func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitio
 // bypasses. Asserts a subscriber now receives a ChangeItemUpdated event after
 // the started_at write.
 func TestUpdateItemSessionStarted_should_publishItemUpdatedEvent_When_StartedAtIsSet(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -623,6 +746,7 @@ func TestUpdateItemSessionStarted_should_publishItemUpdatedEvent_When_StartedAtI
 // is the same-shaped regression test for UpdateItemSessionGitActivity, which
 // recorded commit sha/message/count with zero publish call.
 func TestUpdateItemSessionGitActivity_should_publishItemUpdatedEvent_When_CommitIsRecorded(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -669,6 +793,7 @@ func TestUpdateItemSessionGitActivity_should_publishItemUpdatedEvent_When_Commit
 // is the same-shaped regression test for UpdateItemSessionFileTouch, which
 // recorded the last-file-touch timestamp with zero publish call.
 func TestUpdateItemSessionFileTouch_should_publishItemUpdatedEvent_When_FileTouchIsRecorded(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -715,6 +840,7 @@ func TestUpdateItemSessionFileTouch_should_publishItemUpdatedEvent_When_FileTouc
 // is the same-shaped regression test for UpdateItemSessionVerificationNotes,
 // which saved request_review's verification evidence with zero publish call.
 func TestUpdateItemSessionVerificationNotes_should_publishItemUpdatedEvent_When_NotesAreSaved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -763,6 +889,7 @@ func TestUpdateItemSessionVerificationNotes_should_publishItemUpdatedEvent_When_
 // saw a pr_pending item become visible to FindPRPendingItems' polling loop
 // until their next full poll/refresh.
 func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIsBackfilled(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()

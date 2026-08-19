@@ -9,6 +9,7 @@ import { ProfilesManager } from "@/components/settings/ProfilesManager";
 import { DirectoryRulesManager } from "@/components/settings/DirectoryRulesManager";
 import { AliasesManager } from "@/components/settings/AliasesManager";
 import { PushNotificationSettings } from "@/components/settings/PushNotificationSettings";
+import { SlackNotificationSettings } from "@/components/settings/SlackNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
 import { InputModeSetting } from "@/components/settings/InputModeSetting";
 import { ConfigPageContent } from "@/app/config/ConfigPageContent";
@@ -128,6 +129,9 @@ function SettingsPageInner() {
             </section>
             <section className={styles.section}>
               <PushNotificationSettings />
+            </section>
+            <section className={styles.section}>
+              <SlackNotificationSettings />
             </section>
           </div>
         </Tabs.Content>

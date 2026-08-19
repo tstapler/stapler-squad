@@ -138,6 +138,7 @@ func (m *stuckDialogProcessManager) ResetExitOnce()                             
 var errSimulatedSendKeysFailure = errors.New("simulated SendKeys failure")
 
 func TestIsStartupDialog(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		output string
@@ -192,6 +193,7 @@ Enter to confirm · Esc to cancel`,
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := isStartupDialog(tc.output)
 			if got != tc.want {
 				t.Errorf("isStartupDialog(%q) = %v, want %v", tc.output[:min(len(tc.output), 60)], got, tc.want)
@@ -201,6 +203,7 @@ Enter to confirm · Esc to cancel`,
 }
 
 func TestShouldApprovePrompt(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		output      string
@@ -247,6 +250,7 @@ func TestShouldApprovePrompt(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := shouldApprovePrompt(tc.output, tc.allowedPath)
 			if got != tc.want {
 				t.Errorf("shouldApprovePrompt() = %v, want %v", got, tc.want)
@@ -257,6 +261,7 @@ func TestShouldApprovePrompt(t *testing.T) {
 
 // UT-3: TestIsOneShot — verifies one-shot detection logic.
 func TestIsOneShot(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		tags []string
@@ -272,6 +277,7 @@ func TestIsOneShot(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			inst := &Instance{Title: "test", Tags: tc.tags}
 			got := isOneShot(inst)
 			if got != tc.want {
@@ -283,6 +289,7 @@ func TestIsOneShot(t *testing.T) {
 
 // UT-4: TestBuildContinuationPrompt_NoHistoryFile — empty HistoryFilePath returns generic fallback.
 func TestBuildContinuationPrompt_NoHistoryFile(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session", HistoryFilePath: ""}
 	got := buildContinuationPrompt(inst)
 	if got == "" {
@@ -295,6 +302,7 @@ func TestBuildContinuationPrompt_NoHistoryFile(t *testing.T) {
 
 // UT-5: TestBuildContinuationPrompt_MissingFile — non-existent file path returns graceful fallback.
 func TestBuildContinuationPrompt_MissingFile(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session", HistoryFilePath: "/tmp/does-not-exist-stapler-squad-test.jsonl"}
 	got := buildContinuationPrompt(inst)
 	if got == "" {
@@ -309,6 +317,7 @@ func TestBuildContinuationPrompt_MissingFile(t *testing.T) {
 // UT-9: TestStartSessionDriver_Idempotent — calling twice on the same instance only
 // starts one goroutine. The CAS guard in StartSessionDriver prevents a second spawn.
 func TestStartSessionDriver_Idempotent(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:  "test-idempotent",
 		Status: Stopped,
@@ -332,6 +341,7 @@ func TestStartSessionDriver_Idempotent(t *testing.T) {
 
 // UT-25: TestDriverConstants_Ordering — verifies BLOCK-1 fix: total > ready + inactivity.
 func TestDriverConstants_Ordering(t *testing.T) {
+	t.Parallel()
 	if driverTotalTimeout < driverReadyTimeout+driverInactivityTimeout+5*time.Minute {
 		t.Errorf("driverTotalTimeout (%v) must be >= driverReadyTimeout (%v) + driverInactivityTimeout (%v) + 5m",
 			driverTotalTimeout, driverReadyTimeout, driverInactivityTimeout)
@@ -340,6 +350,7 @@ func TestDriverConstants_Ordering(t *testing.T) {
 
 // UT-21: TestMarkSessionNeedsAttention_NilReviewQueue — nil queue must not panic.
 func TestMarkSessionNeedsAttention_NilReviewQueue(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "test-nil-queue",
 		UUID:        "test-uuid-1",
@@ -351,6 +362,7 @@ func TestMarkSessionNeedsAttention_NilReviewQueue(t *testing.T) {
 
 // UT-17: TestSessionDriver_SecondFailure_MarksNeedsAttention — second failure adds to ReviewQueue.
 func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 	inst := &Instance{
 		Title:       "test-second-failure",
@@ -387,6 +399,7 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 // stayed true forever and retried the identical send on every subsequent tick — live
 // evidence was 392 consecutive failed sends over ~13 minutes against one dead-pane session.
 func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
+	t.Parallel()
 	// An Instance that was never started (SetTmuxSession was never called, so the
 	// internal `started` atomic.Bool is false) makes SendKeys deterministically fail
 	// with "cannot send keys to instance that has not been started or is paused" —
@@ -413,6 +426,7 @@ func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
 // no longer re-fires on the very next tick after a failed send, since nudgeSentAt is now
 // non-zero regardless of send outcome.
 func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:  "test-nudge-rate-limit",
 		Status: Ready,
@@ -439,6 +453,7 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 // ─── U-GO-01: TestSanitizeInitialPromptForTmux_stripsNullBytes ───────────────
 
 func TestSanitizeInitialPromptForTmux_stripsNullBytes(t *testing.T) {
+	t.Parallel()
 	input := "hello\x00world\x00"
 	got := sanitizeInitialPromptForTmux(input)
 	if strings.Contains(got, "\x00") {
@@ -452,6 +467,7 @@ func TestSanitizeInitialPromptForTmux_stripsNullBytes(t *testing.T) {
 // ─── U-GO-02: TestSanitizeInitialPromptForTmux_collapsesNewlines ─────────────
 
 func TestSanitizeInitialPromptForTmux_collapsesNewlines(t *testing.T) {
+	t.Parallel()
 	input := "line1\nline2\rline3"
 	got := sanitizeInitialPromptForTmux(input)
 	if strings.Contains(got, "\n") || strings.Contains(got, "\r") {
@@ -466,6 +482,7 @@ func TestSanitizeInitialPromptForTmux_collapsesNewlines(t *testing.T) {
 // ─── U-GO-03: TestSanitizeInitialPromptForTmux_truncatesAt4096 ───────────────
 
 func TestSanitizeInitialPromptForTmux_truncatesAt4096(t *testing.T) {
+	t.Parallel()
 	input := strings.Repeat("a", 5000)
 	got := sanitizeInitialPromptForTmux(input)
 	if len(got) > 4096 {
@@ -479,6 +496,7 @@ func TestSanitizeInitialPromptForTmux_truncatesAt4096(t *testing.T) {
 // ─── U-GO-04: TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough ────
 
 func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
+	t.Parallel()
 	input := "   \t  "
 	got := sanitizeInitialPromptForTmux(input)
 	if got != "" {
@@ -497,6 +515,7 @@ func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
 // too invasive given the minimal complexity.
 
 func TestRunSessionDriver_selectsInitialPromptWhenNonEmpty(t *testing.T) {
+	t.Parallel()
 	// Verify the selection logic directly: if InitialPrompt is set, it should
 	// be used (after sanitization), not driverInitialPrompt.
 	inst := &Instance{
@@ -520,6 +539,7 @@ func TestRunSessionDriver_selectsInitialPromptWhenNonEmpty(t *testing.T) {
 // ─── U-GO-06: TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty ──────────
 
 func TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:         "test-empty-prompt",
 		InitialPrompt: "",
@@ -540,6 +560,7 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty(t *testing.T) {
 // ─── U-GO-07: TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace ─────
 
 func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:         "test-whitespace-prompt",
 		InitialPrompt: "   ",
@@ -560,6 +581,7 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 // ─── U-GO-08: TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit ───────────
 
 func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {
+	t.Parallel()
 	// Build a 4098-byte input: 4090 ASCII bytes + 2 emoji (😀 = 4 bytes each = 8 bytes total).
 	// After truncation at 4096 bytes, the second emoji straddles the boundary (bytes 4093-4096).
 	// The sanitizer must step back to a valid UTF-8 boundary.
@@ -582,6 +604,7 @@ func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {
 
 // TestParseClaudeSessionID_json verifies extraction from --output-format json output.
 func TestParseClaudeSessionID_json(t *testing.T) {
+	t.Parallel()
 	output := `{"result":"ok","session_id":"abc-123","total_cost_usd":0.003}`
 	got := parseClaudeSessionID(output)
 	if got != "abc-123" {
@@ -591,6 +614,7 @@ func TestParseClaudeSessionID_json(t *testing.T) {
 
 // TestParseClaudeSessionID_streamJson verifies extraction from stream-json init event.
 func TestParseClaudeSessionID_streamJson(t *testing.T) {
+	t.Parallel()
 	output := `{"type":"system","subtype":"init","data":{"session_id":"xyz-789"}}`
 	got := parseClaudeSessionID(output)
 	if got != "xyz-789" {
@@ -600,6 +624,7 @@ func TestParseClaudeSessionID_streamJson(t *testing.T) {
 
 // TestParseClaudeSessionID_empty verifies empty string returns "".
 func TestParseClaudeSessionID_empty(t *testing.T) {
+	t.Parallel()
 	got := parseClaudeSessionID("")
 	if got != "" {
 		t.Errorf("parseClaudeSessionID(\"\") = %q, want empty string", got)
@@ -608,6 +633,7 @@ func TestParseClaudeSessionID_empty(t *testing.T) {
 
 // TestParseClaudeSessionID_noSessionId verifies strings without session_id return "".
 func TestParseClaudeSessionID_noSessionId(t *testing.T) {
+	t.Parallel()
 	output := `{"result":"ok","cost":0.003}`
 	got := parseClaudeSessionID(output)
 	if got != "" {
@@ -627,6 +653,7 @@ func readTestdata(t *testing.T, name string) string {
 // TestOutputShowsConversationStarted verifies that live terminal output patterns
 // reliably distinguish an active or completed conversation from a fresh session.
 func TestOutputShowsConversationStarted(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		output string
@@ -720,6 +747,7 @@ func TestOutputShowsConversationStarted(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := outputShowsConversationStarted(tc.output)
 			if got != tc.want {
 				t.Errorf("outputShowsConversationStarted(...) = %v, want %v", got, tc.want)
@@ -729,6 +757,7 @@ func TestOutputShowsConversationStarted(t *testing.T) {
 }
 
 func TestScanTerminalForPRURL(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		output    string
@@ -772,6 +801,7 @@ remote: https://github.com/tstapler/stapler-squad/pull/42`,
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			gotURL, gotNum := scanTerminalForPRURL(tc.output)
 			if gotURL != tc.wantURL || gotNum != tc.wantPRNum {
 				t.Errorf("scanTerminalForPRURL() = (%q, %d), want (%q, %d)",
@@ -789,6 +819,7 @@ remote: https://github.com/tstapler/stapler-squad/pull/42`,
 // condition Phase 0 used) and asserts SendKeys("1\n") is observed at most
 // maxDialogAnswerAttempts times, never growing with additional ticks.
 func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
+	t.Parallel()
 	fakePM := &stuckDialogProcessManager{dialogText: trustDialogText}
 
 	inst := &Instance{
@@ -843,6 +874,7 @@ func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
 // lines prepended each tick, mirroring an active non-flapping session
 // producing real output after the dialog was answered).
 func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
+	t.Parallel()
 	fakePM := &stuckDialogProcessManager{
 		dialogText:  trustDialogText,
 		growPerCall: true,
@@ -920,7 +952,9 @@ func buildGrowingPrefixContent(chunk string, reps int, dialogText string) string
 // above. See the Acceptance Criteria Coverage Summary note this implies for AC2.
 
 func TestAnswerDialogOnce(t *testing.T) {
+	t.Parallel()
 	t.Run("a_same_hash_sent_twice_second_call_is_noop", func(t *testing.T) {
+		t.Parallel()
 		var state dialogAnswerState
 		sendCallCount := 0
 		send := func() error { sendCallCount++; return nil }
@@ -939,6 +973,7 @@ func TestAnswerDialogOnce(t *testing.T) {
 	})
 
 	t.Run("b_hash_changes_between_calls_resends", func(t *testing.T) {
+		t.Parallel()
 		var state dialogAnswerState
 		sendCallCount := 0
 		send := func() error { sendCallCount++; return nil }
@@ -958,6 +993,7 @@ func TestAnswerDialogOnce(t *testing.T) {
 	})
 
 	t.Run("c_send_fails_maxDialogAnswerAttempts_times_gives_up_and_stays_given_up", func(t *testing.T) {
+		t.Parallel()
 		var state dialogAnswerState
 		sendCallCount := 0
 		send := func() error { sendCallCount++; return errSimulatedSendKeysFailure }
@@ -984,6 +1020,7 @@ func TestAnswerDialogOnce(t *testing.T) {
 	})
 
 	t.Run("d_send_fails_once_then_succeeds_reaches_awaiting_dismissal", func(t *testing.T) {
+		t.Parallel()
 		var state dialogAnswerState
 		sendCallCount := 0
 		send := func() error {
@@ -1008,6 +1045,7 @@ func TestAnswerDialogOnce(t *testing.T) {
 	})
 
 	t.Run("e_whitespace_and_line_wrap_jitter_recognized_as_unchanged", func(t *testing.T) {
+		t.Parallel()
 		// Same logical dialog text, but re-wrapped at a different column width
 		// with different internal newline placement and trailing spaces —
 		// simulating terminal-width-driven line-wrap jitter between ticks.
@@ -1036,6 +1074,7 @@ func TestAnswerDialogOnce(t *testing.T) {
 	})
 
 	t.Run("f_growing_buffer_within_tail_window_recognized_as_unchanged", func(t *testing.T) {
+		t.Parallel()
 		// The dialog text stays fixed at the tail of output across both calls;
 		// call 2 has substantially more unrelated content ahead of it than
 		// call 1 (simulating a growing PTY buffer). Both totals already
@@ -1068,6 +1107,7 @@ func TestAnswerDialogOnce(t *testing.T) {
 	})
 
 	t.Run("g_dialog_pushed_fully_outside_tail_window_never_reached", func(t *testing.T) {
+		t.Parallel()
 		// Companion to (f): enough unrelated content follows the dialog text
 		// that it falls entirely outside the tail window — proving
 		// isStartupDialog on the tailed content correctly stops matching (the
@@ -1131,6 +1171,7 @@ func TestAnswerDialogOnce(t *testing.T) {
 // the shared `if idle > graceTimeout` path (also covered indirectly by
 // TestSessionDriver_SecondFailure_MarksNeedsAttention's similar shape).
 func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testing.T) {
+	t.Parallel()
 	fakePM := &stuckDialogProcessManager{
 		dialogText: trustDialogText,
 		failCount:  maxDialogAnswerAttempts,
@@ -1169,7 +1210,18 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// reached via its timedOut fallback once driverReadyTimeout (30s)
 	// elapses — the deadline below must clear that, not just the dialog
 	// latch's own ~6s give-up window.
-	deadline := time.After(driverReadyTimeout + driverPollInterval*3 + time.Second)
+	//
+	// The extra driverReadyTimeout term (doubling the base budget) is
+	// deliberate slack, not just the ~6s dialog-latch window plus a token
+	// second: this goroutine genuinely blocks on the real 30s
+	// driverReadyTimeout wall-clock wait, so under `go test -race -p 1` for
+	// the full suite (thousands of tests, heavy scheduler/CPU contention)
+	// that wait alone can occasionally overrun a razor-thin margin — this
+	// test was seen to pass in 34s of a 37s budget in an isolated run, a
+	// margin that intermittently failed when run alongside the rest of the
+	// package under -race. Widening the margin (not retrying) is the fix,
+	// since the 30s block is inherent to the code path under test.
+	deadline := time.After(2*driverReadyTimeout + driverPollInterval*3 + time.Second)
 	for fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
 		select {
 		case <-deadline:

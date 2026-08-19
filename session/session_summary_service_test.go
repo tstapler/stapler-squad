@@ -69,6 +69,7 @@ func getRow(t *testing.T, client *ent.Client, sessionUUID string) *ent.SessionSu
 // ---- Task 1.5.2e: guard / pre-check / cooldown / panic scenarios ----
 
 func TestGenerateAndPersist_should_RejectSecondCall_When_FirstCallHoldsInFlightGuard(t *testing.T) {
+	t.Parallel()
 	gen, _, _ := newTestSessionSummaryGenerator(t)
 
 	release, ok := gen.tryAcquire("sess-guard")
@@ -91,6 +92,7 @@ func TestGenerateAndPersist_should_RejectSecondCall_When_FirstCallHoldsInFlightG
 // once it's done, and a session with a released guard must not still be
 // reported in-flight afterward.
 func TestTryAcquire_should_RemoveInFlightMapEntry_When_ReleaseCalled(t *testing.T) {
+	t.Parallel()
 	gen, _, _ := newTestSessionSummaryGenerator(t)
 	sessionUUID := "sess-inflight-cleanup"
 
@@ -122,6 +124,7 @@ func TestTryAcquire_should_RemoveInFlightMapEntry_When_ReleaseCalled(t *testing.
 }
 
 func TestGenerateAndPersist_should_SkipRegeneration_When_ReadyRowAndDiffCountsUnchanged(t *testing.T) {
+	t.Parallel()
 	gen, client, pool := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-dup"
@@ -143,6 +146,7 @@ func TestGenerateAndPersist_should_SkipRegeneration_When_ReadyRowAndDiffCountsUn
 }
 
 func TestGenerateAndPersist_should_ProceedWithRegeneration_When_ReadyRowButDiffCountsDiffer(t *testing.T) {
+	t.Parallel()
 	gen, client, pool := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-resume"
@@ -165,6 +169,7 @@ func TestGenerateAndPersist_should_ProceedWithRegeneration_When_ReadyRowButDiffC
 }
 
 func TestGenerateAndPersist_should_ProceedRegardlessOfDiffChange_When_ReasonIsManualRegenerate(t *testing.T) {
+	t.Parallel()
 	gen, client, pool := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-manual"
@@ -188,6 +193,7 @@ func TestGenerateAndPersist_should_ProceedRegardlessOfDiffChange_When_ReasonIsMa
 }
 
 func TestGenerateAndPersist_should_SkipWrite_When_ManualRegenerateWithinCooldown(t *testing.T) {
+	t.Parallel()
 	gen, client, pool := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-cooldown"
@@ -217,6 +223,7 @@ func TestGenerateAndPersist_should_SkipWrite_When_ManualRegenerateWithinCooldown
 // ERROR. The predicated bulk update must instead no-op when the row no
 // longer matches the snapshot it was read from.
 func TestReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentGenerationCompletesBetweenCheckAndWrite(t *testing.T) {
+	t.Parallel()
 	gen, client, _ := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-toctou"
@@ -268,6 +275,7 @@ func TestReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentGenerati
 }
 
 func TestGenerateAndPersist_should_RecoverFromPanicAndReleaseGuard_When_BuilderPanics(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	sessionUUID := "sess-panic"
@@ -310,6 +318,7 @@ func (panickingNotificationDecisionLister) ListDecisionRecords(context.Context, 
 // ---- Task 1.5.2f: build/narrative/persist/fallback scenarios ----
 
 func TestGenerateAndPersist_should_ReachReadyWithFallbackNarrative_When_TrivialSession(t *testing.T) {
+	t.Parallel()
 	gen, client, pool := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-trivial"
@@ -333,6 +342,7 @@ func TestGenerateAndPersist_should_ReachReadyWithFallbackNarrative_When_TrivialS
 }
 
 func TestGenerateAndPersist_should_SetStatusErrorWithDecisionsStage_When_DecisionsBuilderFails(t *testing.T) {
+	t.Parallel()
 	gen, client, _ := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-decisions-err"
@@ -379,6 +389,7 @@ func TestGenerateAndPersist_should_SetStatusErrorWithDecisionsStage_When_Decisio
 // create mutation) never clears them on the final success-path upsert unless
 // it's done explicitly.
 func TestGenerateAndPersist_should_ClearStaleErrorFields_When_SubsequentGenerationSucceeds(t *testing.T) {
+	t.Parallel()
 	gen, client, _ := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-clear-stale-error"
@@ -414,6 +425,7 @@ func TestGenerateAndPersist_should_ClearStaleErrorFields_When_SubsequentGenerati
 }
 
 func TestGenerateAndPersist_should_UseFallbackNarrative_When_LLMCallFails(t *testing.T) {
+	t.Parallel()
 	gen, client, pool := newTestSessionSummaryGenerator(t)
 	pool.err = context.DeadlineExceeded
 	ctx := context.Background()
@@ -436,6 +448,7 @@ func TestGenerateAndPersist_should_UseFallbackNarrative_When_LLMCallFails(t *tes
 }
 
 func TestGenerateAndPersist_should_TimeoutNarrativeCall_When_PoolBlocksLongerThanLlmNarrativeTimeout(t *testing.T) {
+	t.Parallel()
 	original := llmNarrativeTimeout
 	llmNarrativeTimeout = 200 * time.Millisecond
 	defer func() { llmNarrativeTimeout = original }()
@@ -458,6 +471,7 @@ func TestGenerateAndPersist_should_TimeoutNarrativeCall_When_PoolBlocksLongerTha
 }
 
 func TestGenerateAndPersist_should_PersistDiffFieldsFromCapturedGitDiffStats_When_HappyPath(t *testing.T) {
+	t.Parallel()
 	gen, client, _ := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-happy-diff"
@@ -479,6 +493,7 @@ func TestGenerateAndPersist_should_PersistDiffFieldsFromCapturedGitDiffStats_Whe
 }
 
 func TestGenerateAndPersist_should_PersistTimelineFromInstanceCreatedAtAndDispatchTime_When_HappyPath(t *testing.T) {
+	t.Parallel()
 	gen, client, _ := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-happy-timeline"
@@ -500,6 +515,7 @@ func TestGenerateAndPersist_should_PersistTimelineFromInstanceCreatedAtAndDispat
 }
 
 func TestGenerateAndPersist_should_UpsertBySessionIDNotEdge_When_HappyPath(t *testing.T) {
+	t.Parallel()
 	gen, client, _ := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-no-session-row-exists"
@@ -525,6 +541,7 @@ func TestGenerateAndPersist_should_UpsertBySessionIDNotEdge_When_HappyPath(t *te
 // field writes without lateBindMu. Run with `-race` to verify the guard closes that race;
 // without it, `go test -race` flags a data race on notifLister/tokenStore.
 func TestSetNotificationListerAndSetTokenStore_should_NotRace_When_CalledConcurrentlyWithGenerateAndPersist(t *testing.T) {
+	t.Parallel()
 	gen, _, _ := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 
@@ -555,6 +572,7 @@ func TestSetNotificationListerAndSetTokenStore_should_NotRace_When_CalledConcurr
 // columns rather than leaving generation N's stale values in place alongside
 // cost_data_unavailable=true.
 func TestGenerateAndPersist_should_ClearStaleTokenAndCostFields_When_SubsequentGenerationHasCostDataUnavailable(t *testing.T) {
+	t.Parallel()
 	gen, client, _ := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
 	sessionUUID := "sess-stale-cost"

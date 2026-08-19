@@ -1,6 +1,7 @@
 package git
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 )
 
 func TestSanitizeBranchName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -140,6 +142,7 @@ func TestSanitizeBranchName(t *testing.T) {
 // filepath.Join(worktreeDir, sanitizeBranchName(input)) can never escape
 // worktreeDir, for malicious inputs designed to traverse out of it.
 func TestSanitizeBranchName_StaysWithinWorktreeDir(t *testing.T) {
+	t.Parallel()
 	worktreeDir := "/var/lib/stapler-squad/worktrees"
 
 	maliciousInputs := []string{
@@ -174,6 +177,7 @@ func TestSanitizeBranchName_StaysWithinWorktreeDir(t *testing.T) {
 // filepath.Join(worktreeDir, sanitizedName) call site: it must return an error
 // (never a path) for any name that would resolve outside baseDir.
 func TestJoinWithinDir(t *testing.T) {
+	t.Parallel()
 	baseDir := "/var/lib/stapler-squad/worktrees"
 
 	t.Run("normal name stays within baseDir", func(t *testing.T) {
@@ -214,6 +218,19 @@ func TestPreviewWorktreePath_RejectsTraversal(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", configDir)
 	worktreeDir := filepath.Join(configDir, "worktrees")
+	// getWorktreeDirectory() creates this directory and resolves symlinks on it
+	// (see worktree.go) so worktree-reuse identity checks aren't fooled by macOS's
+	// /var/folders -> /private/var/folders symlink. Mirror that here or this
+	// comparison compares an unresolved path against PreviewWorktreePath's
+	// resolved return value and spuriously fails on macOS.
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+		t.Fatalf("failed to create worktree dir: %v", err)
+	}
+	resolvedWorktreeDir, err := filepath.EvalSymlinks(worktreeDir)
+	if err != nil {
+		t.Fatalf("failed to resolve worktree dir: %v", err)
+	}
+	worktreeDir = resolvedWorktreeDir
 
 	maliciousInputs := []string{
 		"../../../etc",

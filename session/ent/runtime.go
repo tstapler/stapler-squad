@@ -126,6 +126,10 @@ func init() {
 	approvalruleDescRequireCiPassing := approvalruleFields[24].Descriptor()
 	// approvalrule.DefaultRequireCiPassing holds the default value on creation for the require_ci_passing field.
 	approvalrule.DefaultRequireCiPassing = approvalruleDescRequireCiPassing.Default.(bool)
+	// approvalruleDescMinSessionIdleMinutes is the schema descriptor for min_session_idle_minutes field.
+	approvalruleDescMinSessionIdleMinutes := approvalruleFields[25].Descriptor()
+	// approvalrule.DefaultMinSessionIdleMinutes holds the default value on creation for the min_session_idle_minutes field.
+	approvalrule.DefaultMinSessionIdleMinutes = approvalruleDescMinSessionIdleMinutes.Default.(int32)
 	backlogitemFields := schema.BacklogItem{}.Fields()
 	_ = backlogitemFields
 	// backlogitemDescTitle is the schema descriptor for title field.
@@ -772,26 +776,30 @@ func init() {
 	workflowDescCronEnabled := workflowFields[11].Descriptor()
 	// workflow.DefaultCronEnabled holds the default value on creation for the cron_enabled field.
 	workflow.DefaultCronEnabled = workflowDescCronEnabled.Default.(bool)
+	// workflowDescEnabled is the schema descriptor for enabled field.
+	workflowDescEnabled := workflowFields[12].Descriptor()
+	// workflow.DefaultEnabled holds the default value on creation for the enabled field.
+	workflow.DefaultEnabled = workflowDescEnabled.Default.(bool)
 	// workflowDescCreatedAt is the schema descriptor for created_at field.
-	workflowDescCreatedAt := workflowFields[12].Descriptor()
+	workflowDescCreatedAt := workflowFields[13].Descriptor()
 	// workflow.DefaultCreatedAt holds the default value on creation for the created_at field.
 	workflow.DefaultCreatedAt = workflowDescCreatedAt.Default.(func() time.Time)
 	// workflowDescUpdatedAt is the schema descriptor for updated_at field.
-	workflowDescUpdatedAt := workflowFields[13].Descriptor()
+	workflowDescUpdatedAt := workflowFields[14].Descriptor()
 	// workflow.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	workflow.DefaultUpdatedAt = workflowDescUpdatedAt.Default.(func() time.Time)
 	// workflow.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	workflow.UpdateDefaultUpdatedAt = workflowDescUpdatedAt.UpdateDefault.(func() time.Time)
 	// workflowDescKeepSessions is the schema descriptor for keep_sessions field.
-	workflowDescKeepSessions := workflowFields[14].Descriptor()
+	workflowDescKeepSessions := workflowFields[15].Descriptor()
 	// workflow.DefaultKeepSessions holds the default value on creation for the keep_sessions field.
 	workflow.DefaultKeepSessions = workflowDescKeepSessions.Default.(int)
 	// workflowDescArchiveAfterHours is the schema descriptor for archive_after_hours field.
-	workflowDescArchiveAfterHours := workflowFields[15].Descriptor()
+	workflowDescArchiveAfterHours := workflowFields[16].Descriptor()
 	// workflow.DefaultArchiveAfterHours holds the default value on creation for the archive_after_hours field.
 	workflow.DefaultArchiveAfterHours = workflowDescArchiveAfterHours.Default.(int)
 	// workflowDescTriggerType is the schema descriptor for trigger_type field.
-	workflowDescTriggerType := workflowFields[16].Descriptor()
+	workflowDescTriggerType := workflowFields[17].Descriptor()
 	// workflow.DefaultTriggerType holds the default value on creation for the trigger_type field.
 	workflow.DefaultTriggerType = workflowDescTriggerType.Default.(string)
 	// workflowDescID is the schema descriptor for id field.

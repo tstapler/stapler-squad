@@ -26,6 +26,7 @@ import (
 // cap), not-yet-due (future next_remediation_at), granted (no gate active),
 // and restart-grace (boot after last check, not yet consumed this boot).
 func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	boot := now.Add(-1 * time.Hour)
 	future := now.Add(10 * time.Minute)
@@ -84,6 +85,7 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := evaluateRemediation(tt.row, now, boot)
 			assert.Equal(t, tt.want, got)
 		})
@@ -95,6 +97,7 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 // revision (sized for OOM-restart bursts), and verifies attempt numbers
 // outside 1..MaxRemediationAttempts return nil (parked / invalid).
 func TestNextRemediationAt_should_matchTheRevisedSchedule_When_GivenAttemptNumber(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 
 	tests := []struct {
@@ -128,6 +131,7 @@ func TestNextRemediationAt_should_matchTheRevisedSchedule_When_GivenAttemptNumbe
 // remediation attempts, and attempts 2-5 must be correctly gated by the
 // backoff schedule rather than firing immediately back-to-back.
 func TestRemediationDue_should_capAtFiveAttemptsWithDelayedRetries_When_StuckRapidlyInSuccession(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)
@@ -167,6 +171,7 @@ func TestRemediationDue_should_capAtFiveAttemptsWithDelayedRetries_When_StuckRap
 // verifying the schedule advances 30m -> 2h -> 8h -> 24h -> 72h and the 6th
 // call is permanently skipped (parked) even after clearing the timer again.
 func TestRemediationDue_should_advanceThroughFullScheduleThenPark_When_EachAttemptIsForcedDue(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)
@@ -220,6 +225,7 @@ func TestRemediationDue_should_advanceThroughFullScheduleThenPark_When_EachAttem
 // backing TriggerRemediationNow) refuses to un-park a row that already
 // exhausted its budget — ErrRemediationParked, not a silent reset.
 func TestRecordManualRemediationAttempt_should_rejectParked_When_AttemptsAtCap(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)
@@ -247,6 +253,7 @@ func TestRecordManualRemediationAttempt_should_rejectParked_When_AttemptsAtCap(t
 // verifies a manual trigger for a reason with no open stuck row (nothing to
 // remediate) fails clearly instead of silently no-op-ing.
 func TestRecordManualRemediationAttempt_should_error_When_NoOpenRowExists(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)
@@ -264,6 +271,7 @@ func TestRecordManualRemediationAttempt_should_error_When_NoOpenRowExists(t *tes
 // automated one — it counts toward the same 5-attempt cap, per the design
 // doc addendum's explicit safety requirement.
 func TestRecordManualRemediationAttempt_should_incrementLikeANormalAttempt_When_RowIsOpenAndNotParked(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)
@@ -295,6 +303,7 @@ func TestRecordManualRemediationAttempt_should_incrementLikeANormalAttempt_When_
 // verifies the single-row admin reset RPC's backing store method restores a
 // row to its pre-attempt state.
 func TestResetStuckRemediation_should_clearCountersAndNotifiedAt_When_RowIsOpen(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)
@@ -327,6 +336,7 @@ func TestResetStuckRemediation_should_clearCountersAndNotifiedAt_When_RowIsOpen(
 // untouched — the "give the batch a fresh shot" action should not also
 // reset items that are still legitimately mid-backoff.
 func TestBulkResetStuckRemediation_should_onlyResetParkedRows_When_OnlyParkedTrue(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)

@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
@@ -120,10 +121,23 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		)
 		return
 	}
+	inst.driverWG.Add(1)
 	go func() {
+		defer inst.driverWG.Done()
 		defer inst.driverRunning.Store(false)
 		runSessionDriver(inst, allowedPath)
 	}()
+}
+
+// JoinSessionDriver waits for any in-flight SessionDriver goroutine (including
+// a handleDriverFailure-spawned restart) to exit, up to stopJoinTimeout. Tests
+// should call this before relying on t.TempDir() cleanup, since a driver
+// goroutine can otherwise outlive the temp dir it was launched against.
+func JoinSessionDriver(inst *Instance) {
+	if !syncutil.WaitWithTimeout(&inst.driverWG, stopJoinTimeout) {
+		log.Warn("JoinSessionDriver: driver goroutine did not exit within timeout; it may still be running",
+			"session", inst.Title, "timeout", stopJoinTimeout)
+	}
 }
 
 // sanitizeInitialPromptForTmux strips characters that would corrupt the tmux
@@ -226,6 +240,17 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 	for range ticker.C {
 		if time.Now().After(totalDeadline) {
+			return
+		}
+
+		// inst.destroyed is set by Destroy() (session/instance.go). Checking it
+		// here bounds how long this goroutine can outlive its own instance's
+		// teardown to a single driverPollInterval tick, instead of continuing
+		// until totalDeadline and racing subsequent tmux/config calls
+		// (AcquireExecSlot's gateDir/LoadConfig, both keyed off the
+		// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
+		// or session happens to be using that env var's value next.
+		if inst.destroyed.Load() {
 			return
 		}
 
@@ -633,7 +658,11 @@ func handleDriverFailure(inst *Instance, allowedPath string, retried *atomic.Boo
 
 	// Start a new driver goroutine for the restarted session.
 	// The new goroutine inherits the retried flag so it will not retry a second time.
-	go runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, retried)
+	inst.driverWG.Add(1)
+	go func() {
+		defer inst.driverWG.Done()
+		runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, retried)
+	}()
 }
 
 // markSessionNeedsAttention adds the instance to its ReviewQueue (if any)

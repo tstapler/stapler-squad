@@ -15,19 +15,20 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 // TestReviewGateRunner_SkipReviewGate verifies that Run returns immediately
 // without consulting the session creator or calling onPass when
 // item.SkipReviewGate is true.
 func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -61,6 +62,7 @@ func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 // builds the review prompt, calls SpawnReviewSession, and persists an ItemSession
 // linking the review role to the real Instance UUID returned by the spawner.
 func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -125,6 +127,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 // SpawnReviewSession is that mode's rendered ReviewPromptTemplate — not the
 // hardcoded BuildReviewPrompt content.
 func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPipelineMode(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -184,6 +187,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 // TestReviewGateRunner_SpawnerError_LogsAndReturns verifies that a SpawnReviewSession
 // error is logged and Run returns cleanly without persisting a review ItemSession.
 func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -230,6 +234,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 // TestReviewGateRunner_NilSessionCreator_LogsAndReturns verifies that Run logs and
 // returns cleanly (does not panic) when no review mechanism is configured at all.
 func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -278,6 +283,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 // in the diff, so the reviewer's only window into that evidence is this
 // threaded-through text.
 func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -333,6 +339,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 // item.AcceptanceCriteria with one, and asserts the note text reaches the prompt
 // passed to SpawnReviewSession.
 func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPredatesIt(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -431,7 +438,7 @@ func forceEmptyBranchNameViaRawSQL(t *testing.T, storage *Storage, sessionName s
 	er, ok := storage.repo.(*EntRepository)
 	require.True(t, ok, "forceEmptyBranchNameViaRawSQL requires an EntRepository-backed Storage")
 
-	db, err := sql.Open("sqlite3", er.dbPath)
+	db, err := sql.Open("sqlite", er.dbPath)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -472,6 +479,7 @@ func newNonEmptyDiffGitRepo(t *testing.T) string {
 // and still feeds the auto-reopen/cap machinery so persistent failures eventually reach
 // notifyReworkCapHit instead of looping silently.
 func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnverifiable(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -573,6 +581,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 // for the dedicated regression test of that skip condition) and the failure must fall
 // straight through to the same block-and-notify path as the worktree-present case.
 func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -656,6 +665,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 // feeds the auto-reopen machinery, exactly like the diff-error blocks it sits next
 // to.
 func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -737,6 +747,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 // review now always spawns a real session rather than computing a verdict inline,
 // "proceeds" means SpawnReviewSession is called with the recovered diff in its prompt.
 func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -825,6 +836,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 // RecoverBaseCommitSHA's merge-base lookup trivially succeeds and returns HEAD itself
 // — and diffing HEAD against HEAD is empty by construction.
 func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -914,6 +926,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 // asserts never appears). The review must still fall straight through to the
 // block-and-notify path.
 func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBlocksImmediately(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1037,6 +1050,7 @@ func commitOnRepo(t *testing.T, dir string, n int, prefix string) {
 // message naming the conflicted file — never silently letting an inflated/misleading
 // diff reach the reviewer.
 func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoSyncConflicts(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1135,6 +1149,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 // normally — the branch-sync precondition must never block a review that could have
 // just been fixed transparently.
 func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConflict(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()

@@ -50,6 +50,7 @@ function HomeContent() {
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
+  const resumeTriggerRef = useRef<HTMLElement | null>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
@@ -67,13 +68,7 @@ function HomeContent() {
   }, [selectedSession]);
 
   // Trap focus inside delete confirmation dialog; return focus on close
-  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget);
-  useEffect(() => {
-    if (!deleteConfirmTarget && lastFocusBeforeDelete.current) {
-      lastFocusBeforeDelete.current.focus();
-      lastFocusBeforeDelete.current = null;
-    }
-  }, [deleteConfirmTarget]);
+  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget, lastFocusBeforeDelete);
 
 
   const {
@@ -305,6 +300,7 @@ function HomeContent() {
   }, [runOneShot]);
 
   const handleResumeRequest = useCallback((session: Session) => {
+    resumeTriggerRef.current = document.activeElement as HTMLElement;
     setResumeTarget(session);
   }, []);
 
@@ -409,7 +405,13 @@ function HomeContent() {
     },
     "d": () => {
       if (selectedSession && !deleteConfirmTarget) {
-        lastFocusBeforeDelete.current = document.activeElement as HTMLElement;
+        // document.activeElement is unreliable here: the effect above focuses
+        // sessionDetailRef (the cockpit container) whenever selectedSession is
+        // set, so by the time this fires, activeElement is that container, not
+        // the row that was actually clicked. sessionTriggerRef still holds the
+        // real opener; fall back to activeElement only for the deep-link case
+        // where a session was selected without a click (no captured trigger).
+        lastFocusBeforeDelete.current = sessionTriggerRef.current ?? (document.activeElement as HTMLElement);
         setDeleteConfirmTarget(selectedSession);
       }
     },
@@ -481,6 +483,7 @@ function HomeContent() {
           sessions={sessions}
           onConfirm={handleResumeConfirm}
           onCancel={handleResumeCancel}
+          triggerRef={resumeTriggerRef}
         />
       )}
 

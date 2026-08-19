@@ -22,7 +22,7 @@ STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mo
 ./stapler-squad --tmux-keep-server                     # Keep tmux server alive after sessions close
 ```
 
-**WARNING:** `make install-service` restarts the running service, which kills the tmux server and every live tmux session with it — including any session you're currently working in — unless the deployed unit passes `--tmux-keep-server`. See `.claude/rules/tmux-keep-server-on-restart.md`.
+**WARNING:** `make install-service` restarts the running service, which kills the tmux server and every live tmux session with it — including any session you're currently working in — unless the deployed unit passes `--tmux-keep-server`. See `.claude/docs/tmux-keep-server-on-restart.md`.
 
 ### Profiling
 
@@ -132,6 +132,8 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 Releases are not automatic — release-please opens a "Release PR"; merge when ready to ship.
 
+**`gh pr merge` always needs `--repo owner/repo`** — this repo's worktrees make `gh` misresolve `main` otherwise. See `.claude/docs/gh-pr-merge-repo-flag.md`.
+
 ## Adding New Features
 
 ### New Web UI Features
@@ -141,10 +143,10 @@ Releases are not automatic — release-please opens a "Release PR"; merge when r
 4. Test with `make install-service`
 
 ### New Omnibar Capabilities
-Two registries must stay in sync — see `.claude/rules/feature-testing-registry.md`:
+Two registries must stay in sync — see `.claude/docs/feature-testing-registry.md`:
 - **OmnibarAction union** (`types.ts` + `dispatch.ts` + `dispatch.test.ts`) for user-triggerable actions
 - **DetectorRegistry** (`detector.ts` + `detector.test.ts`) for auto-detected input patterns
-- New session creation modes also require 7 touchpoints — see `.claude/rules/session-creation-registry.md`
+- New session creation modes also require 7 touchpoints — see `.claude/docs/session-creation-registry.md`
 
 ### New Session Filters
 1. Add filter params to ConnectRPC service definitions
@@ -167,7 +169,7 @@ go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent
 go run entgo.io/ent/cmd/ent generate ./session/ent/schema
 ```
 
-Workflow: edit schema → run correct generate → `go build ./...` → commit all `session/ent/` changes together.
+Workflow: edit schema → run correct generate → `go build ./...` to confirm it compiles. **Do not commit the generated output** — `.gitignore` deliberately excludes `session/ent/*.go` and `session/ent/*/` (everything except `schema/` and `generate.go`, which are hand-written), the same policy as the `gen/`-prefixed proto output above. Every Make target that needs it (`build`, `test`, `lint`) already depends on `ent-gen`, which regenerates from a stamp file — commit only the `session/ent/schema/` change itself. Force-adding generated ent code (`git add -f`) has caused real breakage before (missing/incomplete package left main broken until someone ran `make ent-gen` and noticed) — don't do it even to unblock a build.
 
 ## Feature Registry
 
@@ -209,19 +211,20 @@ make e2e-lighthouse
 
 ### Manual/interactive testing without touching the live deployed instance
 
-Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it restarts that live service, killing its tmux server and every session/backlog work in flight; see the WARNING above and `.claude/rules/tmux-keep-server-on-restart.md`). To click around a change by hand instead, run a second, fully separate instance:
+Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it restarts that live service, killing its tmux server and every session/backlog work in flight; see the WARNING above and `.claude/docs/tmux-keep-server-on-restart.md`). To click around a change by hand instead, run a second, fully separate instance:
 
 ```bash
-go build -o /tmp/ssq-manual-test .
-PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test /tmp/ssq-manual-test --tmux-keep-server &
+mkdir -p ~/.stapler-squad/manual-builds/manual-1
+go build -o ~/.stapler-squad/manual-builds/manual-1/stapler-squad .
+PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test ~/.stapler-squad/manual-builds/manual-1/stapler-squad --tmux-keep-server &
 # ...test in a browser at http://localhost:62871...
 # for --remote-access, also pass: --remote-port 62872   (its default, 8444, collides with the live instance)
 kill %1   # stop it when done
 ```
 
-- Build to a distinct output path (not `./stapler-squad`) — that path is the live systemd unit's `ExecStart` binary; overwriting it in place is confusing even though a running process keeps its old inode open.
+- Build to `~/.stapler-squad/manual-builds/manual-<N>/stapler-squad` — never `./stapler-squad` (the live launchd/systemd unit's `ExecStart` binary; overwriting it in place is confusing even though a running process keeps its old inode open) and never a bare `/tmp/ssq-manual-test` path (no per-instance separation, so a second concurrent manual build silently overwrites the first instance's running binary, and `/tmp` can be cleared by the OS between reboots, unlike `~/.stapler-squad/`). Number the directory to match the port-block instance (`manual-1` ↔ `62871`/`62872`, `manual-2` ↔ `62873`/`62874`) so the binary path and the port it's bound to stay obviously paired.
 - Use ports from the **manual dev port block** below — `PORT` must differ from `:8543` (and `--remote-port` from `:8444`) or the bind will fail.
-- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `.claude/docs/state-isolation.md`) — it will not see or affect the live deployed instance's sessions, backlog items, or config.
+- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `.claude/docs/state-isolation.md`) — it will not see or affect the live deployed instance's sessions, backlog items, or config. This is separate from the build directory above: `instances/<name>/` holds runtime state (sessions, config, worktrees), `manual-builds/manual-<N>/` holds the binary.
 - `--tmux-keep-server` still applies here: without it, stopping this manual instance kills its tmux server too (fine for a throwaway instance, but keep the flag if you want to leave sessions running between restarts of it).
 
 #### Manual dev port block
@@ -254,19 +257,18 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | Nil safety & static analysis tools | `.claude/docs/nil-safety.md` |
 | Go concurrency patterns | `.claude/docs/concurrency-patterns.md` |
 | Bundling tmux (single-binary) | `.claude/docs/bundling-tmux.md` |
-| CSS architecture (vanilla-extract) | `.claude/rules/css-architecture.md` |
-| Feature registry rules | `.claude/rules/feature-registry.md` |
-| Omnibar feature testing registry | `.claude/rules/feature-testing-registry.md` |
-| Session creation mode registry (7 touchpoints) | `.claude/rules/session-creation-registry.md` |
-| systemd user service (restart, logs, D-Bus issues) | `.claude/rules/systemd-user-service.md` |
-| ent ORM schema generation (`--feature sql/upsert`) | `.claude/rules/ent-schema-generation.md` |
-| Go double-checked locking pattern | `.claude/rules/go-double-checked-locking.md` |
+| CSS architecture (vanilla-extract) | `.claude/docs/css-architecture.md` |
+| Feature registry rules | `.claude/docs/feature-registry.md` |
+| Omnibar feature testing registry | `.claude/docs/feature-testing-registry.md` |
+| Session creation mode registry (7 touchpoints) | `.claude/docs/session-creation-registry.md` |
+| systemd user service (restart, logs, D-Bus issues) | `.claude/docs/systemd-user-service.md` |
 | Interface pollution checklist (leaky abstractions in LLM-generated Go) | `.claude/rules/interface-pollution-checklist.md` |
 | Primitive obsession checklist (same-typed parameter piles in LLM-generated Go) | `.claude/rules/primitive-obsession-checklist.md` |
 | E2E test conventions (annotation, locators, no waitForTimeout) | `.claude/rules/e2e-test-conventions.md` |
-| Commit SDD planning artifacts before ending a session | `.claude/rules/sdd-planning-artifacts-commit.md` |
+| Commit SDD planning artifacts before ending a session | `.claude/docs/sdd-planning-artifacts-commit.md` |
 | Prefer go-git over shelling out to git CLI | `.claude/rules/prefer-go-git-over-subshells.md` |
-| Service restart kills every live tmux session without `--tmux-keep-server` | `.claude/rules/tmux-keep-server-on-restart.md` |
-| Package manager: always pnpm in web-app/, never npm/yarn | `.claude/rules/package-manager.md` |
-| macOS restart can leave orphaned processes racing over tmux/session state | `.claude/rules/service-restart-orphan-process.md` |
+| Service restart kills every live tmux session without `--tmux-keep-server` | `.claude/docs/tmux-keep-server-on-restart.md` |
+| Package manager: always pnpm in web-app/, never npm/yarn | `.claude/docs/package-manager.md` |
+| macOS restart can leave orphaned processes racing over tmux/session state | `.claude/docs/service-restart-orphan-process.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `.claude/rules/fix-flaky-tests-dont-defer.md` |
+| Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `.claude/docs/slack-phase2-public-reachability.md` |

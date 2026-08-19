@@ -77,6 +77,7 @@ func TestReconcileSuspendedProcesses_ReturnsErrorButContinues_When_OneResumeFail
 }
 
 func TestReconcileSuspendedProcesses_ReturnsNil_When_StoreIsNil(t *testing.T) {
+	t.Parallel()
 	if err := ReconcileSuspendedProcesses(context.Background(), nil, nil); err != nil {
 		t.Fatalf("expected nil error for nil store, got %v", err)
 	}

@@ -220,6 +220,8 @@ type Repository interface {
 	UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error)
 	// ArchiveBacklogItem sets the archived_at timestamp on a backlog item.
 	ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
+	// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+	UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
 	// DeleteBacklogItem permanently removes an item and all its child records.
 	DeleteBacklogItem(ctx context.Context, id string) error
 	// TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
@@ -289,6 +291,7 @@ type ApprovalRuleData struct {
 	PythonModes           []string
 	SafePythonImportsOnly bool
 	RequireCIPassing      bool
+	MinSessionIdleMinutes int32
 }
 
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.

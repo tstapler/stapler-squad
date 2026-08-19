@@ -7,6 +7,8 @@ import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { isSessionStale } from "@/lib/session-staleness";
+import { staleBadge } from "./SessionCard.css";
 import {
   row,
   rowPaused,
@@ -59,6 +61,11 @@ interface SessionRowProps {
   onResumeFromHibernation?: () => void;
   /** When true, hides the Needs Approval SubStatusChip during optimistic clear */
   suppressApprovalSubStatus?: boolean;
+  // Minutes of inactivity after which an ACTIVE session is flagged "Stale" (see
+  // lib/session-staleness.ts's isSessionStale). Optional/defaulted so existing call
+  // sites and tests that don't thread it through keep compiling; SessionList passes
+  // the resolved value from useStaleSessionConfig().
+  staleThresholdMinutes?: number;
   /** Which optional columns to render. Defaults to DEFAULT_VISIBLE_COLUMNS. */
   visibleColumns?: ColumnKey[];
   /** When true, the checkbox column is interactive and visible on hover/select mode. */
@@ -154,6 +161,7 @@ function SessionRowInner({
   onSetRateLimitEnabled, onToggleAutonomousMode, onToggleAutoApprove, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
   suppressApprovalSubStatus = false,
+  staleThresholdMinutes = 30,
   visibleColumns = DEFAULT_VISIBLE_COLUMNS,
   selectMode = false,
   isSelected = false,
@@ -266,6 +274,15 @@ function SessionRowInner({
             !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
               <SubStatusChip subStatus={session.subStatus} subagentCount={session.subagentCount} />
             )}
+          {isSessionStale(session, staleThresholdMinutes) && (
+            <span
+              role="img"
+              aria-label={`Stale — no output for over ${staleThresholdMinutes} minutes`}
+              className={staleBadge}
+            >
+              🟠 Stale
+            </span>
+          )}
           <GitHubBadge
             prNumber={session.githubPrNumber}
             prUrl={session.githubPrUrl}

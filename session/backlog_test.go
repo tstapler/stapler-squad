@@ -12,6 +12,7 @@ import (
 // the terminal-transition archival hook both defer to, so they can't drift apart on
 // which roles get cleaned up (see IsTmuxBackedSessionRole's doc comment).
 func TestIsTmuxBackedSessionRole(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		role string
@@ -25,6 +26,7 @@ func TestIsTmuxBackedSessionRole(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := IsTmuxBackedSessionRole(tc.role); got != tc.want {
 				t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want %v", tc.role, got, tc.want)
 			}
@@ -34,6 +36,7 @@ func TestIsTmuxBackedSessionRole(t *testing.T) {
 
 // UT-001: TestCanTransition_AllValidPaths verifies every permitted transition returns true.
 func TestCanTransition_AllValidPaths(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		from BacklogStatus
 		to   BacklogStatus
@@ -60,6 +63,7 @@ func TestCanTransition_AllValidPaths(t *testing.T) {
 
 // UT-002: TestCanTransition_AllInvalidPaths verifies that forbidden transitions return false.
 func TestCanTransition_AllInvalidPaths(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		from BacklogStatus
 		to   BacklogStatus
@@ -78,6 +82,7 @@ func TestCanTransition_AllInvalidPaths(t *testing.T) {
 // UT-003: TestCanTransition_ArchivedToIdeaIsExplicit verifies archived→idea is the only
 // reopen path from archived, and that archived→ready (for example) is not permitted.
 func TestCanTransition_ArchivedToIdeaIsExplicit(t *testing.T) {
+	t.Parallel()
 	if !CanTransitionBacklog(BacklogStatusArchived, BacklogStatusIdea) {
 		t.Error("CanTransition(archived, idea) = false; want true")
 	}
@@ -94,6 +99,7 @@ func TestCanTransition_ArchivedToIdeaIsExplicit(t *testing.T) {
 
 // UT-004: TestTransitionGuard_IdeaToReady_RequiresAC ensures AC must be non-empty.
 func TestTransitionGuard_IdeaToReady_RequiresAC(t *testing.T) {
+	t.Parallel()
 	// Empty AC JSON → error
 	item := BacklogItemTransitionInput{
 		Status:     BacklogStatusIdea,
@@ -121,6 +127,7 @@ func TestTransitionGuard_IdeaToReady_RequiresAC(t *testing.T) {
 // UT-005: TestTransitionGuard_ReviewToDone_RequiresPassOrOverride checks that a FAIL
 // verdict blocks the transition unless an override reason is provided.
 func TestTransitionGuard_ReviewToDone_RequiresPassOrOverride(t *testing.T) {
+	t.Parallel()
 	// FAIL outcome with no override → error
 	item := BacklogItemTransitionInput{
 		Status:         BacklogStatusReview,
@@ -154,6 +161,7 @@ func TestTransitionGuard_ReviewToDone_RequiresPassOrOverride(t *testing.T) {
 // AC0: TestTransitionGuard_ReviewToReady_BlocksWithPassVerdictAndNoOverride checks that a
 // PASS verdict blocks the review->ready backward edge unless override_reason is set.
 func TestTransitionGuard_ReviewToReady_BlocksWithPassVerdictAndNoOverride(t *testing.T) {
+	t.Parallel()
 	item := BacklogItemTransitionInput{
 		Status:         BacklogStatusReview,
 		OverallOutcome: ReviewOutcomePass,
@@ -166,6 +174,7 @@ func TestTransitionGuard_ReviewToReady_BlocksWithPassVerdictAndNoOverride(t *tes
 // AC1: TestTransitionGuard_PRPendingToReady_BlocksWithPassVerdictAndNoOverride checks the
 // same guard applies to the pr_pending->ready backward edge.
 func TestTransitionGuard_PRPendingToReady_BlocksWithPassVerdictAndNoOverride(t *testing.T) {
+	t.Parallel()
 	item := BacklogItemTransitionInput{
 		Status:         BacklogStatusPRPending,
 		OverallOutcome: ReviewOutcomePass,
@@ -178,6 +187,7 @@ func TestTransitionGuard_PRPendingToReady_BlocksWithPassVerdictAndNoOverride(t *
 // AC2: TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithOverrideReason checks that
 // override_reason clears the guard for both backward edges even with a PASS verdict.
 func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithOverrideReason(t *testing.T) {
+	t.Parallel()
 	for _, from := range []BacklogStatus{BacklogStatusReview, BacklogStatusPRPending} {
 		item := BacklogItemTransitionInput{
 			Status:         from,
@@ -193,6 +203,7 @@ func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithOverrideReason(t *t
 // AC3: TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithoutPassVerdict checks that
 // the guard doesn't fire when there's no PASS verdict, override_reason or not.
 func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithoutPassVerdict(t *testing.T) {
+	t.Parallel()
 	for _, from := range []BacklogStatus{BacklogStatusReview, BacklogStatusPRPending} {
 		for _, outcome := range []ReviewOutcome{"", ReviewOutcomeFail, ReviewOutcomePartial, ReviewOutcomeUnverifiable} {
 			item := BacklogItemTransitionInput{
@@ -210,6 +221,7 @@ func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithoutPassVerdict(t *t
 // confirming the new review/pr_pending->ready guard doesn't leak onto the unrelated
 // done->ready backward edge, even with a PASS verdict and no override.
 func TestTransitionGuard_DoneToReady_UnaffectedByVerdictClearGuard(t *testing.T) {
+	t.Parallel()
 	item := BacklogItemTransitionInput{
 		Status:         BacklogStatusDone,
 		OverallOutcome: ReviewOutcomePass,
@@ -221,6 +233,7 @@ func TestTransitionGuard_DoneToReady_UnaffectedByVerdictClearGuard(t *testing.T)
 
 // UT-006: TestTransitionGuard_InProgressToReview_AlwaysAllowed checks that no guard fires.
 func TestTransitionGuard_InProgressToReview_AlwaysAllowed(t *testing.T) {
+	t.Parallel()
 	item := BacklogItemTransitionInput{
 		Status: BacklogStatusInProgress,
 	}
@@ -232,6 +245,7 @@ func TestTransitionGuard_InProgressToReview_AlwaysAllowed(t *testing.T) {
 // UT-006a: TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning
 // verifies the plan gate fires when neither plan_approved nor skip_planning is set.
 func TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning(t *testing.T) {
+	t.Parallel()
 	// Neither approved nor skip → error
 	item := BacklogItemTransitionInput{
 		Status:       BacklogStatusReady,
@@ -264,6 +278,7 @@ func TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning(t 
 
 // UT-007: TestAcCriterion_JSONRoundTrip verifies serialize → parse produces identical data.
 func TestAcCriterion_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
 	original := []AcCriterion{
 		{Index: 0, Text: "must compile", Status: "pending"},
 		{Index: 1, Text: "tests pass", Status: "done"},
@@ -289,6 +304,7 @@ func TestAcCriterion_JSONRoundTrip(t *testing.T) {
 
 // UT-008: TestAggregateOutcome_AllPass verifies PASS only when every verdict is PASS.
 func TestAggregateOutcome_AllPass(t *testing.T) {
+	t.Parallel()
 	verdicts := []CriterionVerdict{
 		{CriterionIndex: 0, Outcome: ReviewVerdictPass},
 		{CriterionIndex: 1, Outcome: ReviewVerdictPass},
@@ -326,6 +342,7 @@ func TestAggregateOutcome_AllPass(t *testing.T) {
 // UT-009: TestAggregateOutcome_PartialAndUnverifiable verifies the priority ordering
 // between PARTIAL and UNVERIFIABLE (PARTIAL wins).
 func TestAggregateOutcome_PartialAndUnverifiable(t *testing.T) {
+	t.Parallel()
 	// Single UNVERIFIABLE
 	verdicts := []CriterionVerdict{
 		{CriterionIndex: 0, Outcome: ReviewVerdictUnverifiable},
@@ -356,6 +373,7 @@ func TestAggregateOutcome_PartialAndUnverifiable(t *testing.T) {
 
 // UT-010: TestMergeAcCriteria covers the core merge semantics of MergeAcCriteria.
 func TestMergeAcCriteria(t *testing.T) {
+	t.Parallel()
 	type tc struct {
 		name     string
 		existing []AcCriterion
@@ -425,6 +443,7 @@ func TestMergeAcCriteria(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := MergeAcCriteria(tt.existing, tt.incoming)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("MergeAcCriteria() error = %v, wantErr %v", err, tt.wantErr)
@@ -480,6 +499,7 @@ func FuzzMergeAcCriteria(f *testing.F) {
 // session-package wrapper around domain.BacklogCategory.IsValid behaves
 // identically — all 4 constants plus "" (uncategorized) are valid.
 func TestIsValidBacklogCategory_should_ReturnTrue_When_KnownOrEmpty(t *testing.T) {
+	t.Parallel()
 	for _, c := range []string{
 		string(BacklogCategoryBugfix), string(BacklogCategoryFeature),
 		string(BacklogCategoryChore), string(BacklogCategoryRefactor), "",
@@ -493,6 +513,7 @@ func TestIsValidBacklogCategory_should_ReturnTrue_When_KnownOrEmpty(t *testing.T
 // TestIsValidBacklogCategory_should_ReturnFalse_When_Unknown guards against an
 // unvalidated string ever reaching the repository as a "valid" category.
 func TestIsValidBacklogCategory_should_ReturnFalse_When_Unknown(t *testing.T) {
+	t.Parallel()
 	if IsValidBacklogCategory("banana") {
 		t.Errorf(`IsValidBacklogCategory("banana") = true, want false`)
 	}

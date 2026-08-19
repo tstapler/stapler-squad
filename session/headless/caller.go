@@ -286,7 +286,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			p.rotateSession(key)
 		}
 		close(ch)
-		return ch, fmt.Errorf("headless runner start: %w", err)
+		return ch, fmt.Errorf("headless runner start: %w: %w", ErrSubprocessStart, err)
 	}
 
 	go func() {
@@ -342,6 +342,17 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			if readErr != nil && !errors.Is(readErr, io.EOF) {
 				if tripBreaker := p.recordError(key); tripBreaker {
 					p.rotateSession(key)
+				}
+				// A subprocess killed mid-write (e.g. OOM-killed) can still have
+				// left real, useful output in data before the read failed. Send it
+				// as a Text chunk before the terminal Err, mirroring the JSON
+				// parse-failure branch below — otherwise CallBlocking's raw return
+				// is "" and captureHeadlessFailure has nothing to persist for
+				// diagnosis.
+				if text := strings.TrimSpace(string(data)); text != "" {
+					if !send(StreamChunk{Text: text}) {
+						return
+					}
 				}
 				send(StreamChunk{Err: readErr, Done: true})
 				return
