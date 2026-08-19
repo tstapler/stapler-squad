@@ -317,35 +317,43 @@ func TestCheckPressure_BaselineNotUpdated_WhenSuppressed(t *testing.T) {
 	var count atomic.Int64
 	registerCountingAlert(&count)
 
-	t0 := time.Now()
+	synctest.Test(t, func(t *testing.T) {
+		t0 := time.Now()
 
-	// Inject 12 zombies — first alert fires, baseline recorded as 12.
-	injectZombies(12, t0)
-	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 500*time.Millisecond)
+		// Inject 12 zombies — first alert fires, baseline recorded as 12.
+		injectZombies(12, t0)
+		checkPressure(t0)
+		// checkPressure fires alerts in a goroutine spawned inside this bubble;
+		// synctest.Wait() blocks until it (and any other bubble goroutine) is
+		// idle or exited, so the count is settled deterministically.
+		synctest.Wait()
+		if got := count.Load(); got != 1 {
+			t.Fatalf("alert count = %d; want 1 after first alert", got)
+		}
 
-	// Advance 30 s; add 12 more zombies at t1 (same total in window: 12, not strictly greater).
-	t1 := t0.Add(30 * time.Second)
-	injectZombies(12, t1)
+		// Advance 30 s; add 12 more zombies at t1 (same total in window: 12, not strictly greater).
+		t1 := t0.Add(30 * time.Second)
+		injectZombies(12, t1)
 
-	// At t1 the window is [t1-30s, t1] = [t0, t1]. Events at t0 are on the boundary.
-	// The stable-count suppression path should leave baseline unchanged.
-	beforeZ := forkMonitor.lastAlertZombieCount
-	checkPressure(t1)
-	time.Sleep(50 * time.Millisecond) // allow any goroutine to run
+		// At t1 the window is [t1-30s, t1] = [t0, t1]. Events at t0 are on the boundary.
+		// The stable-count suppression path should leave baseline unchanged.
+		beforeZ := forkMonitor.lastAlertZombieCount
+		checkPressure(t1)
+		synctest.Wait()
 
-	forkMonitor.alertMu.Lock()
-	afterZ := forkMonitor.lastAlertZombieCount
-	forkMonitor.alertMu.Unlock()
+		forkMonitor.alertMu.Lock()
+		afterZ := forkMonitor.lastAlertZombieCount
+		forkMonitor.alertMu.Unlock()
 
-	// Alert count must still be 1 (suppressed).
-	if got := count.Load(); got != 1 {
-		t.Errorf("alert count = %d; want 1 (stable count must be suppressed)", got)
-	}
-	// Baseline must not have changed during a suppressed call.
-	if afterZ != beforeZ {
-		t.Errorf("baseline was updated during a suppressed call: before=%d after=%d", beforeZ, afterZ)
-	}
+		// Alert count must still be 1 (suppressed).
+		if got := count.Load(); got != 1 {
+			t.Errorf("alert count = %d; want 1 (stable count must be suppressed)", got)
+		}
+		// Baseline must not have changed during a suppressed call.
+		if afterZ != beforeZ {
+			t.Errorf("baseline was updated during a suppressed call: before=%d after=%d", beforeZ, afterZ)
+		}
+	})
 }
 
 // TestCheckPressure_BaselineResetOnClear verifies that transitioning to OK resets
@@ -392,22 +400,26 @@ func TestCheckPressure_NoAlertOnClear(t *testing.T) {
 	var count atomic.Int64
 	registerCountingAlert(&count)
 
-	t0 := time.Now()
+	synctest.Test(t, func(t *testing.T) {
+		t0 := time.Now()
 
-	// Trigger an alert.
-	injectZombies(12, t0)
-	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 500*time.Millisecond)
+		// Trigger an alert.
+		injectZombies(12, t0)
+		checkPressure(t0)
+		synctest.Wait()
+		if got := count.Load(); got != 1 {
+			t.Fatalf("alert count = %d; want 1 after first alert", got)
+		}
 
-	// Advance 35 s so events expire → level returns to OK.
-	t1 := t0.Add(35 * time.Second)
-	checkPressure(t1)
+		// Advance 35 s so events expire → level returns to OK.
+		t1 := t0.Add(35 * time.Second)
+		checkPressure(t1)
+		synctest.Wait()
 
-	time.Sleep(50 * time.Millisecond) // allow any goroutine to run
-
-	if got := count.Load(); got != 1 {
-		t.Errorf("alert count = %d; want 1 (clear must not fire alert callbacks)", got)
-	}
+		if got := count.Load(); got != 1 {
+			t.Errorf("alert count = %d; want 1 (clear must not fire alert callbacks)", got)
+		}
+	})
 }
 
 // TestCheckPressure_ApprovalsUnaffected documents the architectural invariant that
