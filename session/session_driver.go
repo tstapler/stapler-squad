@@ -528,7 +528,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		detectedSt == detection.StatusExecuting ||
 		detectedSt == detection.StatusWaitingForAgent
 
-	if !claudeAtPrompt && !(timedOut && !claudeIsKnownBusy) {
+	if !claudeAtPrompt && (!timedOut || claudeIsKnownBusy) {
 		return
 	}
 
