@@ -146,6 +146,10 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 			// Parse worktree list to find the one with our branch
 			existingPath, found := g.findWorktreeForBranch(output, g.branchName)
 			if found {
+				// git realpath's the path it reports in 'worktree list' output, so
+				// canonicalize before storing to keep this consistent with the
+				// already-resolved paths getWorktreeDirectory hands to fresh creates.
+				existingPath = CanonicalizeWorktreePath(existingPath)
 				log.Info("found existing worktree for branch, using it instead", "branch", g.branchName, "path", existingPath)
 				g.worktreePath = existingPath
 				g.initBaseCommitSHA()
@@ -205,7 +209,11 @@ func (g *GitWorktree) worktreeAlreadyRegisteredForBranch() bool {
 		return false
 	}
 	path, found := g.findWorktreeForBranch(output, g.branchName)
-	if !found || path != g.worktreePath {
+	// g.worktreePath may still be a raw, not-yet-migrated path (e.g. rehydrated
+	// from storage written before this normalization existed), while path always
+	// comes from git's realpath'd 'worktree list' output — canonicalize both
+	// sides so the comparison isn't defeated by a stale spelling difference.
+	if !found || CanonicalizeWorktreePath(path) != CanonicalizeWorktreePath(g.worktreePath) {
 		return false
 	}
 	return !isWorktreeLocked(output, g.worktreePath)

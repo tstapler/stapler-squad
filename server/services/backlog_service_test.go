@@ -3596,11 +3596,13 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	require.NoError(t, err)
 
 	require.Len(t, creator.calls, 1)
-	// git worktree list echoes back a realpath(3)-resolved path, so on macOS
-	// (/var -> /private/var) it textually differs from t.TempDir()'s raw form.
-	resolvedTriageWorktreePath, evalErr := filepath.EvalSymlinks(triageWorktreePath)
-	require.NoError(t, evalErr)
-	assert.Equal(t, resolvedTriageWorktreePath, creator.calls[0].path,
+	// Both sides are already canonicalized by production code (session/git's
+	// getWorktreeDirectory/CanonicalizeWorktreePath), so this must be a strict,
+	// byte-identical raw-string comparison -- not normalized on the test side via
+	// filepath.EvalSymlinks -- to actually prove the fix for the /var vs
+	// /private/var (macOS) path-inconsistency bug: a regression that reintroduces
+	// a raw, unresolved path on either side must fail this assertion.
+	assert.Equal(t, triageWorktreePath, creator.calls[0].path,
 		"SpawnSessionFromItem must reuse the exact worktree TriggerTriage created and committed its SDD docs into, not start a fresh one from main")
 
 	// The committed planning docs must still be present — proving this is a
