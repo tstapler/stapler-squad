@@ -2,8 +2,6 @@ package session
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -751,32 +749,18 @@ func TestUpdateSessionMetadata_SessionNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "session not found")
 }
 
+// createTestEntRepository is a thin wrapper around NewTestEntRepository
+// (testing.go) kept so the ~90 existing `repo, cleanup := createTestEntRepository(t)`
+// call sites in this package don't need touching. NewTestEntRepository
+// already registers its own t.Cleanup, so the returned cleanup func is a
+// no-op retained only for call-site compatibility.
 func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
-	// Create temporary database file with unique name using timestamp to avoid conflicts
-	tmpDir := t.TempDir()
-	// Use nanosecond timestamp to ensure uniqueness even for rapidly running tests
-	uniqueName := fmt.Sprintf("test-%d.db", time.Now().UnixNano())
-	dbPath := filepath.Join(tmpDir, uniqueName)
+	repo := NewTestEntRepository(t)
 
-	t.Logf("Creating test repository with database at: %s", dbPath)
-
-	repo, err := NewEntRepository(WithDatabasePath(dbPath))
-	require.NoError(t, err)
-
-	// Verify database is empty
 	ctx := context.Background()
 	sessions, err := repo.List(ctx)
 	require.NoError(t, err, "Failed to list sessions")
 	require.Empty(t, sessions, "Database should be empty but has %d sessions", len(sessions))
 
-	cleanup := func() {
-		// Close the database connection
-		repo.Close()
-		// Remove all SQLite files (main db + WAL files)
-		os.Remove(dbPath)
-		os.Remove(dbPath + "-wal")
-		os.Remove(dbPath + "-shm")
-	}
-
-	return repo, cleanup
+	return repo, func() {}
 }

@@ -2,9 +2,6 @@ package session_test
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,25 +22,15 @@ import (
 // cycle not allowed in test" build error. See Epic 2.1's implementation notes
 // for the exact error this avoids.
 
-// newTestEntRepositoryForEvents creates a temporary ent-backed *session.EntRepository,
-// mirroring session package's own unexported createTestEntRepository test helper
-// (session/ent_repository_test.go), which is not reachable from this external
-// test package.
+// newTestEntRepositoryForEvents creates an in-memory ent-backed
+// *session.EntRepository via session.NewTestEntRepository, the exported
+// cross-package helper (session/testing.go) added specifically so this
+// external test package no longer needs its own copy of the on-disk
+// construction logic.
 func newTestEntRepositoryForEvents(t *testing.T) (*session.EntRepository, func()) {
 	t.Helper()
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-
-	cleanup := func() {
-		repo.Close()
-		os.Remove(dbPath)
-		os.Remove(dbPath + "-wal")
-		os.Remove(dbPath + "-shm")
-	}
-	return repo, cleanup
+	repo := session.NewTestEntRepository(t)
+	return repo, func() {}
 }
 
 // panickingItemChangePublisher is a test double for Task 2.1.1d: its

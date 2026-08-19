@@ -2,9 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -199,27 +196,15 @@ func TestBacklogItemEventPublisher_should_notPanic_When_PublishingWithZeroSubscr
 	}
 }
 
-// newTestEntRepositoryForIsolation creates a temporary ent-backed
-// *session.EntRepository, mirroring session_test's own
+// newTestEntRepositoryForIsolation creates a uniquely-named in-memory
+// ent-backed *session.EntRepository, mirroring session_test's own
 // newTestEntRepositoryForEvents helper (session/ent_repository_backlog_events_test.go).
 // A local copy is kept here (rather than exporting/reusing that one) because
 // this file lives in package services, not session_test, and the two files
 // serve different packages' tests.
-func newTestEntRepositoryForIsolation(t *testing.T) (*session.EntRepository, func()) {
+func newTestEntRepositoryForIsolation(t *testing.T) *session.EntRepository {
 	t.Helper()
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-
-	cleanup := func() {
-		repo.Close()
-		os.Remove(dbPath)
-		os.Remove(dbPath + "-wal")
-		os.Remove(dbPath + "-shm")
-	}
-	return repo, cleanup
+	return session.NewTestEntRepository(t)
 }
 
 // TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProcesses
@@ -232,10 +217,8 @@ func newTestEntRepositoryForIsolation(t *testing.T) (*session.EntRepository, fun
 // subscriber.
 func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProcesses(t *testing.T) {
 	t.Parallel()
-	repoA, cleanupA := newTestEntRepositoryForIsolation(t)
-	defer cleanupA()
-	repoB, cleanupB := newTestEntRepositoryForIsolation(t)
-	defer cleanupB()
+	repoA := newTestEntRepositoryForIsolation(t)
+	repoB := newTestEntRepositoryForIsolation(t)
 
 	busA := events.NewEventBus(10)
 	defer busA.Close()

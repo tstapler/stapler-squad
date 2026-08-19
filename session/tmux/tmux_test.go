@@ -255,6 +255,58 @@ func TestTmuxCircuitBreakerConfig(t *testing.T) {
 
 // --- Package-level tmux server function integration tests ---
 
+// createSessionWithRetry creates a detached tmux session on serverSocket, retrying
+// with backoff if the attempt fails or is killed by its own per-attempt timeout.
+//
+// Root cause this works around: `tmux new-session` forks and execs the real tmux
+// server process, and on a loaded machine that fork/exec is measurably slow and
+// highly variable -- a manual timing check in this environment found single
+// invocations routinely taking 1.5-4s versus the sub-100ms typical on an idle
+// box (see also the sessionCreateTimeout doc comment in tmux.go, which documents
+// the same class of slowdown for a different fixed-budget call). A single
+// un-retried attempt bounded by a fixed context timeout intermittently gets
+// killed under exactly this load, which is what made
+// TestEnsureServerRunning_NoOp flaky: the timeout wasn't guarding a logic race,
+// it was too tight for this environment's real subprocess latency. This mirrors
+// ensureServerRunningWithRetry in tmux.go, which fixes the identical failure
+// shape (a real-tmux-subprocess call killed by a fixed timeout under load) in
+// production code -- attempts/backoff values match serverStartAttempts/
+// serverStartBackoffStart/serverStartBackoffMax there.
+func createSessionWithRetry(t *testing.T, serverSocket, sessionName string, extraNewSessionArgs ...string) {
+	t.Helper()
+	hasArgs := prependSocket(serverSocket, []string{"has-session", "-t", sessionName})
+	newArgs := prependSocket(serverSocket, append([]string{"new-session", "-d", "-s", sessionName}, extraNewSessionArgs...))
+
+	const attempts = 8
+	backoff := 100 * time.Millisecond
+	const backoffMax = 3 * time.Second
+
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		hasCtx, hasCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		hasErr := safeexec.CommandContext(hasCtx, Binary(), hasArgs...).Run()
+		hasCancel()
+		if hasErr == nil {
+			return // a previous attempt's tmux process actually succeeded despite the local error
+		}
+
+		newCtx, newCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		lastErr = safeexec.CommandContext(newCtx, Binary(), newArgs...).Run()
+		newCancel()
+		if lastErr == nil {
+			return
+		}
+		if i < attempts-1 {
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > backoffMax {
+				backoff = backoffMax
+			}
+		}
+	}
+	require.NoError(t, lastErr, "failed to create tmux session %q on socket %q after %d attempts", sessionName, serverSocket, attempts)
+}
+
 // TestEnsureServerRunning_NoOp verifies that EnsureServerRunning is a no-op
 // when the tmux server is already running.
 func TestEnsureServerRunning_NoOp(t *testing.T) {
@@ -271,9 +323,7 @@ func TestEnsureServerRunning_NoOp(t *testing.T) {
 	// Start the isolated server and keep it alive with a detached session.
 	// Without a session, tmux exits immediately (exit-empty=on by default), causing
 	// the follow-up check in EnsureServerRunning to falsely report the server as dead.
-	newSessionCtx, newSessionCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer newSessionCancel()
-	require.NoError(t, safeexec.CommandContext(newSessionCtx, Binary(), "-L", socketName, "new-session", "-d", "-s", "keepalive").Run())
+	createSessionWithRetry(t, socketName, "keepalive")
 
 	// With the server running and a live session, EnsureServerRunning should be a no-op.
 	_, err := EnsureServerRunning(socketName)

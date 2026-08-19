@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,12 +28,7 @@ type forkTestFixture struct {
 func setupForkTestFixture(t *testing.T) *forkTestFixture {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "fork-svc-test-*")
-	require.NoError(t, err)
-
-	dbPath := fmt.Sprintf("%s/sessions.db", tmpDir)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
@@ -42,20 +36,20 @@ func setupForkTestFixture(t *testing.T) *forkTestFixture {
 	bus := events.NewEventBus(16)
 	svc := NewSessionService(storage, bus)
 
-	// t.Cleanup runs in LIFO order, so registering the repo/bus/tmpdir teardown
-	// here — before svc.Shutdown()'s cleanup below — guarantees Shutdown() (which
+	// t.Cleanup runs in LIFO order, so registering the bus teardown here —
+	// before svc.Shutdown()'s cleanup below — guarantees Shutdown() (which
 	// blocks on any in-flight trackCleanup-tracked goroutines, e.g. from
-	// DeleteSession/Destroy()) always runs BEFORE the repo is closed and tmpDir
-	// removed out from under it. Callers historically invoked the returned
-	// cleanup field themselves (via t.Cleanup(fix.cleanup) or defer
-	// fix.cleanup()) which raced ahead of Shutdown's own t.Cleanup — see
+	// DeleteSession/Destroy()) always runs BEFORE the bus is closed. The repo
+	// is closed via its own t.Cleanup registered inside NewTestEntRepository,
+	// which (being registered first, earlier in this function) runs last.
+	// Callers historically invoked the returned cleanup field themselves (via
+	// t.Cleanup(fix.cleanup) or defer fix.cleanup()) which raced ahead of
+	// Shutdown's own t.Cleanup — see
 	// TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible's
 	// "Fail in goroutine after test has completed" panic. The field is now a
 	// no-op so those existing call sites remain harmless.
 	t.Cleanup(func() {
 		bus.Close()
-		repo.Close()
-		os.RemoveAll(tmpDir)
 	})
 	t.Cleanup(func() { svc.Shutdown() })
 

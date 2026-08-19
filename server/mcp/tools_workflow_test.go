@@ -19,9 +19,7 @@ func newTestWorkflowHandlers(t *testing.T) *workflowHandlers {
 
 	storage := newTestBacklogStorage(t)
 
-	repo, err := session.NewEntRepository(session.WithDatabasePath(t.TempDir() + "/workflow_test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 
 	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
 	workflowSvc := services.NewWorkflowService(workflowRepo, nil, storage)

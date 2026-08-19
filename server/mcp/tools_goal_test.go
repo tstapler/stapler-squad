@@ -3,9 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -19,20 +16,10 @@ import (
 // newTestGoalStorage creates a temporary Storage for goal tool tests.
 func newTestGoalStorage(t *testing.T) *session.Storage {
 	t.Helper()
-	tmpDir, err := os.MkdirTemp("", "goal-test-*")
-	require.NoError(t, err)
-
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		repo.Close()
-		os.RemoveAll(tmpDir)
-	})
 
 	return storage
 }
