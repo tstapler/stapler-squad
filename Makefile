@@ -169,7 +169,8 @@ web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FIL
 		cd web-app && pnpm install --frozen-lockfile; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@cd web-app && NEXT_BUILD_MODE=development ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
+	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
+	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
