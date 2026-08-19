@@ -285,6 +285,36 @@ func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) 
 	assert.True(t, strings.Contains(string(out), branchName), "branch must still exist after reuse")
 }
 
+// TestWorktreeAlreadyRegisteredForBranch_MatchesRawAgainstCanonicalPath verifies AC3: when
+// g.worktreePath holds a raw, not-yet-canonicalized spelling of the same directory git
+// reports (realpath'd) via 'worktree list --porcelain', the two must still be recognized as
+// the same worktree rather than spuriously mismatching and triggering an unnecessary
+// remove+recreate.
+func TestWorktreeAlreadyRegisteredForBranch_MatchesRawAgainstCanonicalPath(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+
+	branchName := "already-registered-raw-vs-canonical"
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-raw-vs-canonical", branchName)
+	require.NoError(t, err)
+	require.NoError(t, wt.setupNewWorktree())
+	defer func() { _ = wt.Cleanup() }()
+
+	// Build a symlink alias to the real worktree directory and point g.worktreePath at
+	// the alias (the "raw" spelling) instead of the canonical path setupNewWorktree
+	// actually created on disk. git itself only ever knows about the real directory, so
+	// 'worktree list --porcelain' will report the canonical path — exercising exactly the
+	// raw-vs-canonicalized mismatch this fix must tolerate.
+	rawAlias := filepath.Join(t.TempDir(), "raw-alias-to-worktree")
+	if err := os.Symlink(wt.worktreePath, rawAlias); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+	wt.worktreePath = rawAlias
+
+	assert.True(t, wt.worktreeAlreadyRegisteredForBranch(),
+		"raw alias path %q for the same worktree as git's canonical report must still match", rawAlias)
+}
+
 // TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate is the regression
 // test for the self-heal fallback in setupNewWorktree's "worktree add -b" error handling.
 // Unlike TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists — which pre-creates the
