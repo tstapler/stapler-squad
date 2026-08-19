@@ -371,54 +371,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// Stopped after sentInitial = potential unexpected exit.
 		if st == Stopped {
-			if !sentInitial {
-				// Exited before we even sent the first prompt — likely a startup crash.
-				// For one-shot sessions or if we've already retried, just exit.
-				if isOneShot(inst) || retried.Load() {
-					return
-				}
-				log.Warn("SessionDriver: session exited before initial prompt sent",
-					"session", inst.Title,
-				)
-				handleDriverFailure(inst, allowedPath, retried, "exit before initial prompt", stop)
-				return
-			}
-			// Stopped after initial prompt was sent.
-			if inst.OneShot {
-				tryExtractClaudeSessionID(inst)
-			}
-			if isOneShot(inst) || retried.Load() {
-				// One-shot sessions: BacklogLifecycleListener handles this; driver exits cleanly.
-				return
-			}
-			if initialPrompt == "" {
-				// No initial prompt was ever configured for this session (e.g. a plain
-				// terminal/bash session created without a task) -- sentInitial's "no
-				// prompt to send" bookkeeping trivially satisfies `st == Stopped` the
-				// moment the session ends, at any time, indistinguishable here from a
-				// real AI-agent task interrupted mid-run. There is no in-flight task to
-				// protect by retrying, so a user-initiated `exit` (or any other exit)
-				// must be left as a clean Stopped, not silently respawned underneath
-				// them moments later.
-				return
-			}
-			// CONCERN-2 guard: only restart if the session crashed quickly (within 5 minutes
-			// of sending the initial prompt). A session that ran for > 5 minutes and then stopped
-			// has likely completed its task normally. BacklogLifecycleListener handles that transition.
-			if time.Since(initialPromptSentAt) > driverMinRuntimeBeforeRetry {
-				log.Info("SessionDriver: session exited after minimum runtime, treating as completion",
-					"session", inst.Title,
-					"runtime", time.Since(initialPromptSentAt).Round(time.Second),
-				)
-				if inst.OneShot {
-					tryExtractClaudeSessionID(inst)
-				}
-				return
-			}
-			log.Warn("SessionDriver: unexpected session exit after initial prompt",
-				"session", inst.Title,
-			)
-			handleDriverFailure(inst, allowedPath, retried, "unexpected exit", stop)
+			handleStoppedStatus(inst, allowedPath, initialPrompt, retried, stop, sentInitial, initialPromptSentAt)
 			return
 		}
 
@@ -437,232 +390,340 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 
 		if hasOutput && isStartupDialog(tailed) {
-			status := answerDialogOnce(&startupLatch, tailed, sendAnswerKey, inst.Title, "startup dialog")
-
-			// Control-flow requirement (ADR-001): only dialogUnanswered (a send
-			// was just attempted this tick, whether it succeeded or is still
-			// under the retry cap) keeps the single-tick continue. Once the
-			// latch reaches dialogAwaitingDismissal or dialogGaveUp, fall
-			// through to the rest of the loop body exactly as if
-			// isStartupDialog had been false this tick — restoring
-			// Ready-detection, the inactivity-timeout escalation, and the
-			// NeedsApproval check for ticks after the dialog has been
-			// answered or abandoned. Without this, a dialogGaveUp session
-			// would silently wedge here until driverTotalTimeout (25 min)
-			// with zero operator escalation.
-			//
-			// Exhaustive switch (not a plain if) so a future 4th
-			// dialogLatchStatus value can't silently fall through the
-			// implicit "unanswered" path and reintroduce the original
-			// unbounded-resend bug.
-			switch status {
-			case dialogUnanswered:
+			if handleStartupDialogTick(inst, tailed, &startupLatch, sendAnswerKey) {
 				continue
-			case dialogAwaitingDismissal, dialogGaveUp:
-				// Fall through to the rest of the loop body — see comment above.
-			default:
-				panic(fmt.Sprintf("SessionDriver: unhandled dialogLatchStatus %d from answerDialogOnce (startup dialog)", status))
 			}
+			// Fall through to the rest of the loop body — see
+			// handleStartupDialogTick's doc comment.
 		}
 
 		if !sentInitial {
-			// Wait for StatusIdle specifically: the `^>\s*▌?\s*$` pattern confirms
-			// Claude Code's readline is showing the input prompt and is listening.
-			//
-			// Do NOT use st == Ready (which equals st == Active — a deprecated alias
-			// that fires the moment the session starts, long before readline is ready).
-			// StatusReady is a `.*` catch-all; StatusIdle is the precise signal.
-			claudeAtPrompt := detectedSt == detection.StatusIdle
-			timedOut := time.Now().After(readyDeadline)
-
-			// On timeout, skip if Claude is known to be actively processing — injecting
-			// while busy writes text into the PTY buffer without Enter ever submitting it,
-			// since readline isn't active. Keep waiting; claudeAtPrompt will fire when Claude
-			// finishes and returns to the input prompt.
-			claudeIsKnownBusy := detectedSt == detection.StatusProcessing ||
-				detectedSt == detection.StatusExecuting ||
-				detectedSt == detection.StatusWaitingForAgent
-
-			if claudeAtPrompt || (timedOut && !claudeIsKnownBusy) {
-				// Re-check whether a conversation is already active before injecting.
-				// The user may have typed something manually while we were waiting.
-				//
-				// Check live PTY output first (no disk I/O, no flush latency), then
-				// fall back to the JSONL file check for cases not visible in the terminal
-				// buffer (e.g. the session just started and the buffer hasn't scrolled yet).
-				if outputShowsConversationStarted(output) {
-					log.Info("SessionDriver: terminal output shows conversation already active, skipping injection",
-						"session", inst.Title,
-					)
-					sentInitial = true
-					initialPromptSentAt = time.Now()
-					continue
-				}
-
-				if _, convErr := FindConversationFilePath(inst.GetStableID()); convErr == nil {
-					log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
-						"session", inst.Title,
-					)
-					sentInitial = true
-					initialPromptSentAt = time.Now()
-					continue
-				}
-
-				sendAttempts++
-
-				if timedOut && !claudeAtPrompt {
-					log.Warn("SessionDriver: timed out waiting for idle prompt, sending anyway",
-						"session", inst.Title,
-						"attempt", sendAttempts,
-					)
-				}
-
-				if claudeAtPrompt {
-					// Brief settling pause after the > prompt appears: the status machine
-					// detected the line, but readline's internal input handler may need a
-					// few hundred ms to be fully listening.
-					time.Sleep(300 * time.Millisecond)
-				}
-
-				// Snapshot terminal content immediately before sending so we can verify
-				// that the keystrokes were actually received (read-back confirmation).
-				contentBefore, _ := inst.PreviewContext(ctx)
-
-				if err := inst.SendKeys(initialPrompt + EnterKeySequence); err != nil {
-					log.Warn("SessionDriver: failed to send initial prompt",
-						"session", inst.Title,
-						"claudeAtPrompt", claudeAtPrompt,
-						"timedOut", timedOut,
-						"attempt", sendAttempts,
-						"err", err,
-					)
-					if sendAttempts >= 3 {
-						log.Error("SessionDriver: giving up on initial prompt after 3 failed attempts",
-							"session", inst.Title,
-						)
-						sentInitial = true
-						initialPromptSentAt = time.Now()
-					}
-					// sentInitial stays false → retry next tick
-				} else {
-					log.Info("SessionDriver: sent initial prompt",
-						"session", inst.Title,
-						"claudeAtPrompt", claudeAtPrompt,
-						"timedOut", timedOut,
-						"attempt", sendAttempts,
-						"promptLen", len(initialPrompt),
-					)
-
-					// Read-back verification: only when we had a confirmed idle prompt
-					// and still have retries left.  After a timeout-triggered send we
-					// cannot reliably verify (Claude may not be at a prompt).
-					if claudeAtPrompt && sendAttempts < 3 {
-						// Wait for PTY echo + pane-capture latency before reading back.
-						time.Sleep(500 * time.Millisecond)
-						contentAfter, verifyErr := inst.PreviewContext(ctx)
-						if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
-							// Terminal content identical to before the send — the
-							// keystrokes were likely swallowed before readline consumed
-							// them.  Retry on the next tick.
-							log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
-								"session", inst.Title,
-								"attempt", sendAttempts,
-							)
-							// sentInitial stays false
-						} else {
-							// Content changed (or verification read failed) — treat as success.
-							log.Info("SessionDriver: read-back confirmed initial prompt received",
-								"session", inst.Title,
-								"attempt", sendAttempts,
-							)
-							sentInitial = true
-							initialPromptSentAt = time.Now()
-						}
-					} else {
-						// Timeout-triggered send or max retries: accept without verification.
-						sentInitial = true
-						initialPromptSentAt = time.Now()
-					}
-				}
-			}
+			sendInitialPromptTick(ctx, inst, initialPrompt, output, detectedSt, readyDeadline, &sentInitial, &initialPromptSentAt, &sendAttempts)
 			continue
 		}
 
 		// Inactivity detection: only after initial prompt sent.
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
 		if st == Ready {
-			last := inst.LastMeaningfulOutputTime()
-			// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
-			// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
-			// from DB before the ReviewQueue poller had a chance to refresh it from live
-			// terminal content). Using initialPromptSentAt as a floor prevents false inactivity
-			// fires immediately after startup.
-			activityRef := initialPromptSentAt
-			if !last.IsZero() && last.After(initialPromptSentAt) {
-				activityRef = last
-			}
-			if !nudgeSentAt.IsZero() && nudgeSentAt.After(activityRef) {
-				activityRef = nudgeSentAt
-			}
-
-			idle := time.Since(activityRef)
-
-			// For backlog work sessions: send a task-reminder nudge before restarting.
-			// This preserves conversational context when Claude finishes but forgets to
-			// call /backlog/review or report_progress.
-			if inst.HasTag(TagBacklogWork) && nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay {
-				nudgeSentAt = attemptBacklogNudge(inst, idle)
-				continue
-			}
-
-			graceTimeout := driverInactivityTimeout
-			if inst.HasTag(TagBacklogWork) && !nudgeSentAt.IsZero() {
-				graceTimeout = driverBacklogNudgeGrace
-			}
-			if idle > graceTimeout {
-				log.Warn("SessionDriver: session stuck — no output for inactivity timeout",
-					"session", inst.Title,
-					"inactivity", idle.Round(time.Second),
-				)
-				handleDriverFailure(inst, allowedPath, retried, "inactivity timeout", stop)
+			cont, ret := handleInactivityTick(inst, allowedPath, retried, stop, initialPromptSentAt, &nudgeSentAt)
+			if ret {
 				return
+			}
+			if cont {
+				continue
 			}
 		}
 
 		// After the initial prompt is sent, watch for NeedsApproval to handle
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
-		//
-		// Same DialogAnswerLatch defect class as the startup-dialog branch
-		// above (ADR-001), applied via an independently-scoped approvalLatch.
-		// Asymmetry note: unlike the startup-dialog branch, this call site has
-		// no `continue` today (it already falls through naturally to the end
-		// of the loop body regardless of outcome), so there is no analogous
-		// control-flow starvation risk to fix here — the returned status is
-		// only used for the latch's own bookkeeping, not for branching.
-		if mgr := inst.GetStatusManager(); mgr != nil {
-			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
-				if hasOutput && shouldApprovePrompt(tailed, allowedPath) {
-					answerDialogOnce(&approvalLatch, tailed, sendAnswerKey, inst.Title, "approval prompt")
-				}
-			}
-		}
+		handleApprovalDialogTick(inst, hasOutput, tailed, allowedPath, &approvalLatch, sendAnswerKey)
 
 		// Scan terminal output for a GitHub PR URL printed by git push.
-		// This auto-links the PR to the session so PRStatusPoller can track it
-		// without relying on branch-name discovery (which fails when the omnibar
-		// branch name differs from the PR head branch).
-		if sentInitial && !prURLLinked && inst.GitHubOwner != "" && previewErr == nil && output != "" {
-			if prURL, prNum := scanTerminalForPRURL(output); prURL != "" {
-				inst.mu.Lock()
-				inst.GitHubPRURL = prURL
-				inst.GitHubPRNumber = prNum
-				inst.mu.Unlock()
-				log.Info("SessionDriver: auto-linked PR from terminal push output",
-					"session", inst.Title, "pr", prNum, "url", prURL)
-				prURLLinked = true
-			}
-		}
+		prURLLinked = scanAndLinkPRURL(inst, sentInitial, prURLLinked, previewErr, output)
 	}
+}
+
+// handleStoppedStatus handles the driver loop's `st == Stopped` branch: an
+// unexpected or expected session exit. The caller always returns from the
+// driver loop immediately after calling this — every path here is terminal.
+func handleStoppedStatus(inst *Instance, allowedPath string, initialPrompt string, retried *atomic.Bool, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) {
+	if !sentInitial {
+		// Exited before we even sent the first prompt — likely a startup crash.
+		// For one-shot sessions or if we've already retried, just exit.
+		if isOneShot(inst) || retried.Load() {
+			return
+		}
+		log.Warn("SessionDriver: session exited before initial prompt sent",
+			"session", inst.Title,
+		)
+		handleDriverFailure(inst, allowedPath, retried, "exit before initial prompt", stop)
+		return
+	}
+	// Stopped after initial prompt was sent.
+	if inst.OneShot {
+		tryExtractClaudeSessionID(inst)
+	}
+	if isOneShot(inst) || retried.Load() {
+		// One-shot sessions: BacklogLifecycleListener handles this; driver exits cleanly.
+		return
+	}
+	if initialPrompt == "" {
+		// No initial prompt was ever configured for this session (e.g. a plain
+		// terminal/bash session created without a task) -- sentInitial's "no
+		// prompt to send" bookkeeping trivially satisfies `st == Stopped` the
+		// moment the session ends, at any time, indistinguishable here from a
+		// real AI-agent task interrupted mid-run. There is no in-flight task to
+		// protect by retrying, so a user-initiated `exit` (or any other exit)
+		// must be left as a clean Stopped, not silently respawned underneath
+		// them moments later.
+		return
+	}
+	// CONCERN-2 guard: only restart if the session crashed quickly (within 5 minutes
+	// of sending the initial prompt). A session that ran for > 5 minutes and then stopped
+	// has likely completed its task normally. BacklogLifecycleListener handles that transition.
+	if time.Since(initialPromptSentAt) > driverMinRuntimeBeforeRetry {
+		log.Info("SessionDriver: session exited after minimum runtime, treating as completion",
+			"session", inst.Title,
+			"runtime", time.Since(initialPromptSentAt).Round(time.Second),
+		)
+		if inst.OneShot {
+			tryExtractClaudeSessionID(inst)
+		}
+		return
+	}
+	log.Warn("SessionDriver: unexpected session exit after initial prompt",
+		"session", inst.Title,
+	)
+	handleDriverFailure(inst, allowedPath, retried, "unexpected exit", stop)
+}
+
+// handleStartupDialogTick answers a detected startup dialog and reports
+// whether the driver loop's current tick should `continue` immediately.
+//
+// Control-flow requirement (ADR-001): only dialogUnanswered (a send was just
+// attempted this tick, whether it succeeded or is still under the retry cap)
+// keeps the single-tick continue. Once the latch reaches
+// dialogAwaitingDismissal or dialogGaveUp, the caller falls through to the
+// rest of the loop body exactly as if isStartupDialog had been false this
+// tick — restoring Ready-detection, the inactivity-timeout escalation, and
+// the NeedsApproval check for ticks after the dialog has been answered or
+// abandoned. Without this, a dialogGaveUp session would silently wedge here
+// until driverTotalTimeout (25 min) with zero operator escalation.
+//
+// Exhaustive switch (not a plain if) so a future 4th dialogLatchStatus value
+// can't silently fall through the implicit "unanswered" path and reintroduce
+// the original unbounded-resend bug.
+func handleStartupDialogTick(inst *Instance, tailed string, startupLatch *dialogAnswerState, sendAnswerKey func() error) bool {
+	status := answerDialogOnce(startupLatch, tailed, sendAnswerKey, inst.Title, "startup dialog")
+
+	switch status {
+	case dialogUnanswered:
+		return true
+	case dialogAwaitingDismissal, dialogGaveUp:
+		return false
+	default:
+		panic(fmt.Sprintf("SessionDriver: unhandled dialogLatchStatus %d from answerDialogOnce (startup dialog)", status))
+	}
+}
+
+// sendInitialPromptTick handles one driver-loop tick's worth of initial-prompt
+// injection: waiting for an idle prompt, re-checking whether a conversation
+// already started underneath us, sending the prompt, and read-back
+// verification. The caller always `continue`s the loop after calling this.
+func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt string, output string, detectedSt detection.DetectedStatus, readyDeadline time.Time, sentInitial *bool, initialPromptSentAt *time.Time, sendAttempts *int) {
+	// Wait for StatusIdle specifically: the `^>\s*▌?\s*$` pattern confirms
+	// Claude Code's readline is showing the input prompt and is listening.
+	//
+	// Do NOT use st == Ready (which equals st == Active — a deprecated alias
+	// that fires the moment the session starts, long before readline is ready).
+	// StatusReady is a `.*` catch-all; StatusIdle is the precise signal.
+	claudeAtPrompt := detectedSt == detection.StatusIdle
+	timedOut := time.Now().After(readyDeadline)
+
+	// On timeout, skip if Claude is known to be actively processing — injecting
+	// while busy writes text into the PTY buffer without Enter ever submitting it,
+	// since readline isn't active. Keep waiting; claudeAtPrompt will fire when Claude
+	// finishes and returns to the input prompt.
+	claudeIsKnownBusy := detectedSt == detection.StatusProcessing ||
+		detectedSt == detection.StatusExecuting ||
+		detectedSt == detection.StatusWaitingForAgent
+
+	if !claudeAtPrompt && !(timedOut && !claudeIsKnownBusy) {
+		return
+	}
+
+	// Re-check whether a conversation is already active before injecting.
+	// The user may have typed something manually while we were waiting.
+	//
+	// Check live PTY output first (no disk I/O, no flush latency), then
+	// fall back to the JSONL file check for cases not visible in the terminal
+	// buffer (e.g. the session just started and the buffer hasn't scrolled yet).
+	if outputShowsConversationStarted(output) {
+		log.Info("SessionDriver: terminal output shows conversation already active, skipping injection",
+			"session", inst.Title,
+		)
+		*sentInitial = true
+		*initialPromptSentAt = time.Now()
+		return
+	}
+
+	if _, convErr := FindConversationFilePath(inst.GetStableID()); convErr == nil {
+		log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
+			"session", inst.Title,
+		)
+		*sentInitial = true
+		*initialPromptSentAt = time.Now()
+		return
+	}
+
+	*sendAttempts++
+
+	if timedOut && !claudeAtPrompt {
+		log.Warn("SessionDriver: timed out waiting for idle prompt, sending anyway",
+			"session", inst.Title,
+			"attempt", *sendAttempts,
+		)
+	}
+
+	if claudeAtPrompt {
+		// Brief settling pause after the > prompt appears: the status machine
+		// detected the line, but readline's internal input handler may need a
+		// few hundred ms to be fully listening.
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	// Snapshot terminal content immediately before sending so we can verify
+	// that the keystrokes were actually received (read-back confirmation).
+	contentBefore, _ := inst.PreviewContext(ctx)
+
+	if err := inst.SendKeys(initialPrompt + EnterKeySequence); err != nil {
+		log.Warn("SessionDriver: failed to send initial prompt",
+			"session", inst.Title,
+			"claudeAtPrompt", claudeAtPrompt,
+			"timedOut", timedOut,
+			"attempt", *sendAttempts,
+			"err", err,
+		)
+		if *sendAttempts >= 3 {
+			log.Error("SessionDriver: giving up on initial prompt after 3 failed attempts",
+				"session", inst.Title,
+			)
+			*sentInitial = true
+			*initialPromptSentAt = time.Now()
+		}
+		// sentInitial stays false → retry next tick
+		return
+	}
+
+	log.Info("SessionDriver: sent initial prompt",
+		"session", inst.Title,
+		"claudeAtPrompt", claudeAtPrompt,
+		"timedOut", timedOut,
+		"attempt", *sendAttempts,
+		"promptLen", len(initialPrompt),
+	)
+
+	// Read-back verification: only when we had a confirmed idle prompt
+	// and still have retries left.  After a timeout-triggered send we
+	// cannot reliably verify (Claude may not be at a prompt).
+	if !claudeAtPrompt || *sendAttempts >= 3 {
+		// Timeout-triggered send or max retries: accept without verification.
+		*sentInitial = true
+		*initialPromptSentAt = time.Now()
+		return
+	}
+
+	// Wait for PTY echo + pane-capture latency before reading back.
+	time.Sleep(500 * time.Millisecond)
+	contentAfter, verifyErr := inst.PreviewContext(ctx)
+	if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
+		// Terminal content identical to before the send — the
+		// keystrokes were likely swallowed before readline consumed
+		// them.  Retry on the next tick.
+		log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
+			"session", inst.Title,
+			"attempt", *sendAttempts,
+		)
+		// sentInitial stays false
+		return
+	}
+	// Content changed (or verification read failed) — treat as success.
+	log.Info("SessionDriver: read-back confirmed initial prompt received",
+		"session", inst.Title,
+		"attempt", *sendAttempts,
+	)
+	*sentInitial = true
+	*initialPromptSentAt = time.Now()
+}
+
+// handleInactivityTick checks for driver inactivity once the initial prompt
+// has been sent, sending a backlog-work nudge or escalating to
+// handleDriverFailure as needed. shouldContinue and shouldReturn tell the
+// caller which loop control-flow to apply; at most one is ever true.
+func handleInactivityTick(inst *Instance, allowedPath string, retried *atomic.Bool, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
+	last := inst.LastMeaningfulOutputTime()
+	// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
+	// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
+	// from DB before the ReviewQueue poller had a chance to refresh it from live
+	// terminal content). Using initialPromptSentAt as a floor prevents false inactivity
+	// fires immediately after startup.
+	activityRef := initialPromptSentAt
+	if !last.IsZero() && last.After(initialPromptSentAt) {
+		activityRef = last
+	}
+	if !nudgeSentAt.IsZero() && nudgeSentAt.After(activityRef) {
+		activityRef = *nudgeSentAt
+	}
+
+	idle := time.Since(activityRef)
+
+	// For backlog work sessions: send a task-reminder nudge before restarting.
+	// This preserves conversational context when Claude finishes but forgets to
+	// call /backlog/review or report_progress.
+	if inst.HasTag(TagBacklogWork) && nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay {
+		*nudgeSentAt = attemptBacklogNudge(inst, idle)
+		return true, false
+	}
+
+	graceTimeout := driverInactivityTimeout
+	if inst.HasTag(TagBacklogWork) && !nudgeSentAt.IsZero() {
+		graceTimeout = driverBacklogNudgeGrace
+	}
+	if idle > graceTimeout {
+		log.Warn("SessionDriver: session stuck — no output for inactivity timeout",
+			"session", inst.Title,
+			"inactivity", idle.Round(time.Second),
+		)
+		handleDriverFailure(inst, allowedPath, retried, "inactivity timeout", stop)
+		return false, true
+	}
+	return false, false
+}
+
+// handleApprovalDialogTick watches for NeedsApproval to handle
+// directory-access dialogs that AutoYes (-y) doesn't cover.
+//
+// Same DialogAnswerLatch defect class as handleStartupDialogTick (ADR-001),
+// applied via an independently-scoped approvalLatch. Asymmetry note: unlike
+// the startup-dialog branch, this call site has no `continue` today (it
+// already falls through naturally to the end of the loop body regardless of
+// outcome), so there is no analogous control-flow starvation risk to fix
+// here — the returned status is only used for the latch's own bookkeeping,
+// not for branching.
+func handleApprovalDialogTick(inst *Instance, hasOutput bool, tailed string, allowedPath string, approvalLatch *dialogAnswerState, sendAnswerKey func() error) {
+	mgr := inst.GetStatusManager()
+	if mgr == nil {
+		return
+	}
+	si := mgr.GetStatus(inst)
+	if si.ClaudeStatus != detection.StatusNeedsApproval {
+		return
+	}
+	if hasOutput && shouldApprovePrompt(tailed, allowedPath) {
+		answerDialogOnce(approvalLatch, tailed, sendAnswerKey, inst.Title, "approval prompt")
+	}
+}
+
+// scanAndLinkPRURL scans terminal output for a GitHub PR URL printed by git
+// push and auto-links it to the session so PRStatusPoller can track it
+// without relying on branch-name discovery (which fails when the omnibar
+// branch name differs from the PR head branch). It returns the prURLLinked
+// value the caller should keep for subsequent ticks.
+func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previewErr error, output string) bool {
+	if prURLLinked || !sentInitial || inst.GitHubOwner == "" || previewErr != nil || output == "" {
+		return prURLLinked
+	}
+	prURL, prNum := scanTerminalForPRURL(output)
+	if prURL == "" {
+		return prURLLinked
+	}
+	inst.mu.Lock()
+	inst.GitHubPRURL = prURL
+	inst.GitHubPRNumber = prNum
+	inst.mu.Unlock()
+	log.Info("SessionDriver: auto-linked PR from terminal push output",
+		"session", inst.Title, "pr", prNum, "url", prURL)
+	return true
 }
 
 // attemptBacklogNudge sends a backlog work session the "you appear to have paused"
