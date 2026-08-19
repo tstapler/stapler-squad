@@ -33,7 +33,7 @@ export function ActivityLogSection({ item, defaultExpanded }: ActivityLogSection
     SHOW_MORE_CAP
   );
 
-  if (item.activityNotes.length === 0) return null;
+  if ((item.activityNotes ?? []).length === 0) return null;
 
   return (
     <CollapsibleSection sectionKey="activity-log" title="Activity Log" defaultExpanded={defaultExpanded}>
