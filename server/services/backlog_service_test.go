@@ -1191,6 +1191,15 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 // that git worktree operations (which require at least one commit) work in tests.
 // Uses go-git directly rather than shelling out — see
 // .claude/rules/prefer-go-git-over-subshells.md.
+//
+// Also sets a local (repo-scoped, not --global) user.name/user.email via go-git's
+// config API. The initial commit below always supplies its own go-git CommitOptions
+// Author, so it doesn't need this — but several tests reuse this repo (or a clone of
+// it, e.g. setupPRFixSyncRepo's originDir) for further commits made via the plain git
+// CLI (runGitTestCmd), which reads identity from git config rather than any argument.
+// That works on a dev machine with a global identity configured, but CI runners have
+// none, and fail with "Author identity unknown" — setting it here once, locally, fixes
+// every downstream CLI commit against this repo.
 func initGitRepoWithCommit(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test Repo\n"), 0o644); err != nil {
@@ -1199,6 +1208,15 @@ func initGitRepoWithCommit(t *testing.T, dir string) {
 	repo, err := git.PlainInit(dir, false)
 	if err != nil {
 		t.Skipf("git init: %v", err)
+	}
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Skipf("git config: %v", err)
+	}
+	cfg.User.Name = "Test User"
+	cfg.User.Email = "test@example.com"
+	if err := repo.SetConfig(cfg); err != nil {
+		t.Skipf("git set config: %v", err)
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
