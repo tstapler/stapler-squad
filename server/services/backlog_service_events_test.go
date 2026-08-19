@@ -663,6 +663,28 @@ func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_Ki
 				assert.Equal(t, "deleted by user", rm.GetReason())
 			},
 		},
+		{
+			// [validation.md Correction #1] Appended to this existing table
+			// rather than a new standalone test function — see Epic 8.4,
+			// Task 8.4.1b.
+			name: "activity_note_added",
+			payload: &events.BacklogItemEventPayload{
+				Kind: events.BacklogChangeActivityNoteAdded, Item: item,
+				ActivityNote: &session.ActivityNoteData{
+					ID: "note-1", Message: "a note", AuthorSessionUUID: "sess-1", AuthorSessionTitle: "Worker",
+				},
+			},
+			check: func(t *testing.T, ev *sessionv1.BacklogItemEvent) {
+				an := ev.GetActivityNoteAdded()
+				require.NotNil(t, an, "the oneof must never be left empty for this kind (Blocker 3's original risk)")
+				assert.Equal(t, "item-1", an.GetItemId())
+				require.NotNil(t, an.GetNote())
+				assert.Equal(t, "note-1", an.GetNote().GetId())
+				assert.Equal(t, "a note", an.GetNote().GetMessage())
+				assert.Equal(t, "sess-1", an.GetNote().GetAuthorSessionUuid())
+				assert.Equal(t, "Worker", an.GetNote().GetAuthorSessionTitle())
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -674,4 +696,25 @@ func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_Ki
 			tc.check(t, out)
 		})
 	}
+}
+
+// TestBacklogItemMatchesFilters_should_MatchActivityNoteEvent_When_StatusFilterSet
+// (Epic 8.4, Story 8.4.3 / Blocker 2 fix) documents the bug the fix closes,
+// not just the fixed state in isolation: a sparse pre-fix snapshot (only ID
+// set) would have been silently dropped by any non-empty status_filter/
+// category_filter, since backlogItemMatchesFilters treats a zero-value
+// Status/RepoPath as a non-match. AppendActivityNote's Blocker-2 fix
+// populates Status/RepoPath before publishing, so the post-fix shape passes.
+func TestBacklogItemMatchesFilters_should_MatchActivityNoteEvent_When_StatusFilterSet(t *testing.T) {
+	t.Parallel()
+	msg := &sessionv1.WatchBacklogItemsRequest{
+		StatusFilter:   []string{"in_progress"},
+		CategoryFilter: []string{"/repo/a"},
+	}
+
+	populated := &session.BacklogItemData{ID: "item-1", Status: "in_progress", RepoPath: "/repo/a"}
+	assert.True(t, backlogItemMatchesFilters(populated, msg), "an activity-note event with Status/RepoPath populated must match a non-empty filter")
+
+	sparse := &session.BacklogItemData{ID: "item-1"}
+	assert.False(t, backlogItemMatchesFilters(sparse, msg), "a sparse snapshot with no Status/RepoPath (the pre-fix shape) would have been silently dropped by a non-empty filter")
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
+	"github.com/tstapler/stapler-squad/session/ent/backlogactivitynote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
@@ -53,6 +54,7 @@ const (
 	// Node types.
 	TypeAnalyticsEvent          = "AnalyticsEvent"
 	TypeApprovalRule            = "ApprovalRule"
+	TypeBacklogActivityNote     = "BacklogActivityNote"
 	TypeBacklogItem             = "BacklogItem"
 	TypeBacklogItemDependency   = "BacklogItemDependency"
 	TypeBacklogProgressNote     = "BacklogProgressNote"
@@ -3144,6 +3146,649 @@ func (m *ApprovalRuleMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown ApprovalRule edge %s", name)
 }
 
+// BacklogActivityNoteMutation represents an operation that mutates the BacklogActivityNote nodes in the graph.
+type BacklogActivityNoteMutation struct {
+	config
+	op                   Op
+	typ                  string
+	id                   *uuid.UUID
+	message              *string
+	author_session_uuid  *string
+	author_session_title *string
+	created_at           *time.Time
+	clearedFields        map[string]struct{}
+	item                 *uuid.UUID
+	cleareditem          bool
+	done                 bool
+	oldValue             func(context.Context) (*BacklogActivityNote, error)
+	predicates           []predicate.BacklogActivityNote
+}
+
+var _ ent.Mutation = (*BacklogActivityNoteMutation)(nil)
+
+// backlogactivitynoteOption allows management of the mutation configuration using functional options.
+type backlogactivitynoteOption func(*BacklogActivityNoteMutation)
+
+// newBacklogActivityNoteMutation creates new mutation for the BacklogActivityNote entity.
+func newBacklogActivityNoteMutation(c config, op Op, opts ...backlogactivitynoteOption) *BacklogActivityNoteMutation {
+	m := &BacklogActivityNoteMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeBacklogActivityNote,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withBacklogActivityNoteID sets the ID field of the mutation.
+func withBacklogActivityNoteID(id uuid.UUID) backlogactivitynoteOption {
+	return func(m *BacklogActivityNoteMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *BacklogActivityNote
+		)
+		m.oldValue = func(ctx context.Context) (*BacklogActivityNote, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().BacklogActivityNote.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withBacklogActivityNote sets the old BacklogActivityNote of the mutation.
+func withBacklogActivityNote(node *BacklogActivityNote) backlogactivitynoteOption {
+	return func(m *BacklogActivityNoteMutation) {
+		m.oldValue = func(context.Context) (*BacklogActivityNote, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m BacklogActivityNoteMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m BacklogActivityNoteMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of BacklogActivityNote entities.
+func (m *BacklogActivityNoteMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *BacklogActivityNoteMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *BacklogActivityNoteMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().BacklogActivityNote.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetItemID sets the "item_id" field.
+func (m *BacklogActivityNoteMutation) SetItemID(u uuid.UUID) {
+	m.item = &u
+}
+
+// ItemID returns the value of the "item_id" field in the mutation.
+func (m *BacklogActivityNoteMutation) ItemID() (r uuid.UUID, exists bool) {
+	v := m.item
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldItemID returns the old "item_id" field's value of the BacklogActivityNote entity.
+// If the BacklogActivityNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogActivityNoteMutation) OldItemID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldItemID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldItemID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldItemID: %w", err)
+	}
+	return oldValue.ItemID, nil
+}
+
+// ResetItemID resets all changes to the "item_id" field.
+func (m *BacklogActivityNoteMutation) ResetItemID() {
+	m.item = nil
+}
+
+// SetMessage sets the "message" field.
+func (m *BacklogActivityNoteMutation) SetMessage(s string) {
+	m.message = &s
+}
+
+// Message returns the value of the "message" field in the mutation.
+func (m *BacklogActivityNoteMutation) Message() (r string, exists bool) {
+	v := m.message
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMessage returns the old "message" field's value of the BacklogActivityNote entity.
+// If the BacklogActivityNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogActivityNoteMutation) OldMessage(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMessage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMessage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMessage: %w", err)
+	}
+	return oldValue.Message, nil
+}
+
+// ResetMessage resets all changes to the "message" field.
+func (m *BacklogActivityNoteMutation) ResetMessage() {
+	m.message = nil
+}
+
+// SetAuthorSessionUUID sets the "author_session_uuid" field.
+func (m *BacklogActivityNoteMutation) SetAuthorSessionUUID(s string) {
+	m.author_session_uuid = &s
+}
+
+// AuthorSessionUUID returns the value of the "author_session_uuid" field in the mutation.
+func (m *BacklogActivityNoteMutation) AuthorSessionUUID() (r string, exists bool) {
+	v := m.author_session_uuid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAuthorSessionUUID returns the old "author_session_uuid" field's value of the BacklogActivityNote entity.
+// If the BacklogActivityNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogActivityNoteMutation) OldAuthorSessionUUID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAuthorSessionUUID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAuthorSessionUUID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAuthorSessionUUID: %w", err)
+	}
+	return oldValue.AuthorSessionUUID, nil
+}
+
+// ClearAuthorSessionUUID clears the value of the "author_session_uuid" field.
+func (m *BacklogActivityNoteMutation) ClearAuthorSessionUUID() {
+	m.author_session_uuid = nil
+	m.clearedFields[backlogactivitynote.FieldAuthorSessionUUID] = struct{}{}
+}
+
+// AuthorSessionUUIDCleared returns if the "author_session_uuid" field was cleared in this mutation.
+func (m *BacklogActivityNoteMutation) AuthorSessionUUIDCleared() bool {
+	_, ok := m.clearedFields[backlogactivitynote.FieldAuthorSessionUUID]
+	return ok
+}
+
+// ResetAuthorSessionUUID resets all changes to the "author_session_uuid" field.
+func (m *BacklogActivityNoteMutation) ResetAuthorSessionUUID() {
+	m.author_session_uuid = nil
+	delete(m.clearedFields, backlogactivitynote.FieldAuthorSessionUUID)
+}
+
+// SetAuthorSessionTitle sets the "author_session_title" field.
+func (m *BacklogActivityNoteMutation) SetAuthorSessionTitle(s string) {
+	m.author_session_title = &s
+}
+
+// AuthorSessionTitle returns the value of the "author_session_title" field in the mutation.
+func (m *BacklogActivityNoteMutation) AuthorSessionTitle() (r string, exists bool) {
+	v := m.author_session_title
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAuthorSessionTitle returns the old "author_session_title" field's value of the BacklogActivityNote entity.
+// If the BacklogActivityNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogActivityNoteMutation) OldAuthorSessionTitle(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAuthorSessionTitle is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAuthorSessionTitle requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAuthorSessionTitle: %w", err)
+	}
+	return oldValue.AuthorSessionTitle, nil
+}
+
+// ClearAuthorSessionTitle clears the value of the "author_session_title" field.
+func (m *BacklogActivityNoteMutation) ClearAuthorSessionTitle() {
+	m.author_session_title = nil
+	m.clearedFields[backlogactivitynote.FieldAuthorSessionTitle] = struct{}{}
+}
+
+// AuthorSessionTitleCleared returns if the "author_session_title" field was cleared in this mutation.
+func (m *BacklogActivityNoteMutation) AuthorSessionTitleCleared() bool {
+	_, ok := m.clearedFields[backlogactivitynote.FieldAuthorSessionTitle]
+	return ok
+}
+
+// ResetAuthorSessionTitle resets all changes to the "author_session_title" field.
+func (m *BacklogActivityNoteMutation) ResetAuthorSessionTitle() {
+	m.author_session_title = nil
+	delete(m.clearedFields, backlogactivitynote.FieldAuthorSessionTitle)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *BacklogActivityNoteMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *BacklogActivityNoteMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the BacklogActivityNote entity.
+// If the BacklogActivityNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogActivityNoteMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *BacklogActivityNoteMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// ClearItem clears the "item" edge to the BacklogItem entity.
+func (m *BacklogActivityNoteMutation) ClearItem() {
+	m.cleareditem = true
+	m.clearedFields[backlogactivitynote.FieldItemID] = struct{}{}
+}
+
+// ItemCleared reports if the "item" edge to the BacklogItem entity was cleared.
+func (m *BacklogActivityNoteMutation) ItemCleared() bool {
+	return m.cleareditem
+}
+
+// ItemIDs returns the "item" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ItemID instead. It exists only for internal usage by the builders.
+func (m *BacklogActivityNoteMutation) ItemIDs() (ids []uuid.UUID) {
+	if id := m.item; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetItem resets all changes to the "item" edge.
+func (m *BacklogActivityNoteMutation) ResetItem() {
+	m.item = nil
+	m.cleareditem = false
+}
+
+// Where appends a list predicates to the BacklogActivityNoteMutation builder.
+func (m *BacklogActivityNoteMutation) Where(ps ...predicate.BacklogActivityNote) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the BacklogActivityNoteMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *BacklogActivityNoteMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.BacklogActivityNote, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *BacklogActivityNoteMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *BacklogActivityNoteMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (BacklogActivityNote).
+func (m *BacklogActivityNoteMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *BacklogActivityNoteMutation) Fields() []string {
+	fields := make([]string, 0, 5)
+	if m.item != nil {
+		fields = append(fields, backlogactivitynote.FieldItemID)
+	}
+	if m.message != nil {
+		fields = append(fields, backlogactivitynote.FieldMessage)
+	}
+	if m.author_session_uuid != nil {
+		fields = append(fields, backlogactivitynote.FieldAuthorSessionUUID)
+	}
+	if m.author_session_title != nil {
+		fields = append(fields, backlogactivitynote.FieldAuthorSessionTitle)
+	}
+	if m.created_at != nil {
+		fields = append(fields, backlogactivitynote.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *BacklogActivityNoteMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case backlogactivitynote.FieldItemID:
+		return m.ItemID()
+	case backlogactivitynote.FieldMessage:
+		return m.Message()
+	case backlogactivitynote.FieldAuthorSessionUUID:
+		return m.AuthorSessionUUID()
+	case backlogactivitynote.FieldAuthorSessionTitle:
+		return m.AuthorSessionTitle()
+	case backlogactivitynote.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *BacklogActivityNoteMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case backlogactivitynote.FieldItemID:
+		return m.OldItemID(ctx)
+	case backlogactivitynote.FieldMessage:
+		return m.OldMessage(ctx)
+	case backlogactivitynote.FieldAuthorSessionUUID:
+		return m.OldAuthorSessionUUID(ctx)
+	case backlogactivitynote.FieldAuthorSessionTitle:
+		return m.OldAuthorSessionTitle(ctx)
+	case backlogactivitynote.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown BacklogActivityNote field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogActivityNoteMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case backlogactivitynote.FieldItemID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetItemID(v)
+		return nil
+	case backlogactivitynote.FieldMessage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMessage(v)
+		return nil
+	case backlogactivitynote.FieldAuthorSessionUUID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAuthorSessionUUID(v)
+		return nil
+	case backlogactivitynote.FieldAuthorSessionTitle:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAuthorSessionTitle(v)
+		return nil
+	case backlogactivitynote.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogActivityNote field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *BacklogActivityNoteMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *BacklogActivityNoteMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogActivityNoteMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown BacklogActivityNote numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *BacklogActivityNoteMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(backlogactivitynote.FieldAuthorSessionUUID) {
+		fields = append(fields, backlogactivitynote.FieldAuthorSessionUUID)
+	}
+	if m.FieldCleared(backlogactivitynote.FieldAuthorSessionTitle) {
+		fields = append(fields, backlogactivitynote.FieldAuthorSessionTitle)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *BacklogActivityNoteMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *BacklogActivityNoteMutation) ClearField(name string) error {
+	switch name {
+	case backlogactivitynote.FieldAuthorSessionUUID:
+		m.ClearAuthorSessionUUID()
+		return nil
+	case backlogactivitynote.FieldAuthorSessionTitle:
+		m.ClearAuthorSessionTitle()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogActivityNote nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *BacklogActivityNoteMutation) ResetField(name string) error {
+	switch name {
+	case backlogactivitynote.FieldItemID:
+		m.ResetItemID()
+		return nil
+	case backlogactivitynote.FieldMessage:
+		m.ResetMessage()
+		return nil
+	case backlogactivitynote.FieldAuthorSessionUUID:
+		m.ResetAuthorSessionUUID()
+		return nil
+	case backlogactivitynote.FieldAuthorSessionTitle:
+		m.ResetAuthorSessionTitle()
+		return nil
+	case backlogactivitynote.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogActivityNote field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *BacklogActivityNoteMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.item != nil {
+		edges = append(edges, backlogactivitynote.EdgeItem)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *BacklogActivityNoteMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case backlogactivitynote.EdgeItem:
+		if id := m.item; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *BacklogActivityNoteMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *BacklogActivityNoteMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *BacklogActivityNoteMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.cleareditem {
+		edges = append(edges, backlogactivitynote.EdgeItem)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *BacklogActivityNoteMutation) EdgeCleared(name string) bool {
+	switch name {
+	case backlogactivitynote.EdgeItem:
+		return m.cleareditem
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *BacklogActivityNoteMutation) ClearEdge(name string) error {
+	switch name {
+	case backlogactivitynote.EdgeItem:
+		m.ClearItem()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogActivityNote unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *BacklogActivityNoteMutation) ResetEdge(name string) error {
+	switch name {
+	case backlogactivitynote.EdgeItem:
+		m.ResetItem()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogActivityNote edge %s", name)
+}
+
 // BacklogItemMutation represents an operation that mutates the BacklogItem nodes in the graph.
 type BacklogItemMutation struct {
 	config
@@ -3216,6 +3861,9 @@ type BacklogItemMutation struct {
 	progress_notes                  map[uuid.UUID]struct{}
 	removedprogress_notes           map[uuid.UUID]struct{}
 	clearedprogress_notes           bool
+	activity_notes                  map[uuid.UUID]struct{}
+	removedactivity_notes           map[uuid.UUID]struct{}
+	clearedactivity_notes           bool
 	source                          *uuid.UUID
 	clearedsource                   bool
 	blocking_dependencies           map[uuid.UUID]struct{}
@@ -5655,6 +6303,60 @@ func (m *BacklogItemMutation) ResetProgressNotes() {
 	m.removedprogress_notes = nil
 }
 
+// AddActivityNoteIDs adds the "activity_notes" edge to the BacklogActivityNote entity by ids.
+func (m *BacklogItemMutation) AddActivityNoteIDs(ids ...uuid.UUID) {
+	if m.activity_notes == nil {
+		m.activity_notes = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.activity_notes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearActivityNotes clears the "activity_notes" edge to the BacklogActivityNote entity.
+func (m *BacklogItemMutation) ClearActivityNotes() {
+	m.clearedactivity_notes = true
+}
+
+// ActivityNotesCleared reports if the "activity_notes" edge to the BacklogActivityNote entity was cleared.
+func (m *BacklogItemMutation) ActivityNotesCleared() bool {
+	return m.clearedactivity_notes
+}
+
+// RemoveActivityNoteIDs removes the "activity_notes" edge to the BacklogActivityNote entity by IDs.
+func (m *BacklogItemMutation) RemoveActivityNoteIDs(ids ...uuid.UUID) {
+	if m.removedactivity_notes == nil {
+		m.removedactivity_notes = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.activity_notes, ids[i])
+		m.removedactivity_notes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedActivityNotes returns the removed IDs of the "activity_notes" edge to the BacklogActivityNote entity.
+func (m *BacklogItemMutation) RemovedActivityNotesIDs() (ids []uuid.UUID) {
+	for id := range m.removedactivity_notes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ActivityNotesIDs returns the "activity_notes" edge IDs in the mutation.
+func (m *BacklogItemMutation) ActivityNotesIDs() (ids []uuid.UUID) {
+	for id := range m.activity_notes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetActivityNotes resets all changes to the "activity_notes" edge.
+func (m *BacklogItemMutation) ResetActivityNotes() {
+	m.activity_notes = nil
+	m.clearedactivity_notes = false
+	m.removedactivity_notes = nil
+}
+
 // SetSourceID sets the "source" edge to the ItemSource entity by id.
 func (m *BacklogItemMutation) SetSourceID(id uuid.UUID) {
 	m.source = &id
@@ -6895,7 +7597,7 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *BacklogItemMutation) AddedEdges() []string {
-	edges := make([]string, 0, 8)
+	edges := make([]string, 0, 9)
 	if m.item_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -6910,6 +7612,9 @@ func (m *BacklogItemMutation) AddedEdges() []string {
 	}
 	if m.progress_notes != nil {
 		edges = append(edges, backlogitem.EdgeProgressNotes)
+	}
+	if m.activity_notes != nil {
+		edges = append(edges, backlogitem.EdgeActivityNotes)
 	}
 	if m.source != nil {
 		edges = append(edges, backlogitem.EdgeSource)
@@ -6957,6 +7662,12 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeActivityNotes:
+		ids := make([]ent.Value, 0, len(m.activity_notes))
+		for id := range m.activity_notes {
+			ids = append(ids, id)
+		}
+		return ids
 	case backlogitem.EdgeSource:
 		if id := m.source; id != nil {
 			return []ent.Value{*id}
@@ -6979,7 +7690,7 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *BacklogItemMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 8)
+	edges := make([]string, 0, 9)
 	if m.removeditem_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -6994,6 +7705,9 @@ func (m *BacklogItemMutation) RemovedEdges() []string {
 	}
 	if m.removedprogress_notes != nil {
 		edges = append(edges, backlogitem.EdgeProgressNotes)
+	}
+	if m.removedactivity_notes != nil {
+		edges = append(edges, backlogitem.EdgeActivityNotes)
 	}
 	if m.removedblocking_dependencies != nil {
 		edges = append(edges, backlogitem.EdgeBlockingDependencies)
@@ -7038,6 +7752,12 @@ func (m *BacklogItemMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeActivityNotes:
+		ids := make([]ent.Value, 0, len(m.removedactivity_notes))
+		for id := range m.removedactivity_notes {
+			ids = append(ids, id)
+		}
+		return ids
 	case backlogitem.EdgeBlockingDependencies:
 		ids := make([]ent.Value, 0, len(m.removedblocking_dependencies))
 		for id := range m.removedblocking_dependencies {
@@ -7056,7 +7776,7 @@ func (m *BacklogItemMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *BacklogItemMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 8)
+	edges := make([]string, 0, 9)
 	if m.cleareditem_sessions {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -7071,6 +7791,9 @@ func (m *BacklogItemMutation) ClearedEdges() []string {
 	}
 	if m.clearedprogress_notes {
 		edges = append(edges, backlogitem.EdgeProgressNotes)
+	}
+	if m.clearedactivity_notes {
+		edges = append(edges, backlogitem.EdgeActivityNotes)
 	}
 	if m.clearedsource {
 		edges = append(edges, backlogitem.EdgeSource)
@@ -7098,6 +7821,8 @@ func (m *BacklogItemMutation) EdgeCleared(name string) bool {
 		return m.clearedstuck_states
 	case backlogitem.EdgeProgressNotes:
 		return m.clearedprogress_notes
+	case backlogitem.EdgeActivityNotes:
+		return m.clearedactivity_notes
 	case backlogitem.EdgeSource:
 		return m.clearedsource
 	case backlogitem.EdgeBlockingDependencies:
@@ -7137,6 +7862,9 @@ func (m *BacklogItemMutation) ResetEdge(name string) error {
 		return nil
 	case backlogitem.EdgeProgressNotes:
 		m.ResetProgressNotes()
+		return nil
+	case backlogitem.EdgeActivityNotes:
+		m.ResetActivityNotes()
 		return nil
 	case backlogitem.EdgeSource:
 		m.ResetSource()

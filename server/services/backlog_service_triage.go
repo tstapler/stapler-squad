@@ -2452,6 +2452,13 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 // ID themselves — this is one shared hook across all tests, and a leftover
 // goroutine from an unmigrated test can still fire it. Modeled on
 // backlog_service_events.go's testAfterSubscribeHook.
+//
+// WARNING: this is one package-level variable shared by the whole test
+// binary. Do not add t.Parallel() to a test that sets this hook unless it
+// also filters by item ID and tolerates callbacks from concurrently running
+// tests — see session_service_test.go's newRateLimitHiddenTestFixture for the
+// kind of cross-subtest crosstalk a shared-state test double can cause under
+// t.Parallel().
 var (
 	// testTriageCompleteHookMu guards concurrent read/write of the hook from
 	// a test goroutine (setter) and a still-running TriggerTriage goroutine

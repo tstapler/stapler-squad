@@ -923,3 +923,84 @@ func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIs
 		t.Fatal("timed out waiting for BacklogItemChanged event from BackfillMissingPRNumbers")
 	}
 }
+
+// TestAppendActivityNote_should_PublishActivityNoteAddedEvent_When_Called
+// (Epic 8.2, Task 8.2.1b) lives in this file (package session_test), not
+// session/ent_repository_backlog_test.go as plan.md's Story 8.2.1 literally
+// names — a real ItemChangePublisher assertion needs the
+// server/services.BacklogItemEventPublisher adapter, which imports session,
+// so it can only be exercised from this external test package (see this
+// file's own header comment for the import-cycle reasoning). Mirrors
+// TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionStatusChanges's
+// shape above.
+func TestAppendActivityNote_should_PublishActivityNoteAddedEvent_When_Called(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	bus := pkgevents.NewEventBus(10)
+	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+
+	sub, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item for activity-note publish test",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "session-uuid-1", "worker-1", "note from a session"))
+
+	select {
+	case ev := <-sub:
+		require.Equal(t, pkgevents.EventBacklogItemChanged, ev.Type)
+		require.NotNil(t, ev.BacklogItemPayload)
+		assert.Equal(t, pkgevents.BacklogChangeActivityNoteAdded, ev.BacklogItemPayload.Kind)
+		require.NotNil(t, ev.BacklogItemPayload.ActivityNote)
+		assert.Equal(t, "note from a session", ev.BacklogItemPayload.ActivityNote.Message)
+		assert.Equal(t, "session-uuid-1", ev.BacklogItemPayload.ActivityNote.AuthorSessionUUID)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for BacklogItemChanged event from AppendActivityNote")
+	}
+}
+
+// TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_When_Called
+// (Epic 8.2, Task 8.2.1c) is Blocker 2's regression test: without the
+// Select(Status, RepoPath).Only(ctx) read AppendActivityNote does before
+// publishing, backlogItemMatchesFilters
+// (server/services/backlog_service_events.go) would silently drop this event
+// for any WatchBacklogItems caller with a non-empty status_filter/
+// category_filter. Same file-placement reasoning as the test above.
+func TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_When_Called(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	bus := pkgevents.NewEventBus(10)
+	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+
+	sub, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "item with known status and repo path",
+		Status:   string(session.BacklogStatusReview),
+		RepoPath: "/repo/known-path",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "", "", "a note"))
+
+	select {
+	case ev := <-sub:
+		require.NotNil(t, ev.BacklogItemPayload)
+		require.NotNil(t, ev.BacklogItemPayload.Item, "the published snapshot must carry a non-nil Item so backlogItemMatchesFilters doesn't unconditionally reject it")
+		assert.Equal(t, string(session.BacklogStatusReview), ev.BacklogItemPayload.Item.Status, "Status must be populated on the snapshot, not left zero-value")
+		assert.Equal(t, "/repo/known-path", ev.BacklogItemPayload.Item.RepoPath, "RepoPath must be populated on the snapshot, not left zero-value")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for BacklogItemChanged event from AppendActivityNote")
+	}
+}

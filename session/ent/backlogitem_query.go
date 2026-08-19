@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/ent/backlogactivitynote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
@@ -36,6 +37,7 @@ type BacklogItemQuery struct {
 	withStatusEvents          *BacklogStatusEventQuery
 	withStuckStates           *BacklogStuckStateQuery
 	withProgressNotes         *BacklogProgressNoteQuery
+	withActivityNotes         *BacklogActivityNoteQuery
 	withSource                *ItemSourceQuery
 	withBlockingDependencies  *BacklogItemDependencyQuery
 	withBlockedByDependencies *BacklogItemDependencyQuery
@@ -179,6 +181,28 @@ func (_q *BacklogItemQuery) QueryProgressNotes() *BacklogProgressNoteQuery {
 			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, selector),
 			sqlgraph.To(backlogprogressnote.Table, backlogprogressnote.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.ProgressNotesTable, backlogitem.ProgressNotesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryActivityNotes chains the current query on the "activity_notes" edge.
+func (_q *BacklogItemQuery) QueryActivityNotes() *BacklogActivityNoteQuery {
+	query := (&BacklogActivityNoteClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, selector),
+			sqlgraph.To(backlogactivitynote.Table, backlogactivitynote.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.ActivityNotesTable, backlogitem.ActivityNotesColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -449,6 +473,7 @@ func (_q *BacklogItemQuery) Clone() *BacklogItemQuery {
 		withStatusEvents:          _q.withStatusEvents.Clone(),
 		withStuckStates:           _q.withStuckStates.Clone(),
 		withProgressNotes:         _q.withProgressNotes.Clone(),
+		withActivityNotes:         _q.withActivityNotes.Clone(),
 		withSource:                _q.withSource.Clone(),
 		withBlockingDependencies:  _q.withBlockingDependencies.Clone(),
 		withBlockedByDependencies: _q.withBlockedByDependencies.Clone(),
@@ -510,6 +535,17 @@ func (_q *BacklogItemQuery) WithProgressNotes(opts ...func(*BacklogProgressNoteQ
 		opt(query)
 	}
 	_q.withProgressNotes = query
+	return _q
+}
+
+// WithActivityNotes tells the query-builder to eager-load the nodes that are connected to
+// the "activity_notes" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *BacklogItemQuery) WithActivityNotes(opts ...func(*BacklogActivityNoteQuery)) *BacklogItemQuery {
+	query := (&BacklogActivityNoteClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withActivityNotes = query
 	return _q
 }
 
@@ -625,12 +661,13 @@ func (_q *BacklogItemQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*
 		nodes       = []*BacklogItem{}
 		withFKs     = _q.withFKs
 		_spec       = _q.querySpec()
-		loadedTypes = [8]bool{
+		loadedTypes = [9]bool{
 			_q.withItemSessions != nil,
 			_q.withSessions != nil,
 			_q.withStatusEvents != nil,
 			_q.withStuckStates != nil,
 			_q.withProgressNotes != nil,
+			_q.withActivityNotes != nil,
 			_q.withSource != nil,
 			_q.withBlockingDependencies != nil,
 			_q.withBlockedByDependencies != nil,
@@ -692,6 +729,13 @@ func (_q *BacklogItemQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*
 		if err := _q.loadProgressNotes(ctx, query, nodes,
 			func(n *BacklogItem) { n.Edges.ProgressNotes = []*BacklogProgressNote{} },
 			func(n *BacklogItem, e *BacklogProgressNote) { n.Edges.ProgressNotes = append(n.Edges.ProgressNotes, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withActivityNotes; query != nil {
+		if err := _q.loadActivityNotes(ctx, query, nodes,
+			func(n *BacklogItem) { n.Edges.ActivityNotes = []*BacklogActivityNote{} },
+			func(n *BacklogItem, e *BacklogActivityNote) { n.Edges.ActivityNotes = append(n.Edges.ActivityNotes, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -889,6 +933,36 @@ func (_q *BacklogItemQuery) loadProgressNotes(ctx context.Context, query *Backlo
 	}
 	query.Where(predicate.BacklogProgressNote(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(backlogitem.ProgressNotesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ItemID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "item_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *BacklogItemQuery) loadActivityNotes(ctx context.Context, query *BacklogActivityNoteQuery, nodes []*BacklogItem, init func(*BacklogItem), assign func(*BacklogItem, *BacklogActivityNote)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[uuid.UUID]*BacklogItem)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(backlogactivitynote.FieldItemID)
+	}
+	query.Where(predicate.BacklogActivityNote(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(backlogitem.ActivityNotesColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

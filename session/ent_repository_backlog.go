@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogactivitynote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
@@ -160,6 +161,17 @@ func progressNoteToData(n *ent.BacklogProgressNote) ProgressNoteData {
 	}
 }
 
+// activityNoteToData maps an *ent.BacklogActivityNote to an ActivityNoteData DTO.
+func activityNoteToData(n *ent.BacklogActivityNote) ActivityNoteData {
+	return ActivityNoteData{
+		ID:                 n.ID.String(),
+		Message:            n.Message,
+		AuthorSessionUUID:  n.AuthorSessionUUID,
+		AuthorSessionTitle: n.AuthorSessionTitle,
+		CreatedAt:          n.CreatedAt,
+	}
+}
+
 // sourceSyncEventToData maps an *ent.SourceSyncEvent to a SourceSyncEventData DTO.
 func sourceSyncEventToData(e *ent.SourceSyncEvent) SourceSyncEventData {
 	return SourceSyncEventData{
@@ -237,6 +249,13 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		data.ProgressNotes = make([]ProgressNoteData, len(item.Edges.ProgressNotes))
 		for i, n := range item.Edges.ProgressNotes {
 			data.ProgressNotes[i] = progressNoteToData(n)
+		}
+	}
+	// Propagate eagerly-loaded activity notes when present (see StatusEvents above).
+	if item.Edges.ActivityNotes != nil {
+		data.ActivityNotes = make([]ActivityNoteData, len(item.Edges.ActivityNotes))
+		for i, n := range item.Edges.ActivityNotes {
+			data.ActivityNotes[i] = activityNoteToData(n)
 		}
 	}
 	// Propagate eagerly-loaded item sessions when present. Note: the
@@ -348,6 +367,9 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		}).
 		WithProgressNotes(func(q *ent.BacklogProgressNoteQuery) {
 			q.Order(ent.Asc(backlogprogressnote.FieldCreatedAt))
+		}).
+		WithActivityNotes(func(q *ent.BacklogActivityNoteQuery) {
+			q.Order(ent.Asc(backlogactivitynote.FieldCreatedAt))
 		}).
 		Only(ctx)
 	if err != nil {
@@ -1613,11 +1635,14 @@ func (r *EntRepository) publishItemChanged(ctx context.Context, item *BacklogIte
 // implementation that doesn't. Task 2.1.1d's regression test proves this
 // holds end-to-end even when a raw, unwrapped test double panics.
 //
-// Publishes item as-is, without eager-loading ItemSessions first. Only
-// DeleteBacklogItem should call this directly: it must build its publish
+// Publishes item as-is, without eager-loading ItemSessions first. Two call
+// sites use this directly: DeleteBacklogItem, which must build its publish
 // snapshot (including ItemSessions) before deleting the item's sessions and
 // the item itself, so re-querying at publish time (as publishItemChanged
-// does) would wrongly observe them as already gone.
+// does) would wrongly observe them as already gone; and AppendActivityNote,
+// whose ChangeActivityNoteAdded event never carries a full item snapshot
+// (ADR-001/ADR-002 — see project_plans/backlog-item-activity-log), so there
+// is nothing extra to eager-load beyond the Status/RepoPath it reads itself.
 func (r *EntRepository) publishItemChangedSnapshot(item *BacklogItemData, change BacklogItemChange) {
 	if r.itemChangePublisher == nil {
 		return
@@ -2066,6 +2091,104 @@ func (r *EntRepository) ListProgressNotesForItem(ctx context.Context, itemID str
 	result := make([]ProgressNoteData, len(notes))
 	for i, n := range notes {
 		result[i] = progressNoteToData(n)
+	}
+	return result, nil
+}
+
+// --- Activity note history (ADR-001) ---
+
+// mapAppendActivityNoteCreateError classifies an error returned from
+// AppendActivityNote's BacklogActivityNote.Create().Save(ctx) call. A
+// foreign-key-violation constraint error means itemID was deleted between
+// AppendActivityNote's earlier existence check and this Create() call (a
+// real but non-deterministic-to-test race) and is wrapped as ErrNotFound so
+// callers (post_backlog_update, via Storage.AppendActivityNote) can map it to
+// ErrItemNotFound the same way the earlier, more common not-found path is
+// mapped. Any other error is wrapped as a plain internal error. Extracted as
+// its own function (rather than inlined in AppendActivityNote) specifically
+// so this classification can be unit-tested without reproducing the
+// underlying delete-between-steps race.
+func mapAppendActivityNoteCreateError(err error, itemID string) error {
+	if ent.IsConstraintError(err) {
+		return fmt.Errorf("backlog item %s not found: %w", itemID, ErrNotFound)
+	}
+	return fmt.Errorf("failed to append activity note for item %s: %w", itemID, err)
+}
+
+// AppendActivityNote records a single post_backlog_update call as an
+// immutable, append-only history entry. This is the one activity-note write
+// path invoked by the ungated post_backlog_update tool — any session, with
+// or without STAPLER_SESSION_UUID, whether or not linked to the item, can
+// call it. Unlike AppendProgressNote, this DOES publish an item-changed
+// event: there is no separate criterion-status write alongside it to carry
+// that responsibility, so if AppendActivityNote didn't publish, a live
+// WatchBacklogItems subscriber would never learn a note was posted.
+//
+// Before publishing, this does a cheap, read-only, field-scoped query for
+// the item's Status and RepoPath and populates them on the published
+// snapshot. This exists solely so backlogItemMatchesFilters
+// (server/services/backlog_service_events.go) doesn't silently drop this
+// event for WatchBacklogItems callers with a non-empty status/category
+// filter — see Blocker 2 in implementation/adversarial-review.md. It is a
+// read, not a read-modify-write, so it introduces no new concurrency hazard.
+// publishItemChangedSnapshot (not the publishItemChanged convenience
+// wrapper) is used deliberately: this event's payload never carries a full
+// item snapshot (ADR-002), so there is nothing for attachItemSessionsForPublish
+// to usefully eager-load beyond the two scalar fields already fetched below.
+func (r *EntRepository) AppendActivityNote(ctx context.Context, itemID, authorSessionUUID, authorSessionTitle, message string) error {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	itemFields, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ID(parsedItemID)).
+		Select(backlogitem.FieldStatus, backlogitem.FieldRepoPath).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("backlog item %s not found: %w", itemID, ErrNotFound)
+		}
+		return fmt.Errorf("failed to look up backlog item %s: %w", itemID, err)
+	}
+
+	created, err := r.client.BacklogActivityNote.Create().
+		SetItemID(parsedItemID).
+		SetMessage(message).
+		SetAuthorSessionUUID(authorSessionUUID).
+		SetAuthorSessionTitle(authorSessionTitle).
+		Save(ctx)
+	if err != nil {
+		return mapAppendActivityNoteCreateError(err, itemID)
+	}
+
+	note := activityNoteToData(created)
+	r.publishItemChangedSnapshot(&BacklogItemData{
+		ID:       itemID,
+		Status:   itemFields.Status,
+		RepoPath: itemFields.RepoPath,
+	}, BacklogItemChange{Kind: ChangeActivityNoteAdded, ActivityNote: &note})
+	return nil
+}
+
+// ListActivityNotesForItem returns the full append-only activity-note history
+// for a backlog item, ordered by created_at ascending (oldest first).
+func (r *EntRepository) ListActivityNotesForItem(ctx context.Context, itemID string) ([]ActivityNoteData, error) {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	notes, err := r.client.BacklogActivityNote.Query().
+		Where(backlogactivitynote.HasItemWith(backlogitem.ID(parsedItemID))).
+		Order(ent.Asc(backlogactivitynote.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list activity notes for item %s: %w", itemID, err)
+	}
+	result := make([]ActivityNoteData, len(notes))
+	for i, n := range notes {
+		result[i] = activityNoteToData(n)
 	}
 	return result, nil
 }

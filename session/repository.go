@@ -416,6 +416,18 @@ type ProgressNoteData struct {
 	CreatedAt      time.Time
 }
 
+// ActivityNoteData is the domain DTO replacing *ent.BacklogActivityNote in Storage returns.
+// Unlike ProgressNoteData (written only by the role-gated report_progress tool), this
+// represents a single append-only entry from the ungated post_backlog_update tool — see
+// ADR-001 (sibling table, not extending BacklogProgressNote).
+type ActivityNoteData struct {
+	ID                 string
+	Message            string
+	AuthorSessionUUID  string
+	AuthorSessionTitle string
+	CreatedAt          time.Time
+}
+
 // SourceSyncEventData is the domain DTO replacing *ent.SourceSyncEvent in Storage returns.
 type SourceSyncEventData struct {
 	ID           string
@@ -569,6 +581,11 @@ type BacklogItemData struct {
 	// implementer's decision history). Only populated when explicitly loaded by
 	// the caller (e.g. GetBacklogItem) — see StatusEvents for the same pattern.
 	ProgressNotes []ProgressNoteData
+	// ActivityNotes holds the eagerly-loaded post_backlog_update history — the
+	// ungated, append-only sibling log to ProgressNotes (see ADR-001). Only
+	// populated when explicitly loaded by the caller (e.g. GetBacklogItem) —
+	// see StatusEvents for the same pattern.
+	ActivityNotes []ActivityNoteData
 }
 
 // BacklogItemSummary is a lightweight projection of BacklogItemData for list views.

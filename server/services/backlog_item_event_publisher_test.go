@@ -99,6 +99,18 @@ func TestBacklogItemEventPublisher_should_recoverAndLog_When_PublishItemChangedP
 	}
 }
 
+// TestMapBacklogChangeKind_should_MapActivityNoteAdded_When_Called (Epic 8.4,
+// Task 8.4.1a) is a direct assertion that ChangeActivityNoteAdded is mapped
+// (no panic) rather than falling through to the default unmapped-kind panic
+// branch.
+func TestMapBacklogChangeKind_should_MapActivityNoteAdded_When_Called(t *testing.T) {
+	t.Parallel()
+	got := mapBacklogChangeKind(session.ChangeActivityNoteAdded)
+	if got != events.BacklogChangeActivityNoteAdded {
+		t.Fatalf("expected %s, got %s", events.BacklogChangeActivityNoteAdded, got)
+	}
+}
+
 // TestBacklogItemEventPublisher_should_noOp_When_BusIsNil verifies the nil-Bus
 // guard: a zero-value publisher (or one constructed without a Bus) must not
 // panic when PublishItemChanged is called.

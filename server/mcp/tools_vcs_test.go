@@ -25,6 +25,15 @@ func initGitRepo(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("git init: %v", err)
 	}
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Skipf("git config: %v", err)
+	}
+	cfg.User.Name = "Test User"
+	cfg.User.Email = "test@example.com"
+	if err := repo.SetConfig(cfg); err != nil {
+		t.Skipf("git set config: %v", err)
+	}
 	writeFile(t, dir, "README.md", "# Test\n")
 	wt, err := repo.Worktree()
 	if err != nil {

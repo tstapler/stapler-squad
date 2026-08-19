@@ -106,6 +106,36 @@ var (
 			},
 		},
 	}
+	// BacklogActivityNotesColumns holds the columns for the "backlog_activity_notes" table.
+	BacklogActivityNotesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "message", Type: field.TypeString},
+		{Name: "author_session_uuid", Type: field.TypeString, Nullable: true},
+		{Name: "author_session_title", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "item_id", Type: field.TypeUUID},
+	}
+	// BacklogActivityNotesTable holds the schema information for the "backlog_activity_notes" table.
+	BacklogActivityNotesTable = &schema.Table{
+		Name:       "backlog_activity_notes",
+		Columns:    BacklogActivityNotesColumns,
+		PrimaryKey: []*schema.Column{BacklogActivityNotesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "backlog_activity_notes_backlog_items_activity_notes",
+				Columns:    []*schema.Column{BacklogActivityNotesColumns[5]},
+				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "backlogactivitynote_item_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogActivityNotesColumns[5], BacklogActivityNotesColumns[4]},
+			},
+		},
+	}
 	// BacklogItemsColumns holds the columns for the "backlog_items" table.
 	BacklogItemsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1185,6 +1215,7 @@ var (
 	Tables = []*schema.Table{
 		AnalyticsEventsTable,
 		ApprovalRulesTable,
+		BacklogActivityNotesTable,
 		BacklogItemsTable,
 		BacklogItemDependenciesTable,
 		BacklogProgressNotesTable,
@@ -1216,6 +1247,7 @@ var (
 )
 
 func init() {
+	BacklogActivityNotesTable.ForeignKeys[0].RefTable = BacklogItemsTable
 	BacklogItemsTable.ForeignKeys[0].RefTable = ItemSourcesTable
 	BacklogItemDependenciesTable.ForeignKeys[0].RefTable = BacklogItemsTable
 	BacklogItemDependenciesTable.ForeignKeys[1].RefTable = BacklogItemsTable
