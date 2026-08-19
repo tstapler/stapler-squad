@@ -69,6 +69,21 @@ func callerSessionUUIDForAudit(ctx context.Context) string {
 	return manualCallerSentinel
 }
 
+// enterpriseHosts returns the configured GitHub Enterprise hostnames via
+// h.backlogSvc, or nil if backlogSvc isn't wired (tests, or a server started
+// without backlog support) — nil is exactly what
+// session.ParseGitHubURL/githubpkg.ParseGitHubRef already default to, so
+// every GitHub URL/ref parse in this file should route through this instead
+// of hardcoding nil, or a configured GHE host (e.g. github.netflix.net)
+// silently fails to parse everywhere in this file even though the server
+// itself has it registered.
+func (h *backlogHandlers) enterpriseHosts() []string {
+	if h.backlogSvc == nil {
+		return nil
+	}
+	return h.backlogSvc.EnterpriseHosts()
+}
+
 // uuidRe validates UUID format (8-4-4-4-12 hex with dashes).
 var uuidRe = regexp.MustCompile(`^[0-9a-f-]{36}$`)
 
@@ -1551,7 +1566,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		// failure below — this is the one check the tool description
 		// promises has no override, so an unparseable stored PrURL must
 		// never silently skip it and let the reassignment through.
-		curRef, curParseErr := session.ParseGitHubURL(item.PrURL)
+		curRef, curParseErr := session.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
 		if curParseErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf(
 				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
@@ -1572,7 +1587,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	// Parse the reported URL to extract owner/repo, and cross-check it
 	// against the reported pr_number — a typo'd URL/number pair fails fast
 	// here, before any network call.
-	ref, parseErr := session.ParseGitHubURL(prURL)
+	ref, parseErr := session.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", parseErr), ""), nil
 	}
@@ -1822,7 +1837,7 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 	repoPath, _ := args["repo_path"].(string)
 	skipTriage, _ := args["skip_triage"].(bool)
 
-	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(issueURL, nil)
+	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(issueURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Type != githubpkg.RefTypeIssue {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", parseErr), ""), nil
 	}
@@ -2012,7 +2027,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 
 	// Parse + type-validate duplicate_ref before any network call (mirrors
 	// report_pr_created's pre-network sanity check).
-	ref, parseErr := githubpkg.ParseGitHubRef(duplicateRef)
+	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
 	if parseErr != nil {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref is not a recognizable GitHub PR/issue/commit URL: %v", parseErr), ""), nil
 	}
