@@ -484,16 +484,12 @@ func TestBuildLaunchCommand_should_AppendExtraArgsAfterCLIFlags_When_BothArePres
 // `"$(cat '<path>')"` command-substitution fragment.
 var promptFileRefRegex = regexp.MustCompile(`\$\(cat '([^']+)'\)`)
 
-// withShortPromptFileCleanupDelay swaps promptFileCleanupDelay for a short
-// duration for the lifetime of a test, so the background cleanup goroutine
+// shortPromptFileCleanupDelay is the per-instance cleanup delay tests use in
+// place of defaultPromptFileCleanupDelay, so the background cleanup goroutine
 // started by promptArg doesn't have to sleep the real 30s default while tests
-// run. Restores the original value on cleanup.
-func withShortPromptFileCleanupDelay(t *testing.T) {
-	t.Helper()
-	orig := promptFileCleanupDelay
-	promptFileCleanupDelay = 10 * time.Millisecond
-	t.Cleanup(func() { promptFileCleanupDelay = orig })
-}
+// run. It's set on promptFileCleanupDelayOverride per-Instance rather than a
+// shared package var, so parallel tests never race each other over it.
+const shortPromptFileCleanupDelay = 10 * time.Millisecond
 
 func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 	t.Parallel()
@@ -505,8 +501,6 @@ func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 	// tmux's own command-length limit sits between 16000 and 16500 bytes for
 	// the *entire* new-session command -- so a large prompt embedded inline
 	// blows that budget outright, no matter how it's quoted.
-	withShortPromptFileCleanupDelay(t)
-
 	// Build a prompt shaped like the real trigger: a description plus many
 	// acceptance criteria each carrying a verbose implementation note, well
 	// past both maxInlinePromptBytes and the ~16KB tmux limit.
@@ -524,7 +518,7 @@ func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 		t.Fatalf("test setup bug: prompt (%d bytes) should exceed the ~16KB tmux command-length limit this regression test guards against", len(prompt))
 	}
 
-	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt, promptFileCleanupDelayOverride: shortPromptFileCleanupDelay}
 	got := inst.buildLaunchCommand("")
 
 	// The whole point of the fix: the assembled command handed to tmux must
@@ -557,10 +551,9 @@ func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 
 func TestBuildClaudeCommand_LargePromptTempFileIsCleanedUpAfterDelay(t *testing.T) {
 	t.Parallel()
-	withShortPromptFileCleanupDelay(t)
 
 	prompt := strings.Repeat("y", maxInlinePromptBytes+1)
-	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt, promptFileCleanupDelayOverride: shortPromptFileCleanupDelay}
 	got := inst.buildLaunchCommand("")
 
 	m := promptFileRefRegex.FindStringSubmatch(got)
@@ -592,10 +585,8 @@ func TestBuildClaudeCommand_LargePromptTempFileContentIsExactExcludingTrailingNe
 	// otherwise fully intact, only trailing newlines affected -- so a future
 	// change that silently starts corrupting more than trailing whitespace
 	// (the actual bug class this whole fix targets) fails this test.
-	withShortPromptFileCleanupDelay(t)
-
 	prompt := strings.Repeat("w", maxInlinePromptBytes+1) + "\n\n"
-	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt, promptFileCleanupDelayOverride: shortPromptFileCleanupDelay}
 	got := inst.buildLaunchCommand("")
 
 	m := promptFileRefRegex.FindStringSubmatch(got)

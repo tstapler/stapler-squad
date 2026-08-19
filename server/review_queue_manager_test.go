@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -48,20 +46,12 @@ func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.
 
 // TestReactiveQueueManagerIntegration tests the full reactive queue workflow
 func TestReactiveQueueManagerIntegration(t *testing.T) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-reactive-queue")
-	defer os.RemoveAll(testDir)
-
 	// Setup components
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
@@ -301,20 +291,12 @@ func drainEvents(ch <-chan *sessionv1.ReviewQueueEvent, timeout time.Duration) {
 
 // TestReactiveQueueManagerMultipleClients tests multiple concurrent clients
 func TestReactiveQueueManagerMultipleClients(t *testing.T) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-multiple-clients")
-	defer os.RemoveAll(testDir)
-
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
@@ -400,20 +382,12 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 
 // TestReactiveQueueManagerFiltering tests client-side filtering
 func TestReactiveQueueManagerFiltering(t *testing.T) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-filtering")
-	defer os.RemoveAll(testDir)
-
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
@@ -487,20 +461,12 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 
 // TestReactiveQueueManagerEventTypes tests all event types
 func TestReactiveQueueManagerEventTypes(t *testing.T) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-event-types")
-	defer os.RemoveAll(testDir)
-
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
@@ -577,10 +543,6 @@ func waitForEvent(t *testing.T, eventCh <-chan *sessionv1.ReviewQueueEvent, even
 
 // BenchmarkReactiveQueueManagerThroughput measures event processing throughput
 func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
-	// Use b.TempDir() so each benchmark calibration call gets an isolated directory
-	// and automatic cleanup — avoids path conflicts between successive b.N runs.
-	testDir := b.TempDir()
-
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
@@ -590,11 +552,7 @@ func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	benchPollerCfg.SlowPollInterval = 10 * time.Millisecond
 	reviewQueuePoller := session.NewReviewQueuePollerWithConfig(queue, statusManager, nil, benchPollerCfg)
 	eventBus := events.NewEventBus(100)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		b.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(b)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		b.Fatalf("Failed to create storage: %v", err)
@@ -673,12 +631,7 @@ drainLoop:
 // and event bus, returning both for use in tests.
 func newReactiveQueueTestSetup(t *testing.T) (*ReactiveQueueManager, *session.ReviewQueuePoller, *events.EventBus) {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("newReactiveQueueTestSetup: create repo: %v", err)
-	}
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("newReactiveQueueTestSetup: create storage: %v", err)
@@ -808,12 +761,7 @@ func (f *fakeOneShotPRCreator) callCount() int {
 // items / item sessions to exercise maybeAutoCreatePR's storage lookups.
 func newReactiveQueueTestSetupWithStorage(t *testing.T) (*ReactiveQueueManager, *session.ReviewQueuePoller, *session.Storage) {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("newReactiveQueueTestSetupWithStorage: create repo: %v", err)
-	}
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("newReactiveQueueTestSetupWithStorage: create storage: %v", err)

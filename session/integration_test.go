@@ -502,25 +502,41 @@ func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 // Uses go-git directly rather than shelling out — see
 // .claude/rules/prefer-go-git-over-subshells.md.
 func setupTestRepository(t *testing.T) string {
-	tempDir := t.TempDir()
-
-	repo, err := git.PlainInit(tempDir, false)
+	t.Helper()
+	dir, err := setupTestRepositoryCommon(t.TempDir(), "# Test Repository")
 	require.NoError(t, err)
+	return dir
+}
 
-	readmeFile := filepath.Join(tempDir, "README.md")
-	err = os.WriteFile(readmeFile, []byte("# Test Repository"), 0644)
-	require.NoError(t, err)
+// setupTestRepositoryCommon is the shared go-git init/add/commit logic behind
+// setupTestRepository and setupTestRepositoryBench — *testing.T and
+// *testing.B report failures differently (require.NoError vs b.Fatal), so
+// each caller wraps this with its own error handling instead of taking a
+// testing.TB.
+func setupTestRepositoryCommon(dir, readmeContents string) (string, error) {
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContents), 0644); err != nil {
+		return "", err
+	}
 
 	wt, err := repo.Worktree()
-	require.NoError(t, err)
-	_, err = wt.Add(".")
-	require.NoError(t, err)
-	_, err = wt.Commit("Initial commit", &git.CommitOptions{
+	if err != nil {
+		return "", err
+	}
+	if _, err := wt.Add("."); err != nil {
+		return "", err
+	}
+	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
 		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
-	})
-	require.NoError(t, err)
+	}); err != nil {
+		return "", err
+	}
 
-	return tempDir
+	return dir, nil
 }
 
 // testExistingSessionResumption tests that when a tmux session already exists,
@@ -848,28 +864,9 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 // Uses go-git directly rather than shelling out — see
 // .claude/rules/prefer-go-git-over-subshells.md.
 func setupTestRepositoryBench(b *testing.B) string {
-	tempDir := b.TempDir()
-
-	repo, err := git.PlainInit(tempDir, false)
+	dir, err := setupTestRepositoryCommon(b.TempDir(), "# Benchmark Repository")
 	if err != nil {
 		b.Fatal(err)
 	}
-
-	readmeFile := filepath.Join(tempDir, "README.md")
-	_ = os.WriteFile(readmeFile, []byte("# Benchmark Repository"), 0644)
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		b.Fatal(err)
-	}
-	if _, err := wt.Add("."); err != nil {
-		b.Fatal(err)
-	}
-	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
-	}); err != nil {
-		b.Fatal(err)
-	}
-
-	return tempDir
+	return dir
 }

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -32,20 +31,10 @@ import (
 // newTestBacklogStorage creates a temporary Storage for testing.
 func newTestBacklogStorage(t *testing.T) *session.Storage {
 	t.Helper()
-	tmpDir, err := os.MkdirTemp("", "backlog-test-*")
-	require.NoError(t, err)
-
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		repo.Close()
-		os.RemoveAll(tmpDir)
-	})
 
 	return storage
 }
@@ -1518,13 +1507,7 @@ func TestReportPRCreated_should_TransitionToPRPending_When_ValidPR(t *testing.T)
 // BUG-040's regression test uses), and assert the tool call itself surfaces
 // an error rather than silently reporting success.
 func TestReportPRCreated_should_ReturnError_When_PersistFails(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "backlog-persist-fail-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 

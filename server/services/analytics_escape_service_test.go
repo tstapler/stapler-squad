@@ -16,14 +16,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// createTestAnalyticsClient opens an in-process SQLite database and runs migrations.
-// The database file is in t.TempDir() and is cleaned up automatically.
+// createTestAnalyticsClient opens an in-memory SQLite database and runs migrations.
+// The database is cleaned up automatically via t.Cleanup.
 func createTestAnalyticsClient(t *testing.T) *ent.Client {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(testDir + "/analytics.db"))
-	require.NoError(t, err, "createTestAnalyticsClient: failed to open database")
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	return repo.GetEntClient()
 }
 

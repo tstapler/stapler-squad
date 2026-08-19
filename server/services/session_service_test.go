@@ -2,12 +2,10 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,19 +20,10 @@ import (
 	"go.uber.org/goleak"
 )
 
-// testDBCounter guarantees each createTestStorage call gets a uniquely-named
-// in-memory database, so unrelated tests running in parallel never share state.
-var testDBCounter atomic.Int64
-
 // createTestStorage creates a test storage backed by an in-memory Ent
-// repository. See session/storage_test.go's createTestStorage (same
-// pattern, applied there first) for why this uses a named, shared-cache
-// in-memory DSN rather than a bare ":memory:" literal: a bare ":memory:"
-// gives every independent sql.Open call its own private, unmigrated
-// database, whereas "cache=shared" makes repeated opens of the same "file:"
-// name attach to the same in-memory DB — needed because EntRepository's
-// underlying *sql.DB pool can open more than one connection over a test's
-// lifetime even with SetMaxOpenConns(1) serializing access to it.
+// repository via session.NewTestEntRepository — see that function's doc
+// comment for why this uses a named, shared-cache in-memory DSN rather than
+// a bare ":memory:" literal.
 //
 // This package's fixtures are called 300+ times across its test files; each
 // call still pays the full Ent schema-creation + backfill-migration cost,
@@ -43,12 +32,7 @@ var testDBCounter atomic.Int64
 func createTestStorage(t *testing.T) *session.Storage {
 	t.Helper()
 
-	dsn := fmt.Sprintf("file:testdb_%d?mode=memory&cache=shared", testDBCounter.Add(1))
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dsn))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
