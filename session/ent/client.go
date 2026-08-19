@@ -18,6 +18,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
+	"github.com/tstapler/stapler-squad/session/ent/backlogactivitynote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
@@ -54,6 +55,8 @@ type Client struct {
 	AnalyticsEvent *AnalyticsEventClient
 	// ApprovalRule is the client for interacting with the ApprovalRule builders.
 	ApprovalRule *ApprovalRuleClient
+	// BacklogActivityNote is the client for interacting with the BacklogActivityNote builders.
+	BacklogActivityNote *BacklogActivityNoteClient
 	// BacklogItem is the client for interacting with the BacklogItem builders.
 	BacklogItem *BacklogItemClient
 	// BacklogItemDependency is the client for interacting with the BacklogItemDependency builders.
@@ -117,6 +120,7 @@ func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.AnalyticsEvent = NewAnalyticsEventClient(c.config)
 	c.ApprovalRule = NewApprovalRuleClient(c.config)
+	c.BacklogActivityNote = NewBacklogActivityNoteClient(c.config)
 	c.BacklogItem = NewBacklogItemClient(c.config)
 	c.BacklogItemDependency = NewBacklogItemDependencyClient(c.config)
 	c.BacklogProgressNote = NewBacklogProgressNoteClient(c.config)
@@ -236,6 +240,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		config:                  cfg,
 		AnalyticsEvent:          NewAnalyticsEventClient(cfg),
 		ApprovalRule:            NewApprovalRuleClient(cfg),
+		BacklogActivityNote:     NewBacklogActivityNoteClient(cfg),
 		BacklogItem:             NewBacklogItemClient(cfg),
 		BacklogItemDependency:   NewBacklogItemDependencyClient(cfg),
 		BacklogProgressNote:     NewBacklogProgressNoteClient(cfg),
@@ -282,6 +287,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		config:                  cfg,
 		AnalyticsEvent:          NewAnalyticsEventClient(cfg),
 		ApprovalRule:            NewApprovalRuleClient(cfg),
+		BacklogActivityNote:     NewBacklogActivityNoteClient(cfg),
 		BacklogItem:             NewBacklogItemClient(cfg),
 		BacklogItemDependency:   NewBacklogItemDependencyClient(cfg),
 		BacklogProgressNote:     NewBacklogProgressNoteClient(cfg),
@@ -336,12 +342,13 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.BacklogItemDependency,
-		c.BacklogProgressNote, c.BacklogStatusEvent, c.BacklogStuckState,
-		c.ClassificationAnalytics, c.ClaudeMetadata, c.ClaudeSession, c.DiffStats,
-		c.ErrorEvent, c.EscapeEvent, c.ItemSession, c.ItemSource, c.PipelineMode,
-		c.Project, c.ReviewVerdict, c.Session, c.SessionGoal, c.SessionSummary,
-		c.Shell, c.SourceSyncEvent, c.Tag, c.TriggerFireEvent, c.Workflow, c.Worktree,
+		c.AnalyticsEvent, c.ApprovalRule, c.BacklogActivityNote, c.BacklogItem,
+		c.BacklogItemDependency, c.BacklogProgressNote, c.BacklogStatusEvent,
+		c.BacklogStuckState, c.ClassificationAnalytics, c.ClaudeMetadata,
+		c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent, c.ItemSession,
+		c.ItemSource, c.PipelineMode, c.Project, c.ReviewVerdict, c.Session,
+		c.SessionGoal, c.SessionSummary, c.Shell, c.SourceSyncEvent, c.Tag,
+		c.TriggerFireEvent, c.Workflow, c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -351,12 +358,13 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.BacklogItemDependency,
-		c.BacklogProgressNote, c.BacklogStatusEvent, c.BacklogStuckState,
-		c.ClassificationAnalytics, c.ClaudeMetadata, c.ClaudeSession, c.DiffStats,
-		c.ErrorEvent, c.EscapeEvent, c.ItemSession, c.ItemSource, c.PipelineMode,
-		c.Project, c.ReviewVerdict, c.Session, c.SessionGoal, c.SessionSummary,
-		c.Shell, c.SourceSyncEvent, c.Tag, c.TriggerFireEvent, c.Workflow, c.Worktree,
+		c.AnalyticsEvent, c.ApprovalRule, c.BacklogActivityNote, c.BacklogItem,
+		c.BacklogItemDependency, c.BacklogProgressNote, c.BacklogStatusEvent,
+		c.BacklogStuckState, c.ClassificationAnalytics, c.ClaudeMetadata,
+		c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent, c.ItemSession,
+		c.ItemSource, c.PipelineMode, c.Project, c.ReviewVerdict, c.Session,
+		c.SessionGoal, c.SessionSummary, c.Shell, c.SourceSyncEvent, c.Tag,
+		c.TriggerFireEvent, c.Workflow, c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -369,6 +377,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.AnalyticsEvent.mutate(ctx, m)
 	case *ApprovalRuleMutation:
 		return c.ApprovalRule.mutate(ctx, m)
+	case *BacklogActivityNoteMutation:
+		return c.BacklogActivityNote.mutate(ctx, m)
 	case *BacklogItemMutation:
 		return c.BacklogItem.mutate(ctx, m)
 	case *BacklogItemDependencyMutation:
@@ -690,6 +700,155 @@ func (c *ApprovalRuleClient) mutate(ctx context.Context, m *ApprovalRuleMutation
 	}
 }
 
+// BacklogActivityNoteClient is a client for the BacklogActivityNote schema.
+type BacklogActivityNoteClient struct {
+	config
+}
+
+// NewBacklogActivityNoteClient returns a client for the BacklogActivityNote from the given config.
+func NewBacklogActivityNoteClient(c config) *BacklogActivityNoteClient {
+	return &BacklogActivityNoteClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `backlogactivitynote.Hooks(f(g(h())))`.
+func (c *BacklogActivityNoteClient) Use(hooks ...Hook) {
+	c.hooks.BacklogActivityNote = append(c.hooks.BacklogActivityNote, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `backlogactivitynote.Intercept(f(g(h())))`.
+func (c *BacklogActivityNoteClient) Intercept(interceptors ...Interceptor) {
+	c.inters.BacklogActivityNote = append(c.inters.BacklogActivityNote, interceptors...)
+}
+
+// Create returns a builder for creating a BacklogActivityNote entity.
+func (c *BacklogActivityNoteClient) Create() *BacklogActivityNoteCreate {
+	mutation := newBacklogActivityNoteMutation(c.config, OpCreate)
+	return &BacklogActivityNoteCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of BacklogActivityNote entities.
+func (c *BacklogActivityNoteClient) CreateBulk(builders ...*BacklogActivityNoteCreate) *BacklogActivityNoteCreateBulk {
+	return &BacklogActivityNoteCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *BacklogActivityNoteClient) MapCreateBulk(slice any, setFunc func(*BacklogActivityNoteCreate, int)) *BacklogActivityNoteCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &BacklogActivityNoteCreateBulk{err: fmt.Errorf("calling to BacklogActivityNoteClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*BacklogActivityNoteCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &BacklogActivityNoteCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for BacklogActivityNote.
+func (c *BacklogActivityNoteClient) Update() *BacklogActivityNoteUpdate {
+	mutation := newBacklogActivityNoteMutation(c.config, OpUpdate)
+	return &BacklogActivityNoteUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *BacklogActivityNoteClient) UpdateOne(_m *BacklogActivityNote) *BacklogActivityNoteUpdateOne {
+	mutation := newBacklogActivityNoteMutation(c.config, OpUpdateOne, withBacklogActivityNote(_m))
+	return &BacklogActivityNoteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *BacklogActivityNoteClient) UpdateOneID(id uuid.UUID) *BacklogActivityNoteUpdateOne {
+	mutation := newBacklogActivityNoteMutation(c.config, OpUpdateOne, withBacklogActivityNoteID(id))
+	return &BacklogActivityNoteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for BacklogActivityNote.
+func (c *BacklogActivityNoteClient) Delete() *BacklogActivityNoteDelete {
+	mutation := newBacklogActivityNoteMutation(c.config, OpDelete)
+	return &BacklogActivityNoteDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *BacklogActivityNoteClient) DeleteOne(_m *BacklogActivityNote) *BacklogActivityNoteDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *BacklogActivityNoteClient) DeleteOneID(id uuid.UUID) *BacklogActivityNoteDeleteOne {
+	builder := c.Delete().Where(backlogactivitynote.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &BacklogActivityNoteDeleteOne{builder}
+}
+
+// Query returns a query builder for BacklogActivityNote.
+func (c *BacklogActivityNoteClient) Query() *BacklogActivityNoteQuery {
+	return &BacklogActivityNoteQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeBacklogActivityNote},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a BacklogActivityNote entity by its id.
+func (c *BacklogActivityNoteClient) Get(ctx context.Context, id uuid.UUID) (*BacklogActivityNote, error) {
+	return c.Query().Where(backlogactivitynote.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *BacklogActivityNoteClient) GetX(ctx context.Context, id uuid.UUID) *BacklogActivityNote {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryItem queries the item edge of a BacklogActivityNote.
+func (c *BacklogActivityNoteClient) QueryItem(_m *BacklogActivityNote) *BacklogItemQuery {
+	query := (&BacklogItemClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogactivitynote.Table, backlogactivitynote.FieldID, id),
+			sqlgraph.To(backlogitem.Table, backlogitem.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, backlogactivitynote.ItemTable, backlogactivitynote.ItemColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *BacklogActivityNoteClient) Hooks() []Hook {
+	return c.hooks.BacklogActivityNote
+}
+
+// Interceptors returns the client interceptors.
+func (c *BacklogActivityNoteClient) Interceptors() []Interceptor {
+	return c.inters.BacklogActivityNote
+}
+
+func (c *BacklogActivityNoteClient) mutate(ctx context.Context, m *BacklogActivityNoteMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&BacklogActivityNoteCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&BacklogActivityNoteUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&BacklogActivityNoteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&BacklogActivityNoteDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown BacklogActivityNote mutation op: %q", m.Op())
+	}
+}
+
 // BacklogItemClient is a client for the BacklogItem schema.
 type BacklogItemClient struct {
 	config
@@ -871,6 +1030,22 @@ func (c *BacklogItemClient) QueryProgressNotes(_m *BacklogItem) *BacklogProgress
 			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, id),
 			sqlgraph.To(backlogprogressnote.Table, backlogprogressnote.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.ProgressNotesTable, backlogitem.ProgressNotesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryActivityNotes queries the activity_notes edge of a BacklogItem.
+func (c *BacklogItemClient) QueryActivityNotes(_m *BacklogItem) *BacklogActivityNoteQuery {
+	query := (&BacklogActivityNoteClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, id),
+			sqlgraph.To(backlogactivitynote.Table, backlogactivitynote.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.ActivityNotesTable, backlogitem.ActivityNotesColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -4562,19 +4737,19 @@ func (c *WorktreeClient) mutate(ctx context.Context, m *WorktreeMutation) (Value
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogItemDependency,
-		BacklogProgressNote, BacklogStatusEvent, BacklogStuckState,
-		ClassificationAnalytics, ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent,
-		EscapeEvent, ItemSession, ItemSource, PipelineMode, Project, ReviewVerdict,
-		Session, SessionGoal, SessionSummary, Shell, SourceSyncEvent, Tag,
-		TriggerFireEvent, Workflow, Worktree []ent.Hook
+		AnalyticsEvent, ApprovalRule, BacklogActivityNote, BacklogItem,
+		BacklogItemDependency, BacklogProgressNote, BacklogStatusEvent,
+		BacklogStuckState, ClassificationAnalytics, ClaudeMetadata, ClaudeSession,
+		DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource, PipelineMode,
+		Project, ReviewVerdict, Session, SessionGoal, SessionSummary, Shell,
+		SourceSyncEvent, Tag, TriggerFireEvent, Workflow, Worktree []ent.Hook
 	}
 	inters struct {
-		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogItemDependency,
-		BacklogProgressNote, BacklogStatusEvent, BacklogStuckState,
-		ClassificationAnalytics, ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent,
-		EscapeEvent, ItemSession, ItemSource, PipelineMode, Project, ReviewVerdict,
-		Session, SessionGoal, SessionSummary, Shell, SourceSyncEvent, Tag,
-		TriggerFireEvent, Workflow, Worktree []ent.Interceptor
+		AnalyticsEvent, ApprovalRule, BacklogActivityNote, BacklogItem,
+		BacklogItemDependency, BacklogProgressNote, BacklogStatusEvent,
+		BacklogStuckState, ClassificationAnalytics, ClaudeMetadata, ClaudeSession,
+		DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource, PipelineMode,
+		Project, ReviewVerdict, Session, SessionGoal, SessionSummary, Shell,
+		SourceSyncEvent, Tag, TriggerFireEvent, Workflow, Worktree []ent.Interceptor
 	}
 )

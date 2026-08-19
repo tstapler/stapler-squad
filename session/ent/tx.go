@@ -16,6 +16,8 @@ type Tx struct {
 	AnalyticsEvent *AnalyticsEventClient
 	// ApprovalRule is the client for interacting with the ApprovalRule builders.
 	ApprovalRule *ApprovalRuleClient
+	// BacklogActivityNote is the client for interacting with the BacklogActivityNote builders.
+	BacklogActivityNote *BacklogActivityNoteClient
 	// BacklogItem is the client for interacting with the BacklogItem builders.
 	BacklogItem *BacklogItemClient
 	// BacklogItemDependency is the client for interacting with the BacklogItemDependency builders.
@@ -199,6 +201,7 @@ func (tx *Tx) Client() *Client {
 func (tx *Tx) init() {
 	tx.AnalyticsEvent = NewAnalyticsEventClient(tx.config)
 	tx.ApprovalRule = NewApprovalRuleClient(tx.config)
+	tx.BacklogActivityNote = NewBacklogActivityNoteClient(tx.config)
 	tx.BacklogItem = NewBacklogItemClient(tx.config)
 	tx.BacklogItemDependency = NewBacklogItemDependencyClient(tx.config)
 	tx.BacklogProgressNote = NewBacklogProgressNoteClient(tx.config)

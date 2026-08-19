@@ -33,6 +33,18 @@ func (f ApprovalRuleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ApprovalRuleMutation", m)
 }
 
+// The BacklogActivityNoteFunc type is an adapter to allow the use of ordinary
+// function as BacklogActivityNote mutator.
+type BacklogActivityNoteFunc func(context.Context, *ent.BacklogActivityNoteMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f BacklogActivityNoteFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.BacklogActivityNoteMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.BacklogActivityNoteMutation", m)
+}
+
 // The BacklogItemFunc type is an adapter to allow the use of ordinary
 // function as BacklogItem mutator.
 type BacklogItemFunc func(context.Context, *ent.BacklogItemMutation) (ent.Value, error)
