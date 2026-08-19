@@ -1290,19 +1290,40 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 
 	// 2. Trigger real triage. TriggerTriage returns immediately; the parse +
 	// persist + idea→ready transition happens in a goroutine (see
-	// backlog_service.go TriggerTriage), so poll for the real transition.
+	// backlog_service.go TriggerTriage), so wait for testTriageCompleteHook
+	// rather than polling GetBacklogItem's status — the goroutine performs
+	// trailing storage writes (UpdateItemSessionEnded, triageInFlight.Delete,
+	// optional auto-spawn) after flipping status to "ready", so polling
+	// status alone can race those trailing writes (see the identical pattern
+	// and its rationale at TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession).
+	// Filter by item ID: a still-running goroutine from an earlier,
+	// unmigrated TriggerTriage test can fire this shared hook after this
+	// test registers its closure, delivering a false completion signal.
+	triageDone := make(chan string, 1)
+	setTestTriageCompleteHook(func(id string) {
+		if id != itemID {
+			return
+		}
+		select {
+		case triageDone <- id:
+		default:
+		}
+	})
+	t.Cleanup(func() { setTestTriageCompleteHook(nil) })
+
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
 	require.NoError(t, err)
 
-	var readyItem *sessionv1.BacklogItem
-	require.Eventually(t, func() bool {
-		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
-		if getErr != nil || getResp.Msg.Item.Status != "ready" {
-			return false
-		}
-		readyItem = getResp.Msg.Item
-		return true
-	}, 2*time.Second, 10*time.Millisecond, "item should reach 'ready' after real headless triage completes")
+	select {
+	case <-triageDone:
+	case <-time.After(60 * time.Second):
+		t.Fatal("timed out waiting for TriggerTriage's background goroutine to complete")
+	}
+
+	getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, getErr)
+	require.Equal(t, "ready", getResp.Msg.Item.Status)
+	readyItem := getResp.Msg.Item
 
 	require.Equal(t, 1, pool.callCount(), "TriggerTriage should have made exactly one real headless call")
 	require.NotEmpty(t, readyItem.PlanArtifactsPath, "TriggerTriage should persist plan_artifacts_path")

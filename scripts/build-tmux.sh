@@ -39,8 +39,9 @@ ensure_dep() {
 if [[ "${1:-}" == "--clean" ]]; then
   rm -f "$OUT_BIN"
   if [[ -f "$SUBMODULE_DIR/Makefile" ]]; then
-    (cd "$SUBMODULE_DIR" && make distclean 2>/dev/null)
-    true
+    if ! (cd "$SUBMODULE_DIR" && make distclean 2>/dev/null); then
+      true
+    fi
   fi
   log "Cleaned."
   exit 0
