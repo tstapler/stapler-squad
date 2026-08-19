@@ -1062,7 +1062,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var tokenStore *tokens.TokenStore
 	var historyDir string
 	if homeDirErr == nil {
-		historyDir = filepath.Join(homeDir, ".claude", "projects")
+		historyDir, homeDirErr = resolveHistoryDir(homeDir, config.IsIsolatedInstance())
+	}
+	if homeDirErr == nil {
 		tokenStore = tokens.NewTokenStore(historyDir)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		tokenStore.Start(context.Background())
@@ -1502,6 +1504,30 @@ type registryInstanceChecker interface {
 // session's controller never made progress, despite the session having been
 // correctly started and wired (Start + SetStatusManager + StartController) at
 // spawn time in SpawnReviewSession → CreateDirectorySession.
+// resolveHistoryDir returns the directory to scan for Claude JSONL history
+// files (feeding TokenStore/ArtifactExtractor). Under test isolation it
+// redirects under the isolated config dir instead of the operator's real
+// ~/.claude/projects, so booting a *server.Server in tests doesn't scan/watch
+// that large, real tree. Production behavior (isIsolated=false) is unchanged.
+// isIsolated is passed in (rather than calling config.IsIsolatedInstance()
+// internally) so both branches are directly unit-testable — every real
+// caller is itself a go test binary, so config.IsIsolatedInstance() would
+// always be true if called from inside this function.
+func resolveHistoryDir(homeDir string, isIsolated bool) (string, error) {
+	if isIsolated {
+		configDir, err := config.GetConfigDir()
+		if err != nil {
+			return "", err
+		}
+		testHistoryDir := filepath.Join(configDir, "claude-projects-test")
+		if err := os.MkdirAll(testHistoryDir, 0755); err != nil {
+			return "", err
+		}
+		return testHistoryDir, nil
+	}
+	return filepath.Join(homeDir, ".claude", "projects"), nil
+}
+
 func newSessionLivenessChecker(findLive func(sessionUUID string) *session.Instance, registry registryInstanceChecker) func(sessionUUID string) bool {
 	return func(sessionUUID string) bool {
 		if live := findLive(sessionUUID); live != nil {

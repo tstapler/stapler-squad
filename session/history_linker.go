@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -47,6 +48,29 @@ type HistoryLinker struct {
 	extraCallbacks []func(string) // additional per-file callbacks (e.g. TokenStore)
 }
 
+// resolveHistoryWatchDir returns the directory to fsnotify-watch for Claude
+// JSONL history files. Under test isolation it redirects under the isolated
+// config dir instead of the operator's real ~/.claude/projects, so this
+// watcher doesn't scan/watch that large, real tree in tests. Production
+// behavior (isIsolated=false) is unchanged. Mirrors server.resolveHistoryDir,
+// which resolves the same directory for TokenStore/ArtifactExtractor — kept
+// as a separate copy since dependencies.go can't import the session
+// package's internals and vice versa.
+func resolveHistoryWatchDir(homeDir string, isIsolated bool) (string, error) {
+	if isIsolated {
+		configDir, err := config.GetConfigDir()
+		if err != nil {
+			return "", err
+		}
+		testHistoryDir := filepath.Join(configDir, "claude-projects-test")
+		if err := os.MkdirAll(testHistoryDir, 0755); err != nil {
+			return "", err
+		}
+		return testHistoryDir, nil
+	}
+	return filepath.Join(homeDir, ".claude", "projects"), nil
+}
+
 // NewHistoryLinkerFromRealInspector creates a HistoryLinker backed by the real
 // gopsutil-based process inspector and an fsnotify watcher on ~/.claude/projects/.
 // This is the production constructor; use NewHistoryLinker in tests.
@@ -62,7 +86,15 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 			backoffs:  make(map[string]*sessionBackoff),
 		}
 	}
-	watchDir := filepath.Join(homeDir, ".claude", "projects")
+	watchDir, err := resolveHistoryWatchDir(homeDir, config.IsIsolatedInstance())
+	if err != nil {
+		log.Warn("HistoryLinker: failed to resolve history watch dir, watcher disabled", "err", err)
+		return &HistoryLinker{
+			detector:  detector,
+			instances: make([]*Instance, 0),
+			backoffs:  make(map[string]*sessionBackoff),
+		}
+	}
 
 	// Build the linker first so the watcher callback can close over it.
 	hl := &HistoryLinker{

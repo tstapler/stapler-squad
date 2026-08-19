@@ -1,6 +1,8 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -325,5 +327,47 @@ func TestPrNumFromTitle(t *testing.T) {
 				t.Errorf("got %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestResolveHistoryDir_should_ReturnConfigDirSubpath_When_IsolatedInstance is
+// the regression test for dependencies.go:1065 previously hard-coding
+// os.UserHomeDir()+".claude/projects" with no isolation check at all, which
+// made every test booting a real *server.Server scan/watch the operator's
+// real, large ~/.claude/projects tree. It uses STAPLER_SQUAD_TEST_DIR to pin
+// config.GetConfigDir()'s return value so the expected path is deterministic.
+func TestResolveHistoryDir_should_ReturnConfigDirSubpath_When_IsolatedInstance(t *testing.T) {
+	homeDir := t.TempDir()
+	configDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", configDir)
+
+	got, err := resolveHistoryDir(homeDir, true)
+	if err != nil {
+		t.Fatalf("resolveHistoryDir() error = %v", err)
+	}
+	want := filepath.Join(configDir, "claude-projects-test")
+	if got != want {
+		t.Errorf("resolveHistoryDir() = %q, want %q", got, want)
+	}
+	if info, statErr := os.Stat(got); statErr != nil || !info.IsDir() {
+		t.Errorf("resolveHistoryDir() = %q does not exist as a directory: %v", got, statErr)
+	}
+}
+
+// TestResolveHistoryDir_should_ReturnRealHomeDir_When_NotIsolated guards the
+// production fallback: with isIsolated=false, resolveHistoryDir must return
+// the real, byte-identical ~/.claude/projects path regardless of what
+// config.GetConfigDir() would otherwise resolve to, so production behavior
+// (AC 2) is unaffected by this change.
+func TestResolveHistoryDir_should_ReturnRealHomeDir_When_NotIsolated(t *testing.T) {
+	homeDir := t.TempDir()
+
+	got, err := resolveHistoryDir(homeDir, false)
+	if err != nil {
+		t.Fatalf("resolveHistoryDir() error = %v", err)
+	}
+	want := filepath.Join(homeDir, ".claude", "projects")
+	if got != want {
+		t.Errorf("resolveHistoryDir() = %q, want %q", got, want)
 	}
 }
