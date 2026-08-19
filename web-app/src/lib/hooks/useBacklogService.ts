@@ -15,6 +15,7 @@ import {
   TriageTask as TriageTaskProto,
   BacklogStatusEvent as BacklogStatusEventProto,
   BacklogProgressNote as BacklogProgressNoteProto,
+  BacklogActivityNote as BacklogActivityNoteProto,
   PipelineMode as PipelineModeProto,
 } from "@/gen/session/v1/backlog_pb";
 
@@ -169,6 +170,8 @@ export interface BacklogItem {
   statusEvents: StatusEvent[];
   /** Implementer's report_progress audit trail (audit log) */
   progressNotes: ProgressNote[];
+  /** Free-form, timestamped, attributed notes posted via post_backlog_update (ungated audit log — see ADR-001, backlog-item-activity-log). */
+  activityNotes: ActivityNote[];
   /** Sum of estimated USD cost across all linked sessions */
   totalEstimatedCostUsd: number;
   /** GitHub PR URL when item is in pr_pending status */
@@ -286,6 +289,15 @@ export interface ProgressNote {
   criterionIndex: number;
   note: string;
   status: string;
+  createdAt?: string;
+}
+
+/** A single post_backlog_update call — an ungated, free-form, attributed note. */
+export interface ActivityNote {
+  id: string;
+  message: string;
+  authorSessionUuid: string;
+  authorSessionTitle: string;
   createdAt?: string;
 }
 
@@ -426,6 +438,16 @@ function mapProgressNote(n: BacklogProgressNoteProto): ProgressNote {
   };
 }
 
+function mapActivityNote(n: BacklogActivityNoteProto): ActivityNote {
+  return {
+    id: n.id,
+    message: n.message,
+    authorSessionUuid: n.authorSessionUuid,
+    authorSessionTitle: n.authorSessionTitle,
+    createdAt: n.createdAt ? new Date(Number(n.createdAt.seconds) * 1000).toISOString() : undefined,
+  };
+}
+
 function mapPipelineMode(p: PipelineModeProto): PipelineMode {
   return {
     id: p.id,
@@ -532,6 +554,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     triageResult,
     statusEvents: (p.statusEvents ?? []).map(mapStatusEvent),
     progressNotes: (p.progressNotes ?? []).map(mapProgressNote),
+    activityNotes: (p.activityNotes ?? []).map(mapActivityNote),
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,

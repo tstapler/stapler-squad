@@ -815,4 +815,67 @@ describe("useWatchBacklogItems", () => {
     expect(item1?.gateVerdict).toBe("FAIL");
     expect(item1?.gateVerdictSummary).toBe("inline verdict wins");
   });
+
+  // Story 6.2.2 (backlog-item-activity-log): activityNoteAdded is a dedicated
+  // single-entry event (ADR-002) — it must dispatch the targeted
+  // appendActivityNote reducer, never a wholesale upsertItem replace.
+  it("dispatches appendActivityNote with the correct payload when an activityNoteAdded event arrives", async () => {
+    const stream = makeControllableStream();
+    mockWatchBacklogItems.mockReturnValueOnce(stream.stream);
+    mockWatchBacklogItems.mockReturnValue(makeHangingStream());
+    mockListBacklogItems.mockResolvedValue({ items: [{ ...makeItem("item-1"), activityNotes: [] }] });
+
+    const store = makeStore();
+    const { result } = renderHook(() => useWatchBacklogItems(), { wrapper: makeWrapper(store) });
+
+    await act(async () => {
+      await flush();
+    });
+    expect(result.current.items.find((i) => i.id === "item-1")?.activityNotes).toEqual([]);
+
+    const note = {
+      id: "note-1",
+      message: "checked in on this",
+      authorSessionUuid: "session-uuid-1",
+      authorSessionTitle: "worker-session",
+      createdAt: undefined,
+    };
+
+    await act(async () => {
+      stream.emit(makeEvent("activityNoteAdded", { itemId: "item-1", note }, 1n));
+      await flush();
+    });
+
+    const item1 = result.current.items.find((i) => i.id === "item-1");
+    expect(item1?.activityNotes).toHaveLength(1);
+    expect(item1?.activityNotes[0]).toMatchObject({
+      id: "note-1",
+      message: "checked in on this",
+      authorSessionUuid: "session-uuid-1",
+      authorSessionTitle: "worker-session",
+    });
+  });
+
+  // Guards against a null note on the wire (defensive null-guard mirroring
+  // the itemUpdated/statusChanged cases' "if (item) dispatch(...)" style).
+  it("does not dispatch when an activityNoteAdded event carries no note", async () => {
+    const stream = makeControllableStream();
+    mockWatchBacklogItems.mockReturnValueOnce(stream.stream);
+    mockWatchBacklogItems.mockReturnValue(makeHangingStream());
+    mockListBacklogItems.mockResolvedValue({ items: [{ ...makeItem("item-1"), activityNotes: [] }] });
+
+    const store = makeStore();
+    const { result } = renderHook(() => useWatchBacklogItems(), { wrapper: makeWrapper(store) });
+
+    await act(async () => {
+      await flush();
+    });
+
+    await act(async () => {
+      stream.emit(makeEvent("activityNoteAdded", { itemId: "item-1", note: undefined }, 1n));
+      await flush();
+    });
+
+    expect(result.current.items.find((i) => i.id === "item-1")?.activityNotes).toEqual([]);
+  });
 });

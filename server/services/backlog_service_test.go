@@ -839,6 +839,7 @@ func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMod
 func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent(t *testing.T) {
 	t.Parallel()
 	note := "auto-reopened after FAIL verdict"
+	activityCreatedAt := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	item := &session.BacklogItemData{
 		ID:    "item-1",
 		Title: "item with audit history",
@@ -848,6 +849,14 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 		},
 		ProgressNotes: []session.ProgressNoteData{
 			{ID: "pn-1", CriterionIndex: 0, Note: "implemented the dedent fix", Status: "done"},
+		},
+		// [validation.md Gap 2 / Epic 8.7] proves the OTHER read path — the
+		// eager-load -> BacklogItemData.ActivityNotes -> backlogItemToProto
+		// mapper chain — actually carries ActivityNotes, distinct from
+		// get_backlog_item's rendering (Epic 8.6), which never touches this
+		// mapper at all.
+		ActivityNotes: []session.ActivityNoteData{
+			{ID: "an-1", Message: "posted via post_backlog_update", AuthorSessionUUID: "sess-9", AuthorSessionTitle: "Helper", CreatedAt: activityCreatedAt},
 		},
 	}
 
@@ -863,6 +872,14 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 	assert.Equal(t, int32(0), p.ProgressNotes[0].CriterionIndex)
 	assert.Equal(t, "implemented the dedent fix", p.ProgressNotes[0].Note)
 	assert.Equal(t, "done", p.ProgressNotes[0].Status)
+
+	require.Len(t, p.ActivityNotes, 1)
+	assert.Equal(t, "an-1", p.ActivityNotes[0].Id)
+	assert.Equal(t, "posted via post_backlog_update", p.ActivityNotes[0].Message)
+	assert.Equal(t, "sess-9", p.ActivityNotes[0].AuthorSessionUuid)
+	assert.Equal(t, "Helper", p.ActivityNotes[0].AuthorSessionTitle)
+	require.NotNil(t, p.ActivityNotes[0].CreatedAt)
+	assert.True(t, p.ActivityNotes[0].CreatedAt.AsTime().Equal(activityCreatedAt))
 }
 
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
@@ -1174,6 +1191,15 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 // that git worktree operations (which require at least one commit) work in tests.
 // Uses go-git directly rather than shelling out — see
 // .claude/rules/prefer-go-git-over-subshells.md.
+//
+// Also sets a local (repo-scoped, not --global) user.name/user.email via go-git's
+// config API. The initial commit below always supplies its own go-git CommitOptions
+// Author, so it doesn't need this — but several tests reuse this repo (or a clone of
+// it, e.g. setupPRFixSyncRepo's originDir) for further commits made via the plain git
+// CLI (runGitTestCmd), which reads identity from git config rather than any argument.
+// That works on a dev machine with a global identity configured, but CI runners have
+// none, and fail with "Author identity unknown" — setting it here once, locally, fixes
+// every downstream CLI commit against this repo.
 func initGitRepoWithCommit(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test Repo\n"), 0o644); err != nil {
@@ -1182,6 +1208,15 @@ func initGitRepoWithCommit(t *testing.T, dir string) {
 	repo, err := git.PlainInit(dir, false)
 	if err != nil {
 		t.Skipf("git init: %v", err)
+	}
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Skipf("git config: %v", err)
+	}
+	cfg.User.Name = "Test User"
+	cfg.User.Email = "test@example.com"
+	if err := repo.SetConfig(cfg); err != nil {
+		t.Skipf("git set config: %v", err)
 	}
 	wt, err := repo.Worktree()
 	if err != nil {

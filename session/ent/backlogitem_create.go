@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/ent/backlogactivitynote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
@@ -706,6 +707,21 @@ func (_c *BacklogItemCreate) AddProgressNotes(v ...*BacklogProgressNote) *Backlo
 	return _c.AddProgressNoteIDs(ids...)
 }
 
+// AddActivityNoteIDs adds the "activity_notes" edge to the BacklogActivityNote entity by IDs.
+func (_c *BacklogItemCreate) AddActivityNoteIDs(ids ...uuid.UUID) *BacklogItemCreate {
+	_c.mutation.AddActivityNoteIDs(ids...)
+	return _c
+}
+
+// AddActivityNotes adds the "activity_notes" edges to the BacklogActivityNote entity.
+func (_c *BacklogItemCreate) AddActivityNotes(v ...*BacklogActivityNote) *BacklogItemCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddActivityNoteIDs(ids...)
+}
+
 // SetSourceID sets the "source" edge to the ItemSource entity by ID.
 func (_c *BacklogItemCreate) SetSourceID(id uuid.UUID) *BacklogItemCreate {
 	_c.mutation.SetSourceID(id)
@@ -1206,6 +1222,22 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ActivityNotesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ActivityNotesTable,
+			Columns: []string{backlogitem.ActivityNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogactivitynote.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

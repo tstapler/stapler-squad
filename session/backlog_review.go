@@ -366,7 +366,7 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	sb.WriteString("Evaluate every acceptance criterion against the diff above. Also verify the implementation follows the plan (if provided).\n")
 	sb.WriteString("Output ONLY a single JSON object with no surrounding text:\n")
 	sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
-	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE.\n")
+	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark a criterion UNVERIFIABLE rather than guessing if you cannot confirm it from what's in front of you — a missing or incomplete diff is a known limitation of this mode, not a signal the work is wrong.\n")
 
 	return sb.String()
 }

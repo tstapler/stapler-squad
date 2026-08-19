@@ -2501,6 +2501,29 @@ func HasProgressNotesWith(preds ...predicate.BacklogProgressNote) predicate.Back
 	})
 }
 
+// HasActivityNotes applies the HasEdge predicate on the "activity_notes" edge.
+func HasActivityNotes() predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ActivityNotesTable, ActivityNotesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasActivityNotesWith applies the HasEdge predicate on the "activity_notes" edge with a given conditions (other predicates).
+func HasActivityNotesWith(preds ...predicate.BacklogActivityNote) predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := newActivityNotesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasSource applies the HasEdge predicate on the "source" edge.
 func HasSource() predicate.BacklogItem {
 	return predicate.BacklogItem(func(s *sql.Selector) {

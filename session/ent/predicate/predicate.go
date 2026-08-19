@@ -12,6 +12,9 @@ type AnalyticsEvent func(*sql.Selector)
 // ApprovalRule is the predicate function for approvalrule builders.
 type ApprovalRule func(*sql.Selector)
 
+// BacklogActivityNote is the predicate function for backlogactivitynote builders.
+type BacklogActivityNote func(*sql.Selector)
+
 // BacklogItem is the predicate function for backlogitem builders.
 type BacklogItem func(*sql.Selector)
 

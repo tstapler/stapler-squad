@@ -824,6 +824,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		p.ProgressNotes = protoNotes
 	}
 
+	// Populate activity notes (the ungated post_backlog_update log) when they
+	// were eagerly loaded.
+	if len(item.ActivityNotes) > 0 {
+		protoActivityNotes := make([]*sessionv1.BacklogActivityNote, len(item.ActivityNotes))
+		for i := range item.ActivityNotes {
+			protoActivityNotes[i] = activityNoteDataToProto(&item.ActivityNotes[i])
+		}
+		p.ActivityNotes = protoActivityNotes
+	}
+
 	return p
 }
 

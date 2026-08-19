@@ -98,10 +98,10 @@ func TestActorSendSync(t *testing.T) {
 // TestActorStopIdempotent confirms that calling Stop() more than once does not
 // panic, deadlock, or close the done channel twice.
 //
-// See TestActorNoLeak for why this baselines via goleak.IgnoreCurrent()
-// instead of a bare process-wide goleak.VerifyNone().
+// Not t.Parallel(): see TestActorNoLeak's doc comment — the same
+// goleak.IgnoreCurrent()-baseline-then-VerifyNone() window is unsafe under
+// t.Parallel() in this package's shared test binary.
 func TestActorStopIdempotent(t *testing.T) {
-	t.Parallel()
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 

@@ -125,6 +125,8 @@ type BacklogItemEdges struct {
 	StuckStates []*BacklogStuckState `json:"stuck_states,omitempty"`
 	// ProgressNotes holds the value of the progress_notes edge.
 	ProgressNotes []*BacklogProgressNote `json:"progress_notes,omitempty"`
+	// ActivityNotes holds the value of the activity_notes edge.
+	ActivityNotes []*BacklogActivityNote `json:"activity_notes,omitempty"`
 	// Source holds the value of the source edge.
 	Source *ItemSource `json:"source,omitempty"`
 	// BlockingDependencies holds the value of the blocking_dependencies edge.
@@ -133,7 +135,7 @@ type BacklogItemEdges struct {
 	BlockedByDependencies []*BacklogItemDependency `json:"blocked_by_dependencies,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [8]bool
+	loadedTypes [9]bool
 }
 
 // ItemSessionsOrErr returns the ItemSessions value or an error if the edge
@@ -181,12 +183,21 @@ func (e BacklogItemEdges) ProgressNotesOrErr() ([]*BacklogProgressNote, error) {
 	return nil, &NotLoadedError{edge: "progress_notes"}
 }
 
+// ActivityNotesOrErr returns the ActivityNotes value or an error if the edge
+// was not loaded in eager-loading.
+func (e BacklogItemEdges) ActivityNotesOrErr() ([]*BacklogActivityNote, error) {
+	if e.loadedTypes[5] {
+		return e.ActivityNotes, nil
+	}
+	return nil, &NotLoadedError{edge: "activity_notes"}
+}
+
 // SourceOrErr returns the Source value or an error if the edge
 // was not loaded in eager-loading, or loaded but was not found.
 func (e BacklogItemEdges) SourceOrErr() (*ItemSource, error) {
 	if e.Source != nil {
 		return e.Source, nil
-	} else if e.loadedTypes[5] {
+	} else if e.loadedTypes[6] {
 		return nil, &NotFoundError{label: itemsource.Label}
 	}
 	return nil, &NotLoadedError{edge: "source"}
@@ -195,7 +206,7 @@ func (e BacklogItemEdges) SourceOrErr() (*ItemSource, error) {
 // BlockingDependenciesOrErr returns the BlockingDependencies value or an error if the edge
 // was not loaded in eager-loading.
 func (e BacklogItemEdges) BlockingDependenciesOrErr() ([]*BacklogItemDependency, error) {
-	if e.loadedTypes[6] {
+	if e.loadedTypes[7] {
 		return e.BlockingDependencies, nil
 	}
 	return nil, &NotLoadedError{edge: "blocking_dependencies"}
@@ -204,7 +215,7 @@ func (e BacklogItemEdges) BlockingDependenciesOrErr() ([]*BacklogItemDependency,
 // BlockedByDependenciesOrErr returns the BlockedByDependencies value or an error if the edge
 // was not loaded in eager-loading.
 func (e BacklogItemEdges) BlockedByDependenciesOrErr() ([]*BacklogItemDependency, error) {
-	if e.loadedTypes[7] {
+	if e.loadedTypes[8] {
 		return e.BlockedByDependencies, nil
 	}
 	return nil, &NotLoadedError{edge: "blocked_by_dependencies"}
@@ -566,6 +577,11 @@ func (_m *BacklogItem) QueryStuckStates() *BacklogStuckStateQuery {
 // QueryProgressNotes queries the "progress_notes" edge of the BacklogItem entity.
 func (_m *BacklogItem) QueryProgressNotes() *BacklogProgressNoteQuery {
 	return NewBacklogItemClient(_m.config).QueryProgressNotes(_m)
+}
+
+// QueryActivityNotes queries the "activity_notes" edge of the BacklogItem entity.
+func (_m *BacklogItem) QueryActivityNotes() *BacklogActivityNoteQuery {
+	return NewBacklogItemClient(_m.config).QueryActivityNotes(_m)
 }
 
 // QuerySource queries the "source" edge of the BacklogItem entity.

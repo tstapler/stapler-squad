@@ -110,7 +110,8 @@ func makeTestBacklogItemWithID(id, title, acJSON string) *BacklogItemData {
 }
 
 // TestWriteSlashCommands_CreatesCorrectFileCount verifies that 2 AC criteria produce
-// status.md + done-0.md + fail-0.md + done-1.md + fail-1.md + review.md + ship.md + help.md = 8 files.
+// status.md + done-0.md + fail-0.md + done-1.md + fail-1.md + review.md + ship.md +
+// help.md + block.md + duplicate.md = 10 files.
 func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 	t.Parallel()
 	worktree := t.TempDir()
@@ -136,6 +137,8 @@ func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 		"review.md",
 		"ship.md",
 		"help.md",
+		"block.md",
+		"duplicate.md",
 	}
 	if len(entries) != len(wantFiles) {
 		names := make([]string, len(entries))
@@ -183,12 +186,56 @@ func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
 	}
 }
 
+// TestWriteSlashCommands_BlockAndDuplicateFilesContainItemIDAndGatingLanguage
+// verifies block.md and duplicate.md (written via buildBlockAndDuplicateCommands)
+// substitute the item's UUID and each explain the work-role-session gating and
+// the SkipReviewGate exception, so an agent reading either file understands why
+// a call might be rejected before it tries.
+func TestWriteSlashCommands_BlockAndDuplicateFilesContainItemIDAndGatingLanguage(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	itemID := "550e8400-e29b-41d4-a716-446655440002"
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItemWithID(itemID, "Feature", ac)
+
+	if err := WriteSlashCommands(nil, item, worktree); err != nil {
+		t.Fatalf("WriteSlashCommands returned error: %v", err)
+	}
+
+	blockPath := filepath.Join(worktree, backlogCommandsDir, "block.md")
+	blockData, err := os.ReadFile(blockPath)
+	if err != nil {
+		t.Fatalf("failed to read block.md: %v", err)
+	}
+	blockContent := string(blockData)
+	blockMustContain := []string{itemID, "report_blocked", "work-role session"}
+	for _, want := range blockMustContain {
+		if !strings.Contains(blockContent, want) {
+			t.Errorf("expected block.md to contain %q\nContent:\n%s", want, blockContent)
+		}
+	}
+
+	duplicatePath := filepath.Join(worktree, backlogCommandsDir, "duplicate.md")
+	duplicateData, err := os.ReadFile(duplicatePath)
+	if err != nil {
+		t.Fatalf("failed to read duplicate.md: %v", err)
+	}
+	duplicateContent := string(duplicateData)
+	duplicateMustContain := []string{itemID, "report_duplicate", "work-role session", "skip the review gate"}
+	for _, want := range duplicateMustContain {
+		if !strings.Contains(duplicateContent, want) {
+			t.Errorf("expected duplicate.md to contain %q\nContent:\n%s", want, duplicateContent)
+		}
+	}
+}
+
 // TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap verifies
 // review.md tells the agent to run /backlog/ship both immediately on a PASS
-// verdict and as a bounded escape hatch after MaxSameSessionReviewAttempts
-// review cycles without one — closing the gap where review.md previously said
-// "PASS → you're done" and "Keep looping until PASS" with no mention of
-// /backlog/ship at all (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
+// verdict and as a bounded escape hatch once the server-tracked attempt count
+// (MaxSameSessionReviewAttempts) reports the cap is hit — closing the gap where
+// review.md previously said "PASS → you're done" and "Keep looping until PASS"
+// with no mention of /backlog/ship at all (see
+// de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
 func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *testing.T) {
 	t.Parallel()
 	worktree := t.TempDir()
@@ -209,7 +256,7 @@ func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *t
 
 	mustContain := []string{
 		"/backlog/ship",
-		fmt.Sprintf("%d review cycles", MaxSameSessionReviewAttempts),
+		fmt.Sprintf("%d allowed in this session", MaxSameSessionReviewAttempts),
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(content, want) {

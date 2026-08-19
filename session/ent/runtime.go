@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
+	"github.com/tstapler/stapler-squad/session/ent/backlogactivitynote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
@@ -130,6 +131,16 @@ func init() {
 	approvalruleDescMinSessionIdleMinutes := approvalruleFields[25].Descriptor()
 	// approvalrule.DefaultMinSessionIdleMinutes holds the default value on creation for the min_session_idle_minutes field.
 	approvalrule.DefaultMinSessionIdleMinutes = approvalruleDescMinSessionIdleMinutes.Default.(int32)
+	backlogactivitynoteFields := schema.BacklogActivityNote{}.Fields()
+	_ = backlogactivitynoteFields
+	// backlogactivitynoteDescCreatedAt is the schema descriptor for created_at field.
+	backlogactivitynoteDescCreatedAt := backlogactivitynoteFields[5].Descriptor()
+	// backlogactivitynote.DefaultCreatedAt holds the default value on creation for the created_at field.
+	backlogactivitynote.DefaultCreatedAt = backlogactivitynoteDescCreatedAt.Default.(func() time.Time)
+	// backlogactivitynoteDescID is the schema descriptor for id field.
+	backlogactivitynoteDescID := backlogactivitynoteFields[0].Descriptor()
+	// backlogactivitynote.DefaultID holds the default value on creation for the id field.
+	backlogactivitynote.DefaultID = backlogactivitynoteDescID.Default.(func() uuid.UUID)
 	backlogitemFields := schema.BacklogItem{}.Fields()
 	_ = backlogitemFields
 	// backlogitemDescTitle is the schema descriptor for title field.
