@@ -219,6 +219,11 @@ message BacklogItem {
   // activity_notes is the ungated post_backlog_update log — eagerly loaded
   // alongside progress_notes (see GetBacklogItem).
   repeated BacklogActivityNote activity_notes = 35;
+  // public_id is the externally-shareable identifier (a "bl_"-prefixed
+  // BacklogItemID), used by ssq:// deep links and the UI's Copy Link/Copy ID
+  // affordances instead of the internal UUID `id`. Empty for rows that
+  // predate the public_id backfill — callers must fall back to `id`.
+  string public_id = 36;
 }
 
 // ItemSource represents an external plugin source that syncs items into the

@@ -117,6 +117,13 @@ export interface LinkedSession {
 
 export interface BacklogItem {
   id: string;
+  /**
+   * Externally-shareable identifier (a "bl_"-prefixed ULID). Empty for rows
+   * created before the public_id backfill (see
+   * session/storage_backlog.go's BackfillBacklogItemPublicIDs) — callers
+   * must fall back to `id` in that case.
+   */
+  publicId?: string;
   title: string;
   description?: string;
   status: BacklogItemStatus;
@@ -521,6 +528,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
 
   return {
     id: p.id,
+    publicId: p.publicId || undefined,
     title: p.title,
     description: p.description || undefined,
     status: (p.status || "idea") as BacklogItemStatus,

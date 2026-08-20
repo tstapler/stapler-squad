@@ -745,6 +745,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		CreatedAt:           timestamppb.New(item.CreatedAt),
 		UpdatedAt:           timestamppb.New(item.UpdatedAt),
 		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		PublicId:            item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
