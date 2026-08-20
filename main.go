@@ -39,22 +39,24 @@ import (
 )
 
 var (
-	version            = "1.1.2"
-	daemonFlag         bool
-	mcpFlag            bool
-	testModeFlag       bool
-	testDirFlag        string
-	discoveryModeFlag  string
-	discoverExtFlag    bool
-	profileFlag        bool
-	profilePortFlag    int
-	traceFlag          bool
-	listenAddrFlag     string
-	remoteAccessFlag   bool
-	remotePortFlag     int
-	rpIDFlag           string
-	tmuxKeepServerFlag bool
-	rootCmd            = &cobra.Command{
+	version                 = "1.1.2"
+	daemonFlag              bool
+	mcpFlag                 bool
+	testModeFlag            bool
+	testDirFlag             string
+	discoveryModeFlag       string
+	discoverExtFlag         bool
+	profileFlag             bool
+	profilePortFlag         int
+	traceFlag               bool
+	listenAddrFlag          string
+	remoteAccessFlag        bool
+	remotePortFlag          int
+	rpIDFlag                string
+	tmuxKeepServerFlag      bool
+	openURLFlag             string
+	registerLinuxSchemeFlag string
+	rootCmd                 = &cobra.Command{
 		Use:   "stapler-squad",
 		Short: "Stapler Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,6 +65,32 @@ var (
 			// session state including Claude session IDs for --resume on next start).
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+
+			// --open-url mode: translate an ssq:// deep link to a local web UI URL
+			// and shell out to the OS's default opener, then exit. Never starts the
+			// HTTP server, config loading, or logging — it's a fire-and-forget CLI
+			// helper invoked by the OS as the ssq:// scheme handler (see
+			// project_plans/backlog-deep-linking/implementation/plan.md Epic 4).
+			if openURLFlag != "" {
+				if err := runOpenURL(ctx, openURLFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// --register-linux-scheme mode: idempotently register stapler-squad as
+			// the OS handler for the ssq:// URL scheme (Story 4.2). Invoked from
+			// scripts/install-service.sh's Linux install path, not by end users
+			// directly — hidden from --help below.
+			if registerLinuxSchemeFlag != "" {
+				desktopDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "applications")
+				if err := registerLinuxScheme(ctx, desktopDir, registerLinuxSchemeFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
 
 			// MCP mode: initialize logging to stderr, run MCP server.
 			// Mutually exclusive with HTTP server mode — returns when stdin closes.
@@ -739,10 +767,20 @@ func init() {
 	rootCmd.Flags().BoolVar(&tmuxKeepServerFlag, "tmux-keep-server", true,
 		"Keep tmux server running even when all user sessions close (sets exit-empty off). "+
 			"Use this if the tmux server frequently stops between sessions.")
+	rootCmd.Flags().StringVar(&openURLFlag, "open-url", "",
+		"Translate an ssq:// deep link to a local web UI URL and open it via the OS's default "+
+			"opener (open on macOS, xdg-open on Linux), then exit. Used as the ssq:// scheme handler.")
+	rootCmd.Flags().StringVar(&registerLinuxSchemeFlag, "register-linux-scheme", "",
+		"(Linux only, internal) Idempotently register the given binary path as the OS handler "+
+			"for the ssq:// URL scheme via a .desktop file + xdg-mime, then exit. "+
+			"Invoked by scripts/install-service.sh.")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")
 	if err != nil {
+		panic(err)
+	}
+	if err := rootCmd.Flags().MarkHidden("register-linux-scheme"); err != nil {
 		panic(err)
 	}
 
@@ -1148,6 +1186,30 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	// Register auth routes on the shared mux (accessible via both servers).
 	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+
+	// Register the gossip-style host advertisement endpoint (ADR-002) on the
+	// same shared mux/remote server -- see host_advertisement.go's doc
+	// comment for why this is the right integration point.
+	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
+	if err != nil {
+		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
+	} else {
+		hostRegistry, regErr := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+		if regErr != nil {
+			log.Warn("failed to open host registry, host advertisement disabled", "err", regErr)
+		} else {
+			selfAddresses := make([]string, 0, len(hostnames)+len(lanIPs))
+			for _, hn := range hostnames {
+				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", hn, remotePort))
+			}
+			for _, ip := range lanIPs {
+				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
+			}
+			advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
+			serverauth.RegisterHostAdvertisementRoute(srv.Mux(), hostIdentity, hostRegistry, advertiser, selfAddresses)
+			go advertiser.Run(ctx)
+		}
+	}
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
