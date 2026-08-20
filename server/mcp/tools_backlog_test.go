@@ -5061,21 +5061,21 @@ func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
 
 // TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace proves the
 // subscribe-before-read ordering: an event published inside
-// testAfterWaitSubscribeHook (after Subscribe returns, before the precheck
-// read) is not missed. This var is shared package state — do not run this
-// test with t.Parallel() relative to other tests using the same hook.
+// withTestAfterWaitSubscribeHook's hook (after Subscribe returns, before the
+// precheck read) is not missed. The hook is scoped to this test's own ctx via
+// context.WithValue, so it can never collide with a t.Parallel() sibling's
+// call into the same code path.
 func TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	ctx := context.Background()
 	bus := events.NewEventBus(32)
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:  "Race window",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	testAfterWaitSubscribeHook = func() {
+	ctx := withTestAfterWaitSubscribeHook(context.Background(), func() {
 		bus.Publish(&events.Event{
 			Type: events.EventBacklogItemChanged,
 			BacklogItemPayload: &events.BacklogItemEventPayload{
@@ -5087,8 +5087,7 @@ func TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace(t *testing.T) {
 				},
 			},
 		})
-	}
-	t.Cleanup(func() { testAfterWaitSubscribeHook = nil })
+	})
 
 	handler := &backlogHandlers{storage: storage, eventBus: bus}
 	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(2)})

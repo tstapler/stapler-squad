@@ -1,12 +1,10 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
@@ -990,12 +987,8 @@ func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBloc
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
-	var buf bytes.Buffer
-	redirectInfoLog(t, &buf)
-	var warnBuf bytes.Buffer
-	origWarning := log.WarningLog
-	log.WarningLog = stdlog.New(&warnBuf, "WARNING: ", 0)
-	t.Cleanup(func() { log.WarningLog = origWarning })
+	redirectInfoLog(t)
+	warnBuf := swapWarningLog(t)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {

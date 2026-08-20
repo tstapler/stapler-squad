@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -205,7 +206,7 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd; read'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -291,7 +292,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -305,7 +306,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -414,7 +415,7 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -497,6 +498,31 @@ func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 		"expected error to match tmux.ErrWorkDirMissing, got: %v", err)
 }
 
+// uniqueTestTmuxSocket returns a tmux server socket name that is unique per
+// invocation, not just per test name. t.Name() alone is deterministic and
+// identical across repeated invocations of the same test (e.g. -count=N, or
+// separate closely-spaced `go test` runs), so a leftover tmux server from a
+// prior invocation reusing that same socket path collides with the new
+// invocation's session creation, producing tmux's "duplicate session" error.
+// Mixing in os.Getpid() and time.Now().UnixNano() guarantees a fresh socket
+// every time. See session/tmux/session_recovery_test.go for the precedent.
+//
+// The socket path (/private/tmp/tmux-<uid>/<name>) is a Unix domain socket
+// path subject to the OS's sun_path length limit (~104 bytes on macOS), so
+// t.Name() is hashed rather than embedded verbatim — a deeply nested subtest
+// name plus pid/timestamp/suffix can otherwise exceed that limit and fail
+// with tmux's "(File name too long)" error instead of connecting.
+func uniqueTestTmuxSocket(t *testing.T, suffix string) string {
+	t.Helper()
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(t.Name()))
+	name := fmt.Sprintf("ssq_%08x_%d_%d", h.Sum32(), os.Getpid(), time.Now().UnixNano())
+	if suffix != "" {
+		name += "_" + suffix
+	}
+	return name
+}
+
 // setupTestRepository creates a temporary git repository for testing
 //
 // Uses go-git directly rather than shelling out — see
@@ -562,7 +588,7 @@ func testExistingSessionResumption(t *testing.T, tempRepo string) {
 		Title:            sessionName,
 		Path:             tempRepo,
 		Program:          "bash -c 'echo resumed && sleep 30'",
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -606,7 +632,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo first && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -637,7 +663,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo second && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -714,7 +740,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo initial session && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -747,7 +773,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		Path:             tempRepo,     // Same path
 		Program:          "bash -c 'echo resumed session && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {
