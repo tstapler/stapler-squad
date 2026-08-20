@@ -89,7 +89,7 @@ func TestDeepLinkResolver_should_ReturnLocalItemPayload_When_HostnameMatchesThis
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var body struct {
-		Kind string                    `json:"kind"`
+		Kind string                   `json:"kind"`
 		Item *session.BacklogItemData `json:"item"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
