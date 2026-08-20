@@ -243,7 +243,7 @@ func TestWatchBacklogItems_should_replayBufferedEventsInSeqOrder_When_AfterSeqIs
 // exactly between the handler's Subscribe() and EventsSince() calls — pure
 // goroutine-scheduling races cannot do this reliably (confirmed: no
 // existing precedent in this repo's WatchSessions tests, which don't cover
-// this scenario at all). testAfterSubscribeHook (backlog_service_events.go)
+// this scenario at all). withTestAfterSubscribeHook (backlog_service_events.go)
 // is a minimal test-only seam added specifically to make this race
 // reproducible on every run rather than only occasionally.
 func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_When_PublishedBetweenSubscribeAndEventsSince(t *testing.T) {
@@ -269,13 +269,10 @@ func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_Wh
 		IsSnapshot:    false, // as originally published — must not be trusted verbatim by the replay branch
 	})
 
-	setTestAfterSubscribeHook(func() {
+	runCtx, cancel := context.WithCancel(withTestAfterSubscribeHook(ctx, func() {
 		bus.Publish(raceEvent)
-	})
-	t.Cleanup(func() { setTestAfterSubscribeHook(nil) })
-
+	}))
 	sender := &fakeBacklogItemEventSender{}
-	runCtx, cancel := context.WithCancel(ctx)
 	done := runWatchBacklogItems(runCtx, svc, &sessionv1.WatchBacklogItemsRequest{AfterSeq: afterSeq}, sender)
 
 	// The race event, published right after Subscribe() registered the

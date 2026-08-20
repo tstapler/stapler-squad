@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -41,38 +40,35 @@ type backlogItemEventSender interface {
 	Send(*sessionv1.BacklogItemEvent) error
 }
 
-// testAfterSubscribeHook, when non-nil, is invoked immediately after
-// s.eventBus.Subscribe(ctx) below, before the after_seq branch's
-// EventsSince(afterSeq) read. Production code never sets this — it exists
-// solely so Epic 3.2's tests can deterministically land a Publish() call
-// inside the narrow race window between Subscribe() and EventsSince()
-// described in the forceIsSnapshot call site's comment (pre-mortem P2 #4):
-// without a seam here, reproducing that specific interleaving depends on
-// non-deterministic goroutine scheduling, which cannot be turned into a
-// reliable regression test. See backlog_service_events_test.go's
-// race-window test for the only caller.
-//
-// testAfterSubscribeHookMu guards concurrent read/write of the hook from a
-// test goroutine (setter) and every other parallel test's watchBacklogItems
-// call (reader) — required under -race since the t.Parallel() rollout made
-// this package's WatchBacklogItems tests run concurrently. Modeled on
-// backlog_service_triage.go's testTriageCompleteHook.
-var (
-	testAfterSubscribeHookMu sync.Mutex
-	testAfterSubscribeHook   func()
-)
+// testAfterSubscribeHookKey is the context key under which a test-only
+// after-Subscribe hook (see withTestAfterSubscribeHook) is stashed. Using
+// ctx instead of a package-global var/mutex means each watchBacklogItems
+// call only ever sees the hook its own caller attached — a global slot
+// (this package's earlier design, and the still-live pattern in
+// backlog_service_triage.go's testTriageCompleteHook) is read by every
+// t.Parallel() test's watchBacklogItems call, not just the one that set it,
+// so an unrelated concurrently-running test's Subscribe() can trigger
+// another test's hook and double-publish its race-marker event. Scoping the
+// hook to ctx makes that cross-test collision structurally impossible: a
+// context created by one test can never be visible to another's call.
+type testAfterSubscribeHookKey struct{}
 
-func setTestAfterSubscribeHook(hook func()) {
-	testAfterSubscribeHookMu.Lock()
-	defer testAfterSubscribeHookMu.Unlock()
-	testAfterSubscribeHook = hook
+// withTestAfterSubscribeHook returns a copy of ctx carrying hook, to be
+// invoked immediately after s.eventBus.Subscribe(ctx) below, before the
+// after_seq branch's EventsSince(afterSeq) read. Production code never uses
+// this — it exists solely so Epic 3.2's tests can deterministically land a
+// Publish() call inside the narrow race window between Subscribe() and
+// EventsSince() described in the forceIsSnapshot call site's comment
+// (pre-mortem P2 #4): without a seam here, reproducing that specific
+// interleaving depends on non-deterministic goroutine scheduling, which
+// cannot be turned into a reliable regression test. See
+// backlog_service_events_test.go's race-window test for the only caller.
+func withTestAfterSubscribeHook(ctx context.Context, hook func()) context.Context {
+	return context.WithValue(ctx, testAfterSubscribeHookKey{}, hook)
 }
 
-func callTestAfterSubscribeHook() {
-	testAfterSubscribeHookMu.Lock()
-	hook := testAfterSubscribeHook
-	testAfterSubscribeHookMu.Unlock()
-	if hook != nil {
+func callTestAfterSubscribeHook(ctx context.Context) {
+	if hook, ok := ctx.Value(testAfterSubscribeHookKey{}).(func()); ok && hook != nil {
 		hook()
 	}
 }
@@ -108,7 +104,7 @@ func (s *BacklogService) watchBacklogItems(
 	eventCh, subID := s.eventBus.Subscribe(ctx)
 	defer s.eventBus.Unsubscribe(subID)
 
-	callTestAfterSubscribeHook()
+	callTestAfterSubscribeHook(ctx)
 
 	costFor := s.buildCostLookup()
 

@@ -626,14 +626,23 @@ func currentStateWaitResult(item *session.BacklogItemData, verdict *session.Revi
 	return nil
 }
 
-// testAfterWaitSubscribeHook, when non-nil, is invoked immediately after
-// h.eventBus.Subscribe(ctx) inside waitForBacklogEvent, before the
-// current-state precheck read. Production code never sets this — it exists
-// solely so tests can deterministically land a Publish() call inside the
-// subscribe→precheck race window, mirroring
-// backlog_service_events.go's testAfterSubscribeHook (same rationale: this
-// race depends on non-deterministic goroutine scheduling without a seam).
-var testAfterWaitSubscribeHook func()
+// testAfterWaitSubscribeHookKey is the context key under which a test-only
+// after-Subscribe hook (see withTestAfterWaitSubscribeHook) is stashed,
+// invoked immediately after h.eventBus.Subscribe(ctx) inside
+// waitForBacklogEvent, before the current-state precheck read. Production
+// code never uses this — it exists solely so tests can deterministically
+// land a Publish() call inside the subscribe→precheck race window,
+// mirroring backlog_service_events.go's withTestAfterSubscribeHook (same
+// rationale: this race depends on non-deterministic goroutine scheduling
+// without a seam). Scoped via ctx rather than a package-global var so a
+// t.Parallel() sibling test's own waitForBacklogEvent call can never
+// observe or trigger this test's hook — see withTestAfterSubscribeHook's
+// doc comment for the cross-test collision a global slot caused there.
+type testAfterWaitSubscribeHookKey struct{}
+
+func withTestAfterWaitSubscribeHook(ctx context.Context, hook func()) context.Context {
+	return context.WithValue(ctx, testAfterWaitSubscribeHookKey{}, hook)
+}
 
 // waitForBacklogEvent blocks until a matching backlog item event fires (or
 // the current state already satisfies eventTypeFilter, or timeout_seconds
@@ -677,8 +686,8 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 	eventCh, subID := h.eventBus.Subscribe(waitCtx)
 	defer h.eventBus.Unsubscribe(subID)
 
-	if testAfterWaitSubscribeHook != nil {
-		testAfterWaitSubscribeHook()
+	if hook, ok := ctx.Value(testAfterWaitSubscribeHookKey{}).(func()); ok && hook != nil {
+		hook()
 	}
 
 	item, err := h.storage.GetBacklogItem(waitCtx, itemID)
