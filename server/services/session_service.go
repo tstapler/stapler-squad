@@ -111,6 +111,11 @@ type SessionService struct {
 	// approvalStore holds pending Claude Code hook approval requests.
 	approvalStore *ApprovalStore
 
+	// deleteSessionCleanupTimeout bounds DeleteSession's cleanup-timeout warning;
+	// see defaultDeleteSessionCleanupTimeout's doc comment. Overridable via
+	// SetDeleteSessionCleanupTimeout for tests.
+	deleteSessionCleanupTimeout time.Duration
+
 	// databaseSvc handles workspace/database switcher RPCs.
 	databaseSvc *DatabaseService
 
@@ -284,14 +289,33 @@ func (s *SessionService) trackCleanup(fn func()) {
 
 // deleteSessionCleanupTimeout bounds how long DeleteSession's background
 // liveInst.Destroy() cleanup (tmux kill, git diff stats, and worktree
-// filesystem cleanup) is awaited before Shutdown/deleteCleanupWG.Wait() gives
-// up on it. Destroy() takes no context and cannot be forcibly cancelled, so a
-// timed-out cleanup keeps running in its own goroutine (untracked by the
-// WaitGroup) after this deadline — only the *wait* is bounded, not the
-// underlying work (see BUG-072 for threading a real context.Context through
-// the cleanup chain so the timeout can cancel the work itself). Matches
+// filesystem cleanup) runs before a warning is logged that it's taking
+// longer than expected. Destroy() takes no context and cannot be forcibly
+// cancelled (see BUG-072 for threading a real context.Context through the
+// cleanup chain so this could cancel the work itself), so this only bounds
+// *when a warning fires* — deleteCleanupWG.Done() (and thus
+// Shutdown/deleteCleanupWG.Wait()) still waits for Destroy() to actually
+// finish regardless of this timeout. That matters for tests: an early Done()
+// at this timeout would let Destroy() (and the SessionDriver goroutine it
+// stops) outlive Shutdown() and the test that called it, free to interfere
+// with whatever state (e.g. a later -count iteration's t.Setenv-scoped
+// STAPLER_SQUAD_TEST_DIR) reuses the process next. Matches
 // KillTmuxSessionByTitle's 5s cap on the same kill-session subprocess.
-const deleteSessionCleanupTimeout = 5 * time.Second
+//
+// defaultDeleteSessionCleanupTimeout is the production default; SessionService
+// stores its own copy in deleteSessionCleanupTimeout so tests can shrink it via
+// SetDeleteSessionCleanupTimeout instead of waiting out the real 5 seconds to
+// exercise the timeout-warning branch below (mirrors
+// BacklogService.triageCleanupTimeout / SetTriageCleanupTimeout).
+const defaultDeleteSessionCleanupTimeout = 5 * time.Second
+
+// SetDeleteSessionCleanupTimeout overrides the default timeout for DeleteSession's
+// cleanup-timeout warning branch. Test-only seam — see
+// defaultDeleteSessionCleanupTimeout's doc comment for why this needs to be
+// overridable rather than a fixed const.
+func (s *SessionService) SetDeleteSessionCleanupTimeout(d time.Duration) {
+	s.deleteSessionCleanupTimeout = d
+}
 
 // destroyWithTimeout runs destroy() (normally inst.Destroy) and waits up to
 // timeout for it to finish. If it doesn't finish in time, this returns a
@@ -313,6 +337,35 @@ func destroyWithTimeout(destroy func() error, timeout time.Duration) error {
 		return err
 	case <-time.After(timeout):
 		return fmt.Errorf("timed out after %s waiting for session cleanup to finish (still running in background)", timeout)
+	}
+}
+
+// waitForDestroyLoggingSlowCleanup runs destroy() (normally liveInst.Destroy) in a
+// goroutine and waits for it to finish. Unlike destroyWithTimeout, it never abandons
+// the goroutine: if destroy() takes longer than timeout, onSlow is invoked (to log a
+// warning) but this function keeps waiting for the real result instead of returning
+// early. That matters because the caller (DeleteSession) only signals
+// deleteCleanupWG.Done() after this returns — an early return at the timeout would let
+// destroy() outlive Shutdown()/the caller and interfere with whatever reuses that state
+// next (e.g. the next -count iteration's t.Setenv-scoped STAPLER_SQUAD_TEST_DIR); see
+// defaultDeleteSessionCleanupTimeout's doc comment.
+//
+// destroy is a func() error (rather than a *session.Instance) for the same testability
+// reason as destroyWithTimeout: onSlow lets a test observe the timeout firing without
+// needing a real Instance whose Destroy() can be made to hang on demand.
+func waitForDestroyLoggingSlowCleanup(destroy func() error, timeout time.Duration, onSlow func()) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- destroy()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		if onSlow != nil {
+			onSlow()
+		}
+		return <-done
 	}
 }
 
@@ -387,7 +440,20 @@ func newDefaultSearchEngine() *search.SearchEngine {
 	}
 	searchEngine := search.NewSearchEngineWithPersistence(indexStore)
 	if loadErr := searchEngine.LoadIndex(); loadErr != nil {
-		log.Warn("failed to load persisted search index", "err", loadErr)
+		var versionErr *search.IndexVersionMismatchError
+		if errors.As(loadErr, &versionErr) {
+			// The on-disk index predates a schema change (see CurrentIndexVersion)
+			// and was rejected rather than mis-decoded. This self-heals: the next
+			// search request finds syncMetadata unset and triggers a full rebuild
+			// (SearchEngine.IncrementalSync -> buildIndexLocked) from live session
+			// history, so results are only empty until that first search — not
+			// until new session activity occurs.
+			log.Warn("search index format changed; discarding incompatible on-disk index",
+				"old_version", versionErr.Got, "new_version", versionErr.Want, "path", versionErr.Path,
+				"impact", "search results empty until next search request triggers an automatic full reindex")
+		} else {
+			log.Warn("failed to load persisted search index", "err", loadErr)
+		}
 	} else if meta := searchEngine.GetSyncMetadata(); meta != nil {
 		log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
 	}
@@ -488,33 +554,34 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
-		storage:            storage,
-		concStorage:        concStorage,
-		eventBus:           eventBus,
-		reviewQueueSvc:     reviewQueueSvc,
-		searchSvc:          NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
-		githubSvc:          NewGitHubService(concStorage),
-		workspaceSvc:       workspaceSvc,
-		configSvc:          NewConfigService(),
-		notificationSvc:    notificationSvc,
-		approvalSvc:        approvalSvc,
-		utilitySvc:         utilitySvc,
-		rulesSvc:           rulesSvc,
-		approvalStore:      approvalStore,
-		databaseSvc:        NewDatabaseService(),
-		fileSvc:            NewFileService(workspaceSvc),
-		pathCompletionSvc:  NewPathCompletionService(),
-		slashCommandSvc:    NewSlashCommandService(),
-		defaultsSvc:        NewDefaultsService(),
-		slackConfigSvc:     NewSlackConfigService(NewSlackNotifier()),
-		callbackConfigSvc:  NewCallbackConfigService(),
-		launcherPresetsSvc: NewLauncherPresetsService(),
-		projectSvc:         NewProjectService(concStorage),
-		checkpointSvc:      NewCheckpointService(storage, eventBus),
-		featureFlagSvc:     NewFeatureFlagService(),
-		terminalSvc:        NewTerminalService(),
-		promptStore:        newPromptStore(),
-		capacityMonitor:    capacityMonitor,
+		storage:                     storage,
+		concStorage:                 concStorage,
+		eventBus:                    eventBus,
+		reviewQueueSvc:              reviewQueueSvc,
+		searchSvc:                   NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		githubSvc:                   NewGitHubService(concStorage),
+		workspaceSvc:                workspaceSvc,
+		configSvc:                   NewConfigService(),
+		notificationSvc:             notificationSvc,
+		approvalSvc:                 approvalSvc,
+		utilitySvc:                  utilitySvc,
+		rulesSvc:                    rulesSvc,
+		approvalStore:               approvalStore,
+		databaseSvc:                 NewDatabaseService(),
+		fileSvc:                     NewFileService(workspaceSvc),
+		pathCompletionSvc:           NewPathCompletionService(),
+		slashCommandSvc:             NewSlashCommandService(),
+		defaultsSvc:                 NewDefaultsService(),
+		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
+		callbackConfigSvc:           NewCallbackConfigService(),
+		launcherPresetsSvc:          NewLauncherPresetsService(),
+		projectSvc:                  NewProjectService(concStorage),
+		checkpointSvc:               NewCheckpointService(storage, eventBus),
+		featureFlagSvc:              NewFeatureFlagService(),
+		terminalSvc:                 NewTerminalService(),
+		promptStore:                 newPromptStore(),
+		capacityMonitor:             capacityMonitor,
+		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
@@ -2518,7 +2585,10 @@ func (s *SessionService) DeleteSession(
 	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
 		s.trackCleanup(func() {
-			if err := destroyWithTimeout(liveInst.Destroy, deleteSessionCleanupTimeout); err != nil {
+			err := waitForDestroyLoggingSlowCleanup(liveInst.Destroy, s.deleteSessionCleanupTimeout, func() {
+				log.Warn("session cleanup still running in background after timeout", "session", req.Msg.Id, "timeout", s.deleteSessionCleanupTimeout)
+			})
+			if err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		})

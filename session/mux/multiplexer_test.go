@@ -44,7 +44,12 @@ func TestMultiplexer_BroadcastToClients(t *testing.T) {
 	// Read from both client sides in goroutines before broadcasting.
 	var wg sync.WaitGroup
 	readMsg := func(conn net.Conn) ([]byte, error) {
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		// 10s is a hang safety net, not a correctness check: net.Pipe() delivers
+		// synchronously, so a healthy broadcast returns almost instantly. A 2s
+		// deadline flaked under `go test -race -count=20 ./session/...` (heavy
+		// CPU contention from the whole package suite) even though this test
+		// passes reliably in isolation.
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		decoded, err := DecodeMessage(conn)
 		if err != nil {
 			return nil, err

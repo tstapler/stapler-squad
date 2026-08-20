@@ -163,7 +163,7 @@ func TestIdleDetector_PatternMatching_FromContent(t *testing.T) {
 				DebounceDelay: 0, // no debounce in these unit tests
 				BufferSize:    4096,
 			}
-			detector := NewIdleDetectorWithConfig("test", buffer, cfg)
+			detector, _ := newDetectorWithFakeClock("test", buffer, cfg)
 			got := detector.DetectStateFromContent(tt.content)
 			if got != tt.expected {
 				t.Errorf("%s: DetectStateFromContent(%q) = %v, want %v", tt.name, tt.content, got, tt.expected)
@@ -403,7 +403,7 @@ func TestIdleDetector_GetStateInfo(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test-session", buffer, config)
+	detector, _ := newDetectorWithFakeClock("test-session", buffer, config)
 
 	buffer.Write([]byte("— INSERT —"))
 	detector.DetectState()

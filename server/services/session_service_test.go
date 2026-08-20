@@ -2,12 +2,11 @@ package services
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,19 +21,10 @@ import (
 	"go.uber.org/goleak"
 )
 
-// testDBCounter guarantees each createTestStorage call gets a uniquely-named
-// in-memory database, so unrelated tests running in parallel never share state.
-var testDBCounter atomic.Int64
-
 // createTestStorage creates a test storage backed by an in-memory Ent
-// repository. See session/storage_test.go's createTestStorage (same
-// pattern, applied there first) for why this uses a named, shared-cache
-// in-memory DSN rather than a bare ":memory:" literal: a bare ":memory:"
-// gives every independent sql.Open call its own private, unmigrated
-// database, whereas "cache=shared" makes repeated opens of the same "file:"
-// name attach to the same in-memory DB — needed because EntRepository's
-// underlying *sql.DB pool can open more than one connection over a test's
-// lifetime even with SetMaxOpenConns(1) serializing access to it.
+// repository via session.NewTestEntRepository — see that function's doc
+// comment for why this uses a named, shared-cache in-memory DSN rather than
+// a bare ":memory:" literal.
 //
 // This package's fixtures are called 300+ times across its test files; each
 // call still pays the full Ent schema-creation + backfill-migration cost,
@@ -43,12 +33,7 @@ var testDBCounter atomic.Int64
 func createTestStorage(t *testing.T) *session.Storage {
 	t.Helper()
 
-	dsn := fmt.Sprintf("file:testdb_%d?mode=memory&cache=shared", testDBCounter.Add(1))
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dsn))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
@@ -454,9 +439,11 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
 // TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent is the
 // liveInst-present counterpart to TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil:
 // it wires a ReviewQueuePoller with a live instance so FindLiveInstance returns
-// non-nil and DeleteSession takes the destroyWithTimeout(liveInst.Destroy, ...)
-// branch, then uses the same artificial-delay + goleak technique to verify
-// Shutdown still blocks until tracked cleanup exits and nothing leaks.
+// non-nil and DeleteSession takes the liveInst.Destroy() branch (which runs
+// waitForDestroyLoggingSlowCleanup — see TestWaitForDestroyLoggingSlowCleanup_*
+// for direct coverage of that helper's own timeout/non-abandoning behavior),
+// then uses the same artificial-delay + goleak technique to verify Shutdown
+// still blocks until tracked cleanup exits and nothing leaks.
 func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T) {
 	// Not t.Parallel(): see TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil's
 	// goleak-baseline-pollution rationale above.
@@ -571,6 +558,120 @@ func TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout(t *testi
 	// comment — but leaving it running would otherwise trip goleak in other
 	// tests in this package that run concurrently or immediately after).
 	<-workDone
+}
+
+// TestWaitForDestroyLoggingSlowCleanup_DoesNotAbandonWorkAfterTimeout exercises
+// DeleteSession's actual liveInst-cleanup timeout logic (extracted into
+// waitForDestroyLoggingSlowCleanup so it's directly testable — see that
+// function's doc comment). Unlike destroyWithTimeout, this must NOT abandon
+// the work at the timeout: it fires onSlow once the timeout elapses but keeps
+// waiting for the real result, so the returned error (and elapsed time)
+// reflect the full work duration, not the timeout.
+func TestWaitForDestroyLoggingSlowCleanup_DoesNotAbandonWorkAfterTimeout(t *testing.T) {
+	const testTimeout = 20 * time.Millisecond
+	const workDuration = 150 * time.Millisecond
+
+	var mu sync.Mutex
+	onSlowCalled := false
+
+	workDone := make(chan struct{})
+	start := time.Now()
+	err := waitForDestroyLoggingSlowCleanup(func() error {
+		time.Sleep(workDuration)
+		close(workDone)
+		return nil
+	}, testTimeout, func() {
+		mu.Lock()
+		onSlowCalled = true
+		mu.Unlock()
+	})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.True(t, onSlowCalled, "onSlow should fire once the timeout elapses")
+	mu.Unlock()
+
+	assert.GreaterOrEqualf(t, elapsed, workDuration,
+		"waitForDestroyLoggingSlowCleanup returned after %s, should have waited for the full %s of work instead of abandoning it at the %s timeout",
+		elapsed, workDuration, testTimeout)
+
+	select {
+	case <-workDone:
+	default:
+		t.Fatal("destroy work should already be complete by the time waitForDestroyLoggingSlowCleanup returned")
+	}
+}
+
+// TestWaitForDestroyLoggingSlowCleanup_NoTimeout_OnSlowNeverCalled is the
+// fast-path counterpart: when destroy() finishes before timeout, onSlow must
+// never fire and the real error/result is returned directly.
+func TestWaitForDestroyLoggingSlowCleanup_NoTimeout_OnSlowNeverCalled(t *testing.T) {
+	var mu sync.Mutex
+	onSlowCalled := false
+
+	sentinel := errors.New("destroy failed")
+	err := waitForDestroyLoggingSlowCleanup(func() error {
+		return sentinel
+	}, time.Second, func() {
+		mu.Lock()
+		onSlowCalled = true
+		mu.Unlock()
+	})
+
+	require.ErrorIs(t, err, sentinel)
+	mu.Lock()
+	assert.False(t, onSlowCalled, "onSlow must not fire when destroy() finishes before the timeout")
+	mu.Unlock()
+}
+
+// TestDeleteSession_LiveInstance_LogsWarningOnSlowCleanupButStillWaits wires
+// waitForDestroyLoggingSlowCleanup's timeout branch through the actual
+// DeleteSession RPC path (via SetDeleteSessionCleanupTimeout, the test-only
+// override — see defaultDeleteSessionCleanupTimeout's doc comment) and
+// asserts the expected warning is logged, then that Shutdown still blocks
+// until the real cleanup goroutine finishes and nothing leaks.
+func TestDeleteSession_LiveInstance_LogsWarningOnSlowCleanupButStillWaits(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	// A near-zero timeout guarantees the slow-cleanup branch fires for any
+	// real Destroy(), however fast, without needing a genuinely slow instance.
+	svc.SetDeleteSessionCleanupTimeout(time.Nanosecond)
+
+	testInst := &session.Instance{
+		Title:     "live-instance-slow-cleanup",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInst))
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	poller.SetInstances([]*session.Instance{testInst})
+	svc.SetReviewQueuePoller(poller)
+
+	baseline := goleak.IgnoreCurrent()
+	buf := captureLogs(t)
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "live-instance-slow-cleanup",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	svc.Shutdown()
+
+	assert.Contains(t, buf.String(), "session cleanup still running in background after timeout",
+		"DeleteSession's liveInst branch should log the slow-cleanup warning when deleteSessionCleanupTimeout elapses")
+
+	goleak.VerifyNone(t, baseline)
 }
 
 // TestDeleteSession_StorageDeletedBeforeResponse verifies that storage is fully

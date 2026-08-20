@@ -259,6 +259,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-bundle-${{ runner.os }}-
+
       - name: Build Next.js app
         run: cd web-app && pnpm run build
 
@@ -306,6 +318,18 @@ jobs:
 
       - name: Generate protobuf code
         run: buf generate proto
+
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-throughput-${{ runner.os }}-
 
       - name: Install Playwright browsers
         # apt-get update (invoked internally by --with-deps) has stalled for
@@ -481,6 +505,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-lighthouse-${{ runner.os }}-
+
       - name: Build Next.js app
         run: cd web-app && pnpm run build
 
@@ -546,6 +582,18 @@ jobs:
 
       - name: Generate ent ORM code
         run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-e2e-latency-${{ runner.os }}-
 
       - name: Build Next.js app
         run: pnpm run build

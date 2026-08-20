@@ -2,8 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,17 +18,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
-// newTestSessionSummaryEntClient constructs a fresh in-memory-on-disk sqlite-backed
-// *ent.Client for tests, mirroring session package's own createTestEntRepository
-// (session/ent_repository_test.go) — that helper is unexported and lives in a
-// different package, so this is a thin, test-local re-implementation using the
-// exported session.NewEntRepository/session.WithDatabasePath constructors.
+// newTestSessionSummaryEntClient constructs a fresh in-memory sqlite-backed
+// *ent.Client for tests via session.NewTestEntRepository.
 func newTestSessionSummaryEntClient(t *testing.T) *ent.Client {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), fmt.Sprintf("session-summary-test-%d.db", time.Now().UnixNano()))
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	return repo.GetEntClient()
 }
 

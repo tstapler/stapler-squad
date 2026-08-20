@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // TestEnsureDirectorySessionPath_CreatesAndGitInitsMissingDirectory verifies that
@@ -128,7 +129,12 @@ func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testin
 func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	worktreePath := t.TempDir()
+	// NewGitWorktreeFromStorage canonicalizes worktreePath (via
+	// git.CanonicalizeWorktreePath) whenever the directory exists on disk, so
+	// the expectation must be canonicalized too -- otherwise this flakes on
+	// macOS, where t.TempDir() returns a /var path that's actually a symlink
+	// to /private/var (see #558).
+	worktreePath := git.CanonicalizeWorktreePath(t.TempDir())
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
 	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
