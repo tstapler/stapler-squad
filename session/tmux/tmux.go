@@ -2151,19 +2151,26 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 	})
 }
 
+// registryConfirmsExists reports whether the push-based registry is healthy
+// and affirmatively confirms that session name exists. A `false` result only
+// means "the registry didn't confirm it" — it does NOT mean the session is
+// absent, since the registry may be lagging behind tmux reality (e.g. the
+// %session-created event has not been delivered yet, or a synchronous
+// NotifySessionCreated call hasn't landed). Callers must always fall through
+// to a cache/subprocess check for an authoritative negative; only a `true`
+// result here is trustworthy on its own.
+func (t *TmuxSession) registryConfirmsExists(name string) bool {
+	return t.registry != nil && t.registry.IsHealthy() && t.registry.SessionExists(name)
+}
+
 func (t *TmuxSession) DoesSessionExist() bool {
 	if t == nil {
 		return false
 	}
-	// Fast path: use the push-based registry when it is healthy and it confirms
-	// the session exists. If the registry returns false, it may be lagging behind
-	// tmux reality (e.g. the %session-created event has not been delivered yet),
-	// so fall through to the cache/subprocess path for an authoritative answer.
-	if t.registry != nil && t.registry.IsHealthy() {
-		if t.registry.SessionExists(t.sanitizedName) {
-			return true
-		}
-		// Registry returned false — do not trust it blindly; fall through.
+	// Fast path: use the push-based registry when it confirms the session
+	// exists. See registryConfirmsExists for why a false here isn't trusted.
+	if t.registryConfirmsExists(t.sanitizedName) {
+		return true
 	}
 
 	// Fast path: lock-free atomic load.
@@ -2232,17 +2239,15 @@ func (t *TmuxSession) DoesSessionExistNoCache() bool {
 		return false
 	}
 
-	// Fast path: use the push-based registry when it is healthy and it confirms
-	// the session exists. A registry `true` reflects either a delivered CM event
-	// or a synchronous NotifySessionCreated call, so it's as authoritative as a
-	// fresh subprocess check. A registry `false` may just mean the %session-created
-	// event hasn't landed yet, so it is never trusted — always fall through to the
-	// subprocess path below for an authoritative negative, preserving this
-	// function's "always fresh" contract.
-	if t.registry != nil && t.registry.IsHealthy() {
-		if t.registry.SessionExists(t.sanitizedName) {
-			return true
-		}
+	// Fast path: use the push-based registry when it confirms the session
+	// exists. A registry `true` reflects either a delivered CM event or a
+	// synchronous NotifySessionCreated call, so it's as authoritative as a
+	// fresh subprocess check. See registryConfirmsExists for why a false
+	// here isn't trusted — always fall through to the subprocess path below
+	// for an authoritative negative, preserving this function's "always
+	// fresh" contract.
+	if t.registryConfirmsExists(t.sanitizedName) {
+		return true
 	}
 
 	v, _, _ := t.noCacheSF.Do("", func() (interface{}, error) {

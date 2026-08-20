@@ -942,6 +942,35 @@ func TestDoesSessionExist_NilRegistry(t *testing.T) {
 	require.True(t, execCalled, "exec list-sessions should be called when registry is nil")
 }
 
+// TestDoesSessionExist_FallsBackWhenRegistrySaysFalse verifies that a
+// registry `false` is never trusted — DoesSessionExist always falls through
+// to the cache/subprocess path for an authoritative answer.
+func TestDoesSessionExist_FallsBackWhenRegistrySaysFalse(t *testing.T) {
+	t.Parallel()
+	execCalled := false
+	cmdExec := MockCmdExec{
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "list-sessions") {
+				execCalled = true
+				return []byte(TmuxPrefix + "reg-false-test"), nil
+			}
+			return []byte(""), nil
+		},
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true) // Healthy, but doesn't know about this session yet.
+
+	session := newTmuxSessionWithSocket("reg-false-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
+
+	result := session.DoesSessionExist()
+
+	require.True(t, result, "DoesSessionExist should fall back to exec and find the session")
+	require.True(t, execCalled, "exec list-sessions should be called when registry reports false")
+}
+
 // TestDoesSessionExistNoCache_UsesRegistry verifies that when the registry is
 // healthy and confirms the session, DoesSessionExistNoCache returns true
 // without executing any tmux subprocess.
