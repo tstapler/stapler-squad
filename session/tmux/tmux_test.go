@@ -942,6 +942,146 @@ func TestDoesSessionExist_NilRegistry(t *testing.T) {
 	require.True(t, execCalled, "exec list-sessions should be called when registry is nil")
 }
 
+// TestDoesSessionExist_FallsBackWhenRegistrySaysFalse verifies that a
+// registry `false` is never trusted — DoesSessionExist always falls through
+// to the cache/subprocess path for an authoritative answer.
+func TestDoesSessionExist_FallsBackWhenRegistrySaysFalse(t *testing.T) {
+	t.Parallel()
+	execCalled := false
+	cmdExec := MockCmdExec{
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "list-sessions") {
+				execCalled = true
+				return []byte(TmuxPrefix + "reg-false-test"), nil
+			}
+			return []byte(""), nil
+		},
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true) // Healthy, but doesn't know about this session yet.
+
+	session := newTmuxSessionWithSocket("reg-false-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
+
+	result := session.DoesSessionExist()
+
+	require.True(t, result, "DoesSessionExist should fall back to exec and find the session")
+	require.True(t, execCalled, "exec list-sessions should be called when registry reports false")
+}
+
+// TestDoesSessionExistNoCache_UsesRegistry verifies that when the registry is
+// healthy and confirms the session, DoesSessionExistNoCache returns true
+// without executing any tmux subprocess.
+func TestDoesSessionExistNoCache_UsesRegistry(t *testing.T) {
+	t.Parallel()
+	forkCount := 0
+	cmdExec := MockCmdExec{
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			forkCount++
+			return []byte(""), nil
+		},
+		RunFunc:    func(cmd *exec.Cmd) error { forkCount++; return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { forkCount++; return []byte(""), nil },
+	}
+
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true)
+	reg.SetSessions([]string{TmuxPrefix + "reg-nocache-test"})
+
+	session := newTmuxSessionWithSocket("reg-nocache-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
+
+	result := session.DoesSessionExistNoCache()
+
+	require.True(t, result, "DoesSessionExistNoCache should return true from healthy registry")
+	require.Equal(t, 0, forkCount, "no exec forks should occur when registry is healthy and confirms existence")
+}
+
+// TestDoesSessionExistNoCache_FallsBackWhenRegistrySaysFalse verifies that a
+// registry `false` is never trusted — DoesSessionExistNoCache always falls
+// through to the subprocess path for an authoritative negative, preserving
+// its "always fresh" contract.
+func TestDoesSessionExistNoCache_FallsBackWhenRegistrySaysFalse(t *testing.T) {
+	t.Parallel()
+	execCalled := false
+	cmdExec := MockCmdExec{
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "list-sessions") {
+				execCalled = true
+				return []byte(TmuxPrefix + "reg-false-nocache-test"), nil
+			}
+			return []byte(""), nil
+		},
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true) // Healthy, but doesn't know about this session yet.
+
+	session := newTmuxSessionWithSocket("reg-false-nocache-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
+
+	result := session.DoesSessionExistNoCache()
+
+	require.True(t, result, "DoesSessionExistNoCache should fall back to exec and find the session")
+	require.True(t, execCalled, "exec list-sessions should be called when registry reports false")
+}
+
+// TestDoesSessionExistNoCache_FallsBackWhenRegistryUnhealthy verifies that
+// when the registry reports unhealthy, DoesSessionExistNoCache falls back to
+// the exec path.
+func TestDoesSessionExistNoCache_FallsBackWhenRegistryUnhealthy(t *testing.T) {
+	t.Parallel()
+	execCalled := false
+	cmdExec := MockCmdExec{
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "list-sessions") {
+				execCalled = true
+				return []byte(TmuxPrefix + "fallback-nocache-test"), nil
+			}
+			return []byte(""), nil
+		},
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(false) // Registry is unhealthy — must fall back.
+
+	session := newTmuxSessionWithSocket("fallback-nocache-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
+
+	result := session.DoesSessionExistNoCache()
+
+	require.True(t, result, "DoesSessionExistNoCache should return true from exec fallback")
+	require.True(t, execCalled, "exec list-sessions should be called when registry is unhealthy")
+}
+
+// TestDoesSessionExistNoCache_NilRegistry verifies that a nil registry falls
+// back to exec.
+func TestDoesSessionExistNoCache_NilRegistry(t *testing.T) {
+	t.Parallel()
+	execCalled := false
+	cmdExec := MockCmdExec{
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "list-sessions") {
+				execCalled = true
+				return []byte(TmuxPrefix + "nil-reg-nocache-test"), nil
+			}
+			return []byte(""), nil
+		},
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+
+	session := newTmuxSessionWithSocket("nil-reg-nocache-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(nil))
+
+	result := session.DoesSessionExistNoCache()
+
+	require.True(t, result)
+	require.True(t, execCalled, "exec list-sessions should be called when registry is nil")
+}
+
 // TestCapturePaneSemaphore verifies that the capturePaneSem semaphore caps
 // concurrent CapturePaneContent subprocess executions to at most 8.
 func TestCapturePaneSemaphore(t *testing.T) {
