@@ -792,7 +792,9 @@ func init() {
 			"Invoked by scripts/install-service.sh.")
 	rootCmd.Flags().BoolVar(&listKnownHostsFlag, "list-known-hosts", false,
 		"Print the local Workspace Host Registry's known peer hosts (identity, advertised "+
-			"address(es), last-seen time) to stdout, then exit.")
+			"address(es), last-seen time) to stdout, then exit. Peers only appear here if "+
+			"they're reachable at the network layer (same LAN or VPN/Tailscale-style overlay) "+
+			"— this registry does not perform NAT traversal or cross-network discovery.")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")

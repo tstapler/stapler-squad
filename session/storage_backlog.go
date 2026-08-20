@@ -39,6 +39,18 @@ import (
 // id-based query runs; this keeps the public_id branch in exactly one place
 // instead of duplicating it across every one of the ~30 call sites this
 // story wires.
+//
+// Enumeration of every other uuid.Parse/uuid.UUID call site touching a raw
+// id string in this repo (closing plan.md Story 1.3 Task 0, tracked as an
+// open item in adversarial-review.md): server/services/*.go's other
+// uuid.Parse calls (PipelineMode, Workflow, ItemSource ids) parse distinct
+// entity types, not BacklogItem, so they're correctly left on the legacy
+// path. Every consumer of a BacklogItem id string -- MCP tools
+// (server/mcp/tools_backlog.go), the deep-link resolver
+// (server/services/deep_link_resolver.go's resolveLocal), and the review/
+// triage/lifecycle update paths -- funnels through Storage.GetBacklogItem or
+// another EntRepository method that already calls resolveBacklogItemLookup,
+// so no other call site needs its own dual-ID branch.
 func (r *EntRepository) resolveBacklogItemLookup(ctx context.Context, id string) (uuid.UUID, error) {
 	if IsBacklogItemIDShape(id) {
 		item, err := r.client.BacklogItem.Query().
