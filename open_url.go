@@ -54,7 +54,7 @@ func osOpenerCommand() (string, error) {
 
 // osOpenerFunc shells out to the OS's default URL opener. Overridden in
 // tests so the actual subprocess is never invoked.
-var osOpenerFunc = func(ctx context.Context, targetURL string) error {
+var osOpenerFunc = func(ctx context.Context, targetURL string) error { //nolint:gochecknoglobals // test seam, see doc comment above
 	opener, err := osOpenerCommand()
 	if err != nil {
 		return err

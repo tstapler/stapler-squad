@@ -37,18 +37,18 @@ MimeType=x-scheme-handler/ssq;
 // out to the xdg-utils CLI tools. Package vars so tests can stub them
 // without a real Linux desktop environment (xdg-mime/update-desktop-database
 // aren't installed in most CI/dev containers).
-var xdgMimeQueryFunc = func(ctx context.Context) (string, error) {
+var xdgMimeQueryFunc = func(ctx context.Context) (string, error) { //nolint:gochecknoglobals // test seam, see doc comment above
 	cmd := safeexec.CommandContext(ctx, "xdg-mime", "query", "default", "x-scheme-handler/ssq")
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
 }
 
-var xdgMimeDefaultFunc = func(ctx context.Context) error {
+var xdgMimeDefaultFunc = func(ctx context.Context) error { //nolint:gochecknoglobals // test seam, see doc comment above
 	cmd := safeexec.CommandContext(ctx, "xdg-mime", "default", linuxDesktopFileName, "x-scheme-handler/ssq")
 	return cmd.Run()
 }
 
-var updateDesktopDatabaseFunc = func(ctx context.Context, desktopDir string) error {
+var updateDesktopDatabaseFunc = func(ctx context.Context, desktopDir string) error { //nolint:gochecknoglobals // test seam, see doc comment above
 	cmd := safeexec.CommandContext(ctx, "update-desktop-database", desktopDir)
 	return cmd.Run()
 }
