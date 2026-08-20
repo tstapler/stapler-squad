@@ -291,19 +291,13 @@ func (f *fakePanePreviewer) Preview() (string, error) {
 	return f.snapshots[idx], nil
 }
 
-// withShrunkIdleSettleTimers shrinks idleSettlePollInterval/idleSettleWindow
-// for the duration of a test (restored via t.Cleanup), so tests exercising
-// the between-turn settle-window debounce run in milliseconds instead of
-// waiting out the real 500ms/60s production values.
-func withShrunkIdleSettleTimers(t *testing.T) {
-	t.Helper()
-	origPoll, origWindow := idleSettlePollInterval, idleSettleWindow
-	idleSettlePollInterval = 5 * time.Millisecond
-	idleSettleWindow = 100 * time.Millisecond
-	t.Cleanup(func() {
-		idleSettlePollInterval, idleSettleWindow = origPoll, origWindow
-	})
-}
+// Shrunk idle-settle poll/window values shared by tests exercising the
+// between-turn settle-window debounce, so they run in milliseconds instead of
+// waiting out the real 500ms/60s production defaults.
+const (
+	testIdleSettlePollInterval = 5 * time.Millisecond
+	testIdleSettleWindow       = 100 * time.Millisecond
+)
 
 // pumpIdleSignals sends detection.StatusIdle to all listeners registered on cc
 // at a fixed cadence until ctx is cancelled.
@@ -329,13 +323,6 @@ func pumpIdleSignals(ctx context.Context, cc *ClaudeController) {
 // covers acceptance criterion 1: an identical NEXT_MESSAGE across consecutive
 // turns must not be re-delivered via SendKeys once already sent.
 func TestAutonomousDriver_run_should_suppressSend_When_NextMessageMatchesLastNudge(t *testing.T) {
-	// Not t.Parallel(): withShrunkIdleSettleTimers/withShrunkPaneSettleTimers mutate
-	// unsynchronized package-level vars (idleSettlePollInterval, idleSettleWindow,
-	// paneSettlePollInterval) — see autonomous_driver.go:446 — which races and can
-	// leave the wrong "orig" value restored when parallel tests overlap.
-	withShrunkIdleSettleTimers(t)
-	withShrunkPaneSettleTimers(t)
-
 	pool := &fakeHeadlessPool{responses: []string{
 		"NEXT_MESSAGE: keep going",
 		"NEXT_MESSAGE: keep going",
@@ -352,11 +339,15 @@ func TestAutonomousDriver_run_should_suppressSend_When_NextMessageMatchesLastNud
 	inst.started.Store(true)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "fix everything",
-		maxTurns:     10,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "fix everything",
+		maxTurns:               10,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
+		paneSettlePollInterval: testPaneSettlePollInterval,
+		paneSettleMaxWait:      testPaneSettleMaxWait,
 	}
 
 	doneCh := make(chan AutonomousDriverOutcome, 1)
@@ -398,10 +389,6 @@ func TestAutonomousDriver_run_should_suppressSend_When_NextMessageMatchesLastNud
 // acceptance criterion 4: distinct NEXT_MESSAGE content across turns must
 // each be delivered via SendKeys — suppression must not over-trigger.
 func TestAutonomousDriver_run_should_sendBoth_When_NextMessagesDiffer(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
-	withShrunkPaneSettleTimers(t)
-
 	pool := &fakeHeadlessPool{responses: []string{
 		"NEXT_MESSAGE: first message",
 		"NEXT_MESSAGE: second message",
@@ -417,11 +404,15 @@ func TestAutonomousDriver_run_should_sendBoth_When_NextMessagesDiffer(t *testing
 	inst.started.Store(true)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "fix everything",
-		maxTurns:     10,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "fix everything",
+		maxTurns:               10,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
+		paneSettlePollInterval: testPaneSettlePollInterval,
+		paneSettleMaxWait:      testPaneSettleMaxWait,
 	}
 
 	doneCh := make(chan AutonomousDriverOutcome, 1)
@@ -470,10 +461,6 @@ func TestAutonomousDriver_run_should_sendBoth_When_NextMessagesDiffer(t *testing
 // NEXT_MESSAGE twice must only trigger SendKeys once — the second turn's
 // pane-unchanged + text-repeat combination must hit the suppression branch.
 func TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
-	withShrunkPaneSettleTimers(t)
-
 	pool := &fakeHeadlessPool{responses: []string{
 		"NEXT_MESSAGE: keep going",
 		"NEXT_MESSAGE: keep going",
@@ -494,12 +481,16 @@ func TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged(t *testing
 	preview := &fakePanePreviewer{snapshots: []string{"unchanged pane content"}}
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "fix everything",
-		maxTurns:     10,
-		previewer:    preview,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "fix everything",
+		maxTurns:               10,
+		previewer:              preview,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
+		paneSettlePollInterval: testPaneSettlePollInterval,
+		paneSettleMaxWait:      testPaneSettleMaxWait,
 	}
 
 	doneCh := make(chan AutonomousDriverOutcome, 1)
@@ -553,10 +544,6 @@ func TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged(t *testing
 // fix, turn 2 compares against the correct post-delivery snapshot, finds no
 // new activity, and suppresses — so SendKeys must fire only once.
 func TestAutonomousDriver_run_should_useDeliveryTimeSnapshot_When_PaneChangesDuringRoundTrip(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
-	withShrunkPaneSettleTimers(t)
-
 	pool := &fakeHeadlessPool{responses: []string{
 		"NEXT_MESSAGE: keep going",
 		"NEXT_MESSAGE: keep going",
@@ -582,12 +569,16 @@ func TestAutonomousDriver_run_should_useDeliveryTimeSnapshot_When_PaneChangesDur
 	}}
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "fix everything",
-		maxTurns:     10,
-		previewer:    preview,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "fix everything",
+		maxTurns:               10,
+		previewer:              preview,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
+		paneSettlePollInterval: testPaneSettlePollInterval,
+		paneSettleMaxWait:      testPaneSettleMaxWait,
 	}
 
 	doneCh := make(chan AutonomousDriverOutcome, 1)
@@ -627,8 +618,6 @@ func TestAutonomousDriver_run_should_useDeliveryTimeSnapshot_When_PaneChangesDur
 }
 
 func TestAutonomousDriver_MaxTurnsLimit(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{}
 
 	inst := &Instance{Title: "test-max-turns", UUID: "abcdefgh-1234"}
@@ -636,11 +625,13 @@ func TestAutonomousDriver_MaxTurnsLimit(t *testing.T) {
 	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "fix everything",
-		maxTurns:     3,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "fix everything",
+		maxTurns:               3,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
 	}
 
 	doneCh := make(chan AutonomousDriverOutcome, 1)
@@ -668,8 +659,6 @@ func TestAutonomousDriver_MaxTurnsLimit(t *testing.T) {
 }
 
 func TestAutonomousDriver_DoneSignal(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		// DONE on the very first turn so no SendCommandImmediate is needed
 		responses: []string{
@@ -682,11 +671,13 @@ func TestAutonomousDriver_DoneSignal(t *testing.T) {
 	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "fix login",
-		maxTurns:     20,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "fix login",
+		maxTurns:               20,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
 	}
 
 	doneCh := make(chan AutonomousDriverOutcome, 1)
@@ -717,8 +708,6 @@ func TestAutonomousDriver_DoneSignal(t *testing.T) {
 }
 
 func TestAutonomousDriver_IdempotencyGuard(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		responses: []string{"DONE: done"},
 	}
@@ -728,11 +717,13 @@ func TestAutonomousDriver_IdempotencyGuard(t *testing.T) {
 	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "goal",
-		maxTurns:     5,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "goal",
+		maxTurns:               5,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -747,11 +738,13 @@ func TestAutonomousDriver_IdempotencyGuard(t *testing.T) {
 		t.Errorf("first Start() failed: %v", err1)
 	}
 	_ = err2 // no-op; just ensure no panic
+
+	if !driver.Wait(ctx) {
+		t.Error("driver did not exit within the test context deadline")
+	}
 }
 
 func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		responses: []string{"DONE: complete"},
 	}
@@ -761,11 +754,13 @@ func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
 	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "goal",
-		maxTurns:     5,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "goal",
+		maxTurns:               5,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
 	}
 
 	doneCh := make(chan AutonomousDriverOutcome, 1)
@@ -791,8 +786,6 @@ func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
 }
 
 func TestAutonomousDriver_PanicRecovery(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
 	pool := &panicPool{}
 
 	inst := &Instance{Title: "test-panic", UUID: "abcdefgh-panic0"}
@@ -800,11 +793,13 @@ func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "goal",
-		maxTurns:     5,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "goal",
+		maxTurns:               5,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -816,13 +811,15 @@ func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Give driver time to panic and recover. Server must not crash.
-	time.Sleep(500 * time.Millisecond)
+	// Wait for the panic-recovery deferred close(done) to fire — proves the
+	// goroutine actually exited via the recover() path rather than guessing a
+	// sleep duration. Server must not crash.
+	if !driver.Wait(ctx) {
+		t.Error("driver did not exit within the test context deadline after a simulated panic")
+	}
 }
 
 func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{}
 
 	inst := &Instance{Title: "test-stop", UUID: "abcdefgh-stop0"}
@@ -830,11 +827,13 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "goal",
-		maxTurns:     100,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "goal",
+		maxTurns:               100,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -849,15 +848,11 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	driver.Stop()
 
-	// After Stop, driverRunning should eventually become false.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !driver.driverRunning.Load() {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if !driver.Wait(waitCtx) {
+		t.Error("driver did not stop within 2s after Stop()")
 	}
-	t.Error("driver did not stop within 2s after Stop()")
 }
 
 // TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression proves the
@@ -867,8 +862,6 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 // called shortly after — the run loop must return within the 2s test
 // deadline, not block for the full cooldown.
 func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		responses:   []string{"WAIT: agent already acknowledged the plan"},
 		firstCallCh: make(chan struct{}),
@@ -879,11 +872,13 @@ func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) 
 	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "goal",
-		maxTurns:     100,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "goal",
+		maxTurns:               100,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -907,17 +902,134 @@ func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) 
 	stopStart := time.Now()
 	driver.Stop()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !driver.driverRunning.Load() {
-			if elapsed := time.Since(stopStart); elapsed >= nudgeCooldown {
-				t.Fatalf("driver took %v to stop — appears to have blocked on the full nudgeCooldown instead of returning promptly", elapsed)
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if !driver.Wait(waitCtx) {
+		t.Fatal("driver did not stop within 2s after Stop() while suppressing a nudge — suggests the suppression wait is not ctx-aware")
 	}
-	t.Error("driver did not stop within 2s after Stop() while suppressing a nudge — suggests the suppression wait is not ctx-aware")
+	if elapsed := time.Since(stopStart); elapsed >= nudgeCooldown {
+		t.Fatalf("driver took %v to stop — appears to have blocked on the full nudgeCooldown instead of returning promptly", elapsed)
+	}
+}
+
+// blockingPool never returns from CallBlocking until its context is
+// cancelled, letting a test hold the driver's run() goroutine open for as
+// long as it wants — used to prove Wait() actually blocks on goroutine exit
+// rather than returning as soon as it's called.
+type blockingPool struct{}
+
+func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+	<-ctx.Done()
+	return "", 0, ctx.Err()
+}
+
+// TestAutonomousDriver_Wait_BlocksUntilRunExits proves Wait() is a real join
+// point on the run() goroutine, not a fixed sleep or an immediate return: it
+// must not report the driver stopped until well after Stop() is called, and
+// only once run() has actually finished.
+func TestAutonomousDriver_Wait_BlocksUntilRunExits(t *testing.T) {
+	pool := &blockingPool{}
+
+	inst := &Instance{Title: "test-wait-blocks", UUID: "abcdefgh-wait0"}
+	cc, _ := NewClaudeController(inst)
+	inst.controllerManager.controller.Store(cc)
+
+	driver := &AutonomousDriver{
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "goal",
+		maxTurns:               100,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go pumpIdleSignals(ctx, cc)
+
+	if err := driver.Start(ctx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// Wait() called concurrently with Stop() must not return before the
+	// run() goroutine actually exits — record how long it took and confirm
+	// Wait() didn't return instantly (which would indicate it isn't really
+	// synchronizing on goroutine exit).
+	time.Sleep(50 * time.Millisecond)
+	stopStart := time.Now()
+	driver.Stop()
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if !driver.Wait(waitCtx) {
+		t.Fatal("Wait() timed out instead of observing run() exit")
+	}
+	if elapsed := time.Since(stopStart); elapsed <= 0 {
+		t.Fatal("Wait() reported an impossible non-positive duration")
+	}
+
+	// A second Wait() call after run() has already exited must return true
+	// immediately — the done channel stays closed.
+	immediateCtx, immediateCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer immediateCancel()
+	if !driver.Wait(immediateCtx) {
+		t.Fatal("Wait() returned false after run() had already exited")
+	}
+}
+
+// TestAutonomousDriver_Wait_RespectsOwnContextTimeout proves Wait() is
+// bounded by the ctx passed to it, not by the driver's lifetime: if the
+// run() goroutine is still alive (deliberately kept blocked here), Wait()
+// must return false promptly at its own deadline rather than hanging.
+func TestAutonomousDriver_Wait_RespectsOwnContextTimeout(t *testing.T) {
+	pool := &blockingPool{}
+
+	inst := &Instance{Title: "test-wait-timeout", UUID: "abcdefgh-wait1"}
+	cc, _ := NewClaudeController(inst)
+	inst.controllerManager.controller.Store(cc)
+
+	driver := &AutonomousDriver{
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "goal",
+		maxTurns:               100,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
+	}
+
+	runCtx, runCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer runCancel()
+
+	go pumpIdleSignals(runCtx, cc)
+
+	if err := driver.Start(runCtx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	// Deliberately never call Stop()/cancel runCtx here — run() stays alive
+	// for the duration of this test, so Wait() must time out on its own.
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer waitCancel()
+
+	start := time.Now()
+	if driver.Wait(waitCtx) {
+		t.Fatal("Wait() returned true while the driver's run() goroutine was still alive")
+	}
+	if elapsed := time.Since(start); elapsed > 1*time.Second {
+		t.Fatalf("Wait() took %v to honor its 100ms context deadline", elapsed)
+	}
+
+	// Clean up: stop the driver and let its goroutine actually exit so it
+	// doesn't leak past the end of this test (goleak would catch it).
+	driver.Stop()
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cleanupCancel()
+	if !driver.Wait(cleanupCtx) {
+		t.Fatal("driver did not exit during cleanup")
+	}
 }
 
 // panicPool panics on the first call to simulate a driver panic.
@@ -950,8 +1062,6 @@ func TestAutonomousDriver_NilPool_Start(t *testing.T) {
 
 // TestAutonomousDriver_ShortUUID verifies no panic when UUID is shorter than 8 chars.
 func TestAutonomousDriver_ShortUUID(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		responses: []string{"DONE: ok"},
 	}
@@ -960,11 +1070,13 @@ func TestAutonomousDriver_ShortUUID(t *testing.T) {
 	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
-		inst:         inst,
-		controller:   cc,
-		headlessPool: pool,
-		goal:         "test short uuid",
-		maxTurns:     2,
+		inst:                   inst,
+		controller:             cc,
+		headlessPool:           pool,
+		goal:                   "test short uuid",
+		maxTurns:               2,
+		idleSettlePollInterval: testIdleSettlePollInterval,
+		idleSettleWindow:       testIdleSettleWindow,
 	}
 
 	doneCh := make(chan AutonomousDriverOutcome, 1)
@@ -1064,7 +1176,7 @@ func TestWaitForIdle_should_returnImmediately_When_SettleWindowIsZero(t *testing
 	defer cancel()
 
 	start := time.Now()
-	ok := waitForIdle(ctx, statusCh, cc, 0)
+	ok := waitForIdle(ctx, statusCh, cc, 0, testIdleSettlePollInterval)
 	elapsed := time.Since(start)
 
 	if !ok {
@@ -1101,7 +1213,7 @@ func TestWaitForIdle_should_requireSustainedIdle_When_SettleWindowIsSet(t *testi
 	}()
 
 	start := time.Now()
-	ok := waitForIdle(ctx, statusCh, cc, settleWindow)
+	ok := waitForIdle(ctx, statusCh, cc, settleWindow, testIdleSettlePollInterval)
 	elapsed := time.Since(start)
 
 	if !ok {
@@ -1127,7 +1239,7 @@ func TestWaitForIdle_should_returnImmediately_When_ExplicitStatusArrives(t *test
 	defer cancel()
 
 	start := time.Now()
-	ok := waitForIdle(ctx, statusCh, cc, 60*time.Second) // long settle window
+	ok := waitForIdle(ctx, statusCh, cc, 60*time.Second, testIdleSettlePollInterval) // long settle window
 	elapsed := time.Since(start)
 
 	if !ok {
@@ -1152,7 +1264,7 @@ func TestWaitForIdle_should_returnFalse_When_ContextExpiresBeforeSettleWindowEla
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 
-	ok := waitForIdle(ctx, statusCh, cc, 5*time.Second)
+	ok := waitForIdle(ctx, statusCh, cc, 5*time.Second, testIdleSettlePollInterval)
 	if ok {
 		t.Error("expected waitForIdle to return false when ctx expires before the settle window elapses")
 	}
@@ -1193,7 +1305,7 @@ func TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryDisp
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	ok := waitForIdle(ctx, statusCh, cc, settleWindow)
+	ok := waitForIdle(ctx, statusCh, cc, settleWindow, testIdleSettlePollInterval)
 
 	if ok {
 		t.Error("waitForIdle returned true for a sustained batched-tool-call-summary pane with no " +
@@ -1330,9 +1442,9 @@ func (f *fakePaneSettleChecker) HasUpdated() (bool, bool) {
 	return f.updates[idx], false
 }
 
-// withShrunkPaneSettleTimers shrinks the package-level poll/deadline vars for
-// the duration of a test (restored via the returned func), so these tests run
-// in milliseconds instead of waiting out the real 150ms/2s production values.
+// Shrunk pane-settle poll/deadline values shared by the waitForPaneSettle
+// tests below, so they run in milliseconds instead of waiting out the real
+// 150ms/2s production defaults.
 //
 // The margin between the 4-poll settle time (4*pollInterval) and the
 // half-deadline failure threshold used by
@@ -1343,15 +1455,10 @@ func (f *fakePaneSettleChecker) HasUpdated() (bool, bool) {
 // (60ms expected vs. a 300ms threshold, 240ms margin) replaced an earlier
 // 20ms/300ms pairing (80ms expected vs. a 150ms threshold, only 70ms margin)
 // that flaked under exactly that jitter.
-func withShrunkPaneSettleTimers(t *testing.T) {
-	t.Helper()
-	origInterval, origMax := paneSettlePollInterval, paneSettleMaxWait
-	paneSettlePollInterval = 15 * time.Millisecond
-	paneSettleMaxWait = 600 * time.Millisecond
-	t.Cleanup(func() {
-		paneSettlePollInterval, paneSettleMaxWait = origInterval, origMax
-	})
-}
+const (
+	testPaneSettlePollInterval = 15 * time.Millisecond
+	testPaneSettleMaxWait      = 600 * time.Millisecond
+)
 
 // TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEarly
 // is the regression test for BUG-031's fix: once the pane reports two
@@ -1360,20 +1467,18 @@ func withShrunkPaneSettleTimers(t *testing.T) {
 // keystroke follow the content write as soon as the TUI has actually
 // finished rendering it, not just eventually.
 func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEarly(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkPaneSettleTimers(t)
 	checker := &fakePaneSettleChecker{updates: []bool{true, true, false, false, false}}
 
 	start := time.Now()
-	waitForPaneSettle(context.Background(), checker)
+	waitForPaneSettle(context.Background(), checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
 	elapsed := time.Since(start)
 
 	// A relative margin (half the deadline) rather than a thin absolute one:
-	// settling takes ~4 polls (paneSettlePollInterval*4), well under half of
-	// paneSettleMaxWait, so this still fails if early-return regresses toward
-	// waiting out the full deadline, without tripping on ordinary scheduler
-	// jitter under full-suite load.
-	if halfDeadline := paneSettleMaxWait / 2; elapsed >= halfDeadline {
+	// settling takes ~4 polls (testPaneSettlePollInterval*4), well under half
+	// of testPaneSettleMaxWait, so this still fails if early-return regresses
+	// toward waiting out the full deadline, without tripping on ordinary
+	// scheduler jitter under full-suite load.
+	if halfDeadline := testPaneSettleMaxWait / 2; elapsed >= halfDeadline {
 		t.Errorf("expected early return once settled, took %v (>= half of deadline %v)", elapsed, halfDeadline)
 	}
 	if checker.calls < 4 {
@@ -1383,37 +1488,33 @@ func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEar
 
 // TestWaitForPaneSettle_should_returnAtDeadline_When_PaneNeverSettles verifies
 // a pane that never stops changing (e.g. a genuinely busy session) does not
-// hang waitForPaneSettle forever — it must still return once paneSettleMaxWait
-// elapses, so the caller's submit keystroke is never permanently blocked.
+// hang waitForPaneSettle forever — it must still return once maxWait elapses,
+// so the caller's submit keystroke is never permanently blocked.
 func TestWaitForPaneSettle_should_returnAtDeadline_When_PaneNeverSettles(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkPaneSettleTimers(t)
 	checker := &fakePaneSettleChecker{updates: []bool{true}} // always "still changing"
 
 	start := time.Now()
-	waitForPaneSettle(context.Background(), checker)
+	waitForPaneSettle(context.Background(), checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
 	elapsed := time.Since(start)
 
-	if elapsed < paneSettleMaxWait {
+	if elapsed < testPaneSettleMaxWait {
 		t.Errorf("expected to wait out the full deadline for a never-settling pane, returned early after %v", elapsed)
 	}
 }
 
 // TestWaitForPaneSettle_should_returnImmediately_When_ContextCancelled verifies
 // a cancelled context stops the poll loop right away rather than waiting out
-// paneSettleMaxWait.
+// maxWait.
 func TestWaitForPaneSettle_should_returnImmediately_When_ContextCancelled(t *testing.T) {
-	// Not t.Parallel(): see withShrunkIdleSettleTimers/withShrunkPaneSettleTimers doc comments.
-	withShrunkPaneSettleTimers(t)
 	checker := &fakePaneSettleChecker{updates: []bool{true}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	start := time.Now()
-	waitForPaneSettle(ctx, checker)
+	waitForPaneSettle(ctx, checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
 	elapsed := time.Since(start)
 
-	if elapsed >= paneSettlePollInterval {
+	if elapsed >= testPaneSettlePollInterval {
 		t.Errorf("expected immediate return on cancelled context, took %v", elapsed)
 	}
 }

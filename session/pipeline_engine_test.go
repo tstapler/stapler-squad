@@ -55,15 +55,28 @@ func (f *fakePipelineModeRepository) ListEnabled(ctx context.Context) ([]*ent.Pi
 	return f.listEnabledFn(ctx)
 }
 
+// warningLogMu serializes every swapWarningLog user in this file against
+// every other one. log.WarningLog is a shared package-level var, so two
+// tests (or subtests) swapping it concurrently -- which happens routinely
+// here since most callers also call t.Parallel() -- can have one test's
+// warn log land in another's buffer, or arrive after that buffer was
+// already read, producing a spuriously empty capture.
+var warningLogMu sync.Mutex
+
 // swapWarningLog redirects log.WarningLog to a buffer for the duration of the
 // calling test, restoring the original on cleanup. Mirrors the established
-// pattern in session/review_gate_test.go.
+// pattern in session/review_gate_test.go. Acquires warningLogMu for the
+// duration so concurrent (t.Parallel) tests don't race on the shared global.
 func swapWarningLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	warningLogMu.Lock()
 	var buf bytes.Buffer
 	orig := log.WarningLog
 	log.WarningLog = stdlog.New(&buf, "WARNING: ", 0)
-	t.Cleanup(func() { log.WarningLog = orig })
+	t.Cleanup(func() {
+		log.WarningLog = orig
+		warningLogMu.Unlock()
+	})
 	return &buf
 }
 
@@ -331,8 +344,12 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 		PipelineMode:       "deleted-mode",
 	}
 
+	// These subtests deliberately do not call t.Parallel(): swapWarningLog
+	// reassigns the shared package-level log.WarningLog var, so running them
+	// concurrently races on that global -- one subtest's warn log can land in
+	// another's buffer (or arrive after it's already been read), leaving the
+	// read-back empty.
 	t.Run("SlashCommandSet", func(t *testing.T) {
-		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got, err := engine.SlashCommandSet(item)
@@ -350,7 +367,6 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("TriagePromptFor", func(t *testing.T) {
-		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got := engine.TriagePromptFor(item, "/tmp/plan.md")
@@ -362,7 +378,6 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("ReviewPromptFor", func(t *testing.T) {
-		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got := engine.ReviewPromptFor(item, nil, "diff content", false, "notes", ReviewContextExtras{})
@@ -374,7 +389,6 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InteractiveReviewPromptFor", func(t *testing.T) {
-		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got := engine.InteractiveReviewPromptFor(item, nil, "diff content", false, "review-session-id", "notes")
@@ -386,7 +400,6 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InitialPromptFor", func(t *testing.T) {
-		t.Parallel()
 		buf := swapWarningLog(t)
 
 		got := engine.InitialPromptFor(item, nil)

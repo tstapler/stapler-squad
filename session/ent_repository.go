@@ -96,6 +96,13 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		expandedPath = filepath.Join(homeDir, expandedPath[2:])
 	}
 
+	// Persist the resolved path back onto repo.dbPath (nothing above this
+	// point reads the field again — every remaining use in this function
+	// already switched to the local expandedPath) so later code, notably
+	// BackfillBacklogItemPublicIDs's flock lock-file derivation, sees the
+	// real absolute path rather than an unexpanded "~/..." one.
+	repo.dbPath = expandedPath
+
 	// Create parent directory if it doesn't exist, unless expandedPath is a
 	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
 	// rather than a real filesystem path.
@@ -228,6 +235,18 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
+	}
+
+	// Assign a public_id to every pre-existing BacklogItem row that predates
+	// this feature (idempotent) — see BackfillBacklogItemPublicIDs in
+	// storage_backlog.go. Unlike the backfills above, this one is
+	// flock-guarded: it mints a fresh random BacklogItemID per row rather
+	// than deterministically recomputing the same value, so an unguarded
+	// race between two processes could assign two different ids to the same
+	// row.
+	if err := repo.BackfillBacklogItemPublicIDs(context.Background()); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill backlog item public id: %w", err)
 	}
 
 	return repo, nil

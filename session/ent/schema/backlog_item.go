@@ -142,6 +142,22 @@ func (BacklogItem) Fields() []ent.Field {
 		field.Int("triggered_by_chain_depth").
 			Default(0).
 			Comment("webhook-triggers pipeline chaining (Epic 6.3): how many chain hops produced this item, propagated session->session and hard-capped at maxChainDepth as a runaway-loop backstop independent of the WIP-limit gate."),
+		field.String("public_id").
+			Optional().
+			Unique().
+			Comment("Type-prefixed sortable public ID (\"bl_<ULID>\", see session.BacklogItemID). " +
+				"Deliberately NOT .Nillable(): .Nillable() only changes the generated Go field " +
+				"from string to *string — it does not affect SQL column nullability. .Optional() " +
+				"alone already makes the underlying column NULLable (confirmed in " +
+				"session/ent/migrate/schema.go: Nullable: true), so every row created before the " +
+				"Story 1.4 backfill runs stores a real SQL NULL here, not \"\". Standard SQL UNIQUE " +
+				"semantics treat NULL as distinct from every other NULL, so any number of NULL rows " +
+				"coexist under .Unique() without collision — verified empirically: two rows created " +
+				"back-to-back with public_id unset both saved successfully, while two rows given the " +
+				"same explicit non-empty value correctly failed the unique constraint. Query for " +
+				"\"unset\" using the generated backlogitem.PublicIDIsNil() predicate (available " +
+				"despite the absence of .Nillable(), since ent derives it from column nullability), " +
+				"never PublicIDEQ(\"\") — that would never match a NULL column value."),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),
@@ -206,7 +222,12 @@ func (BacklogItem) Edges() []ent.Edge {
 	}
 }
 
-// Indexes of the BacklogItem.
+// Indexes of the BacklogItem. public_id does not need its own
+// index.Fields("public_id") entry — its Unique() field definition above
+// already makes ent generate a unique index over that column; an explicit
+// entry here would be a second, redundant, non-unique index over the same
+// column (same convention as session/ent/schema/session_summary.go's
+// session_id).
 func (BacklogItem) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("status", "priority"),
