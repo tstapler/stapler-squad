@@ -1,7 +1,7 @@
 // @feature backlog:item-detail, backlog:deep-link-resolve
 
 import { test, expect } from '@playwright/test';
-import { createBacklogItemDirect, enableBacklogFeatureFlag, disableBacklogFeatureFlag } from './pages/BacklogMutations';
+import { createBacklogItemDirectWithPublicId, enableBacklogFeatureFlag, disableBacklogFeatureFlag } from './pages/BacklogMutations';
 
 /**
  * Story 5.2 (project_plans/backlog-deep-linking): regression coverage
@@ -23,14 +23,19 @@ test.describe('Backlog legacy ?item= deep link backcompat', () => {
 
   test('legacy_item_query_param_should_ResolveIdenticallyToBeforeFeatureShipped', async ({ page, request }) => {
     const title = `e2e-legacy-backcompat-${Date.now()}`;
-    const itemId = await createBacklogItemDirect(request, { title });
+    const { itemId, publicId } = await createBacklogItemDirectWithPublicId(request, { title });
 
     await page.goto(`/backlog?item=${itemId}`, { waitUntil: 'domcontentloaded' });
 
     const pane = page.getByTestId('backlog-item-detail');
     await expect(pane).toBeVisible();
     await expect(pane).toContainText(title);
-    await expect(page.getByTestId('backlog-item-id')).toHaveText(itemId);
+    // The legacy ?item=<uuid> URL still resolves the same item -- but every
+    // item (old or new) now displays its publicId (bl_...) per Story 2.3's
+    // universal public_id-first display, not the raw UUID. That's the
+    // intentional, additive UI change; backcompat here is about the URL/
+    // routing mechanics below, not the displayed ID text.
+    await expect(page.getByTestId('backlog-item-id')).toHaveText(publicId);
 
     // No new deep-link error/warning UI (Story 5.1's DeepLinkErrorBanner)
     // and no migration prompt appear on this legacy path. Scoped to the

@@ -26,8 +26,14 @@ test.describe('Backlog same-host deep link resolution', () => {
   });
 
   test.beforeEach(async ({ page }) => {
+    // Suppress both the backlog-specific tour and the general app-wide
+    // onboarding modal (rendered globally via CockpitShell.tsx) -- the
+    // latter renders as its own role="dialog", which would otherwise be
+    // miscounted as an "extra" dialog by this suite's no-interstitial
+    // assertions.
     await page.addInitScript(() => {
       localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+      localStorage.setItem('stapler-squad:onboarded', 'true');
     });
   });
 
@@ -41,7 +47,12 @@ test.describe('Backlog same-host deep link resolution', () => {
     await expect(pane).toBeVisible();
     await expect(pane).toContainText(title);
     // No intermediate click/dialog is required to reach the detail panel.
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    // Excludes the app's permanent "Notification Panel" (role="dialog",
+    // accessible name "Notification Panel"), which stays mounted and
+    // CSS-visible (off-screen via transform, not display:none) even when
+    // closed -- unrelated to this deep-link flow, so a blanket dialog check
+    // would misreport it as an interstitial.
+    await expect(page.getByRole('dialog').filter({ hasNotText: 'Notification' })).toHaveCount(0);
   });
 
   test('sameHostLink_should_MoveFocusToItemHeading_When_Resolved', async ({ page, request }) => {

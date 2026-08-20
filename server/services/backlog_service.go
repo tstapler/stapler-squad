@@ -653,6 +653,7 @@ type triageResultJSON struct {
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:         item.ID,
+		PublicId:   item.PublicIDRaw,
 		Title:      item.Title,
 		Priority:   int32(item.Priority),
 		Status:     string(item.Status),

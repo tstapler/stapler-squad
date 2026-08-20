@@ -599,6 +599,7 @@ type BacklogItemData struct {
 // but eagerly includes ItemSessions (with ReviewVerdict) for cost/status display.
 type BacklogItemSummary struct {
 	ID                 string               `json:"id"`
+	PublicIDRaw        string               `json:"public_id"`
 	ExternalID         string               `json:"external_id"`
 	ExternalURL        string               `json:"external_url"`
 	Labels             []string             `json:"labels"`
