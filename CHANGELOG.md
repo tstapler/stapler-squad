@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.46.0](https://github.com/tstapler/stapler-squad/compare/v1.45.1...v1.46.0) (2026-08-20)
+
+
+### Features
+
+* **backlog:** add ungated activity log for backlog items ([#552](https://github.com/tstapler/stapler-squad/issues/552)) ([2297801](https://github.com/tstapler/stapler-squad/commit/2297801a8cb10b7bfe8f16cecde3ccbcfab65d8f))
+
+
+### Bug Fixes
+
+* **backlog:** improve headless review verdict parsing and no-diff schema example ([79239ec](https://github.com/tstapler/stapler-squad/commit/79239ecb58f023bbd30ea94b0f307842b651436d))
+* **config,session:** close LoadConfig TOCTOU race and SessionDriver orphan-goroutine race ([#548](https://github.com/tstapler/stapler-squad/issues/548)) ([a32a01d](https://github.com/tstapler/stapler-squad/commit/a32a01d5d95652de0bde2442b38e24d231471420))
+* **test:** dedupe in-memory-sqlite test helper, harden tmux subprocess flakes, fix wedged-git-subprocess timeout ([#559](https://github.com/tstapler/stapler-squad/issues/559)) ([6a1fccf](https://github.com/tstapler/stapler-squad/commit/6a1fccf2422ca8359d30050a6e61baa81f1536a0))
+* **test:** resolve symlinks before comparing worktree path in TestWorkspace_UsesWorktreePath_WhenPresentOnDisk ([79ee345](https://github.com/tstapler/stapler-squad/commit/79ee3456e0d76e71556e3dc74b45e62b7ff2aa15))
+
 ## [1.45.1](https://github.com/tstapler/stapler-squad/compare/v1.45.0...v1.45.1) (2026-08-19)
 
 
