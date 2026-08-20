@@ -14,9 +14,6 @@ func TestNewInvertedIndex(t *testing.T) {
 	if idx.Index == nil {
 		t.Fatal("Index map is nil")
 	}
-	if idx.DocFrequency == nil {
-		t.Fatal("DocFrequency map is nil")
-	}
 	if idx.DocLengths == nil {
 		t.Fatal("DocLengths map is nil")
 	}
@@ -68,8 +65,8 @@ func TestAddDocument_SingleDocument(t *testing.T) {
 	}
 
 	// Check document frequency
-	if idx.DocFrequency["hello"] != 1 {
-		t.Errorf("DocFrequency['hello'] = %d, want 1", idx.DocFrequency["hello"])
+	if idx.GetDocumentFrequency("hello") != 1 {
+		t.Errorf("DocFrequency['hello'] = %d, want 1", idx.GetDocumentFrequency("hello"))
 	}
 }
 
@@ -98,14 +95,14 @@ func TestAddDocument_MultipleDocuments(t *testing.T) {
 	}
 
 	// Check document frequencies
-	if idx.DocFrequency["world"] != 2 {
-		t.Errorf("DocFrequency['world'] = %d, want 2", idx.DocFrequency["world"])
+	if idx.GetDocumentFrequency("world") != 2 {
+		t.Errorf("DocFrequency['world'] = %d, want 2", idx.GetDocumentFrequency("world"))
 	}
-	if idx.DocFrequency["hello"] != 1 {
-		t.Errorf("DocFrequency['hello'] = %d, want 1", idx.DocFrequency["hello"])
+	if idx.GetDocumentFrequency("hello") != 1 {
+		t.Errorf("DocFrequency['hello'] = %d, want 1", idx.GetDocumentFrequency("hello"))
 	}
-	if idx.DocFrequency["peace"] != 1 {
-		t.Errorf("DocFrequency['peace'] = %d, want 1", idx.DocFrequency["peace"])
+	if idx.GetDocumentFrequency("peace") != 1 {
+		t.Errorf("DocFrequency['peace'] = %d, want 1", idx.GetDocumentFrequency("peace"))
 	}
 }
 
@@ -127,8 +124,8 @@ func TestAddDocument_RepeatedTerms(t *testing.T) {
 	}
 
 	// Document frequency should still be 1 (one document)
-	if idx.DocFrequency["test"] != 1 {
-		t.Errorf("DocFrequency['test'] = %d, want 1", idx.DocFrequency["test"])
+	if idx.GetDocumentFrequency("test") != 1 {
+		t.Errorf("DocFrequency['test'] = %d, want 1", idx.GetDocumentFrequency("test"))
 	}
 }
 
@@ -247,11 +244,11 @@ func TestRemoveDocument(t *testing.T) {
 	}
 
 	// Check document frequency updated
-	if idx.DocFrequency["world"] != 1 {
-		t.Errorf("DocFrequency['world'] = %d, want 1", idx.DocFrequency["world"])
+	if idx.GetDocumentFrequency("world") != 1 {
+		t.Errorf("DocFrequency['world'] = %d, want 1", idx.GetDocumentFrequency("world"))
 	}
-	if idx.DocFrequency["hello"] != 0 {
-		t.Errorf("DocFrequency['hello'] = %d, want 0", idx.DocFrequency["hello"])
+	if idx.GetDocumentFrequency("hello") != 0 {
+		t.Errorf("DocFrequency['hello'] = %d, want 0", idx.GetDocumentFrequency("hello"))
 	}
 
 	// Check HasDocument
@@ -261,6 +258,127 @@ func TestRemoveDocument(t *testing.T) {
 	if !idx.HasDocument(2) {
 		t.Error("HasDocument(2) = false, want true")
 	}
+}
+
+// TestRemoveDocument_MiddleDocument_RebasesCSROffsets is a regression test for
+// the CSR splice in RemoveDocument (inverted_index.go ~lines 222-230): removing
+// docIndex==0 (the first posting) needs no rebasing of trailing offsets and no
+// shift of a buffer around a middle element, so it can't catch an off-by-one in
+// either the Positions splice or the "subtract span from every later offset"
+// loop. This removes the middle of three postings, each with 2+ distinct
+// positions, and checks that the flat Positions buffer and PosOffsets for the
+// surviving postings are exactly right, not just non-crashing.
+func TestRemoveDocument_MiddleDocument_RebasesCSROffsets(t *testing.T) {
+	t.Parallel()
+	idx := NewInvertedIndex()
+
+	idx.AddDocument(1, []string{"shared", "a"}, map[string][]int32{"shared": {0, 5}})
+	idx.AddDocument(2, []string{"shared", "b"}, map[string][]int32{"shared": {1, 2, 3}})
+	idx.AddDocument(3, []string{"shared", "c"}, map[string][]int32{"shared": {10, 20}})
+
+	postings := idx.Search("shared")
+	if postings == nil {
+		t.Fatal("Search('shared') returned nil before removal")
+	}
+	// Sanity-check the pre-removal CSR layout matches what we expect to splice.
+	wantPosOffsetsBefore := []int32{0, 2, 5, 7}
+	if !equalInt32Slices(postings.PosOffsets, wantPosOffsetsBefore) {
+		t.Fatalf("PosOffsets before removal = %v, want %v", postings.PosOffsets, wantPosOffsetsBefore)
+	}
+
+	// Remove the middle document (docID 2, docIndex 1).
+	idx.RemoveDocument(2)
+
+	postings = idx.Search("shared")
+	if postings == nil {
+		t.Fatal("Search('shared') returned nil after removal")
+	}
+
+	wantDocIDs := []int32{1, 3}
+	if !equalInt32Slices(postings.DocIDs, wantDocIDs) {
+		t.Fatalf("DocIDs = %v, want %v", postings.DocIDs, wantDocIDs)
+	}
+	wantFrequency := []int32{1, 1}
+	if !equalInt32Slices(postings.Frequency, wantFrequency) {
+		t.Fatalf("Frequency = %v, want %v", postings.Frequency, wantFrequency)
+	}
+	// DocIDs/Frequency must stay aligned with PosOffsets: len(PosOffsets) == len(DocIDs)+1.
+	if len(postings.PosOffsets) != len(postings.DocIDs)+1 {
+		t.Fatalf("len(PosOffsets) = %d, want len(DocIDs)+1 = %d", len(postings.PosOffsets), len(postings.DocIDs)+1)
+	}
+	wantPosOffsetsAfter := []int32{0, 2, 4}
+	if !equalInt32Slices(postings.PosOffsets, wantPosOffsetsAfter) {
+		t.Fatalf("PosOffsets after removal = %v, want %v", postings.PosOffsets, wantPosOffsetsAfter)
+	}
+
+	// The critical assertion: positions for the posting that was AFTER the
+	// removed one (doc 3, now at index 1) must read back correctly out of the
+	// shifted flat buffer, not some off-by-one slice of it.
+	doc1Positions := postings.PositionsAt(0)
+	if !equalInt32Slices(doc1Positions, []int32{0, 5}) {
+		t.Errorf("PositionsAt(0) (doc 1) = %v, want [0 5]", doc1Positions)
+	}
+	doc3Positions := postings.PositionsAt(1)
+	if !equalInt32Slices(doc3Positions, []int32{10, 20}) {
+		t.Errorf("PositionsAt(1) (doc 3, was after removed doc) = %v, want [10 20]", doc3Positions)
+	}
+}
+
+// TestRemoveDocument_LastDocument_RebasesCSROffsets covers removing the last
+// posting: docIndex == len(DocIDs)-1, so the "subtract span from every later
+// offset" loop runs exactly once (on the final offset) and must still land on
+// len(Positions) exactly.
+func TestRemoveDocument_LastDocument_RebasesCSROffsets(t *testing.T) {
+	t.Parallel()
+	idx := NewInvertedIndex()
+
+	idx.AddDocument(1, []string{"shared"}, map[string][]int32{"shared": {0, 5}})
+	idx.AddDocument(2, []string{"shared"}, map[string][]int32{"shared": {1, 2, 3}})
+	idx.AddDocument(3, []string{"shared"}, map[string][]int32{"shared": {10, 20}})
+
+	// Remove the last document (docID 3, docIndex 2).
+	idx.RemoveDocument(3)
+
+	postings := idx.Search("shared")
+	if postings == nil {
+		t.Fatal("Search('shared') returned nil after removal")
+	}
+
+	wantDocIDs := []int32{1, 2}
+	if !equalInt32Slices(postings.DocIDs, wantDocIDs) {
+		t.Fatalf("DocIDs = %v, want %v", postings.DocIDs, wantDocIDs)
+	}
+	if len(postings.PosOffsets) != len(postings.DocIDs)+1 {
+		t.Fatalf("len(PosOffsets) = %d, want len(DocIDs)+1 = %d", len(postings.PosOffsets), len(postings.DocIDs)+1)
+	}
+	wantPosOffsetsAfter := []int32{0, 2, 5}
+	if !equalInt32Slices(postings.PosOffsets, wantPosOffsetsAfter) {
+		t.Fatalf("PosOffsets after removal = %v, want %v", postings.PosOffsets, wantPosOffsetsAfter)
+	}
+	if last := postings.PosOffsets[len(postings.PosOffsets)-1]; int(last) != len(postings.Positions) {
+		t.Errorf("final PosOffsets entry = %d, want len(Positions) = %d", last, len(postings.Positions))
+	}
+
+	doc1Positions := postings.PositionsAt(0)
+	if !equalInt32Slices(doc1Positions, []int32{0, 5}) {
+		t.Errorf("PositionsAt(0) (doc 1) = %v, want [0 5]", doc1Positions)
+	}
+	doc2Positions := postings.PositionsAt(1)
+	if !equalInt32Slices(doc2Positions, []int32{1, 2, 3}) {
+		t.Errorf("PositionsAt(1) (doc 2) = %v, want [1 2 3]", doc2Positions)
+	}
+}
+
+func equalInt32Slices(a, b []int32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRemoveDocument_NonExistent(t *testing.T) {
@@ -293,9 +411,6 @@ func TestClear(t *testing.T) {
 	}
 	if len(idx.Index) != 0 {
 		t.Errorf("len(Index) = %d, want 0", len(idx.Index))
-	}
-	if len(idx.DocFrequency) != 0 {
-		t.Errorf("len(DocFrequency) = %d, want 0", len(idx.DocFrequency))
 	}
 	if len(idx.DocLengths) != 0 {
 		t.Errorf("len(DocLengths) = %d, want 0", len(idx.DocLengths))
@@ -414,14 +529,15 @@ func TestPositionTracking(t *testing.T) {
 	if quickPostings == nil {
 		t.Fatal("Search('quick') returned nil")
 	}
-	if len(quickPostings.Positions) != 1 {
-		t.Fatalf("len(Positions) = %d, want 1", len(quickPostings.Positions))
+	if len(quickPostings.DocIDs) != 1 {
+		t.Fatalf("len(DocIDs) = %d, want 1", len(quickPostings.DocIDs))
 	}
-	if len(quickPostings.Positions[0]) != 2 {
-		t.Errorf("len(Positions[0]) = %d, want 2", len(quickPostings.Positions[0]))
+	quickPositions := quickPostings.PositionsAt(0)
+	if len(quickPositions) != 2 {
+		t.Errorf("len(PositionsAt(0)) = %d, want 2", len(quickPositions))
 	}
-	if quickPostings.Positions[0][0] != 1 || quickPostings.Positions[0][1] != 4 {
-		t.Errorf("Positions[0] = %v, want [1, 4]", quickPostings.Positions[0])
+	if quickPositions[0] != 1 || quickPositions[1] != 4 {
+		t.Errorf("PositionsAt(0) = %v, want [1, 4]", quickPositions)
 	}
 }
 

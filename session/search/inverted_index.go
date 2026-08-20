@@ -6,15 +6,29 @@ import (
 
 // PostingsList represents the posting list for a term in the inverted index.
 // It contains document IDs, positions within each document, and term frequencies.
+//
+// Positions are stored CSR-style (one flat slice plus per-document offsets)
+// instead of [][]int32. A separate slice per document meant AddDocument
+// allocated O(terms × docs) tiny slices; profiling a real index load showed
+// this dominating resident heap. Flattening cuts that to O(terms) growable
+// slices — read a document's positions back out via PositionsAt.
 type PostingsList struct {
 	// DocIDs contains the list of document IDs containing this term
 	DocIDs []int32
-	// Positions contains the positions of the term within each document
-	// Positions[i] corresponds to DocIDs[i]
-	Positions [][]int32
+	// Positions is the flat, concatenated positions for every document in
+	// DocIDs. Use PositionsAt(i) rather than indexing this directly.
+	Positions []int32
+	// PosOffsets has len(DocIDs)+1 entries; PositionsAt(i) is
+	// Positions[PosOffsets[i]:PosOffsets[i+1]].
+	PosOffsets []int32
 	// Frequency contains the term frequency in each document
 	// Frequency[i] corresponds to DocIDs[i]
 	Frequency []int32
+}
+
+// PositionsAt returns the positions recorded for DocIDs[i].
+func (p *PostingsList) PositionsAt(i int) []int32 {
+	return p.Positions[p.PosOffsets[i]:p.PosOffsets[i+1]]
 }
 
 // InvertedIndex is a thread-safe inverted index for full-text search.
@@ -22,8 +36,6 @@ type PostingsList struct {
 type InvertedIndex struct {
 	// Index maps terms to their posting lists
 	Index map[string]*PostingsList
-	// DocFrequency maps terms to the number of documents containing them (for IDF calculation)
-	DocFrequency map[string]int
 	// TotalDocs is the total number of documents indexed
 	TotalDocs int
 	// DocLengths maps document IDs to their lengths (number of tokens) for BM25
@@ -38,7 +50,6 @@ type InvertedIndex struct {
 func NewInvertedIndex() *InvertedIndex {
 	return &InvertedIndex{
 		Index:        make(map[string]*PostingsList),
-		DocFrequency: make(map[string]int),
 		DocLengths:   make(map[int32]int),
 		TotalDocs:    0,
 		AvgDocLength: 0,
@@ -70,18 +81,16 @@ func (idx *InvertedIndex) AddDocument(docID int32, tokens []string, positions ma
 	}
 	idx.AvgDocLength = float64(totalLength) / float64(idx.TotalDocs)
 
-	// Track which terms are new to this document (for DocFrequency)
-	seenTerms := make(map[string]bool)
-
 	// Add each unique term to the index
 	for term, freq := range termFreq {
 		// Get or create posting list for this term
 		postingList, exists := idx.Index[term]
 		if !exists {
 			postingList = &PostingsList{
-				DocIDs:    make([]int32, 0),
-				Positions: make([][]int32, 0),
-				Frequency: make([]int32, 0),
+				DocIDs:     make([]int32, 0),
+				Positions:  make([]int32, 0),
+				PosOffsets: []int32{0},
+				Frequency:  make([]int32, 0),
 			}
 			idx.Index[term] = postingList
 		}
@@ -90,18 +99,11 @@ func (idx *InvertedIndex) AddDocument(docID int32, tokens []string, positions ma
 		postingList.DocIDs = append(postingList.DocIDs, docID)
 		postingList.Frequency = append(postingList.Frequency, int32(freq))
 
-		// Add positions if available
+		// Append positions (if any) to the flat slice and record the new offset
 		if pos, ok := positions[term]; ok {
-			postingList.Positions = append(postingList.Positions, pos)
-		} else {
-			postingList.Positions = append(postingList.Positions, []int32{})
+			postingList.Positions = append(postingList.Positions, pos...)
 		}
-
-		// Update document frequency (only count each term once per document)
-		if !seenTerms[term] {
-			idx.DocFrequency[term]++
-			seenTerms[term] = true
-		}
+		postingList.PosOffsets = append(postingList.PosOffsets, int32(len(postingList.Positions)))
 	}
 }
 
@@ -145,7 +147,11 @@ func (idx *InvertedIndex) GetDocumentFrequency(term string) int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	return idx.DocFrequency[term]
+	postingList, exists := idx.Index[term]
+	if !exists {
+		return 0
+	}
+	return len(postingList.DocIDs)
 }
 
 // GetTotalDocs returns the total number of indexed documents.
@@ -213,13 +219,19 @@ func (idx *InvertedIndex) RemoveDocument(docID int32) {
 		}
 
 		if docIndex >= 0 {
+			// Remove docIndex's positions from the flat slice, then shift every
+			// later offset left by the removed span's length.
+			start, end := postingList.PosOffsets[docIndex], postingList.PosOffsets[docIndex+1]
+			span := end - start
+			postingList.Positions = append(postingList.Positions[:start], postingList.Positions[end:]...)
+			postingList.PosOffsets = append(postingList.PosOffsets[:docIndex], postingList.PosOffsets[docIndex+1:]...)
+			for i := docIndex; i < len(postingList.PosOffsets); i++ {
+				postingList.PosOffsets[i] -= span
+			}
+
 			// Remove from posting list
 			postingList.DocIDs = append(postingList.DocIDs[:docIndex], postingList.DocIDs[docIndex+1:]...)
-			postingList.Positions = append(postingList.Positions[:docIndex], postingList.Positions[docIndex+1:]...)
 			postingList.Frequency = append(postingList.Frequency[:docIndex], postingList.Frequency[docIndex+1:]...)
-
-			// Update document frequency
-			idx.DocFrequency[term]--
 
 			// Mark term for deletion if no documents contain it
 			if len(postingList.DocIDs) == 0 {
@@ -231,7 +243,6 @@ func (idx *InvertedIndex) RemoveDocument(docID int32) {
 	// Delete empty terms
 	for _, term := range termsToDelete {
 		delete(idx.Index, term)
-		delete(idx.DocFrequency, term)
 	}
 
 	// Update document count and length tracking
@@ -256,7 +267,6 @@ func (idx *InvertedIndex) Clear() {
 	defer idx.mu.Unlock()
 
 	idx.Index = make(map[string]*PostingsList)
-	idx.DocFrequency = make(map[string]int)
 	idx.DocLengths = make(map[int32]int)
 	idx.TotalDocs = 0
 	idx.AvgDocLength = 0

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // TestEnsureDirectorySessionPath_CreatesAndGitInitsMissingDirectory verifies that
@@ -128,12 +129,24 @@ func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testin
 func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	worktreePath := t.TempDir()
+	// NewGitWorktreeFromStorage canonicalizes worktreePath (via
+	// git.CanonicalizeWorktreePath) whenever the directory exists on disk, so
+	// the expectation must be canonicalized too -- otherwise this flakes on
+	// macOS, where t.TempDir() returns a /var path that's actually a symlink
+	// to /private/var (see #558).
+	worktreePath := git.CanonicalizeWorktreePath(t.TempDir())
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
 	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
+	// NewGitWorktreeFromStorage canonicalizes worktreePath via
+	// CanonicalizeWorktreePath since the directory exists on disk (e.g. macOS's
+	// /var -> /private/var), so the expected value must go through the same
+	// resolution rather than comparing against the raw t.TempDir() string.
+	resolvedWorktreePath, err := filepath.EvalSymlinks(worktreePath)
+	require.NoError(t, err)
+
 	ws := inst.Workspace()
-	require.Equal(t, worktreePath, ws.EffectivePath)
+	require.Equal(t, resolvedWorktreePath, ws.EffectivePath)
 	require.Equal(t, repoPath, ws.RepoRoot)
 }

@@ -15,6 +15,7 @@ function makeItem(overrides: Partial<BacklogItem> & { id: string }): BacklogItem
     linkedSessions: [],
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };
