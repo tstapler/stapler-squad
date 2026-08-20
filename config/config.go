@@ -857,17 +857,39 @@ func LoadConfig() *Config {
 	cfg, err := LoadConfigFromPath(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			defaultCfg := DefaultConfig()
-			if saveErr := saveConfig(defaultCfg); saveErr != nil {
-				log.Warn("failed to save default config", "err", saveErr)
-			}
-			return defaultCfg
+			return loadConfigWithDefaultFallback(configPath)
 		}
 		log.Warn("failed to load config file", "err", err)
 		return DefaultConfig()
 	}
 
 	return cfg
+}
+
+// loadConfigWithDefaultFallback handles a not-yet-created configPath by writing
+// DefaultConfig() as the initial file. It takes the same per-path lock saveConfig
+// uses (see saveConfigMu's doc comment) and re-checks existence under that lock
+// before writing: without the re-check, a caller that observed os.IsNotExist an
+// instant before a concurrent, legitimate config.SaveConfig() call (e.g. a test
+// seeding a profile) could still land its default-config write *after* that
+// real save, silently clobbering it back to defaults. Re-checking under the
+// same lock the real save also uses makes the two calls mutually exclusive and
+// ordered, so whichever wins the race, the file reflects that decision instead
+// of two writers reordering across the check-then-write gap.
+func loadConfigWithDefaultFallback(configPath string) *Config {
+	pathLock := saveConfigLockFor(configPath)
+	pathLock.Lock()
+	defer pathLock.Unlock()
+
+	if cfg, err := LoadConfigFromPath(configPath); err == nil {
+		return cfg
+	}
+
+	defaultCfg := DefaultConfig()
+	if saveErr := saveConfigLocked(defaultCfg, configPath); saveErr != nil {
+		log.Warn("failed to save default config", "err", saveErr)
+	}
+	return defaultCfg
 }
 
 // saveConfigMu serializes the write-tmp-then-rename sequence in saveConfig,
@@ -909,14 +931,22 @@ func saveConfig(config *Config, paths ...string) error {
 		configPath = filepath.Join(configDir, ConfigFileName)
 	}
 
+	pathLock := saveConfigLockFor(configPath)
+	pathLock.Lock()
+	defer pathLock.Unlock()
+
+	return saveConfigLocked(config, configPath)
+}
+
+// saveConfigLocked performs the marshal + write-tmp-then-rename sequence.
+// Callers must hold saveConfigLockFor(configPath) — factored out so
+// loadConfigWithDefaultFallback can share the same critical section as
+// saveConfig without re-entering (and deadlocking on) the same mutex.
+func saveConfigLocked(config *Config, configPath string) error {
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-
-	pathLock := saveConfigLockFor(configPath)
-	pathLock.Lock()
-	defer pathLock.Unlock()
 
 	// Write to a uniquely-named temp file in the same directory, then rename
 	// for atomicity. The name must be unique per call (os.CreateTemp's random

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"go.uber.org/goleak"
 )
 
 // stuckDialogProcessManager implements ProcessManager. CapturePaneContent always
@@ -374,7 +376,7 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	var retried atomic.Bool
 	retried.Store(true) // already retried once
 
-	handleDriverFailure(inst, "/tmp", &retried, "unexpected exit")
+	handleDriverFailure(inst, "/tmp", &retried, "unexpected exit", make(chan struct{}))
 
 	// ReviewQueue should have an entry for this session.
 	item, found := rq.Get(inst.UUID)
@@ -833,7 +835,7 @@ func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried)
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
 	}()
 
 	// 6 ticks — double Phase 0's original 3-tick window — to prove the count
@@ -892,7 +894,7 @@ func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried)
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
 	}()
 
 	time.Sleep(driverPollInterval*6 + 500*time.Millisecond)
@@ -1192,7 +1194,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried)
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
 	}()
 	defer func() {
 		inst.mu.Lock()
@@ -1229,5 +1231,150 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 				maxDialogAnswerAttempts)
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak
+// is the dedicated regression test for the config/session TOCTOU-and-goroutine-
+// lifecycle fix: StopSessionDriver (called from Instance.Destroy()) must return
+// within a bounded time even when it races a driver goroutine that is genuinely
+// alive and blocked in its poll loop, and must leave no goroutine behind.
+//
+// The driver goroutine's main loop (runSessionDriverWithPrompt, session_driver.go)
+// spends nearly all of its life parked at `select { case <-stop: case
+// <-ticker.C: }` — so letting StartSessionDriver run for one scheduler tick
+// before calling StopSessionDriver concurrently is sufficient to catch it there,
+// mirroring the real race between an in-flight poll and a session being
+// destroyed. This does not depend on real tmux: the fake ProcessManager below
+// never matches a dialog or produces terminal content, so the loop always falls
+// straight through to the ticker wait.
+func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak(t *testing.T) {
+	// See TestActorNoLeak (actor_test.go) for why this baselines via
+	// goleak.IgnoreCurrent() instead of a bare process-wide goleak.VerifyNone().
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
+
+	fakePM := &stuckDialogProcessManager{}
+
+	inst := &Instance{
+		Title:          "concurrent-stop-test",
+		UUID:           "test-uuid-concurrent-stop",
+		Status:         Running,
+		processManager: fakePM,
+		reviewQueue:    NewReviewQueue(),
+	}
+	inst.started.Store(true)
+
+	StartSessionDriver(inst, t.TempDir())
+
+	// Let the driver goroutine actually reach its poll-loop select before
+	// racing StopSessionDriver against it.
+	deadline := time.After(time.Second)
+	for !inst.driverRunning.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("driver goroutine never marked itself running")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		StopSessionDriver(inst)
+	}()
+
+	select {
+	case <-stopDone:
+	case <-time.After(driverStopTimeout + 2*time.Second):
+		t.Fatal("StopSessionDriver did not return within its bounded timeout while racing an in-flight poll")
+	}
+
+	if inst.driverRunning.Load() {
+		t.Fatal("driverRunning still true after StopSessionDriver returned")
+	}
+
+	// A StartSessionDriver call arriving after Destroy() must be refused —
+	// driverDestroyed (set by StopSessionDriver) must permanently block it.
+	StartSessionDriver(inst, t.TempDir())
+	time.Sleep(20 * time.Millisecond)
+	if inst.driverRunning.Load() {
+		t.Fatal("StartSessionDriver spawned a new driver goroutine after the instance was destroyed")
+	}
+
+	// The deferred goleak.VerifyNone confirms the stopped goroutine (and its
+	// stop-watcher child) do not leak past this point.
+}
+
+// TestStopSessionDriver_WaitsForHandleDriverFailureRetryGoroutine_NoGoroutineLeak
+// is the regression test for the BLOCKER fix: StopSessionDriver must not return
+// while a handleDriverFailure-spawned retry continuation is still running.
+//
+// Before the fix, StopSessionDriver waited on a per-run sessionDriverStopper.done
+// channel that was only closed by the *original* run's goroutine (via
+// StartSessionDriver's defer). handleDriverFailure spawns a second, untracked-by-
+// `done` goroutine to continue the run after a restart and returns immediately
+// (see handleDriverFailure's doc comment: the caller "must return immediately"),
+// so the original goroutine's defer fired and closed `done` while the retry
+// goroutine was still alive — StopSessionDriver returned early, reintroducing the
+// exact "goroutine outlives Destroy()" bug this package exists to prevent.
+//
+// This test reproduces the exact interleaving handleDriverFailure produces
+// (Add(1) for the retry BEFORE the original goroutine's Done() fires) without
+// depending on real tmux/session restart plumbing: the fix is in StopSessionDriver
+// and inst.driverWG's bookkeeping, not in handleDriverFailure's business logic.
+func TestStopSessionDriver_WaitsForHandleDriverFailureRetryGoroutine_NoGoroutineLeak(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
+
+	inst := &Instance{Title: "test-stop-waits-for-retry"}
+	stopper := &sessionDriverStopper{stop: make(chan struct{})}
+	inst.driverStopper.Store(stopper)
+
+	retryStarted := make(chan struct{})
+	retryFinish := make(chan struct{})
+
+	// Simulate StartSessionDriver's original goroutine.
+	inst.driverWG.Add(1)
+	go func() {
+		defer inst.driverWG.Done()
+		<-stopper.stop
+
+		// Simulate handleDriverFailure: Add(1) and spawn a retry continuation
+		// BEFORE this goroutine's own Done() fires — the exact sequencing that
+		// broke the old done-channel-based StopSessionDriver.
+		inst.driverWG.Add(1)
+		go func() {
+			defer inst.driverWG.Done()
+			close(retryStarted)
+			<-retryFinish
+		}()
+	}()
+
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		StopSessionDriver(inst)
+	}()
+
+	select {
+	case <-retryStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("simulated retry goroutine never started")
+	}
+
+	select {
+	case <-stopDone:
+		t.Fatal("StopSessionDriver returned before the handleDriverFailure-style retry goroutine finished")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(retryFinish)
+
+	select {
+	case <-stopDone:
+	case <-time.After(driverStopTimeout + 2*time.Second):
+		t.Fatal("StopSessionDriver did not return after the retry goroutine finished")
 	}
 }
