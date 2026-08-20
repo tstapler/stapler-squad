@@ -440,7 +440,20 @@ func newDefaultSearchEngine() *search.SearchEngine {
 	}
 	searchEngine := search.NewSearchEngineWithPersistence(indexStore)
 	if loadErr := searchEngine.LoadIndex(); loadErr != nil {
-		log.Warn("failed to load persisted search index", "err", loadErr)
+		var versionErr *search.IndexVersionMismatchError
+		if errors.As(loadErr, &versionErr) {
+			// The on-disk index predates a schema change (see CurrentIndexVersion)
+			// and was rejected rather than mis-decoded. This self-heals: the next
+			// search request finds syncMetadata unset and triggers a full rebuild
+			// (SearchEngine.IncrementalSync -> buildIndexLocked) from live session
+			// history, so results are only empty until that first search — not
+			// until new session activity occurs.
+			log.Warn("search index format changed; discarding incompatible on-disk index",
+				"old_version", versionErr.Got, "new_version", versionErr.Want, "path", versionErr.Path,
+				"impact", "search results empty until next search request triggers an automatic full reindex")
+		} else {
+			log.Warn("failed to load persisted search index", "err", loadErr)
+		}
 	} else if meta := searchEngine.GetSyncMetadata(); meta != nil {
 		log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
 	}
