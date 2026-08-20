@@ -74,6 +74,20 @@ func Test_translateDeepLinkURL_should_BuildLocalhostItemURL_When_GivenValidDeepL
 	}
 }
 
+func Test_translateDeepLinkURL_should_EscapeQueryValue_When_IDContainsQueryMetacharacters(t *testing.T) {
+	// A raw ID of "bl_01J999&evil=1" (as it would appear after url.Parse
+	// decodes a percent-encoded '&' in the path segment) must not inject an
+	// extra query parameter into the URL handed to the OS opener.
+	got, err := translateDeepLinkURL("ssq://otherhost/backlog/v1/bl_01J999%26evil=1")
+	if err != nil {
+		t.Fatalf("translateDeepLinkURL() error = %v, want nil", err)
+	}
+	want := "http://localhost:8543/backlog?item=bl_01J999%26evil%3D1"
+	if got != want {
+		t.Errorf("translateDeepLinkURL() = %q, want %q (unescaped injection)", got, want)
+	}
+}
+
 func Test_translateDeepLinkURL_should_ReturnError_When_GivenMalformedURL(t *testing.T) {
 	_, err := translateDeepLinkURL("http://not-ssq-scheme/foo")
 	if !errors.Is(err, deeplink.ErrMalformed) {

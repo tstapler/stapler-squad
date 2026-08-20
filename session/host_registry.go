@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -193,6 +194,15 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 	if !record.HostIdentity.IsValid() || len(record.AdvertisedAddress) == 0 {
 		return false, false, fmt.Errorf("advertisement record missing host identity or advertised address")
 	}
+	for _, addr := range record.AdvertisedAddress {
+		if !isPlausiblePeerAddress(addr) {
+			log.Warn("host_registry.advertisement_rejected",
+				"host_id", record.HostIdentity.String(),
+				"reason", "implausible_advertised_address",
+				"address", addr)
+			return false, false, nil
+		}
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -222,6 +232,38 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 		return false, false, err
 	}
 	return !hadEntry, true, nil
+}
+
+// isPlausiblePeerAddress rejects an advertised address that names a
+// loopback, link-local, or unspecified endpoint (e.g. "127.0.0.1:8543",
+// "169.254.169.254:80", "localhost:1", "[::1]:80") -- the addresses a
+// misbehaving or compromised peer would advertise to redirect this
+// instance's own outbound liveness check (registryHostResolver.checkLiveness
+// in server/services/deep_link_resolver.go) at itself or at a cloud
+// metadata endpoint reachable only from this instance's network position.
+// A TOFU-pinned identity is still trusted to say who it is; this only
+// bounds where "who it is" is allowed to claim to be reachable at. Address
+// content is otherwise unrestricted -- see ADR-002's accepted same-LAN
+// threat model -- this blocks the specific classes of address that turn a
+// trust decision about identity into an SSRF primitive.
+func isPlausiblePeerAddress(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Not an IP literal (a real DNS hostname) -- can't be resolved
+		// safely here without risking a DNS-rebinding TOCTOU against
+		// whatever later dials this address, so it's allowed through
+		// unchanged; the bounded-timeout liveness check remains the
+		// backstop against a genuinely unreachable/malicious target.
+		return true
+	}
+	return !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified()
 }
 
 // Prune removes every entry whose LastSeenAt is more than the registry's

@@ -317,6 +317,62 @@ func TestHostRegistry_Advertise_should_ReturnError_When_AdvertisedAddressEmpty(t
 	}
 }
 
+func TestHostRegistry_Advertise_should_RejectAndNotUpsert_When_AdvertisedAddressIsLoopbackOrLinkLocal(t *testing.T) {
+	implausible := []string{
+		"127.0.0.1:8543",
+		"localhost:8543",
+		"169.254.169.254:80", // cloud metadata endpoint
+		"[::1]:8543",
+		"0.0.0.0:8543",
+	}
+	for _, addr := range implausible {
+		t.Run(addr, func(t *testing.T) {
+			stateDir := t.TempDir()
+			registry, err := NewHostRegistry(stateDir, DefaultHostRegistryTTL)
+			if err != nil {
+				t.Fatalf("NewHostRegistry() error = %v, want nil", err)
+			}
+			identity, err := LoadOrCreateHostIdentity(t.TempDir())
+			if err != nil {
+				t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
+			}
+
+			record := newTestAdvertisement(t, identity, []string{addr}, time.Now())
+			isNew, accepted, err := registry.Advertise(record)
+			if err != nil {
+				t.Fatalf("Advertise(%q) error = %v, want nil", addr, err)
+			}
+			if isNew || accepted {
+				t.Fatalf("Advertise(%q) = (isNew=%v, accepted=%v), want (false, false)", addr, isNew, accepted)
+			}
+			if _, ok := registry.Lookup(identity.ID); ok {
+				t.Fatalf("Lookup() found an entry for %q, want none -- implausible address must not be upserted", addr)
+			}
+		})
+	}
+}
+
+func TestHostRegistry_Advertise_should_Accept_When_AdvertisedAddressIsOrdinaryLANHost(t *testing.T) {
+	stateDir := t.TempDir()
+	registry, err := NewHostRegistry(stateDir, DefaultHostRegistryTTL)
+	if err != nil {
+		t.Fatalf("NewHostRegistry() error = %v, want nil", err)
+	}
+	identity, err := LoadOrCreateHostIdentity(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
+	}
+
+	record := newTestAdvertisement(t, identity, []string{"192.168.1.42:8543"}, time.Now())
+	_, accepted, err := registry.Advertise(record)
+	if err != nil {
+		t.Fatalf("Advertise() error = %v, want nil", err)
+	}
+	if !accepted {
+		t.Fatalf("Advertise() accepted = false, want true for an ordinary LAN address")
+	}
+}
+
 func TestHostRegistry_LookupByHostname_should_ReturnEntry_When_HostnameMatchesAdvertisedAddress(t *testing.T) {
 	stateDir := t.TempDir()
 	registry, err := NewHostRegistry(stateDir, DefaultHostRegistryTTL)

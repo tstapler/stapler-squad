@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +40,33 @@ func newDeepLinkResolverForTest(items backlogItemGetter, hostname string) *DeepL
 	r := NewDeepLinkResolver(items, nil)
 	r.ownHostname = fakeOwnHostname(hostname)
 	return r
+}
+
+// stubHealthTransport lets liveness-check tests control checkLiveness's
+// http.Client.Do outcome directly, without a real network dial -- needed
+// because the advertised addresses these tests seed must be plausible
+// (non-loopback) per session.HostRegistry's isPlausiblePeerAddress SSRF
+// guard, so a real httptest.Server (always loopback-bound) can no longer
+// stand in for "the address is live."
+type stubHealthTransport struct {
+	respond func(req *http.Request) (*http.Response, error)
+}
+
+func (s stubHealthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return s.respond(req)
+}
+
+// registryResolverWithStubTransport builds a registryHostResolver identical
+// to NewRegistryHostResolver's, except its httpClient's Transport is the
+// given stub rather than the real network -- same package as
+// registryHostResolver, so its unexported fields are reachable directly.
+func registryResolverWithStubTransport(stateDir string, transport http.RoundTripper) *registryHostResolver {
+	return &registryHostResolver{
+		stateDir:        stateDir,
+		registryTTL:     session.DefaultHostRegistryTTL,
+		httpClient:      &http.Client{Transport: transport},
+		livenessTimeout: defaultLivenessTimeout,
+	}
 }
 
 func TestDeepLinkResolver_should_ReturnLocalItemPayload_When_HostnameMatchesThisInstance(t *testing.T) {
@@ -175,22 +201,22 @@ func TestDeepLinkResolver_should_ReturnHandoffAddress_When_HostnameKnownAndLiven
 	storage := createTestStorage(t)
 	stateDir := t.TempDir()
 
-	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer live.Close()
-	// Advertise as "localhost:<port>" rather than the raw 127.0.0.1 address
-	// so the hostname component matches the ssq:// URL's "localhost" host
-	// (session.HostRegistry.LookupByHostname matches on hostname, not IP),
-	// while the address remains real and connectable for the liveness check.
-	addr := "localhost:" + strings.TrimPrefix(live.URL, "http://127.0.0.1:")
+	// A plausible (non-loopback) advertised address -- session.HostRegistry
+	// rejects loopback/link-local addresses at Advertise-time as an SSRF
+	// guard, so this can no longer be a real httptest.Server's 127.0.0.1
+	// address. The liveness check itself is stubbed below instead of hitting
+	// the network.
+	addr := "remotehost.internal:9443"
 
 	seedRegistryEntry(t, stateDir, addr)
 
-	resolver := NewDeepLinkResolver(storage, NewRegistryHostResolver(stateDir, session.DefaultHostRegistryTTL))
+	transport := stubHealthTransport{respond: func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	}}
+	resolver := NewDeepLinkResolver(storage, registryResolverWithStubTransport(stateDir, transport))
 	resolver.ownHostname = fakeOwnHostname("myhost")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url=ssq://localhost/backlog/v1/bl_01J0000000000000000000", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url=ssq://remotehost.internal/backlog/v1/bl_01J0000000000000000000", nil)
 	rec := httptest.NewRecorder()
 
 	resolver.HandleResolve(rec, req)
@@ -233,28 +259,24 @@ func TestDeepLinkResolver_should_ReturnUnreachableWithinBoundedTimeout_When_Live
 	storage := createTestStorage(t)
 	stateDir := t.TempDir()
 
-	// A handler that hangs until the test unblocks it, so the request
-	// stalls until the resolver's own bounded liveness timeout fires --
-	// not until any real network/DNS failure. block is released before
-	// hang.Close() (deferred in reverse order) so Close() doesn't wait
-	// forever on a handler goroutine that never returns.
-	block := make(chan struct{})
-	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-block
-	}))
-	defer hang.Close()
-	defer close(block)
-	// See the handoff-address test above: advertise "localhost:<port>" so the
-	// hostname matches the ssq:// URL's "localhost" host while the address
-	// itself stays real (and hangs, for this test).
-	addr := "localhost:" + strings.TrimPrefix(hang.URL, "http://127.0.0.1:")
+	// See the handoff-address test above: advertise a plausible (non-loopback)
+	// address and stub the liveness transport rather than dialing a real
+	// httptest.Server, which would always be loopback and rejected by
+	// session.HostRegistry's SSRF guard. The stub blocks until the
+	// resolver's own bounded liveness timeout cancels the request's
+	// context, exactly like a real unresponsive peer would.
+	addr := "remotehost.internal:9443"
 
 	seedRegistryEntry(t, stateDir, addr)
 
-	resolver := NewDeepLinkResolver(storage, NewRegistryHostResolver(stateDir, session.DefaultHostRegistryTTL))
+	transport := stubHealthTransport{respond: func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	}}
+	resolver := NewDeepLinkResolver(storage, registryResolverWithStubTransport(stateDir, transport))
 	resolver.ownHostname = fakeOwnHostname("myhost")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url=ssq://localhost/backlog/v1/bl_01J0000000000000000000", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url=ssq://remotehost.internal/backlog/v1/bl_01J0000000000000000000", nil)
 	rec := httptest.NewRecorder()
 
 	start := time.Now()

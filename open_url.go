@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"runtime"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -26,7 +27,13 @@ func translateDeepLinkURL(raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s/%s?item=%s", localWebAppBaseURL, link.ItemType, link.ID), nil
+	// ItemType/ID come from ParseDeepLink's decoded URL path segments, so a
+	// crafted ssq:// link (e.g. an ID containing a percent-encoded '&') could
+	// otherwise inject extra query parameters into the URL handed to the OS
+	// opener. url.PathEscape/QueryEscape close that off the same way
+	// web-app/src/app/resolve/page.tsx's encodeURIComponent already does on
+	// the browser side.
+	return fmt.Sprintf("%s/%s?item=%s", localWebAppBaseURL, url.PathEscape(link.ItemType), url.QueryEscape(link.ID)), nil
 }
 
 // osOpenerCommand returns the OS command used to open a URL in the user's
