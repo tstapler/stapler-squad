@@ -23,11 +23,19 @@ type convergenceNode struct {
 	identity   session.HostIdentity
 	registry   *session.HostRegistry
 	advertiser *session.HostAdvertiser
-	url        string
+	server     *httptest.Server
+	addr       string // bare "host:port", the AdvertisedAddress format (ADR-002)
 }
 
 func newConvergenceNode(t *testing.T) *convergenceNode {
 	t.Helper()
+	// A real end-to-end gossip test can only bind httptest servers to
+	// loopback, which session.HostRegistry.Advertise otherwise rejects as
+	// an implausible (SSRF-prone) peer address -- see
+	// SetAllowImplausibleAddressesForTest's doc comment.
+	session.SetAllowImplausibleAddressesForTest(true)
+	t.Cleanup(func() { session.SetAllowImplausibleAddressesForTest(false) })
+
 	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
@@ -39,14 +47,17 @@ func newConvergenceNode(t *testing.T) *convergenceNode {
 
 	mux := http.NewServeMux()
 	server := httptest.NewUnstartedServer(mux)
-	url := "http://" + server.Listener.Addr().String()
+	addr := server.Listener.Addr().String()
 
-	advertiser := session.NewHostAdvertiser(identity, registry, []string{url}, time.Hour)
-	auth.RegisterHostAdvertisementRoute(mux, identity, registry, advertiser, []string{url})
-	server.Start()
+	advertiser := session.NewHostAdvertiser(identity, registry, []string{addr}, time.Hour)
+	auth.RegisterHostAdvertisementRoute(mux, identity, registry, advertiser, []string{addr})
+	// StartTLS, not Start: every production --remote-port server is
+	// TLS-only (server/server.go's StartRemote always calls ServeTLS), and
+	// HostAdvertiser now dials peers over https:// accordingly.
+	server.StartTLS()
 	t.Cleanup(server.Close)
 
-	return &convergenceNode{identity: identity, registry: registry, advertiser: advertiser, url: url}
+	return &convergenceNode{identity: identity, registry: registry, advertiser: advertiser, server: server, addr: addr}
 }
 
 // seedKnownPeer makes node aware of peer as if peer's address had been
@@ -55,7 +66,7 @@ func newConvergenceNode(t *testing.T) *convergenceNode {
 // already know how to reach each other before gossip begins.
 func seedKnownPeer(t *testing.T, node, peer *convergenceNode) {
 	t.Helper()
-	record := session.BuildAdvertisement(peer.identity, []string{peer.url}, time.Now())
+	record := session.BuildAdvertisement(peer.identity, []string{peer.addr}, time.Now())
 	if _, _, err := node.registry.Advertise(record); err != nil {
 		t.Fatalf("seeding known peer failed: %v", err)
 	}
@@ -90,17 +101,20 @@ func TestAdvertisementEndpoint_should_ConvergeThreeNodeTopology_When_BoundedReGo
 	if !ok {
 		t.Fatalf("C never learned about A -- bounded re-gossip through B did not converge")
 	}
-	if len(entry.AdvertisedAddress) == 0 || entry.AdvertisedAddress[0] != nodeA.url {
-		t.Fatalf("C's entry for A has AdvertisedAddress = %v, want [%s]", entry.AdvertisedAddress, nodeA.url)
+	if len(entry.AdvertisedAddress) == 0 || entry.AdvertisedAddress[0] != nodeA.addr {
+		t.Fatalf("C's entry for A has AdvertisedAddress = %v, want [%s]", entry.AdvertisedAddress, nodeA.addr)
 	}
 
 	if _, ok := nodeB.registry.Lookup(nodeA.identity.ID); !ok {
 		t.Fatalf("B (the direct recipient) never learned about A")
 	}
 
-	// Malformed payload against a live node's real HTTP server: rejected
+	// Malformed payload against a live node's real HTTPS server: rejected
 	// cleanly (non-2xx), never a panic or a silently-accepted bad record.
-	resp, err := http.Post(nodeB.url+session.AdvertisementEndpointPath, "application/json", strings.NewReader("{not valid json"))
+	// nodeB.server.Client() is pre-configured to trust the httptest
+	// server's self-signed cert (mirroring peerTLSTransport's production
+	// InsecureSkipVerify, but scoped to this specific test server).
+	resp, err := nodeB.server.Client().Post(nodeB.server.URL+session.AdvertisementEndpointPath, "application/json", strings.NewReader("{not valid json"))
 	if err != nil {
 		t.Fatalf("POST malformed payload: %v", err)
 	}

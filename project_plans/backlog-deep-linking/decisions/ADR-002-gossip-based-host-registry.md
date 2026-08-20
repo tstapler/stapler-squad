@@ -148,3 +148,17 @@ the steering's own constraint.
   already be able to reach each other's advertised address at the network layer; this registry
   only solves "which address is currently valid for which identity," not "make unreachable
   hosts reachable."
+- **TLS certificate verification is intentionally skipped for peer-to-peer advertisement and
+  liveness traffic.** Every instance's `--remote-port` server is TLS-only (`server/server.go`'s
+  `StartRemote` always calls `ServeTLS`), but each instance also mints its own local, self-signed
+  CA (`server/tls.go`) with no mechanism for two independently-provisioned hosts to share or
+  exchange CAs — certificate-chain verification between peers cannot succeed by construction.
+  `session.HostAdvertiser` and `server/services.registryHostResolver` both dial peers with
+  `InsecureSkipVerify: true`. This is not a gap: it is consistent with the trust model already
+  described above — peer identity is authenticated at the application layer (Ed25519 signature
+  verified against a TOFU-pinned public key in `HostRegistry.Advertise`), and TLS here provides
+  transport encryption only, not identity assurance. Found and fixed during Phase 6 verification
+  (2026-08-20): the original implementation used plain `http://` against a TLS-only server and a
+  schemeless URL in `SendAdvertisement`, so gossip and liveness checks were both non-functional
+  end-to-end despite unit tests passing (tests exercised plain-HTTP fixtures that didn't
+  reproduce the real server's TLS-only listener).

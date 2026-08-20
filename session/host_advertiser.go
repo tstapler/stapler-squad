@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -49,8 +50,20 @@ func NewHostAdvertiser(identity HostIdentity, registry *HostRegistry, addresses 
 		identity:  identity,
 		registry:  registry,
 		addresses: addresses,
-		client:    &http.Client{Timeout: 5 * time.Second},
-		interval:  interval,
+		// TLSClientConfig.InsecureSkipVerify: every peer's --remote-port
+		// server (server/server.go's StartRemote) always serves TLS with a
+		// locally-minted self-signed CA (server/tls.go) -- there is no
+		// shared CA between independently-provisioned hosts for per-
+		// connection certificate verification to succeed against. Per
+		// ADR-002, peer identity is instead authenticated at the
+		// application layer: HostRegistry.Advertise only accepts a record
+		// whose Ed25519 signature verifies against a TOFU-pinned public
+		// key. TLS here provides transport encryption only.
+		client: &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec // see comment above
+		},
+		interval: interval,
 	}
 }
 
@@ -92,7 +105,11 @@ func (a *HostAdvertiser) SendAdvertisement(ctx context.Context, addr string, rec
 	if err != nil {
 		return fmt.Errorf("failed to marshal advertisement: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, addr+AdvertisementEndpointPath, bytes.NewReader(body))
+	// addr is a bare "host:port" (see main.go's selfAddresses, per ADR-002's
+	// AdvertisedAddress format) -- it needs an explicit scheme before it's a
+	// valid absolute URL; without one, http.NewRequestWithContext fails to
+	// parse it ("first path segment in URL cannot contain colon").
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+addr+AdvertisementEndpointPath, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to build advertisement request: %w", err)
 	}

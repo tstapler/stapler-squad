@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -84,9 +85,25 @@ func NewRegistryHostResolver(stateDir string, ttl time.Duration) *registryHostRe
 	return &registryHostResolver{
 		stateDir:        stateDir,
 		registryTTL:     ttl,
-		httpClient:      &http.Client{},
+		httpClient:      &http.Client{Transport: peerTLSTransport()},
 		livenessTimeout: defaultLivenessTimeout,
 	}
+}
+
+// peerTLSTransport returns an http.Transport for dialing another
+// stapler-squad instance's --remote-port server (server/server.go's
+// StartRemote always calls ServeTLS -- there is no plaintext-HTTP remote
+// listener). Certificate verification is deliberately skipped: each
+// instance mints its own local, self-signed TLS CA (server/tls.go) with no
+// mechanism for two independently-provisioned hosts to share or exchange
+// CAs, so per-connection TLS verification cannot succeed between peers by
+// construction. Authentication instead happens at the application layer,
+// exactly as ADR-002 designs it: an advertisement is only trusted if its
+// Ed25519 signature verifies against a TOFU-pinned public key
+// (session.HostRegistry.Advertise) -- TLS here provides transport
+// encryption only, not peer identity.
+func peerTLSTransport() *http.Transport {
+	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // see doc comment: identity is verified at the application layer (Ed25519/TOFU), not via the TLS chain
 }
 
 // ResolveHost implements HostResolver.
@@ -121,7 +138,7 @@ func (r *registryHostResolver) checkLiveness(address string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), r.livenessTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+address+"/health", nil)
 	if err != nil {
 		return false
 	}

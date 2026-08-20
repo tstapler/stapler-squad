@@ -195,7 +195,7 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 		return false, false, fmt.Errorf("advertisement record missing host identity or advertised address")
 	}
 	for _, addr := range record.AdvertisedAddress {
-		if !isPlausiblePeerAddress(addr) {
+		if !allowImplausibleAddressesForTest && !isPlausiblePeerAddress(addr) {
 			log.Warn("host_registry.advertisement_rejected",
 				"host_id", record.HostIdentity.String(),
 				"reason", "implausible_advertised_address",
@@ -233,6 +233,14 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 	}
 	return !hadEntry, true, nil
 }
+
+// allowImplausibleAddressesForTest disables isPlausiblePeerAddress's
+// rejection below. Only ever set (via SetAllowImplausibleAddressesForTest
+// in export_test.go, compiled solely into test binaries -- never part of a
+// production build) by tests that need a real loopback-bound HTTP/TLS
+// server to exercise gossip end-to-end, since httptest servers cannot bind
+// a non-loopback address.
+var allowImplausibleAddressesForTest = false
 
 // isPlausiblePeerAddress rejects an advertised address that names a
 // loopback, link-local, or unspecified endpoint (e.g. "127.0.0.1:8543",
