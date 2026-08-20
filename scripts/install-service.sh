@@ -232,6 +232,19 @@ EOF
     echo ""
     log_info "Optional — keep service running after logout (one-time setup):"
     echo "    loginctl enable-linger \$USER"
+
+    # Register stapler-squad as the OS handler for ssq:// deep links (Story 4.2,
+    # project_plans/backlog-deep-linking/implementation/plan.md). Non-fatal: a
+    # missing xdg-mime/update-desktop-database (minimal containers, WSL) should
+    # not fail the whole service install — only the click-to-open convenience
+    # is lost, the service itself still runs fine.
+    echo ""
+    log_info "Registering ssq:// URL scheme handler..."
+    if "$bin_path" --register-linux-scheme "$bin_path"; then
+        log_success "ssq:// scheme handler registered."
+    else
+        log_warning "Failed to register ssq:// scheme handler (xdg-mime/update-desktop-database may be unavailable). Deep links from other apps won't open stapler-squad, but the service itself is unaffected."
+    fi
 }
 
 # ── TCC / Full Disk Access helpers ───────────────────────────────────────────

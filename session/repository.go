@@ -443,7 +443,13 @@ type SourceSyncEventData struct {
 
 // BacklogItemData is the domain model for a backlog item.
 type BacklogItemData struct {
-	ID                 string
+	ID string
+	// PublicIDRaw is the raw public_id column value ("" when unset — see
+	// session/ent/schema/backlog_item.go's field comment for why that's a
+	// real SQL NULL underneath, not a deliberately-empty string). Do not
+	// compare this to "" or parse it directly at call sites — use the
+	// PublicID() accessor, which centralizes that decision.
+	PublicIDRaw        string
 	Title              string
 	Description        string
 	AcceptanceCriteria AcCriteriaJSON
@@ -593,6 +599,7 @@ type BacklogItemData struct {
 // but eagerly includes ItemSessions (with ReviewVerdict) for cost/status display.
 type BacklogItemSummary struct {
 	ID                 string               `json:"id"`
+	PublicIDRaw        string               `json:"public_id"`
 	ExternalID         string               `json:"external_id"`
 	ExternalURL        string               `json:"external_url"`
 	Labels             []string             `json:"labels"`

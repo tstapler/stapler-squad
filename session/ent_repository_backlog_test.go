@@ -860,3 +860,235 @@ func TestMapAppendActivityNoteCreateError_should_WrapPlainError_When_ErrIsNotCon
 // adapter rather than a package-internal recording double — an internal
 // session-package test file cannot import server/services without an
 // import cycle, since server/services itself imports session.
+
+// TestEntRepositoryBacklog_should_EnforceUniqueConstraint_When_DuplicatePublicIdInserted
+// is the ent-level regression guard for Story 1.2's public_id column
+// (session/ent/schema/backlog_item.go): two rows left with public_id unset
+// must coexist without colliding — the field's Optional() (without
+// Nillable()) makes the underlying SQL column a real NULL, and standard SQL
+// UNIQUE semantics never treat two NULLs as equal, per that field's
+// documented decision — while a genuine duplicate non-empty value must still
+// be rejected by the same unique index. Also asserts the unset rows round
+// trip through the BacklogItemData.PublicID() accessor as absent, not as a
+// parseable id and not as accidentally "equal" to one another.
+func TestEntRepositoryBacklog_should_EnforceUniqueConstraint_When_DuplicatePublicIdInserted(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	unsetA, err := repo.client.BacklogItem.Create().SetTitle("unset a").Save(ctx)
+	require.NoError(t, err, "creating a row with public_id unset must succeed")
+	unsetB, err := repo.client.BacklogItem.Create().SetTitle("unset b").Save(ctx)
+	require.NoError(t, err, "a second row with public_id unset must also succeed — NULL != NULL for uniqueness")
+
+	dataA := backlogItemToData(unsetA)
+	dataB := backlogItemToData(unsetB)
+	if _, ok := dataA.PublicID(); ok {
+		t.Fatalf("PublicID() reported present for row %s created without public_id", unsetA.ID)
+	}
+	if _, ok := dataB.PublicID(); ok {
+		t.Fatalf("PublicID() reported present for row %s created without public_id", unsetB.ID)
+	}
+
+	const dup = "bl_01JDUPLICATETESTVALUE0001"
+	_, err = repo.client.BacklogItem.Create().SetTitle("dup 1").SetPublicID(dup).Save(ctx)
+	require.NoError(t, err, "first row with an explicit public_id must succeed")
+
+	_, err = repo.client.BacklogItem.Create().SetTitle("dup 2").SetPublicID(dup).Save(ctx)
+	require.Error(t, err, "a second row with the same non-empty public_id must be rejected")
+	assert.True(t, ent.IsConstraintError(err), "expected a unique-constraint violation for duplicate public_id, got: %v", err)
+}
+
+// pragmaIndexColumns returns the column names covered by a sqlite index,
+// via PRAGMA index_info(<name>) on the given raw connection.
+func pragmaIndexColumns(t *testing.T, rawDB *sql.DB, indexName string) []string {
+	t.Helper()
+	rows, err := rawDB.Query(fmt.Sprintf("PRAGMA index_info(%q);", indexName))
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var seqno, cid int
+		var name sql.NullString
+		require.NoError(t, rows.Scan(&seqno, &cid, &name))
+		if name.Valid {
+			cols = append(cols, name.String)
+		}
+	}
+	require.NoError(t, rows.Err())
+	return cols
+}
+
+// backlogItemsHasColumn reports whether backlog_items currently has a column
+// with the given name, via PRAGMA table_info on the given raw connection.
+func backlogItemsHasColumn(t *testing.T, rawDB *sql.DB, columnName string) bool {
+	t.Helper()
+	rows, err := rawDB.Query(`PRAGMA table_info(backlog_items);`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dfltValue sql.NullString
+		require.NoError(t, rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk))
+		if name == columnName {
+			found = true
+		}
+	}
+	require.NoError(t, rows.Err())
+	return found
+}
+
+// TestMigrationShouldBeReversible_WhenBacklogItemPublicIdColumnAddedThenRemoved
+// is Story 1.2's migration-reversibility guard for the additive `public_id`
+// column (session/ent/schema/backlog_item.go), matching the test mapped in
+// project_plans/backlog-deep-linking/implementation/validation.md ("Migration
+// Plan: additive public_id column" row): run the additive migration up
+// against a scratch DB, verify the public_id column exists as
+// Optional/Unique/indexed and pre-existing rows are untouched, then run the
+// "down" direction and verify the column is gone and the id/UUID-keyed data
+// is unaffected.
+//
+// ent has no first-class down-migration (client.Schema.Create only ever
+// migrates forward, additively, to match the current Go schema — see
+// TestNewEntRepository_should_MigrateExistingDatabaseSuccessfully_When_BacklogItemDependenciesTableIsMissing
+// above for the same up-migration-only reality applied to a whole table).
+// So, mirroring that test's established pattern, both migration directions
+// are exercised via raw-connection DDL against a real sqlite file: "up" is
+// reconstructed by opening a pre-feature-schema DB (public_id column
+// dropped) through the real production entry point (NewEntRepository,
+// whose internal client.Schema.Create call is the actual code under test),
+// and "down" is simulated by dropping the column again afterward — the
+// mechanical operation an actual down-migration would perform — then
+// confirming the id/UUID column and its data survive untouched.
+func TestMigrationShouldBeReversible_WhenBacklogItemPublicIdColumnAddedThenRemoved(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, fmt.Sprintf("public-id-migration-test-%d.db", time.Now().UnixNano()))
+
+	// Step 1: build the database with the current full schema (public_id
+	// included) and seed pre-existing rows, one with public_id left unset
+	// (simulating a row created before Story 1.4's backfill ever runs) and
+	// one with an explicit value.
+	repo, err := NewEntRepository(WithDatabasePath(dbPath))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	unsetItem, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item predating the public_id column",
+	})
+	require.NoError(t, err)
+
+	setItem, err := repo.client.BacklogItem.Create().
+		SetTitle("item with an explicit public_id").
+		SetPublicID("bl_01JMIGRATIONREVERSIBLETEST1").
+		Save(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.Close())
+
+	// Step 2: reconstruct the pre-migration ("before up") schema state by
+	// dropping the public_id column via a raw connection — sqlite (bundled
+	// via mattn/go-sqlite3 v1.14.40) supports ALTER TABLE ... DROP COLUMN.
+	rawDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_timeout=5000&_fk=1")
+	require.NoError(t, err)
+	// sqlite refuses ALTER TABLE ... DROP COLUMN when the column still backs
+	// an index, so the unique index over public_id (Story 1.2) must be
+	// dropped first.
+	_, err = rawDB.Exec(`DROP INDEX IF EXISTS backlog_items_public_id_key;`)
+	require.NoError(t, err)
+	_, err = rawDB.Exec(`ALTER TABLE backlog_items DROP COLUMN public_id;`)
+	require.NoError(t, err)
+	require.False(t, backlogItemsHasColumn(t, rawDB, "public_id"), "public_id column must be gone after the pre-migration reconstruction")
+	require.NoError(t, rawDB.Close())
+
+	// Step 3 ("up"): reopen via the real production entry point. Its
+	// internal client.Schema.Create call is the actual additive migration
+	// under test — it must succeed against the now-missing column with
+	// pre-existing rows still in place, and must not disturb their id/title
+	// data.
+	migrated, err := NewEntRepository(WithDatabasePath(dbPath))
+	require.NoError(t, err, "the additive public_id migration must succeed against a database missing that column")
+
+	// NewEntRepository's constructor runs BackfillBacklogItemPublicIDs
+	// (Story 1.4) immediately after Schema.Create, so the row that predated
+	// the column is expected to come back with a freshly minted public_id
+	// rather than staying absent — the assertion that matters here is that
+	// its pre-existing id/title data is untouched by either the schema
+	// migration or the backfill.
+	fetchedUnset, err := migrated.GetBacklogItem(ctx, unsetItem.ID)
+	require.NoError(t, err)
+	assert.Equal(t, unsetItem.ID, fetchedUnset.ID)
+	assert.Equal(t, "item predating the public_id column", fetchedUnset.Title)
+	if _, ok := fetchedUnset.PublicID(); !ok {
+		t.Fatalf("expected public_id to have been backfilled for %s after migration re-added the column", unsetItem.ID)
+	}
+
+	// setItem's original explicit value ("bl_01JMIGRATIONREVERSIBLETEST1")
+	// cannot survive this round-trip: ALTER TABLE ... DROP COLUMN discards
+	// that column's data for every row, not just the ones that were unset —
+	// there is no way for a raw column drop to distinguish "had a value" from
+	// "didn't." That's the correct, expected behavior of a real down
+	// migration on a lossy column removal, not a test bug. What must hold is
+	// that setItem's other data (id, title) is unaffected, and that it too
+	// receives a freshly backfilled public_id distinct from fetchedUnset's —
+	// proving the backfill doesn't collide when multiple rows need new values
+	// at once.
+	fetchedSet, err := migrated.GetBacklogItem(ctx, setItem.ID.String())
+	require.NoError(t, err)
+	assert.Equal(t, setItem.ID.String(), fetchedSet.ID)
+	assert.Equal(t, "item with an explicit public_id", fetchedSet.Title)
+	if _, ok := fetchedSet.PublicID(); !ok {
+		t.Fatalf("expected public_id to have been backfilled for %s after migration re-added the column", setItem.ID)
+	}
+	assert.NotEqual(t, fetchedUnset.PublicIDRaw, fetchedSet.PublicIDRaw, "backfilled public_id values must be unique across rows")
+
+	// Verify the re-added column is Optional (nullable) and Unique+indexed,
+	// per Story 1.2's schema decision.
+	verifyDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_timeout=5000&_fk=1")
+	require.NoError(t, err)
+	require.True(t, backlogItemsHasColumn(t, verifyDB, "public_id"), "public_id column must exist after the up migration")
+
+	indexRows, err := verifyDB.Query(`PRAGMA index_list(backlog_items);`)
+	require.NoError(t, err)
+	foundUniquePublicIDIndex := false
+	for indexRows.Next() {
+		var seq int
+		var name string
+		var unique, partial int
+		var origin string
+		require.NoError(t, indexRows.Scan(&seq, &name, &unique, &origin, &partial))
+		if unique != 1 {
+			continue
+		}
+		cols := pragmaIndexColumns(t, verifyDB, name)
+		if len(cols) == 1 && cols[0] == "public_id" {
+			foundUniquePublicIDIndex = true
+		}
+	}
+	require.NoError(t, indexRows.Err())
+	require.NoError(t, indexRows.Close())
+	require.True(t, foundUniquePublicIDIndex, "expected a unique index over public_id after the up migration")
+	require.NoError(t, migrated.Close())
+
+	// Step 4 ("down"): simulate a down-migration by dropping the column
+	// again via the same raw-connection mechanism used to build the "before"
+	// state in step 2, then verify the id/UUID-keyed rows and their other
+	// data are unaffected — the column removal touches only that column.
+	_, err = verifyDB.Exec(`DROP INDEX IF EXISTS backlog_items_public_id_key;`)
+	require.NoError(t, err)
+	_, err = verifyDB.Exec(`ALTER TABLE backlog_items DROP COLUMN public_id;`)
+	require.NoError(t, err, "down migration (dropping public_id) must succeed")
+	require.False(t, backlogItemsHasColumn(t, verifyDB, "public_id"), "public_id column must be gone after the down migration")
+
+	var unsetTitleAfterDown, setTitleAfterDown string
+	require.NoError(t, verifyDB.QueryRow(`SELECT title FROM backlog_items WHERE id = ?;`, unsetItem.ID).Scan(&unsetTitleAfterDown))
+	assert.Equal(t, "item predating the public_id column", unsetTitleAfterDown, "id/UUID-keyed row data must be unaffected by the down migration")
+	require.NoError(t, verifyDB.QueryRow(`SELECT title FROM backlog_items WHERE id = ?;`, setItem.ID.String()).Scan(&setTitleAfterDown))
+	assert.Equal(t, "item with an explicit public_id", setTitleAfterDown, "id/UUID-keyed row data must be unaffected by the down migration")
+
+	require.NoError(t, verifyDB.Close())
+}

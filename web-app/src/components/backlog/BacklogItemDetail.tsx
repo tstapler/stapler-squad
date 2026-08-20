@@ -1255,12 +1255,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               )}
             </div>
             <div className={styles.idRow}>
-              <span className={styles.idText} data-testid="backlog-item-id">{item.id}</span>
+              <span className={styles.idText} data-testid="backlog-item-id">{item.publicId || item.id}</span>
               <button
                 type="button"
                 className={styles.copyButton}
-                onClick={() => handleCopy("id", item.id)}
-                aria-label="Copy item ID"
+                onClick={() => handleCopy("id", item.publicId || item.id)}
+                aria-label={copiedField === "id" ? "Copied item ID to clipboard" : "Copy item ID"}
                 data-testid="copy-item-id-button"
               >
                 {copiedField === "id" ? "✓ Copied" : "Copy ID"}
@@ -1268,12 +1268,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               <button
                 type="button"
                 className={styles.copyButton}
-                onClick={() => handleCopy("link", `${window.location.origin}/backlog?item=${item.id}`)}
-                aria-label="Copy shareable link"
+                onClick={() =>
+                  handleCopy("link", `ssq://${window.location.host}/backlog/v1/${item.publicId || item.id}`)
+                }
+                aria-label={copiedField === "link" ? "Copied link to clipboard" : "Copy shareable link"}
                 data-testid="copy-item-link-button"
               >
                 {copiedField === "link" ? "✓ Copied" : "Copy Link"}
               </button>
+              {/*
+                Dynamic aria-live confirmation region: the copy buttons'
+                own aria-label already changes post-copy (above), but a
+                screen reader focused elsewhere on the page only hears
+                that if it re-visits the button. This region announces
+                the same confirmation proactively, closing the
+                accessibility gap flagged in
+                project_plans/backlog-deep-linking/design/ux.md (Copy
+                Link/Copy ID had only a static label before).
+              */}
+              <span
+                aria-live="polite"
+                role="status"
+                data-testid="copy-status-announcement"
+                style={{
+                  position: "absolute",
+                  width: "1px",
+                  height: "1px",
+                  overflow: "hidden",
+                  clip: "rect(0 0 0 0)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {copiedField === "id" && "Item ID copied to clipboard"}
+                {copiedField === "link" && "Link copied to clipboard"}
+              </span>
             </div>
           </div>
           <div className={styles.headerActions}>

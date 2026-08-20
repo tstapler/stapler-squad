@@ -653,6 +653,7 @@ type triageResultJSON struct {
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:         item.ID,
+		PublicId:   item.PublicIDRaw,
 		Title:      item.Title,
 		Priority:   int32(item.Priority),
 		Status:     string(item.Status),
@@ -745,6 +746,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		CreatedAt:           timestamppb.New(item.CreatedAt),
 		UpdatedAt:           timestamppb.New(item.UpdatedAt),
 		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		PublicId:            item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL

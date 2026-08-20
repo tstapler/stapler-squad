@@ -743,6 +743,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cbHandler.RegisterRoutes(srv.mux)
 	log.Info("Registered Circuit Breaker debug handler at /api/debug/circuit-breakers")
 
+	// Register the ssq:// deep-link resolver (project_plans/backlog-deep-linking
+	// Epic 2 Story 2.2, Epic 3 Story 3.3). hostResolver is backed by the
+	// Workspace Host Registry persisted under configDir — falls back to nil
+	// (every cross-host lookup reports "not-registered") only if configDir
+	// couldn't be determined.
+	if deps.Storage != nil {
+		var hostResolver services.HostResolver
+		if configErr == nil {
+			hostResolver = services.NewRegistryHostResolver(configDir, session.DefaultHostRegistryTTL)
+		} else {
+			log.Warn("Deep-link resolver falling back to unimplemented host resolver: config dir unavailable", "err", configErr)
+		}
+		deepLinkResolver := services.NewDeepLinkResolver(deps.Storage, hostResolver)
+		deepLinkResolver.RegisterRoutes(srv.mux)
+		log.Info("Registered deep-link resolver at /api/deep-link/resolve")
+	}
+
 	// Register the backlog debug seed endpoints ONLY for the e2e test server
 	// (STAPLER_SQUAD_INSTANCE=e2e-local) — lets the Playwright suite seed
 	// BacklogStuckState rows and queued backlog items directly, bypassing the
