@@ -477,6 +477,10 @@ func newNonEmptyDiffGitRepo(t *testing.T) string {
 // notifyReworkCapHit instead of looping silently.
 func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnverifiable(t *testing.T) {
 	t.Parallel()
+	// RecoverBaseCommitSHA fails here and hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -663,6 +667,10 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 // to.
 func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *testing.T) {
 	t.Parallel()
+	// Empty committed diff hits review_gate.go's WarningLog.Printf directly; redirect
+	// it so this write serializes against every other test's concurrent
+	// swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -834,6 +842,10 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 // — and diffing HEAD against HEAD is empty by construction.
 func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks(t *testing.T) {
 	t.Parallel()
+	// The recovered-but-empty diff path hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1044,6 +1056,10 @@ func commitOnRepo(t *testing.T, dir string, n int, prefix string) {
 // diff reach the reviewer.
 func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoSyncConflicts(t *testing.T) {
 	t.Parallel()
+	// The unresolvable branch-drift conflict hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
