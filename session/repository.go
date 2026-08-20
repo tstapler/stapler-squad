@@ -449,8 +449,8 @@ type BacklogItemData struct {
 	// real SQL NULL underneath, not a deliberately-empty string). Do not
 	// compare this to "" or parse it directly at call sites — use the
 	// PublicID() accessor, which centralizes that decision.
-	PublicIDRaw string
-	Title       string
+	PublicIDRaw        string
+	Title              string
 	Description        string
 	AcceptanceCriteria AcCriteriaJSON
 	Priority           int
