@@ -260,6 +260,127 @@ func TestRemoveDocument(t *testing.T) {
 	}
 }
 
+// TestRemoveDocument_MiddleDocument_RebasesCSROffsets is a regression test for
+// the CSR splice in RemoveDocument (inverted_index.go ~lines 222-230): removing
+// docIndex==0 (the first posting) needs no rebasing of trailing offsets and no
+// shift of a buffer around a middle element, so it can't catch an off-by-one in
+// either the Positions splice or the "subtract span from every later offset"
+// loop. This removes the middle of three postings, each with 2+ distinct
+// positions, and checks that the flat Positions buffer and PosOffsets for the
+// surviving postings are exactly right, not just non-crashing.
+func TestRemoveDocument_MiddleDocument_RebasesCSROffsets(t *testing.T) {
+	t.Parallel()
+	idx := NewInvertedIndex()
+
+	idx.AddDocument(1, []string{"shared", "a"}, map[string][]int32{"shared": {0, 5}})
+	idx.AddDocument(2, []string{"shared", "b"}, map[string][]int32{"shared": {1, 2, 3}})
+	idx.AddDocument(3, []string{"shared", "c"}, map[string][]int32{"shared": {10, 20}})
+
+	postings := idx.Search("shared")
+	if postings == nil {
+		t.Fatal("Search('shared') returned nil before removal")
+	}
+	// Sanity-check the pre-removal CSR layout matches what we expect to splice.
+	wantPosOffsetsBefore := []int32{0, 2, 5, 7}
+	if !equalInt32Slices(postings.PosOffsets, wantPosOffsetsBefore) {
+		t.Fatalf("PosOffsets before removal = %v, want %v", postings.PosOffsets, wantPosOffsetsBefore)
+	}
+
+	// Remove the middle document (docID 2, docIndex 1).
+	idx.RemoveDocument(2)
+
+	postings = idx.Search("shared")
+	if postings == nil {
+		t.Fatal("Search('shared') returned nil after removal")
+	}
+
+	wantDocIDs := []int32{1, 3}
+	if !equalInt32Slices(postings.DocIDs, wantDocIDs) {
+		t.Fatalf("DocIDs = %v, want %v", postings.DocIDs, wantDocIDs)
+	}
+	wantFrequency := []int32{1, 1}
+	if !equalInt32Slices(postings.Frequency, wantFrequency) {
+		t.Fatalf("Frequency = %v, want %v", postings.Frequency, wantFrequency)
+	}
+	// DocIDs/Frequency must stay aligned with PosOffsets: len(PosOffsets) == len(DocIDs)+1.
+	if len(postings.PosOffsets) != len(postings.DocIDs)+1 {
+		t.Fatalf("len(PosOffsets) = %d, want len(DocIDs)+1 = %d", len(postings.PosOffsets), len(postings.DocIDs)+1)
+	}
+	wantPosOffsetsAfter := []int32{0, 2, 4}
+	if !equalInt32Slices(postings.PosOffsets, wantPosOffsetsAfter) {
+		t.Fatalf("PosOffsets after removal = %v, want %v", postings.PosOffsets, wantPosOffsetsAfter)
+	}
+
+	// The critical assertion: positions for the posting that was AFTER the
+	// removed one (doc 3, now at index 1) must read back correctly out of the
+	// shifted flat buffer, not some off-by-one slice of it.
+	doc1Positions := postings.PositionsAt(0)
+	if !equalInt32Slices(doc1Positions, []int32{0, 5}) {
+		t.Errorf("PositionsAt(0) (doc 1) = %v, want [0 5]", doc1Positions)
+	}
+	doc3Positions := postings.PositionsAt(1)
+	if !equalInt32Slices(doc3Positions, []int32{10, 20}) {
+		t.Errorf("PositionsAt(1) (doc 3, was after removed doc) = %v, want [10 20]", doc3Positions)
+	}
+}
+
+// TestRemoveDocument_LastDocument_RebasesCSROffsets covers removing the last
+// posting: docIndex == len(DocIDs)-1, so the "subtract span from every later
+// offset" loop runs exactly once (on the final offset) and must still land on
+// len(Positions) exactly.
+func TestRemoveDocument_LastDocument_RebasesCSROffsets(t *testing.T) {
+	t.Parallel()
+	idx := NewInvertedIndex()
+
+	idx.AddDocument(1, []string{"shared"}, map[string][]int32{"shared": {0, 5}})
+	idx.AddDocument(2, []string{"shared"}, map[string][]int32{"shared": {1, 2, 3}})
+	idx.AddDocument(3, []string{"shared"}, map[string][]int32{"shared": {10, 20}})
+
+	// Remove the last document (docID 3, docIndex 2).
+	idx.RemoveDocument(3)
+
+	postings := idx.Search("shared")
+	if postings == nil {
+		t.Fatal("Search('shared') returned nil after removal")
+	}
+
+	wantDocIDs := []int32{1, 2}
+	if !equalInt32Slices(postings.DocIDs, wantDocIDs) {
+		t.Fatalf("DocIDs = %v, want %v", postings.DocIDs, wantDocIDs)
+	}
+	if len(postings.PosOffsets) != len(postings.DocIDs)+1 {
+		t.Fatalf("len(PosOffsets) = %d, want len(DocIDs)+1 = %d", len(postings.PosOffsets), len(postings.DocIDs)+1)
+	}
+	wantPosOffsetsAfter := []int32{0, 2, 5}
+	if !equalInt32Slices(postings.PosOffsets, wantPosOffsetsAfter) {
+		t.Fatalf("PosOffsets after removal = %v, want %v", postings.PosOffsets, wantPosOffsetsAfter)
+	}
+	if last := postings.PosOffsets[len(postings.PosOffsets)-1]; int(last) != len(postings.Positions) {
+		t.Errorf("final PosOffsets entry = %d, want len(Positions) = %d", last, len(postings.Positions))
+	}
+
+	doc1Positions := postings.PositionsAt(0)
+	if !equalInt32Slices(doc1Positions, []int32{0, 5}) {
+		t.Errorf("PositionsAt(0) (doc 1) = %v, want [0 5]", doc1Positions)
+	}
+	doc2Positions := postings.PositionsAt(1)
+	if !equalInt32Slices(doc2Positions, []int32{1, 2, 3}) {
+		t.Errorf("PositionsAt(1) (doc 2) = %v, want [1 2 3]", doc2Positions)
+	}
+}
+
+func equalInt32Slices(a, b []int32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestRemoveDocument_NonExistent(t *testing.T) {
 	t.Parallel()
 	idx := NewInvertedIndex()

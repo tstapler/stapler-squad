@@ -166,6 +166,142 @@ func TestIndexStore_SaveAndLoad(t *testing.T) {
 	}
 }
 
+// TestIndexStore_SaveAndLoad_PreservesPositions is a regression test for the
+// CSR gob round-trip: TestIndexStore_SaveAndLoad above only asserts on
+// TotalDocs/GetTermCount/DocIDs after loading, none of which would catch
+// PostingsList.Positions/PosOffsets surviving gob encode/decode with the wrong
+// values or misaligned offsets. This builds an index with known, distinct
+// positions for a term across multiple documents, round-trips it through
+// Save/Load, and asserts PositionsAt returns the exact original values for
+// every document.
+func TestIndexStore_SaveAndLoad_PreservesPositions(t *testing.T) {
+	t.Parallel()
+	store, _ := setupTestIndexStore(t)
+
+	idx := NewInvertedIndex()
+	docStore := NewDocumentStore()
+
+	doc1 := &Document{SessionID: "session-1", Content: "shared a", WordCount: 2, Timestamp: time.Now()}
+	docID1 := docStore.Add(doc1)
+	idx.AddDocument(docID1, []string{"shared", "a"}, map[string][]int32{"shared": {0, 5}})
+
+	doc2 := &Document{SessionID: "session-1", Content: "shared b", WordCount: 2, Timestamp: time.Now()}
+	docID2 := docStore.Add(doc2)
+	idx.AddDocument(docID2, []string{"shared", "b"}, map[string][]int32{"shared": {1, 2, 3}})
+
+	doc3 := &Document{SessionID: "session-1", Content: "shared c", WordCount: 2, Timestamp: time.Now()}
+	docID3 := docStore.Add(doc3)
+	idx.AddDocument(docID3, []string{"shared", "c"}, map[string][]int32{"shared": {10, 20}})
+
+	if err := store.Save(idx, docStore); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loadedIdx, _, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	loadedPostings := loadedIdx.Search("shared")
+	if loadedPostings == nil {
+		t.Fatal("Search('shared') returned nil after load")
+	}
+	if len(loadedPostings.DocIDs) != 3 {
+		t.Fatalf("len(DocIDs) = %d, want 3", len(loadedPostings.DocIDs))
+	}
+
+	wantPositions := [][]int32{{0, 5}, {1, 2, 3}, {10, 20}}
+	for i, want := range wantPositions {
+		got := loadedPostings.PositionsAt(i)
+		if !equalInt32Slices(got, want) {
+			t.Errorf("PositionsAt(%d) = %v, want %v", i, got, want)
+		}
+	}
+}
+
+// TestValidateCSRInvariants_RejectsCorruptOffsets is a regression test for the
+// CSR invariant checks added to Load(): a hand-corrupted PostingsList (wrong
+// PosOffsets length, non-monotonic offsets, wrong start/end offset) must be
+// caught as a clear error by validateCSRInvariants rather than surviving to
+// panic later inside PositionsAt.
+func TestValidateCSRInvariants_RejectsCorruptOffsets(t *testing.T) {
+	t.Parallel()
+
+	validPostings := func() *PostingsList {
+		return &PostingsList{
+			DocIDs:     []int32{1, 2},
+			Positions:  []int32{0, 5, 1, 2, 3},
+			PosOffsets: []int32{0, 2, 5},
+			Frequency:  []int32{1, 1},
+		}
+	}
+
+	tests := map[string]struct {
+		mutate func(pl *PostingsList)
+	}{
+		"wrong PosOffsets length": {
+			mutate: func(pl *PostingsList) {
+				pl.PosOffsets = []int32{0, 2}
+			},
+		},
+		"non-monotonic offsets": {
+			mutate: func(pl *PostingsList) {
+				pl.PosOffsets = []int32{0, 5, 2}
+			},
+		},
+		"PosOffsets[0] not zero": {
+			mutate: func(pl *PostingsList) {
+				pl.PosOffsets = []int32{1, 3, 6}
+			},
+		},
+		"final offset not len(Positions)": {
+			mutate: func(pl *PostingsList) {
+				pl.PosOffsets = []int32{0, 2, 4}
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			pl := validPostings()
+			tc.mutate(pl)
+
+			idx := NewInvertedIndex()
+			idx.Index["broken"] = pl
+
+			if err := validateCSRInvariants(idx); err == nil {
+				t.Fatal("validateCSRInvariants() = nil, want error for corrupt CSR offsets")
+			}
+		})
+	}
+}
+
+// TestIndexStore_Load_RejectsCorruptCSROffsets confirms the invariant check is
+// actually wired into Load(): a gob-encoded index with a deliberately broken
+// PostingsList must make Load() return an error instead of succeeding and
+// leaving a caller to panic on the first PositionsAt call.
+func TestIndexStore_Load_RejectsCorruptCSROffsets(t *testing.T) {
+	t.Parallel()
+	store, _ := setupTestIndexStore(t)
+
+	idx := NewInvertedIndex()
+	idx.AddDocument(1, []string{"shared"}, map[string][]int32{"shared": {0, 5}})
+	// Corrupt the CSR offsets directly after building a valid index via the
+	// normal API, so Save() persists exactly this broken shape.
+	idx.Index["shared"].PosOffsets = []int32{0, 999}
+	docStore := NewDocumentStore()
+
+	if err := store.Save(idx, docStore); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	if _, _, err := store.Load(); err == nil {
+		t.Fatal("Load() = nil error, want error for corrupt CSR offsets on disk")
+	}
+}
+
 func TestIndexStore_Exists(t *testing.T) {
 	t.Parallel()
 	store, _ := setupTestIndexStore(t)
