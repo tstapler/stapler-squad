@@ -2232,6 +2232,19 @@ func (t *TmuxSession) DoesSessionExistNoCache() bool {
 		return false
 	}
 
+	// Fast path: use the push-based registry when it is healthy and it confirms
+	// the session exists. A registry `true` reflects either a delivered CM event
+	// or a synchronous NotifySessionCreated call, so it's as authoritative as a
+	// fresh subprocess check. A registry `false` may just mean the %session-created
+	// event hasn't landed yet, so it is never trusted — always fall through to the
+	// subprocess path below for an authoritative negative, preserving this
+	// function's "always fresh" contract.
+	if t.registry != nil && t.registry.IsHealthy() {
+		if t.registry.SessionExists(t.sanitizedName) {
+			return true
+		}
+	}
+
 	v, _, _ := t.noCacheSF.Do("", func() (interface{}, error) {
 		// Direct check without cache — use a longer timeout for critical validation.
 		ctx, cancel := context.WithTimeout(context.Background(), sessionExistsNoCacheTimeout)
