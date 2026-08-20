@@ -1,7 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"crypto/ed25519"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,6 +107,77 @@ func TestHostRegistry_Prune_should_RemoveEntry_When_RegistryTTLCyclesElapseWithN
 
 	if _, ok := registry.Lookup(identity.ID); ok {
 		t.Fatalf("Lookup() after Prune() past TTL = found, want not found (stale entry should be pruned)")
+	}
+}
+
+func TestHostRegistry_Prune_should_LogHostRegistryEntryExpired_When_EntryDroppedPastTTL(t *testing.T) {
+	stateDir := t.TempDir()
+	ttl := 3 * time.Minute
+	clock := &fakeClock{now: time.Now()}
+	registry, err := NewHostRegistryWithClock(stateDir, ttl, clock)
+	if err != nil {
+		t.Fatalf("NewHostRegistryWithClock() error = %v, want nil", err)
+	}
+
+	identity, err := LoadOrCreateHostIdentity(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
+	}
+
+	record := newTestAdvertisement(t, identity, []string{"peer-a:8444"}, clock.Now())
+	if _, _, err := registry.Advertise(record); err != nil {
+		t.Fatalf("Advertise() error = %v, want nil", err)
+	}
+
+	clock.Advance(ttl + time.Second)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if err := registry.Prune(); err != nil {
+		t.Fatalf("Prune() error = %v, want nil", err)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "host_registry.entry_expired") {
+		t.Fatalf("expected a host_registry.entry_expired log line, got: %s", got)
+	}
+	if !strings.Contains(got, identity.ID.String()) {
+		t.Fatalf("expected the log line to name the expired host id %s, got: %s", identity.ID.String(), got)
+	}
+}
+
+func TestHostRegistry_Prune_should_NotLogHostRegistryEntryExpired_When_NoEntryDropped(t *testing.T) {
+	stateDir := t.TempDir()
+	ttl := 3 * time.Minute
+	clock := &fakeClock{now: time.Now()}
+	registry, err := NewHostRegistryWithClock(stateDir, ttl, clock)
+	if err != nil {
+		t.Fatalf("NewHostRegistryWithClock() error = %v, want nil", err)
+	}
+
+	identity, err := LoadOrCreateHostIdentity(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
+	}
+	record := newTestAdvertisement(t, identity, []string{"peer-a:8444"}, clock.Now())
+	if _, _, err := registry.Advertise(record); err != nil {
+		t.Fatalf("Advertise() error = %v, want nil", err)
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if err := registry.Prune(); err != nil {
+		t.Fatalf("Prune() error = %v, want nil", err)
+	}
+
+	if strings.Contains(buf.String(), "host_registry.entry_expired") {
+		t.Fatalf("expected no host_registry.entry_expired log line when nothing was pruned, got: %s", buf.String())
 	}
 }
 

@@ -1,10 +1,27 @@
 package session
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// captureLogInfo temporarily redirects the default slog handler to a text
+// handler writing into the returned buffer, restoring the previous handler
+// via t.Cleanup. Mirrors main_test.go's captureLogWarn for this package.
+func captureLogInfo(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+	})
+	return &buf
+}
 
 func TestLoadOrCreateHostIdentity_should_MintAndPersist_When_NoIdentityFileExists(t *testing.T) {
 	stateDir := t.TempDir()
@@ -60,6 +77,41 @@ func TestLoadOrCreateHostIdentity_should_ReturnSameIdentity_When_LoadedTwiceAcro
 	}
 	if string(first.PrivateKey) != string(second.PrivateKey) {
 		t.Fatalf("PrivateKey changed across simulated restarts")
+	}
+}
+
+func TestLoadOrCreateHostIdentity_should_LogHostIdentityGenerated_When_MintingNewIdentity(t *testing.T) {
+	stateDir := t.TempDir()
+	buf := captureLogInfo(t)
+
+	identity, err := LoadOrCreateHostIdentity(stateDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "host_identity.generated") {
+		t.Fatalf("expected a host_identity.generated log line, got: %s", got)
+	}
+	if !strings.Contains(got, identity.ID.String()) {
+		t.Fatalf("expected the log line to name the minted host id %s, got: %s", identity.ID.String(), got)
+	}
+}
+
+func TestLoadOrCreateHostIdentity_should_NotLogHostIdentityGenerated_When_LoadingExistingIdentity(t *testing.T) {
+	stateDir := t.TempDir()
+
+	if _, err := LoadOrCreateHostIdentity(stateDir); err != nil {
+		t.Fatalf("initial LoadOrCreateHostIdentity() error = %v, want nil", err)
+	}
+
+	buf := captureLogInfo(t)
+	if _, err := LoadOrCreateHostIdentity(stateDir); err != nil {
+		t.Fatalf("second LoadOrCreateHostIdentity() error = %v, want nil", err)
+	}
+
+	if strings.Contains(buf.String(), "host_identity.generated") {
+		t.Fatalf("expected no host_identity.generated log line on the load-existing path, got: %s", buf.String())
 	}
 }
 

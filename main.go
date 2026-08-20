@@ -25,13 +25,16 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
+	"io"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -56,6 +59,7 @@ var (
 	tmuxKeepServerFlag      bool
 	openURLFlag             string
 	registerLinuxSchemeFlag string
+	listKnownHostsFlag      bool
 	rootCmd                 = &cobra.Command{
 		Use:   "stapler-squad",
 		Short: "Stapler Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
@@ -86,6 +90,18 @@ var (
 			if registerLinuxSchemeFlag != "" {
 				desktopDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "applications")
 				if err := registerLinuxScheme(ctx, desktopDir, registerLinuxSchemeFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// --list-known-hosts mode (Observability Plan,
+			// project_plans/backlog-deep-linking/implementation/plan.md): print the
+			// local Workspace Host Registry's contents to stdout, then exit. Lets a
+			// user diagnose "why didn't my link resolve" without reading logs.
+			if listKnownHostsFlag {
+				if err := runListKnownHosts(os.Stdout); err != nil {
 					fmt.Fprintln(os.Stderr, err)
 					os.Exit(1)
 				}
@@ -774,6 +790,9 @@ func init() {
 		"(Linux only, internal) Idempotently register the given binary path as the OS handler "+
 			"for the ssq:// URL scheme via a .desktop file + xdg-mime, then exit. "+
 			"Invoked by scripts/install-service.sh.")
+	rootCmd.Flags().BoolVar(&listKnownHostsFlag, "list-known-hosts", false,
+		"Print the local Workspace Host Registry's known peer hosts (identity, advertised "+
+			"address(es), last-seen time) to stdout, then exit.")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")
@@ -1314,4 +1333,46 @@ func buildMCPDeps() (session.InstanceStore, *services.SessionService, *scrollbac
 	sbMgr := scrollback.NewScrollbackManager(sbConfig)
 
 	return core.Storage, core.SessionService, sbMgr, core.Storage, nil
+}
+
+// runListKnownHosts implements --list-known-hosts: open this instance's
+// local Workspace Host Registry (using the same state-dir resolution as
+// startRemoteAccess's session.NewHostRegistry call) and print its current
+// contents to out. Registry-open failures (e.g. a corrupted
+// host_registry.json) are returned as a single-line error, mirroring
+// runOpenURL's error-handling convention, rather than exiting via panic.
+func runListKnownHosts(out io.Writer) error {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("list-known-hosts: failed to resolve config directory: %w", err)
+	}
+	registry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	if err != nil {
+		return fmt.Errorf("list-known-hosts: failed to open host registry: %w", err)
+	}
+	formatKnownHosts(out, registry.Snapshot())
+	return nil
+}
+
+// formatKnownHosts renders entries as a human-readable table (host id,
+// advertised address(es), last-seen time) to out, sorted by HostID for
+// deterministic output. Separated from runListKnownHosts so the formatting
+// logic is directly testable without touching disk.
+func formatKnownHosts(out io.Writer, entries []session.RegistryEntry) {
+	if len(entries) == 0 {
+		fmt.Fprintln(out, "No known hosts.")
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].HostID.String() < entries[j].HostID.String()
+	})
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "HOST ID\tADVERTISED ADDRESS(ES)\tLAST SEEN")
+	for _, entry := range entries {
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
+			entry.HostID.String(),
+			strings.Join(entry.AdvertisedAddress, ", "),
+			entry.LastSeenAt.Local().Format(time.RFC3339))
+	}
+	_ = w.Flush()
 }

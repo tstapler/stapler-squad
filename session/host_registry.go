@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // hostRegistryFileName is the JSON file (alongside host_identity.json) that
@@ -234,6 +236,10 @@ func (r *HostRegistry) Prune() error {
 	changed := false
 	for key, entry := range r.entries {
 		if entry.LastSeenAt.Before(cutoff) {
+			log.Info("host_registry.entry_expired",
+				"host_id", entry.HostID.String(),
+				"last_seen_at", entry.LastSeenAt,
+				"ttl", r.ttl)
 			delete(r.entries, key)
 			changed = true
 		}

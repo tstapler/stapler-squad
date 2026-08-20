@@ -14,6 +14,8 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/oklog/ulid/v2"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // HostIDPrefix is prepended to every generated HostIdentity ID (e.g.
@@ -133,8 +135,8 @@ func (id *HostID) UnmarshalJSON(data []byte) error {
 // persisted to host_identity.json; the private key never leaves the
 // instance that generated it. See ADR-002 for the full design rationale.
 type HostIdentity struct {
-	ID         HostID            `json:"id"`
-	PublicKey  ed25519.PublicKey `json:"public_key"`
+	ID         HostID             `json:"id"`
+	PublicKey  ed25519.PublicKey  `json:"public_key"`
 	PrivateKey ed25519.PrivateKey `json:"private_key"`
 }
 
@@ -229,5 +231,6 @@ func LoadOrCreateHostIdentity(stateDir string) (HostIdentity, error) {
 		os.Remove(tmpPath)
 		return HostIdentity{}, fmt.Errorf("failed to atomically write host identity file: %w", err)
 	}
+	log.Info("host_identity.generated", "host_id", identity.ID.String(), "state_dir", stateDir)
 	return identity, nil
 }
