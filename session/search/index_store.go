@@ -206,6 +206,9 @@ func (e *IndexVersionMismatchError) Error() string {
 // called. Validating eagerly here makes that a clean Load() error instead.
 func validateCSRInvariants(idx *InvertedIndex) error {
 	for term, pl := range idx.Index {
+		if pl == nil {
+			return fmt.Errorf("corrupt index: nil postings list for term %q", term)
+		}
 		if len(pl.PosOffsets) != len(pl.DocIDs)+1 {
 			return fmt.Errorf("corrupt index: invalid CSR offsets for term %q: len(PosOffsets)=%d, want len(DocIDs)+1=%d",
 				term, len(pl.PosOffsets), len(pl.DocIDs)+1)
