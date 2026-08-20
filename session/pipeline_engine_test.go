@@ -1,10 +1,8 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	stdlog "log"
 	"reflect"
 	"strings"
 	"sync"
@@ -12,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -55,30 +52,8 @@ func (f *fakePipelineModeRepository) ListEnabled(ctx context.Context) ([]*ent.Pi
 	return f.listEnabledFn(ctx)
 }
 
-// warningLogMu serializes every swapWarningLog user in this file against
-// every other one. log.WarningLog is a shared package-level var, so two
-// tests (or subtests) swapping it concurrently -- which happens routinely
-// here since most callers also call t.Parallel() -- can have one test's
-// warn log land in another's buffer, or arrive after that buffer was
-// already read, producing a spuriously empty capture.
-var warningLogMu sync.Mutex
-
-// swapWarningLog redirects log.WarningLog to a buffer for the duration of the
-// calling test, restoring the original on cleanup. Mirrors the established
-// pattern in session/review_gate_test.go. Acquires warningLogMu for the
-// duration so concurrent (t.Parallel) tests don't race on the shared global.
-func swapWarningLog(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	warningLogMu.Lock()
-	var buf bytes.Buffer
-	orig := log.WarningLog
-	log.WarningLog = stdlog.New(&buf, "WARNING: ", 0)
-	t.Cleanup(func() {
-		log.WarningLog = orig
-		warningLogMu.Unlock()
-	})
-	return &buf
-}
+// warningLogMu and swapWarningLog live in session/sync_buffer_test.go, shared
+// with session/review_gate_test.go and session/backlog_lifecycle_test.go.
 
 func assertWarnLogContainsUnresolved(t *testing.T, logOutput, itemID, mode string) {
 	t.Helper()

@@ -145,8 +145,13 @@ func TestApprove_FromHibernated_Succeeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Approve from Hibernated should succeed (Hibernated->Active is valid), got: %v", err)
 	}
-	if inst.Status != Active {
-		t.Errorf("expected status Active after Approve from Hibernated, got %s", inst.Status)
+	// Read via Snapshot(), not the bare field: transitionToLocked's synchronous
+	// write and resumeFromHibernationLocked's async write-back-on-failure both
+	// publish through i.snapshot (an atomic.Pointer), so this is the only read
+	// that's ordered against both without racing under -race. See the doc
+	// comment on (*Instance).GetStatus in instance_state.go.
+	if status := inst.Snapshot().Status; status != Active {
+		t.Errorf("expected status Active after Approve from Hibernated, got %s", status)
 	}
 }
 
@@ -224,8 +229,15 @@ func TestApprove_AllSourceStatuses(t *testing.T) {
 			if !tt.expectPass && err == nil {
 				t.Errorf("expected Approve to fail from %s, but it succeeded", tt.from)
 			}
-			if tt.expectPass && inst.Status != Active {
-				t.Errorf("expected status Active after Approve from %s, got %s", tt.from, inst.Status)
+			// Read via Snapshot(), not the bare field: the Hibernated->Active case
+			// dispatches resumeFromHibernationLocked in a background goroutine that
+			// can write Status back to Hibernated (on Start() failure) after Approve()
+			// has already returned. Both that write-back and transitionToLocked's own
+			// synchronous write publish through i.snapshot (an atomic.Pointer), so
+			// this is the only read ordered against both without racing under -race.
+			// See the doc comment on (*Instance).GetStatus in instance_state.go.
+			if status := inst.Snapshot().Status; tt.expectPass && status != Active {
+				t.Errorf("expected status Active after Approve from %s, got %s", tt.from, status)
 			}
 		})
 	}
