@@ -447,7 +447,73 @@ func BenchmarkIndexStore_Load(b *testing.B) {
 	store.Save(idx, docStore)
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		store.Load()
+	}
+}
+
+// TestIndexStore_Load_PostingsAllocs guards PerfFix-2: PostingsList.Positions
+// moved from [][]int32 (one allocation per document per term) to a flat []int32
+// plus PosOffsets (one allocation per term). Loading N docs sharing a small term
+// vocabulary should allocate roughly O(terms), not O(terms x docs) — regressing
+// back to a nested slice would show up here as allocs scaling with document count.
+//
+// This measures decoding just the inverted-index gob file (via the unexported
+// loadGob), not the full IndexStore.Load(), which also decodes a
+// map[int32]*Document with one *Document per document — an allocation that is
+// inherently O(docs) and has nothing to do with PostingsList's shape. Folding
+// that into the measurement made the threshold unsatisfiable regardless of how
+// PostingsList is stored.
+//
+// This is a Test, not a Benchmark, deliberately: it calls testing.Benchmark()
+// internally to get an AllocsPerOp() reading, and nesting that inside a function
+// go test's own -bench harness invokes causes a hang. The outer harness
+// recalibrates N by assuming per-call elapsed time scales with N, but this
+// function's real cost (build docs, Save, run the nested benchmark) doesn't
+// scale with the outer b.N at all — so measured duration stays flat between
+// rounds and the harness keeps re-running with an exponentially larger target N
+// (1, 10, 100, ... up to its 1e9 cap), each round repeating the ~1s nested
+// testing.Benchmark() call. Calling testing.Benchmark() from a Test avoids this
+// since Tests run exactly once, with no calibration loop.
+func TestIndexStore_Load_PostingsAllocs(t *testing.T) {
+	tmpDir := t.TempDir()
+	store, _ := NewIndexStoreWithDir(filepath.Join(tmpDir, "bench-allocs"))
+
+	idx := NewInvertedIndex()
+	docStore := NewDocumentStore()
+
+	const numDocs = 1000
+	for i := 0; i < numDocs; i++ {
+		doc := &Document{
+			SessionID: "session-1",
+			Content:   "test document content",
+			WordCount: 3,
+		}
+		docID := docStore.Add(doc)
+		idx.AddDocumentSimple(docID, []string{"test", "document", "content"})
+	}
+	if err := store.Save(idx, docStore); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	allocsPerOp := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var loaded InvertedIndex
+			if err := store.loadGob(invertedIndexFile, &loaded); err != nil {
+				b.Fatalf("loadGob(inverted index) failed: %v", err)
+			}
+		}
+	}).AllocsPerOp()
+
+	// InvertedIndex also carries DocLengths (map[int32]int, one entry per
+	// document — legitimately O(docs), map bucket growth for 1000 entries
+	// measured ~265 allocs/op here). The bound below is well below what an
+	// O(terms x docs) PostingsList regression would produce (3 terms x 1000
+	// docs = thousands of allocs) while leaving headroom for that map growth.
+	const maxAllocsPerOp = 400
+	if allocsPerOp > maxAllocsPerOp {
+		t.Fatalf("loading inverted index allocated %d allocs/op, want <= %d (regressed to per-document allocation?)",
+			allocsPerOp, maxAllocsPerOp)
 	}
 }

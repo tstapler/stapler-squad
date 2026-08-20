@@ -14,9 +14,6 @@ func TestNewInvertedIndex(t *testing.T) {
 	if idx.Index == nil {
 		t.Fatal("Index map is nil")
 	}
-	if idx.DocFrequency == nil {
-		t.Fatal("DocFrequency map is nil")
-	}
 	if idx.DocLengths == nil {
 		t.Fatal("DocLengths map is nil")
 	}
@@ -68,8 +65,8 @@ func TestAddDocument_SingleDocument(t *testing.T) {
 	}
 
 	// Check document frequency
-	if idx.DocFrequency["hello"] != 1 {
-		t.Errorf("DocFrequency['hello'] = %d, want 1", idx.DocFrequency["hello"])
+	if idx.GetDocumentFrequency("hello") != 1 {
+		t.Errorf("DocFrequency['hello'] = %d, want 1", idx.GetDocumentFrequency("hello"))
 	}
 }
 
@@ -98,14 +95,14 @@ func TestAddDocument_MultipleDocuments(t *testing.T) {
 	}
 
 	// Check document frequencies
-	if idx.DocFrequency["world"] != 2 {
-		t.Errorf("DocFrequency['world'] = %d, want 2", idx.DocFrequency["world"])
+	if idx.GetDocumentFrequency("world") != 2 {
+		t.Errorf("DocFrequency['world'] = %d, want 2", idx.GetDocumentFrequency("world"))
 	}
-	if idx.DocFrequency["hello"] != 1 {
-		t.Errorf("DocFrequency['hello'] = %d, want 1", idx.DocFrequency["hello"])
+	if idx.GetDocumentFrequency("hello") != 1 {
+		t.Errorf("DocFrequency['hello'] = %d, want 1", idx.GetDocumentFrequency("hello"))
 	}
-	if idx.DocFrequency["peace"] != 1 {
-		t.Errorf("DocFrequency['peace'] = %d, want 1", idx.DocFrequency["peace"])
+	if idx.GetDocumentFrequency("peace") != 1 {
+		t.Errorf("DocFrequency['peace'] = %d, want 1", idx.GetDocumentFrequency("peace"))
 	}
 }
 
@@ -127,8 +124,8 @@ func TestAddDocument_RepeatedTerms(t *testing.T) {
 	}
 
 	// Document frequency should still be 1 (one document)
-	if idx.DocFrequency["test"] != 1 {
-		t.Errorf("DocFrequency['test'] = %d, want 1", idx.DocFrequency["test"])
+	if idx.GetDocumentFrequency("test") != 1 {
+		t.Errorf("DocFrequency['test'] = %d, want 1", idx.GetDocumentFrequency("test"))
 	}
 }
 
@@ -247,11 +244,11 @@ func TestRemoveDocument(t *testing.T) {
 	}
 
 	// Check document frequency updated
-	if idx.DocFrequency["world"] != 1 {
-		t.Errorf("DocFrequency['world'] = %d, want 1", idx.DocFrequency["world"])
+	if idx.GetDocumentFrequency("world") != 1 {
+		t.Errorf("DocFrequency['world'] = %d, want 1", idx.GetDocumentFrequency("world"))
 	}
-	if idx.DocFrequency["hello"] != 0 {
-		t.Errorf("DocFrequency['hello'] = %d, want 0", idx.DocFrequency["hello"])
+	if idx.GetDocumentFrequency("hello") != 0 {
+		t.Errorf("DocFrequency['hello'] = %d, want 0", idx.GetDocumentFrequency("hello"))
 	}
 
 	// Check HasDocument
@@ -293,9 +290,6 @@ func TestClear(t *testing.T) {
 	}
 	if len(idx.Index) != 0 {
 		t.Errorf("len(Index) = %d, want 0", len(idx.Index))
-	}
-	if len(idx.DocFrequency) != 0 {
-		t.Errorf("len(DocFrequency) = %d, want 0", len(idx.DocFrequency))
 	}
 	if len(idx.DocLengths) != 0 {
 		t.Errorf("len(DocLengths) = %d, want 0", len(idx.DocLengths))
@@ -414,14 +408,15 @@ func TestPositionTracking(t *testing.T) {
 	if quickPostings == nil {
 		t.Fatal("Search('quick') returned nil")
 	}
-	if len(quickPostings.Positions) != 1 {
-		t.Fatalf("len(Positions) = %d, want 1", len(quickPostings.Positions))
+	if len(quickPostings.DocIDs) != 1 {
+		t.Fatalf("len(DocIDs) = %d, want 1", len(quickPostings.DocIDs))
 	}
-	if len(quickPostings.Positions[0]) != 2 {
-		t.Errorf("len(Positions[0]) = %d, want 2", len(quickPostings.Positions[0]))
+	quickPositions := quickPostings.PositionsAt(0)
+	if len(quickPositions) != 2 {
+		t.Errorf("len(PositionsAt(0)) = %d, want 2", len(quickPositions))
 	}
-	if quickPostings.Positions[0][0] != 1 || quickPostings.Positions[0][1] != 4 {
-		t.Errorf("Positions[0] = %v, want [1, 4]", quickPostings.Positions[0])
+	if quickPositions[0] != 1 || quickPositions[1] != 4 {
+		t.Errorf("PositionsAt(0) = %v, want [1, 4]", quickPositions)
 	}
 }
 

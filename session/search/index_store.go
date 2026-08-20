@@ -29,8 +29,11 @@ type IndexVersion struct {
 }
 
 const (
-	// CurrentIndexVersion is the schema version for the index format
-	CurrentIndexVersion = 1
+	// CurrentIndexVersion is the schema version for the index format.
+	// Bumped to 2: PostingsList.Positions moved from [][]int32 to a flat
+	// []int32 + PosOffsets (see PerfFix-2), which changes the on-disk gob
+	// shape — old-format indexes must be rejected rather than mis-decoded.
+	CurrentIndexVersion = 2
 
 	// Index file names
 	invertedIndexFile = "inverted_index.gob"
