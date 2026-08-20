@@ -201,16 +201,68 @@ type ConnectRPCWebSocketHandler struct {
 
 	// ponytail: xsync.Map replaces map+RWMutex — markSnapshotDirty called per terminal frame
 	snapshotCache *xsync.Map[string, sessionSnapshot]
+
+	// Observability only (no behavior change): tracks which streamViaControlMode
+	// generation currently "owns" a given tmux session name. Nothing here
+	// prevents two invocations from running concurrently against the same
+	// session (e.g. a browser reconnect racing the old connection's deferred
+	// StopControlMode, which a full server restart triggers for every open
+	// terminal at once) — each independently resizes tmux and captures its
+	// pane, and a client that receives a snapshot captured mid-resize by a
+	// *different* generation sees garbled/overlapping content (see the ±1
+	// nudge comment in streamViaControlMode for the single-generation version
+	// of this same failure mode). See recordControlModeStreamStart's doc
+	// comment for what gets logged and how to correlate a recurrence.
+	activeControlModeStreams *xsync.Map[string, controlModeStreamGeneration]
+	controlModeStreamCounter atomic.Int64
+}
+
+// controlModeStreamGeneration identifies one streamViaControlMode invocation
+// for a tmux session, purely so overlapping invocations can be spotted in
+// logs (see ConnectRPCWebSocketHandler.activeControlModeStreams).
+type controlModeStreamGeneration struct {
+	generation int64
+	startedAt  time.Time
 }
 
 // NewConnectRPCWebSocketHandler creates a new ConnectRPC WebSocket handler
 // tmuxStreamerManager is required for ALL sessions (managed and external) since they all use tmux capture-pane polling
 func NewConnectRPCWebSocketHandler(sessionService *SessionService, scrollbackManager *scrollback.ScrollbackManager, tmuxStreamerManager *session.ExternalTmuxStreamerManager) *ConnectRPCWebSocketHandler {
 	return &ConnectRPCWebSocketHandler{
-		sessionService:      sessionService,
-		scrollbackManager:   scrollbackManager,
-		tmuxStreamerManager: tmuxStreamerManager,
-		snapshotCache:       xsync.NewMap[string, sessionSnapshot](),
+		sessionService:           sessionService,
+		scrollbackManager:        scrollbackManager,
+		tmuxStreamerManager:      tmuxStreamerManager,
+		snapshotCache:            xsync.NewMap[string, sessionSnapshot](),
+		activeControlModeStreams: xsync.NewMap[string, controlModeStreamGeneration](),
+	}
+}
+
+// recordControlModeStreamStart registers a new streamViaControlMode
+// invocation for tmuxSessionName and returns its generation number plus a
+// cleanup func the caller must defer. If a prior generation is still
+// registered (its cleanup hasn't run yet), this logs a WARN naming both
+// generations and how long the prior one has been running — that's the
+// signal to grep for ("overlapping control-mode stream") when terminal
+// output looks garbled/overlapping after the fact, since the exact moment of
+// visual corruption is rarely caught live.
+func (h *ConnectRPCWebSocketHandler) recordControlModeStreamStart(sessionID, tmuxSessionName string) (generation int64, done func()) {
+	generation = h.controlModeStreamCounter.Add(1)
+	if prior, loaded := h.activeControlModeStreams.Load(tmuxSessionName); loaded {
+		log.Warn("[streamViaControlMode] overlapping control-mode stream detected for tmux session",
+			"session", sessionID, "tmux", tmuxSessionName,
+			"new_generation", generation, "prior_generation", prior.generation,
+			"prior_running_for", time.Since(prior.startedAt).String())
+	}
+	h.activeControlModeStreams.Store(tmuxSessionName, controlModeStreamGeneration{generation: generation, startedAt: time.Now()})
+	return generation, func() {
+		// Only clear the entry if it's still ours — a newer overlapping
+		// generation's entry must survive this (older) generation's cleanup.
+		h.activeControlModeStreams.Compute(tmuxSessionName, func(cur controlModeStreamGeneration, loaded bool) (controlModeStreamGeneration, xsync.ComputeOp) {
+			if loaded && cur.generation == generation {
+				return controlModeStreamGeneration{}, xsync.DeleteOp
+			}
+			return cur, xsync.CancelOp
+		})
 	}
 }
 
@@ -592,7 +644,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// a raw title containing spaces would target a session name that was never created (#162).
 	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
 
-	log.Info("[streamViaControlMode] starting", "session", sessionID, "tmux", tmuxSessionName)
+	streamGeneration, doneStreaming := h.recordControlModeStreamStart(sessionID, tmuxSessionName)
+	defer doneStreaming()
+
+	log.Info("[streamViaControlMode] starting", "session", sessionID, "tmux", tmuxSessionName, "generation", streamGeneration)
 
 	// Update LastViewed timestamp - user is viewing this session
 	instance.MarkViewed()
@@ -838,7 +893,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 			if elapsed := time.Since(quiescenceStart); elapsed >= 500*time.Millisecond-5*time.Millisecond {
 				log.Warn("[streamViaControlMode] initial quiescence timed out; session may be stalled", "elapsed", elapsed.Round(time.Millisecond), "session", sessionID)
 			}
-			log.Info("[streamViaControlMode] tmux resized, redraw complete", "cols", targetCols, "rows", targetRows)
+			log.Info("[streamViaControlMode] tmux resized, redraw complete", "cols", targetCols, "rows", targetRows, "generation", streamGeneration)
 		}
 	} else {
 		log.Warn("[streamViaControlMode] handshake missing dimensions, layout may be incorrect")

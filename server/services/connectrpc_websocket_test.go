@@ -424,6 +424,55 @@ func TestWaitForQuiescenceResetsTimerOnUpdates(t *testing.T) {
 	}
 }
 
+// --- recordControlModeStreamStart ---
+
+// TestRecordControlModeStreamStart_should_AssignIncreasingGenerations_When_CalledRepeatedly
+// verifies the generation counter is monotonic and unique per call, which is
+// what lets a later log correlation ("generation N started at T, generation
+// N+1 started at T+50ms while N was still active") actually work.
+func TestRecordControlModeStreamStart_should_AssignIncreasingGenerations_When_CalledRepeatedly(t *testing.T) {
+	t.Parallel()
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	gen1, done1 := h.recordControlModeStreamStart("sess1", "staplersquad_sess1")
+	done1()
+	gen2, done2 := h.recordControlModeStreamStart("sess1", "staplersquad_sess1")
+	done2()
+
+	if gen2 <= gen1 {
+		t.Errorf("gen2 = %d, want > gen1 = %d", gen2, gen1)
+	}
+}
+
+// TestRecordControlModeStreamStart_should_LeaveEntryRegistered_When_OlderGenerationCleansUpAfterNewerStarts
+// is the regression test for the actual race this exists to detect: if
+// generation N's stream is still torn down (its deferred cleanup runs) after
+// generation N+1 has already started for the same tmux session, N's cleanup
+// must NOT clear N+1's still-active entry out of activeControlModeStreams --
+// doing so would make a genuinely-overlapping N+2 invocation look like the
+// first and only stream, silently defeating the whole detection mechanism.
+func TestRecordControlModeStreamStart_should_LeaveEntryRegistered_When_OlderGenerationCleansUpAfterNewerStarts(t *testing.T) {
+	t.Parallel()
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	const tmuxName = "staplersquad_sess1"
+
+	genOld, doneOld := h.recordControlModeStreamStart("sess1", tmuxName)
+	genNew, _ := h.recordControlModeStreamStart("sess1", tmuxName)
+
+	// The older generation's stream ends (its stream handler returns) after
+	// the newer one has already started -- exactly the overlap this
+	// mechanism exists to catch.
+	doneOld()
+
+	cur, ok := h.activeControlModeStreams.Load(tmuxName)
+	if !ok {
+		t.Fatalf("activeControlModeStreams entry for %q was removed entirely; want the newer generation's entry to survive", tmuxName)
+	}
+	if cur.generation != genNew {
+		t.Errorf("activeControlModeStreams entry generation = %d, want %d (the newer, still-active generation); got the older one (%d) instead", cur.generation, genNew, genOld)
+	}
+}
+
 // --- getOrRefreshSnapshot / markSnapshotDirty ---
 
 // TestGetOrRefreshSnapshotCallsCaptureFnOnMiss verifies that on a cache miss
