@@ -163,26 +163,25 @@ func TestStreamHub_should_EvictSlowSubscriberUnderSustainedBackpressure_And_Incr
 // sync.Once stand-in before StreamOwnershipLock existed; the race test below
 // now exercises the real primitive directly.
 
-// overlapInvariantViolated is the pure predicate behind the OverlapInvariant
-// check named in plan.md's Domain Glossary: more than one distinct owner
-// resolved for a single tmux session. Kept as a plain function (rather than
-// inlined into a t.Fatal call) so the "does the check itself fire correctly"
-// case below can be exercised without invoking testing.T's FailNow/Goexit
-// machinery outside of a real running test.
-func overlapInvariantViolated(ownerCount int) bool {
-	return ownerCount > 1
-}
-
-// assertOverlapInvariant is the test-time equivalent of the OverlapInvariant
-// check named in plan.md's Domain Glossary: production code always emits
-// slog.Error and never panics (a panic in this single-operator daily-driver
-// process is worse than the bug it would catch), but "every -race test that
+// assertOverlapInvariant calls the real, production-shipped
+// streamhub.OverlapInvariant (session/streamhub/ownership.go) with a hook
+// installed so a violation fails the test immediately via t.Fatal, per
+// plan.md's OverlapInvariant Domain Glossary entry ("every -race test that
 // could trigger it explicitly fails via t.Fatal if it fires during test
-// execution" is exactly what this helper does.
-func assertOverlapInvariant(t *testing.T, ownerCount int) {
+// execution"). This replaces Epic 1.4's test-local
+// overlapInvariantViolated/assertOverlapInvariant stand-ins, which predated
+// StreamOwnershipLock and the real OverlapInvariant implementation.
+func assertOverlapInvariant(t *testing.T, sessionName string, ownerCount int) {
 	t.Helper()
-	if overlapInvariantViolated(ownerCount) {
-		t.Fatalf("OverlapInvariant violated: %d owners resolved for one session, want at most 1", ownerCount)
+	violated := false
+	streamhub.SetOverlapInvariantHookForTest(func(gotSession string, gotOwnerCount int) {
+		violated = true
+	})
+	t.Cleanup(func() { streamhub.SetOverlapInvariantHookForTest(nil) })
+
+	streamhub.OverlapInvariant(sessionName, ownerCount)
+	if violated {
+		t.Fatalf("OverlapInvariant violated: %d owners resolved for session %q, want at most 1", ownerCount, sessionName)
 	}
 }
 
@@ -218,7 +217,7 @@ func TestStreamOwnershipLock_should_ResolveToSingleWinner_When_ConcurrentCallers
 		for _, r := range results {
 			distinct[r] = true
 		}
-		assertOverlapInvariant(t, len(distinct))
+		assertOverlapInvariant(t, fmt.Sprintf("race-test-session-%d", i), len(distinct))
 		if len(distinct) != 1 {
 			t.Fatalf("iteration %d: expected every concurrent caller to observe the same resolved StreamPath, got %d distinct results: %v",
 				i, len(distinct), results)
@@ -226,23 +225,31 @@ func TestStreamOwnershipLock_should_ResolveToSingleWinner_When_ConcurrentCallers
 	}
 }
 
-func TestOverlapInvariant_should_DetectViolation_When_TwoOwnersAreForciblySimulated(t *testing.T) {
-	// Proves the invariant *check itself* fires correctly by deliberately
-	// bypassing the resolver (never done by real callers) to construct a
-	// forced two-owner scenario — mirroring plan.md's AC in this project's
-	// actual, documented form: production always logs via slog.Error and
-	// never panics (see plan.md's OverlapInvariant glossary entry), while
-	// every test that could trigger it fails via t.Fatal
-	// (assertOverlapInvariant, used by the race test above, is exactly that
-	// t.Fatal wrapper around this predicate).
-	if !overlapInvariantViolated(2) {
-		t.Fatal("expected overlapInvariantViolated(2) to report a violation for a forced two-owner scenario")
+// TestOverlapInvariant_should_LogErrorAndIncrementMetric_When_TwoOwnersAreForciblySimulated
+// proves the invariant check itself fires correctly by deliberately
+// bypassing the resolver (never done by real callers) to construct a forced
+// two-owner scenario — mirroring plan.md's AC in this project's actual,
+// documented form: production always logs via slog.Error and increments
+// streamhub_overlap_invariant_violations_total, and never panics (see
+// plan.md's OverlapInvariant glossary entry). This test never expects or
+// recovers a panic; assertOverlapInvariant (used by the race test above) is
+// the t.Fatal-on-violation wrapper every -race test in this plan uses.
+func TestOverlapInvariant_should_LogErrorAndIncrementMetric_When_TwoOwnersAreForciblySimulated(t *testing.T) {
+	before := streamhub.OverlapInvariantViolationsTotal()
+
+	streamhub.OverlapInvariant("forced-two-owner-session", 2)
+	if got := streamhub.OverlapInvariantViolationsTotal(); got != before+1 {
+		t.Fatalf("expected streamhub_overlap_invariant_violations_total to increment by 1 for a forced two-owner scenario, got %d -> %d", before, got)
 	}
-	if overlapInvariantViolated(1) {
-		t.Fatal("expected overlapInvariantViolated(1) to report no violation for a single resolved owner")
+
+	streamhub.OverlapInvariant("single-owner-session", 1)
+	if got := streamhub.OverlapInvariantViolationsTotal(); got != before+1 {
+		t.Fatalf("expected no increment for a single resolved owner, got %d -> %d", before, got)
 	}
-	if overlapInvariantViolated(0) {
-		t.Fatal("expected overlapInvariantViolated(0) to report no violation when no owner has resolved yet")
+
+	streamhub.OverlapInvariant("no-owner-yet-session", 0)
+	if got := streamhub.OverlapInvariantViolationsTotal(); got != before+1 {
+		t.Fatalf("expected no increment when no owner has resolved yet, got %d -> %d", before, got)
 	}
 }
 

@@ -651,6 +651,58 @@ func TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_Rac
 	}
 }
 
+// --- Epic 3.2 / Story 3.2.1: registry consolidation ---
+
+// TestHubOwnedSession_should_NeverTouchActiveControlModeStreams_When_MultipleSubscribersAttach
+// is Story 3.2.1's core AC: for PathHubOwned sessions, hub.SubscriberCount()
+// is the sole source of truth for connection count — activeControlModeStreams
+// (the legacy, per-handler-instance registry) must never be incremented for
+// hub-owned sessions, since streamViaHub (unlike streamViaControlMode) never
+// calls recordControlModeStreamStart.
+func TestHubOwnedSession_should_NeverTouchActiveControlModeStreams_When_MultipleSubscribersAttach(t *testing.T) {
+	t.Parallel()
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	sessionName := "hub-owned-connection-count-" + t.Name()
+
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+	require.NoError(t, err)
+
+	hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
+	hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
+
+	require.Equal(t, 2, hub.SubscriberCount(), "hub.SubscriberCount() must be the sole source of truth for PathHubOwned sessions")
+	_, loaded := h.activeControlModeStreams.Load(sessionName)
+	require.False(t, loaded, "hub-owned sessions must never touch activeControlModeStreams (Story 3.2.1)")
+}
+
+// TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_MultipleSubscribersAttach
+// is Story 3.2.1's Task 3.2.1c/3.2.1d AC: the hub subscribes to the
+// underlying TmuxSession's control-mode output exactly once (via
+// pumpControlModeOutputIntoHub, started only from GetOrCreate's winning
+// LoadOrCompute call), regardless of how many Subscribers later attach to
+// the hub itself — i.e. TmuxSession.controlModeSubscribers gets exactly one
+// entry for the hub's own subscription, not one per attached hub Subscriber.
+func TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_MultipleSubscribersAttach(t *testing.T) {
+	t.Parallel()
+	sessionName := "hub-subscribe-once-" + t.Name()
+	controller := &fakeSessionController{}
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+	hub, err := registry.GetOrCreate(sessionName, controller)
+	require.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
+	}
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&controller.subscribeCalls) >= 1
+	}, time.Second, 5*time.Millisecond, "expected the pump goroutine to subscribe at least once")
+	require.EqualValues(t, 1, atomic.LoadInt32(&controller.subscribeCalls),
+		"the hub must subscribe to the underlying TmuxSession's control-mode output exactly once, regardless of how many Subscribers are attached to the hub itself")
+}
+
 // TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved
 // is validation.md's REQ-1 test name. Full end-to-end coverage of
 // streamTerminal's session resolution (SessionService/storage/tmux) is out of

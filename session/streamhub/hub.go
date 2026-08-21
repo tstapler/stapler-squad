@@ -2,6 +2,7 @@ package streamhub
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -146,15 +147,27 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 		opt(h)
 	}
 	h.batchWindow = NewBatchWindow(h.onBatchFlush, WithMaxBatchWindow(h.batchMaxWindow))
+
+	incActiveHubs()
+	log.Info("streamhub hub created", "session", sessionName, "resolved_path", "hub_owned")
 	return h
 }
 
 // onBatchFlush is the hub's BatchWindow.onFlush callback: it broadcasts the
-// flushed unit's bytes to every attached subscriber. unit.Seq/unit.Reason
-// are exposed for observability and tests today; stamping them into the
-// actual wire envelope a subscriber receives is Epic 2.2's WebSocketTransport
+// flushed unit's bytes to every attached subscriber, after logging and
+// recording the flush event (Story 3.2.2) — frames coalesced, byte count,
+// and trigger reason, the same information an operator would otherwise only
+// be able to reconstruct from `BatchWindow.FlushCount`/`TimersArmed`'s
+// test-only instrumentation. Stamping unit.Seq/unit.Reason into the actual
+// wire envelope a subscriber receives is Epic 2.2's WebSocketTransport
 // scope, not this epic's.
 func (h *StreamHub) onBatchFlush(unit BroadcastUnit) {
+	log.Info("streamhub batch flushed",
+		"session", h.sessionName,
+		"frames_coalesced", unit.FramesCoalesced,
+		"bytes", len(unit.Data),
+		"reason", unit.Reason.String())
+	recordBatchFlushFramesCoalesced(unit.FramesCoalesced)
 	h.Broadcast(unit.Data)
 }
 
@@ -197,7 +210,10 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 	sub.startWriter(h.handleSubscriberSendError)
 
 	log.Info("streamhub subscriber attached",
-		"session", h.sessionName, "subscriber_id", string(id), "subscriber_count", count)
+		"session", h.sessionName, "subscriber_id", string(id), "subscriber_count", count,
+		"transport_type", fmt.Sprintf("%T", transport),
+		"can_resize", capability.CanResize, "can_write", capability.CanWrite)
+	recordSubscribersPerHub(count)
 	return id
 }
 
@@ -282,6 +298,7 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 	time.AfterFunc(grace, func() {
 		if sub.isStillFull() {
 			h.slowSubscriberDropsTotal.Add(1)
+			recordSlowSubscriberDrop()
 			h.removeSubscriber(sub.id, errSlowSubscriberEvicted)
 			return
 		}
@@ -350,24 +367,28 @@ func (h *StreamHub) ForceTeardown() error {
 	for _, sub := range h.subscribers {
 		subs = append(subs, sub)
 	}
+	subscriberCountAtTeardown := len(h.subscribers)
 	h.subscribers = make(map[SubscriberID]*subscriber)
 	h.state = HubTornDown
 	h.mu.Unlock()
+
+	decActiveHubs()
 
 	for _, sub := range subs {
 		sub.close()
 	}
 
 	if h.controller == nil {
-		log.Info("streamhub torn down", "session", h.sessionName)
+		log.Info("streamhub torn down", "session", h.sessionName, "subscriber_count", subscriberCountAtTeardown)
 		return nil
 	}
 
 	if err := h.controller.StopControlMode(); err != nil {
-		log.Warn("streamhub force teardown: StopControlMode failed", "session", h.sessionName, "error", err)
+		log.Warn("streamhub force teardown: StopControlMode failed",
+			"session", h.sessionName, "subscriber_count", subscriberCountAtTeardown, "error", err)
 		return err
 	}
-	log.Info("streamhub torn down", "session", h.sessionName)
+	log.Info("streamhub torn down", "session", h.sessionName, "subscriber_count", subscriberCountAtTeardown)
 	return nil
 }
 

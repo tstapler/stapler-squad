@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/puzpuzpuz/xsync/v4"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // ErrOwnershipResolvedToOtherPath is returned by ResolveExpecting when the
@@ -92,4 +95,53 @@ func (l *StreamOwnershipLock) ResolveExpecting(flagValue bool, want StreamPath) 
 		return got, fmt.Errorf("%w: resolved %v, wanted %v", ErrOwnershipResolvedToOtherPath, got, want)
 	}
 	return got, nil
+}
+
+// overlapInvariantHook lets a test observe an OverlapInvariant violation
+// synchronously (e.g. to t.Fatal on first occurrence, per plan.md's
+// OverlapInvariant Domain Glossary entry) instead of grepping captured log
+// output. nil in production. Set via SetOverlapInvariantHookForTest.
+var overlapInvariantHook atomic.Pointer[func(sessionName string, ownerCount int)]
+
+// SetOverlapInvariantHookForTest installs hook to run, in addition to
+// OverlapInvariant's normal slog.Error+metric behavior, whenever a
+// violation is detected. Pass nil to clear it. Tests should always clear it
+// via t.Cleanup so a hook installed by one test can't leak into another
+// running in the same package binary.
+func SetOverlapInvariantHookForTest(hook func(sessionName string, ownerCount int)) {
+	if hook == nil {
+		overlapInvariantHook.Store(nil)
+		return
+	}
+	overlapInvariantHook.Store(&hook)
+}
+
+// OverlapInvariant is the production-reachable, load-bearing regression
+// check named in plan.md's Domain Glossary: no two owners (legacy
+// connection or hub) should ever hold resize/capture authority for one tmux
+// session concurrently. StreamOwnershipLock.Resolve's mutex-guarded
+// resolve-once-and-cache behavior already makes this structurally
+// impossible under correct usage — this function is the defense-in-depth
+// check that would surface a future regression in that guarantee
+// immediately (e.g. HubRegistry.GetOrCreate calls it on every hub
+// creation/lookup, Task 3.2's real production call site) rather than
+// relying solely on code review to keep Resolve/GetOrCreate correct
+// forever. It always emits slog.Error with full context and increments
+// streamhub_overlap_invariant_violations_total — it never panics, since a
+// panic in this single-operator daily-driver process would be worse than
+// the bug it would catch. This is the one real implementation: earlier
+// phases' overlapInvariantViolated/assertOverlapInvariant test-local
+// helpers (Epic 1.4) have been retired in favor of calling this directly,
+// via SetOverlapInvariantHookForTest for the t.Fatal-on-first-occurrence
+// behavior every -race test in this plan requires.
+func OverlapInvariant(sessionName string, ownerCount int) {
+	if ownerCount <= 1 {
+		return
+	}
+	recordOverlapInvariantViolation()
+	log.Error("streamhub: OverlapInvariant violated — more than one owner resolved for a tmux session",
+		"tmux_session", sessionName, "owner_count", ownerCount)
+	if hook := overlapInvariantHook.Load(); hook != nil {
+		(*hook)(sessionName, ownerCount)
+	}
 }

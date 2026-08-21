@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,12 @@ import (
 // contract, not the hub's resize/quiescence pipeline.
 type fakeSessionController struct {
 	stopControlModeCalls int
+
+	// subscribeCalls counts SubscribeControlModeUpdates invocations — used
+	// by Story 3.2.1's test asserting the hub subscribes to the underlying
+	// TmuxSession's control-mode output exactly once regardless of how many
+	// Subscribers are attached to the hub itself.
+	subscribeCalls int32
 }
 
 func (f *fakeSessionController) SetWindowSize(int, int) error        { return nil }
@@ -25,6 +32,7 @@ func (f *fakeSessionController) StopControlMode() error {
 	return nil
 }
 func (f *fakeSessionController) SubscribeControlModeUpdates() (string, <-chan []byte) {
+	atomic.AddInt32(&f.subscribeCalls, 1)
 	ch := make(chan []byte)
 	close(ch)
 	return "fake-sub", ch

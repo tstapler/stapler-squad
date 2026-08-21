@@ -58,6 +58,12 @@ type BroadcastUnit struct {
 	Seq    HubSequenceNumber
 	Data   []byte
 	Reason FlushReason
+
+	// FramesCoalesced is the number of underlying Add calls folded into this
+	// unit (Task 3.2.2a/Story 3.2.2's streamhub_batch_flush_frames_coalesced
+	// metric) — 1 for a Bypass unit, since it never touches accumulation at
+	// all and represents exactly one control/quiescence message.
+	FramesCoalesced int
 }
 
 // batchScratchPool holds reusable accumulation buffers, adapting
@@ -98,9 +104,10 @@ type BatchWindow struct {
 	maxWindow time.Duration
 	seq       sequenceCounter
 
-	mu    sync.Mutex
-	buf   *[]byte
-	timer *time.Timer
+	mu         sync.Mutex
+	buf        *[]byte
+	timer      *time.Timer
+	frameCount int // number of Add calls folded into the pending window so far
 
 	// flushCount and timersArmed are test-only instrumentation for Task
 	// 2.1.1e's call-counting AC (the hub's coalesce step must run once per
@@ -138,6 +145,7 @@ func (b *BatchWindow) Add(data []byte) {
 	defer b.mu.Unlock()
 	first := len(*b.buf) == 0
 	*b.buf = append(*b.buf, data...)
+	b.frameCount++
 	if first {
 		b.armCeilingLocked()
 	}
@@ -194,6 +202,8 @@ func (b *BatchWindow) flushLocked(reason FlushReason) {
 	// Copy out before handoff — see batchScratchPool's doc comment for why
 	// this copy (unlike coalesceBufPool's) is load-bearing, not incidental.
 	data := append([]byte(nil), (*b.buf)...)
+	frames := b.frameCount
+	b.frameCount = 0
 	scratch := b.buf
 	*scratch = (*scratch)[:0]
 	fresh := batchScratchPool.Get().(*[]byte)
@@ -203,7 +213,7 @@ func (b *BatchWindow) flushLocked(reason FlushReason) {
 
 	batchScratchPool.Put(scratch)
 	b.flushCount.Add(1)
-	b.onFlush(BroadcastUnit{Seq: b.seq.next(), Data: data, Reason: reason})
+	b.onFlush(BroadcastUnit{Seq: b.seq.next(), Data: data, Reason: reason, FramesCoalesced: frames})
 }
 
 // Bypass immediately delivers data as its own BroadcastUnit, stamped with
@@ -214,7 +224,7 @@ func (b *BatchWindow) flushLocked(reason FlushReason) {
 // already-pending batch still flushes later on its own normal schedule;
 // Bypass never cancels or folds into it.
 func (b *BatchWindow) Bypass(data []byte) {
-	b.onFlush(BroadcastUnit{Seq: b.seq.next(), Data: data, Reason: FlushBypass})
+	b.onFlush(BroadcastUnit{Seq: b.seq.next(), Data: data, Reason: FlushBypass, FramesCoalesced: 1})
 }
 
 // FlushCount reports how many times the accumulation/coalesce step

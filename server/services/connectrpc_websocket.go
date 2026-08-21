@@ -308,6 +308,18 @@ func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.Sessi
 		go pumpControlModeOutputIntoHub(hub, controller, sessionName)
 		return hub, false
 	})
+
+	// OverlapInvariant (Epic 3.2): xsync.Map.LoadOrCompute guarantees the
+	// constructor above runs at most once per key, so exactly one *StreamHub
+	// is ever vended for sessionName by this call — ownerCount is always 1
+	// here under correct xsync/GetOrCreate behavior. This is the real,
+	// production-reachable call site plan.md's OverlapInvariant Domain
+	// Glossary entry asks for: defense in depth against a future regression
+	// in that guarantee (e.g. a refactor that swaps LoadOrCompute for a
+	// racy Load+Store), which would then surface here immediately, on every
+	// hub creation/lookup, instead of only in a rare production incident.
+	streamhub.OverlapInvariant(sessionName, 1)
+
 	return hub, nil
 }
 

@@ -39,7 +39,8 @@ func (h *StreamHub) RequestResize(id SubscriberID, size TerminalSize) {
 	}
 
 	sub.recordResizeVote(size)
-	negotiated := negotiateSize(h.collectResizeVotes())
+	votes := h.collectResizeVotes()
+	negotiated := negotiateSize(votes)
 
 	h.resizeMu.Lock()
 	previous := h.negotiatedSize
@@ -49,7 +50,13 @@ func (h *StreamHub) RequestResize(id SubscriberID, size TerminalSize) {
 	current := h.negotiatedSize
 	h.resizeMu.Unlock()
 
-	if current != previous {
+	changed := current != previous
+	log.Info("streamhub resize negotiated",
+		"session", h.sessionName, "votes", len(votes),
+		"negotiated_cols", current.Cols(), "negotiated_rows", current.Rows(), "changed", changed)
+	recordResizeNegotiation(changed)
+
+	if changed {
 		h.applyNegotiatedSize(current)
 	}
 }
