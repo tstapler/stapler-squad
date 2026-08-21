@@ -34,9 +34,10 @@ var ErrOwnershipResolvedToOtherPath = errors.New("streamhub: session ownership a
 // legacy StartControlMode and hub creation acquire; today it only owns the
 // resolve-once-and-cache behavior (Story 3.1.1).
 type StreamOwnershipLock struct {
-	mu       sync.Mutex
-	resolved bool
-	path     StreamPath
+	mu          sync.Mutex
+	resolved    bool
+	path        StreamPath
+	sessionName string
 }
 
 // ownershipLocks is the package-level, per-tmux-session-name registry of
@@ -53,9 +54,35 @@ var ownershipLocks = xsync.NewMap[string, *StreamOwnershipLock]()
 // what makes the mutual exclusion in Story 3.1.2 possible.
 func AcquireOwnershipLock(sessionName string) *StreamOwnershipLock {
 	lock, _ := ownershipLocks.LoadOrCompute(sessionName, func() (*StreamOwnershipLock, bool) {
-		return &StreamOwnershipLock{}, false
+		return &StreamOwnershipLock{sessionName: sessionName}, false
 	})
 	return lock
+}
+
+// sessionOverrideLookup, when set, is consulted by Resolve before it falls
+// back to the caller-supplied global flagValue — Story 3.3.1's per-session
+// canary override, letting an operator force PathHubOwned for one named
+// session without flipping the global STAPLER_SQUAD_USE_STREAM_HUB default.
+// nil (the default) means no override source is wired, so Resolve behaves
+// exactly as before this story. Set via SetSessionOverrideLookup by the
+// caller that owns config access (server/services), the same way
+// overlapInvariantHook below keeps this package decoupled from package
+// testing/config rather than importing them directly.
+var sessionOverrideLookup atomic.Pointer[func(sessionName string) (forceHub bool, ok bool)]
+
+// SetSessionOverrideLookup installs lookup as the per-session override
+// source consulted by every StreamOwnershipLock's Resolve call. lookup
+// should return (forceHub, true) when sessionName has an explicit override
+// recorded, or (_, false) when it does not (falls back to the global
+// flagValue). Pass nil to clear it — tests should always do so via
+// t.Cleanup so a hook installed by one test can't leak into another running
+// in the same package binary.
+func SetSessionOverrideLookup(lookup func(sessionName string) (forceHub bool, ok bool)) {
+	if lookup == nil {
+		sessionOverrideLookup.Store(nil)
+		return
+	}
+	sessionOverrideLookup.Store(&lookup)
 }
 
 // Resolve turns flagValue into a StreamPath the first time it is called on
@@ -64,12 +91,24 @@ func AcquireOwnershipLock(sessionName string) *StreamOwnershipLock {
 // what makes a flag flip mid-rollout safe: the first connection's resolution
 // sticks for the session's lifetime, so a second connection arriving after
 // the flag changed in the environment still observes the original decision.
+//
+// Story 3.3.1: before falling back to flagValue (the global default), Resolve
+// consults sessionOverrideLookup for this lock's own session name. A
+// recorded override forcing PathHubOwned wins regardless of flagValue — the
+// per-session canary mechanism — but never overrides an already-sticky
+// resolution, same as the global flag.
 func (l *StreamOwnershipLock) Resolve(flagValue bool) StreamPath {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if !l.resolved {
-		if flagValue {
+		effective := flagValue
+		if lookup := sessionOverrideLookup.Load(); lookup != nil {
+			if forceHub, ok := (*lookup)(l.sessionName); ok && forceHub {
+				effective = true
+			}
+		}
+		if effective {
 			l.path = PathHubOwned
 		} else {
 			l.path = PathLegacyPerConnection

@@ -345,16 +345,40 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 	log.Info("streamhub raw-output pump exiting", "session", sessionName)
 }
 
-// useStreamHub is a placeholder StreamPath resolver (Task 2.2.2a): a simple,
-// per-connection env var read. Epic 3.1 (Story 3.1.1/3.1.2) replaces this
-// with streamhub.AcquireOwnershipLock's sticky, once-per-session resolution —
-// see plan.md's Risk Control section on why a per-connection re-read is
-// unsafe long-term (a flag flip mid-session could let two owners race the
-// same tmux session). Until Epic 3.1 lands, this only matters while the flag
-// defaults to "false" (unset today), so that race window is not reachable in
-// production.
+// useStreamHub is the global STAPLER_SQUAD_USE_STREAM_HUB default resolver,
+// re-read per connection — safe because StreamOwnershipLock.Resolve (Epic
+// 3.1) caches the first resolution per tmux session, so a later re-read
+// observing a changed value can never move an already-resolved session.
+//
+// Story 3.3.1/3.3.2 (pre-mortem P1 #4): requesting the global default to be
+// true is mechanically gated on config.ResolveGlobalStreamHubDefault —
+// refused, and safely defaulted to false with a loud log line, unless
+// config.RollbackRehearsalCompletedAt has been recorded (Story 3.3.2's
+// rehearsal). This gate does not apply to the per-session override path
+// (see the streamhub.SetSessionOverrideLookup wiring in init below), which
+// AcquireOwnershipLock's Resolve consults independently of this function's
+// return value.
 func useStreamHub() bool {
-	return os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true"
+	requested := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true"
+	effective, err := config.ResolveGlobalStreamHubDefault(config.LoadConfig(), requested)
+	if err != nil {
+		log.Error("streamhub: refusing to enable global default", "error", err)
+		return false
+	}
+	return effective
+}
+
+// init wires streamhub's per-session canary override (Story 3.3.1) to this
+// package's config access, so session/streamhub itself never needs to
+// import package config — the same one-way-dependency shape ADR-003
+// establishes for AcquireOwnershipLock. Re-reads config.LoadConfig() on
+// every call rather than caching, matching GetFeatureFlag's existing
+// re-read-every-time convention (a session's own override can be changed
+// without restarting the process).
+func init() {
+	streamhub.SetSessionOverrideLookup(func(sessionName string) (bool, bool) {
+		return config.LoadConfig().GetStreamHubSessionOverride(sessionName)
+	})
 }
 
 // tmuxSessionNameForStreamPath computes the tmux session name StreamPath

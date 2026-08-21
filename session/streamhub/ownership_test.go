@@ -128,6 +128,70 @@ func TestStreamOwnershipLock_should_SucceedResolveExpecting_When_RequestedPathMa
 	}
 }
 
+// TestStreamOwnershipLock_should_ForcePathHubOwned_When_SessionOverrideIsSet
+// is plan.md Story 3.3.1's AC1 scenario: with a per-session override
+// installed via SetSessionOverrideLookup forcing session "canary-1" to
+// PathHubOwned, the first connection to that session resolves PathHubOwned
+// even though the global flag value passed is false, while a simultaneous
+// connection to a different, non-overridden session resolves
+// PathLegacyPerConnection from the same global flag.
+func TestStreamOwnershipLock_should_ForcePathHubOwned_When_SessionOverrideIsSet(t *testing.T) {
+	canarySession := "canary-1-" + t.Name()
+	normalSession := "normal-1-" + t.Name()
+
+	streamhub.SetSessionOverrideLookup(func(sessionName string) (bool, bool) {
+		if sessionName == canarySession {
+			return true, true
+		}
+		return false, false
+	})
+	t.Cleanup(func() { streamhub.SetSessionOverrideLookup(nil) })
+
+	// Global flag is false for both; only the canary session has an override.
+	canaryPath := streamhub.AcquireOwnershipLock(canarySession).Resolve(false)
+	if canaryPath != streamhub.PathHubOwned {
+		t.Fatalf("expected overridden session to resolve PathHubOwned, got %v", canaryPath)
+	}
+
+	normalPath := streamhub.AcquireOwnershipLock(normalSession).Resolve(false)
+	if normalPath != streamhub.PathLegacyPerConnection {
+		t.Fatalf("expected non-overridden session to resolve PathLegacyPerConnection, got %v", normalPath)
+	}
+}
+
+// TestStreamOwnershipLock_should_IgnoreOverride_When_NoLookupIsInstalled
+// verifies the zero-value/backwards-compatible behavior: with no
+// SetSessionOverrideLookup call in effect (nil, the package default),
+// Resolve behaves exactly as it did before Story 3.3.1.
+func TestStreamOwnershipLock_should_IgnoreOverride_When_NoLookupIsInstalled(t *testing.T) {
+	sessionName := "no-override-" + t.Name()
+
+	got := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
+	if got != streamhub.PathLegacyPerConnection {
+		t.Fatalf("expected PathLegacyPerConnection with no override lookup installed, got %v", got)
+	}
+}
+
+// TestStreamOwnershipLock_should_KeepOverrideStickyResolution_When_LookupIsClearedLater
+// verifies the override only affects the *first* resolution, like the global
+// flag: once resolved via an override, clearing the lookup afterward must
+// not disturb the already-sticky PathHubOwned resolution.
+func TestStreamOwnershipLock_should_KeepOverrideStickyResolution_When_LookupIsClearedLater(t *testing.T) {
+	sessionName := "sticky-override-" + t.Name()
+
+	streamhub.SetSessionOverrideLookup(func(name string) (bool, bool) { return true, true })
+	first := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
+	if first != streamhub.PathHubOwned {
+		t.Fatalf("expected PathHubOwned from override, got %v", first)
+	}
+
+	streamhub.SetSessionOverrideLookup(nil)
+	second := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
+	if second != streamhub.PathHubOwned {
+		t.Fatalf("expected sticky PathHubOwned to survive override removal, got %v", second)
+	}
+}
+
 // TestStreamOwnershipLock_should_NeverProduceTwoOwners_When_HubAndLegacyIntentsRaceConcurrently
 // is plan.md Story 3.1.2 AC2's race scenario at the StreamOwnershipLock
 // primitive level: many goroutines concurrently call ResolveExpecting with

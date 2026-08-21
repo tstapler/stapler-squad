@@ -490,13 +490,46 @@ func TestUseStreamHub_should_DefaultToFalse_When_EnvVarUnset(t *testing.T) {
 // TestUseStreamHub_should_ReturnTrue_When_EnvVarIsExactlyTrue verifies the
 // flag only turns PathHubOwned on for the literal value "true" — any other
 // value (including a typo like "1" or "True") stays on the legacy path
-// rather than failing open.
+// rather than failing open. Requires a recorded rollback rehearsal (Story
+// 3.3.2) since useStreamHub()'s gate refuses to enable the global default
+// otherwise (Story 3.3.1's Task 3.3.1d).
 func TestUseStreamHub_should_ReturnTrue_When_EnvVarIsExactlyTrue(t *testing.T) {
+	recordRollbackRehearsalCompletedForTest(t)
+
 	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
 	require.True(t, useStreamHub())
 
 	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "1")
 	require.False(t, useStreamHub())
+}
+
+// recordRollbackRehearsalCompletedForTest records a passing rollback
+// rehearsal (Story 3.3.2's Task 3.3.2c) so a test's useStreamHub() call can
+// resolve the global default to true, and restores
+// RollbackRehearsalCompletedAt to nil via t.Cleanup so this doesn't leak
+// into other tests in the same package binary run.
+func recordRollbackRehearsalCompletedForTest(t *testing.T) {
+	t.Helper()
+	require.NoError(t, config.LoadConfig().RecordRollbackRehearsalCompleted())
+	t.Cleanup(func() {
+		cfg := config.LoadConfig()
+		cfg.RollbackRehearsalCompletedAt = nil
+		_ = config.SaveConfig(cfg)
+	})
+}
+
+// TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted is Story
+// 3.3.1/3.3.2's integration-level regression test (pre-mortem P1 #4): even
+// with STAPLER_SQUAD_USE_STREAM_HUB="true" set, useStreamHub() must return
+// false — safely, not by panicking or crashing the connection — when no
+// rollback rehearsal has been recorded.
+func TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted(t *testing.T) {
+	cfg := config.LoadConfig()
+	cfg.RollbackRehearsalCompletedAt = nil
+	require.NoError(t, config.SaveConfig(cfg))
+
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	require.False(t, useStreamHub(), "expected the global default to stay false without a recorded rollback rehearsal")
 }
 
 // TestHubRegistry_should_CreateExactlyOneHub_When_GetOrCreateCalledConcurrently
@@ -714,6 +747,11 @@ func TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_Mult
 // SetWindowSize/ResizePTY/CapturePaneContent called by anything in this
 // epic's new code path (only AttachSubscriber's bookkeeping runs).
 func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved(t *testing.T) {
+	// Story 3.3.1/3.3.2: useStreamHub() now refuses to resolve the global
+	// default to true unless a rollback rehearsal has been recorded
+	// (config.RollbackRehearsalCompletedAt) — record one here so this
+	// test's premise (the global default resolving true) still holds.
+	recordRollbackRehearsalCompletedForTest(t)
 	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
 	require.True(t, useStreamHub(), "flag must resolve PathHubOwned for this test's premise to hold")
 
