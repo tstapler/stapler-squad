@@ -343,6 +343,7 @@ func TestWriteSlashCommands_should_MatchExactFileSet_When_CalledTwiceWithDiffere
 	}
 	wantFiles := map[string]bool{
 		"status.md": true, "review.md": true, "ship.md": true, "help.md": true,
+		"block.md": true, "duplicate.md": true,
 		"done-0.md": true, "fail-0.md": true, "done-1.md": true, "fail-1.md": true,
 		"done-2.md": true, "fail-2.md": true,
 	}
