@@ -510,6 +510,14 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
+
+	// Wire a ReviewQueuePoller so FindLiveInstance (used by destroyCreatedSession to
+	// join the driver goroutine) resolves the live instance instead of always nil.
+	statusMgr := session.NewInstanceStatusManager()
+	queue := session.NewReviewQueue()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
 	return svc
 }
 
