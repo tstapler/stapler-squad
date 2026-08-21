@@ -249,7 +249,7 @@ func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *session.Instance
 	rqm.signalActivity()
 	go func() {
 		select {
-		case <-rqm.ctx.Done():
+		case <-rqm.baseContext().Done():
 			return
 		default:
 		}
