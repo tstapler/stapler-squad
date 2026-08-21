@@ -2100,3 +2100,87 @@ one layer down the stack (a session-liveness filter instead of a backlog-status 
 3. Carried forward unchanged: the 3 deferred `hasActiveWorkSession` sibling call sites from PR #292,
    and item #6 (interface-pollution cleanup, `PipelineModeRepository`/`Repository`) — still low
    priority, still not routed.
+
+## Update — 2026-08-21: 18-day gap since last check — 20 items had been silently parked for up to 2 weeks by an already-fixed bug; bucket [3] re-confirmed resolved with no regression
+
+First check-in since 08-03 (longest gap this doc has recorded — every prior pass was 1-5 days
+apart). `ListStuckBacklogItems` returned **40 items** (vs. 1-3 in every prior pass), so this
+pass escalated past the usual "light verification" scope for the one dominant cause below, while
+treating bucket [3] with an independent fresh-eyes fork per the doc's own standing mandate not to
+trust a prior pass's conclusion without re-deriving it.
+
+**[FIXED, was live for up to 2 weeks] 20 items permanently parked on `STUCK_REASON_ORPHANED_TRIAGE`,
+`remediation_attempts` at the 5-attempt cap, silently sitting in `idea` status since 2026-08-06/08-11
+with no signal beyond one WARN notification each.** 16 of the 20 were a bulk-import batch created
+2026-08-06T07:50:07 (kanban board view, session pinning, terminal input batching, PII scanning,
+prompt library, Linear/JIRA integration, VS Code extension, and 9 others); a 17th (`4daf7ced`) was
+itself a detailed, well-root-caused bug report describing exactly this incident — created
+2026-08-11, it was caught by the same trap it described and got permanently parked 30 minutes
+later, never seen again until this pass.
+
+The code-level root cause `4daf7ced` identified (`classifyHeadlessCallError`,
+`server/services/backlog_service_triage.go:2371-2384`, swallowing subprocess-start failures into
+an undiagnosable `errType=other` bucket with no captured raw output) was **already fixed** by PR
+[#535](https://github.com/tstapler/stapler-squad/pull/535) (`3d2a7600b`, merged 2026-08-18) — its
+own commit message cites "17 of 19 currently-parked production backlog items" as the motivating
+case, confirming it targeted this exact incident. What PR #535 didn't do — because it's an
+operational action, not a code change — was actually recover the 20 already-parked items; they
+just sat there for another 2-3 days post-fix with nothing watching them.
+
+**Action taken (user-approved via AskUserQuestion — "bulk reset all 16 now")**: called the
+purpose-built `BulkResetStuckRemediation` RPC (`reason=STUCK_REASON_ORPHANED_TRIAGE,
+only_parked=true`) — `{"resetCount":20}`. Verified via `GetBacklogItem` on one item (`6e048b5b`,
+"kanban board view") that the reconciliation loop picked it up immediately: a fresh
+`headless-triage-*` session (created 2026-08-21T07:00:42, `pipelineModeSnapshot: "sdd"`) was
+already in flight moments after the reset, on top of 6 prior failed attempts (4 `timeout`, 2
+`other`) dating back to 2026-08-06. Not individually verified for all 20 — the reconciliation
+loop's own WIP/concurrency gating governs the retry fan-out from here, not this pass.
+
+**Recurring-shape note**: this is a **sixth** instance of the notify-once-then-silent family this
+doc has tracked since 07-27 (silent no-op spawn, self-defeating exclusion guard, event lost across
+restart, notify-once never resolved, degraded-fallback-masks-error from 08-03) — call it **a fix
+landing with no sweep to recover items already caught by the bug it fixes**. `MaxRemediationAttempts`
+parking is *by design* terminal (a human is supposed to notice and call `ResetStuckRemediation`/
+`BulkResetStuckRemediation`), but nothing surfaces "N items parked, and the bug that parked them
+was just fixed" as an actionable prompt — a human (or this audit) has to independently notice the
+correlation. Worth a cheap follow-up: when a PR fixes a `classifyHeadlessCallError` bucket (or any
+bucket-specific triage failure), CI or a post-merge hook could diff `BacklogStuckState` rows against
+the newly-fixed bucket and prompt an automatic (or at least surfaced) bulk reset — same shape as
+the standing `hasActiveWorkSession` sibling-call-site gap (07-31), a fix that closes the write side
+but not the recovery side.
+
+**Bucket [3] re-verified via an independent fork with no access to this doc's history** (per the
+mandate not to trust a prior pass's conclusion without re-deriving it): confirms 08-03's
+"substantially RESOLVED" holds, with fresh file:line citations —
+`session/repository.go:487` (`PipelineMode string`), `:496` (`Category string`), `:474`
+(`ReworkCapOverride *int`) alongside the original 3 bools; `proto/session/v1/backlog.proto:247`+
+full CRUD; `web-app/src/app/settings/pipeline-modes/` real components; `session/backlog_commands.go:31,54-56`
+`WriteSlashCommands` delegating to `engine.SlashCommandSet(item)` per-item; end-to-end user path
+confirmed live in `BacklogItemForm.tsx:102-157` (real per-item picker, category-driven default that
+never fights a manual choice). `WorkflowEngine` (`session/workflow_engine.go`,
+`server/services/backlog_service.go:365,709`) is still exclusively `NewDefaultWorkflowEngine()`
+everywhere — same unchanged thread as every pass since 07-19, still assessed as deliberate
+division of concerns, not a gap. No `feat(backlog)` commit since 08-03 (chat-based creation, item
+dependencies, escalation signals, activity log, ULID public IDs) introduces a new pipeline
+stage/session type that bypasses `PipelineEngine`/`WriteSlashCommands` — nothing newly
+non-configurable.
+
+**Housekeeping gap found**: `project_plans/backlog-configurable-pipeline/implementation/plan.md`
+still says `**Status**: Ready for implementation` and is dated 2026-07-15, despite Phases 1-3 all
+being shipped (`8affe06cc`, `6c77f3a27`, `7e542c27b`) — the plan doc was never updated to reflect
+reality. Should be marked done/archived rather than left reading as not-yet-started.
+
+### Recommended Next Actions
+
+1. Watch the 20 freshly-reset items over the next few `ListStuckBacklogItems` checks — if any
+   re-park with the *same* `other` bucket even after PR #535's fix, that's a live regression, not
+   history repeating; if they clear or fail with a properly-classified reason instead, the fix is
+   confirmed working end-to-end, not just at the unit level.
+2. Update `project_plans/backlog-configurable-pipeline/implementation/plan.md`'s Status line to
+   reflect Phases 1-3 shipped (housekeeping, not urgent).
+3. Consider a cheap "bug fix → sweep parked items in the bucket it fixed" follow-up per the
+   recurring-shape note above — not routed to `sdd:fix-bug` this pass (no live instance currently
+   needs it beyond the one just manually resolved), but worth naming before it recurs a third time.
+4. Carried forward unchanged, still low priority: interface-pollution cleanup
+   (`PipelineModeRepository`/`Repository`), the 3 `hasActiveWorkSession` sibling call sites from
+   PR #292, and `be676dab`'s plan-approval decision (from 08-03, still needs a human).
