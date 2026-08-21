@@ -133,7 +133,7 @@ func hookEndpoints(baseURLFn func() string) map[HookName]string {
 //
 //	token, _ := relay.BearerToken()
 //	target := services.RemoteHookTarget{
-//	    SocketPath:  sshremote.RemoteApprovalSocketPath(inst.GetEffectiveRootDir()),
+//	    SocketPath:  sshremote.RemoteApprovalSocketPath(inst.GetEffectiveRootDir(), inst.GetStableID()),
 //	    BearerToken: token,
 //	}
 //	services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, hooks,
@@ -143,7 +143,7 @@ func hookEndpoints(baseURLFn func() string) map[HookName]string {
 // local or remote session alike -- is byte-identical to pre-Phase-5 behavior.
 type RemoteHookTarget struct {
 	// SocketPath is the remote-host Unix domain socket path RemoteApprovalRelay reads
-	// from -- see sshremote.RemoteApprovalSocketPath(basePath).
+	// from -- see sshremote.RemoteApprovalSocketPath(basePath, stableSessionID).
 	SocketPath string
 	// BearerToken is the relay's current bearer credential (sshremote.RemoteApprovalRelay.
 	// BearerToken), embedded in the generated hook command's JSON payload so the relay's

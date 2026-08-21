@@ -33,6 +33,7 @@ import (
 	"connectrpc.com/connect"
 	gliderssh "github.com/gliderlabs/ssh"
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
@@ -519,14 +520,32 @@ func TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree(t *testing
 	require.Len(t, entries, 1, "CreateSession must not create any worktree for session_type=directory")
 	require.Equal(t, "plain-dir", entries[0].Name())
 
-	requireRemoteSessionPersistedWithBranch(t, fix, "remote-directory-session")
+	// Unlike the ExistingWorktree/NewWorktree cases, a remote Directory session must
+	// NOT be persisted as a worktree at all -- no synthetic "unknown" branch sentinel,
+	// matching a local Directory session's Branch="" exactly (pre-ship review finding;
+	// see session_service.go's remote block and instance_worktree.go's default case).
+	require.Eventually(t, func() bool {
+		data, listErr := fix.storage.ListInstanceData()
+		if listErr != nil {
+			return false
+		}
+		for _, d := range data {
+			if d.Title == "remote-directory-session" {
+				return d.Branch == ""
+			}
+		}
+		return false
+	}, 10*time.Second, 200*time.Millisecond, "instance must be persisted to storage with no worktree/branch (matching a local Directory session)")
 }
 
 // requireRemoteSessionPersistedWithBranch waits for title's instance to reach
 // durable storage with a non-empty Branch -- see the ExistingWorktree test's
 // doc comment for why this specifically regression-tests the
 // Worktree.branch_name NotEmpty persistence failure a caller-supplied-branch
-// of "" (Directory/ExistingWorktree remote sessions) previously hit silently.
+// of "" (ExistingWorktree/NewWorktree remote sessions, which persist a real
+// worktree row) previously hit silently. Does NOT apply to Directory remote
+// sessions, which persist no worktree at all -- see
+// TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree.
 func requireRemoteSessionPersistedWithBranch(t *testing.T, fix *remoteSessionFixture, title string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -567,20 +586,76 @@ func TestCreateSession_RemoteTarget_ExistingWorktree_MissingPath_ReturnsInvalidA
 	require.Contains(t, connectErr.Message(), "existing_worktree")
 }
 
-// TestCreateSession_RemoteTarget_UnsupportedSessionType_ReturnsInvalidArgument
-// proves session_type=new_project is rejected up front rather than silently
-// attempting local-filesystem git-init discovery against a path that only
-// exists on the remote host -- see the remote mode-specific block's doc
-// comment in session_service.go for why new_project specifically isn't yet
-// supported (InitializeProjectDirectory has no CommandRunner-based remote
-// equivalent).
-func TestCreateSession_RemoteTarget_UnsupportedSessionType_ReturnsInvalidArgument(t *testing.T) {
+// TestCreateSession_RemoteTarget_NewProject_InitializesGitRepoOnRemoteHost proves
+// session_type=new_project composes with a remote target: the pre-ship-review MAJOR
+// finding "new_project has no CommandRunner-based remote equivalent" turned out to be
+// stale -- git.RemoteWorktreeOps.InitializeProjectDirectory (session/git/remote_worktree.go)
+// already existed with no production caller; this wires it up. Directly parallels
+// TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree's shape, but also
+// verifies the remote host actually got git-initialized (a real .git entry + a commit).
+func TestCreateSession_RemoteTarget_NewProject_InitializesGitRepoOnRemoteHost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	srv := startRemoteSessionTestSSHServer(t)
+	fix := newRemoteSessionFixture(t, srv)
+
+	newProjectPath := filepath.Join(fix.basePath, "new-project-dir")
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "remote-new-project-session",
+		Path:        newProjectPath,
+		Program:     "sh",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT,
+		Remote:      &sessionv1.RemoteTarget{RemoteName: "test-remote"},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+
+	sessionName := "staplersquad_remote-new-project-session"
+	require.Eventually(t, func() bool {
+		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
+	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
+
+	// The "remote host" (a real local SSH server under this test) must have been
+	// genuinely git-initialized at newProjectPath: a .git entry and a real commit,
+	// mirroring InitializeProjectDirectory's local behavior (util.go's
+	// createInitialCommit) rather than merely creating an empty directory.
+	require.DirExists(t, filepath.Join(newProjectPath, ".git"))
+	repo, openErr := gogit.PlainOpen(newProjectPath)
+	require.NoError(t, openErr, "remote path must be a valid git repo after new_project init")
+	head, headErr := repo.Head()
+	require.NoError(t, headErr, "remote repo must have a commit (git worktree add requires at least one)")
+	require.NotEqual(t, plumbing.ZeroHash, head.Hash())
+
+	// Matches Directory's persistence contract exactly: no worktree row, no
+	// synthetic "unknown" branch sentinel -- see setupFirstTimeWorktree's
+	// NewProject case and requireRemoteSessionPersistedWithBranch's doc comment.
+	require.Eventually(t, func() bool {
+		data, listErr := fix.storage.ListInstanceData()
+		if listErr != nil {
+			return false
+		}
+		for _, d := range data {
+			if d.Title == "remote-new-project-session" {
+				return d.Branch == ""
+			}
+		}
+		return false
+	}, 10*time.Second, 200*time.Millisecond, "instance must be persisted to storage with no worktree/branch (matching a local NewProject session)")
+}
+
+// TestCreateSession_RemoteTarget_NewProject_MissingPath_ReturnsInvalidArgument proves
+// the one precondition unique to remote+NewProject: local NewProject can leave its path
+// unresolved and fall back to alias-config resolution, but a remote NewProject has no
+// such fallback for where on the remote host to initialize, so this must be rejected
+// synchronously with a clear error rather than remote-initializing an empty path.
+func TestCreateSession_RemoteTarget_NewProject_MissingPath_ReturnsInvalidArgument(t *testing.T) {
 	srv := startRemoteSessionTestSSHServer(t)
 	fix := newRemoteSessionFixture(t, srv)
 
 	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:       "remote-new-project-unsupported",
-		Path:        filepath.Join(fix.basePath, "new-project-dir"),
+		Title:       "remote-new-project-missing-path",
 		Program:     "sh",
 		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT,
 		Remote:      &sessionv1.RemoteTarget{RemoteName: "test-remote"},

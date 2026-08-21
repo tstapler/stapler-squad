@@ -893,10 +893,25 @@ func stapleSquadTmuxName(title string) string {
 }
 
 // expandTildePath replaces a leading ~ with the user's home directory.
-func expandTildePath(path string) string {
+//
+// remote must be true when this path names a location on a remote host
+// (req.Msg.Remote set) rather than this process's own filesystem. A `~`-prefixed
+// remote path is rejected outright rather than silently expanded against
+// os.UserHomeDir() -- that resolves to THIS server process's local home
+// directory, not the remote host's, so the expanded path previously named
+// nonsense on the wrong machine entirely (e.g. a NewWorktree session's repo
+// path, or a Directory session's remote path) -- found in pre-ship review.
+// The remote host's actual home directory isn't synchronously resolvable here
+// without an extra SSH round trip before the runner is even dialed, so
+// callers targeting a remote host should pass an absolute path instead.
+func expandTildePath(path string, remote bool) (string, error) {
+	isTildePath := path == "~" || strings.HasPrefix(path, "~/")
+	if isTildePath && remote {
+		return "", fmt.Errorf("path %q: ~ is not supported for remote sessions -- use an absolute path on the remote host", path)
+	}
 	if path == "~" {
 		if home, err := os.UserHomeDir(); err == nil {
-			return home
+			return home, nil
 		} else {
 			log.Warn("expandTildePath: failed to resolve home directory", "err", err)
 		}
@@ -907,14 +922,14 @@ func expandTildePath(path string) string {
 			// Guard against path traversal: reject any result that escapes the home directory.
 			if !strings.HasPrefix(expanded, home+string(filepath.Separator)) && expanded != home {
 				log.Warn("expandTildePath: path traversal rejected", "input", path)
-				return path
+				return path, nil
 			}
-			return expanded
+			return expanded, nil
 		} else {
 			log.Warn("expandTildePath: failed to resolve home directory", "err", err)
 		}
 	}
-	return path
+	return path, nil
 }
 
 // GetApprovalStore returns the approval store for wiring up the HTTP hook handler.
@@ -1662,8 +1677,21 @@ func (s *SessionService) CreateSession(
 	// one-off path and the defaults/alias path further down.
 	cfg := config.LoadConfig()
 
+	// resolveRemoteTarget is resolved here -- ahead of expandTildePath below, and well
+	// ahead of the Directory-mode os.Stat check and the mode-specific block further down
+	// -- because both of those, and tilde-expansion, must behave differently for a
+	// remote-targeted request. It only depends on req.Msg/cfg (both already available),
+	// so resolving it this early is side-effect-free.
+	resolvedRemote, remoteRequested, remoteErr := resolveRemoteTarget(req.Msg, cfg)
+	if remoteErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, remoteErr)
+	}
+
 	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
-	resolvedPath := expandTildePath(req.Msg.Path)
+	resolvedPath, tildeErr := expandTildePath(req.Msg.Path, remoteRequested)
+	if tildeErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, tildeErr)
+	}
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
@@ -1745,7 +1773,11 @@ func (s *SessionService) CreateSession(
 			}
 			instanceCLIFlags = resolved.CLIFlags
 			if resolvedPath == "" && resolved.Path != "" {
-				resolvedPath = expandTildePath(resolved.Path)
+				aliasResolvedPath, aliasTildeErr := expandTildePath(resolved.Path, remoteRequested)
+				if aliasTildeErr != nil {
+					return nil, connect.NewError(connect.CodeInvalidArgument, aliasTildeErr)
+				}
+				resolvedPath = aliasResolvedPath
 			}
 			// Read session type directly from the alias config — it is an alias-specific
 			// property, not a cascading default, so it is not part of ResolvedDefaults.
@@ -1804,17 +1836,6 @@ func (s *SessionService) CreateSession(
 		sessionType = session.SessionTypeDirectory
 	}
 
-	// resolveRemoteTarget is resolved here (rather than immediately before the
-	// mode-specific block below) because the Directory-mode os.Stat check right
-	// below it must NOT run against the local filesystem for a remote request --
-	// resolvedPath names a path on the remote host in that case, which this
-	// process cannot os.Stat. It only depends on req.Msg/cfg (both already
-	// available), so hoisting it earlier is side-effect-free.
-	resolvedRemote, remoteRequested, remoteErr := resolveRemoteTarget(req.Msg, cfg)
-	if remoteErr != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, remoteErr)
-	}
-
 	// For Directory mode: if path does not exist and create_if_missing is not set, return
 	// CodeNotFound so the frontend can show a confirmation dialog. Skipped for a remote
 	// target -- create_if_missing is not yet supported for remote Directory sessions (see
@@ -1867,39 +1888,57 @@ func (s *SessionService) CreateSession(
 	// SessionTypeNewWorktree session's Path names an existing local repo; a
 	// fresh worktree is created under the remote's configured base_path),
 	// SessionTypeExistingWorktree (req.Msg.ExistingWorktree already names a
-	// worktree path on the remote host -- no creation, just attach), and
+	// worktree path on the remote host -- no creation, just attach),
 	// SessionTypeDirectory (resolvedPath already names a plain directory on
 	// the remote host -- no worktree machinery at all, mirrors local
-	// Directory sessions). SessionTypeNewProject is deliberately NOT yet
-	// supported: local NewProject uses go-git's PlainInit/PlainOpen directly
-	// against the local filesystem (session/git/util.go's
-	// InitializeProjectDirectory), which has no CommandRunner-based remote
-	// equivalent yet -- a real gap, tracked separately, not silently
-	// papered over here. Any other session type combined with a remote
-	// target is rejected up front rather than silently attempting
-	// local-filesystem discovery against a path that only exists on the
-	// remote host.
+	// Directory sessions), and SessionTypeNewProject (resolvedPath is
+	// git-initialized on the remote host via
+	// git.RemoteWorktreeOps.InitializeProjectDirectory, mirroring local
+	// NewProject's git.InitializeProjectDirectory -- pre-ship review found
+	// the CommandRunner-based remote equivalent already existed in
+	// session/git/remote_worktree.go with no production caller yet; this is
+	// that caller). Any other session type combined with a remote target is
+	// rejected up front rather than silently attempting local-filesystem
+	// discovery against a path that only exists on the remote host.
 	//
 	// On success, sessionType/existingWorktreeOverride are remapped to
 	// SessionTypeExistingWorktree pointing at the worktree/directory just
-	// resolved -- see setupFirstTimeWorktree's doc comment
-	// (session/instance_worktree.go) for why that's the shape the later async
-	// Start() goroutine needs: it only attaches to the already-created
-	// worktree/tmux session, it never tries to create them again (Setup() is
-	// skipped entirely for SessionTypeExistingWorktree).
+	// resolved for NewWorktree/ExistingWorktree specifically -- see
+	// setupFirstTimeWorktree's doc comment (session/instance_worktree.go) for
+	// why that's the shape the later async Start() goroutine needs for those
+	// two: it only attaches to the already-created worktree/tmux session, it
+	// never tries to create them again (Setup() is skipped entirely for
+	// SessionTypeExistingWorktree). Directory and NewProject are deliberately
+	// NOT remapped -- both persist no worktree at all (see
+	// instance_worktree.go's setupFirstTimeWorktree default/NewProject
+	// cases), so remapping either to ExistingWorktree would make
+	// setupFirstTimeWorktree persist a synthetic worktree row with a
+	// placeholder "unknown" branch for a path that isn't meaningfully a
+	// worktree -- the exact design smell pre-ship review flagged for
+	// Directory, which NewProject would otherwise reintroduce.
 	var executionTarget session.ExecutionTarget = session.LocalTarget{}
 	existingWorktreeOverride := req.Msg.ExistingWorktree
 	if remoteRequested {
 		switch sessionType {
-		case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory:
+		case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory, session.SessionTypeNewProject:
 			// supported, handled below
 		default:
 			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("remote sessions do not support session_type=%q (supported: new_worktree, existing_worktree, directory)", sessionType))
+				fmt.Errorf("remote sessions do not support session_type=%q (supported: new_worktree, existing_worktree, directory, new_project)", sessionType))
 		}
 		if sessionType == session.SessionTypeExistingWorktree && req.Msg.ExistingWorktree == "" {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				errors.New("existing_worktree path is required for remote session_type=existing_worktree"))
+		}
+		if sessionType == session.SessionTypeNewProject && resolvedPath == "" {
+			// Local NewProject can leave resolvedPath empty and still resolve one later
+			// via alias config (see the "path is required" exemption above and the
+			// alias-resolution block below) -- but a remote NewProject has no such
+			// alias-driven fallback for WHERE on the remote host to init, so this must
+			// be resolvable synchronously, right here, or rejected with a clear error
+			// rather than remote-initializing an empty/nonsense path.
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				errors.New("path is required for remote session_type=new_project"))
 		}
 		if s.remoteKeyStore == nil || s.remoteKnownHosts == nil {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -1964,6 +2003,20 @@ func (s *SessionService) CreateSession(
 			remoteWorkingPath = req.Msg.ExistingWorktree
 		case session.SessionTypeDirectory:
 			remoteWorkingPath = resolvedPath
+		case session.SessionTypeNewProject:
+			remoteWorkingPath = resolvedPath
+			// No createdWorktree/rollback bookkeeping here, matching
+			// InitializeProjectDirectory's own doc comment: unlike CreateWorktree
+			// there is no cheap, safe remote rollback for a partial git-init (that
+			// doc comment is explicit about not wanting an `rm -rf` embedded in a
+			// remote script). A failure after this point can leave a
+			// partially-initialized directory on the remote host for an operator
+			// to inspect or retry against -- an accepted, documented tradeoff, not
+			// an oversight.
+			if initErr := git.NewRemoteWorktreeOps(runner).InitializeProjectDirectory(ctx, remoteWorkingPath); initErr != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to initialize new project on remote %q: %w", resolvedRemote.Name, initErr))
+			}
 		}
 
 		// Best-effort compensating cleanup if the remote tmux session can't be
@@ -2009,7 +2062,21 @@ func (s *SessionService) CreateSession(
 		}
 
 		executionTarget = session.NewRemoteExecutionTarget(*resolvedRemote, runner)
-		sessionType = session.SessionTypeExistingWorktree
+		// Only NewWorktree/ExistingWorktree originated in a real git worktree on the
+		// remote host -- remap those to ExistingWorktree so setupFirstTimeWorktree
+		// attaches to remoteWorkingPath instead of re-running worktree creation
+		// (see its doc comment). Directory/NewProject-originated sessions are
+		// deliberately left as-is: forcing either through ExistingWorktree too (as
+		// this used to do unconditionally for Directory) made setupFirstTimeWorktree
+		// persist a synthetic GitWorktree row with a placeholder "unknown" branch
+		// even when the remote path may not be a meaningful git worktree -- found in
+		// pre-ship review. Leaving them alone routes each through
+		// setupFirstTimeWorktree's existing default/NewProject cases
+		// (SetWorktree(nil), no worktree persisted), identical to their local
+		// counterparts, with no ent schema change needed.
+		if sessionType != session.SessionTypeDirectory && sessionType != session.SessionTypeNewProject {
+			sessionType = session.SessionTypeExistingWorktree
+		}
 		existingWorktreeOverride = remoteWorkingPath
 	}
 
@@ -2248,7 +2315,7 @@ func (s *SessionService) setupRemoteApprovalHooks(instance *session.Instance, ro
 
 	token, _ := relay.BearerToken()
 	hookTarget := RemoteHookTarget{
-		SocketPath:  sshremote.RemoteApprovalSocketPath(rootDir),
+		SocketPath:  sshremote.RemoteApprovalSocketPath(rootDir, instance.GetStableID()),
 		BearerToken: token,
 	}
 

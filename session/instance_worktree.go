@@ -35,19 +35,27 @@ func (i *Instance) RepoName() (string, error) {
 // setupFirstTimeWorktree creates or attaches to the git worktree based on session type.
 //
 // A remote ExecutionTarget (ssh-remote-workspaces Phase 4 Epic 4.2) only supports
-// SessionTypeExistingWorktree: CreateSession's mode-specific block
-// (server/services/session_service.go) already creates the remote worktree
-// synchronously via RemoteWorktreeOps.CreateWorktree -- and remaps the request's
-// session_type to SessionTypeExistingWorktree with ExistingWorktree set to the
-// remote path -- before this method ever runs, precisely so the git.NewGitWorktreeWithBranch
+// SessionTypeExistingWorktree, SessionTypeDirectory, and SessionTypeNewProject:
+// CreateSession's mode-specific block (server/services/session_service.go) already
+// creates/resolves/git-initializes the remote working path synchronously -- via
+// RemoteWorktreeOps.CreateWorktree for a real worktree, RemoteWorktreeOps.
+// InitializeProjectDirectory for a new project, or trivially for a plain directory
+// -- before this method ever runs, precisely so the git.NewGitWorktreeWithBranch
 // path below (which does local-filesystem repo discovery: findGitRepoRoot,
 // getWorktreeDirectory, findExistingWorktreeForBranch) is never reached against a
-// path that only exists on the remote host. Any other combination is rejected
-// up front rather than silently attempting local discovery against a remote path.
+// path that only exists on the remote host. session_type is remapped to
+// SessionTypeExistingWorktree with ExistingWorktree set to the remote path ONLY
+// when the request originated as NewWorktree/ExistingWorktree (a real worktree); a
+// Directory- or NewProject-originated remote session deliberately keeps its
+// original session_type so it falls through to the default/NewProject case below
+// (no worktree persisted) exactly like its local counterpart -- see those cases'
+// own comments for why. Any other combination is rejected up front rather than
+// silently attempting local discovery against a remote path.
 func (i *Instance) setupFirstTimeWorktree() error {
-	if i.executionTarget().IsRemote() && i.SessionType != SessionTypeExistingWorktree {
-		return fmt.Errorf("remote execution target only supports session_type=existing_worktree "+
-			"(worktree must be pre-created by CreateSession's mode-specific block); got %v", i.SessionType)
+	if i.executionTarget().IsRemote() && i.SessionType != SessionTypeExistingWorktree &&
+		i.SessionType != SessionTypeDirectory && i.SessionType != SessionTypeNewProject {
+		return fmt.Errorf("remote execution target only supports session_type=existing_worktree, session_type=directory, "+
+			"or session_type=new_project (worktree/path must be pre-resolved by CreateSession's mode-specific block); got %v", i.SessionType)
 	}
 
 	switch i.SessionType {
@@ -130,15 +138,30 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		log.Info("connected to existing worktree", "session", i.Title, "branch", i.Branch)
 	case SessionTypeNewProject:
 		log.Info("new project session, initializing git repo", "session", i.Title, "path", i.Path)
-		if err := git.InitializeProjectDirectory(i.Path); err != nil {
-			return fmt.Errorf("new_project initialization failed: %w", err)
+		// A remote instance's project directory was already git-initialized on the
+		// remote host by CreateSession's mode-specific block (git.RemoteWorktreeOps.
+		// InitializeProjectDirectory) -- git.InitializeProjectDirectory below is the
+		// LOCAL-filesystem path (go-git PlainInit against this process's own disk)
+		// and must not run a second time against i.Path, which names a remote host
+		// path in that case.
+		if !i.executionTarget().IsRemote() {
+			if err := git.InitializeProjectDirectory(i.Path); err != nil {
+				return fmt.Errorf("new_project initialization failed: %w", err)
+			}
 		}
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
 		log.Info("new project initialized", "path", i.Path)
 	default: // SessionTypeDirectory and unknown types → no worktree
 		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
-		if i.CreateIfMissing {
+		// EnsureDirectorySessionPath does local-filesystem os.Stat/git-init -- correct for
+		// a local Directory session, but i.Path names a REMOTE host path for a remote one,
+		// so running it here would silently create/git-init the wrong directory on this
+		// server's own disk. create_if_missing is not yet supported for remote Directory
+		// sessions (CreateSession's own request-validation layer already skips its
+		// existence check for this combination -- see session_service.go's CreateSession),
+		// so this just no-ops rather than acting on a path it cannot correctly resolve.
+		if i.CreateIfMissing && !i.executionTarget().IsRemote() {
 			if err := EnsureDirectorySessionPath(i.Path); err != nil {
 				return fmt.Errorf("failed to create directory for session: %w", err)
 			}
