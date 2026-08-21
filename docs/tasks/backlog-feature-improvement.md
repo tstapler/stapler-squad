@@ -2182,5 +2182,28 @@ reality. Should be marked done/archived rather than left reading as not-yet-star
    recurring-shape note above — not routed to `sdd:fix-bug` this pass (no live instance currently
    needs it beyond the one just manually resolved), but worth naming before it recurs a third time.
 4. Carried forward unchanged, still low priority: interface-pollution cleanup
-   (`PipelineModeRepository`/`Repository`), the 3 `hasActiveWorkSession` sibling call sites from
-   PR #292, and `be676dab`'s plan-approval decision (from 08-03, still needs a human).
+   (`PipelineModeRepository`/`Repository`), and `be676dab`'s plan-approval decision (from 08-03,
+   still needs a human).
+
+## Update — 2026-08-21 (later same day): the 3 `hasActiveWorkSession` sibling call sites were already fixed, this doc just never crossed them off
+
+A fix-bug pass dispatched to close this item found nothing to fix: all 3 sites
+(`AutoRespawnAutonomousWork`, `AutoReopenForPRFix`, `AutoRespawnReview`, all in
+`server/services/backlog_service_triage.go`) already call
+`notifyRespawnBlockedByActiveSession`, durably marking `StuckReasonRespawnBlockedActive`
+(`MarkStuck`/`MarkStuckNotified`, `backlog_service_triage.go:1363`) instead of only logging, and
+resolving it (`resolveRespawnBlockedActiveLogged`, `:1405`) once the guard clears. `AutoRespawnReview`
+additionally gets a periodic sweep (`reconcileRespawnBlockedActiveResolution`,
+`session/backlog_lifecycle_review.go:763`) for the one case where its inline resolve path doesn't
+re-run before the item would otherwise park. All 6 mark/resolve regression tests
+(`Test{AutoReopenForPRFix,AutoRespawnAutonomousWork,AutoRespawnReview}_*_RecordsRespawnBlockedActive`
+/ `..._ResolvesAnyOpenRespawnBlockedActiveRow`) pass on current `main`.
+
+**Root cause of the staleness**: the fix shipped as PR #319 (`36ae43522`), merged 2026-08-03T15:15:30,
+the *same day* as this doc's 08-03 baseline entry — but that entry and every pass since (08-05
+through 08-21) kept repeating "3 known siblings" from the original 07-31 framing without re-checking
+git history against the specific commit that closed it. This is itself a small instance of the
+audit's own standing lesson: a carried-forward finding needs the same "re-derive from source, don't
+trust the prior pass" discipline as everything else, not just new findings.
+
+No code change needed or made. Removing this from the carry-forward list as of this update.
