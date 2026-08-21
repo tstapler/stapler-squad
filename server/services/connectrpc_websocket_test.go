@@ -519,7 +519,9 @@ func TestHubRegistry_should_CreateExactlyOneHub_When_GetOrCreateCalledConcurrent
 		go func(i int) {
 			defer wg.Done()
 			controller := &fakeSessionController{}
-			hubs[i] = registry.GetOrCreate(sessionName, controller)
+			hub, err := registry.GetOrCreate(sessionName, controller)
+			require.NoError(t, err)
+			hubs[i] = hub
 		}(i)
 	}
 	wg.Wait()
@@ -538,10 +540,115 @@ func TestHubRegistry_should_ReturnDifferentHubs_When_SessionNamesDiffer(t *testi
 	t.Parallel()
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
 
-	hubA := registry.GetOrCreate("session-a", &fakeSessionController{})
-	hubB := registry.GetOrCreate("session-b", &fakeSessionController{})
+	hubA, errA := registry.GetOrCreate("session-a", &fakeSessionController{})
+	require.NoError(t, errA)
+	hubB, errB := registry.GetOrCreate("session-b", &fakeSessionController{})
+	require.NoError(t, errB)
 
 	require.NotSame(t, hubA, hubB)
+}
+
+// TestHubRegistry_should_RefuseToCreateHub_When_OwnershipLockAlreadyResolvedLegacy
+// is validation.md's REQ-8 scenario applied to the real HubRegistry: if a
+// concurrent legacy StartControlMode call already won this session's
+// StreamOwnershipLock resolution, GetOrCreate must refuse to create a
+// competing hub (ErrOwnershipResolvedToOtherPath) rather than silently
+// creating one anyway — the exact "no silent success reinterpreted"
+// requirement from Task 3.1.2b.
+func TestHubRegistry_should_RefuseToCreateHub_When_OwnershipLockAlreadyResolvedLegacy(t *testing.T) {
+	t.Parallel()
+	sessionName := "hub-registry-legacy-already-resolved-" + t.Name()
+
+	// Simulate the legacy path winning the race: it resolves the lock with
+	// flagValue=false before this connection's hub-creation attempt runs.
+	resolved := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
+	require.Equal(t, streamhub.PathLegacyPerConnection, resolved)
+
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+
+	require.Nil(t, hub, "GetOrCreate must not create a hub once ownership resolved legacy")
+	require.ErrorIs(t, err, streamhub.ErrOwnershipResolvedToOtherPath)
+}
+
+// TestHubRegistry_should_CreateHub_When_OwnershipLockResolvesHubOwned is the
+// happy-path counterpart: when no concurrent legacy call has won the race
+// (or this call is itself the first), GetOrCreate's own ownership check
+// passes and hub creation proceeds exactly as before Story 3.1.2.
+func TestHubRegistry_should_CreateHub_When_OwnershipLockResolvesHubOwned(t *testing.T) {
+	t.Parallel()
+	sessionName := "hub-registry-hub-owned-" + t.Name()
+
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+
+	require.NoError(t, err)
+	require.NotNil(t, hub)
+	require.Equal(t, streamhub.PathHubOwned, streamhub.AcquireOwnershipLock(sessionName).Resolve(false))
+}
+
+// TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_RacedConcurrently
+// is REQ-8's race scenario (plan.md Story 3.1.2 AC2, scoped to the two real
+// entry points that live in this package/file rather than
+// Instance.StartControlMode, which this story's task explicitly leaves
+// untouched — see the commit message / PR description for why). Many
+// goroutines race GetOrCreate (the hub-creation intent) against
+// AcquireOwnershipLock(...).ResolveExpecting(false, PathLegacyPerConnection)
+// (the legacy-start intent, i.e. exactly the check streamViaControlMode now
+// performs before calling StartControlMode) for the same session name.
+// Exactly one intent may "win" (no error) per session; every loser must
+// observe ErrOwnershipResolvedToOtherPath and the single resolved StreamPath
+// must be consistent for all racers.
+func TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_RacedConcurrently(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 1000-iteration race test in short mode")
+	}
+
+	const iterations = 1000
+	const racersPerSide = 8
+
+	for i := 0; i < iterations; i++ {
+		sessionName := fmt.Sprintf("hub-vs-legacy-race-%d", i)
+		registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+		var wg sync.WaitGroup
+		var hubWins, legacyWins atomic.Int64
+		var hubErrs, legacyErrs atomic.Int64
+
+		for g := 0; g < racersPerSide; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := registry.GetOrCreate(sessionName, &fakeSessionController{}); err != nil {
+					hubErrs.Add(1)
+				} else {
+					hubWins.Add(1)
+				}
+			}()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(false, streamhub.PathLegacyPerConnection); err != nil {
+					legacyErrs.Add(1)
+				} else {
+					legacyWins.Add(1)
+				}
+			}()
+		}
+		wg.Wait()
+
+		resolved := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
+		switch resolved {
+		case streamhub.PathHubOwned:
+			require.Equal(t, int64(racersPerSide), hubWins.Load(), "iteration %d: every hub-creation racer should win when ownership resolved PathHubOwned", i)
+			require.Equal(t, int64(0), legacyWins.Load(), "iteration %d: no legacy racer should win when ownership resolved PathHubOwned", i)
+			require.Equal(t, int64(racersPerSide), legacyErrs.Load())
+		case streamhub.PathLegacyPerConnection:
+			require.Equal(t, int64(racersPerSide), legacyWins.Load(), "iteration %d: every legacy racer should win when ownership resolved PathLegacyPerConnection", i)
+			require.Equal(t, int64(0), hubWins.Load(), "iteration %d: no hub-creation racer should win when ownership resolved PathLegacyPerConnection", i)
+			require.Equal(t, int64(racersPerSide), hubErrs.Load())
+		}
+	}
 }
 
 // TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved
@@ -560,7 +667,8 @@ func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHu
 
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
 	controller := &fakeSessionController{}
-	hub := registry.GetOrCreate("path-hub-owned-test", controller)
+	hub, err := registry.GetOrCreate("path-hub-owned-test", controller)
+	require.NoError(t, err)
 
 	serverStream, _, cleanup := createTestWebSocketPair(t)
 	defer cleanup()

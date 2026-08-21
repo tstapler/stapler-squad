@@ -1,6 +1,9 @@
 package streamhub_test
 
 import (
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -77,5 +80,116 @@ func TestAcquireOwnershipLock_should_ReturnSameLockInstance_When_CalledWithSameS
 	first.Resolve(true)
 	if got := second.Resolve(false); got != streamhub.PathHubOwned {
 		t.Fatalf("expected shared lock instance to see the resolution made via the other reference, got %v", got)
+	}
+}
+
+// TestHubRegistry_should_JoinLegacyPathExplicitly_When_LockAlreadyResolvedLegacyPerConnection
+// is validation.md's REQ-8 error/edge-path scenario (plan.md Task 3.1.2b):
+// once a session's StreamOwnershipLock has already resolved
+// PathLegacyPerConnection (a legacy StartControlMode call got there first),
+// a hub-creation attempt (ResolveExpecting(true, PathHubOwned) — exactly
+// what server/services' HubRegistry.GetOrCreate calls before creating a
+// hub) must not silently succeed or reinterpret the resolution as its own;
+// it must fail explicitly with ErrOwnershipResolvedToOtherPath so the
+// caller joins the legacy path instead of creating a competing hub.
+func TestHubRegistry_should_JoinLegacyPathExplicitly_When_LockAlreadyResolvedLegacyPerConnection(t *testing.T) {
+	sessionName := "exclusive-test-" + t.Name()
+
+	// The legacy path gets there first and resolves the lock.
+	first := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
+	if first != streamhub.PathLegacyPerConnection {
+		t.Fatalf("expected first resolution to be PathLegacyPerConnection, got %v", first)
+	}
+
+	// Hub creation's intent-asserting resolve must refuse rather than
+	// silently reinterpret this session as PathHubOwned.
+	got, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(true, streamhub.PathHubOwned)
+	if !errors.Is(err, streamhub.ErrOwnershipResolvedToOtherPath) {
+		t.Fatalf("expected ErrOwnershipResolvedToOtherPath, got %v", err)
+	}
+	if got != streamhub.PathLegacyPerConnection {
+		t.Fatalf("expected ResolveExpecting to still report the actual resolved path so the caller can join it, got %v", got)
+	}
+}
+
+// TestStreamOwnershipLock_should_SucceedResolveExpecting_When_RequestedPathMatchesResolution
+// is ResolveExpecting's happy-path counterpart: when the caller's intended
+// path matches what actually resolved (win or first-resolver), no error is
+// returned.
+func TestStreamOwnershipLock_should_SucceedResolveExpecting_When_RequestedPathMatchesResolution(t *testing.T) {
+	sessionName := "resolve-expecting-happy-" + t.Name()
+
+	got, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(true, streamhub.PathHubOwned)
+	if err != nil {
+		t.Fatalf("expected no error when the requested path matches resolution, got %v", err)
+	}
+	if got != streamhub.PathHubOwned {
+		t.Fatalf("expected PathHubOwned, got %v", got)
+	}
+}
+
+// TestStreamOwnershipLock_should_NeverProduceTwoOwners_When_HubAndLegacyIntentsRaceConcurrently
+// is plan.md Story 3.1.2 AC2's race scenario at the StreamOwnershipLock
+// primitive level: many goroutines concurrently call ResolveExpecting with
+// opposing intents (hub creation vs. legacy start) for the same session
+// name. Exactly one intent must win per session (zero error) and the loser
+// side must uniformly observe ErrOwnershipResolvedToOtherPath — never a mix
+// where both sides believe they won, which is what "two owners" would look
+// like at this layer.
+func TestStreamOwnershipLock_should_NeverProduceTwoOwners_When_HubAndLegacyIntentsRaceConcurrently(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 1000-iteration race test in short mode")
+	}
+
+	const iterations = 1000
+	const racersPerSide = 8
+
+	for i := 0; i < iterations; i++ {
+		sessionName := fmt.Sprintf("ownership-race-hub-vs-legacy-%d", i)
+
+		var wg sync.WaitGroup
+		hubResults := make([]error, racersPerSide)
+		legacyResults := make([]error, racersPerSide)
+
+		for g := 0; g < racersPerSide; g++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				_, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(true, streamhub.PathHubOwned)
+				hubResults[idx] = err
+			}(g)
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				_, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(false, streamhub.PathLegacyPerConnection)
+				legacyResults[idx] = err
+			}(g)
+		}
+		wg.Wait()
+
+		hubWins, legacyWins := 0, 0
+		for _, err := range hubResults {
+			if err == nil {
+				hubWins++
+			}
+		}
+		for _, err := range legacyResults {
+			if err == nil {
+				legacyWins++
+			}
+		}
+
+		if hubWins > 0 && legacyWins > 0 {
+			t.Fatalf("iteration %d: OverlapInvariant violated — both hub (%d) and legacy (%d) intents won for the same session", i, hubWins, legacyWins)
+		}
+		if hubWins+legacyWins == 0 {
+			t.Fatalf("iteration %d: expected exactly one side to win, but neither did", i)
+		}
+		if hubWins != 0 && hubWins != racersPerSide {
+			t.Fatalf("iteration %d: expected all %d hub-intent racers to agree, got %d wins", i, racersPerSide, hubWins)
+		}
+		if legacyWins != 0 && legacyWins != racersPerSide {
+			t.Fatalf("iteration %d: expected all %d legacy-intent racers to agree, got %d wins", i, racersPerSide, legacyWins)
+		}
 	}
 }

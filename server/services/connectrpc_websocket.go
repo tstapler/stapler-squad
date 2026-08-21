@@ -289,13 +289,26 @@ var HubRegistry = &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub](
 // for that name. controller is only consulted on that first (winning) call;
 // later callers for the same sessionName get the existing hub regardless of
 // what controller they pass.
-func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.SessionController) *streamhub.StreamHub {
+//
+// Story 3.1.2: before ever creating a hub, GetOrCreate itself acquires
+// sessionName's StreamOwnershipLock and asserts PathHubOwned via
+// ResolveExpecting. This makes GetOrCreate safe to call independently of
+// streamTerminal's own top-level Resolve()-gated routing decision — if a
+// concurrent legacy StartControlMode call already won the resolution for
+// this session, GetOrCreate refuses to create a competing hub and returns
+// ErrOwnershipResolvedToOtherPath instead, so the caller (streamViaHub) can
+// fall back to joining the legacy path explicitly rather than silently
+// operating as a second, independent owner.
+func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
+	if _, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(true, streamhub.PathHubOwned); err != nil {
+		return nil, err
+	}
 	hub, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
 		hub := streamhub.NewStreamHub(sessionName, controller)
 		go pumpControlModeOutputIntoHub(hub, controller, sessionName)
 		return hub, false
 	})
-	return hub
+	return hub, nil
 }
 
 // pumpControlModeOutputIntoHub is the single production feed from a
@@ -733,6 +746,22 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// Always derive via the canonical sanitizer, never by hand-concatenating prefix+title —
 	// a raw title containing spaces would target a session name that was never created (#162).
 	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	// Story 3.1.2: mirror GetOrCreate's own defensive check on the legacy
+	// side. streamTerminal's top-level routing already gates this call
+	// behind the same StreamOwnershipLock resolution, but re-asserting it
+	// here means streamViaControlMode is safe to call from any future
+	// entry point too — not just today's single gated call site. If a
+	// concurrent hub-bound connection already won the resolution for this
+	// session, this connection must join the hub rather than proceed as an
+	// independent legacy owner (which would let it resize/capture the pane
+	// outside the hub's single-owner pipeline, the exact corruption this
+	// project exists to prevent).
+	if _, err := streamhub.AcquireOwnershipLock(tmuxSessionName).ResolveExpecting(false, streamhub.PathLegacyPerConnection); err != nil {
+		log.Info("[streamViaControlMode] ownership resolved to hub-owned path concurrently, joining it instead of proceeding as an independent legacy owner",
+			"session", sessionID, "tmux", tmuxSessionName, "err", err)
+		return h.streamViaHub(stream, instance)
+	}
 
 	streamGeneration, doneStreaming := h.recordControlModeStreamStart(sessionID, tmuxSessionName)
 	defer doneStreaming()
@@ -1329,7 +1358,20 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		}
 	}()
 
-	hub := HubRegistry.GetOrCreate(tmuxSessionName, instance)
+	// Story 3.1.2: GetOrCreate itself re-checks StreamOwnershipLock before
+	// creating a hub. If a concurrent legacy StartControlMode call already
+	// won the resolution for this session (ErrOwnershipResolvedToOtherPath),
+	// this connection must join the legacy path explicitly rather than
+	// treat control mode already being started above as this connection
+	// having become a hub owner — StartControlMode's refcounting is shared
+	// by both paths, so it succeeding here says nothing about which
+	// ownership model won.
+	hub, err := HubRegistry.GetOrCreate(tmuxSessionName, instance)
+	if err != nil {
+		log.Info("[streamViaHub] ownership resolved to legacy path concurrently, joining it instead of creating a competing hub",
+			"session", sessionID, "tmux", tmuxSessionName, "err", err)
+		return h.streamViaControlMode(stream, instance)
+	}
 
 	transport := NewWebSocketTransport(stream)
 	subscriberID := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{

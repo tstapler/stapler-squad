@@ -1,10 +1,21 @@
 package streamhub
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/puzpuzpuz/xsync/v4"
 )
+
+// ErrOwnershipResolvedToOtherPath is returned by ResolveExpecting when the
+// session's sticky StreamPath resolution does not match the caller's own
+// intended path — i.e. the other side of the race won. Callers must treat
+// this as an explicit signal to join the winning path (attach as a
+// subscriber to its existing hub, or proceed as a legacy per-connection
+// stream) rather than silently reinterpreting their own attempt as having
+// succeeded (Task 3.1.2b).
+var ErrOwnershipResolvedToOtherPath = errors.New("streamhub: session ownership already resolved to a different StreamPath")
 
 // StreamOwnershipLock resolves STAPLER_SQUAD_USE_STREAM_HUB (plus any future
 // per-session override, Story 3.3.1) into a StreamPath exactly once per
@@ -63,4 +74,22 @@ func (l *StreamOwnershipLock) Resolve(flagValue bool) StreamPath {
 		l.resolved = true
 	}
 	return l.path
+}
+
+// ResolveExpecting resolves the lock exactly like Resolve, but additionally
+// asserts that the resolved StreamPath matches want — the caller's own
+// intended role (hub creation expects PathHubOwned; legacy StartControlMode
+// expects PathLegacyPerConnection). If another caller's resolution already
+// won and it disagrees with want, ResolveExpecting returns the actual
+// resolved path plus ErrOwnershipResolvedToOtherPath instead of proceeding,
+// so HubRegistry.GetOrCreate and the legacy per-connection entry point (both
+// in package server/services, which cannot itself hold this lock's internal
+// state) can refuse to create a competing owner and instead join whichever
+// path actually won (Story 3.1.2 / Task 3.1.2b).
+func (l *StreamOwnershipLock) ResolveExpecting(flagValue bool, want StreamPath) (StreamPath, error) {
+	got := l.Resolve(flagValue)
+	if got != want {
+		return got, fmt.Errorf("%w: resolved %v, wanted %v", ErrOwnershipResolvedToOtherPath, got, want)
+	}
+	return got, nil
 }
