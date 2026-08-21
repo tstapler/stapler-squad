@@ -1,0 +1,11 @@
+{
+  "id": "paused-session-card-distinction",
+  "type": "frontend",
+  "description": "SessionCard distinct paused badge and cardPaused dimming",
+  "component": "SessionCard",
+  "path": "web-app/src/components/sessions/SessionCard.tsx",
+  "markerLine": 0,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-28T00:00:00Z"
+}

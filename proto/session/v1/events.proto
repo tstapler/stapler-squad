@@ -1,0 +1,458 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+import "session/v1/types.proto";
+
+// SessionEvent represents a real-time event about session state changes.
+// Used for WatchSessions streaming RPC to push updates to clients.
+message SessionEvent {
+  // Timestamp when the event occurred
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Event type (one of the following)
+  oneof event {
+    SessionCreatedEvent session_created = 2;
+    SessionUpdatedEvent session_updated = 3;
+    SessionDeletedEvent session_deleted = 4;
+    // field 5 (status_changed / SessionStatusChangedEvent) removed in Epic 4
+    UserInteractionEvent user_interaction = 6;
+    SessionAcknowledgedEvent session_acknowledged = 7;
+    ApprovalResponseEvent approval_response = 8;
+    NotificationEvent notification = 9;
+  }
+
+  reserved 5;
+  reserved "status_changed";
+
+  // Monotonically increasing sequence number assigned by the server EventBus.
+  // Clients should track the highest seq they have received and pass it as
+  // after_seq in WatchSessionsRequest on reconnect to replay missed events.
+  // Events are retained for up to one hour.
+  uint64 seq = 10;
+}
+
+// SessionCreatedEvent is emitted when a new session is created
+message SessionCreatedEvent {
+  Session session = 1;
+}
+
+// SessionUpdatedEvent is emitted when session properties are modified
+message SessionUpdatedEvent {
+  Session session = 1;
+  // Fields that were updated (for efficient client updates)
+  repeated string updated_fields = 2;
+  // Fine-grained detected status at event publish time. Transitional shortcut for the
+  // migration period; populated when the detection layer has a registered controller.
+  // Deprecated once StatusBadge reads from session.detected_status directly (Epic 5).
+  DetectedStatus detected_status = 3;
+  // Human-readable context string from the terminal pattern detector.
+  // Empty when detected_status is UNSPECIFIED.
+  string detected_context = 4;
+}
+
+// SessionDeletedEvent is emitted when a session is deleted
+message SessionDeletedEvent {
+  string session_id = 1;
+  string reason = 2; // Optional deletion reason
+}
+
+// TerminalData represents terminal I/O for bidirectional streaming.
+// Used for StreamTerminal RPC to provide real-time terminal access.
+message TerminalData {
+  // Session identifier
+  string session_id = 1;
+
+  // Terminal message type
+  oneof data {
+    TerminalOutput output = 2;
+    TerminalInput input = 3;
+    TerminalResize resize = 4;
+    TerminalError error = 5;
+    ScrollbackRequest scrollback_request = 6;
+    ScrollbackResponse scrollback_response = 7;
+    CurrentPaneRequest current_pane_request = 9;   // Request current tmux pane content
+    CurrentPaneResponse current_pane_response = 10; // Response with current pane content
+    FlowControl flow_control = 11;  // Flow control signals for backpressure management (xterm.js best practice)
+
+    // Resize quiescence signal — sent before/after server-side tmux reflow wait
+    ResizeQuiescence resize_quiescence = 16;
+
+    // Shell status update event (server → client); shell_id identifies the shell.
+    ShellStatusUpdate shell_status_update = 18;
+
+    // Coalesced CurrentPaneRequests bound for the same connection (client →
+    // server), Epic 5.2 / Story 5.2.1. Flag-gated behind terminal:resync-batching
+    // (default off) — see BatchedCurrentPaneRequest's doc comment for the
+    // unresolved default-on decision this message deliberately does not make.
+    BatchedCurrentPaneRequest batched_current_pane_request = 19;
+  }
+
+  // Fields 8, 12, 13, 14, 15 (delta, state, diff, input_echo, ssp_negotiation)
+  // removed — the MOSH-style state-synchronization protocol (TerminalDelta /
+  // TerminalState / TerminalDiff / InputWithEcho / SSPNegotiation) was never
+  // fully wired up on either the server or client and has been removed along
+  // with its Go and TypeScript implementations. Reserved to prevent
+  // accidental reuse.
+  reserved 8, 12, 13, 14, 15;
+  reserved "delta", "state", "diff", "input_echo", "ssp_negotiation";
+
+  // Optional shell identifier. When non-empty, this TerminalData message is
+  // scoped to a custom shell (sibling tmux session) rather than the main session.
+  string shell_id = 17;
+}
+
+// ShellStatusUpdate notifies the client that a custom shell's status has changed.
+// Delivered via the StreamTerminal stream with shell_id set.
+message ShellStatusUpdate {
+  // The shell whose status changed.
+  string shell_id = 1;
+
+  // New lifecycle status.
+  ShellStatus new_status = 2;
+
+  // Exit code (only meaningful when new_status is STOPPED or ERROR).
+  int32 exit_code = 3;
+}
+
+// ResizeQuiescence signals the client that the server is waiting for tmux to
+// finish reflowing after a resize (resizing=true) or that the stable post-resize
+// snapshot has been sent (resizing=false). Enables the frontend to show/hide a
+// non-blocking overlay during the reflow window.
+message ResizeQuiescence {
+  bool resizing = 1;  // true=reflow in progress, false=reflow complete
+  int32 cols = 2;     // Target columns for this resize event
+  int32 rows = 3;     // Target rows for this resize event
+}
+
+// TerminalOutput contains data from the terminal (server to client)
+message TerminalOutput {
+  bytes data = 1; // Raw terminal output bytes (ANSI escape codes, etc)
+
+  // Echoes the resync_id of the CurrentPaneRequest that triggered this output,
+  // when applicable. Lets the client correlate a resync reply to the specific
+  // request it made (e.g. to clear pending-resync state) rather than assuming
+  // the most recent request is always the one being answered. Empty when this
+  // output is not a resync reply.
+  string resync_id = 2;
+}
+
+// TerminalInput contains user input for the terminal (client to server)
+message TerminalInput {
+  bytes data = 1; // Raw input bytes (keystrokes, etc)
+}
+
+// TerminalResize notifies of terminal dimension changes
+message TerminalResize {
+  int32 rows = 1;
+  int32 cols = 2;
+}
+
+// TerminalError indicates a terminal streaming error
+message TerminalError {
+  string message = 1;
+  string code = 2; // Error code (e.g., "session_not_found", "tmux_error")
+}
+
+// FlowControl manages backpressure between client and server for terminal streaming.
+// Implements watermark-based flow control following xterm.js best practices.
+//
+// Reference: https://xtermjs.org/docs/guides/flowcontrol/
+//
+// How it works:
+// 1. Client tracks watermark (bytes queued in xterm.js write buffer)
+// 2. When watermark exceeds HIGH threshold (100KB), client sends pause=true
+// 3. Server stops reading from PTY and buffers data
+// 4. When watermark drops below LOW threshold (10KB), client sends pause=false
+// 5. Server resumes reading from PTY
+//
+// This prevents:
+// - Browser tab crashes from memory exhaustion
+// - Terminal rendering lag from write queue backup
+// - Lost data from WebSocket buffer overflow
+message FlowControl {
+  // If true, server should pause PTY output (HIGH watermark exceeded)
+  // If false, server should resume PTY output (LOW watermark reached)
+  bool paused = 1;
+
+  // Current watermark value in bytes (optional, for server-side metrics/debugging)
+  // Watermark = bytes queued in xterm.js but not yet parsed/rendered
+  optional uint64 watermark = 2;
+}
+
+// ScrollbackRequest requests historical terminal scrollback
+message ScrollbackRequest {
+  uint64 from_sequence = 1; // Start from this sequence (0 for latest)
+  int32 limit = 2;           // Maximum number of lines to return
+}
+
+// ScrollbackResponse contains historical terminal scrollback data
+message ScrollbackResponse {
+  repeated ScrollbackChunk chunks = 1; // Scrollback data chunks
+  bool has_more = 2;                   // True if more data available
+  uint64 total_lines = 3;              // Total lines available
+  uint64 oldest_sequence = 4;          // Oldest sequence in storage
+  uint64 newest_sequence = 5;          // Newest sequence in storage
+}
+
+// ScrollbackChunk represents a chunk of scrollback data
+message ScrollbackChunk {
+  bytes data = 1;            // Terminal output data
+  uint64 sequence = 2;       // Sequence number for ordering
+  int64 timestamp_ms = 3;    // Unix timestamp in milliseconds
+}
+
+// CurrentPaneRequest requests the current visible tmux pane content.
+// This gives the exact content the user would see if they attached to tmux directly.
+message CurrentPaneRequest {
+  // Number of lines to capture from the bottom of the pane (default: 50)
+  // If 0 or negative, captures the entire visible pane
+  int32 lines = 1;
+
+  // Include escape sequences for colors and formatting (default: true)
+  bool include_escapes = 2;
+
+  // Target terminal dimensions (optional)
+  // If provided, server will resize tmux pane to match BEFORE capturing content
+  // This prevents size mismatches between client's browser terminal and server's tmux pane
+  optional int32 target_cols = 3;  // Target columns (width)
+  optional int32 target_rows = 4;  // Target rows (height)
+
+  // Field 5 (streaming_mode) removed — the selectable streaming-mode feature
+  // (raw/raw-compressed/state/hybrid) was never fully wired up server-side
+  // and has been removed. Reserved to prevent accidental reuse.
+  reserved 5;
+  reserved "streaming_mode";
+
+  // Client-generated correlation ID for this resync request. Echoed back on
+  // the resulting TerminalOutput.resync_id so the client can match a reply to
+  // the specific request that triggered it.
+  string resync_id = 6;
+
+  // True when the client believes its current terminal dimensions may be
+  // stale (e.g. after a tab was backgrounded and resized without a resize
+  // event reaching the server). Signals the server to skip fast-path
+  // optimizations that assume dimensions are already in sync.
+  bool stale_dimensions = 7;
+}
+
+// BatchedCurrentPaneRequest coalesces multiple CurrentPaneRequests bound for
+// the same connection into a single round trip (Epic 5.2 / Story 5.2.1,
+// terminal-resync-reliability). Each sub-request keeps its own resync_id and
+// gets its own individually-tagged TerminalOutput reply — batching the
+// transport does not change per-request correlation semantics.
+//
+// Flag-gated behind terminal:resync-batching (default off; see
+// feature_flag_service.go). Whether to flip that flag on by default is an
+// open go/no-go decision NOT resolved by this message or its handling code —
+// it is deferred pending Epic 5.1's compression benchmark numbers (see
+// requirements.md's Unresolved Question #1 in
+// project_plans/terminal-resync-reliability/). Do not treat the existence of
+// this type as an implicit decision to enable batching broadly.
+message BatchedCurrentPaneRequest {
+  repeated CurrentPaneRequest requests = 1;
+}
+
+// CurrentPaneResponse contains the current visible tmux pane content
+message CurrentPaneResponse {
+  // Raw terminal content from tmux capture-pane
+  bytes content = 1;
+
+  // Cursor position in the pane
+  int32 cursor_x = 2;  // Column (0-based)
+  int32 cursor_y = 3;  // Row (0-based)
+
+  // Current pane dimensions
+  int32 pane_width = 4;   // Columns
+  int32 pane_height = 5;  // Rows
+}
+
+// ============================================================================
+// Review Queue Interaction Events
+// ============================================================================
+
+// UserInteractionEvent is emitted when user interacts with a session.
+// Triggers immediate review queue re-evaluation for responsive feedback.
+message UserInteractionEvent {
+  // Session identifier
+  string session_id = 1;
+
+  // Type of interaction
+  InteractionType type = 2;
+
+  // Optional context about the interaction
+  string context = 3;
+
+  // Interaction types
+  enum InteractionType {
+    INTERACTION_TYPE_UNSPECIFIED = 0;
+    // User typed input in terminal
+    INTERACTION_TYPE_TERMINAL_INPUT = 1;
+    // User approved a prompt
+    INTERACTION_TYPE_APPROVAL_GIVEN = 2;
+    // User denied/rejected a prompt
+    INTERACTION_TYPE_APPROVAL_DENIED = 3;
+    // User executed a command
+    INTERACTION_TYPE_COMMAND_EXECUTED = 4;
+    // User attached to session
+    INTERACTION_TYPE_SESSION_ATTACHED = 5;
+    // User detached from session
+    INTERACTION_TYPE_SESSION_DETACHED = 6;
+    // User opened notification panel
+    INTERACTION_TYPE_NOTIFICATION_PANEL_OPENED = 7;
+    // User closed notification panel
+    INTERACTION_TYPE_NOTIFICATION_PANEL_CLOSED = 8;
+    // User viewed a notification
+    INTERACTION_TYPE_NOTIFICATION_VIEWED = 9;
+    // User dismissed a notification
+    INTERACTION_TYPE_NOTIFICATION_DISMISSED = 10;
+    // User marked notification as read
+    INTERACTION_TYPE_NOTIFICATION_MARKED_READ = 11;
+    // User marked all notifications as read
+    INTERACTION_TYPE_NOTIFICATION_MARKED_ALL_READ = 12;
+    // User removed notification from history
+    INTERACTION_TYPE_NOTIFICATION_REMOVED = 13;
+    // User cleared notification history
+    INTERACTION_TYPE_NOTIFICATION_HISTORY_CLEARED = 14;
+    // User clicked notification to view session
+    INTERACTION_TYPE_NOTIFICATION_SESSION_VIEWED = 15;
+  }
+}
+
+// SessionAcknowledgedEvent is emitted when user acknowledges/skips a session.
+// Session is immediately removed from review queue until next update.
+message SessionAcknowledgedEvent {
+  // Session identifier
+  string session_id = 1;
+
+  // When the acknowledgment occurred
+  google.protobuf.Timestamp acknowledged_at = 2;
+
+  // Optional reason for acknowledgment
+  string reason = 3;
+}
+
+// ApprovalResponseEvent is emitted when user responds to approval dialog.
+// Session status is updated and review queue item is removed.
+message ApprovalResponseEvent {
+  // Session identifier
+  string session_id = 1;
+
+  // Whether user approved (true) or denied (false)
+  bool approved = 2;
+
+  // What was being approved
+  string context = 3;
+
+  // When the response occurred
+  google.protobuf.Timestamp responded_at = 4;
+}
+
+// ============================================================================
+// Review Queue Events (for WatchReviewQueue streaming)
+// ============================================================================
+
+// ReviewQueueEvent represents changes to the review queue.
+// Used for WatchReviewQueue streaming RPC.
+message ReviewQueueEvent {
+  // Timestamp when the event occurred
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Event type
+  oneof event {
+    ReviewQueueItemAddedEvent item_added = 2;
+    ReviewQueueItemRemovedEvent item_removed = 3;
+    ReviewQueueItemUpdatedEvent item_updated = 4;
+    ReviewQueueStatisticsEvent statistics = 5;
+  }
+}
+
+// ReviewQueueItemAddedEvent is emitted when item is added to queue
+message ReviewQueueItemAddedEvent {
+  // The item that was added
+  ReviewItem item = 1;
+
+  // What triggered this addition
+  string trigger = 2; // "poller", "manual_check", "status_change"
+
+  // Whether this item is part of an initial snapshot (sent on WebSocket reconnection).
+  // Frontend should NOT fire notifications for snapshot items to prevent duplicates.
+  // - true: Item is part of initial snapshot (existing queue items sent on reconnect)
+  // - false: Item is a real-time addition (new session needs attention)
+  bool is_snapshot = 3;
+}
+
+// ReviewQueueItemRemovedEvent is emitted when item is removed from queue
+message ReviewQueueItemRemovedEvent {
+  // Session ID of removed item
+  string session_id = 1;
+
+  // Why it was removed
+  string reason = 2; // "resolved", "dismissed", "timeout", "acknowledged"
+}
+
+// ReviewQueueItemUpdatedEvent is emitted when item properties change
+message ReviewQueueItemUpdatedEvent {
+  // Session ID
+  string session_id = 1;
+
+  // Updated item
+  ReviewItem item = 2;
+
+  // What changed
+  repeated string updated_fields = 3; // "priority", "context", "reason"
+}
+
+// ReviewQueueStatisticsEvent provides aggregate queue statistics
+message ReviewQueueStatisticsEvent {
+  // Total items in queue
+  int32 total_items = 1;
+
+  // Items by priority level
+  map<int32, int32> by_priority = 2;
+
+  // Items by attention reason
+  map<int32, int32> by_reason = 3;
+
+  // Average age in milliseconds
+  int64 average_age_ms = 4;
+
+  // Sessions that auto-escalated since last statistics
+  repeated string escalated_items = 5;
+}
+
+// ============================================================================
+// Notification Events (for cross-process notification broadcasting)
+// ============================================================================
+
+// NotificationEvent is emitted when a tmux session sends a notification.
+// Broadcast to all connected clients (web UI and TUI) for display.
+message NotificationEvent {
+  // Session that sent the notification
+  string session_id = 1;
+
+  // Session name for display
+  string session_name = 2;
+
+  // Type of notification (determines default UI treatment)
+  NotificationType notification_type = 3;
+
+  // Priority level (determines audio, visual styling, auto-dismiss)
+  NotificationPriority priority = 4;
+
+  // Human-readable title
+  string title = 5;
+
+  // Detailed message
+  string message = 6;
+
+  // Optional metadata (key-value pairs for additional context)
+  map<string, string> metadata = 7;
+
+  // When the notification was sent (from server)
+  google.protobuf.Timestamp timestamp = 8;
+
+  // Unique notification ID (for tracking)
+  string notification_id = 9;
+}

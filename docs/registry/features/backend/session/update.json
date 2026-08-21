@@ -1,0 +1,30 @@
+{
+  "id": "session:update",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UpdateSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestUpdateSession_NoteUpdate",
+    "TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument",
+    "TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload",
+    "TestUpdateSession_ProgramUpdate_ActiveSession_RestartFailure_ReturnsInternal",
+    "TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart",
+    "TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault",
+    "TestUpdateSession_ProgramAndOtherField_SinglePublish",
+    "TestUpdateSessionProgram_RealInstance_SwitchesAndPersists",
+    "TestUpdateSessionProgram_NotFound",
+    "TestUpdateSessionProgram_PublishesPlainEvent_WhenStatusManagerNil",
+    "TestUpdateSessionProgram_PublishesPlainEvent_WhenControllerNotRegistered",
+    "TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys",
+    "TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_ReturnsFailedPrecondition",
+    "TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController",
+    "tests/e2e/backlog-session-steer.spec.ts",
+    "TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload",
+    "TestUpdateSession_should_RejectAutoApprove_When_ProgramUnsupported"
+  ],
+  "lastModified": "2026-08-12T00:00:00Z"
+}

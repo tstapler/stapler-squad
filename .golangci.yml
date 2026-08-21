@@ -1,0 +1,308 @@
+version: "2"
+
+run:
+  # ponytail: single-threaded to avoid golangci-lint v2.11.4 race on //go:build go1.26 files
+  concurrency: 1
+
+linters:
+  enable:
+    - depguard
+    - exhaustive
+    - forbidigo
+    - gochecknoglobals
+    - ineffassign
+    - nilnil
+    - prealloc
+    - staticcheck
+    - govet
+    - unused
+  disable:
+    - errcheck
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: false
+    # Hotspot-analysis follow-up (2026-08-06, session/backlog_lifecycle.go split into
+    # backlog_lifecycle_{review,pr,triage,stale,archive}.go): gocyclo/gocognit/funlen/
+    # revive(file-length-limit) catch the exact shape that let backlog_lifecycle.go grow
+    # to 4930 lines / 91 methods before anyone flagged it — a giant file, a giant function,
+    # or a deeply-branching function. Deliberately NOT in the `enable:` list above: the repo
+    # already has ~100 pre-existing violations in files this change didn't touch (top
+    # offenders: server/services/session_service.go, session/tmux/tmux.go,
+    # session/ent_repository.go, pkg/classifier/classifier.go — several are already on the
+    # code-hotspot-analysis skill's radar). Enabling them here would fail `make lint` for
+    # everyone immediately on unrelated code. Instead, .github/workflows/lint.yml enables
+    # them via `--enable` scoped to `only-new-issues: true`, so only NEW violations in
+    # changed code fail CI — these settings just configure the thresholds for that step.
+    # `make lint` / `make ci` / `make pre-commit` are intentionally unaffected.
+    gocyclo:
+      min-complexity: 25
+    gocognit:
+      min-complexity: 40
+    funlen:
+      lines: 150
+      statements: 100
+      ignore-comments: true
+    revive:
+      rules:
+        - name: file-length-limit
+          arguments:
+            - max: 1000
+              skipComments: true
+              skipBlankLines: true
+    depguard:
+      rules:
+        no_server_in_core:
+          files:
+            - "**/session/**/*.go"
+            - "**/config/**/*.go"
+            - "**/log/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/server"
+              desc: "core packages (session/config/log) must not import the server layer"
+            - pkg: "github.com/tstapler/stapler-squad/server/**"
+              desc: "core packages must not import server subpackages"
+        no_ioutil:
+          files:
+            - "$all"
+          deny:
+            - pkg: "io/ioutil"
+              desc: "replaced by io and os packages since Go 1.16"
+        no_ent_in_services:
+          # activated-after: all server/services exclusions removed (refactor/storage-interface-cleanup P6)
+          files:
+            - "**/server/services/**/*.go"
+            # Temporarily excluded — session/ent still imported; removed-in: refactor/storage-interface-cleanup (P6)
+            - "!**/server/services/error_registry.go"
+            - "!**/server/services/analytics_escape_service.go"
+            - "!**/server/services/analytics_escape_service_test.go"
+            - "!**/server/services/workflow_service_test.go"
+            - "!**/server/services/workflow_service.go"
+            - "!**/server/services/backlog_service.go"
+            - "!**/server/services/backlog_service_query.go"
+            - "!**/server/services/backlog_service_lifecycle.go"
+            - "!**/server/services/backlog_service_triage.go"
+            - "!**/server/services/session_service.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session/ent"
+              desc: "server/services must not import session/ent directly; use domain DTOs from session package"
+    forbidigo:
+      analyze-types: false
+      forbid:
+        - pattern: ^fmt\.Print(f|ln)?$
+          msg: "use the log package instead of fmt.Print* in production code"
+        - pattern: '(?m)exec\.Command$'
+          msg: "use exec.CommandContext with context.WithTimeout; raw exec.Command can hang indefinitely"
+        - pattern: 'log\.(InfoLog|WarningLog|ErrorLog|DebugLog)\.Printf'
+          msg: "use slog.InfoContext(ctx, ...) in new code; legacy log.XxxLog.Printf is being migrated"
+        - pattern: '^LoadInstances$'
+          msg: "LoadInstances() re-hydrates all sessions from disk and spawns PTY/tmux subprocesses — use FindLiveInstance fast path instead (see PerfFix-1)"
+        - pattern: 'ent\.IsNotFound'
+          msg: "use errors.Is(err, session.ErrNotFound) in server/services — wrap ent errors at the storage layer"
+      exclude-godoc-examples: true
+  exclusions:
+    paths:
+      - "^\\.\\."
+      - session/tmux/tmux_windows
+      - web-app
+      - \.stapler-squad
+      - \.claude-squad
+    rules:
+      # ──────────────────────────────────────────────────────────────────────────
+      # gocyclo/gocognit/funlen/revive(file-length-limit): table-driven tests and
+      # generated code naturally run long/branchy without being a maintenance smell —
+      # exclude them the same way this file already exempts _test.go from SA5011 and
+      # forbidigo above.
+      # ──────────────────────────────────────────────────────────────────────────
+      - path: "_test\\.go"
+        linters: [gocyclo, gocognit, funlen, revive]
+      - path: "^gen/"
+        linters: [gocyclo, gocognit, funlen, revive]
+      - path: "\\.pb\\.go"
+        linters: [gocyclo, gocognit, funlen, revive]
+      - path: "\\.connect\\.go"
+        linters: [gocyclo, gocognit, funlen, revive]
+      - path: "session/ent/"
+        linters: [gocyclo, gocognit, funlen, revive]
+      # exhaustive enforces DetectedStatus switch coverage in session/detection/ only.
+      # All other packages use iota types with intentional default: clauses.
+      - path: "^server/"
+        linters: [exhaustive]
+      - path: "^session/[^d]"
+        linters: [exhaustive]
+      - path: "^session/d[^e]"
+        linters: [exhaustive]
+      - path: "^session/de[^t]"
+        linters: [exhaustive]
+      - path: "^session/det[^e]"
+        linters: [exhaustive]
+      - path: "^session/dete[^c]"
+        linters: [exhaustive]
+      - path: "^main\\.go"
+        linters: [exhaustive]
+      - path: "^github/"
+        linters: [exhaustive]
+      - path: "^executor/"
+        linters: [exhaustive]
+      - path: "^cmd/"
+        linters: [exhaustive]
+      - path: "^pkg/"
+        linters: [exhaustive]
+      - path: "^daemon/"
+        linters: [exhaustive]
+      - path: "^telemetry/"
+        linters: [exhaustive]
+      - path: "^testutil/"
+        linters: [exhaustive]
+      - path: "^profiling/"
+        linters: [exhaustive]
+      # infoplist_darwin.go uses import "C" to force CGO linking for macOS codesigning.
+      # The CGO preamble comment causes a C compiler parse error when golangci-lint
+      # runs typecheck without the macOS build flags. Suppress the typecheck issue.
+      - path: "infoplist_darwin\\.go"
+        linters: [typecheck]
+      - linters: [typecheck]
+        text: "could not import C"
+      - linters: [typecheck]
+        text: "unknown type name 'cgo'"
+      - linters: [typecheck]
+        text: "expected ';' after top level declarator"
+      - linters: [typecheck]
+        text: "requires newer Go version"
+      # LoadInstances: allow in the storage implementation itself, in bulk-startup wiring,
+      # and in the fallback path of findInstanceFast (workspace_service.go) which is
+      # intentionally guarded by the live-finder fast path.
+      - path: "session/storage\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      - path: "server/dependencies\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      - path: "server/services/workspace_service\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      - path: "server/services/session_service\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      # MCP tools have their own per-tool LoadInstances calls that are aware of the
+      # side-effect but have not yet been migrated to FindLiveInstance.
+      - path: "server/mcp/"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      # Remaining services with intentional LoadInstances uses (health, backlog, etc.)
+      - path: "server/services/(approval_handler|review_queue_service|notification_service|backlog_service|backlog_service_sync|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      - path: "session/health\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      # hibernation_sweeper uses the liveProvider fast path when wired; LoadInstances
+      # is only reached in the fallback path (e.g. tests without the poller).
+      - path: "session/hibernation_sweeper\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      - path: "_test\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      - path: "_test\\.go"
+        linters: [forbidigo]
+        text: "exec\\.Command"
+      # Allow fmt.Print* in main.go, test files, cmd/, and tests/demo/ (CLI/test output)
+      - path: "main\\.go"
+        linters: [forbidigo]
+        text: "fmt\\.Print"
+      - path: "_test\\.go"
+        linters: [forbidigo]
+        text: "fmt\\.Print"
+      - path: "^cmd/"
+        linters: [forbidigo]
+        text: "fmt\\.Print"
+      - path: "^tests/demo/"
+        linters: [forbidigo]
+        text: "fmt\\.Print"
+      # SA5011 false positives: staticcheck doesn't model t.Fatal/t.Fatalf as non-returning,
+      # so nil-guard patterns like "if x == nil { t.Fatal(...) }; x.Field" get flagged.
+      - path: "_test\\.go"
+        linters: [staticcheck]
+        text: "SA5011"
+      # Allow fmt.Print* in session/mux/picker.go (terminal UI rendering with escape codes)
+      - path: "^session/mux/picker\\.go"
+        linters: [forbidigo]
+      # ──────────────────────────────────────────────────────────────────────────
+      # forbidigo: legacy log.XxxLog.Printf — migrated incrementally.
+      # New packages (pkg/warren, pkg/events, pkg/analytics) are NOT excluded;
+      # they must use slog from the start.
+      # ──────────────────────────────────────────────────────────────────────────
+      - path: "^log/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^session/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^server/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^cmd/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^daemon/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^config/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^profiling/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^telemetry/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^testutil/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^main\\.go"
+        linters: [forbidigo]
+        text: "log\\."
+      # ──────────────────────────────────────────────────────────────────────────
+      # forbidigo: ent.IsNotFound boundary guard
+      # server/services/backlog_service*.go still calls ent.IsNotFound directly —
+      # excluded until the storage-interface cleanup refactor (P6). The glob covers
+      # the base file AND all split files created in Phase 3 (P1):
+      # backlog_service_query.go, backlog_service_lifecycle.go, backlog_service_triage.go
+      # removed-in: refactor/storage-interface-cleanup (P6)
+      - path: "server/services/backlog_service.*\\.go"
+        linters: [forbidigo]
+        text: "ent\\.IsNotFound"
+      # session/ is the legitimate ent-wrapping layer; allowed to reference ent.IsNotFound
+      - path: "^session/"
+        linters: [forbidigo]
+        text: "ent\\.IsNotFound"
+      # ──────────────────────────────────────────────────────────────────────────
+      # gochecknoglobals: existing packages have globals from before this rule was
+      # introduced. Suppress blanket per-package; new packages (pkg/warren,
+      # pkg/events) are NOT excluded and must not introduce globals.
+      # ──────────────────────────────────────────────────────────────────────────
+      - path: "^session/"
+        linters: [gochecknoglobals]
+      - path: "^server/"
+        linters: [gochecknoglobals]
+      - path: "^cmd/"
+        linters: [gochecknoglobals]
+      - path: "^main\\.go"
+        linters: [gochecknoglobals]
+      - path: "^executor/"
+        linters: [gochecknoglobals]
+      - path: "^github/"
+        linters: [gochecknoglobals]
+      - path: "^daemon/"
+        linters: [gochecknoglobals]
+      - path: "^telemetry/"
+        linters: [gochecknoglobals]
+      - path: "^testutil/"
+        linters: [gochecknoglobals]
+      - path: "^profiling/"
+        linters: [gochecknoglobals]
+      - path: "^pkg/analytics/"
+        linters: [gochecknoglobals]
+      - path: "^pkg/classifier/"
+        linters: [gochecknoglobals]

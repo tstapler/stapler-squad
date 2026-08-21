@@ -1,0 +1,13 @@
+{
+  "id": "defaults:get",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetSessionDefaults",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestGetSessionDefaults_ResolvesStaleSessionDefaults"
+  ],
+  "lastModified": "2026-08-15T00:00:00Z"
+}

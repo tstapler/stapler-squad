@@ -1,0 +1,6 @@
+= Running Agent... (ctrl+o to expand)
+! generalist · ● Acknowledging Interruption & Apologizing
+⌃" Thinking... (esc to cancel, 10s)          Tip: Copy the last response to your clipboard with /copy
+Shift+Tab to accept edits                                          1 GEMINI.md file · 63 skills
+>  Press 'Esc' for NORMAL mode.
+[INSERT]         ~/dotfiles          master          untrusted          Auto (Gemini 3)          528.8 MB

@@ -1,0 +1,11 @@
+{
+  "id": "session:delete-workflow-failed",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "DeleteWorkflowFailedSessions",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-21T12:20:00.767671468-07:00"
+}

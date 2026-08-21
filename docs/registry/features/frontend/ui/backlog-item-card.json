@@ -1,0 +1,18 @@
+{
+  "id": "backlog-item-card",
+  "type": "frontend",
+  "component": "BacklogItemCard",
+  "path": "web-app/src/components/backlog/BacklogItemCard.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "BacklogItemCard_should_RenderStatusLabelFromGetStatusLabel_When_ItemStatusIsReview",
+    "BacklogItemCard_should_RenderQueuedStatusLabelIndependently_When_GetActionSpecFallsThroughToDefaultBranch",
+    "BacklogItemCard_should_RenderCompactBlockerChip_When_StuckItemPropProvided",
+    "BacklogItemCard_should_OmitBlockerChipAndKeepFooterUnchanged_When_StuckItemPropUndefined",
+    "BacklogItemCard_should_RenderProvenanceBadge_When_ExternalUrlPresent",
+    "BacklogItemCard_should_OmitProvenanceBadge_When_ExternalUrlEmpty",
+    "BacklogItemCard_should_NotTriggerOnClick_When_ProvenanceBadgeClicked"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}

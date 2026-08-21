@@ -1,0 +1,13 @@
+{
+  "id": "ListSessionTokens",
+  "type": "backend",
+  "service": "InsightsService",
+  "method": "ListSessionTokens",
+  "protoFile": "proto/session/v1/insights.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestListSessionTokens_WhenUnpricedModelFamily_ExpectUnpricedModelsPopulated"
+  ],
+  "lastModified": "2026-07-27T00:00:00Z"
+}

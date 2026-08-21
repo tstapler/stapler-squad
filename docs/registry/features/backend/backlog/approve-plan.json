@@ -1,0 +1,16 @@
+{
+  "id": "backlog:approve-plan",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "ApprovePlan",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp",
+    "TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
+    "TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning"
+  ],
+  "lastModified": "2026-07-19T00:00:00Z"
+}

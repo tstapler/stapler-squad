@@ -1,0 +1,55 @@
+=== done-0.md ===
+Call report_progress with item_id=char-fixture-1, criteria_index=0, status=pass. Include the optional note parameter with a 1-2 sentence description of what you verified (e.g. "ran the new unit test, it passes" or "manually tested via curl against the new endpoint") — it is appended to this item's permanent audit trail and is what a reviewer reads to judge whether this criterion is genuinely done, not just marked done.
+
+=== fail-0.md ===
+Call report_progress with item_id=char-fixture-1, criteria_index=0, status=fail. Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking this criterion — it is appended to this item's permanent audit trail and is what a reviewer or the next session reads to understand why this criterion isn't done yet.
+
+=== help.md ===
+# Available Backlog Commands
+
+- `/backlog/status` — Show current item status and checklist
+- `/backlog/done-0` — Mark criterion 0 as complete
+- `/backlog/fail-0` — Mark criterion 0 as failed
+- `/backlog/review` — Submit for review with a summary
+- `/backlog/ship` — Create a PR with /github:pr-ship and submit for review
+- `/backlog/block` — Report that you're stuck and hand this item back (not for bugs you can fix yourself)
+- `/backlog/duplicate` — Report this item is already covered by an existing PR, issue, or commit
+
+=== review.md ===
+Call request_review with item_id=char-fixture-1 and a 2-3 sentence summary of what was built.
+
+Do NOT end your session after this. Call wait_for_backlog_event(item_id, event_type="verdict_recorded") instead of polling — it blocks until the verdict lands (or times out) and returns the outcome directly, or returns immediately if a verdict is already recorded.
+
+PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part of this task, not a separate step someone else does.
+
+FAIL/PARTIAL → fix the noted gaps in this same session and run /backlog/review again. Its request_review call reports which attempt number you're on out of 3 allowed in this session — the count is tracked server-side, so trust what it reports rather than counting your own calls. Once it says you've hit the cap, STOP looping: run /backlog/ship anyway to open a PR so a human can pick up the review directly, rather than retrying /backlog/review again.
+
+=== ship.md ===
+You are ready to ship your work as a pull request — either because /backlog/review just returned PASS, or because review has looped without reaching a PASS and it's time to hand the work to a human instead of retrying indefinitely.
+
+Before shipping, confirm all acceptance criteria are marked complete (`/backlog/status`).
+
+Steps:
+1. Create the pull request:
+   Run `/github:pr-ship` — this drives the PR through local CI, code review, remote CI, and
+   merge-conflict resolution. It will stop short of actually merging; the final merge is left to
+   the human reviewer.
+
+2. Once `/github:pr-ship` reports all gates green: if this work has NOT already received a PASS verdict (i.e. you're shipping because review looped without converging, not because it passed), request the automated review with the PR number included:
+   Run `/backlog/review` with a 2-3 sentence summary of what was built and the PR number.
+   If review already returned PASS before you got here, skip this — running it again will fail (the    item is no longer `in_progress`), and there's nothing left for it to check.
+
+3. Report the PR back onto this backlog item — REQUIRED, do not skip:
+   Call the report_pr_created MCP tool with item_id=char-fixture-1, pr_url=<the PR URL /github:pr-ship or gh pr create printed>, pr_number=<the PR number>, and summary=<2-3 sentences: what changed and why>.
+   You created this PR yourself — nothing else will ever report it back to the item record. Skipping this step leaves the item stuck in review with a real PR that is invisible to the reviewer and the operator.
+
+Note: if the repository has no GitHub remote, run `gh pr create` manually — do NOT use `--fill`, which
+just concatenates commit messages with no test plan. Write `--title` using Conventional Commits format
+and a `--body` structured as `## Summary` (why this change was made, from the backlog item above),
+`## What Changed` (a short bullet list), and `## Test plan` (a checklist of concrete verification steps).
+Then run `/backlog/review`, then step 3 above to report the PR.
+
+=== status.md ===
+Call the get_backlog_item MCP tool with item_id=char-fixture-1.
+Format the response as a numbered checklist.
+

@@ -1,0 +1,374 @@
+import { style, keyframes, globalStyle } from "@vanilla-extract/css";
+import { vars } from "@/styles/theme-contract.css";
+
+const fadeIn = keyframes({
+  from: { opacity: 0 },
+  to: { opacity: 1 },
+});
+
+// Story 6.1: Theme-specific opening animation — scale + fade for cyberpunk feel
+const scanlineReveal = keyframes({
+  from: { opacity: 0, transform: "translateY(-16px) scaleY(0.95)", filter: "brightness(2)" },
+  "60%": { filter: "brightness(1.2)" },
+  to: { opacity: 1, transform: "translateY(0) scaleY(1)", filter: "brightness(1)" },
+});
+
+const spin = keyframes({
+  from: { transform: "rotate(0deg)" },
+  to: { transform: "rotate(360deg)" },
+});
+
+export const overlay = style({
+  position: "fixed",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  background: vars.color.overlayBackground,
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "center",
+  paddingTop: "10vh",
+  paddingBottom: "10vh",
+  // Advanced Options can push modal content taller than the viewport; without
+  // this the footer (Cancel/Create Session) is clipped and unreachable.
+  overflowY: "auto",
+  zIndex: 1000,
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: fadeIn,
+      animationDuration: "0.15s",
+      animationTimingFunction: "ease-out",
+    },
+  },
+});
+
+export const modal = style({
+  background: vars.color.cardBackground,
+  borderRadius: 12,
+  width: "100%",
+  maxWidth: 600,
+  // Story 6.1: Theme-aware glow border on omnibar
+  boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px ${vars.color.glowSecondary}`,
+  // Matches the maxHeight+overflow convention used by WorkspaceSwitchModal/TagEditor.
+  // Unlike those, the whole modal scrolls together (header+footer included) rather than
+  // pinning header/footer around an inner scroll region — .modal's children here include
+  // several conditionally-rendered, statically-positioned dropdowns (AliasPalette,
+  // AtCommandDropdown, discovery results), so splitting out a dedicated scroll region
+  // would need re-verifying each of those states; left as a follow-up.
+  maxHeight: "80vh",
+  overflowY: "auto",
+  overflowX: "hidden",
+  position: "relative",
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: scanlineReveal,
+      animationDuration: "0.22s",
+      animationTimingFunction: "ease-out",
+    },
+  },
+});
+
+export const inputContainer = style({
+  display: "flex",
+  alignItems: "center",
+  padding: 16,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  gap: 12,
+});
+
+export const typeIndicator = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 32,
+  height: 32,
+  fontSize: 18,
+  flexShrink: 0,
+});
+
+export const input = style({
+  flex: 1,
+  background: "transparent",
+  border: "none",
+  outline: "none",
+  color: vars.color.textPrimary,
+  fontSize: 16,
+  fontFamily: "inherit",
+  selectors: {
+    "&::placeholder": {
+      color: vars.color.textMuted,
+    },
+  },
+});
+
+export const detectionInfo = style({
+  padding: "12px 16px",
+  background: vars.color.hoverBackground,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const detectionBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "4px 10px",
+  background: vars.color.accentBg,
+  color: vars.color.primary,
+  borderRadius: 4,
+  fontSize: 13,
+  fontWeight: 500,
+});
+
+export const unknown = style({
+  background: vars.color.warningBg,
+  color: vars.color.warning,
+});
+
+export const body = style({
+  padding: 16,
+  display: "flex",
+  flexDirection: "column",
+  gap: 16,
+});
+
+export const field = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+});
+
+export const label = style({
+  fontSize: 13,
+  fontWeight: 500,
+  color: vars.color.textSecondary,
+});
+
+export const fieldInput = style({
+  background: vars.color.hoverBackground,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 6,
+  padding: "10px 12px",
+  color: vars.color.textPrimary,
+  fontSize: 14,
+  outline: "none",
+  transition: "border-color 0.15s",
+  selectors: {
+    "&:focus": {
+      borderColor: vars.color.primary,
+    },
+    "&::placeholder": {
+      color: vars.color.textMuted,
+    },
+  },
+});
+
+export const hint = style({
+  fontSize: 12,
+  color: vars.color.textMuted,
+});
+
+export const select = style({
+  background: vars.color.hoverBackground,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 6,
+  padding: "10px 12px",
+  color: vars.color.textPrimary,
+  fontSize: 14,
+  outline: "none",
+  cursor: "pointer",
+  selectors: {
+    "&:focus": {
+      borderColor: vars.color.primary,
+    },
+  },
+});
+
+export const checkbox = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  cursor: "pointer",
+  fontSize: 14,
+  color: vars.color.textPrimary,
+});
+
+globalStyle(`${checkbox} input`, {
+  width: 16,
+  height: 16,
+  cursor: "pointer",
+});
+
+export const collapsible = style({
+  borderTop: `1px solid ${vars.color.borderColor}`,
+  marginTop: 8,
+  paddingTop: 16,
+});
+
+export const collapsibleHeader = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  cursor: "pointer",
+  userSelect: "none",
+  marginBottom: 12,
+});
+
+export const collapsibleTitle = style({
+  fontSize: 13,
+  fontWeight: 500,
+  color: vars.color.textSecondary,
+});
+
+export const collapsibleIcon = style({
+  color: vars.color.textMuted,
+  transition: "transform 0.2s",
+});
+
+export const expanded = style({
+  transform: "rotate(180deg)",
+});
+
+export const collapsibleContent = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+});
+
+export const footer = style({
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 8,
+  padding: 16,
+  borderTop: `1px solid ${vars.color.borderColor}`,
+  background: vars.color.hoverBackground,
+});
+
+export const button = style({
+  padding: "8px 16px",
+  borderRadius: 6,
+  fontSize: 14,
+  fontWeight: 500,
+  cursor: "pointer",
+  transition: "all 0.15s",
+  border: "none",
+});
+
+export const buttonSecondary = style({
+  background: "transparent",
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  selectors: {
+    "&:hover": {
+      background: vars.color.hoverBackground,
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
+export const buttonPrimary = style({
+  background: vars.color.primary,
+  color: vars.color.primaryText,
+  selectors: {
+    "&:hover": {
+      background: vars.color.accentHover,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
+
+export const error = style({
+  color: vars.color.error,
+  fontSize: 13,
+  padding: "8px 12px",
+  background: vars.color.errorBg,
+  borderRadius: 6,
+  margin: "0 16px",
+  overflowWrap: "break-word",
+});
+
+export const shortcuts = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 16,
+  padding: "8px 16px",
+  background: vars.color.hoverBackground,
+  fontSize: 12,
+  color: vars.color.textMuted,
+});
+
+export const createButton = style({
+  marginLeft: "auto",
+  padding: "6px 16px",
+  borderRadius: 6,
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+  border: "none",
+  background: vars.color.primary,
+  color: vars.color.primaryText,
+  // Touch target: 44px minimum per Apple HIG, achieved via invisible padding.
+  // The button body stays compact so it fits the shortcuts bar height.
+  minHeight: 32,
+  "@media": {
+    "(pointer: coarse)": {
+      padding: "10px 20px",
+      fontSize: 14,
+      borderRadius: 8,
+    },
+  },
+  selectors: {
+    "&:hover:not(:disabled)": {
+      background: vars.color.accentHover,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
+export const shortcut = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+});
+
+export const shortcutKey = style({
+  background: vars.color.cardBackground,
+  padding: "2px 6px",
+  borderRadius: 4,
+  fontFamily: "monospace",
+});
+
+export const completionError = style({
+  padding: "4px 16px",
+  fontSize: 12,
+  color: vars.color.error,
+});
+
+export const pathIndicator = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 20,
+  height: 20,
+  fontSize: 14,
+  flexShrink: 0,
+});
+
+export const pathIndicatorValid = style({
+  color: vars.color.success,
+});
+
+export const pathIndicatorInvalid = style({
+  color: vars.color.error,
+});
+
+export const pathIndicatorLoading = style({
+  color: vars.color.textMuted,
+  animation: `${spin} 1s linear infinite`,
+  display: "inline-block",
+});

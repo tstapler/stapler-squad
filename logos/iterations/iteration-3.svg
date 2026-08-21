@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 512">
+
+  <rect width="1024" height="512" fill="#0A0A0F"/>
+
+  <g id="icon">
+
+    <!-- Outer gold rim -->
+    <circle cx="180" cy="256" r="148" fill="#C9A84C"/>
+    <!-- Dark gap -->
+    <circle cx="180" cy="256" r="140" fill="#0A0A0F"/>
+    <!-- Purple whisper ring -->
+    <circle cx="180" cy="256" r="136" fill="none" stroke="#5B3678" stroke-width="2"/>
+    <!-- Seal face -->
+    <circle cx="180" cy="256" r="132" fill="#100D14"/>
+
+    <!-- 12 clock-position gold dots -->
+    <circle cx="316" cy="256" r="4" fill="#C9A84C"/>
+    <circle cx="297" cy="324" r="4" fill="#C9A84C"/>
+    <circle cx="248" cy="374" r="4" fill="#C9A84C"/>
+    <circle cx="180" cy="392" r="4" fill="#C9A84C"/>
+    <circle cx="112" cy="374" r="4" fill="#C9A84C"/>
+    <circle cx="63" cy="324" r="4" fill="#C9A84C"/>
+    <circle cx="44" cy="256" r="4" fill="#C9A84C"/>
+    <circle cx="63" cy="188" r="4" fill="#C9A84C"/>
+    <circle cx="112" cy="138" r="4" fill="#C9A84C"/>
+    <circle cx="180" cy="120" r="4" fill="#C9A84C"/>
+    <circle cx="248" cy="138" r="4" fill="#C9A84C"/>
+    <circle cx="297" cy="188" r="4" fill="#C9A84C"/>
+
+    <!-- Larger, bolder staple signet — centered at (180, 254) -->
+    <rect x="108" y="200" width="144" height="22" fill="#8B1A3B" rx="5"/>
+    <rect x="108" y="200" width="22" height="108" fill="#8B1A3B" rx="5"/>
+    <rect x="230" y="200" width="22" height="108" fill="#8B1A3B" rx="5"/>
+
+    <!-- Curved motto: · COMMITTE MIHI · (entrust it to me) -->
+    <!-- Characters placed along r=112 arc, reading left-to-right along the bottom -->
+    <text x="76.2" y="298.0" transform="rotate(68.0,76.2,298.0)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">·</text>
+    <text x="93.0" y="326.5" transform="rotate(51.0,93.0,326.5)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">C</text>
+    <text x="104.3" y="338.6" transform="rotate(42.5,104.3,338.6)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">O</text>
+    <text x="117.4" y="348.9" transform="rotate(34.0,117.4,348.9)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">M</text>
+    <text x="131.8" y="357.1" transform="rotate(25.5,131.8,357.1)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">M</text>
+    <text x="147.3" y="363.1" transform="rotate(17.0,147.3,363.1)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">I</text>
+    <text x="163.4" y="366.8" transform="rotate(8.5,163.4,366.8)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">T</text>
+    <text x="180.0" y="368.0" transform="rotate(0.0,180.0,368.0)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">T</text>
+    <text x="196.6" y="366.8" transform="rotate(-8.5,196.6,366.8)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">E</text>
+    <text x="228.2" y="357.1" transform="rotate(-25.5,228.2,357.1)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">M</text>
+    <text x="242.6" y="348.9" transform="rotate(-34.0,242.6,348.9)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">I</text>
+    <text x="255.7" y="338.6" transform="rotate(-42.5,255.7,338.6)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">H</text>
+    <text x="267.0" y="326.5" transform="rotate(-51.0,267.0,326.5)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">I</text>
+    <text x="283.8" y="298.0" transform="rotate(-68.0,283.8,298.0)" font-family="Georgia, serif" font-size="13" fill="#C9A84C" text-anchor="middle">·</text>
+
+  </g>
+
+  <line x1="340" y1="90" x2="340" y2="422" stroke="#1E1820" stroke-width="1"/>
+
+  <g id="wordmark">
+
+    <text
+      x="692"
+      y="234"
+      font-family="Georgia, 'Times New Roman', serif"
+      font-size="68"
+      font-weight="700"
+      fill="#EDE0D0"
+      letter-spacing="8"
+      text-anchor="middle">SENESCHAL</text>
+
+    <text
+      x="692"
+      y="290"
+      font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+      font-size="15"
+      font-weight="400"
+      fill="#C9A84C"
+      letter-spacing="5"
+      text-anchor="middle">YOUR AGENTIC ESTATE, MANAGED</text>
+
+  </g>
+
+</svg>

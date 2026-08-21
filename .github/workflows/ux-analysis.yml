@@ -1,0 +1,237 @@
+name: UX Analysis
+
+# Story 5: UX Analysis Automation
+# Runs on PRs touching web-app/src. Non-blocking advisory step.
+# - Axe Core: WCAG 2.1 AA (critical/serious violations block)
+# - Lighthouse CI: performance score < 70 warns
+# - Claude vision: advisory UX analysis (skipped if no API key)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'web-app/src/**'
+
+permissions:
+  pull-requests: write
+
+# Guards the delete-on-clean comment mutation against out-of-order runs: an
+# older, slower run finishing after a newer one could otherwise delete or
+# overwrite the comment the newer run correctly posted. Cancelling a
+# superseded run outright is safe here — this is a single-job,
+# pull_request-only workflow with no unrelated work to preserve.
+concurrency:
+  group: ux-analysis-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ux-analysis:
+    name: UX Analysis (Axe + Lighthouse + Claude)
+    runs-on: ubuntu-latest
+    # This job runs in parallel with other jobs, never blocks main build
+    timeout-minutes: 10
+    env:
+      # Job-level env so it's available in step if: conditions (secrets context not allowed there)
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate protos and build web UI
+        uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-files
+        continue-on-error: true
+
+      - name: Build binary
+        run: go build -o stapler-squad .
+
+      - name: Install Playwright + test dependencies
+        run: |
+          cd tests/e2e
+          pnpm install --frozen-lockfile
+          npx playwright install chromium --with-deps
+
+      - name: Start test server
+        run: |
+          STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=e2e-local \
+            ./stapler-squad --tmux-keep-server > /tmp/server.log 2>&1 &
+          echo $! > /tmp/server.pid
+
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8543/ > /dev/null 2>&1; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          echo "--- debug mutate-create smoke test ---"
+          curl -s -X POST http://localhost:8543/api/debug/backlog/mutate-create \
+            -H "Content-Type: application/json" \
+            -d '{"title":"ci-smoke-test","status":"idea","priority":3}' \
+            -w "\nHTTP_STATUS:%{http_code}\n"
+
+      - name: Run Axe accessibility tests
+        id: axe
+        env:
+          TEST_SERVER_URL: http://localhost:8543
+        run: |
+          cd tests/e2e
+          npx playwright test accessibility.spec.ts --reporter=list
+        # Axe test failures block merge (critical/serious violations)
+        continue-on-error: false
+
+      - name: Run Lighthouse CI
+        id: lighthouse
+        run: |
+          cd tests/e2e
+          npx lhci autorun --config=lighthouse.config.js 2>&1 | tee /tmp/lighthouse-output.txt || true
+          # Extract performance score from lhci JSON manifest (stdout format is not stable)
+          SCORE=$(node -e "
+            try {
+              const m = require('./.lighthouseci/manifest.json');
+              const lhr = require(m[0].jsonPath);
+              console.log(Math.round(lhr.categories.performance.score * 100));
+            } catch(e) { console.log('unknown'); }
+          " 2>/dev/null || echo "unknown")
+          echo "score=${SCORE}" >> $GITHUB_OUTPUT
+        continue-on-error: true  # Lighthouse is non-blocking (warning only)
+
+      - name: Capture screenshots for Claude analysis
+        id: screenshots
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
+        run: |
+          cd tests/e2e
+          # Capture screenshots of primary routes
+          npx playwright screenshot --browser=chromium \
+            http://localhost:8543 \
+            /tmp/screenshot-main.png 2>/dev/null || true
+          npx playwright screenshot --browser=chromium \
+            http://localhost:8543/review-queue \
+            /tmp/screenshot-review-queue.png 2>/dev/null || true
+
+          # Run Claude UX analysis
+          mkdir -p docs/qa
+          cd ..
+          if command -v ts-node >/dev/null 2>&1; then
+            ts-node tools/ux-analysis/analyze.ts \
+              /tmp/screenshot-main.png \
+              /tmp/screenshot-review-queue.png \
+              --pr ${{ github.event.number }} \
+              --feature ui:main-page \
+              --output docs/qa || true
+          fi
+        continue-on-error: true
+
+      - name: Stop test server
+        if: always()
+        run: |
+          echo "--- server.log (last 200 lines) ---"
+          tail -n 200 /tmp/server.log 2>/dev/null || echo "(no server.log)"
+          if [ -f /tmp/server.pid ]; then
+            kill "$(cat /tmp/server.pid)" 2>/dev/null || true
+          fi
+          pkill -f "stapler-squad.*e2e-local" 2>/dev/null || true
+
+      - name: Post UX analysis PR comment
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true # advisory comment; never fail the job if posting is denied
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          LIGHTHOUSE_SCORE: ${{ steps.lighthouse.outputs.score }}
+          UX_FINDINGS_COUNT: ${{ steps.screenshots.outputs.findings_count }}
+        with:
+          script: |
+            const { isActionable } = require('./tools/ci-gates/ux-actionability.js');
+            const marker = '<!-- ux-analysis -->';
+            const lighthouseScore = process.env.LIGHTHOUSE_SCORE || 'unknown';
+            const axeResult = '${{ steps.axe.outcome }}';
+            const findingsCount = Number(process.env.UX_FINDINGS_COUNT || 0);
+
+            const score = parseInt(lighthouseScore, 10);
+            let lighthouseEmoji = '✅';
+            if (isNaN(score) || score < 70) {
+              lighthouseEmoji = '⚠️';
+            }
+            const axeEmoji = axeResult === 'success' ? '✅' : '❌';
+            // -1 is analyze.ts's sentinel for "started but crashed before
+            // completing" (written before any real work, overwritten with
+            // the real count on success) — distinct from "step didn't run
+            // at all" (findingsCount stays 0, not actionable by design).
+            const claudeStatus = findingsCount < 0 ? 'analysis crashed — see run log' : `${findingsCount} finding(s)`;
+
+            const summary = [
+              '## UX Analysis',
+              '',
+              '| Check | Status | Details |',
+              '|-------|--------|---------|',
+              `| ${axeEmoji} Axe Core (WCAG 2.1 AA) | ${axeResult} | Critical/serious violations block merge |`,
+              `| ${lighthouseEmoji} Lighthouse Performance | Score: ${lighthouseScore} | Warning if < 70 (non-blocking) |`,
+              `| 🤖 Claude UX Analysis | ${claudeStatus} | See docs/qa/ for details |`,
+              '',
+              '> Axe Core excludes terminal rendering areas (intentional design).',
+              '> Lighthouse runs in desktop preset for this developer tool.',
+            ].join('\n');
+            // Per Observability Plan: this is the *only* place these signals
+            // are visible today besides the (now-gated) PR comment, so write
+            // it unconditionally before the actionability gate runs.
+            require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (!isActionable({ axeOutcome: axeResult, lighthouseScore, findingsCount })) {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+
+            const body = [marker, summary, '', '> This comment clears automatically once nothing needs attention.'].join('\n');
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

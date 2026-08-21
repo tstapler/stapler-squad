@@ -1,0 +1,36 @@
+import type { Feature } from '../types';
+
+export const pathFeatures = {
+  'path-list-completions': {
+    id: 'path-list-completions',
+    title: 'List Path Completions',
+    description: 'Returns filesystem path completions for a given prefix, supporting tilde expansion, hidden files, symlinks, and truncation.',
+    rpcIds: ['path:list-completions'],
+    componentPaths: [],
+    testIds: [
+      'TestListPathCompletions_BasicListing',
+      'TestListPathCompletions_FilterByPrefix',
+      'TestListPathCompletions_DirectoriesOnly',
+      'TestListPathCompletions_HiddenFilesHidden',
+      'TestListPathCompletions_HiddenFilesShownWhenPrefixStartsWithDot',
+      'TestListPathCompletions_NonexistentBaseDir',
+      'TestListPathCompletions_TildeExpansion',
+      'TestListPathCompletions_TildeAlone',
+      'TestListPathCompletions_Truncation',
+      'TestListPathCompletions_MaxResultsHardCap',
+      'TestListPathCompletions_DefaultMaxResults',
+      'TestListPathCompletions_NoTruncationUnderLimit',
+      'TestListPathCompletions_PathExists',
+      'TestListPathCompletions_PathExists_FileIsNotDir',
+      'TestListPathCompletions_EntryPathCorrectness',
+      'TestListPathCompletions_BaseDirInResponse',
+      'TestListPathCompletions_Symlink_ToDirectory',
+      'TestListPathCompletions_Symlink_ToFile',
+      'TestListPathCompletions_Symlink_ToFile_ExcludedByDirOnly',
+      'TestListPathCompletions_BrokenSymlink_Skipped',
+      'TestListPathCompletions_ContextCancellation',
+    ],
+    status: 'stable',
+    since: '1.0.0',
+  },
+} as const satisfies Record<string, Feature>;

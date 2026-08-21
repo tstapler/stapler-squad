@@ -1,0 +1,261 @@
+import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import { isSessionStale } from "../session-staleness";
+
+/**
+ * Grouping strategy options for organizing sessions.
+ * Mirrors the TUI grouping strategies in ui/list.go
+ */
+export enum GroupingStrategy {
+  Category = "category",
+  Tag = "tag",
+  Branch = "branch",
+  Path = "path",
+  Program = "program",
+  Status = "status",
+  SessionType = "session_type",
+  Project = "project",
+  Workflow = "workflow",
+  Stale = "stale",
+  None = "none",
+}
+
+export const GroupingStrategyLabels: Partial<Record<GroupingStrategy, string>> = {
+  [GroupingStrategy.Category]: "Category",
+  [GroupingStrategy.Tag]: "Tags",
+  [GroupingStrategy.Branch]: "Branch",
+  [GroupingStrategy.Path]: "Path",
+  [GroupingStrategy.Program]: "Program",
+  [GroupingStrategy.Status]: "Status",
+  [GroupingStrategy.SessionType]: "Session Type",
+  [GroupingStrategy.Project]: "Project",
+  [GroupingStrategy.Workflow]: "Workflow",
+  [GroupingStrategy.Stale]: "Stale",
+  [GroupingStrategy.None]: "None (Flat List)",
+};
+
+/**
+ * Grouped session data structure
+ */
+export interface GroupedSessions {
+  groupKey: string;
+  displayName: string;
+  sessions: Session[];
+}
+
+/**
+ * Group sessions by the selected strategy with multi-membership support.
+ * Mirrors the TUI OrganizeByStrategy() method in ui/list.go:959
+ *
+ * Implementation Notes:
+ * - Tag strategy enables multi-membership: sessions appear in multiple groups simultaneously
+ * - Uses Map<string, Session[]> for O(1) group lookups and membership checks
+ * - Returns sorted array with special groups (Uncategorized, Untagged) at the end
+ * - Preserves session references (no cloning) for efficient memory usage
+ *
+ * Performance:
+ * - Time Complexity: O(n * g) where n = session count, g = average groups per session
+ * - Space Complexity: O(n * g) for multi-membership scenarios (tags)
+ * - Sorting: O(k log k) where k = unique group count
+ *
+ * @param sessions - Array of Session instances to organize
+ * @param strategy - Grouping strategy to apply (Category, Tag, Branch, etc.)
+ * @returns Sorted array of grouped sessions with display metadata
+ */
+/**
+ * Options for groupSessions. Currently used to pass workflow name lookups.
+ */
+export interface GroupSessionsOptions {
+  /** Map from workflow UUID to workflow name, used by GroupingStrategy.Workflow */
+  workflowIdToName?: Map<string, string>;
+  /** Idle-time threshold (minutes) used by GroupingStrategy.Stale; defaults to 30 */
+  thresholdMinutes?: number;
+}
+
+export function groupSessions(
+  sessions: Session[],
+  strategy: GroupingStrategy,
+  options?: GroupSessionsOptions
+): GroupedSessions[] {
+  // Early exit: No grouping returns single flat group
+  if (strategy === GroupingStrategy.None) {
+    return [
+      {
+        groupKey: "all",
+        displayName: "All Sessions",
+        sessions: [...sessions],
+      },
+    ];
+  }
+
+  // Map for O(1) group lookups and membership checks
+  const grouped = new Map<string, Session[]>();
+
+  // Phase 1: Extract group keys and build membership map
+  sessions.forEach((session) => {
+    let groupKeys: string[] = [];
+
+    // Extract group keys based on selected strategy
+    // Most strategies return single group (single-membership)
+    // Tag strategy returns multiple groups (multi-membership)
+    switch (strategy) {
+      case GroupingStrategy.Category:
+        // Single-membership: One category per session
+        groupKeys = [session.category || "Uncategorized"];
+        break;
+
+      case GroupingStrategy.Tag:
+        // Multi-membership: Session appears in ALL its tag groups
+        // Example: session with tags ["Frontend", "React"] appears in both groups
+        // This enables multi-dimensional organization without duplication
+        if (session.tags && session.tags.length > 0) {
+          groupKeys = session.tags;
+        } else {
+          groupKeys = ["Untagged"];
+        }
+        break;
+
+      case GroupingStrategy.Branch:
+        // Single-membership: One branch per session
+        groupKeys = [session.branch || "No Branch"];
+        break;
+
+      case GroupingStrategy.Path:
+        // Single-membership: One path per session
+        groupKeys = [session.path || "No Path"];
+        break;
+
+      case GroupingStrategy.Program:
+        // Single-membership: One program per session
+        groupKeys = [session.program || "No Program"];
+        break;
+
+      case GroupingStrategy.Status:
+        // Single-membership: One status per session
+        groupKeys = [getStatusDisplayName(session.status)];
+        break;
+
+      case GroupingStrategy.SessionType:
+        // Single-membership: One type per session
+        groupKeys = [getSessionTypeDisplayName(session.sessionType)];
+        break;
+
+      case GroupingStrategy.Project:
+        // Single-membership: One project per session (empty project_id = No Project)
+        groupKeys = [session.projectId || "No Project"];
+        break;
+
+      case GroupingStrategy.Workflow:
+        // Single-membership: One workflow per session; manual sessions go into "Manual Sessions"
+        if (session.workflowId) {
+          const wfName = options?.workflowIdToName?.get(session.workflowId) ?? session.workflowId;
+          groupKeys = [wfName];
+        } else {
+          groupKeys = ["Manual Sessions"];
+        }
+        break;
+
+      case GroupingStrategy.Stale:
+        // Single-membership: "Stale" only for ACTIVE sessions past the idle threshold;
+        // everything else (including non-ACTIVE sessions) falls into "Not Stale" rather
+        // than a misleading "Active" bucket.
+        groupKeys = [isSessionStale(session, options?.thresholdMinutes ?? 30) ? "Stale" : "Not Stale"];
+        break;
+
+      default:
+        // Fallback for unknown strategies
+        groupKeys = ["Uncategorized"];
+    }
+
+    // Phase 2: Add session to all its groups (enables multi-membership)
+    // For most strategies, this adds to single group
+    // For Tag strategy, this adds to multiple groups
+    groupKeys.forEach((key) => {
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+      // Session reference is shared across groups (no cloning for efficiency)
+      grouped.get(key)!.push(session);
+    });
+  });
+
+  // Phase 3: Convert Map to sorted array
+  // Sort logic ensures consistent ordering with special groups at the end
+  const sortedGroups = Array.from(grouped.keys()).sort((a, b) => {
+    // Special groups (empty/missing fields) always appear at the end
+    const specialGroups = ["Uncategorized", "Untagged", "No Branch", "No Path", "No Program", "No Project", "Manual Sessions"];
+    if (specialGroups.includes(a)) return 1;
+    if (specialGroups.includes(b)) return -1;
+
+    // For Status grouping: enforce preferred order so active groups appear first.
+    // "Paused" appears after active/working groups, before terminal/unknown states.
+    const statusOrder: Record<string, number> = {
+      "Active": 0,
+      "Ready": 1,
+      "Loading": 2,
+      "Creating": 2,
+      "Needs Approval": 3,
+      "Paused": 4,
+      "Stopped": 5,
+      "Hibernated": 6,
+      "Unknown": 7,
+    };
+    const aOrder = statusOrder[a] ?? 99;
+    const bOrder = statusOrder[b] ?? 99;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+
+    // Regular groups sorted alphabetically as fallback
+    return a.localeCompare(b);
+  });
+
+  // Phase 4: Build final result array with metadata
+  return sortedGroups.map((key) => ({
+    groupKey: key,
+    displayName: key,
+    sessions: grouped.get(key)!,
+  }));
+}
+
+/**
+ * Get human-readable status display name
+ */
+function getStatusDisplayName(status: number): string {
+  switch (status) {
+    case SessionStatus.ACTIVE:         return "Active";   // 1 (covers legacy RUNNING alias)
+    case SessionStatus.READY:          return "Ready";    // 2 (deprecated)
+    case SessionStatus.LOADING:        return "Loading";  // 3 (deprecated)
+    case SessionStatus.PAUSED:         return "Paused";   // 4
+    case SessionStatus.NEEDS_APPROVAL: return "Needs Approval"; // 5 (deprecated)
+    case SessionStatus.CREATING:       return "Creating"; // 6
+    case SessionStatus.STOPPED:        return "Stopped";  // 7
+    case SessionStatus.HIBERNATED:     return "Hibernated"; // 8
+    case SessionStatus.CRASHED:        return "Crashed";  // 10
+    default:                           return "Unknown";
+  }
+}
+
+/**
+ * Get human-readable session type display name
+ */
+function getSessionTypeDisplayName(sessionType: number): string {
+  switch (sessionType) {
+    case 1:
+      return "Directory";
+    case 2:
+      return "New Worktree";
+    case 3:
+      return "Existing Worktree";
+    default:
+      return "Unknown";
+  }
+}
+
+/**
+ * Get the next grouping strategy in the cycle.
+ * Mirrors the TUI CycleGroupingStrategy() method in ui/list.go
+ */
+export function cycleGroupingStrategy(current: GroupingStrategy): GroupingStrategy {
+  const strategies = Object.values(GroupingStrategy);
+  const currentIndex = strategies.indexOf(current);
+  const nextIndex = (currentIndex + 1) % strategies.length;
+  return strategies[nextIndex];
+}

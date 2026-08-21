@@ -1,0 +1,16 @@
+id: actor-self-send-deadlock
+language: go
+rule:
+  all:
+    - pattern: $RECV.sendSyncErr($$$)
+    - inside:
+        kind: function_declaration
+        has:
+          kind: parameter_list
+          has:
+            pattern: $_ *instanceState
+message: |
+  Calling sendSyncErr from inside an *instanceState function deadlocks the actor goroutine.
+  The actor is single-threaded: it cannot process a new command while blocked waiting for itself.
+  Call the corresponding Locked twin directly (e.g. transitionToLocked, pauseLocked) instead.
+severity: error

@@ -1,0 +1,19 @@
+{
+  "id": "unfinished-backlog-queue",
+  "type": "frontend",
+  "component": "BacklogQueueSection",
+  "path": "web-app/src/components/unfinished/BacklogQueueSection.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "BacklogQueueSection — loads and renders queued backlog items on mount",
+    "BacklogQueueSection — does not mount the GitHub issue picker until the import affordance is opened",
+    "BacklogQueueSection — shows an empty state when there are no queued items",
+    "BacklogQueueSection — imports a selected GitHub issue and reloads the list",
+    "BacklogQueueSection — surfaces an error when GitHub issue import fails",
+    "BacklogQueueSection — surfaces an error when the initial backlog load fails",
+    "BacklogQueueSection — toggles the collapsible section via click and keyboard",
+    "BacklogQueueSection — import button keyboard activation does not toggle the section"
+  ],
+  "lastModified": "2026-07-22T00:00:00Z"
+}

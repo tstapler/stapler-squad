@@ -1,0 +1,18 @@
+{
+  "id": "backlog:trigger-triage",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "TriggerTriage",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_triage.go",
+  "tested": true,
+  "testIds": [
+    "BacklogItemDetail — Epic 1.1: triage question answer wiring \u003e calls triggerTriage with the composed Q:/A: feedback when a question is answered",
+    "TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved",
+    "TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason",
+    "tests/e2e/triage-question-answer.spec.ts",
+    "tests/e2e/plan-review.spec.ts"
+  ],
+  "lastModified": "2026-08-12T00:00:00Z"
+}

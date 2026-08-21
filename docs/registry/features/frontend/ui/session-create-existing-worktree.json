@@ -1,0 +1,16 @@
+{
+  "id": "session-create-existing-worktree",
+  "type": "frontend",
+  "component": "OmnibarCreationPanel",
+  "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+  "tested": true,
+  "testIds": [
+    "existing worktree session creation > existing worktree option is selectable",
+    "existing worktree session creation > shows worktree path input when existing worktree is selected",
+    "existing worktree session creation > hides branch controls when existing worktree is selected",
+    "existing worktree session creation > shows working directory field for existing worktree mode",
+    "existing worktree session creation > submit is disabled when worktree path is empty",
+    "existing worktree session creation > sends existing worktree type with worktree path in payload"
+  ],
+  "lastModified": "2026-05-01T00:00:00Z"
+}

@@ -1,0 +1,85 @@
+version: 2.9
+
+builds:
+  - id: stapler-squad
+    binary: stapler-squad
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -X main.version={{.Version}}
+  - id: ssq-mux
+    binary: ssq-mux
+    main: ./cmd/ssq-mux
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+  - id: ssq-hooks
+    binary: ssq-hooks
+    main: ./cmd/ssq-hooks
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+brews:
+  - name: stapler-squad
+    directory: Formula
+    repository:
+      owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
+      name: "{{ .Env.GITHUB_REPO_NAME }}"
+      branch: main
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: "https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
+    description: "Manage multiple AI terminal agents like Claude Code, Aider, Codex, OpenCode, and Amp."
+    license: "MIT"
+    install: |
+      bin.install "stapler-squad"
+      bin.install_symlink bin/"stapler-squad" => "ssq"
+    test: |
+      system "#{bin}/stapler-squad version"
+
+release:
+  prerelease: auto
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  use: github
+
+  filters:
+    exclude:
+      - "^docs:"
+      - typo
+      - "^refactor"
+      - "^chore"

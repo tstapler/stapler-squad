@@ -1,0 +1,14 @@
+{
+  "id": "defaults:update-global",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UpdateGlobalDefaults",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestUpdateGlobalDefaults_ZeroStaleSessionThreshold_UsesServerDefault",
+    "TestUpdateGlobalDefaults_PersistsExplicitStaleSessionOverride"
+  ],
+  "lastModified": "2026-08-15T00:00:00Z"
+}

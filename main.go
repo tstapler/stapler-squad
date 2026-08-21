@@ -1,0 +1,1380 @@
+package main
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	cmdbridge "github.com/tstapler/stapler-squad/cmd"
+	"github.com/tstapler/stapler-squad/cmd/commands"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/daemon"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/warren"
+	"github.com/tstapler/stapler-squad/profiling"
+	"github.com/tstapler/stapler-squad/server"
+	serverauth "github.com/tstapler/stapler-squad/server/auth"
+	mcpserver "github.com/tstapler/stapler-squad/server/mcp"
+	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/telemetry"
+	"io"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"syscall"
+	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+)
+
+var (
+	version                 = "1.1.2"
+	daemonFlag              bool
+	mcpFlag                 bool
+	testModeFlag            bool
+	testDirFlag             string
+	discoveryModeFlag       string
+	discoverExtFlag         bool
+	profileFlag             bool
+	profilePortFlag         int
+	traceFlag               bool
+	listenAddrFlag          string
+	remoteAccessFlag        bool
+	remotePortFlag          int
+	rpIDFlag                string
+	tmuxKeepServerFlag      bool
+	openURLFlag             string
+	registerLinuxSchemeFlag string
+	listKnownHostsFlag      bool
+	rootCmd                 = &cobra.Command{
+		Use:   "stapler-squad",
+		Short: "Stapler Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// signal.NotifyContext cancels ctx on SIGTERM/SIGINT, triggering graceful
+			// shutdown via app.Run → app.Stop → srv.Shutdown (shutdown hooks persist
+			// session state including Claude session IDs for --resume on next start).
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			// --open-url mode: translate an ssq:// deep link to a local web UI URL
+			// and shell out to the OS's default opener, then exit. Never starts the
+			// HTTP server, config loading, or logging — it's a fire-and-forget CLI
+			// helper invoked by the OS as the ssq:// scheme handler (see
+			// project_plans/backlog-deep-linking/implementation/plan.md Epic 4).
+			if openURLFlag != "" {
+				if err := runOpenURL(ctx, openURLFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// --register-linux-scheme mode: idempotently register stapler-squad as
+			// the OS handler for the ssq:// URL scheme (Story 4.2). Invoked from
+			// scripts/install-service.sh's Linux install path, not by end users
+			// directly — hidden from --help below.
+			if registerLinuxSchemeFlag != "" {
+				desktopDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "applications")
+				if err := registerLinuxScheme(ctx, desktopDir, registerLinuxSchemeFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// --list-known-hosts mode (Observability Plan,
+			// project_plans/backlog-deep-linking/implementation/plan.md): print the
+			// local Workspace Host Registry's contents to stdout, then exit. Lets a
+			// user diagnose "why didn't my link resolve" without reading logs.
+			if listKnownHostsFlag {
+				if err := runListKnownHosts(os.Stdout); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// MCP mode: initialize logging to stderr, run MCP server.
+			// Mutually exclusive with HTTP server mode — returns when stdin closes.
+			//
+			// Thin-client fast path: if the main stapler-squad HTTP server is already
+			// running (it almost always is — this binary is spawned per Claude Code
+			// subagent via .mcp.json, once per subagent process), proxy stdio tool
+			// calls to its existing /mcp endpoint instead of opening a second
+			// ent/SQLite connection + EventBus + ReviewQueue in this subprocess. Only
+			// falls back to the fully-local path (buildMCPDeps) when the HTTP server
+			// isn't reachable, e.g. before the daemon has started.
+			if mcpFlag {
+				mcpserver.InitMCPLogging()
+				cfg := config.LoadConfig()
+				if proxyURL := mcpProxyURL(cfg.ListenAddress); proxyURL != "" {
+					proxyErr := mcpserver.RunProxyServer(ctx, proxyURL, mcpserver.ProxyHeaders())
+					if proxyErr == nil {
+						return nil
+					}
+					if errors.Is(proxyErr, mcpserver.ErrProxyUnavailable) {
+						log.Warn("mcp: thin-client proxy unavailable, falling back to embedded storage", "err", proxyErr, "url", proxyURL)
+					} else {
+						return proxyErr
+					}
+				}
+				store, svc, sbMgr, storage, mcpErr := buildMCPDeps()
+				if mcpErr != nil {
+					return fmt.Errorf("mcp: init deps: %w", mcpErr)
+				}
+				// The stdio MCP server is a short-lived subprocess per session, so a
+				// load-time read of the flag (rather than a live BacklogController,
+				// which BuildCoreDeps doesn't construct) is sufficient.
+				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
+				// No BacklogService on this stdio fallback path (buildMCPDeps only
+				// builds Phase 1 CoreDeps) — submit_review_verdict's eager
+				// review->in_progress transition is skipped here, and
+				// create_backlog_item/import_github_issue skip auto-triage; see
+				// RunServer's doc comment.
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil)
+			}
+
+			// Enable test mode if flag is set
+			if testModeFlag {
+				testDir := testDirFlag
+				if testDir == "" {
+					// Use default test directory with PID for isolation
+					testDir = fmt.Sprintf("/tmp/stapler-squad-test-%d", os.Getpid())
+				}
+				// Set environment variable for config package to use
+				os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+				log.Info("Test mode enabled: using isolated data directory", "dir", testDir)
+			}
+
+			// Load config first so we can configure logging properly
+			cfg := config.LoadConfig()
+
+			// Register the process manager backend before any session is created.
+			// Empty string defaults to "tmux" for backwards-compatibility.
+			{
+				backend := session.ProcessManagerBackend(cfg.ProcessManagerBackend)
+				if backend == "" {
+					backend = session.BackendTmux
+				}
+				session.RegisterBackendProvider(backend)
+			}
+
+			// Load discovery config
+			discoveryCfg := config.LoadDiscoveryConfig()
+
+			// Apply discovery mode flag overrides
+			if discoveryModeFlag != "" {
+				mode := config.DiscoveryMode(discoveryModeFlag)
+				// Validate the mode
+				if mode != config.DiscoveryManagedOnly &&
+					mode != config.DiscoveryExternalOnly &&
+					mode != config.DiscoveryAll {
+					return fmt.Errorf("invalid discovery mode '%s', must be one of: managed-only, external-only, all", discoveryModeFlag)
+				}
+				discoveryCfg.Mode = mode
+				log.Info("Discovery mode set from flag", "mode", mode)
+			}
+
+			// Apply --discover-external shorthand flag
+			if discoverExtFlag {
+				discoveryCfg.Mode = config.DiscoveryAll
+				discoveryCfg.AllowExternalAttach = true
+				log.Info("External discovery enabled (from --discover-external flag)")
+			}
+
+			log.InitializeWithConfig(daemonFlag, buildLogConfig(daemonFlag, cfg, false))
+			defer func() {
+				log.LogSessionPathsToStderr()
+				log.Close()
+			}()
+
+			// Start profiling if enabled
+			if profileFlag || traceFlag {
+				cleanup, err := profiling.StartProfiling(profiling.Config{
+					Enabled:      true,
+					HTTPPort:     profilePortFlag,
+					BlockProfile: true, // Enable block profiling for lock-up detection
+					MutexProfile: true, // Enable mutex profiling for lock contention
+					TraceEnabled: traceFlag,
+					TraceFile:    "", // Use default
+				})
+				if err != nil {
+					return fmt.Errorf("failed to start profiling: %w", err)
+				}
+				defer cleanup()
+
+				// Monitor goroutines periodically
+				if profileFlag {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					go profiling.MonitorGoroutines(ctx, 10*time.Second)
+				}
+			}
+
+			// Load user-defined detector plugins from the config dir's detectors/
+			// subfolder and start watching it for changes. Never fatal.
+			if err := detection.InitPlugins(ctx); err != nil {
+				log.Warn("failed to initialize detector plugins", "err", err)
+			}
+
+			if daemonFlag {
+				err := daemon.RunDaemon(cfg)
+				log.Error("failed to start daemon", "err", err)
+				return err
+			}
+
+			// Web server mode (default and only mode)
+			// Acquire an exclusive, process-lifetime lock before touching any
+			// shared state (tmux server, ent DB) so a prior process that
+			// launchd/systemd has lost track of (see
+			// .claude/rules/service-restart-orphan-process.md) can't race
+			// this one over the same instance directory.
+			configDir, err := config.GetConfigDir()
+			if err != nil {
+				return fmt.Errorf("failed to resolve config directory: %w", err)
+			}
+			instanceLock, err := config.AcquireInstanceLock(configDir, config.DefaultInstanceLockTimeout)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if unlockErr := instanceLock.Unlock(); unlockErr != nil {
+					log.Warn("Failed to release instance lock", "err", unlockErr)
+				}
+			}()
+
+			// Initialize OpenTelemetry for APM (Datadog, etc.)
+			telemetryCfg := telemetry.DefaultConfig()
+			telemetryProvider, err := telemetry.Initialize(ctx, telemetryCfg)
+			if err != nil {
+				log.Warn("Failed to initialize telemetry", "err", err)
+			} else {
+				defer func() {
+					shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := telemetryProvider.Shutdown(shutdownCtx); err != nil {
+						log.Warn("Failed to shutdown telemetry", "err", err)
+					}
+				}()
+			}
+
+			// Start continuous profiling if configured.
+			stopProfiling, err := profiling.StartContinuousProfiling(
+				"stapler-squad",
+				cfg.PyroscopeServerAddress,
+			)
+			if err != nil {
+				log.Warn("Continuous profiling unavailable", "err", err)
+			}
+			defer stopProfiling()
+
+			// Determine listen address: flag > PORT env > config > default
+			address := cfg.ListenAddress
+			if address == "" {
+				address = "localhost:8543"
+			}
+			// PORT env var overrides for test mode
+			if port := os.Getenv("PORT"); port != "" {
+				address = "localhost:" + port
+			}
+			// --listen flag: explicit override (highest priority)
+			if listenAddrFlag != "" {
+				address = listenAddrFlag
+			}
+
+			// Warn when binding to non-localhost
+			host, _, _ := net.SplitHostPort(address)
+			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+				log.Warn("WARNING: Binding to non-localhost address. Ensure firewall rules are configured.", "address", address)
+				fmt.Fprintf(os.Stderr, "\nWARNING: stapler-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
+			}
+
+			// --rp-id flag overrides config
+			if rpIDFlag != "" {
+				cfg.PasskeyRPID = rpIDFlag
+			}
+
+			// Detect every LAN IP (not just the OS-preferred outbound one, which
+			// can be a VPN tunnel) for hostname resolution and display.
+			lanIPs := detectLANIPs()
+			hostnameSeen := make(map[string]bool)
+			var hostnames []string
+			for _, ip := range lanIPs {
+				for _, name := range resolveLANHostnames(ip) {
+					if !hostnameSeen[name] {
+						hostnameSeen[name] = true
+						hostnames = append(hostnames, name)
+					}
+				}
+			}
+
+			app := warren.New()
+			var (
+				coreDeps *server.CoreDeps
+				svcDeps  *server.ServiceDeps
+				srv      *server.Server
+			)
+
+			app.Phase("core-deps", func(ctx context.Context, a *warren.App) error {
+				log.Info("Building core dependencies (phase 1/3)...")
+				var err error
+				coreDeps, err = server.BuildCoreDepsWithOptions(server.BuildOptions{})
+				return err
+			})
+
+			app.Phase("service-deps", func(ctx context.Context, a *warren.App) error {
+				log.Info("Building service dependencies (phase 2/3)...")
+				var err error
+				svcDeps, err = server.BuildServiceDeps(coreDeps)
+				return err
+			})
+
+			app.Phase("runtime", func(ctx context.Context, a *warren.App) error {
+				log.Info("Building runtime dependencies (phase 3/3)...")
+
+				strictStartup := os.Getenv("STAPLER_SQUAD_STRICT_STARTUP") == "true"
+
+				// Ensure tmux server is running BEFORE restoring sessions.
+				// BuildRuntimeDeps calls Start(false) via FromInstanceData; if the server
+				// is not yet up, DoesSessionExist() triggers recoverFromServerFailure which
+				// starts a fresh server — then all sessions look non-existent and get cold-
+				// restored into brand-new tmux sessions, losing the running processes.
+				// The TmuxServerReady token enforces this ordering at compile time.
+				tmuxReady, tmuxReadyErr := tmux.EnsureServerRunning("")
+				if tmuxReadyErr != nil {
+					if strictStartup {
+						return fmt.Errorf("tmux server startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tmuxReadyErr)
+					}
+					log.Warn("Failed to ensure tmux server running", "err", tmuxReadyErr)
+				}
+				// --tmux-keep-server intentionally keeps the tmux server (and anything
+				// attached to it) alive across this restart, but any control-mode client
+				// this process spawns will be brand new -- so any control-mode client
+				// still attached at this exact point is necessarily a leftover from the
+				// previous process instance (BUG-042). Reconcile before restoring any
+				// session, which is the earliest point a fresh control-mode client could
+				// be spawned.
+				if killed, err := tmux.KillOrphanedControlModeClients(""); err != nil {
+					log.Warn("Failed to clean up orphaned control-mode clients", "err", err)
+				} else if killed > 0 {
+					log.Info("Cleaned up orphaned control-mode clients left over from a prior process instance", "count", killed)
+				}
+				// Create a keepalive session so the tmux server does not exit when all user sessions close.
+				if err := tmux.CreateKeepaliveSession(""); err != nil {
+					if strictStartup {
+						return fmt.Errorf("failed to create tmux keepalive session (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+					}
+					log.Warn("Failed to create keepalive session", "err", err)
+				}
+				// Set exit-empty off so the server survives even if the keepalive dies.
+				if tmuxKeepServerFlag {
+					if err := tmux.SetExitEmpty("", false); err != nil {
+						if strictStartup {
+							return fmt.Errorf("failed to set tmux exit-empty off (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+						}
+						log.Warn("Failed to set tmux exit-empty off", "err", err)
+					}
+				}
+
+				rt, err := server.BuildRuntimeDeps(tmuxReady, svcDeps, cfg)
+				if err != nil {
+					return err
+				}
+
+				srv = server.NewServerWithDeps(address, rt.ToServerDeps())
+				srv.SetHostnames(hostnames)
+
+				localOrigin := fmt.Sprintf("http://%s", address)
+				srv.SetOrigins([]string{localOrigin})
+
+				// STAPLER_SQUAD_EXTRA_ORIGINS lets an isolated DevStack's next-dev frontend past
+				// CORS. Only honored when STAPLER_SQUAD_INSTANCE is also explicitly set — the
+				// default/systemd instance never sets a custom instance name, so this env var is
+				// a structural no-op there regardless of its value (ADR-001 §2, pre-mortem.md
+				// Failure #3). Each entry must be an exact http(s)://localhost:<port> or
+				// http(s)://127.0.0.1:<port> origin — anything else is rejected and logged, never
+				// silently trusted.
+				if os.Getenv("STAPLER_SQUAD_INSTANCE") != "" {
+					if extraOriginsRaw := os.Getenv("STAPLER_SQUAD_EXTRA_ORIGINS"); extraOriginsRaw != "" {
+						validExtraOrigins, _ := parseExtraOrigins(extraOriginsRaw)
+						srv.SetOrigins(append(srv.GetOrigins(), validExtraOrigins...))
+					}
+					log.Info("CORS trusted origins", "origins", srv.GetOrigins())
+				}
+
+				// Start a second HTTPS server with passkey auth for remote access.
+				if remoteAccessFlag || cfg.PasskeyEnabled {
+					if err := startRemoteAccess(ctx, srv, address, cfg, remotePortFlag); err != nil {
+						return fmt.Errorf("start remote access: %w", err)
+					}
+				}
+
+				a.Go("http-server", func(ctx context.Context) {
+					log.Info("Starting web server", "address", address)
+					if err := srv.Start(ctx); err != nil {
+						log.Error("HTTP server stopped", "err", err)
+					}
+				})
+
+				return nil
+			})
+
+			return app.Run(ctx)
+		},
+	}
+
+	resetCmd = &cobra.Command{
+		Use:   "reset",
+		Short: "Reset all stored instances",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Load config first so we can configure logging properly
+			cfg := config.LoadConfig()
+			log.InitializeWithConfig(false, buildLogConfig(false, cfg, false))
+			defer func() {
+				log.LogSessionPathsToStderr()
+				log.Close()
+			}()
+
+			repo, err := session.NewEntRepository()
+			if err != nil {
+				return fmt.Errorf("failed to initialize repository: %w", err)
+			}
+			defer repo.Close()
+			storage, err := session.NewStorageWithRepository(repo)
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			if err := storage.DeleteAllInstances(); err != nil {
+				return fmt.Errorf("failed to reset storage: %w", err)
+			}
+			fmt.Println("Storage has been reset successfully")
+
+			if err := tmux.CleanupSessions(executor.MakeExecutor()); err != nil {
+				return fmt.Errorf("failed to cleanup tmux sessions: %w", err)
+			}
+			fmt.Println("Tmux sessions have been cleaned up")
+
+			if err := git.CleanupWorktrees(); err != nil {
+				return fmt.Errorf("failed to cleanup worktrees: %w", err)
+			}
+			fmt.Println("Worktrees have been cleaned up")
+
+			// Kill any daemon that's running.
+			if err := daemon.StopDaemon(); err != nil {
+				return err
+			}
+			fmt.Println("daemon has been stopped")
+
+			return nil
+		},
+	}
+
+	debugCmd = &cobra.Command{
+		Use:   "debug",
+		Short: "Print debug information like config paths",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Load config first so we can configure logging properly
+			cfg := config.LoadConfig()
+			log.InitializeWithConfig(false, buildLogConfig(false, cfg, false))
+			defer func() {
+				log.LogSessionPathsToStderr()
+				log.Close()
+			}()
+
+			configDir, err := config.GetConfigDir()
+			if err != nil {
+				return fmt.Errorf("failed to get config directory: %w", err)
+			}
+			configJson, _ := json.MarshalIndent(cfg, "", "  ")
+
+			fmt.Printf("Config: %s\n%s\n", filepath.Join(configDir, config.ConfigFileName), configJson)
+
+			// Check for key binding conflicts
+			fmt.Println("\n=== Key Binding Validation ===")
+			bridge := cmdbridge.GetGlobalBridge()
+			issues := bridge.ValidateSetup()
+
+			if len(issues) > 0 {
+				fmt.Printf("❌ Found %d validation issues:\n", len(issues))
+				for _, issue := range issues {
+					fmt.Printf("  - %s\n", issue)
+				}
+			} else {
+				fmt.Println("✅ No key binding conflicts detected")
+			}
+
+			return nil
+		},
+	}
+
+	versionCmd = &cobra.Command{
+		Use:   "version",
+		Short: "Print the version number of stapler-squad",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("stapler-squad version %s\n", version)
+			fmt.Printf("https://github.com/TylerStaplerAtFanatics/stapler-squad/releases/tag/v%s\n", version)
+		},
+	}
+
+	testPtyCmd = &cobra.Command{
+		Use:   "test-pty",
+		Short: "Test PTY initialization and discovery",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize logging
+			cfg := config.LoadConfig()
+			log.InitializeWithConfig(false, buildLogConfig(false, cfg, true))
+			defer log.Close()
+
+			fmt.Println("=== PTY Initialization Test ===")
+
+			// Load existing sessions
+			repo, err := session.NewEntRepository()
+			if err != nil {
+				return fmt.Errorf("failed to initialize repository: %w", err)
+			}
+			defer repo.Close()
+			storage, err := session.NewStorageWithRepository(repo)
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			instances, err := storage.LoadInstances()
+			if err != nil {
+				return fmt.Errorf("failed to load instances: %w", err)
+			}
+
+			fmt.Printf("Found %d sessions\n\n", len(instances))
+
+			// Test PTY initialization for each session
+			for _, inst := range instances {
+				fmt.Printf("Session: %s\n", inst.Title)
+				fmt.Printf("  Status: %v\n", inst.Status)
+				fmt.Printf("  Path: %s\n", inst.Path)
+				fmt.Printf("  Branch: %s\n", inst.Branch)
+
+				// Test PTY access
+				if inst.Started() {
+					ptyReader, err := inst.GetPTYReader()
+					if err != nil {
+						fmt.Printf("  ❌ PTY Error: %v\n", err)
+					} else {
+						fmt.Printf("  ✅ PTY: FD %d\n", ptyReader.Fd())
+
+						// Try to get PTY path (cross-platform)
+						var ptyPath string
+						linuxPath := fmt.Sprintf("/proc/self/fd/%d", ptyReader.Fd())
+						macosPath := fmt.Sprintf("/dev/fd/%d", ptyReader.Fd())
+
+						ptyPath, err = os.Readlink(linuxPath)
+						if err != nil {
+							ptyPath, err = os.Readlink(macosPath)
+							if err != nil {
+								fmt.Printf("  ⚠️  PTY Path: Unable to resolve (error: %v)\n", err)
+							} else {
+								fmt.Printf("  ✅ PTY Path: %s (macOS)\n", ptyPath)
+							}
+						} else {
+							fmt.Printf("  ✅ PTY Path: %s (Linux)\n", ptyPath)
+						}
+					}
+				} else {
+					fmt.Printf("  ⚠️  Session not started\n")
+				}
+				fmt.Println()
+			}
+
+			// Test PTY discovery
+			fmt.Println("=== PTY Discovery Test ===")
+			discovery := session.NewPTYDiscovery()
+			discovery.SetSessions(instances)
+			err = discovery.Refresh()
+			if err != nil {
+				fmt.Printf("❌ Discovery Error: %v\n", err)
+			} else {
+				connections := discovery.GetConnections()
+				fmt.Printf("Discovered %d PTY connections:\n\n", len(connections))
+				for i, conn := range connections {
+					fmt.Printf("%d. Session: %s\n", i+1, conn.SessionName)
+					fmt.Printf("   Path: %s\n", conn.Path)
+					fmt.Printf("   PID: %d\n", conn.PID)
+					fmt.Printf("   Command: %s\n", conn.Command)
+					fmt.Printf("   Status: %v\n", conn.Status)
+					fmt.Println()
+				}
+			}
+
+			return nil
+		},
+	}
+
+	listSessionsCmd = &cobra.Command{
+		Use:   "list",
+		Short: "List all sessions",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize logging
+			cfg := config.LoadConfig()
+			log.InitializeWithConfig(false, buildLogConfig(false, cfg, false))
+			defer log.Close()
+
+			repo, err := session.NewEntRepository()
+			if err != nil {
+				return fmt.Errorf("failed to initialize repository: %w", err)
+			}
+			defer repo.Close()
+			storage, err := session.NewStorageWithRepository(repo)
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			instances, err := storage.LoadInstances()
+			if err != nil {
+				return fmt.Errorf("failed to load instances: %w", err)
+			}
+
+			if len(instances) == 0 {
+				fmt.Println("No sessions found")
+				return nil
+			}
+
+			fmt.Printf("Found %d sessions:\n\n", len(instances))
+			for i, inst := range instances {
+				fmt.Printf("%d. %s\n", i+1, inst.Title)
+				fmt.Printf("   Status: %v\n", inst.Status)
+				fmt.Printf("   Path: %s\n", inst.Path)
+				if inst.Branch != "" {
+					fmt.Printf("   Branch: %s\n", inst.Branch)
+				}
+				if inst.Started() {
+					fmt.Printf("   Started: Yes\n")
+				} else {
+					fmt.Printf("   Started: No\n")
+				}
+				fmt.Println()
+			}
+
+			return nil
+		},
+	}
+
+	printQRCodesCmd = &cobra.Command{
+		Use:   "print-qr-codes",
+		Short: "Generate a 1-hour setup token and print QR codes for all detected domains",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			port, _ := cmd.Flags().GetInt("remote-port")
+			rpID, _ := cmd.Flags().GetString("rp-id")
+
+			// Generate and persist a new setup token so the running server picks it up.
+			configDir, err := config.GetConfigDir()
+			if err != nil {
+				return fmt.Errorf("get config dir: %w", err)
+			}
+			setupTokenPath := filepath.Join(configDir, serverauth.SetupTokenDir, serverauth.SetupTokenFile)
+			mgr := serverauth.NewSetupManager()
+			token, err := mgr.GenerateToFile(setupTokenPath)
+			if err != nil {
+				return fmt.Errorf("generate setup token: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "New setup token written to %s (valid 1h)\n", setupTokenPath)
+
+			lanIPs := detectLANIPs()
+			lanIPStr := lanIPs[0]
+
+			var hostnames []string
+			hostnameSeen := make(map[string]bool)
+			for _, ip := range lanIPs {
+				for _, name := range resolveLANHostnames(ip) {
+					if !hostnameSeen[name] {
+						hostnameSeen[name] = true
+						hostnames = append(hostnames, name)
+					}
+				}
+			}
+
+			displayHost := rpID
+			if displayHost == "" {
+				if len(hostnames) > 0 {
+					displayHost = hostnames[0]
+				} else {
+					displayHost = lanIPStr
+				}
+			}
+
+			// Collect all unique hosts to print QR codes for.
+			seen := make(map[string]bool)
+			var hosts []string
+			addHost := func(h string) {
+				if !seen[h] {
+					seen[h] = true
+					hosts = append(hosts, h)
+				}
+			}
+			addHost(displayHost)
+			for _, hn := range hostnames {
+				addHost(hn)
+			}
+			for _, ip := range lanIPs {
+				addHost(ip)
+			}
+
+			for _, host := range hosts {
+				caURL := fmt.Sprintf("https://%s:%d/auth/ca.pem", host, port)
+				setupURL := fmt.Sprintf("https://%s:%d/login?setup_token=%s", host, port, token)
+
+				fmt.Fprintf(os.Stderr, "\n══ Domain: %s ══\n", host)
+				fmt.Fprintf(os.Stderr, "\n── QR Code 1: Install CA certificate ──\n")
+				if qrErr := serverauth.PrintQRToTerminal(caURL); qrErr != nil {
+					fmt.Fprintf(os.Stderr, "QR print failed: %v\n", qrErr)
+				}
+				fmt.Fprintf(os.Stderr, "\n── QR Code 2: Register passkey (valid 1h) ──\n")
+				if qrErr := serverauth.PrintQRToTerminal(setupURL); qrErr != nil {
+					fmt.Fprintf(os.Stderr, "QR print failed: %v\n", qrErr)
+				}
+			}
+			return nil
+		},
+	}
+)
+
+func init() {
+	rootCmd.Flags().BoolVar(&mcpFlag, "mcp", false,
+		"Run as an MCP server (stdio transport). Reads MCP JSON-RPC from stdin, writes to stdout. "+
+			"Log output goes to stderr. Mutually exclusive with web server mode.")
+	rootCmd.Flags().BoolVar(&daemonFlag, "daemon", false, "Run a program that loads all sessions"+
+		" and runs autoyes mode on them.")
+	rootCmd.Flags().BoolVar(&testModeFlag, "test-mode", false, "Run in test mode with isolated data directory")
+	rootCmd.Flags().StringVar(&testDirFlag, "test-dir", "", "Custom test data directory (defaults to /tmp/stapler-squad-test-<PID>)")
+
+	// Discovery mode flags
+	rootCmd.Flags().StringVar(&discoveryModeFlag, "discovery-mode", "",
+		"Instance discovery mode: managed-only, external-only, or all (default: managed-only)")
+	rootCmd.Flags().BoolVar(&discoverExtFlag, "discover-external", false,
+		"Enable external instance discovery (shorthand for --discovery-mode=all with attach enabled)")
+
+	// Profiling flags
+	rootCmd.Flags().BoolVar(&profileFlag, "profile", false, "Enable runtime profiling (HTTP server + goroutine monitoring)")
+	rootCmd.Flags().IntVar(&profilePortFlag, "profile-port", 6060, "Port for pprof HTTP server (default: 6060)")
+	rootCmd.Flags().BoolVar(&traceFlag, "trace", false, "Enable execution tracing to /tmp/stapler-squad-trace-<PID>.out")
+
+	// Remote access and passkey flags
+	rootCmd.Flags().StringVar(&listenAddrFlag, "listen", "",
+		"Address to listen on (e.g. '0.0.0.0:8543'). Overrides config listen_address.")
+	rootCmd.Flags().BoolVar(&remoteAccessFlag, "remote-access", false,
+		"Enable remote access: starts a second HTTPS server with passkey auth on --remote-port (default 8444). "+
+			"Local server on localhost remains unchanged.")
+	rootCmd.Flags().IntVar(&remotePortFlag, "remote-port", 8444,
+		"Port for the remote access HTTPS server (used with --remote-access, default: 8444)")
+	rootCmd.Flags().StringVar(&rpIDFlag, "rp-id", "",
+		"WebAuthn Relying Party ID override (your LAN IP or hostname, e.g. '192.168.1.42'). "+
+			"Defaults to the detected LAN IP.")
+	rootCmd.Flags().BoolVar(&tmuxKeepServerFlag, "tmux-keep-server", true,
+		"Keep tmux server running even when all user sessions close (sets exit-empty off). "+
+			"Use this if the tmux server frequently stops between sessions.")
+	rootCmd.Flags().StringVar(&openURLFlag, "open-url", "",
+		"Translate an ssq:// deep link to a local web UI URL and open it via the OS's default "+
+			"opener (open on macOS, xdg-open on Linux), then exit. Used as the ssq:// scheme handler.")
+	rootCmd.Flags().StringVar(&registerLinuxSchemeFlag, "register-linux-scheme", "",
+		"(Linux only, internal) Idempotently register the given binary path as the OS handler "+
+			"for the ssq:// URL scheme via a .desktop file + xdg-mime, then exit. "+
+			"Invoked by scripts/install-service.sh.")
+	rootCmd.Flags().BoolVar(&listKnownHostsFlag, "list-known-hosts", false,
+		"Print the local Workspace Host Registry's known peer hosts (identity, advertised "+
+			"address(es), last-seen time) to stdout, then exit. Peers only appear here if "+
+			"they're reachable at the network layer (same LAN or VPN/Tailscale-style overlay) "+
+			"— this registry does not perform NAT traversal or cross-network discovery.")
+
+	// Hide the daemonFlag as it's only for internal use
+	err := rootCmd.Flags().MarkHidden("daemon")
+	if err != nil {
+		panic(err)
+	}
+	if err := rootCmd.Flags().MarkHidden("register-linux-scheme"); err != nil {
+		panic(err)
+	}
+
+	printQRCodesCmd.Flags().Int("remote-port", 8444, "Port of the remote access HTTPS server")
+	printQRCodesCmd.Flags().String("rp-id", "", "Override hostname/IP (defaults to detected LAN hostname)")
+
+	rootCmd.AddCommand(debugCmd)
+	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(resetCmd)
+	rootCmd.AddCommand(testPtyCmd)
+	rootCmd.AddCommand(listSessionsCmd)
+	rootCmd.AddCommand(printQRCodesCmd)
+	rootCmd.AddCommand(commands.GetSessionCmd)
+}
+
+// extraOriginPattern matches an exact http(s)://localhost:<port> or
+// http(s)://127.0.0.1:<port> origin — no path, query, wildcard, or other host.
+var extraOriginPattern = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1):\d+$`)
+
+// parseExtraOrigins splits raw on commas and strings.TrimSpace's each entry,
+// validating it against extraOriginPattern. Entries that pass are returned in
+// valid; entries that fail are logged via log.Warn (naming the offending entry)
+// and returned in rejected — they are never silently included in valid.
+func parseExtraOrigins(raw string) (valid []string, rejected []string) {
+	for _, entry := range strings.Split(raw, ",") {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if extraOriginPattern.MatchString(trimmed) {
+			valid = append(valid, trimmed)
+		} else {
+			log.Warn("Rejected invalid STAPLER_SQUAD_EXTRA_ORIGINS entry", "entry", trimmed)
+			rejected = append(rejected, trimmed)
+		}
+	}
+	return valid, rejected
+}
+
+// resolveLANHostnames returns a list of domain names suitable for use as a WebAuthn rpID
+// or TLS SANs. It collects all identifiable hostnames from various sources.
+func resolveLANHostnames(lanIPStr string) []string {
+	var hostnames []string
+	seen := make(map[string]bool)
+
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name != "" && strings.Contains(name, ".") && !seen[name] {
+			hostnames = append(hostnames, name)
+			seen[name] = true
+		}
+	}
+
+	// 1. Reverse DNS — works when the DHCP server registers PTR records.
+	if names, err := net.LookupAddr(lanIPStr); err == nil {
+		for _, name := range names {
+			// PTR records end with a trailing dot; strip it.
+			if len(name) > 0 && name[len(name)-1] == '.' {
+				name = name[:len(name)-1]
+			}
+			add(name)
+		}
+	}
+
+	// 1b. macOS split-DNS scopes forward lookups by search domain (e.g. a
+	// VPN profile routes *.corp.example to a corp resolver and a home
+	// router's domain to the router), but a PTR query has no domain
+	// suffix to match against — so it always falls through to the
+	// system's default/unscoped resolver. If that default is a VPN/corp
+	// resolver, a LAN router's PTR record (e.g. a UniFi "Local DNS
+	// Record") is silently invisible to step 1 above even though it
+	// exists and answers fine when queried directly. Ask every
+	// nameserver scutil knows about — including scoped ones — so that
+	// record isn't lost.
+	for _, name := range reverseDNSViaKnownNameservers(lanIPStr) {
+		add(name)
+	}
+
+	// 2. Linux-specific: mDNS reverse lookup via avahi-resolve
+	avahiCtx, avahiCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer avahiCancel()
+	avahiCmd := safeexec.CommandContext(avahiCtx, "avahi-resolve", "-a", lanIPStr)
+	if out, err := avahiCmd.Output(); err == nil {
+		fields := strings.Fields(string(out))
+		if len(fields) >= 2 {
+			add(fields[1])
+		}
+	}
+
+	// 3. Try hostname -f for FQDN
+	hostnameCtx, hostnameCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer hostnameCancel()
+	hostnameCmd := safeexec.CommandContext(hostnameCtx, "hostname", "-f")
+	if out, err := hostnameCmd.Output(); err == nil {
+		add(string(out))
+	}
+
+	hostname, hostErr := os.Hostname()
+	if hostErr == nil && hostname != "" {
+		// 4. hostname + search domains
+		for _, domain := range getDNSSearchDomains() {
+			if domain == "local" {
+				continue
+			}
+			add(hostname + "." + domain)
+		}
+
+		// 5. mDNS .local fallback
+		add(hostname + ".local")
+	}
+
+	return hostnames
+}
+
+// getDNSSearchDomains returns the DNS search domains configured on this system.
+// It checks /etc/resolv.conf first, then falls back to `scutil --dns` on macOS
+// (where /etc/resolv.conf is not the authoritative source).
+func getDNSSearchDomains() []string {
+	seen := make(map[string]bool)
+	var domains []string
+
+	add := func(d string) {
+		if d != "" && !seen[d] {
+			seen[d] = true
+			domains = append(domains, d)
+		}
+	}
+
+	// /etc/resolv.conf — works reliably on Linux; present but advisory on macOS.
+	if data, err := os.ReadFile("/etc/resolv.conf"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "search ") {
+				for _, d := range strings.Fields(line)[1:] {
+					add(d)
+				}
+			}
+		}
+	}
+
+	// scutil --dns — macOS authoritative source for search domains.
+	scutilCtx, scutilCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer scutilCancel()
+	scutilCmd := safeexec.CommandContext(scutilCtx, "scutil", "--dns")
+	if out, err := scutilCmd.Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			// Format: "search domain[N] : example.com"
+			if strings.HasPrefix(line, "search domain") {
+				if parts := strings.SplitN(line, ":", 2); len(parts) == 2 {
+					add(strings.TrimSpace(parts[1]))
+				}
+			}
+		}
+	}
+
+	return domains
+}
+
+// scutilNameservers extracts every nameserver IP scutil knows about,
+// including ones scoped to a single search domain (e.g. a LAN router
+// handling only a home domain while a VPN resolver handles everything
+// else). Returns nil on non-macOS systems where scutil isn't present.
+func scutilNameservers() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := safeexec.CommandContext(ctx, "scutil", "--dns").Output()
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var servers []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		// Format: "nameserver[N] : 192.168.1.1"
+		if !strings.HasPrefix(line, "nameserver[") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ns := strings.TrimSpace(parts[1])
+		if ns != "" && !seen[ns] {
+			seen[ns] = true
+			servers = append(servers, ns)
+		}
+	}
+	return servers
+}
+
+// reverseDNSViaKnownNameservers performs a PTR lookup for lanIPStr against
+// every nameserver scutil reports, rather than relying on the OS's default
+// resolver selection. A PTR query carries no domain suffix, so per-domain
+// split-DNS scoping (which routes forward lookups like *.home.example to a
+// LAN router and everything else to a VPN/corp resolver) can't route it
+// correctly — it always falls through to whichever resolver is unscoped or
+// listed first. Querying each known nameserver directly finds a LAN-only
+// PTR record that step 1's net.LookupAddr would otherwise miss.
+func reverseDNSViaKnownNameservers(lanIPStr string) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, server := range scutilNameservers() {
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		found, err := resolver.LookupAddr(ctx, lanIPStr)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, name := range found {
+			name = strings.TrimSuffix(name, ".")
+			if name != "" && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+// getOutboundIP detects the primary LAN IP by consulting the OS routing table.
+// No data is sent – this just triggers a routing lookup.
+func getOutboundIP() (net.IP, error) {
+	conn, err := net.Dial("udp", "8.8.8.8:53")
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP, nil
+}
+
+// listNonLoopbackIPs enumerates every non-loopback, non-link-local IPv4
+// address bound to an up local interface. getOutboundIP only reports the
+// single interface the OS routing table picks for outbound internet traffic
+// -- typically a VPN tunnel when one is active -- so it can miss the real LAN
+// entirely (and any hostnames that only resolve on that LAN, e.g. a router's
+// local DNS record). This enumerates all of them instead.
+func listNonLoopbackIPs() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var ips []string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			ip4 := ip.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+				continue
+			}
+			s := ip4.String()
+			if !seen[s] {
+				seen[s] = true
+				ips = append(ips, s)
+			}
+		}
+	}
+	return ips
+}
+
+// detectLANIPs returns every LAN IP that TLS certs and WebAuthn origins
+// should cover: the OS-preferred outbound address first (preserving prior
+// single-IP behavior and its use as the default display/rpID address), then
+// any other interface addresses listNonLoopbackIPs finds that
+// getOutboundIP's routing-table heuristic missed.
+func detectLANIPs() []string {
+	seen := make(map[string]bool)
+	var ips []string
+	if lanIP, err := getOutboundIP(); err == nil && lanIP != nil {
+		s := lanIP.String()
+		seen[s] = true
+		ips = append(ips, s)
+	}
+	for _, ip := range listNonLoopbackIPs() {
+		if !seen[ip] {
+			seen[ip] = true
+			ips = append(ips, ip)
+		}
+	}
+	if len(ips) == 0 {
+		ips = []string{"127.0.0.1"}
+	}
+	return ips
+}
+
+// startRemoteAccess starts a second HTTPS server on all interfaces with passkey
+// authentication, while the local server on localhost stays unchanged.
+func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int) error {
+	// Detect every LAN IP (not just the OS-preferred outbound one, which can
+	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
+	lanIPs := detectLANIPs()
+	lanIPStr := lanIPs[0]
+
+	// Use hostnames already resolved and stored on the server -- this is
+	// already a flattened, deduplicated union across every detected LAN IP
+	// (see the early detectLANIPs()-based resolution that feeds SetHostnames).
+	hostnames := srv.GetHostnames()
+
+	remoteAddr := fmt.Sprintf("0.0.0.0:%d", remotePort)
+
+	// Build one SAN set per network the server answers on, so each leaf cert
+	// only ever advertises its own network's identity. WebAuthn rpID must be
+	// a hostname, so including the LAN IP in the SANs is fine for HTTPS, but
+	// rpID itself must be a hostname for most browsers.
+	networks := map[string][]string{
+		"127.0.0.1": {"localhost", "127.0.0.1"},
+	}
+	for _, ip := range lanIPs {
+		networks[ip] = append([]string{ip}, resolveLANHostnames(ip)...)
+	}
+
+	caFile, netCerts, err := server.EnsureNetworkTLSCerts(networks)
+	if err != nil {
+		return fmt.Errorf("ensure TLS certs: %w", err)
+	}
+
+	tlsCfg := &tls.Config{
+		GetCertificate: server.GetCertificateByLocalAddr(netCerts),
+		MinVersion:     tls.VersionTLS12,
+	}
+
+	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
+	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
+	rpID := cfg.PasskeyRPID
+	if rpID == "" {
+		if len(hostnames) > 0 {
+			rpID = hostnames[0]
+		} else {
+			rpID = lanIPStr
+		}
+	}
+	allRPIDs := []string{rpID}
+	if len(hostnames) > 1 {
+		allRPIDs = append(allRPIDs, hostnames...)
+	}
+
+	origins := []string{fmt.Sprintf("https://%s:%d", rpID, remotePort)}
+	for _, hn := range hostnames {
+		origins = append(origins, fmt.Sprintf("https://%s:%d", hn, remotePort))
+	}
+	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
+
+	displayHost := rpID
+	if len(hostnames) > 0 {
+		displayHost = hostnames[0]
+	}
+	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
+
+	srv.SetOrigins(append(srv.GetOrigins(), origins...))
+
+	// Initialise auth subsystem.
+	store, err := serverauth.NewCredentialStore()
+	if err != nil {
+		return fmt.Errorf("create credential store: %w", err)
+	}
+
+	// Persist auth sessions so the phone stays logged in across server restarts.
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("get config dir: %w", err)
+	}
+	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
+	sessions := serverauth.NewSessionManager(sessionsPath)
+
+	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions)
+	if err != nil {
+		return fmt.Errorf("create webauthn handler: %w", err)
+	}
+
+	setupMgr := serverauth.NewSetupManager()
+	inviteMgr := serverauth.NewInviteManager()
+
+	// Ensure the auth subdirectory exists so WatchFile can watch a quiet directory
+	// instead of the busy root state dir (eliminates spurious fsnotify wakeups).
+	authDir := filepath.Join(configDir, serverauth.SetupTokenDir)
+	if err := os.MkdirAll(authDir, 0700); err != nil {
+		log.Warn("failed to create auth dir", "path", authDir, "err", err)
+	}
+	setupTokenPath := filepath.Join(authDir, serverauth.SetupTokenFile)
+	go setupMgr.WatchFile(ctx, setupTokenPath)
+
+	// Register auth routes on the shared mux (accessible via both servers).
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+
+	// Register the gossip-style host advertisement endpoint (ADR-002) on the
+	// same shared mux/remote server -- see host_advertisement.go's doc
+	// comment for why this is the right integration point.
+	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
+	if err != nil {
+		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
+	} else {
+		hostRegistry, regErr := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+		if regErr != nil {
+			log.Warn("failed to open host registry, host advertisement disabled", "err", regErr)
+		} else {
+			selfAddresses := make([]string, 0, len(hostnames)+len(lanIPs))
+			for _, hn := range hostnames {
+				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", hn, remotePort))
+			}
+			for _, ip := range lanIPs {
+				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
+			}
+			advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
+			serverauth.RegisterHostAdvertisementRoute(srv.Mux(), hostIdentity, hostRegistry, advertiser, selfAddresses)
+			go advertiser.Run(ctx)
+		}
+	}
+
+	// Start the remote HTTPS server with auth middleware applied.
+	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
+		return fmt.Errorf("start remote server: %w", err)
+	}
+
+	// Store the HTTPS URL so /api/server-info can expose it to the settings UI.
+	srv.SetHTTPSURL(origin)
+
+	// Bootstrap: if no passkeys registered, print setup + CA QR codes.
+	if !store.HasCredentials() {
+		token, tokenErr := setupMgr.Init()
+		if tokenErr != nil {
+			log.Warn("Failed to generate setup token", "err", tokenErr)
+		} else {
+			setupURL := fmt.Sprintf("https://%s:%d/login?setup_token=%s", displayHost, remotePort, token)
+			caURL := fmt.Sprintf("https://%s:%d/auth/ca.pem", displayHost, remotePort)
+
+			fmt.Fprintf(os.Stderr, "\n╔══════════════════════════════════════════════════════╗\n")
+			fmt.Fprintf(os.Stderr, "║  REMOTE ACCESS ENABLED                               ║\n")
+			fmt.Fprintf(os.Stderr, "╠══════════════════════════════════════════════════════╣\n")
+			fmt.Fprintf(os.Stderr, "║  Local  (no auth): http://%-26s ║\n", localAddr)
+			fmt.Fprintf(os.Stderr, "║  Remote (HTTPS):   https://%s:%-5d               ║\n", displayHost, remotePort)
+			fmt.Fprintf(os.Stderr, "╠══════════════════════════════════════════════════════╣\n")
+			fmt.Fprintf(os.Stderr, "║  No passkeys registered — scan QR codes below:       ║\n")
+			fmt.Fprintf(os.Stderr, "╚══════════════════════════════════════════════════════╝\n")
+
+			fmt.Fprintf(os.Stderr, "\n── QR Code 1: Install CA certificate (trust HTTPS on your phone) ──\n")
+			if qrErr := serverauth.PrintQRToTerminal(caURL); qrErr != nil {
+				log.Warn("CA QR print failed", "err", qrErr)
+			}
+
+			fmt.Fprintf(os.Stderr, "\n── QR Code 2: Register passkey (after installing CA cert) ──\n")
+			if qrErr := serverauth.PrintQRToTerminal(setupURL); qrErr != nil {
+				log.Warn("Setup QR print failed", "err", qrErr)
+			}
+		}
+	}
+
+	log.Info("auth: remote access enabled", "port", remotePort, "rpID", rpID, "host", displayHost, "lan_ip", lanIPStr)
+	log.Info("auth: TLS CA cert", "path", caFile)
+	return nil
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+	}
+}
+
+// buildLogConfig converts application config to a log.LogConfig. consoleEnabled
+// controls whether output is also written to stdout (false for server/CLI modes,
+// true for interactive diagnostic commands).
+func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.LogConfig {
+	return &log.LogConfig{
+		LogsEnabled:    true,
+		LogsDir:        "",
+		LogMaxSize:     cfg.LogMaxSize,
+		LogMaxFiles:    cfg.LogMaxFiles,
+		LogMaxAge:      cfg.LogMaxAge,
+		LogCompress:    cfg.LogCompress,
+		UseSessionLogs: cfg.UseSessionLogs,
+		ConsoleEnabled: consoleEnabled,
+		FileEnabled:    true,
+		FileLevel:      log.DEBUG,
+	}
+}
+
+// mcpProxyURL builds the /mcp endpoint URL for the configured HTTP listen
+// address, normalizing wildcard/empty hosts (used for remote-access mode) to
+// "localhost" since the MCP proxy always dials the server on the same host.
+// Mirrors the URL shape SessionService.SetMCPServerURL builds for the
+// --mcp-config flag passed to newly launched sessions (server/server.go).
+// Returns "" if listenAddr has no parseable host:port.
+func mcpProxyURL(listenAddr string) string {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil || port == "" {
+		return ""
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/mcp"
+}
+
+// buildMCPDeps creates the minimal server dependencies needed by the MCP server.
+// Uses Phase 1+2 only (no tmux startup, no HTTP listener, no background pollers).
+// The ScrollbackManager is read-only in MCP mode — it reads from the same storage
+// path written by the HTTP server process.
+func buildMCPDeps() (session.InstanceStore, *services.SessionService, *scrollback.ScrollbackManager, *session.Storage, error) {
+	core, err := server.BuildCoreDeps()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("cannot determine home directory for scrollback storage: %w", err)
+	}
+	sbConfig := scrollback.DefaultScrollbackConfig()
+	sbConfig.StoragePath = filepath.Join(homeDir, ".stapler-squad", "sessions")
+	sbMgr := scrollback.NewScrollbackManager(sbConfig)
+
+	return core.Storage, core.SessionService, sbMgr, core.Storage, nil
+}
+
+// runListKnownHosts implements --list-known-hosts: open this instance's
+// local Workspace Host Registry (using the same state-dir resolution as
+// startRemoteAccess's session.NewHostRegistry call) and print its current
+// contents to out. Registry-open failures (e.g. a corrupted
+// host_registry.json) are returned as a single-line error, mirroring
+// runOpenURL's error-handling convention, rather than exiting via panic.
+func runListKnownHosts(out io.Writer) error {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("list-known-hosts: failed to resolve config directory: %w", err)
+	}
+	registry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	if err != nil {
+		return fmt.Errorf("list-known-hosts: failed to open host registry: %w", err)
+	}
+	formatKnownHosts(out, registry.Snapshot())
+	return nil
+}
+
+// formatKnownHosts renders entries as a human-readable table (host id,
+// advertised address(es), last-seen time) to out, sorted by HostID for
+// deterministic output. Separated from runListKnownHosts so the formatting
+// logic is directly testable without touching disk.
+func formatKnownHosts(out io.Writer, entries []session.RegistryEntry) {
+	if len(entries) == 0 {
+		fmt.Fprintln(out, "No known hosts.")
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].HostID.String() < entries[j].HostID.String()
+	})
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "HOST ID\tADVERTISED ADDRESS(ES)\tLAST SEEN")
+	for _, entry := range entries {
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
+			entry.HostID.String(),
+			strings.Join(entry.AdvertisedAddress, ", "),
+			entry.LastSeenAt.Local().Format(time.RFC3339))
+	}
+	_ = w.Flush()
+}

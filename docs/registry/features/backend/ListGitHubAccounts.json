@@ -1,0 +1,13 @@
+{
+  "id": "ListGitHubAccounts",
+  "type": "backend",
+  "service": "GitHubUserService",
+  "method": "ListGitHubAccounts",
+  "protoFile": "proto/session/v1/github_user.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestListGitHubAccounts_AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts"
+  ],
+  "lastModified": "2026-08-05T00:00:00-07:00"
+}

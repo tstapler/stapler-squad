@@ -1,0 +1,184 @@
+"use client";
+// +feature: ui:header-nav
+
+import { useState, useEffect, useRef } from "react";
+import { AppLink } from "@/components/ui/AppLink";
+import { usePathname } from "next/navigation";
+import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
+import { ApprovalNavBadge } from "@/components/sessions/ApprovalNavBadge";
+import { MemoryNavBadge } from "@/components/sessions/MemoryNavBadge";
+import { UnfinishedNavBadge } from "@/components/unfinished/UnfinishedNavBadge";
+import { StuckNavBadge } from "@/components/backlog-stuck/StuckNavBadge";
+import { DebugMenu } from "@/components/ui/DebugMenu";
+import { NotificationsNavBadge } from "@/components/ui/NotificationsNavBadge";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { useOmnibar } from "@/lib/contexts/OmnibarContext";
+import { routes } from "@/lib/routes";
+import { NAV_PAGES } from "@/lib/nav-pages";
+import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
+import { useAuth } from "@/lib/contexts/AuthContext";
+import { WorkspaceSwitcher } from "@/components/layout/WorkspaceSwitcher";
+import { BottomNav } from "@/components/layout/BottomNav";
+import { ConnectionIndicator } from "@/components/layout/ConnectionIndicator";
+import { ApprovalDrawer } from "@/components/sessions/ApprovalDrawer";
+import * as styles from "./Header.css";
+
+export function Header() {
+  const pathname = usePathname();
+  const { authenticated, authEnabled } = useAuth();
+  const [isDebugOpen, setIsDebugOpen] = useState(false);
+  const debugButtonTriggerRef = useRef<HTMLElement | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isApprovalDrawerOpen, setIsApprovalDrawerOpen] = useState(false);
+  const { togglePanel, getUnreadCount } = useNotifications();
+  const { flags } = useFeatureFlags();
+  const visibleNavPages = NAV_PAGES.filter((p) => !p.featureFlag || flags[p.featureFlag]);
+  const { open: openOmnibar } = useOmnibar();
+  const unreadCount = getUnreadCount();
+
+  // Close mobile menu on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isMobileMenuOpen) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isMobileMenuOpen]);
+
+  // Close mobile menu on route change
+  useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [pathname]);
+
+  return (
+    <>
+      <header className={styles.header}>
+        <div className={styles.container}>
+          <div className={styles.branding}>
+            <h1 className={styles.title}>Stapler Squad</h1>
+            <span className={styles.subtitle}>Session Manager</span>
+          </div>
+
+          <button
+            className={styles.hamburger}
+            aria-label={isMobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+            aria-expanded={isMobileMenuOpen}
+            aria-controls="mobile-nav"
+            onClick={() => setIsMobileMenuOpen((prev) => !prev)}
+          >
+            <span className={`${styles.hamburgerLine} ${isMobileMenuOpen ? styles.hamburgerLineOpen1 : ""}`} />
+            <span className={`${styles.hamburgerLine} ${isMobileMenuOpen ? styles.hamburgerLineOpen2 : ""}`} />
+            <span className={`${styles.hamburgerLine} ${isMobileMenuOpen ? styles.hamburgerLineOpen3 : ""}`} />
+          </button>
+
+          <nav
+            id="mobile-nav"
+            aria-label="Main navigation"
+            className={`${styles.nav} ${isMobileMenuOpen ? styles.navOpen : ""}`}
+          >
+            {visibleNavPages.map((page) => {
+              const isActive = page.href === routes.home
+                ? pathname === routes.home
+                : pathname?.startsWith(page.href);
+              const isSecondary = page.headerNav === false;
+              return (
+                <AppLink
+                  key={page.href}
+                  href={page.href}
+                  className={`${styles.navLink} ${isActive ? styles.active : ""} ${isSecondary ? styles.hamburgerOnlyNavLink : ""}`}
+                  aria-current={isActive ? "page" : undefined}
+                >
+                  {page.href === routes.unfinished ? (
+                    <><span>{page.label}</span><UnfinishedNavBadge inline={true} /><StuckNavBadge inline={true} /></>
+                  ) : page.href === routes.reviewQueue ? (
+                    <><span>{page.label}</span><ReviewQueueNavBadge inline={true} /></>
+                  ) : page.href === routes.notifications ? (
+                    <><span>{page.label}</span><NotificationsNavBadge inline={true} /></>
+                  ) : (
+                    page.label
+                  )}
+                </AppLink>
+              );
+            })}
+            {authEnabled && authenticated && (
+              <AppLink
+                href={routes.account}
+                className={`${styles.navLink} ${pathname === routes.account ? styles.active : ""}`}
+                aria-current={pathname === routes.account ? "page" : undefined}
+              >
+                Account
+              </AppLink>
+            )}
+          </nav>
+
+          <div className={styles.actions}>
+            <MemoryNavBadge />
+            <ConnectionIndicator />
+            <WorkspaceSwitcher />
+            <button
+              className={styles.newSessionButton}
+              onClick={openOmnibar}
+              aria-label="Create new session (⌘K)"
+              title="Create new session (⌘K)"
+            >
+              <span className={styles.newSessionIcon} aria-hidden="true">+</span>
+              <span className={styles.newSessionLabel}>New Session</span>
+            </button>
+            <ApprovalNavBadge onClick={() => setIsApprovalDrawerOpen(true)} />
+            <button
+              className={styles.notificationButton}
+              onClick={togglePanel}
+              aria-label="Open notifications"
+              title="Notifications"
+            >
+              <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+              </svg>
+              {unreadCount > 0 && (
+                <span className={styles.notificationBadge} aria-label={`${unreadCount} unread`}>{unreadCount}</span>
+              )}
+            </button>
+            <button
+              className={styles.debugButton}
+              onClick={(event) => {
+                debugButtonTriggerRef.current = event.currentTarget;
+                setIsDebugOpen(true);
+              }}
+              aria-label="Open debug menu"
+              title="Debug menu"
+            >
+              <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+              </svg>
+            </button>
+            <button
+              className={styles.helpButton}
+              onClick={() => {
+                window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
+              }}
+              aria-label="Show keyboard shortcuts"
+              title="Keyboard shortcuts (?)"
+            >
+              ?
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <BottomNav />
+
+      <DebugMenu
+        isOpen={isDebugOpen}
+        onClose={() => setIsDebugOpen(false)}
+        triggerRef={debugButtonTriggerRef}
+      />
+      <ApprovalDrawer
+        isOpen={isApprovalDrawerOpen}
+        onClose={() => setIsApprovalDrawerOpen(false)}
+      />
+    </>
+  );
+}

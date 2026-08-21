@@ -1,0 +1,10 @@
+{
+  "id": "session-bulk-select-row-mode",
+  "type": "frontend",
+  "component": "SessionRow",
+  "path": "web-app/src/components/sessions/SessionRow.tsx",
+  "description": "Bulk session selection in row mode — checkboxes, range select, undo toast",
+  "tested": true,
+  "testIds": ["bulk-select.spec.ts"],
+  "lastModified": "2026-06-23T00:00:00Z"
+}

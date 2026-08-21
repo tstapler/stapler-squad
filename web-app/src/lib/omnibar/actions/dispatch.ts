@@ -1,0 +1,122 @@
+import { OmnibarAction } from "./types";
+import { OmnibarSessionData } from "@/components/sessions/Omnibar";
+import { ThemeName } from "@/lib/contexts/ThemeContext";
+import type { AnalyticsProvider } from "@/lib/analytics/types";
+
+export interface ActionDeps {
+  navigate: (sessionId: string) => void;
+  createSession: (data: OmnibarSessionData) => Promise<void>;
+  pauseSession: (id: string) => Promise<void>;
+  resumeSession: (id: string) => Promise<void>;
+  deleteSession: (id: string) => Promise<void>;
+  close: () => void;
+  setTheme: (name: ThemeName) => void;
+  /**
+   * runWorkflow fires a workflow by slug + optional arg.
+   * Optional to avoid breaking existing call sites; absent dep silently no-ops.
+   */
+  runWorkflow?: (slug: string, arg: string) => void;
+  /** Optional analytics provider — tracking is best-effort; missing it never blocks the action */
+  analytics?: Pick<AnalyticsProvider, "track">;
+  /** Creates a backlog item from a free-text chat message, then navigates to the Backlog page */
+  createBacklogItemFromChat: (text: string) => Promise<void>;
+}
+
+export function dispatchOmnibarAction(
+  action: OmnibarAction,
+  deps: ActionDeps
+): void {
+  /** Convenience: call track if analytics dep is provided — best-effort, never throws */
+  const track = deps.analytics ? deps.analytics.track.bind(deps.analytics) : null;
+
+  switch (action.type) {
+    case "navigate_session":
+      if (track) track({ name: "omnibar.navigate_session", category: "user_action" });
+      deps.navigate(action.sessionId);
+      deps.close();
+      return;
+    case "create_session": {
+      const isAutonomous = action.sessionType === "autonomous";
+      if (track) track({ name: "omnibar.create_session", category: "user_action", labels: { sessionType: action.sessionType } });
+      void deps.createSession({
+        title: action.title ?? "",
+        path: action.path,
+        sessionType: isAutonomous ? undefined : action.sessionType as "directory" | "new_worktree" | "existing_worktree" | "one_off",
+        branch: action.branch,
+        program: action.program ?? "",
+        autoYes: false,
+        autonomousMode: isAutonomous ? true : undefined,
+        permissionMode: isAutonomous ? "auto" : undefined,
+      });
+      deps.close();
+      return;
+    }
+    case "clone_session":
+      if (track) track({ name: "omnibar.clone_session", category: "user_action" });
+      void deps.createSession({
+        title: `${action.label} (clone)`,
+        path: action.sourcePath,
+        program: action.sourceProgram,
+        sessionType: "new_worktree",
+        autoYes: false,
+      });
+      deps.close();
+      return;
+    case "pause_session":
+      if (track) track({ name: "omnibar.pause_session", category: "user_action" });
+      void deps.pauseSession(action.sessionId);
+      deps.close();
+      return;
+    case "resume_session":
+      if (track) track({ name: "omnibar.resume_session", category: "user_action" });
+      void deps.resumeSession(action.sessionId);
+      deps.close();
+      return;
+    case "delete_session":
+      if (track) track({ name: "omnibar.delete_session", category: "user_action" });
+      void deps.deleteSession(action.sessionId);
+      deps.close();
+      return;
+    case "set_theme":
+      if (track) track({ name: "omnibar.set_theme", category: "user_action" });
+      deps.setTheme(action.themeName);
+      deps.close();
+      return;
+    case "auto_fix":
+      if (track) track({ name: "omnibar.auto_fix", category: "user_action" });
+      void deps.createSession({
+        title: action.title,
+        path: "",
+        sessionType: undefined,
+        program: action.program ?? "",
+        autoYes: false,
+        autonomousMode: true,
+        permissionMode: "auto",
+      });
+      deps.close();
+      return;
+    case "run_workflow":
+      if (track) track({ name: "omnibar.run_workflow", category: "user_action", labels: { slug: action.workflowSlug } });
+      deps.runWorkflow?.(action.workflowSlug, action.workflowArg);
+      deps.close();
+      return;
+    case "create_alias_session":
+      if (track) track({ name: "omnibar.create_alias_session", category: "user_action", labels: { aliasName: action.aliasName } });
+      void deps.createSession({
+        title: action.label?.trim() || action.aliasName,
+        path: "",
+        program: "",
+        autoYes: false,
+        aliasName: action.aliasName,
+        branch: action.branch,
+      });
+      deps.close();
+      return;
+    case "chat_backlog_item":
+      if (track) track({ name: "omnibar.chat_backlog_item", category: "user_action" });
+      void deps.createBacklogItemFromChat(action.text);
+      deps.close();
+      return;
+    // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅
+  }
+}

@@ -1,0 +1,930 @@
+"use client";
+
+import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
+import { Tree } from "react-arborist";
+import type { NodeApi, TreeApi } from "react-arborist";
+import type { FileNode } from "@/gen/session/v1/types_pb";
+import { fetchDirectoryFiles, searchFiles } from "@/lib/hooks/useFileService";
+import { getFileIcon } from "@/lib/utils/fileIcons";
+import { truncateMiddle } from "@/lib/utils/truncateMiddle";
+import type { LineStats } from "@/lib/utils/gitStatus";
+import {
+  container, loading as loadingClass, error as errorClass, retryButton, empty,
+  node as nodeClass, selected, keyboardFocused, nodeInner, icon as iconClass, name as nameClass, ignored,
+  symlinkBadge, statusBadge, spinner, inlineError,
+  searchContainer, searchInput, toolbar, toolbarButton, toolbarLabel,
+  treeWrapper, mark, searchEmpty, searchTruncated as searchTruncatedClass,
+  searchOverlay, lineStats as lineStatsClass, lineStatsAdd, lineStatsDel,
+} from "./FileTree.css";
+import { vars } from "@/styles/theme.css";
+
+// ---- Data model ----
+
+export interface TreeNode {
+  id: string;        // full relative path (unique within worktree)
+  name: string;
+  isDir: boolean;
+  size: bigint;
+  gitStatus: string;
+  isSymlink: boolean;
+  symlinkTarget: string;
+  isIgnored: boolean;
+  children?: TreeNode[]; // undefined = not loaded, [] = empty dir
+}
+
+// Git status colors — mapped to theme tokens so they respond to light/dark mode.
+const GIT_STATUS_COLORS: Record<string, string> = {
+  M: vars.color.gitModified,
+  A: vars.color.gitAdded,
+  D: vars.color.gitDeleted,
+  "?": vars.color.gitUntracked,
+  R: vars.color.gitRenamed,
+  U: vars.color.gitConflict,
+};
+
+// ---- Props ----
+
+interface FileTreeProps {
+  sessionId: string;
+  baseUrl: string;
+  /** Called when a file (non-directory) is selected. */
+  onFileSelect: (path: string) => void;
+  /** Map of relative path → git status letter. */
+  gitStatusMap?: Map<string, string>;
+  /** Map of relative path → added/removed line counts. */
+  lineStatsMap?: Map<string, LineStats>;
+  /** Sort order for tree rows — name or file type/extension (dirs always first). */
+  sortBy?: SortMode;
+  /** When true, show only changed files and their ancestor directories. */
+  filterChangedOnly?: boolean;
+  /** Selected file path (for visual highlight). */
+  selectedPath?: string | null;
+  /** Whether to include gitignored files. */
+  includeIgnored?: boolean;
+  /** Search/filter term — filters tree by name/path substring. */
+  searchTerm?: string;
+  /** Called when search results change (count, truncated). null = browse mode. */
+  onSearchResults?: (count: number | null, truncated: boolean) => void;
+}
+
+// ---- Helpers ----
+
+function fileNodeToTreeNode(fn: FileNode): TreeNode {
+  return {
+    id: fn.path || fn.name,
+    name: fn.name,
+    isDir: fn.isDir,
+    size: fn.size,
+    gitStatus: fn.gitStatus,
+    isSymlink: fn.isSymlink,
+    symlinkTarget: fn.symlinkTarget,
+    isIgnored: fn.isIgnored,
+    children: fn.isDir ? undefined : undefined,
+  };
+}
+
+/**
+ * Build tree data from the directory contents map.
+ * Recursively attaches loaded children to each directory node.
+ * Exported for unit testing.
+ */
+export function buildTreeData(
+  nodes: TreeNode[],
+  dirContents: Map<string, TreeNode[]>
+): TreeNode[] {
+  return nodes.map((node) => {
+    if (!node.isDir) return node;
+    const loaded = dirContents.get(node.id);
+    if (loaded === undefined) {
+      // children: [] makes isLeaf=false (react-arborist checks Array.isArray).
+      // This allows node.toggle() to fire, which triggers onToggle → handleToggle → loadDirectory.
+      // Children will be populated lazily after the first toggle.
+      return { ...node, children: [] };
+    }
+    return {
+      ...node,
+      children: buildTreeData(loaded, dirContents),
+    };
+  });
+}
+
+// ---- Sort ----
+
+export type SortMode = "name" | "type";
+
+function sortKey(node: TreeNode, sortBy: SortMode): string {
+  if (sortBy === "name" || node.isDir) return "";
+  const dot = node.name.lastIndexOf(".");
+  return dot > 0 ? node.name.slice(dot + 1).toLowerCase() : "";
+}
+
+/**
+ * Sort tree data (dirs always first) by name, or by file extension then name
+ * when sortBy is "type". Exported for unit testing.
+ */
+export function sortTreeData(nodes: TreeNode[], sortBy: SortMode): TreeNode[] {
+  const sorted = [...nodes].sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    const keyDiff = sortKey(a, sortBy).localeCompare(sortKey(b, sortBy));
+    if (keyDiff !== 0) return keyDiff;
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  });
+  return sorted.map((n) => (n.children ? { ...n, children: sortTreeData(n.children, sortBy) } : n));
+}
+
+// ---- Filter: changed files only ----
+
+/**
+ * Every ancestor directory path of every changed file, so a "changed only"
+ * filter can keep ancestor directories visible even when they haven't been
+ * expanded/loaded yet (gitStatusMap covers the whole repo, not just loaded
+ * subtrees).
+ */
+export function buildChangedAncestorPrefixes(gitStatusMap: Map<string, string>): Set<string> {
+  const prefixes = new Set<string>();
+  for (const path of gitStatusMap.keys()) {
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      prefixes.add(parts.slice(0, i).join("/"));
+    }
+  }
+  return prefixes;
+}
+
+/**
+ * Filter tree data down to changed files and their ancestor directories.
+ * Operates only on already-loaded/searched nodes — never triggers a fetch.
+ * Exported for unit testing.
+ */
+export function filterChangedTreeData(
+  nodes: TreeNode[],
+  gitStatusMap: Map<string, string>,
+  changedAncestorPrefixes: Set<string>
+): TreeNode[] {
+  const result: TreeNode[] = [];
+  for (const node of nodes) {
+    if (node.isDir) {
+      if (!changedAncestorPrefixes.has(node.id)) continue;
+      const children = node.children
+        ? filterChangedTreeData(node.children, gitStatusMap, changedAncestorPrefixes)
+        : node.children;
+      result.push({ ...node, children });
+    } else if (gitStatusMap.has(node.id)) {
+      result.push(node);
+    }
+  }
+  return result;
+}
+
+/**
+ * Compute which directories have any git-modified descendants.
+ */
+function computeDirStatuses(
+  nodes: TreeNode[],
+  gitStatusMap: Map<string, string>,
+  result: Map<string, string>
+): boolean {
+  let anyStatus = false;
+  for (const node of nodes) {
+    if (!node.isDir) {
+      const status = gitStatusMap.get(node.id);
+      if (status) {
+        anyStatus = true;
+      }
+    } else if (node.children) {
+      const childHas = computeDirStatuses(node.children, gitStatusMap, result);
+      if (childHas) {
+        result.set(node.id, "●");
+        anyStatus = true;
+      }
+    }
+  }
+  return anyStatus;
+}
+
+/**
+ * Build a nested TreeNode tree from a flat list of FileNode search results.
+ * Ancestor directories are synthesised from file path segments.
+ */
+function buildSearchTree(files: FileNode[]): TreeNode[] {
+  const nodeMap = new Map<string, TreeNode>();
+
+  for (const file of files) {
+    const filePath = file.path || file.name;
+    const parts = filePath.split("/");
+
+    // Create ancestor directory nodes for each path segment.
+    for (let i = 1; i < parts.length; i++) {
+      const dirPath = parts.slice(0, i).join("/");
+      if (!nodeMap.has(dirPath)) {
+        nodeMap.set(dirPath, {
+          id: dirPath,
+          name: parts[i - 1],
+          isDir: true,
+          size: BigInt(0),
+          gitStatus: "",
+          isSymlink: false,
+          symlinkTarget: "",
+          isIgnored: false,
+          children: [],
+        });
+      }
+    }
+
+    // Create the file node (reuse existing converter for consistency).
+    nodeMap.set(filePath, fileNodeToTreeNode(file));
+  }
+
+  // Wire children into parents.
+  const roots: TreeNode[] = [];
+  for (const [path, node] of nodeMap) {
+    const lastSlash = path.lastIndexOf("/");
+    if (lastSlash === -1) {
+      roots.push(node);
+    } else {
+      const parentPath = path.slice(0, lastSlash);
+      const parent = nodeMap.get(parentPath);
+      if (parent?.children) {
+        parent.children.push(node);
+      }
+    }
+  }
+
+  // Sort recursively: directories first, then alphabetical.
+  function sortNodes(nodes: TreeNode[]): TreeNode[] {
+    nodes.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    });
+    for (const node of nodes) {
+      if (node.children) sortNodes(node.children);
+    }
+    return nodes;
+  }
+
+  return sortNodes(roots);
+}
+
+// ---- Node renderer ----
+
+interface NodeRendererProps {
+  node: NodeApi<TreeNode>;
+  style: React.CSSProperties;
+  dragHandle?: (el: HTMLDivElement | null) => void;
+  gitStatusMap: Map<string, string>;
+  lineStatsMap: Map<string, LineStats>;
+  dirStatusMap: Map<string, string>;
+  loadingPaths: Set<string>;
+  errorPaths: Map<string, string>;
+  selectedPath: string | null | undefined;
+  includeIgnored: boolean;
+  searchTerm: string;
+  containerWidth: number;
+}
+
+function highlightMatch(name: string, term: string): React.ReactNode {
+  if (!term) return name;
+  const idx = name.toLowerCase().indexOf(term.toLowerCase());
+  if (idx === -1) return name;
+  return (
+    <>
+      {name.slice(0, idx)}
+      <mark className={mark}>{name.slice(idx, idx + term.length)}</mark>
+      {name.slice(idx + term.length)}
+    </>
+  );
+}
+
+function NodeRenderer({
+  node,
+  style,
+  gitStatusMap,
+  lineStatsMap,
+  dirStatusMap,
+  loadingPaths,
+  errorPaths,
+  selectedPath,
+  searchTerm,
+  containerWidth,
+}: NodeRendererProps) {
+  const data = node.data;
+  // Per-node char budget accounts for indent depth (16px per level + 8px base padding).
+  const maxChars = Math.floor((containerWidth - 48 - (node.level * 16 + 8)) / 7.5);
+  const isSelected = selectedPath === data.id;
+  const isLoading = loadingPaths.has(data.id);
+  const loadError = errorPaths.get(data.id);
+
+  // Determine git status badge.
+  const statusLetter = data.isDir
+    ? dirStatusMap.get(data.id)
+    : gitStatusMap.get(data.id) || data.gitStatus;
+  const statusColor = statusLetter ? GIT_STATUS_COLORS[statusLetter] : undefined;
+  const lineStats = data.isDir ? undefined : lineStatsMap.get(data.id);
+
+  const icon = data.isSymlink
+    ? "⇢"
+    : data.isDir
+    ? node.isOpen
+      ? "▾"
+      : "▸"
+    : getFileIcon(data.name);
+
+  return (
+    <div
+      style={style}
+      title={data.id}
+      className={`${nodeClass} ${isSelected ? selected : ""} ${node.isFocused ? keyboardFocused : ""} ${data.isIgnored ? ignored : ""}`}
+      role="treeitem"
+      aria-level={node.level + 1}
+      aria-selected={isSelected}
+      aria-expanded={data.isDir ? node.isOpen : undefined}
+      onClick={() => {
+        // Directories toggle open/close (fires onToggle → handleToggle → loadDirectory).
+        // Files/symlinks activate (fires onActivate → onFileSelect).
+        if (data.isDir) node.toggle();
+        else node.activate();
+      }}
+    >
+      <div
+        className={nodeInner}
+        style={{ paddingLeft: `${node.level * 16 + 8}px` }}
+      >
+        <span className={iconClass}>{icon}</span>
+        <span className={nameClass}>
+          {searchTerm
+            ? highlightMatch(data.name, searchTerm)
+            : truncateMiddle(data.name, maxChars)}
+        </span>
+        {data.isSymlink && (
+          <span className={symlinkBadge} title={`→ ${data.symlinkTarget}`}>
+            symlink
+          </span>
+        )}
+        {isLoading && <span className={spinner} />}
+        {loadError && (
+          <span className={inlineError} title={loadError}>
+            ⚠
+          </span>
+        )}
+        {statusLetter && (
+          <span
+            className={statusBadge}
+            style={{ color: statusColor }}
+            title={`Git status: ${statusLetter}`}
+          >
+            {statusLetter}
+          </span>
+        )}
+        {lineStats && (
+          <span className={lineStatsClass} title={`+${lineStats.add} -${lineStats.del}`}>
+            {lineStats.add > 0 && <span className={lineStatsAdd}>+{lineStats.add}</span>}
+            {lineStats.del > 0 && <span className={lineStatsDel}>-{lineStats.del}</span>}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Imperative handle ----
+
+export interface FileTreeHandle {
+  revealPath: (path: string) => void;
+  collapseAll: () => void;
+}
+
+// ---- Main component ----
+
+// Stable empty map/set to avoid creating new references on every render when
+// the corresponding prop is not provided, which would break useMemo dependency checks.
+const EMPTY_GIT_STATUS_MAP = new Map<string, string>();
+const EMPTY_LINE_STATS_MAP = new Map<string, LineStats>();
+
+export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree({
+  sessionId,
+  baseUrl,
+  onFileSelect,
+  gitStatusMap = EMPTY_GIT_STATUS_MAP,
+  lineStatsMap = EMPTY_LINE_STATS_MAP,
+  sortBy = "name",
+  filterChangedOnly = false,
+  selectedPath,
+  includeIgnored = false,
+  searchTerm = "",
+  onSearchResults,
+}: FileTreeProps, ref) {
+  // Map of directory path → loaded TreeNode children.
+  const [dirContents, setDirContents] = useState<Map<string, TreeNode[]>>(new Map());
+  // Tracks which paths are currently loading.
+  // loadingPathsRef is the source of truth; loadingPaths state is kept in sync for renders.
+  const loadingPathsRef = useRef<Set<string>>(new Set());
+  const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set());
+  // Tracks which paths have load errors.
+  const [errorPaths, setErrorPaths] = useState<Map<string, string>>(new Map());
+  // Root loading/error state.
+  const [rootLoading, setRootLoading] = useState(true);
+  const [rootError, setRootError] = useState<string | null>(null);
+
+  // Search mode state. null = browse mode, array = search mode.
+  const [searchResults, setSearchResults] = useState<TreeNode[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchTruncated, setSearchTruncated] = useState(false);
+
+  // Request ID ref prevents stale search responses from overwriting newer results.
+  const searchRequestIdRef = useRef(0);
+  // Timer ref for debouncing search input.
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track whether we were in search mode to trigger closeAll on exit.
+  const wasInSearchModeRef = useRef(false);
+  // Snapshot of open node IDs taken just before entering search mode.
+  const savedOpenStateRef = useRef<Record<string, boolean>>({});
+
+  const treeRef = useRef<TreeApi<TreeNode> | undefined>(undefined);
+  // Tracks the timestamp of the last 'g' keypress for the gg chord.
+  const lastGRef = useRef<number>(0);
+
+  // ResizeObserver: track container dimensions for react-window (requires numeric width/height).
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dims, setDims] = useState({ w: 300, h: 600 });
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      requestAnimationFrame(() => {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setDims({ w: Math.floor(width), h: Math.floor(height) });
+        }
+      });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Load a directory's children.
+  const loadDirectory = useCallback(
+    async (dirPath: string) => {
+      if (loadingPathsRef.current.has(dirPath)) return;
+
+      loadingPathsRef.current.add(dirPath);
+      setLoadingPaths(new Set(loadingPathsRef.current));
+      setErrorPaths((prev) => {
+        const next = new Map(prev);
+        next.delete(dirPath);
+        return next;
+      });
+
+      try {
+        const response = await fetchDirectoryFiles(
+          sessionId,
+          dirPath === "." ? "." : dirPath,
+          includeIgnored,
+          baseUrl
+        );
+        const nodes = (response.files || []).map(fileNodeToTreeNode);
+
+        setDirContents((prev) => {
+          const next = new Map(prev);
+          next.set(dirPath, nodes);
+          return next;
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to load directory";
+        setErrorPaths((prev) => new Map(prev).set(dirPath, msg));
+      } finally {
+        loadingPathsRef.current.delete(dirPath);
+        setLoadingPaths(new Set(loadingPathsRef.current));
+      }
+    },
+    [sessionId, baseUrl, includeIgnored]
+  );
+
+  // Stable ref to latest loadDirectory — allows revealPathImpl to always call the
+  // latest version without closing over a stale function instance.
+  const loadDirectoryRef = useRef(loadDirectory);
+  useEffect(() => {
+    loadDirectoryRef.current = loadDirectory;
+  }, [loadDirectory]);
+
+  // Load root on mount and whenever session, base URL, or ignored-files setting changes.
+  useEffect(() => {
+    setDirContents(new Map());
+    setRootLoading(true);
+    setRootError(null);
+
+    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl)
+      .then((response) => {
+        const nodes = (response.files || []).map(fileNodeToTreeNode);
+        setDirContents(new Map([[".", nodes]]));
+      })
+      .catch((err) => {
+        setRootError(err instanceof Error ? err.message : "Failed to load files");
+      })
+      .finally(() => {
+        setRootLoading(false);
+      });
+  }, [sessionId, baseUrl, includeIgnored]);
+
+  // Debounced backend search: fires when searchTerm changes.
+  useEffect(() => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+
+    if (!searchTerm || searchTerm.length < 2) {
+      // Exit search mode.
+      setSearchResults(null);
+      setSearchLoading(false);
+      setSearchTruncated(false);
+      onSearchResults?.(null, false);
+      return;
+    }
+
+    setSearchLoading(true);
+
+    searchTimerRef.current = setTimeout(async () => {
+      const requestId = ++searchRequestIdRef.current;
+
+      try {
+        const response = await searchFiles(sessionId, searchTerm, includeIgnored, baseUrl);
+        if (requestId !== searchRequestIdRef.current) return; // stale response
+
+        const tree = buildSearchTree(response.files || []);
+        setSearchResults(tree);
+        setSearchTruncated(response.truncated);
+        setSearchLoading(false);
+        onSearchResults?.(response.totalMatches, response.truncated);
+      } catch {
+        if (requestId !== searchRequestIdRef.current) return;
+        setSearchResults([]);
+        setSearchLoading(false);
+        onSearchResults?.(0, false);
+      }
+    }, 300);
+
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [searchTerm, sessionId, includeIgnored, baseUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Open all tree nodes when entering search mode; restore prior state when leaving.
+  useEffect(() => {
+    if (searchResults !== null) {
+      if (!wasInSearchModeRef.current) {
+        // Snapshot expanded state before entering search for restoration on exit.
+        savedOpenStateRef.current = { ...(treeRef.current?.openState ?? {}) };
+        wasInSearchModeRef.current = true;
+      }
+      // Delay to allow react-arborist to render the new data before calling openAll.
+      const timer = setTimeout(() => {
+        treeRef.current?.openAll();
+      }, 0);
+      return () => clearTimeout(timer);
+    } else if (wasInSearchModeRef.current) {
+      wasInSearchModeRef.current = false;
+      // Restore the browse-mode open state instead of collapsing everything.
+      const saved = savedOpenStateRef.current;
+      treeRef.current?.closeAll();
+      for (const [id, isOpen] of Object.entries(saved)) {
+        if (isOpen) treeRef.current?.open(id);
+      }
+      savedOpenStateRef.current = {};
+    }
+  }, [searchResults]);
+
+  // Memoized tree computations — only recompute when their inputs actually change.
+  const treeData = useMemo(
+    () => buildTreeData(dirContents.get(".") ?? [], dirContents),
+    [dirContents]
+  );
+  const browsedData = useMemo(
+    () => searchResults ?? treeData,
+    [searchResults, treeData]
+  );
+  const changedAncestorPrefixes = useMemo(
+    () => buildChangedAncestorPrefixes(gitStatusMap),
+    [gitStatusMap]
+  );
+  const filteredData = useMemo(
+    () =>
+      filterChangedOnly
+        ? filterChangedTreeData(browsedData, gitStatusMap, changedAncestorPrefixes)
+        : browsedData,
+    [browsedData, filterChangedOnly, gitStatusMap, changedAncestorPrefixes]
+  );
+  const displayedData = useMemo(
+    () => sortTreeData(filteredData, sortBy),
+    [filteredData, sortBy]
+  );
+  const dirStatusMap = useMemo(() => {
+    const m = new Map<string, string>();
+    computeDirStatuses(displayedData, gitStatusMap, m);
+    return m;
+  }, [displayedData, gitStatusMap]);
+
+  // Set of all known directory ids across all loaded children.
+  // Allows handleToggle to skip non-directory ids without re-traversing the tree.
+  const knownDirIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const nodes of dirContents.values()) {
+      for (const node of nodes) {
+        if (node.isDir) s.add(node.id);
+      }
+    }
+    return s;
+  }, [dirContents]);
+
+  // Row height: 44px on narrow (mobile) viewports for touch target compliance, 28px otherwise.
+  const rowHeight = dims.w < 640 ? 44 : 28;
+
+  // AbortController for in-flight revealPath operations — ensures only one runs at a time.
+  const revealAbortRef = useRef<AbortController | null>(null);
+
+  // Expand ancestor directories and scroll to targetPath.
+  const revealPathImpl = useCallback(async (targetPath: string) => {
+    revealAbortRef.current?.abort();
+    const controller = new AbortController();
+    revealAbortRef.current = controller;
+    const signal = controller.signal;
+
+    // Build ancestor paths: e.g. 'a/b/c.tsx' → ['a', 'a/b']
+    const segments = targetPath.split("/");
+    const ancestors: string[] = [];
+    for (let i = 1; i < segments.length; i++) {
+      ancestors.push(segments.slice(0, i).join("/"));
+    }
+
+    for (const ancestorPath of ancestors) {
+      if (signal.aborted) return;
+      // Load if not already loaded.
+      if (!dirContents.has(ancestorPath)) {
+        try {
+          await loadDirectoryRef.current(ancestorPath);
+          await new Promise<void>((r) => setTimeout(r, 0));
+        } catch {
+          // Directory load failed; stop reveal at this ancestor
+          return;
+        }
+      }
+      // Open the directory in the tree.
+      treeRef.current?.open(ancestorPath);
+    }
+
+    if (signal.aborted) return;
+    // Scroll the target node into view.
+    requestAnimationFrame(() => {
+      treeRef.current?.scrollTo(targetPath);
+    });
+  }, [dirContents]);
+
+  // Expose imperative handle to parent refs.
+  useImperativeHandle(ref, () => ({
+    collapseAll: () => {
+      treeRef.current?.closeAll();
+    },
+    revealPath: (path: string) => {
+      void revealPathImpl(path);
+    },
+  }), [revealPathImpl]);
+
+  const handleActivate = useCallback(
+    (node: NodeApi<TreeNode>) => {
+      const data = node.data;
+      if (!data.isDir && !data.isSymlink) {
+        onFileSelect(data.id);
+      }
+    },
+    [onFileSelect]
+  );
+
+  const handleToggle = useCallback(
+    (id: string) => {
+      // load-bearing guard: prevents openAll() fan-out in search mode.
+      if (searchResults !== null) return;
+      // Only attempt to load known directory ids; ignore files and unknown ids.
+      if (!knownDirIds.has(id)) return;
+      // Load if not yet fetched, or retry if a previous load errored.
+      if (!dirContents.has(id) || errorPaths.has(id)) {
+        loadDirectory(id);
+      }
+    },
+    [dirContents, errorPaths, knownDirIds, loadDirectory, searchResults]
+  );
+
+  const handleTreeKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const tree = treeRef.current;
+      if (!tree) return;
+
+      // Don't intercept modified shortcuts (Ctrl+G, Cmd+K, Alt+j, etc.)
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const focusedNode = tree.focusedNode;
+      const visible = tree.visibleNodes;
+      if (!visible || visible.length === 0) return;
+
+      switch (e.key) {
+        case "j": {
+          e.preventDefault();
+          const idx = focusedNode ? visible.findIndex((n) => n.id === focusedNode.id) : -1;
+          const next = visible[idx + 1];
+          if (next) tree.focus(next.id);
+          break;
+        }
+        case "k": {
+          e.preventDefault();
+          const idx = focusedNode ? visible.findIndex((n) => n.id === focusedNode.id) : -1;
+          const prev = visible[Math.max(0, idx - 1)];
+          if (prev) tree.focus(prev.id);
+          break;
+        }
+        case "l": {
+          e.preventDefault();
+          if (!focusedNode) break;
+          if (focusedNode.data.isDir) {
+            tree.open(focusedNode.id);
+          } else {
+            focusedNode.activate();
+          }
+          break;
+        }
+        case "h": {
+          e.preventDefault();
+          if (!focusedNode) break;
+          if (focusedNode.data.isDir && focusedNode.isOpen) {
+            tree.close(focusedNode.id);
+          } else if (focusedNode.parent && !focusedNode.parent.isRoot) {
+            tree.focus(focusedNode.parent.id);
+          }
+          break;
+        }
+        case "g": {
+          e.preventDefault();
+          const now = Date.now();
+          if (now - lastGRef.current < 400) {
+            const first = visible[0];
+            if (first) tree.focus(first.id);
+            lastGRef.current = 0;
+          } else {
+            lastGRef.current = now;
+          }
+          break;
+        }
+        case "G": {
+          e.preventDefault();
+          const last = visible[visible.length - 1];
+          if (last) tree.focus(last.id);
+          break;
+        }
+        case "Enter": {
+          if (!focusedNode) break;
+          e.preventDefault();
+          if (focusedNode.data.isDir) {
+            focusedNode.toggle();
+          } else {
+            focusedNode.activate();
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [] // treeRef and lastGRef are refs — stable, no deps needed
+  );
+
+  if (rootLoading) {
+    return (
+      <div className={container}>
+        <div className={loadingClass}>
+          <span className={spinner} />
+          Loading files…
+        </div>
+      </div>
+    );
+  }
+
+  if (rootError) {
+    return (
+      <div className={container}>
+        <div className={errorClass}>
+          <span>⚠ {rootError}</span>
+          <button
+            className={retryButton}
+            onClick={() => {
+              setRootLoading(true);
+              setRootError(null);
+              fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl)
+                .then((response) => {
+                  const nodes = (response.files || []).map(fileNodeToTreeNode);
+                  setDirContents(new Map([[".", nodes]]));
+                })
+                .catch((err) => {
+                  setRootError(err instanceof Error ? err.message : "Failed to load files");
+                })
+                .finally(() => setRootLoading(false));
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Search empty state.
+  if (searchResults !== null && searchResults.length === 0) {
+    return (
+      <div className={container}>
+        <div className={searchEmpty}>No files match &ldquo;{searchTerm}&rdquo;</div>
+      </div>
+    );
+  }
+
+  if (treeData.length === 0 && searchResults === null) {
+    return (
+      <div className={container}>
+        <div className={empty}>This directory is empty.</div>
+      </div>
+    );
+  }
+
+  // Filter-to-changed empty state — distinct from "directory is empty" above.
+  if (filterChangedOnly && displayedData.length === 0) {
+    return (
+      <div className={container}>
+        <div className={empty}>No changed files.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={container}
+      ref={containerRef}
+      tabIndex={0}
+      onKeyDown={handleTreeKeyDown}
+      role="tree"
+      title="Navigate with j/k/h/l  •  Enter to open  •  gg/G for top/bottom"
+      aria-label="File tree. Use j/k to navigate, l/Enter to open, h to go up."
+    >
+      {searchTruncated && (
+        <div className={searchTruncatedClass}>
+          Showing first 500 results — refine your search for more specific matches.
+        </div>
+      )}
+      <div style={{ position: "relative", flex: 1 }}>
+        {searchLoading && (
+          <div className={searchOverlay}>
+            <span className={spinner} />
+          </div>
+        )}
+        <Tree<TreeNode>
+          ref={treeRef}
+          data={displayedData}
+          idAccessor={(node) => node.id}
+          childrenAccessor={(node) => {
+            if (!node.isDir) return null;
+            // Returning [] (not null) for all dirs keeps isLeaf=false so node.toggle() works.
+            // Returning null would make the node a leaf and prevent any toggle from firing.
+            return node.children ?? [];
+          }}
+          disableDrag={true}
+          disableDrop={true}
+          onActivate={handleActivate}
+          onToggle={handleToggle}
+          rowHeight={rowHeight}
+          openByDefault={false}
+          width={dims.w}
+          height={dims.h}
+          searchTerm={searchResults === null ? (searchTerm || undefined) : undefined}
+          searchMatch={(node, term) => {
+            const t = term.toLowerCase();
+            return (
+              node.data.name.toLowerCase().includes(t) ||
+              node.data.id.toLowerCase().includes(t)
+            );
+          }}
+        >
+          {({ node, style, dragHandle }) => (
+            <NodeRenderer
+              node={node}
+              style={style}
+              dragHandle={dragHandle}
+              gitStatusMap={gitStatusMap}
+              lineStatsMap={lineStatsMap}
+              dirStatusMap={dirStatusMap}
+              loadingPaths={loadingPaths}
+              errorPaths={errorPaths}
+              selectedPath={selectedPath}
+              includeIgnored={includeIgnored}
+              searchTerm={searchTerm}
+              containerWidth={dims.w}
+            />
+          )}
+        </Tree>
+      </div>
+    </div>
+  );
+});

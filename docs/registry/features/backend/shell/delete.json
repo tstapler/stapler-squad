@@ -1,0 +1,11 @@
+{
+  "id": "shell:delete",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "DeleteShell",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-21T12:39:06.59282763-07:00"
+}

@@ -1,0 +1,51 @@
+import type { Feature } from '../types';
+
+export const rulesFeatures = {
+  'bulk-upsert-rules': {
+    id: 'bulk-upsert-rules',
+    title: 'Bulk Upsert Rules',
+    description: 'Bulk creates or updates multiple session rules in a single request.',
+    rpcIds: ['BulkUpsertRules'],
+    componentPaths: [],
+    testIds: [],
+    status: 'experimental',
+    since: '1.0.0',
+  },
+  'export-rules': {
+    id: 'export-rules',
+    title: 'Export Rules',
+    description: 'Exports the current set of session rules to a portable format.',
+    rpcIds: ['ExportRules'],
+    componentPaths: [],
+    testIds: [],
+    status: 'experimental',
+    since: '1.0.0',
+  },
+  'generate-suggested-rule': {
+    id: 'generate-suggested-rule',
+    title: 'Generate Suggested Rule',
+    description: 'Uses AI to generate suggested rules based on analytics gaps and session patterns.',
+    rpcIds: ['GenerateSuggestedRule'],
+    componentPaths: [],
+    testIds: [
+      'TestGenerateSuggestedRule_AnalyticsGaps_ReturnsSuggestions',
+      'TestGenerateSuggestedRule_UnspecifiedSource_ReturnsError',
+      'TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented',
+      'TestGenerateSuggestedRule_NeverCallsUpsert',
+      'TestGenerateSuggestedRule_ReturnsOnCtxCancellation',
+      'TestGenerateSuggestedRule_Integration_MockAI',
+    ],
+    status: 'stable',
+    since: '1.0.0',
+  },
+  'validate-rules': {
+    id: 'validate-rules',
+    title: 'Validate Rules',
+    description: 'Validates a set of session rules for correctness before applying them.',
+    rpcIds: ['ValidateRules'],
+    componentPaths: [],
+    testIds: [],
+    status: 'experimental',
+    since: '1.0.0',
+  },
+} as const satisfies Record<string, Feature>;

@@ -1,0 +1,18 @@
+{
+  "id": "log-viewer",
+  "type": "frontend",
+  "component": "LogViewer",
+  "path": "web-app/src/components/logs/LogViewer.tsx",
+  "tested": true,
+  "testIds": [
+    "log-viewer > log-viewer_should_autoScrollToBottom_When_liveTailEnabled",
+    "log-viewer > log-viewer_should_showJumpToLatest_When_userScrollsUp",
+    "log-viewer > log-viewer_should_showSearchInput_When_searchExpanded",
+    "log-viewer > log-viewer_should_highlightMatches_When_searchQueryEntered",
+    "log-viewer > log-viewer_should_filterToErrorOnly_When_errorChipSelected",
+    "log-viewer > log-viewer_should_expandRow_When_rowClicked",
+    "log-viewer > log-viewer_should_showSearchAsExpandable_When_mobileViewport"
+  ],
+  "lastModified": "2026-05-14T00:00:00Z",
+  "description": "Datadog-like log viewer with virtual scroll, live tail, search highlight, level coloring, expandable rows, and mobile-first responsive design"
+}

@@ -1,0 +1,171 @@
+package session
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+)
+
+// ErrNoHistoryAdapter indicates PortSessionHistory was asked to port history for a program
+// pair where no registered HistoryAdapter claims one (or both) sides — e.g. opencode, aider,
+// bash, or gemini (the real Gemini CLI, distinct from Antigravity's own storage format — see
+// AgyAdapter.CanHandle), none of which have a canonical history format to port. Callers should
+// treat this as an expected, low-severity no-op (log and continue), not a hard failure.
+var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
+
+// ConversationID represents a validated Claude/Antigravity conversation UUID.
+type ConversationID string
+
+// ParseConversationID parses and validates a raw string as a ConversationID.
+func ParseConversationID(s string) (ConversationID, error) {
+	if !isValidUUID(s) {
+		return "", fmt.Errorf("invalid conversation ID format: %q", s)
+	}
+	return ConversationID(s), nil
+}
+
+// WorkspacePath represents a cleaned, resolved workspace root path.
+type WorkspacePath string
+
+// NewWorkspacePath resolves symlinks and cleans a path to guarantee a single canonical representation.
+func NewWorkspacePath(s string) (WorkspacePath, error) {
+	if s == "" {
+		return "", fmt.Errorf("workspace path cannot be empty")
+	}
+	resolved, err := filepath.EvalSymlinks(s)
+	if err != nil {
+		resolved = s
+	}
+	return WorkspacePath(filepath.Clean(resolved)), nil
+}
+
+// PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
+func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
+	srcAdapter := resolveHistoryAdapter(oldProgram)
+	dstAdapter := resolveHistoryAdapter(newProgram)
+
+	if srcAdapter == nil || dstAdapter == nil {
+		return ErrNoHistoryAdapter
+	}
+	if srcAdapter.Name() == dstAdapter.Name() {
+		return nil
+	}
+
+	// 1. Import turns to canonical format from source adapter
+	turns, err := srcAdapter.Import(ctx, i)
+	if err != nil {
+		return fmt.Errorf("failed to import session history from %s: %w", srcAdapter.Name(), err)
+	}
+
+	// 2. Apply Stapler Squad Inhibition Engine to redact secrets
+	inhibition := NewInhibitionEngine()
+	sanitizedTurns := inhibition.SanitizeTurns(turns)
+
+	// 3. Export sanitized turns in target adapter format
+	if err := dstAdapter.Export(ctx, sanitizedTurns, i); err != nil {
+		return fmt.Errorf("failed to export session history to %s: %w", dstAdapter.Name(), err)
+	}
+
+	// 4. Perform post-switch steps like history.jsonl mapping
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	uuidStr := i.GetClaudeConversationUUID()
+	workspace := i.GetWorkingDirectory()
+
+	if dstAdapter.Name() == "agy" {
+		// Append history.jsonl for Antigravity
+		agyHistoryPath := filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl")
+		if err := os.MkdirAll(filepath.Dir(agyHistoryPath), 0700); err == nil {
+			historyEntry := map[string]interface{}{
+				"display":        fmt.Sprintf("Ported from Claude: %s", i.Title),
+				"timestamp":      time.Now().UnixMilli(),
+				"workspace":      workspace,
+				"conversationId": uuidStr,
+			}
+			historyData, marshalErr := json.Marshal(historyEntry)
+			if marshalErr != nil {
+				log.Warn("PortSessionHistory: failed to marshal agy history entry", "error", marshalErr)
+				return marshalErr
+			}
+			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+				if _, werr := f.Write(historyData); werr != nil {
+					f.Close()
+					log.Warn("PortSessionHistory: failed to write agy history data", "error", werr)
+					return werr
+				}
+				if _, werr := f.Write([]byte("\n")); werr != nil {
+					f.Close()
+					log.Warn("PortSessionHistory: failed to write agy history newline", "error", werr)
+					return werr
+				}
+				f.Close()
+			}
+		}
+	} else if dstAdapter.Name() == "claude" {
+		// Append history.jsonl for Claude
+		claudeHistoryPath := filepath.Join(home, ".claude", "history.jsonl")
+		if err := os.MkdirAll(filepath.Dir(claudeHistoryPath), 0700); err == nil {
+			historyEntry := map[string]interface{}{
+				"display":        fmt.Sprintf("Ported from Antigravity: %s", i.Title),
+				"pastedContents": map[string]interface{}{},
+				"timestamp":      time.Now().UnixMilli(),
+				"project":        workspace,
+				"sessionId":      uuidStr,
+			}
+			historyData, marshalErr := json.Marshal(historyEntry)
+			if marshalErr != nil {
+				log.Warn("PortSessionHistory: failed to marshal claude history entry", "error", marshalErr)
+				return marshalErr
+			}
+			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+				if _, werr := hf.Write(historyData); werr != nil {
+					hf.Close()
+					log.Warn("PortSessionHistory: failed to write claude history data", "error", werr)
+					return werr
+				}
+				if _, werr := hf.Write([]byte("\n")); werr != nil {
+					hf.Close()
+					log.Warn("PortSessionHistory: failed to write claude history newline", "error", werr)
+					return werr
+				}
+				hf.Close()
+			}
+		}
+
+		// Update Claude session data on the Instance
+		i.claudeSessionMu.Lock()
+		if i.claudeSession == nil {
+			i.claudeSession = &ClaudeSessionData{}
+		}
+		i.claudeSession.ConversationUUID = uuidStr
+		i.claudeSession.ProjectName = i.Title
+		i.claudeSession.LastAttached = time.Now()
+		if i.claudeSession.Metadata == nil {
+			i.claudeSession.Metadata = make(map[string]string)
+		}
+		i.claudeSession.Metadata["working_dir"] = workspace
+		cb := i.claudeSessionIDSavedCallback
+		i.claudeSessionMu.Unlock()
+
+		if cb != nil {
+			cb()
+		}
+	}
+
+	log.Info("PortSessionHistory: ported session history using canonical formats", "from", srcAdapter.Name(), "to", dstAdapter.Name(), "session", i.Title)
+	return nil
+}
+
+// Shim functions to keep backward compatibility with existing tests and server code.
+func portClaudeToAgy(i *Instance) error {
+	return PortSessionHistory(context.Background(), "claude", "agy", i)
+}

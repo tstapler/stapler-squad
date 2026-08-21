@@ -1,0 +1,354 @@
+"use client";
+
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo, ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { Omnibar, OmnibarSessionData } from "@/components/sessions/Omnibar";
+import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useWorkflows } from "@/lib/hooks/useWorkflows";
+import { useAuth } from "@/lib/contexts/AuthContext";
+import { SessionType } from "@/gen/session/v1/types_pb";
+import { getDefaultRegistry } from "@/lib/omnibar/detector";
+import { WorkflowDetector, type WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
+import { useAliases } from "@/lib/hooks/useAliases";
+import { AliasDetector } from "@/lib/omnibar/detectors/AliasDetector";
+import { useLauncherPresets } from "@/lib/hooks/useLauncherPresets";
+import { PresetDetector } from "@/lib/omnibar/detectors/PresetDetector";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
+import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
+
+const sessionTypeMap: Record<string, SessionType> = {
+  directory: SessionType.DIRECTORY,
+  new_worktree: SessionType.NEW_WORKTREE,
+  existing_worktree: SessionType.EXISTING_WORKTREE,
+  one_off: SessionType.ONE_OFF,
+  new_project: SessionType.NEW_PROJECT, // new-project mode: backend initializes git repo
+  autonomous: SessionType.DIRECTORY, // autonomous reuses DIRECTORY; server handles autonomous flag
+};
+
+interface OmnibarContextValue {
+  isOpen: boolean;
+  open: () => void;
+  openInCreationMode: () => void;
+  openOmnibar: (initialInput?: string, initialTitle?: string) => void;
+  close: () => void;
+  toggle: () => void;
+}
+
+const OmnibarContext = createContext<OmnibarContextValue | null>(null);
+
+export function useOmnibar(): OmnibarContextValue {
+  const context = useContext(OmnibarContext);
+  if (!context) {
+    throw new Error("useOmnibar must be used within an OmnibarProvider");
+  }
+  return context;
+}
+
+interface OmnibarProviderProps {
+  children: ReactNode;
+}
+
+export function OmnibarProvider({ children }: OmnibarProviderProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [initialMode, setInitialMode] = useState<"discovery" | "creation">("discovery");
+  const [initialInput, setInitialInput] = useState<string | undefined>(undefined);
+  const [initialTitle, setInitialTitle] = useState<string | undefined>(undefined);
+  const router = useRouter();
+  const { authEnabled, authenticated, loading: authLoading } = useAuth();
+  const { createSession, runWorkflow: runWorkflowRPC } = useSessionService({
+    enabled: !authLoading && (!authEnabled || authenticated),
+  });
+  const { createBacklogItemFromChat } = useBacklogService();
+  const { workflows } = useWorkflows();
+
+  // Lean WorkflowEntry[] for the detector and @ autocomplete dropdown.
+  const workflowEntries = useMemo<WorkflowEntry[]>(
+    () =>
+      workflows.map((w) => ({
+        slug: w.slug,
+        name: w.name,
+        description: w.description,
+        targetDirectory: w.targetDirectory,
+        sessionType: w.sessionType,
+        inputTemplate: w.inputTemplate,
+      })),
+    [workflows]
+  );
+
+  // Dynamically register/unregister WorkflowDetector whenever the workflow list changes.
+  // The detector is NOT in createDefaultRegistry() — it lives only in the singleton
+  // returned by getDefaultRegistry() so it reflects the live DB state.
+  const workflowDetectorRef = useRef<WorkflowDetector | null>(null);
+  useEffect(() => {
+    const registry = getDefaultRegistry();
+    if (workflowDetectorRef.current) {
+      registry.unregister(workflowDetectorRef.current);
+    }
+    const detector = new WorkflowDetector(workflowEntries);
+    registry.register(detector);
+    workflowDetectorRef.current = detector;
+    return () => {
+      registry.unregister(detector);
+      workflowDetectorRef.current = null;
+    };
+  }, [workflowEntries]);
+
+  const { aliases } = useAliases();
+
+  // Dynamically register/unregister AliasDetector whenever the alias list changes.
+  const aliasDetectorRef = useRef<AliasDetector | null>(null);
+  useEffect(() => {
+    const registry = getDefaultRegistry();
+    if (aliasDetectorRef.current) {
+      registry.unregister(aliasDetectorRef.current);
+    }
+    const detector = new AliasDetector(aliases);
+    registry.register(detector);
+    aliasDetectorRef.current = detector;
+    return () => {
+      registry.unregister(detector);
+      aliasDetectorRef.current = null;
+    };
+  }, [aliases]);
+
+  // Single source of truth for launcher presets — both the PresetDetector registration below
+  // and OmnibarPresetList's rendering (passed down through Omnibar -> OmnibarCreationPanel as
+  // props) read from this one fetch. A second, independent useLauncherPresets() call in
+  // OmnibarCreationPanel would fetch redundantly and — worse — this effect's refetch-on-open
+  // would never reach it, since each hook call owns disconnected state.
+  const { presets: launcherPresets, loading: launcherPresetsLoading, loadError: launcherPresetsLoadError, refetch: refetchLauncherPresets } = useLauncherPresets();
+
+  // Dynamically register/unregister PresetDetector whenever the preset list changes.
+  const presetDetectorRef = useRef<PresetDetector | null>(null);
+  useEffect(() => {
+    const registry = getDefaultRegistry();
+    if (presetDetectorRef.current) {
+      registry.unregister(presetDetectorRef.current);
+    }
+    const detector = new PresetDetector(launcherPresets);
+    registry.register(detector);
+    presetDetectorRef.current = detector;
+    return () => {
+      registry.unregister(detector);
+      presetDetectorRef.current = null;
+    };
+  }, [launcherPresets]);
+
+  const { hosts: enterpriseHosts, refetch: refetchEnterpriseHosts } = useGitHubEnterpriseHosts();
+
+  // Re-fetch presets and GHE hosts each time the omnibar opens so a hand-edited
+  // launcher-presets.json change, or a GitHub Enterprise account added mid-session,
+  // appears immediately without a server restart or page reload (Success Criterion 1;
+  // same staleness problem for enterprise hosts as launcher presets).
+  const prevOmnibarOpenRef = useRef(false);
+  useEffect(() => {
+    if (isOpen && !prevOmnibarOpenRef.current) {
+      refetchLauncherPresets();
+      refetchEnterpriseHosts();
+    }
+    prevOmnibarOpenRef.current = isOpen;
+  }, [isOpen, refetchLauncherPresets, refetchEnterpriseHosts]);
+
+  // GitHubEnterpriseURLDetector is registered synchronously (with an empty host
+  // list) inside createDefaultRegistry(), so the registry always has a slot for
+  // it — no window where a GHES URL falls through to SessionSearch. This effect
+  // just keeps its host list in sync as the async RPC result changes.
+  useEffect(() => {
+    const detector = getDefaultRegistry().find("GitHubEnterpriseURL") as
+      | GitHubEnterpriseURLDetector
+      | undefined;
+    detector?.setHosts(enterpriseHosts);
+  }, [enterpriseHosts]);
+
+  const open = useCallback(() => {
+    setInitialMode("discovery");
+    setInitialInput(undefined);
+    setInitialTitle(undefined);
+    setIsOpen(true);
+  }, []);
+  const openInCreationMode = useCallback(() => {
+    setInitialMode("creation");
+    setInitialInput(undefined);
+    setInitialTitle(undefined);
+    setIsOpen(true);
+  }, []);
+  const openOmnibar = useCallback((inputValue?: string, titleValue?: string) => {
+    setInitialMode(inputValue ? "creation" : "discovery");
+    setInitialInput(inputValue);
+    setInitialTitle(titleValue);
+    setIsOpen(true);
+  }, []);
+  const close = useCallback(() => {
+    setIsOpen(false);
+    setInitialInput(undefined);
+    setInitialTitle(undefined);
+  }, []);
+  const toggle = useCallback(() => setIsOpen((prev) => !prev), []);
+
+  // Global keyboard shortcut: Cmd+K or Ctrl+K (discovery), Cmd+Shift+K (creation)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd+Shift+K (Mac) or Ctrl+Shift+K — open directly in creation mode
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "K") {
+        e.preventDefault();
+        openInCreationMode();
+        return;
+      }
+
+      // Cmd+K (Mac) or Ctrl+K (Windows/Linux) — discovery mode toggle
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "k") {
+        e.preventDefault();
+        toggle();
+      }
+
+      // Also support 'n' key when not in an input
+      if (e.key === "n" && !isInputElement(e.target as Element)) {
+        e.preventDefault();
+        open();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [toggle, open, openInCreationMode]);
+
+  const handleNavigateToSession = useCallback(
+    (sessionId: string) => {
+      router.push(`/?session=${sessionId}`);
+      close();
+    },
+    [router, close]
+  );
+
+  const handleNavigateToSessionInNewPane = useCallback(
+    (sessionId: string) => {
+      router.push(`/?session=${sessionId}&newPane=true`);
+      close();
+    },
+    [router, close]
+  );
+
+  // Handle session creation
+  const handleCreateSession = useCallback(
+    async (data: OmnibarSessionData) => {
+      // Determine effective session type.
+      // For new_project + "open as new_worktree": use NEW_WORKTREE — findGitRepoRoot already
+      // handles mkdir + git init + initial commit for non-existent paths, so no special type needed.
+      // For new_project + "open as directory": use NEW_PROJECT so the backend initialises the repo
+      // and opens the session without a worktree.
+      const effectiveSessionType = data.isNewProject
+        ? data.sessionType === "new_worktree"
+          ? sessionTypeMap["new_worktree"]
+          : SessionType.NEW_PROJECT
+        : data.sessionType
+        ? sessionTypeMap[data.sessionType]
+        : undefined;
+
+      // createSession throws on error, so no null check needed
+      const session = await createSession({
+        title: data.title,
+        path: data.path,
+        branch: data.branch,
+        program: data.program,
+        category: data.category,
+        prompt: data.prompt,
+        autoYes: data.autoYes,
+        autoApprove: data.autoApprove ?? false,
+        workingDir: data.workingDir,
+        existingWorktree: data.existingWorktree,
+        sessionType: effectiveSessionType,
+        createIfMissing: data.createIfMissing ?? false,
+        initialPrompt: data.initialPrompt,
+        autonomousMode: data.autonomousMode ?? false,
+        permissionMode: data.permissionMode ?? "",
+        aliasName: data.aliasName ?? "",
+        cliFlags: data.extraCliFlags ?? "",
+        extraArgs: data.extraArgs ?? [],
+      });
+
+      if (session) {
+        // Navigate to the new session so it auto-opens in the detail pane on mobile.
+        router.push(`/?session=${session.id}`);
+      }
+    },
+    [createSession, router]
+  );
+
+  // Handle run_workflow omnibar action — fires the workflow via RunWorkflow RPC,
+  // then navigates to the newly created session so the user can see it running.
+  const handleRunWorkflow = useCallback(
+    async (slug: string, arg: string) => {
+      const wf = workflows.find((w) => w.slug === slug);
+      if (!wf) {
+        console.error("Unknown workflow slug:", slug);
+        return;
+      }
+      try {
+        const sessionId = await runWorkflowRPC({ id: wf.id, arg });
+        if (sessionId) {
+          router.push(`/?session=${sessionId}`);
+        }
+      } catch (err) {
+        console.error("Failed to run workflow:", err);
+      }
+    },
+    [runWorkflowRPC, workflows, router]
+  );
+
+  // Handle chat_backlog_item: create a backlog item from a free-text message with no
+  // structured form fields — title/description both come from the raw message, and the
+  // normal auto-triage pipeline (skipTriage defaults to false) takes it from there.
+  const handleCreateBacklogItemFromChat = useCallback(
+    async (text: string) => {
+      const result = await createBacklogItemFromChat(text);
+      if (result) {
+        router.push(`/backlog?item=${result.item.id}`);
+      }
+    },
+    [createBacklogItemFromChat, router]
+  );
+
+  const value: OmnibarContextValue = {
+    isOpen,
+    open,
+    openInCreationMode,
+    openOmnibar,
+    close,
+    toggle,
+  };
+
+  return (
+    <OmnibarContext.Provider value={value}>
+      {children}
+      <Omnibar
+        isOpen={isOpen}
+        onClose={close}
+        onCreateSession={handleCreateSession}
+        onNavigateToSession={handleNavigateToSession}
+        onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
+        onRunWorkflow={handleRunWorkflow}
+        onCreateBacklogItemFromChat={handleCreateBacklogItemFromChat}
+        initialMode={initialMode}
+        initialInput={initialInput}
+        initialTitle={initialTitle}
+        workflows={workflowEntries}
+        launcherPresets={launcherPresets}
+        launcherPresetsLoading={launcherPresetsLoading}
+        launcherPresetsLoadError={launcherPresetsLoadError}
+      />
+    </OmnibarContext.Provider>
+  );
+}
+
+// Helper to check if target is an input element
+function isInputElement(element: Element | null): boolean {
+  if (!element) return false;
+  const tagName = element.tagName.toLowerCase();
+  return (
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select" ||
+    element instanceof HTMLElement && element.isContentEditable
+  );
+}

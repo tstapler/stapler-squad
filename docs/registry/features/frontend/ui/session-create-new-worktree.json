@@ -1,0 +1,15 @@
+{
+  "id": "session-create-new-worktree",
+  "type": "frontend",
+  "component": "OmnibarCreationPanel",
+  "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+  "tested": true,
+  "testIds": [
+    "new worktree session creation > new worktree is the default selection",
+    "new worktree session creation > shows use-title-as-branch checkbox for new worktree mode",
+    "new worktree session creation > branch field is read-only while use-title-as-branch is checked",
+    "new worktree session creation > branch field becomes editable when use-title-as-branch is unchecked",
+    "new worktree session creation > sends new worktree type with branch in payload"
+  ],
+  "lastModified": "2026-05-01T00:00:00Z"
+}

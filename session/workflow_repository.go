@@ -1,0 +1,97 @@
+package session
+
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/ent"
+)
+
+// WorkflowRepository defines persistence operations for workflow definitions.
+type WorkflowRepository interface {
+	Create(ctx context.Context, w WorkflowCreateInput) (*ent.Workflow, error)
+	Update(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput) (*ent.Workflow, error)
+	// UpdateConditional applies a partial update only if the row's current updated_at
+	// exactly matches expectedUpdatedAt (optimistic-concurrency CAS, mirrors
+	// EntRepository.TransitionBacklogItemStatus's precondition pattern). Returns
+	// ErrPreconditionFailed if the row has been modified since expectedUpdatedAt was
+	// read, or ErrNotFound if the row doesn't exist.
+	UpdateConditional(ctx context.Context, id uuid.UUID, w WorkflowUpdateInput, expectedUpdatedAt time.Time) (*ent.Workflow, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	GetByID(ctx context.Context, id uuid.UUID) (*ent.Workflow, error)
+	GetBySlug(ctx context.Context, slug string) (*ent.Workflow, error)
+	// GetByWebhookSlug retrieves a workflow by its webhook_slug (the routing key for
+	// POST /webhooks/{slug}). Only meaningful when TriggerType == "webhook".
+	GetByWebhookSlug(ctx context.Context, slug string) (*ent.Workflow, error)
+	ListAll(ctx context.Context) ([]*ent.Workflow, error)
+	ListEnabled(ctx context.Context) ([]*ent.Workflow, error) // cron_enabled=true
+	// ListByTriggerType returns all workflows with the given trigger_type, regardless
+	// of cron_enabled — callers (e.g. GitHubWebhookHandler) filter further by
+	// repo/branch/enabled in application code. Narrowing by trigger_type at the DB
+	// layer first avoids a linear decrypt-and-check over every workflow in the system
+	// (webhook-triggers Task 2.2.1b).
+	ListByTriggerType(ctx context.Context, triggerType string) ([]*ent.Workflow, error)
+}
+
+// WorkflowCreateInput holds the fields for creating a new workflow.
+type WorkflowCreateInput struct {
+	Slug            string
+	Name            string
+	Description     string
+	Command         string
+	TargetDirectory string
+	InputTemplate   string
+	SessionType     string
+	Model           string
+	AgentType       string
+	CronExpression  string
+	CronEnabled     bool
+	// Enabled is the generic per-trigger enable gate. Pointer, not a bare bool: the
+	// schema default (true) only applies when the column is never explicitly set, so
+	// a bare bool would silently create a disabled workflow for any caller that
+	// forgets to set it (the zero value is false) — nil here means "use the schema
+	// default," matching every other optional-with-a-meaningful-default field's shape.
+	Enabled           *bool
+	KeepSessions      *int // nil = use default (0, disabled); 0 = keep all
+	ArchiveAfterHours *int // nil = use default (0, disabled); 0 = disabled
+
+	// Trigger fields (webhook-triggers Epic 1.1).
+	TriggerType            string // "cron" | "github_push" | "webhook" | "manual"; "" -> ent default "manual"
+	GitHubRepo             string
+	GitHubBranch           string
+	WebhookSlug            string
+	WebhookSecretEncrypted string
+	EventFilter            string
+	LabelFilter            string
+	PromptTemplate         string
+}
+
+// WorkflowUpdateInput holds optional fields for updating an existing workflow.
+// Pointer fields are only applied when non-nil (partial update).
+type WorkflowUpdateInput struct {
+	Name              *string
+	Description       *string
+	Command           *string
+	TargetDirectory   *string
+	InputTemplate     *string
+	SessionType       *string
+	Model             *string
+	AgentType         *string
+	CronExpression    *string
+	CronEnabled       *bool
+	Enabled           *bool // generic per-trigger enable gate
+	KeepSessions      *int  // nil = do not update; 0 = keep all (disabled)
+	ArchiveAfterHours *int  // nil = do not update; 0 = disabled
+
+	// Trigger fields (webhook-triggers Epic 1.1).
+	TriggerType            *string
+	GitHubRepo             *string
+	GitHubBranch           *string
+	WebhookSlug            *string
+	WebhookSecretEncrypted *string
+	EventFilter            *string
+	LabelFilter            *string
+	PromptTemplate         *string
+	LastFiredAt            *time.Time
+}

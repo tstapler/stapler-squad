@@ -1,0 +1,18 @@
+ ● Workflow(Migrate all 137 backend features to the typed TypeScript+Go catalog
+)
+  phases:
+    1. Migrate domains — Generate TS + Go feature files per domain in
+  parallel
+    2. Migrate misc — Generate TS + Go files for flat/PascalCase features
+    3. Consolidate — Update catalog.ts to import all new domain files
+  Dynamic workflows can use a lot of tokens quickly by running many
+  subagents in parallel — which counts against your usage limit. Stop a
+  running workflow at any time with /workflows, or disable dynamic workflows
+  in /config.
+  ❯ 1. Yes, run it
+    2. View raw script
+    3. No
+  Esc to cancel · Tab to amend
+  ctrl+g to edit script in $EDITOR
+
+❯ ▌
