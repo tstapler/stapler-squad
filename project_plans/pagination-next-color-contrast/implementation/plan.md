@@ -182,6 +182,7 @@ Known affected consumers reachable from pages IT-5.1 scans: `web-app/src/compone
 **Acceptance Criteria**:
 - Requirement 3 (build freshness half) — the tested binary is not stale.
   - *Given* `tests/e2e/helpers/test-server.ts`'s `ensureBinary()` reuses `./stapler-squad` if its mtime is under 1 hour old, and its own fallback path runs bare `go build` (which does NOT regenerate `web-app/out` / `server/web/dist`, per pitfalls.md §5), *When* `make build` is run at the repo root immediately before the Playwright invocation, *Then* `server/web/dist` and the repo-root `./stapler-squad` binary are regenerated from the current `web-app/src` (including the theme.css.ts edit), verified by `ls -la ./stapler-squad` showing an mtime newer than the `git commit`/edit timestamp of `theme.css.ts`.
+  - **Content check (pre-mortem P1 #1, not just mtime):** *Given* an mtime check only proves *a* rebuild happened, not that it embedded the new value, *When* `grep -rl "5457ef" server/web/dist` is run after `make build`, *Then* it matches at least one built CSS/JS chunk — if it matches nothing, the build is stale/cached regardless of mtime and must be re-run (e.g. via `rm -rf server/web/dist web-app/out && make build`) before trusting any subsequent spec pass.
 - Requirement 3 (test-pass half) — `accessibility.spec.ts` passes fully.
   - *Given* the freshly built binary is running via the e2e harness's own `global-setup.ts`, *When* `cd tests/e2e && npx playwright test accessibility.spec.ts --reporter=line` is run, *Then* the output reports `0 failed` across both the `[chromium]` and `[chromium-dom]` projects, with IT-5.1 ("Main page has no critical or serious accessibility violations") passing in both.
 
@@ -190,6 +191,7 @@ Known affected consumers reachable from pages IT-5.1 scans: `web-app/src/compone
 ##### Task 1.2.1a: Rebuild the binary (~3 min)
 - From the repo root, run `make build`.
 - Confirm it completes without error and regenerates `server/web/dist` (build output should reference the Next.js static export step, not just `go build`).
+- **Content check (pre-mortem P1 #1):** Run `grep -rl "5457ef" server/web/dist`. If it returns no match, the build cached stale frontend output despite a fresh binary mtime — clear `server/web/dist` and `web-app/out` and re-run `make build` before continuing.
 - Files: none (build artifacts only, not committed)
 
 ##### Task 1.2.1b: Run the accessibility spec (~3 min)
@@ -276,4 +278,13 @@ Known affected consumers reachable from pages IT-5.1 scans: `web-app/src/compone
 ##### Task 1.5.1a: Draft PR-description callout (~3 min)
 - Write four short bullet points (see acceptance criteria above — borderHover/accentText, globals.css legacy `--primary`, the Story 1.1.2 foreground-usage finding (drafted in Task 1.1.2b — including the genuine `ReviewQueuePanel.css.ts` accentBg-composite border-contrast regression, not just the pre-existing-debt cases), and `make lint`'s procedural scope) into the PR description alongside the standard summary/test-plan sections.
 - Cross-reference `web-app/src/styles/theme.css.ts:631,657`, `web-app/src/app/globals.css:46`, `web-app/src/components/sessions/SessionList.css.ts:107`, and `web-app/src/components/sessions/ReviewQueuePanel.css.ts:287,429,493` by path:line.
+- Link the PR description's callout bullet to the tracked backlog item created in Task 1.5.1b (not just prose).
 - Files: none (PR body, not a repo file)
+
+##### Task 1.5.1b: File a tracked backlog item for the accentBg border-contrast regression, and add inline comments at the divergent hardcoded values (pre-mortem P1 #2) (~4 min)
+- File a backlog item (`mcp__stapler-squad__create_backlog_item` or `gh issue create` if the MCP tool is unavailable) describing: `ReviewQueuePanel.css.ts:287,429,493`'s `border: 1px solid vars.color.primary` renders against `accentBg` (a hardcoded rgba tint of the *old* primary that doesn't track the token), dropping from 3.50:1 to 2.97:1 against the WCAG 1.4.11 3:1 floor once this PR's `primary` edit lands. Recommend either deriving `accentBg` from `primary` or picking a different border color for `ReviewQueuePanel.css.ts`.
+- Add a one-line comment at `theme.css.ts:654` (`accentBg`) noting it's hardcoded independently of `primary` and, as composited under `ReviewQueuePanel.css.ts`'s border usage, is below the WCAG 1.4.11 3:1 floor — link the backlog item.
+- Mirror a one-line comment at `theme.css.ts:631` (`borderHover`) and `theme.css.ts:657` (`accentText`) noting they're independently hardcoded to the pre-fix `#6366f1` and now diverge in hue from `primary`.
+- Add the same one-line pointer at `globals.css:46`'s legacy `--primary` noting it's a separate, independently-defined value still consumed by ~9 `.btn-primary` components, unaffected by this fix.
+- **Scope note:** these are one-line comments on existing lines, not edits to `primary`'s own value/consumers — they don't violate Requirement 2's token-only-edit scope (Requirement 2 is about not touching *consumer `.css.ts` files*; these four comments annotate other *tokens* in the same source-of-truth file `theme.css.ts` plus the pre-existing `globals.css` legacy value, not a `.css.ts` consumer of `vars.color.primary`).
+- Files: `web-app/src/styles/theme.css.ts` (comments at lines 631, 654, 657), `web-app/src/app/globals.css` (comment at line 46)

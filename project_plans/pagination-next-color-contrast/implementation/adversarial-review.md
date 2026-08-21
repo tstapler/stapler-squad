@@ -1,8 +1,19 @@
 # Adversarial Review: pagination-next-color-contrast
 
 **Date**: 2026-08-21
-**Verdict**: BLOCKED
-**Iteration**: 2 (re-review of previously blocked items)
+**Verdict**: RESOLVED (iteration 3 — verified against current plan.md)
+**Iteration**: 3 (re-review of iteration 2's blockers)
+
+## Iteration 3 verification
+
+- **Blocker 1 (accentBg-composite regression):** RESOLVED. `plan.md`'s Story 1.1.2 now states the corrected finding directly — the `accentBg`-over-`cardBackground` composite crosses the 3:1 floor (3.50:1 → 2.97:1), scoped explicitly as a genuine new WCAG 1.4.11 regression distinct from the four flat-background rows, and carried into the Task 1.1.2b PR-callout bullet and Task 1.5.1a.
+- **Blocker 2 (wrong file path):** RESOLVED. `grep -n "components/backlog" plan.md` returns no matches; all three references (Story 1.1.2 background, Task 1.1.2a, Task 1.5.1a) now cite `web-app/src/components/sessions/ReviewQueuePanel.css.ts`, which exists at that path.
+
+Both concerns and minors from iteration 2 remain non-blocking observations (visual-regression coverage breadth, lint's procedural scope, PR-title wording) and are already addressed by the plan's existing tasks (1.3.1b's manual fallback, Task 1.5.1a's lint caveat).
+
+---
+
+## Iteration 2 (superseded by the above)
 
 ## Blockers
 
