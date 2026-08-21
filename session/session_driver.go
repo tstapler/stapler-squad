@@ -167,9 +167,17 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		return
 	}
 	stopper := &sessionDriverStopper{stop: make(chan struct{})}
+	// Add(1) must happen before driverStopper is published (and before driverMu is
+	// released): StopSessionDriver reads driverStopper under driverMu and, if
+	// non-nil, immediately calls driverWG.Wait() outside the lock. Storing the
+	// stopper before Add(1) would let that Wait() race the not-yet-executed Add
+	// on a concurrent goroutine — sync.WaitGroup's own contract forbids Add and
+	// Wait running concurrently without a happens-before edge, and go test -race
+	// flags it. Doing Add under the same critical section as the Store makes the
+	// mutex provide that ordering.
+	inst.driverWG.Add(1)
 	inst.driverStopper.Store(stopper)
 	inst.driverMu.Unlock()
-	inst.driverWG.Add(1)
 	go func() {
 		defer inst.driverWG.Done()
 		defer inst.driverRunning.Store(false)

@@ -515,11 +515,29 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 
 // destroyCreatedSession cleans up a session that was successfully created during a test.
 // Errors are soft-logged so cleanup failures don't mask the actual test assertion.
+//
+// It waits for DeleteSession's background Destroy() cleanup (waitForPendingCleanup)
+// before returning: these tests set HOME to a t.TempDir(), and since t.Cleanup runs
+// LIFO, that TempDir's RemoveAll (registered after the service, later in the test
+// body) would otherwise race Destroy() for files under HOME (e.g. the tmux exec-gate
+// directory) — see waitForPendingCleanup's doc comment.
+//
+// It also joins the session's SessionDriver goroutine (session.JoinSessionDriver):
+// Destroy()'s call to StopSessionDriver only bounds its wait to driverStopTimeout and
+// proceeds anyway on timeout, so without this join the driver goroutine can still be
+// polling Preview() — which resolves the tmux exec-gate directory via the process-wide
+// HOME/config dir — after waitForPendingCleanup returns and the test's t.TempDir() is
+// removed, intermittently producing "directory not empty" from RemoveAll.
 func destroyCreatedSession(t *testing.T, svc *SessionService, id string) {
 	t.Helper()
+	inst := svc.FindLiveInstance(id)
 	_, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
 	if err != nil {
 		t.Logf("destroyCreatedSession: cleanup for %q failed (non-fatal): %v", id, err)
+	}
+	svc.waitForPendingCleanup()
+	if inst != nil {
+		session.JoinSessionDriver(inst)
 	}
 }
 
