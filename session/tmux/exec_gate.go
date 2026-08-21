@@ -194,6 +194,20 @@ func acquireSlot(ctx context.Context, dir string, n int, blocking bool) (release
 	if n <= 0 {
 		n = 1
 	}
+	if blocking {
+		// Checked up front, before the first TryLock attempt: an uncontended
+		// slot lock succeeds immediately regardless of ctx, so without this a
+		// caller whose ctx was already canceled/expired before the call would
+		// still get a slot and run its subprocess anyway — defeating
+		// PreviewContext's cancellation guarantee (session/instance_terminal.go)
+		// for the common, uncontended case. See
+		// TestInstance_PreviewContext_ReturnsCtxErrDirectlyOnCancellation.
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		default:
+		}
+	}
 	order := rand.Perm(n) // spreads contention across processes racing at the same instant
 	backoff := execGateAcquireBackoffStart
 	for {

@@ -19,6 +19,7 @@ import (
 // ProcessRunner with neither allowedTools nor permissionMode set produces no
 // extra flags, so existing call sites are unaffected.
 func TestProcessRunner_ToolAccessArgs_Empty_WhenNeitherSet(t *testing.T) {
+	t.Parallel()
 	r := &ProcessRunner{claudeBin: "claude"}
 	assert.Empty(t, r.toolAccessArgs())
 }
@@ -27,6 +28,7 @@ func TestProcessRunner_ToolAccessArgs_Empty_WhenNeitherSet(t *testing.T) {
 // that when both allowedTools and permissionMode are set, both flag pairs are
 // returned with --allowedTools preceding --permission-mode.
 func TestProcessRunner_ToolAccessArgs_BothSet_ReturnsBothFlagsInOrder(t *testing.T) {
+	t.Parallel()
 	r := &ProcessRunner{claudeBin: "claude", allowedTools: "Read,Grep,Glob", permissionMode: "plan"}
 	assert.Equal(t, []string{"--allowedTools", "Read,Grep,Glob", "--permission-mode", "plan"}, r.toolAccessArgs())
 }
@@ -34,6 +36,7 @@ func TestProcessRunner_ToolAccessArgs_BothSet_ReturnsBothFlagsInOrder(t *testing
 // TestProcessRunner_ToolAccessArgs_OnlyAllowedTools verifies that only the
 // --allowedTools flag pair is returned when permissionMode is unset.
 func TestProcessRunner_ToolAccessArgs_OnlyAllowedTools(t *testing.T) {
+	t.Parallel()
 	r := &ProcessRunner{claudeBin: "claude", allowedTools: "Read,Grep,Glob"}
 	assert.Equal(t, []string{"--allowedTools", "Read,Grep,Glob"}, r.toolAccessArgs())
 }
@@ -43,6 +46,7 @@ func TestProcessRunner_ToolAccessArgs_OnlyAllowedTools(t *testing.T) {
 // pairs are returned in the order --allowedTools, --permission-mode,
 // --disallowedTools.
 func TestProcessRunner_ToolAccessArgs_AllThreeSet_ReturnsInOrder(t *testing.T) {
+	t.Parallel()
 	r := &ProcessRunner{
 		claudeBin:       "claude",
 		allowedTools:    "Read,Grep,Glob",
@@ -65,6 +69,7 @@ func TestProcessRunner_ToolAccessArgs_AllThreeSet_ReturnsInOrder(t *testing.T) {
 // fail if that copy pattern regressed back to a field-by-field literal that
 // forgot interpreter.
 func TestProcessRunner_WithWorkDir_PreservesInterpreter(t *testing.T) {
+	t.Parallel()
 	r := &ProcessRunner{claudeBin: "fake-claude.sh", interpreter: "sh"}
 	updated := r.WithWorkDir("/tmp/some-worktree")
 
@@ -78,6 +83,7 @@ func TestProcessRunner_WithWorkDir_PreservesInterpreter(t *testing.T) {
 // WithToolAccess preserves the existing workDir while setting
 // allowedTools/permissionMode/disallowedTools, and leaves the receiver unmodified.
 func TestProcessRunner_WithToolAccess_PreservesWorkDir(t *testing.T) {
+	t.Parallel()
 	r := &ProcessRunner{claudeBin: "claude", workDir: "/tmp/some-worktree"}
 	updated := r.WithToolAccess("Read,Grep,Glob", "plan", "Write,Edit")
 
@@ -98,6 +104,7 @@ func TestProcessRunner_WithToolAccess_PreservesWorkDir(t *testing.T) {
 // TestProcessRunner_WithWorkDir_PreservesInterpreter's doc comment for why
 // this specific field is worth its own regression test.
 func TestProcessRunner_WithToolAccess_PreservesInterpreter(t *testing.T) {
+	t.Parallel()
 	r := &ProcessRunner{claudeBin: "fake-claude.sh", interpreter: "sh"}
 	updated := r.WithToolAccess("Read,Grep,Glob", "plan", "Write,Edit")
 
@@ -144,6 +151,7 @@ func readArgvMarker(t *testing.T, markerPath string) (argv0 string, args []strin
 // NewShellWrappedProcessRunnerForTesting exists to exploit (see its doc
 // comment in fake_runner.go).
 func TestProcessRunner_Run_should_ExecViaInterpreterWithClaudeBinPrepended_When_InterpreterSet(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	scriptPath, markerPath := writeArgvRecordingFakeScript(t, dir, 0o644)
 
@@ -169,6 +177,7 @@ func TestProcessRunner_Run_should_ExecViaInterpreterWithClaudeBinPrepended_When_
 // Run execs claudeBin directly by path with unchanged argv — proving zero
 // behavior change for existing production callers.
 func TestProcessRunner_Run_should_ExecClaudeBinDirectly_When_InterpreterEmpty(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	scriptPath, markerPath := writeArgvRecordingFakeScript(t, dir, 0o755)
 

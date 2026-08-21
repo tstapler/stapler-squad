@@ -5,6 +5,7 @@ import (
 )
 
 func TestClaudeDetector_Name(t *testing.T) {
+	t.Parallel()
 	d := NewClaudeDetector()
 	if d.Name() != "claude" {
 		t.Errorf("Name() = %q, want %q", d.Name(), "claude")
@@ -12,6 +13,7 @@ func TestClaudeDetector_Name(t *testing.T) {
 }
 
 func TestClaudeDetector_Patterns_should_haveReadyPattern(t *testing.T) {
+	t.Parallel()
 	d := NewClaudeDetector()
 	p := d.Patterns()
 	if len(p.Ready) == 0 {
@@ -23,6 +25,7 @@ func TestClaudeDetector_Patterns_should_haveReadyPattern(t *testing.T) {
 }
 
 func TestClaudeDetector_Patterns_should_haveActivePatterns(t *testing.T) {
+	t.Parallel()
 	d := NewClaudeDetector()
 	p := d.Patterns()
 	if len(p.Active) == 0 {
@@ -31,6 +34,7 @@ func TestClaudeDetector_Patterns_should_haveActivePatterns(t *testing.T) {
 }
 
 func TestClaudeDetector_Patterns_should_haveSuccessPatterns(t *testing.T) {
+	t.Parallel()
 	d := NewClaudeDetector()
 	p := d.Patterns()
 	if len(p.Success) == 0 {
@@ -39,6 +43,7 @@ func TestClaudeDetector_Patterns_should_haveSuccessPatterns(t *testing.T) {
 }
 
 func TestClaudeDetector_FilterContent_should_returnUnchanged(t *testing.T) {
+	t.Parallel()
 	d := NewClaudeDetector()
 	input := "some terminal output"
 	if got := d.FilterContent(input); got != input {

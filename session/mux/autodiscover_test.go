@@ -11,6 +11,7 @@ import (
 )
 
 func TestAutoDiscoveryCreation(t *testing.T) {
+	t.Parallel()
 	// Test creation with watcher
 	ad, err := NewAutoDiscovery()
 	if err != nil {
@@ -33,6 +34,7 @@ func TestAutoDiscoveryCreation(t *testing.T) {
 }
 
 func TestIsClaudeMuxSocket(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		path     string
 		expected bool
@@ -62,6 +64,7 @@ func TestIsClaudeMuxSocket(t *testing.T) {
 }
 
 func TestAutoDiscoveryStartStop(t *testing.T) {
+	t.Parallel()
 	ad := NewAutoDiscoveryWithFallback()
 	defer func() { _ = ad.Stop() }()
 
@@ -86,6 +89,7 @@ func TestAutoDiscoveryStartStop(t *testing.T) {
 }
 
 func TestAutoDiscoverySocketHandling(t *testing.T) {
+	t.Parallel()
 	ad := NewAutoDiscoveryWithFallback()
 	defer func() { _ = ad.Stop() }()
 
@@ -114,6 +118,7 @@ func TestAutoDiscoverySocketHandling(t *testing.T) {
 }
 
 func TestWatcherActiveStatus(t *testing.T) {
+	t.Parallel()
 	ad := NewAutoDiscoveryWithFallback()
 	defer func() { _ = ad.Stop() }()
 
@@ -133,6 +138,7 @@ func TestWatcherActiveStatus(t *testing.T) {
 }
 
 func TestAutoDiscoveryCallbacks(t *testing.T) {
+	t.Parallel()
 	ad := NewAutoDiscoveryWithFallback()
 	defer func() { _ = ad.Stop() }()
 

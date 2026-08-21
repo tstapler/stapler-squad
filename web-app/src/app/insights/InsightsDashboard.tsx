@@ -32,6 +32,11 @@ import {
   grid2,
   section,
   sectionTitle,
+  sectionHeader,
+  modeToggleGroup,
+  modeToggleButton,
+  modeToggleButtonActive,
+  projectedCostEmptyState,
 } from "./InsightsDashboard.css";
 
 // Lazy-load recharts and its D3 dependencies (~1.2MB) only when the insights page is visited.
@@ -102,6 +107,7 @@ function InsightsDashboardInner() {
     projection.projectedMonthly > threshold;
 
   const [selectedSession, setSelectedSession] = useState<SessionTokenSummary | null>(null);
+  const [modelOverTimeMode, setModelOverTimeMode] = useState<"cost" | "tokens">("cost");
 
   const timeRangeValue: TimeRangeValue = {
     preset,
@@ -174,6 +180,12 @@ function InsightsDashboardInner() {
                 onThresholdChange={setThreshold}
               />
             )}
+            {!projection && (
+              <div className={projectedCostEmptyState}>
+                Projected monthly cost needs at least 7 days of usage data in the
+                current calendar month — check back once you have more history.
+              </div>
+            )}
           </section>
 
           <section className={section}>
@@ -184,7 +196,28 @@ function InsightsDashboardInner() {
           </section>
 
           <section className={section}>
-            <ModelOverTimeChart daily={summary.daily} mode="cost" />
+            <div className={sectionHeader}>
+              <h2 className={sectionTitle}>Spend by Model Over Time</h2>
+              <div className={modeToggleGroup} role="group" aria-label="Model over time view">
+                <button
+                  type="button"
+                  className={modelOverTimeMode === "cost" ? `${modeToggleButton} ${modeToggleButtonActive}` : modeToggleButton}
+                  aria-pressed={modelOverTimeMode === "cost"}
+                  onClick={() => setModelOverTimeMode("cost")}
+                >
+                  Cost
+                </button>
+                <button
+                  type="button"
+                  className={modelOverTimeMode === "tokens" ? `${modeToggleButton} ${modeToggleButtonActive}` : modeToggleButton}
+                  aria-pressed={modelOverTimeMode === "tokens"}
+                  onClick={() => setModelOverTimeMode("tokens")}
+                >
+                  Tokens
+                </button>
+              </div>
+            </div>
+            <ModelOverTimeChart daily={summary.daily} mode={modelOverTimeMode} />
           </section>
 
           {(summary.topSkills.length > 0 || summary.topTools.length > 0) && (

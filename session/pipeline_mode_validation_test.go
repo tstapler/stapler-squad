@@ -24,6 +24,7 @@ import (
 // to catch a FUTURE regression where someone gives one function its own
 // copy that drifts from the other.
 func TestPlaceholderAllowList_should_BeIdenticalBetweenRenderTemplateAndValidator_When_ComparedDirectly(t *testing.T) {
+	t.Parallel()
 	got := placeholderAllowList()
 
 	require.Equal(t, recognizedPlaceholders, got,
@@ -46,6 +47,7 @@ func TestPlaceholderAllowList_should_BeIdenticalBetweenRenderTemplateAndValidato
 // is the behavioral cross-check that catches drift even if the two
 // functions do NOT literally share a slice.
 func TestRenderTemplateAndValidatePipelineModeContent_should_AgreeOnEveryToken_When_TableDrivenOverAllPlaceholdersPlusOneBogusToken(t *testing.T) {
+	t.Parallel()
 	tokens := make([]string, 0, len(recognizedPlaceholders)+1)
 	tokens = append(tokens, recognizedPlaceholders...)
 	tokens = append(tokens, "made_up_placeholder")
@@ -58,6 +60,7 @@ func TestRenderTemplateAndValidatePipelineModeContent_should_AgreeOnEveryToken_W
 
 	for _, token := range tokens {
 		t.Run(token, func(t *testing.T) {
+			t.Parallel()
 			tmpl := "{{" + token + "}}"
 
 			rendered := renderTemplate(tmpl, placeholders)
@@ -81,6 +84,7 @@ func TestRenderTemplateAndValidatePipelineModeContent_should_AgreeOnEveryToken_W
 // (validation.md row 59): a template using {{item_id}}: {{item_title}}
 // (both recognized) passes validation.
 func TestValidatePipelineModeContent_should_Accept_When_AllPlaceholdersAreRecognized(t *testing.T) {
+	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
 		Slug:                 "quick",
 		ValidateSlug:         true,
@@ -93,6 +97,7 @@ func TestValidatePipelineModeContent_should_Accept_When_AllPlaceholdersAreRecogn
 // (validation.md row 60): {{made_up_placeholder}} in triage_prompt_template
 // is rejected with an error naming both the field and the token.
 func TestValidatePipelineModeContent_should_RejectNamingFieldAndToken_When_UnrecognizedPlaceholderUsed(t *testing.T) {
+	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
 		Slug:                 "quick",
 		ValidateSlug:         true,
@@ -108,6 +113,7 @@ func TestValidatePipelineModeContent_should_RejectNamingFieldAndToken_When_Unrec
 // TestValidatePipelineModeContent_should_RejectWithInvalidSlugMessage_When_SlugContainsUppercaseOrPunctuation
 // (validation.md row 61): "Quick Fix!" is rejected; "quick-fix" is accepted.
 func TestValidatePipelineModeContent_should_RejectWithInvalidSlugMessage_When_SlugContainsUppercaseOrPunctuation(t *testing.T) {
+	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
 		Slug:         "Quick Fix!",
 		ValidateSlug: true,
@@ -125,6 +131,7 @@ func TestValidatePipelineModeContent_should_RejectWithInvalidSlugMessage_When_Sl
 // TestValidatePipelineModeContent_should_RejectEmptySlug_When_ValidateSlugTrue
 // covers the "empty slug" half of Story 2.3.1's slug acceptance criteria.
 func TestValidatePipelineModeContent_should_RejectEmptySlug_When_ValidateSlugTrue(t *testing.T) {
+	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
 		Slug:         "",
 		ValidateSlug: true,
@@ -138,6 +145,7 @@ func TestValidatePipelineModeContent_should_RejectEmptySlug_When_ValidateSlugTru
 // value because UpdatePipelineModeRequest has no slug field) never fails
 // slug validation it wasn't asked to perform.
 func TestValidatePipelineModeContent_should_SkipSlugValidation_When_ValidateSlugFalse(t *testing.T) {
+	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
 		ValidateSlug:         false,
 		TriagePromptTemplate: "Fix {{item_id}}.",
@@ -151,8 +159,10 @@ func TestValidatePipelineModeContent_should_SkipSlugValidation_When_ValidateSlug
 // is table-driven over shellMetacharacters, proving each blocked sequence is
 // rejected when present in a content-template field, naming the field.
 func TestValidatePipelineModeContent_should_RejectShellMetacharacters_When_ContentTemplateFieldContainsOne(t *testing.T) {
+	t.Parallel()
 	for _, meta := range shellMetacharacters {
 		t.Run(meta, func(t *testing.T) {
+			t.Parallel()
 			err := ValidatePipelineModeContent(PipelineModeContentFields{
 				TriagePromptTemplate: "Run " + meta + " rm -rf /",
 			})
@@ -166,6 +176,7 @@ func TestValidatePipelineModeContent_should_RejectShellMetacharacters_When_Conte
 // is the zero-regression companion: ordinary content-template text with no
 // shell metacharacters and only recognized placeholders passes.
 func TestValidatePipelineModeContent_should_Accept_When_ContentTemplateFieldsContainNoMetacharacters(t *testing.T) {
+	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
 		Slug:                  "quick",
 		ValidateSlug:          true,

@@ -16,6 +16,7 @@ import (
 // explicitly setting enabled (bypassing EntWorkflowRepository.Create, which always sets
 // it explicitly) picks up the schema's Default(true) at the SQL layer.
 func TestWorkflow_EnabledField_DefaultsTrue(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -34,6 +35,7 @@ func TestWorkflow_EnabledField_DefaultsTrue(t *testing.T) {
 // verifies the happy path of the CAS (webhook-triggers verify follow-ups AC9): a write
 // whose expectedUpdatedAt matches the row's current updated_at succeeds.
 func TestEntWorkflowRepository_UpdateConditional_should_ApplyWrite_When_UpdatedAtMatches(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -53,6 +55,7 @@ func TestEntWorkflowRepository_UpdateConditional_should_ApplyWrite_When_UpdatedA
 // verifies the CAS rejects a write whose expectedUpdatedAt no longer matches — the
 // scenario two concurrent UpdateWorkflow callers would otherwise both win.
 func TestEntWorkflowRepository_UpdateConditional_should_ReturnErrPreconditionFailed_When_UpdatedAtStale(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -80,6 +83,7 @@ func TestEntWorkflowRepository_UpdateConditional_should_ReturnErrPreconditionFai
 // ErrPreconditionFailed, never both silently applying (the Get-then-check-then-write
 // bug UpdateWorkflow had before this fix).
 func TestEntWorkflowRepository_UpdateConditional_should_RejectExactlyOneConcurrentWriter(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -127,6 +131,7 @@ func TestEntWorkflowRepository_UpdateConditional_should_RejectExactlyOneConcurre
 // SetWebhookSlug(""), so clearing two separate workflows' webhook_slug in
 // sequence must both succeed.
 func TestEntWorkflowRepository_Update_should_ClearWebhookSlugWithoutUniqueConstraintViolation_When_TwoWorkflowsBothClearedInSequence(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -170,6 +175,7 @@ func TestEntWorkflowRepository_Update_should_ClearWebhookSlugWithoutUniqueConstr
 // is the companion happy-path case: a non-empty webhook_slug update still goes
 // through SetWebhookSlug and round-trips correctly.
 func TestEntWorkflowRepository_Update_should_SetWebhookSlug_When_NonEmptyValueProvided(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 

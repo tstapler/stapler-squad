@@ -11,6 +11,7 @@ import (
 // NewTriggerRateLimiter, must not panic on first Allow() call. Before the fix, the
 // nil limiters map panicked on the assignment t.limiters[workflowID] = lim.
 func TestTriggerRateLimiter_Allow_ZeroValue_DoesNotPanic(t *testing.T) {
+	t.Parallel()
 	var lim TriggerRateLimiter
 
 	if !lim.Allow(uuid.New()) {
@@ -19,6 +20,7 @@ func TestTriggerRateLimiter_Allow_ZeroValue_DoesNotPanic(t *testing.T) {
 }
 
 func TestTriggerRateLimiter_Allow_Constructed_StillWorksPerWorkflow(t *testing.T) {
+	t.Parallel()
 	lim := NewTriggerRateLimiter()
 	a, b := uuid.New(), uuid.New()
 

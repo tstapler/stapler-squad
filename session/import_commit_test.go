@@ -20,6 +20,7 @@ func newNotFoundDetector(t *testing.T) *HistoryFileDetector {
 }
 
 func TestCommitImportExternalSession_ReturnsErrCorrelationDrifted_When_FreshKindDiffersFromExpected(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{}
 	detector := newNotFoundDetector(t)
 
@@ -41,6 +42,7 @@ func TestCommitImportExternalSession_ReturnsErrCorrelationDrifted_When_FreshKind
 }
 
 func TestCommitImportExternalSession_ReturnsErrPathAlreadyManaged_When_PathCollides(t *testing.T) {
+	t.Parallel()
 	path := t.TempDir()
 	store := &fakeInstanceStore{
 		instances: []InstanceData{{Title: "existing", Path: path}},
@@ -62,6 +64,7 @@ func TestCommitImportExternalSession_ReturnsErrPathAlreadyManaged_When_PathColli
 }
 
 func TestCommitImportExternalSession_ReturnsErrPathNotExist_When_CandidatePathMissing(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{}
 	detector := newNotFoundDetector(t)
 
@@ -266,6 +269,7 @@ func TestCommitImportExternalSession_ReturnsError_When_AliveCheckerRejectsOrigin
 // a candidate's client-supplied TmuxSession name without confirming it
 // actually corresponds to a live tmux session at commit time.
 func TestCommitImportExternalSession_ReturnsErrTmuxSessionNotFound_When_CandidateTmuxSessionMissing(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{}
 	detector := newNotFoundDetector(t)
 

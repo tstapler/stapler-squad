@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.uber.org/goleak"
@@ -74,26 +75,19 @@ func TestReapZombieChildren_ReturnsZero_When_NoZombieChildrenExist(t *testing.T)
 func TestStartZombieReaper_JoinsOnCtxCancel(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	StartZombieReaper(ctx, time.Millisecond, func(string, ...any) {}, &wg)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		StartZombieReaper(ctx, time.Millisecond, func(string, ...any) {}, &wg)
 
-	time.Sleep(20 * time.Millisecond) // let several ticks fire
-	cancel()
+		time.Sleep(20 * time.Millisecond) // let several ticks fire
+		cancel()
 
-	done := make(chan struct{})
-	go func() {
+		// wg.Wait() durably blocks until the reaper goroutine exits; synctest's
+		// deadlock detection fails the test if it never does, instead of a
+		// real-time.After race.
 		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		// Mirrors the margin in zombie_detector_test.go: under heavy parallel
-		// test-suite load, scheduling delays alone (even without a subprocess
-		// call here) can push a tick past 1s without indicating a real hang.
-		t.Fatal("wg.Wait() did not return within 5s of ctx cancellation")
-	}
+	})
 
 	goleak.VerifyNone(t, baseline)
 }

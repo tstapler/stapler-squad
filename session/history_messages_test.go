@@ -68,6 +68,7 @@ func makeToolUseMsg() conversationMessage {
 // --- extractMsgContent -------------------------------------------------------
 
 func TestExtractMsgContent_StringContent(t *testing.T) {
+	t.Parallel()
 	raw := makeMsg("user", "hello world")
 	msg, ok := extractMsgContent(raw)
 	if !ok {
@@ -82,6 +83,7 @@ func TestExtractMsgContent_StringContent(t *testing.T) {
 }
 
 func TestExtractMsgContent_ArrayContent(t *testing.T) {
+	t.Parallel()
 	raw := conversationMessage{
 		Type:      "assistant",
 		SessionID: "s",
@@ -109,6 +111,7 @@ func TestExtractMsgContent_ArrayContent(t *testing.T) {
 }
 
 func TestExtractMsgContent_NonMessageType(t *testing.T) {
+	t.Parallel()
 	raw := makeToolUseMsg()
 	_, ok := extractMsgContent(raw)
 	if ok {
@@ -119,6 +122,7 @@ func TestExtractMsgContent_NonMessageType(t *testing.T) {
 // --- readAllMessagesFromFile -------------------------------------------------
 
 func TestReadAllMessagesFromFile_Empty(t *testing.T) {
+	t.Parallel()
 	path := buildJSONLFile(t, nil)
 	msgs, err := readAllMessagesFromFile(path)
 	if err != nil {
@@ -130,6 +134,7 @@ func TestReadAllMessagesFromFile_Empty(t *testing.T) {
 }
 
 func TestReadAllMessagesFromFile_OnlyToolEntries(t *testing.T) {
+	t.Parallel()
 	path := buildJSONLFile(t, []conversationMessage{
 		makeToolUseMsg(),
 		makeToolUseMsg(),
@@ -144,6 +149,7 @@ func TestReadAllMessagesFromFile_OnlyToolEntries(t *testing.T) {
 }
 
 func TestReadAllMessagesFromFile_MixedEntries(t *testing.T) {
+	t.Parallel()
 	path := buildJSONLFile(t, []conversationMessage{
 		makeMsg("user", "msg1"),
 		makeToolUseMsg(),
@@ -167,6 +173,7 @@ func TestReadAllMessagesFromFile_MixedEntries(t *testing.T) {
 }
 
 func TestReadAllMessagesFromFile_MalformedLines(t *testing.T) {
+	t.Parallel()
 	// Write valid + invalid lines directly
 	dir := t.TempDir()
 	path := filepath.Join(dir, "conv.jsonl")
@@ -187,6 +194,7 @@ func TestReadAllMessagesFromFile_MalformedLines(t *testing.T) {
 }
 
 func TestReadAllMessagesFromFile_NonExistent(t *testing.T) {
+	t.Parallel()
 	_, err := readAllMessagesFromFile("/nonexistent/path/conv.jsonl")
 	if err == nil {
 		t.Fatal("expected error for non-existent file")
@@ -196,6 +204,7 @@ func TestReadAllMessagesFromFile_NonExistent(t *testing.T) {
 // --- readLastNMessagesFromFile -----------------------------------------------
 
 func TestReadLastNMessages_LimitZeroReturnsAll(t *testing.T) {
+	t.Parallel()
 	path := buildJSONLFile(t, []conversationMessage{
 		makeMsg("user", "a"),
 		makeMsg("assistant", "b"),
@@ -211,6 +220,7 @@ func TestReadLastNMessages_LimitZeroReturnsAll(t *testing.T) {
 }
 
 func TestReadLastNMessages_LimitExceedsCount(t *testing.T) {
+	t.Parallel()
 	path := buildJSONLFile(t, []conversationMessage{
 		makeMsg("user", "only one"),
 	})
@@ -227,6 +237,7 @@ func TestReadLastNMessages_LimitExceedsCount(t *testing.T) {
 }
 
 func TestReadLastNMessages_LimitAtExactCount(t *testing.T) {
+	t.Parallel()
 	msgs := make([]conversationMessage, 5)
 	for i := range msgs {
 		msgs[i] = makeMsg("user", fmt.Sprintf("msg%d", i))
@@ -243,6 +254,7 @@ func TestReadLastNMessages_LimitAtExactCount(t *testing.T) {
 }
 
 func TestReadLastNMessages_LimitReturnsLastN(t *testing.T) {
+	t.Parallel()
 	raw := make([]conversationMessage, 20)
 	for i := range raw {
 		raw[i] = makeMsg("user", fmt.Sprintf("msg%d", i))
@@ -266,6 +278,7 @@ func TestReadLastNMessages_LimitReturnsLastN(t *testing.T) {
 }
 
 func TestReadLastNMessages_ChronologicalOrder(t *testing.T) {
+	t.Parallel()
 	// Build 100 messages; request last 10.  Verify order is oldest-first.
 	raw := make([]conversationMessage, 100)
 	for i := range raw {
@@ -289,6 +302,7 @@ func TestReadLastNMessages_ChronologicalOrder(t *testing.T) {
 }
 
 func TestReadLastNMessages_EmptyFile(t *testing.T) {
+	t.Parallel()
 	path := buildJSONLFile(t, nil)
 	msgs, err := readLastNMessagesFromFile(path, 5)
 	if err != nil {
@@ -300,6 +314,7 @@ func TestReadLastNMessages_EmptyFile(t *testing.T) {
 }
 
 func TestReadLastNMessages_SkipsToolEntries(t *testing.T) {
+	t.Parallel()
 	// Interleave tool entries; the tail read must skip them and return user/assistant only.
 	raw := []conversationMessage{
 		makeMsg("user", "first"),
@@ -324,6 +339,7 @@ func TestReadLastNMessages_SkipsToolEntries(t *testing.T) {
 }
 
 func TestReadLastNMessages_LargeFile_SpansMultipleChunks(t *testing.T) {
+	t.Parallel()
 	// Create enough messages that the file exceeds one 64 KiB chunk.
 	// Each message content is ~200 bytes; 400 messages ≈ 80 KB → two chunks.
 	const total = 400
@@ -351,6 +367,7 @@ func TestReadLastNMessages_LargeFile_SpansMultipleChunks(t *testing.T) {
 // ResultsMatchForwardAndReverse verifies that readLastNMessagesFromFile returns
 // the same last-N entries as reading all messages and slicing the tail.
 func TestReadLastNMessages_MatchesForwardRead(t *testing.T) {
+	t.Parallel()
 	const total = 50
 	raw := make([]conversationMessage, total)
 	for i := range raw {
@@ -391,6 +408,7 @@ func TestReadLastNMessages_MatchesForwardRead(t *testing.T) {
 // --- GetMessagesFromConversationFile (via real session history) ---------------
 
 func TestGetMessagesFromConversationFile_NotFound(t *testing.T) {
+	t.Parallel()
 	// Use a directory that doesn't exist as the projects dir.
 	// We can't easily inject the path, so test via findConversationFilePath directly.
 	_, err := findConversationFilePath("nonexistent-session-id-xyz")

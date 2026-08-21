@@ -17,6 +17,7 @@ import (
 // archiving (e.g. Active), leaving the two out of sync. The retention sweep (and
 // anything else gated on Status) depends on an archived session also being Stopped.
 func TestArchiveSession_SetsStatusStopped(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
@@ -38,6 +39,7 @@ func TestArchiveSession_SetsStatusStopped(t *testing.T) {
 // TestArchiveSessionByUUID_SetsStatusStopped covers the CAS variant used by
 // callers (e.g. backlog lifecycle) that archive unconditionally by UUID.
 func TestArchiveSessionByUUID_SetsStatusStopped(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 

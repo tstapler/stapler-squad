@@ -107,6 +107,7 @@ func enabledCfg() *config.Config {
 // so if TransitionBacklogItemStatus were (incorrectly) waiting on it
 // synchronously, this test would hang past its own timeout.
 func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBegins_When_DoneWithNextWorkflowSet(t *testing.T) {
+	t.Parallel()
 	fx, cleanup := newChainTestFixture(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -165,6 +166,7 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 // rejected before ever calling FireTriggerChained, with ChainFired left true
 // (so the reconciler never retries it) and a fired_failed audit row.
 func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_DepthAtOrAboveMax(t *testing.T) {
+	t.Parallel()
 	fx, cleanup := newChainTestFixture(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -211,6 +213,7 @@ func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_DepthAtOrAboveMax(t
 // (ChainedAt) for longer than maxChainWaitDuration gives up rather than
 // letting TriggerChainReconciler retry it forever behind a saturated WIP gate.
 func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_WaitExceedsMaxChainWaitDuration(t *testing.T) {
+	t.Parallel()
 	fx, cleanup := newChainTestFixture(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -257,6 +260,7 @@ func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_WaitExceedsMaxChain
 // is the happy path: FireTriggerChained is called once with depth+1, and
 // ChainFired lands true afterward.
 func TestChainFirer_Fire_should_createSessionAndMarkChainFired_When_ValidChainConfigured(t *testing.T) {
+	t.Parallel()
 	fx, cleanup := newChainTestFixture(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -301,6 +305,7 @@ func TestChainFirer_Fire_should_createSessionAndMarkChainFired_When_ValidChainCo
 // between the done write and the async dispatch ever running) is picked up
 // by ReconcileChains and fired.
 func TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHasUnfiredChain(t *testing.T) {
+	t.Parallel()
 	fx, cleanup := newChainTestFixture(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -355,6 +360,7 @@ func TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHas
 // (ChainFired/NextWorkflowIDSet pushed into the SQL WHERE clause, no reliance
 // on row position), it must still be found and fired.
 func TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneItemsExist(t *testing.T) {
+	t.Parallel()
 	fx, cleanup := newChainTestFixture(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -414,6 +420,7 @@ func TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneIte
 // Run with -race to additionally prove no data race in the shared semaphore/
 // counting fake.
 func TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameItem(t *testing.T) {
+	t.Parallel()
 	fx, cleanup := newChainTestFixture(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -468,6 +475,7 @@ func TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameI
 // 8.2.1b's defense-in-depth gate: Dispatch must not fire (or even reserve a
 // semaphore slot) when webhook_triggers is off.
 func TestChainFirer_Dispatch_should_noOp_When_FeatureFlagDisabled(t *testing.T) {
+	t.Parallel()
 	fx, cleanup := newChainTestFixture(t)
 	defer cleanup()
 	ctx := context.Background()

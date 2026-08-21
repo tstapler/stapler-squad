@@ -13,6 +13,7 @@ import (
 // ---- BuildDiffSnapshot ----
 
 func TestBuildDiffSnapshot_should_ReturnEmptySnapshot_When_DiffStatsIsNil(t *testing.T) {
+	t.Parallel()
 	snapshot := BuildDiffSnapshot(nil)
 	if !snapshot.IsEmpty() {
 		t.Fatalf("expected empty snapshot, got %+v", snapshot)
@@ -23,6 +24,7 @@ func TestBuildDiffSnapshot_should_ReturnEmptySnapshot_When_DiffStatsIsNil(t *tes
 }
 
 func TestBuildDiffSnapshot_should_ReturnPopulatedSnapshot_When_DiffStatsProvided(t *testing.T) {
+	t.Parallel()
 	stats := &git.DiffStats{
 		Added:   42,
 		Removed: 7,
@@ -37,6 +39,7 @@ func TestBuildDiffSnapshot_should_ReturnPopulatedSnapshot_When_DiffStatsProvided
 // ---- BuildTimelineSnapshot ----
 
 func TestBuildTimelineSnapshot_should_ComputeDuration_When_CreatedAtAndStoppedAtProvided(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	stop := start.Add(5 * time.Minute)
 	snapshot := BuildTimelineSnapshot(start, stop)
@@ -71,6 +74,7 @@ func (f *fakeReviewQueueLookup) ReviewQueueResolvedCount(ctx context.Context, _ 
 }
 
 func TestBuildDecisionsSnapshot_should_ReturnAllZero_When_NoRecords(t *testing.T) {
+	t.Parallel()
 	snapshot, err := BuildDecisionsSnapshot(context.Background(), "sess-1", &fakeNotificationDecisionLister{}, &fakeReviewQueueLookup{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -81,6 +85,7 @@ func TestBuildDecisionsSnapshot_should_ReturnAllZero_When_NoRecords(t *testing.T
 }
 
 func TestBuildDecisionsSnapshot_should_QueryNotificationHistoryStore_When_SessionHasFiveAutoApprovedRecords(t *testing.T) {
+	t.Parallel()
 	autoApproved := int32(sessionv1.NotificationType_NOTIFICATION_TYPE_AUTO_APPROVED)
 	approvalNeeded := int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED)
 
@@ -101,6 +106,7 @@ func TestBuildDecisionsSnapshot_should_QueryNotificationHistoryStore_When_Sessio
 }
 
 func TestBuildDecisionsSnapshot_should_ReturnError_When_ReviewQueueLookupExceedsTimeout(t *testing.T) {
+	t.Parallel()
 	start := time.Now()
 	_, err := BuildDecisionsSnapshot(context.Background(), "sess-1", &fakeNotificationDecisionLister{}, &fakeReviewQueueLookup{block: true})
 	elapsed := time.Since(start)
@@ -130,6 +136,7 @@ func (f *fakeTokenStoreReader) Subscribe() <-chan struct{}     { return nil }
 func (f *fakeTokenStoreReader) Unsubscribe(ch <-chan struct{}) {}
 
 func TestBuildCostSnapshot_should_ReturnDataUnavailable_When_TokenStoreReturnsNil(t *testing.T) {
+	t.Parallel()
 	store := &fakeTokenStoreReader{}
 	snapshot := BuildCostSnapshot("no-such-session", store)
 	if !snapshot.DataUnavailable {
@@ -138,6 +145,7 @@ func TestBuildCostSnapshot_should_ReturnDataUnavailable_When_TokenStoreReturnsNi
 }
 
 func TestBuildCostSnapshot_should_ReturnPopulatedSnapshot_When_TokenStoreReturnsParseResult(t *testing.T) {
+	t.Parallel()
 	store := &fakeTokenStoreReader{byUUID: map[string]*tokens.ParseResult{
 		"sess-123": {
 			SessionUUID:  "sess-123",
@@ -156,6 +164,7 @@ func TestBuildCostSnapshot_should_ReturnPopulatedSnapshot_When_TokenStoreReturns
 }
 
 func TestBuildCostSnapshot_should_ReturnTotalTokensAndCost_When_RealTranscriptParsedByTokenStore(t *testing.T) {
+	t.Parallel()
 	store := tokens.NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -185,12 +194,14 @@ func TestBuildCostSnapshot_should_ReturnTotalTokensAndCost_When_RealTranscriptPa
 // ---- isTrivialSession ----
 
 func TestIsTrivialSession_should_ReturnTrue_When_EmptyDiffZeroDecisionsAndShortDuration(t *testing.T) {
+	t.Parallel()
 	if !isTrivialSession(DiffSnapshot{}, DecisionsSnapshot{}, 5*time.Second) {
 		t.Fatal("expected trivial session to be detected")
 	}
 }
 
 func TestIsTrivialSession_should_ReturnFalse_When_DurationEqualsExactly30Seconds(t *testing.T) {
+	t.Parallel()
 	if isTrivialSession(DiffSnapshot{}, DecisionsSnapshot{}, trivialSessionMaxDuration) {
 		t.Fatal("expected duration == trivialSessionMaxDuration to NOT be trivial (strict less-than boundary)")
 	}

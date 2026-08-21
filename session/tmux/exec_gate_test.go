@@ -166,6 +166,7 @@ func TestAcquireResyncExecSlot_should_NotConsumeDefaultPoolCapacity_When_FastLan
 }
 
 func TestExecGate_BoundsPeakConcurrency(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	const n = 3
 	const workers = 20
@@ -200,6 +201,7 @@ func TestExecGate_BoundsPeakConcurrency(t *testing.T) {
 }
 
 func TestExecGate_TryAcquireFailsWhenFull(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	const n = 2
 
@@ -244,6 +246,7 @@ func TestExecGate_TryAcquireFailsWhenFull(t *testing.T) {
 }
 
 func TestExecGate_ReleaseIsIdempotentSafe(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	release, ok, err := acquireSlot(context.Background(), dir, 1, true)
 	require.NoError(t, err)

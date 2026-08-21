@@ -33,6 +33,7 @@ func writeTestJSONL(t *testing.T, turns []struct{ role, content string }) string
 
 // UT-6: TestBuildContinuationPrompt_WithJSONL — reads real JSONL and includes last assistant msg.
 func TestBuildContinuationPrompt_WithJSONL(t *testing.T) {
+	t.Parallel()
 	turns := []struct{ role, content string }{
 		{"user", "Please fix the bug in main.go"},
 		{"assistant", "I'll start by examining the file."},
@@ -59,6 +60,7 @@ func TestBuildContinuationPrompt_WithJSONL(t *testing.T) {
 
 // UT-7: TestBuildContinuationPrompt_TruncatesLongMessage — 1000-char message is truncated at 500.
 func TestBuildContinuationPrompt_TruncatesLongMessage(t *testing.T) {
+	t.Parallel()
 	longContent := strings.Repeat("x", 1000)
 	turns := []struct{ role, content string }{
 		{"assistant", longContent},
@@ -81,6 +83,7 @@ func TestBuildContinuationPrompt_TruncatesLongMessage(t *testing.T) {
 
 // UT-8: TestBuildContinuationPrompt_NoAssistantMessage — only user messages → generic fallback.
 func TestBuildContinuationPrompt_NoAssistantMessage(t *testing.T) {
+	t.Parallel()
 	turns := []struct{ role, content string }{
 		{"user", "Hello, fix this bug."},
 		{"user", "Are you there?"},

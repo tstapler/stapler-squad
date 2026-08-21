@@ -12,6 +12,7 @@ import (
 )
 
 func TestEntTriggerFireEventRepository_Create_should_PersistAndRoundTrip_When_ValidInput(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -48,6 +49,7 @@ func TestEntTriggerFireEventRepository_Create_should_PersistAndRoundTrip_When_Va
 // delivery_id) pair fails with the typed ErrDuplicateDelivery via the composite
 // unique index, not a silent duplicate insert.
 func TestEntTriggerFireEventRepository_Create_should_ReturnErrDuplicateDelivery_When_SameWorkflowAndDeliveryIDRepeats(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -83,6 +85,7 @@ func TestEntTriggerFireEventRepository_Create_should_ReturnErrDuplicateDelivery_
 // watching main) must each be able to record their own fire event — a bare global
 // unique index on delivery_id alone would incorrectly collide here.
 func TestEntTriggerFireEventRepository_Create_should_AllowSameDeliveryIDAcrossDifferentWorkflows(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -118,6 +121,7 @@ func TestEntTriggerFireEventRepository_Create_should_AllowSameDeliveryIDAcrossDi
 // with each other — delivery_id is left unset (NULL), and SQL treats distinct NULLs as
 // non-colliding under the composite unique index.
 func TestEntTriggerFireEventRepository_Create_should_AllowMultipleRowsWithNoDeliveryID(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -145,6 +149,7 @@ func TestEntTriggerFireEventRepository_Create_should_AllowMultipleRowsWithNoDeli
 // concurrently — the scenario the unique index (not a pre-check-then-insert) exists to
 // make safe: exactly one of the two racing Create calls must succeed.
 func TestEntTriggerFireEventRepository_Create_should_RejectExactlyOneConcurrentDuplicate(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -192,6 +197,7 @@ func TestEntTriggerFireEventRepository_Create_should_RejectExactlyOneConcurrentD
 // verifies a rejected webhook request (e.g. unknown slug) can still be recorded with no
 // resolved Workflow.
 func TestEntTriggerFireEventRepository_Create_should_AllowNilWorkflowID_When_RejectedBeforeResolution(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -220,6 +226,7 @@ func TestEntTriggerFireEventRepository_Create_should_AllowNilWorkflowID_When_Rej
 // from the generated client (unexported fields prevent constructing one directly) via
 // an unrelated unique-index collision on Workflow.slug.
 func TestIsDuplicateDeliveryConstraintError_should_ReturnFalse_When_ConstraintErrorIsNotTheDeliveryIndex(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -249,6 +256,7 @@ func TestIsDuplicateDeliveryConstraintError_should_ReturnFalse_When_ConstraintEr
 // TestEntTriggerFireEventRepository_ListByWorkflow_should_DefaultLimitAndOrderNewestFirst
 // verifies the default limit (100) and newest-first ordering.
 func TestEntTriggerFireEventRepository_ListByWorkflow_should_DefaultLimitAndOrderNewestFirst(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 

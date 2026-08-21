@@ -11,6 +11,7 @@ import (
 )
 
 func TestTokenStore_WhenFileNotCached_ExpectParseOnGetAll(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -35,6 +36,7 @@ func TestTokenStore_WhenFileNotCached_ExpectParseOnGetAll(t *testing.T) {
 }
 
 func TestTokenStore_WhenFileCached_ExpectCacheHitSkipsReparse(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -69,6 +71,7 @@ func TestTokenStore_WhenFileCached_ExpectCacheHitSkipsReparse(t *testing.T) {
 }
 
 func TestTokenStore_WhenGetByUUID_ExpectDirectLookup(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -95,6 +98,7 @@ func TestTokenStore_WhenGetByUUID_ExpectDirectLookup(t *testing.T) {
 }
 
 func TestTokenStore_WhenConcurrentRequests_ExpectNoDataRace(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -127,6 +131,7 @@ func TestTokenStore_WhenConcurrentRequests_ExpectNoDataRace(t *testing.T) {
 }
 
 func TestTokenStore_Subscribe_WhenStoreUpdated_ExpectNotification(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

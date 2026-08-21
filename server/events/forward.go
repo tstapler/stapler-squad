@@ -35,6 +35,7 @@ const (
 	BacklogChangeItemArchived          = pkgevents.BacklogChangeItemArchived
 	BacklogChangeItemRemoved           = pkgevents.BacklogChangeItemRemoved
 	BacklogChangeTriageProgressUpdated = pkgevents.BacklogChangeTriageProgressUpdated
+	BacklogChangeActivityNoteAdded     = pkgevents.BacklogChangeActivityNoteAdded
 )
 
 // Constructor functions (var allows assignment but is callable with identical syntax)

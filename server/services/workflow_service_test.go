@@ -39,14 +39,10 @@ func (m *mockScheduler) FireNow(_ context.Context, _ *ent.Workflow, _ string) (s
 	return "test-session-id", nil
 }
 
-// createTestEntClient opens an in-process SQLite database with full migrations.
+// createTestEntClient opens an in-memory SQLite database with full migrations.
 func createTestEntClient(t *testing.T) *session.EntRepository {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(testDir + "/workflow_test.db"))
-	require.NoError(t, err, "createTestEntClient: failed to open database")
-	t.Cleanup(func() { repo.Close() })
-	return repo
+	return session.NewTestEntRepository(t)
 }
 
 // createTestWorkflowService wires up a SessionService + WorkflowService with
@@ -68,6 +64,7 @@ func createTestWorkflowService(t *testing.T) (*SessionService, *WorkflowService)
 
 // TestCreateWorkflow_HappyPath checks that a valid workflow is persisted.
 func TestCreateWorkflow_HappyPath(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -90,6 +87,7 @@ func TestCreateWorkflow_HappyPath(t *testing.T) {
 // enabled defaults to true, and an explicit false round-trips unchanged — independent
 // of cron_enabled, which is left at its own zero-value default (false) here.
 func TestCreateWorkflow_Enabled_DefaultsTrueAndRoundTrips(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -112,6 +110,7 @@ func TestCreateWorkflow_Enabled_DefaultsTrueAndRoundTrips(t *testing.T) {
 // enabled without touching cronEnabled and vice versa — the two fields must not be
 // coupled at the RPC layer (webhook-triggers verify follow-ups AC0-3).
 func TestUpdateWorkflow_Enabled_IndependentOfCronEnabled(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -134,6 +133,7 @@ func TestUpdateWorkflow_Enabled_IndependentOfCronEnabled(t *testing.T) {
 
 // TestCreateWorkflow_InvalidSlug verifies that a slug with uppercase is rejected.
 func TestCreateWorkflow_InvalidSlug(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -150,6 +150,7 @@ func TestCreateWorkflow_InvalidSlug(t *testing.T) {
 
 // TestCreateWorkflow_DuplicateSlug verifies AlreadyExists is returned.
 func TestCreateWorkflow_DuplicateSlug(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -175,6 +176,7 @@ func TestCreateWorkflow_DuplicateSlug(t *testing.T) {
 
 // TestListWorkflows verifies workflows are listed after creation.
 func TestListWorkflows(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -196,6 +198,7 @@ func TestListWorkflows(t *testing.T) {
 
 // TestDeleteWorkflow verifies a workflow is removed.
 func TestDeleteWorkflow(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -218,6 +221,7 @@ func TestDeleteWorkflow(t *testing.T) {
 
 // TestUpdateWorkflow verifies that a workflow's name is updated.
 func TestUpdateWorkflow(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -246,6 +250,7 @@ func TestUpdateWorkflow(t *testing.T) {
 // updated_at, is rejected with CodeAborted rather than overwriting the first caller's
 // change.
 func TestUpdateWorkflow_ConcurrentWrites_SecondCallerGetsConflict(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -279,6 +284,7 @@ func TestUpdateWorkflow_ConcurrentWrites_SecondCallerGetsConflict(t *testing.T) 
 // before AC9 — no precondition, always writes, including twice in a row against the
 // same original snapshot.
 func TestUpdateWorkflow_NoExpectedUpdatedAt_AlwaysWrites_LikeBeforeCAS(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -302,6 +308,7 @@ func TestUpdateWorkflow_NoExpectedUpdatedAt_AlwaysWrites_LikeBeforeCAS(t *testin
 
 // TestCreateWorkflow_MissingCommand verifies validation catches empty command.
 func TestCreateWorkflow_MissingCommand(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -319,6 +326,7 @@ func TestCreateWorkflow_MissingCommand(t *testing.T) {
 // TestCreateWorkflow_MalformedModel verifies a whitespace-bearing model value is
 // rejected at save time rather than silently accepted to fail later at fire time.
 func TestCreateWorkflow_MalformedModel(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -336,6 +344,7 @@ func TestCreateWorkflow_MalformedModel(t *testing.T) {
 
 // TestCreateWorkflow_ValidFamilyModel verifies a namespaced family alias is accepted.
 func TestCreateWorkflow_ValidFamilyModel(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -354,6 +363,7 @@ func TestCreateWorkflow_ValidFamilyModel(t *testing.T) {
 // TestUpdateWorkflow_MalformedModel verifies UpdateWorkflow applies the same
 // save-time model validation as CreateWorkflow.
 func TestUpdateWorkflow_MalformedModel(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -375,6 +385,7 @@ func TestUpdateWorkflow_MalformedModel(t *testing.T) {
 
 // TestSessionService_DelegatesListWorkflows verifies the delegation from SessionService.
 func TestSessionService_DelegatesListWorkflows(t *testing.T) {
+	t.Parallel()
 	sessSvc, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -395,6 +406,7 @@ func TestSessionService_DelegatesListWorkflows(t *testing.T) {
 // TestCreateWorkflow_WithCronEnabled_CallsReload verifies that creating a cron-enabled
 // workflow invokes Reload on the scheduler.
 func TestCreateWorkflow_WithCronEnabled_CallsReload(t *testing.T) {
+	t.Parallel()
 	_, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -416,6 +428,7 @@ func TestCreateWorkflow_WithCronEnabled_CallsReload(t *testing.T) {
 // TestDeleteWorkflow_CallsSchedulerRemove verifies that deleting a workflow
 // invokes Remove on the scheduler.
 func TestDeleteWorkflow_CallsSchedulerRemove(t *testing.T) {
+	t.Parallel()
 	_, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -438,6 +451,7 @@ func TestDeleteWorkflow_CallsSchedulerRemove(t *testing.T) {
 
 // TestRunWorkflow_HappyPath verifies that RunWorkflow returns the session ID from FireNow.
 func TestRunWorkflow_HappyPath(t *testing.T) {
+	t.Parallel()
 	_, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -464,6 +478,7 @@ func TestRunWorkflow_HappyPath(t *testing.T) {
 
 // TestRunWorkflow_NotFound verifies that RunWorkflow returns CodeNotFound for unknown IDs.
 func TestRunWorkflow_NotFound(t *testing.T) {
+	t.Parallel()
 	_, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -482,6 +497,7 @@ func TestRunWorkflow_NotFound(t *testing.T) {
 // validation: a request whose populated match-criteria fields don't match the
 // declared trigger_type is rejected with CodeInvalidArgument.
 func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		req  *sessionv1.CreateWorkflowRequest
@@ -514,6 +530,7 @@ func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, svc := createTestWorkflowService(t)
 			ctx := context.Background()
 
@@ -536,6 +553,7 @@ func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 // never causes the resulting row to register as a cron entry, since that gate
 // independently requires trigger_type=="cron" too.
 func TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -557,6 +575,7 @@ func TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted(t *testing.T
 // acceptance criteria: a Workflow row created with trigger_type="webhook" and a
 // webhook_slug is retrievable via GetByWebhookSlug.
 func TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -584,6 +603,7 @@ func TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug(t *testing.T) {
 // to UpdateWorkflow, evaluated against the *effective* (existing-row-merged-with-
 // request) state — not just the request's own fields in isolation.
 func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -618,6 +638,7 @@ func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 // trigger-type mismatch — cron_enabled no longer gates whether the trigger fires (see
 // Enabled), but validateTriggerTypeFieldConsistency must still accept the combination.
 func TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -646,6 +667,7 @@ func TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType(t *testing
 // UpdateWorkflow call touching only an unrelated field (not any trigger field) is not
 // rejected by the trigger-type consistency check.
 func TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -673,6 +695,7 @@ func TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected(t *testing.T)
 // TestListTriggerFireEvents_ReturnsEventsForWorkflow verifies Task 1.2.1d's minimal
 // query-only RPC round-trips TriggerFireEvent rows recorded against a workflow.
 func TestListTriggerFireEvents_ReturnsEventsForWorkflow(t *testing.T) {
+	t.Parallel()
 	sessSvc, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -711,6 +734,7 @@ func TestListTriggerFireEvents_ReturnsEventsForWorkflow(t *testing.T) {
 // TestListTriggerFireEvents_NilRepo_ReturnsEmptyList verifies the nil-degradation
 // convention matching this file's other RPCs (e.g. ListWorkflows with a nil repo).
 func TestListTriggerFireEvents_NilRepo_ReturnsEmptyList(t *testing.T) {
+	t.Parallel()
 	sessSvc, _ := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -724,6 +748,7 @@ func TestListTriggerFireEvents_NilRepo_ReturnsEmptyList(t *testing.T) {
 // TestUpdateWorkflow_MultipleFields verifies that multiple fields can be updated
 // simultaneously and that unaffected fields remain unchanged.
 func TestUpdateWorkflow_MultipleFields(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
@@ -775,6 +800,7 @@ func TestCreateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // TestCreateWorkflow_ValidPromptTemplate_Accepted is the control case: a syntactically
 // valid prompt_template is accepted and persisted.
 func TestCreateWorkflow_ValidPromptTemplate_Accepted(t *testing.T) {
+	t.Parallel()
 	_, svc := createTestWorkflowService(t)
 	ctx := context.Background()
 

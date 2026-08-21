@@ -60,6 +60,7 @@ func stubMatchingPRByNumberFinder(listener *BacklogLifecycleListener, headBranch
 // --- Task 6.6: verifyPRHeadBranchMatchesTracked unit tests -----------------
 
 func TestVerifyPRHeadBranchMatchesTracked_should_ReturnTrue_When_HeadBranchMatches(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -76,6 +77,7 @@ func TestVerifyPRHeadBranchMatchesTracked_should_ReturnTrue_When_HeadBranchMatch
 }
 
 func TestVerifyPRHeadBranchMatchesTracked_should_ReturnFalse_When_HeadBranchDiffers(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -96,6 +98,7 @@ func TestVerifyPRHeadBranchMatchesTracked_should_ReturnFalse_When_HeadBranchDiff
 // empty tracked branch (the caller couldn't resolve the item's own tracked
 // branch) must never be treated as "nothing to check, so it matches".
 func TestVerifyPRHeadBranchMatchesTracked_should_ReturnFalse_When_TrackedBranchEmpty(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -115,6 +118,7 @@ func TestVerifyPRHeadBranchMatchesTracked_should_ReturnFalse_When_TrackedBranchE
 }
 
 func TestVerifyPRHeadBranchMatchesTracked_should_ReturnFalse_When_FinderErrors(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -139,6 +143,7 @@ func TestVerifyPRHeadBranchMatchesTracked_should_ReturnFalse_When_FinderErrors(t
 // auto-closed on the strength of item.PrNumber alone, even when its last
 // work-session commit is confirmed already on main.
 func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -192,6 +197,7 @@ func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetect
 // PR whose head branch doesn't match the item's tracked branch must not
 // auto-complete the item.
 func TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -218,6 +224,7 @@ func TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDe
 // is the direct proof of adversarial-review.md's Blocker fix for
 // reconcileBouncingItems' IsPRMerged-driven done transition (Task 6.5).
 func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -269,6 +276,7 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 // work session's last commit isn't on main yet), and Task 6.3a's independent
 // re-check must still catch the head-branch mismatch and disclose it.
 func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -325,6 +333,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHead
 // covers the CI-failing/blocked/conflicting fixCtx-building call site
 // (~line 4158).
 func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRHeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -386,6 +395,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRH
 // pre-Task-6.3a behavior already produced — this task must not change the
 // normal, verified CI-fix path.
 func TestReconcilePRPending_should_OmitUnverifiedDisclaimer_When_CIFailingPRHeadBranchMatchesTracked(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()

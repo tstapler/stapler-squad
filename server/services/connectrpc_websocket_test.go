@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,6 +75,7 @@ func readEnvelopeFromClient(t *testing.T, conn *websocket.Conn) *protocol.Envelo
 // TestSendEndStreamSuccess verifies that sendEndStreamSuccess writes a message
 // with the EndStream flag set (regression: streamViaControlMode was missing this call).
 func TestSendEndStreamSuccess(t *testing.T) {
+	t.Parallel()
 	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
@@ -88,6 +90,7 @@ func TestSendEndStreamSuccess(t *testing.T) {
 // TestSendEndStreamError verifies that sendEndStreamError writes a message
 // with the EndStream flag set and an encoded error.
 func TestSendEndStreamError(t *testing.T) {
+	t.Parallel()
 	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
@@ -121,6 +124,7 @@ func TestSendEndStreamError(t *testing.T) {
 // TestSendEndStreamSuccessIsIdempotentFormat verifies the envelope structure
 // matches what the ConnectRPC client expects (EndStreamFlag = 0x02).
 func TestSendEndStreamSuccessEnvelopeFormat(t *testing.T) {
+	t.Parallel()
 	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
@@ -146,6 +150,7 @@ func TestSendEndStreamSuccessEnvelopeFormat(t *testing.T) {
 // TestSanitizeInitialContentStripsPositioningCodes verifies that the ANSI sequences
 // that cause garbled rendering on replay are stripped from tmux capture-pane output.
 func TestSanitizeInitialContentStripsPositioningCodes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		input string
@@ -220,6 +225,7 @@ func TestSanitizeInitialContentStripsPositioningCodes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := sanitizeInitialContent(tc.input)
 			if got != tc.want {
 				t.Errorf("sanitizeInitialContent(%q) = %q, want %q", tc.input, got, tc.want)
@@ -231,6 +237,7 @@ func TestSanitizeInitialContentStripsPositioningCodes(t *testing.T) {
 // TestSanitizeInitialContentPreservesSGRColors verifies that SGR color sequences
 // (which are safe for replay) are intentionally NOT stripped.
 func TestSanitizeInitialContentPreservesSGRColors(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		input string
@@ -246,6 +253,7 @@ func TestSanitizeInitialContentPreservesSGRColors(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := sanitizeInitialContent(tc.input)
 			if got != tc.input {
 				t.Errorf("sanitizeInitialContent(%q) unexpectedly changed SGR code to %q", tc.input, got)
@@ -257,6 +265,7 @@ func TestSanitizeInitialContentPreservesSGRColors(t *testing.T) {
 // TestSanitizeInitialContentPreservesPlainText verifies that printable text
 // and newlines pass through unchanged.
 func TestSanitizeInitialContentPreservesPlainText(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"",
 		"hello world",
@@ -277,6 +286,7 @@ func TestSanitizeInitialContentPreservesPlainText(t *testing.T) {
 // output with mixed SGR colors and cursor positioning codes. The test verifies that
 // colors are kept and positioning codes are removed.
 func TestSanitizeInitialContentRealWorldCapture(t *testing.T) {
+	t.Parallel()
 	// Simulate tmux capture-pane -e output: colored prompt with cursor positioning
 	input := "\x1b[?1049h\x1b[H\x1b[2J\x1b[1;32m$\x1b[0m \x1b[1mcommand\x1b[0m\x1b[H"
 	got := sanitizeInitialContent(input)
@@ -303,6 +313,7 @@ func TestSanitizeInitialContentRealWorldCapture(t *testing.T) {
 // TestWaitForQuiescenceReturnsAfterQuietPeriod verifies that waitForQuiescence
 // returns once no updates arrive for the quietFor duration.
 func TestWaitForQuiescenceReturnsAfterQuietPeriod(t *testing.T) {
+	t.Parallel()
 	updates := make(chan struct{}, 1)
 	start := time.Now()
 
@@ -323,6 +334,7 @@ func TestWaitForQuiescenceReturnsAfterQuietPeriod(t *testing.T) {
 // TestWaitForQuiescenceReturnsOnTimeout verifies that waitForQuiescence returns
 // at the timeout even when updates keep arriving continuously.
 func TestWaitForQuiescenceReturnsOnTimeout(t *testing.T) {
+	t.Parallel()
 	updates := make(chan struct{}, 64)
 
 	// Continuously send updates from a goroutine to prevent quiescence.
@@ -367,6 +379,7 @@ func TestWaitForQuiescenceReturnsOnTimeout(t *testing.T) {
 // TestWaitForQuiescenceReturnsOnChannelClose verifies that closing the updates
 // channel causes waitForQuiescence to return promptly.
 func TestWaitForQuiescenceReturnsOnChannelClose(t *testing.T) {
+	t.Parallel()
 	updates := make(chan struct{})
 	close(updates)
 
@@ -382,6 +395,7 @@ func TestWaitForQuiescenceReturnsOnChannelClose(t *testing.T) {
 // TestWaitForQuiescenceResetsTimerOnUpdates verifies that each incoming update
 // resets the quiet timer, delaying the return.
 func TestWaitForQuiescenceResetsTimerOnUpdates(t *testing.T) {
+	t.Parallel()
 	updates := make(chan struct{}, 4)
 	// Use 100ms intervals / 200ms quiet — 5× larger than the original values so
 	// the OS scheduler has real slack. With 20ms/40ms the scheduler jitter alone
@@ -410,11 +424,61 @@ func TestWaitForQuiescenceResetsTimerOnUpdates(t *testing.T) {
 	}
 }
 
+// --- recordControlModeStreamStart ---
+
+// TestRecordControlModeStreamStart_should_AssignIncreasingGenerations_When_CalledRepeatedly
+// verifies the generation counter is monotonic and unique per call, which is
+// what lets a later log correlation ("generation N started at T, generation
+// N+1 started at T+50ms while N was still active") actually work.
+func TestRecordControlModeStreamStart_should_AssignIncreasingGenerations_When_CalledRepeatedly(t *testing.T) {
+	t.Parallel()
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	gen1, done1 := h.recordControlModeStreamStart("sess1", "staplersquad_sess1")
+	done1()
+	gen2, done2 := h.recordControlModeStreamStart("sess1", "staplersquad_sess1")
+	done2()
+
+	if gen2 <= gen1 {
+		t.Errorf("gen2 = %d, want > gen1 = %d", gen2, gen1)
+	}
+}
+
+// TestRecordControlModeStreamStart_should_LeaveEntryRegistered_When_OlderGenerationCleansUpAfterNewerStarts
+// is the regression test for the actual race this exists to detect: if
+// generation N's stream is still torn down (its deferred cleanup runs) after
+// generation N+1 has already started for the same tmux session, N's cleanup
+// must NOT clear N+1's still-active entry out of activeControlModeStreams --
+// doing so would make a genuinely-overlapping N+2 invocation look like the
+// first and only stream, silently defeating the whole detection mechanism.
+func TestRecordControlModeStreamStart_should_LeaveEntryRegistered_When_OlderGenerationCleansUpAfterNewerStarts(t *testing.T) {
+	t.Parallel()
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	const tmuxName = "staplersquad_sess1"
+
+	genOld, doneOld := h.recordControlModeStreamStart("sess1", tmuxName)
+	genNew, _ := h.recordControlModeStreamStart("sess1", tmuxName)
+
+	// The older generation's stream ends (its stream handler returns) after
+	// the newer one has already started -- exactly the overlap this
+	// mechanism exists to catch.
+	doneOld()
+
+	cur, ok := h.activeControlModeStreams.Load(tmuxName)
+	if !ok {
+		t.Fatalf("activeControlModeStreams entry for %q was removed entirely; want the newer generation's entry to survive", tmuxName)
+	}
+	if cur.generation != genNew {
+		t.Errorf("activeControlModeStreams entry generation = %d, want %d (the newer, still-active generation); got the older one (%d) instead", cur.generation, genNew, genOld)
+	}
+}
+
 // --- getOrRefreshSnapshot / markSnapshotDirty ---
 
 // TestGetOrRefreshSnapshotCallsCaptureFnOnMiss verifies that on a cache miss
 // captureFn is called and the result is cached.
 func TestGetOrRefreshSnapshotCallsCaptureFnOnMiss(t *testing.T) {
+	t.Parallel()
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	calls := 0
 	captureFn := func() (string, error) {
@@ -437,6 +501,7 @@ func TestGetOrRefreshSnapshotCallsCaptureFnOnMiss(t *testing.T) {
 // TestGetOrRefreshSnapshotReturnsCacheOnHit verifies that a second call returns
 // the cached result without invoking captureFn again.
 func TestGetOrRefreshSnapshotReturnsCacheOnHit(t *testing.T) {
+	t.Parallel()
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	calls := 0
 	captureFn := func() (string, error) {
@@ -460,6 +525,7 @@ func TestGetOrRefreshSnapshotReturnsCacheOnHit(t *testing.T) {
 // TestGetOrRefreshSnapshotRefreshesOnDirty verifies that marking a snapshot dirty
 // causes the next getOrRefreshSnapshot call to invoke captureFn again.
 func TestGetOrRefreshSnapshotRefreshesOnDirty(t *testing.T) {
+	t.Parallel()
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	calls := 0
 	captureFn := func() (string, error) {
@@ -489,6 +555,7 @@ func TestGetOrRefreshSnapshotRefreshesOnDirty(t *testing.T) {
 // TestMarkSnapshotDirtyOnUnknownSessionIsNoOp verifies that marking an absent
 // session dirty does not panic or create a cache entry.
 func TestMarkSnapshotDirtyOnUnknownSessionIsNoOp(t *testing.T) {
+	t.Parallel()
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 
 	// Should not panic
@@ -503,6 +570,7 @@ func TestMarkSnapshotDirtyOnUnknownSessionIsNoOp(t *testing.T) {
 // TestGetOrRefreshSnapshotPropagatesCaptureFnError verifies that captureFn errors
 // are returned to the caller and nothing is cached.
 func TestGetOrRefreshSnapshotPropagatesCaptureFnError(t *testing.T) {
+	t.Parallel()
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	captureErr := fmt.Errorf("tmux: session not found")
 	captureFn := func() (string, error) { return "", captureErr }
@@ -522,6 +590,7 @@ func TestGetOrRefreshSnapshotPropagatesCaptureFnError(t *testing.T) {
 // TestSnapshotCacheConcurrentAccess verifies that concurrent reads and
 // dirty-marking do not cause data races. Run with -race to validate.
 func TestSnapshotCacheConcurrentAccess(t *testing.T) {
+	t.Parallel()
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 
 	var wg sync.WaitGroup
@@ -555,6 +624,7 @@ func newRequestWithOrigin(origin string) *http.Request {
 // TestIsAllowedOriginNoHeader verifies that requests without an Origin header
 // (e.g. CLI tools, server-side callers) are allowed unconditionally.
 func TestIsAllowedOriginNoHeader(t *testing.T) {
+	t.Parallel()
 	r := newRequestWithOrigin("")
 	if !isAllowedOrigin(r) {
 		t.Error("request with no Origin header should be allowed")
@@ -563,6 +633,7 @@ func TestIsAllowedOriginNoHeader(t *testing.T) {
 
 // TestIsAllowedOriginLocalhostVariants verifies that all localhost forms are accepted.
 func TestIsAllowedOriginLocalhostVariants(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		origin string
@@ -573,6 +644,7 @@ func TestIsAllowedOriginLocalhostVariants(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			r := newRequestWithOrigin(tc.origin)
 			if !isAllowedOrigin(r) {
 				t.Errorf("origin %q should be allowed", tc.origin)
@@ -584,6 +656,7 @@ func TestIsAllowedOriginLocalhostVariants(t *testing.T) {
 // TestIsAllowedOriginHTTPS verifies that any HTTPS origin is accepted
 // (auth enforcement is left to middleware).
 func TestIsAllowedOriginHTTPS(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"https://myapp.example.com",
 		"https://company.internal:8443",
@@ -591,6 +664,7 @@ func TestIsAllowedOriginHTTPS(t *testing.T) {
 	}
 	for _, origin := range cases {
 		t.Run(origin, func(t *testing.T) {
+			t.Parallel()
 			r := newRequestWithOrigin(origin)
 			if !isAllowedOrigin(r) {
 				t.Errorf("HTTPS origin %q should be allowed", origin)
@@ -602,6 +676,7 @@ func TestIsAllowedOriginHTTPS(t *testing.T) {
 // TestIsAllowedOriginHTTPNonLocalhostBlocked verifies that plaintext HTTP origins
 // from non-localhost hosts are rejected to prevent CSRF from remote pages.
 func TestIsAllowedOriginHTTPNonLocalhostBlocked(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"http://attacker.example.com",
 		"http://evil.com",
@@ -609,6 +684,7 @@ func TestIsAllowedOriginHTTPNonLocalhostBlocked(t *testing.T) {
 	}
 	for _, origin := range cases {
 		t.Run(origin, func(t *testing.T) {
+			t.Parallel()
 			r := newRequestWithOrigin(origin)
 			if isAllowedOrigin(r) {
 				t.Errorf("HTTP non-localhost origin %q should be blocked", origin)
@@ -619,6 +695,7 @@ func TestIsAllowedOriginHTTPNonLocalhostBlocked(t *testing.T) {
 
 // TestIsAllowedOriginMalformed verifies that a malformed Origin header is rejected.
 func TestIsAllowedOriginMalformed(t *testing.T) {
+	t.Parallel()
 	r := newRequestWithOrigin("not-a-url")
 	// url.Parse("not-a-url") does not return an error (it parses as a relative URL with no scheme).
 	// A relative URL has no scheme → not https → host is "" → not localhost → should be blocked.
@@ -645,6 +722,7 @@ func TestIsAllowedOriginMalformed(t *testing.T) {
 // Bug B. It MUST fail against the old sanitizeInitialContent-only implementation
 // (which returned bare \n unchanged).
 func TestPrepareSnapshotContentNormalizesNewlines(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		input string
@@ -684,6 +762,7 @@ func TestPrepareSnapshotContentNormalizesNewlines(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := prepareSnapshotContent(tc.input)
 			if got != tc.want {
 				t.Errorf("prepareSnapshotContent(%q) =\n  %q\nwant\n  %q", tc.input, got, tc.want)
@@ -695,6 +774,7 @@ func TestPrepareSnapshotContentNormalizesNewlines(t *testing.T) {
 // TestPrepareSnapshotContentStripsCursorPositioning verifies that sanitization
 // (stripping cursor-positioning codes) still runs before newline normalisation.
 func TestPrepareSnapshotContentStripsCursorPositioning(t *testing.T) {
+	t.Parallel()
 	// A realistic capture-pane fragment: cursor home + color + text + newline
 	input := "\x1b[H\x1b[1;32mline1\x1b[0m\nline2\n"
 	got := prepareSnapshotContent(input)
@@ -713,6 +793,7 @@ func TestPrepareSnapshotContentStripsCursorPositioning(t *testing.T) {
 // TestPrepareSnapshotContentPreservesSGR verifies that SGR color sequences are
 // preserved (they are safe to replay and must not be lost).
 func TestPrepareSnapshotContentPreservesSGR(t *testing.T) {
+	t.Parallel()
 	input := "\x1b[1;32mhello\x1b[0m\nworld\n"
 	got := prepareSnapshotContent(input)
 
@@ -732,6 +813,7 @@ func TestPrepareSnapshotContentPreservesSGR(t *testing.T) {
 // handler's deferred conn.Close()), and does not keep forwarding input
 // received after the loop has exited.
 func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
+	t.Parallel()
 	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
@@ -754,8 +836,9 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 	doneChan := make(chan struct{})
 	errChan := make(chan error, 2)
 	done := make(chan struct{})
+	var resizeSettling atomic.Bool
 	go func() {
-		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest)
+		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest, &resizeSettling)
 		close(done)
 	}()
 
@@ -1117,6 +1200,7 @@ func TestStreamViaTmuxCapturePane_should_CaptureAtExistingPaneDimensions_When_St
 // while other frame types (Input, Resize, ScrollbackRequest — Task 3.2.2.3's explicit
 // negative cases) must not trigger it.
 func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPaneRequestFrameArrives(t *testing.T) {
+	t.Parallel()
 	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
@@ -1137,8 +1221,9 @@ func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPane
 	doneChan := make(chan struct{})
 	errChan := make(chan error, 2)
 	done := make(chan struct{})
+	var resizeSettling atomic.Bool
 	go func() {
-		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest)
+		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest, &resizeSettling)
 		close(done)
 	}()
 	defer func() {
@@ -1252,6 +1337,7 @@ func sendInputIgnoringError(conn *websocket.Conn, payload []byte) error {
 // every snapshot contains DECSTR, ED2, and CUP in that order.
 // Regression for Bug A: a prefix without ED2 (screen clear) caused double display.
 func TestAnsiSnapshotPrefixContainsRequiredSequences(t *testing.T) {
+	t.Parallel()
 	decstr := "\x1b[!p"
 	ed2 := "\x1b[2J"
 	cup := "\x1b[H"
@@ -1280,6 +1366,7 @@ func TestAnsiSnapshotPrefixContainsRequiredSequences(t *testing.T) {
 // a non-letter final byte. The CSI final-byte range is 0x40-0x7E per ECMA-48, not just
 // A-Z/a-z; a letter-only class would leave these bytes in the "visible" count.
 func TestStripAnsiCodesHandlesNonLetterCSITerminators(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -1290,6 +1377,7 @@ func TestStripAnsiCodesHandlesNonLetterCSITerminators(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := stripAnsiCodes(tt.input)
 			if got != tt.want {
 				t.Errorf("stripAnsiCodes(%q) = %q, want %q", tt.input, got, tt.want)
@@ -1308,6 +1396,7 @@ func TestStripAnsiCodesHandlesNonLetterCSITerminators(t *testing.T) {
 // is only called from the output-forwarding goroutine, which does not start until
 // after the initial snapshot has already been captured and sent.
 func TestInvalidateSnapshotForcesRecapture(t *testing.T) {
+	t.Parallel()
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	calls := 0
 	captureFn := func() (string, error) {
@@ -1338,6 +1427,7 @@ func TestInvalidateSnapshotForcesRecapture(t *testing.T) {
 // TestInvalidateSnapshotOnUnknownSessionIsNoOp verifies invalidating an absent
 // session neither panics nor creates a cache entry.
 func TestInvalidateSnapshotOnUnknownSessionIsNoOp(t *testing.T) {
+	t.Parallel()
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 
 	h.invalidateSnapshot("nonexistent-session")
@@ -1357,6 +1447,7 @@ func TestInvalidateSnapshotOnUnknownSessionIsNoOp(t *testing.T) {
 // This test pins the current semantics so the trap is visible; making the initial
 // wait genuinely quiescence-driven requires subscribing a producer before the nudge.
 func TestWaitForQuiescenceReturnsAfterQuietForWhenNoProducer(t *testing.T) {
+	t.Parallel()
 	ch := make(chan struct{}, 16) // no producer, mirroring the initial-nudge call site
 
 	start := time.Now()
@@ -1384,6 +1475,7 @@ func (f fakeCursorPositioner) GetPaneCursorPosition() (int, int, error) {
 // TestWithCursorSyncAppendsOneBasedCUP verifies the trailing CUP escape converts
 // tmux's 0-based cursor coords to CUP's 1-based row;col form.
 func TestWithCursorSyncAppendsOneBasedCUP(t *testing.T) {
+	t.Parallel()
 	got := withCursorSync("content", fakeCursorPositioner{x: 4, y: 9})
 	want := "content\x1b[10;5H"
 	if got != want {
@@ -1394,6 +1486,7 @@ func TestWithCursorSyncAppendsOneBasedCUP(t *testing.T) {
 // TestWithCursorSyncPassesThroughOnErrorOrNilTarget verifies content is returned
 // unchanged when the cursor position is unavailable.
 func TestWithCursorSyncPassesThroughOnErrorOrNilTarget(t *testing.T) {
+	t.Parallel()
 	if got := withCursorSync("content", nil); got != "content" {
 		t.Errorf("nil target: got %q, want unchanged", got)
 	}
@@ -1417,6 +1510,7 @@ func TestWithCursorSyncPassesThroughOnErrorOrNilTarget(t *testing.T) {
 // streaming goroutines with no injectable seam. If those are ever refactored behind a
 // single snapshot-composition helper, replace this with a direct test of that helper.
 func TestAllSnapshotSendsUseCursorSync(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("connectrpc_websocket.go")
 	if err != nil {
 		t.Fatalf("read source: %v", err)
@@ -1594,7 +1688,8 @@ func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOf
 	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
 	}
-	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest)
+	var resizeSettling atomic.Bool
+	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
 
 	env := readEnvelopeFromClient(t, clientConn)
 	if env.Flags != 0 {
@@ -1666,7 +1761,8 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
 	}
-	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest)
+	var resizeSettling atomic.Bool
+	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
 
 	env := readEnvelopeFromClient(t, clientConn)
 	var terminalData sessionv1.TerminalData
@@ -1752,7 +1848,8 @@ func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_
 	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
 	}
-	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest)
+	var resizeSettling atomic.Bool
+	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
 
 	env := readEnvelopeFromClient(t, clientConn)
 	if env.Flags&protocol.CompressedFlag == 0 {

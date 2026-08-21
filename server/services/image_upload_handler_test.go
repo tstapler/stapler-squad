@@ -33,6 +33,7 @@ func postJSON(t *testing.T, h *FileUploadHandler, body any) *httptest.ResponseRe
 }
 
 func TestHandleUpload_ValidPNG(t *testing.T) {
+	t.Parallel()
 	h, dir := newFileUploadHandler(t)
 
 	payload := []byte("fake-png-data")
@@ -68,6 +69,7 @@ func TestHandleUpload_ValidPNG(t *testing.T) {
 }
 
 func TestHandleUpload_WrongMethod(t *testing.T) {
+	t.Parallel()
 	h, _ := newFileUploadHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/upload/file", nil)
 	rr := httptest.NewRecorder()
@@ -78,6 +80,7 @@ func TestHandleUpload_WrongMethod(t *testing.T) {
 }
 
 func TestHandleUpload_InvalidBase64(t *testing.T) {
+	t.Parallel()
 	h, _ := newFileUploadHandler(t)
 	rr := postJSON(t, h, map[string]string{"data": "not-valid-base64!!!", "contentType": "image/png"})
 	if rr.Code != http.StatusBadRequest {
@@ -97,6 +100,7 @@ func TestHandleUpload_InvalidJSON(t *testing.T) {
 }
 
 func TestExtensionForMIME(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		ct          string
@@ -120,6 +124,7 @@ func TestExtensionForMIME(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := extensionForMIME(tc.ct, tc.originalExt)
 			if got != tc.want {
 				t.Errorf("extensionForMIME(%q, %q) = %q, want %q", tc.ct, tc.originalExt, got, tc.want)
@@ -129,6 +134,7 @@ func TestExtensionForMIME(t *testing.T) {
 }
 
 func TestSanitizeExtension(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		filename string
 		want     string
@@ -146,6 +152,7 @@ func TestSanitizeExtension(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.filename, func(t *testing.T) {
+			t.Parallel()
 			got := sanitizeExtension(tc.filename)
 			if got != tc.want {
 				t.Errorf("sanitizeExtension(%q) = %q, want %q", tc.filename, got, tc.want)
@@ -155,6 +162,7 @@ func TestSanitizeExtension(t *testing.T) {
 }
 
 func TestCleanOldPasteFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Write an old file (mtime in the past)
@@ -185,6 +193,7 @@ func TestCleanOldPasteFiles(t *testing.T) {
 
 // TestHandleUpload_NonImageMIMEAccepted verifies that non-image MIME types are accepted.
 func TestHandleUpload_NonImageMIMEAccepted(t *testing.T) {
+	t.Parallel()
 	h, _ := newFileUploadHandler(t)
 	cases := []struct {
 		ct      string
@@ -198,6 +207,7 @@ func TestHandleUpload_NonImageMIMEAccepted(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.ct, func(t *testing.T) {
+			t.Parallel()
 			rr := postJSON(t, h, map[string]string{
 				"data":        base64.StdEncoding.EncodeToString([]byte("fake")),
 				"contentType": tc.ct,
@@ -216,6 +226,7 @@ func TestHandleUpload_NonImageMIMEAccepted(t *testing.T) {
 
 // TestHandleUpload_OriginalFilenameExtFallback verifies extension fallback via filename.
 func TestHandleUpload_OriginalFilenameExtFallback(t *testing.T) {
+	t.Parallel()
 	h, _ := newFileUploadHandler(t)
 	rr := postJSON(t, h, map[string]string{
 		"data":             base64.StdEncoding.EncodeToString([]byte("fake")),
@@ -235,6 +246,7 @@ func TestHandleUpload_OriginalFilenameExtFallback(t *testing.T) {
 // TestHandleUpload_DecodedSizeLimitEnforced verifies that a file that decodes to
 // more than maxUploadBytes is rejected even if the encoded body fits in MaxBytesReader.
 func TestHandleUpload_DecodedSizeLimitEnforced(t *testing.T) {
+	t.Parallel()
 	h, _ := newFileUploadHandler(t)
 	// Construct decoded data just over the limit
 	oversize := make([]byte, maxUploadBytes+1)
@@ -251,6 +263,7 @@ func TestHandleUpload_DecodedSizeLimitEnforced(t *testing.T) {
 // TestHandleUpload_PathTraversalInFilename verifies that a crafted originalFilename
 // cannot escape the paste directory.
 func TestHandleUpload_PathTraversalInFilename(t *testing.T) {
+	t.Parallel()
 	h, dir := newFileUploadHandler(t)
 	rr := postJSON(t, h, map[string]string{
 		"data":             base64.StdEncoding.EncodeToString([]byte("fake")),

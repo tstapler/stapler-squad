@@ -191,6 +191,7 @@ var snapshotTests = []snapshotTest{
 // Stub fixtures (empty files) fail with a descriptive message telling you
 // exactly what terminal output to capture and paste in.
 func TestSnapshotDetection(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	for _, tc := range snapshotTests {

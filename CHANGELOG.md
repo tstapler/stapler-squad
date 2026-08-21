@@ -1,5 +1,62 @@
 # Changelog
 
+## [1.46.0](https://github.com/tstapler/stapler-squad/compare/v1.45.1...v1.46.0) (2026-08-20)
+
+
+### Features
+
+* **backlog:** add ungated activity log for backlog items ([#552](https://github.com/tstapler/stapler-squad/issues/552)) ([2297801](https://github.com/tstapler/stapler-squad/commit/2297801a8cb10b7bfe8f16cecde3ccbcfab65d8f))
+
+
+### Bug Fixes
+
+* **backlog:** improve headless review verdict parsing and no-diff schema example ([79239ec](https://github.com/tstapler/stapler-squad/commit/79239ecb58f023bbd30ea94b0f307842b651436d))
+* **config,session:** close LoadConfig TOCTOU race and SessionDriver orphan-goroutine race ([#548](https://github.com/tstapler/stapler-squad/issues/548)) ([a32a01d](https://github.com/tstapler/stapler-squad/commit/a32a01d5d95652de0bde2442b38e24d231471420))
+* **test:** dedupe in-memory-sqlite test helper, harden tmux subprocess flakes, fix wedged-git-subprocess timeout ([#559](https://github.com/tstapler/stapler-squad/issues/559)) ([6a1fccf](https://github.com/tstapler/stapler-squad/commit/6a1fccf2422ca8359d30050a6e61baa81f1536a0))
+* **test:** resolve symlinks before comparing worktree path in TestWorkspace_UsesWorktreePath_WhenPresentOnDisk ([79ee345](https://github.com/tstapler/stapler-squad/commit/79ee3456e0d76e71556e3dc74b45e62b7ff2aa15))
+
+## [1.45.1](https://github.com/tstapler/stapler-squad/compare/v1.45.0...v1.45.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **backlog:** recognize GitHub Enterprise URLs in report_pr_created/import_github_issue/report_duplicate ([5c3015e](https://github.com/tstapler/stapler-squad/commit/5c3015ef8919abfcd96266cbe60f829c61597106))
+* **backlog:** sanitize LLM-controlled triage title against path traversal (security) ([#534](https://github.com/tstapler/stapler-squad/issues/534)) ([7b9aee4](https://github.com/tstapler/stapler-squad/commit/7b9aee4cd7b2bd463450b6ad79101cb2a008f987))
+* **backlog:** strip ConnectRPC [code] prefix from error messages ([#549](https://github.com/tstapler/stapler-squad/issues/549)) ([b5acba7](https://github.com/tstapler/stapler-squad/commit/b5acba7a89e7487532997c3f228c1600c212521b))
+* bound cmd.Wait() independently in gogitstore crash-subprocess harness ([#547](https://github.com/tstapler/stapler-squad/issues/547)) ([8f6cf22](https://github.com/tstapler/stapler-squad/commit/8f6cf22442473679d08d3ab05f99d7c1dd614cc8))
+* **build:** add missing ent-gen/web-dist deps to lint, add make ready target ([7795ca7](https://github.com/tstapler/stapler-squad/commit/7795ca7a2e91532487ff632045bcbb4cefc85ee6))
+* **concurrency:** serialize ent/atlas schema creation across independent clients ([702c86c](https://github.com/tstapler/stapler-squad/commit/702c86c017260e08201df822d6509e7847e0ef41))
+* **deploy:** fix health-check timeout and rollback path bugs hit in a live incident ([88e819f](https://github.com/tstapler/stapler-squad/commit/88e819f140a0f8de6f30ba3988e0d0ecb83b0280))
+* **github:** isolate session package's rate-limit test fixtures from the shared DefaultRateLimiter global ([#550](https://github.com/tstapler/stapler-squad/issues/550)) ([0b50326](https://github.com/tstapler/stapler-squad/commit/0b50326c5cd73b7a43d65717e595bb1c1c1b0905))
+* **omnibar:** refetch GitHub Enterprise hosts when the omnibar opens ([7a52633](https://github.com/tstapler/stapler-squad/commit/7a5263301c0a013849b9a3f0cc6e56dbefba8548))
+* **omnibar:** register GitHubEnterpriseURLDetector synchronously ([8c22835](https://github.com/tstapler/stapler-squad/commit/8c2283504d6e31155230f543b6da578d41ee8b69))
+* **terminal:** prevent live-forward writes from racing resize/pane-capture snapshots ([77ebfc5](https://github.com/tstapler/stapler-squad/commit/77ebfc54362f72d5b16a52694ed709e90d5373c8))
+* **terminal:** wait for real quiescence on control-mode reconnect ([d394352](https://github.com/tstapler/stapler-squad/commit/d3943524ba8dcfb962391591d00da18f855bb6e6))
+* **test:** make goleak elision workaround tests deterministic ([#542](https://github.com/tstapler/stapler-squad/issues/542)) ([0297da8](https://github.com/tstapler/stapler-squad/commit/0297da8c0d1d6ae13dda2065fb28b88f2d919ece))
+* **test:** root-cause and fix rotating cross-test flakes from t.Parallel() rollout ([30c6ce9](https://github.com/tstapler/stapler-squad/commit/30c6ce91478cb58e5ecbfc493db37b318621ae96))
+* **triage:** classify subprocess-start failures instead of swallowing them into "other" ([#535](https://github.com/tstapler/stapler-squad/issues/535)) ([3d2a760](https://github.com/tstapler/stapler-squad/commit/3d2a7600bd3f1560fc37636d06194b5d667add6a))
+
+## [1.45.0](https://github.com/tstapler/stapler-squad/compare/v1.44.1...v1.45.0) (2026-08-17)
+
+
+### Features
+
+* **insights:** surface cache read/write tokens across dashboard ([8ac1cca](https://github.com/tstapler/stapler-squad/commit/8ac1cca57fb41d8df75a7d5ae9397e794de95f95))
+* **session:** add SetCommitStatus and PR head SHA tracking ([db4e208](https://github.com/tstapler/stapler-squad/commit/db4e20869e807e5930a2e1555235bce9c8b92c49))
+
+
+### Bug Fixes
+
+* **github:** fail fast on known rate limits instead of retrying blind ([a6e747e](https://github.com/tstapler/stapler-squad/commit/a6e747ef24c5dad9ed3cc055bc69caf8e552edc2))
+* **server:** join fork-pressure/zombie-watcher/zombie-reaper goroutines in Shutdown() ([#531](https://github.com/tstapler/stapler-squad/issues/531)) ([658a7e9](https://github.com/tstapler/stapler-squad/commit/658a7e9cd3bfb4b54b59f92ec90799009a92d87a))
+* **sqlite:** migrate to pure-Go modernc.org/sqlite driver for CGO_ENABLED=0 releases ([#526](https://github.com/tstapler/stapler-squad/issues/526)) ([0212d33](https://github.com/tstapler/stapler-squad/commit/0212d33002d41bd846d44010e9a52b1e108816f5))
+* **web-app:** batch pending writes with Promise.all in flow-control stress test ([#539](https://github.com/tstapler/stapler-squad/issues/539)) ([ed5f596](https://github.com/tstapler/stapler-squad/commit/ed5f596b970de4e90c0dae1e94329bea11186c90))
+
+
+### Performance Improvements
+
+* **web-app:** preserve session entity refs on unchanged snapshot data ([a38f54f](https://github.com/tstapler/stapler-squad/commit/a38f54f219fceaa5e388a2578e1e1117347b41e3))
+
 ## [1.44.1](https://github.com/tstapler/stapler-squad/compare/v1.44.0...v1.44.1) (2026-08-17)
 
 
