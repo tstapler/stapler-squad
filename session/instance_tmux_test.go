@@ -569,7 +569,15 @@ func TestBuildClaudeCommand_LargePromptTempFileIsCleanedUpAfterDelay(t *testing.
 	}
 	path := m[1]
 
-	deadline := time.Now().Add(2 * time.Second)
+	// promptFileCleanupDelay is 10ms (see withShortPromptFileCleanupDelay), but
+	// the polling deadline is much more generous: under this package's own
+	// full t.Parallel() fan-out (dozens of subtests forking real tmux/git
+	// subprocesses concurrently), CPU/scheduler contention can delay the
+	// cleanup goroutine's timer firing well past the nominal 10ms -- same
+	// root cause as BUG-051 (fixed wall-clock budget blown under load), just
+	// intra-package rather than across-package, so the -p 1 scoping in
+	// Makefile's test target doesn't help here.
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return // cleaned up as expected

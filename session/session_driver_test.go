@@ -1211,17 +1211,20 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// elapses — the deadline below must clear that, not just the dialog
 	// latch's own ~6s give-up window.
 	//
-	// The extra driverReadyTimeout term (doubling the base budget) is
-	// deliberate slack, not just the ~6s dialog-latch window plus a token
-	// second: this goroutine genuinely blocks on the real 30s
-	// driverReadyTimeout wall-clock wait, so under `go test -race -p 1` for
-	// the full suite (thousands of tests, heavy scheduler/CPU contention)
-	// that wait alone can occasionally overrun a razor-thin margin — this
-	// test was seen to pass in 34s of a 37s budget in an isolated run, a
-	// margin that intermittently failed when run alongside the rest of the
-	// package under -race. Widening the margin (not retrying) is the fix,
-	// since the 30s block is inherent to the code path under test.
-	deadline := time.After(2*driverReadyTimeout + driverPollInterval*3 + time.Second)
+	// The extra driverReadyTimeout term is deliberate slack, not just the
+	// ~6s dialog-latch window plus a token second: this goroutine genuinely
+	// blocks on the real 30s driverReadyTimeout wall-clock wait, so under
+	// heavy scheduler/CPU contention (go test -race -p 1 for the full
+	// suite, or session's own t.Parallel() fan-out within a single package)
+	// that wait alone can occasionally overrun a razor-thin margin. Two
+	// documented recurrences of exactly this: an isolated run once passed
+	// in 34s of a 37s (1x) budget and failed under -race package load; a
+	// later run passed in 68.52s against a since-widened 67s (2x) budget
+	// under session's own -p 1 in-package parallel load (see BUG-051's
+	// recurrence log). Each time, widening the margin (not retrying) is the
+	// fix, since the 30s block is inherent to the code path under test —
+	// bumped to 3x here for more headroom against the same contention.
+	deadline := time.After(3*driverReadyTimeout + driverPollInterval*3 + time.Second)
 	for fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
 		select {
 		case <-deadline:

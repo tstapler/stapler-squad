@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession is an
@@ -47,7 +48,7 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	killSocket := func(socket string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = safeexec.CommandContext(ctx, "tmux", "-L", socket, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, tmux.Binary(), "-L", socket, "kill-server").Run()
 	}
 	reproSocket := fmt.Sprintf("test_cmdlen_repro_%d_%d", os.Getpid(), time.Now().UnixNano())
 	fixedSocket := fmt.Sprintf("test_cmdlen_fixed_%d_%d", os.Getpid(), time.Now().UnixNano())
@@ -76,7 +77,7 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	// Step 1: reproduce the original bug directly against tmux -- an inline
 	// command embedding the oversized prompt must be rejected.
 	inlineCmd := "echo " + shellQuote(prompt)
-	out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", reproSocket,
+	out, err := safeexec.CommandContext(context.Background(), tmux.Binary(), "-L", reproSocket,
 		"new-session", "-d", "-s", "repro-inline", inlineCmd).CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected tmux to reject an inline command embedding a %d-byte prompt with 'command too long', but it succeeded", len(prompt))
@@ -104,7 +105,7 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	}
 
 	newSessionArgs := []string{"-L", fixedSocket, "new-session", "-d", "-s", "repro-fixed", "-e", "OUT_FILE=" + outFile, fixedCmd}
-	if out, err := safeexec.CommandContext(context.Background(), "tmux", newSessionArgs...).CombinedOutput(); err != nil {
+	if out, err := safeexec.CommandContext(context.Background(), tmux.Binary(), newSessionArgs...).CombinedOutput(); err != nil {
 		t.Fatalf("tmux rejected the fixed command (this is the bug re-appearing): %s (%v)\ncommand was: %s", out, err, fixedCmd)
 	}
 
