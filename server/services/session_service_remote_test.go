@@ -39,6 +39,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -63,7 +64,7 @@ func realExecSessionSSHHandler(s gliderssh.Session) {
 		_ = s.Exit(0)
 		return
 	}
-	cmd := exec.CommandContext(s.Context(), "sh", "-c", raw)
+	cmd := safeexec.CommandContext(s.Context(), "sh", "-c", raw)
 	cmd.Stdin = s
 	cmd.Stdout = s
 	cmd.Stderr = s.Stderr()

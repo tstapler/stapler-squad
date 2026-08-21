@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestStartRemoteControlMode_TerminalRoundTrip is Task 4.4.1g's integration
@@ -37,7 +39,7 @@ func TestStartRemoteControlMode_TerminalRoundTrip(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = exec.CommandContext(ctx, Binary(), "-L", socket, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, Binary(), "-L", socket, "kill-server").Run()
 	})
 
 	// "cat" as the pane's program: it echoes anything written to its stdin

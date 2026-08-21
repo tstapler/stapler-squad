@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
@@ -59,7 +60,7 @@ func realExecWithPtySessionSSHHandler(s gliderssh.Session) {
 		return
 	}
 
-	cmd := exec.CommandContext(s.Context(), "sh", "-c", raw)
+	cmd := safeexec.CommandContext(s.Context(), "sh", "-c", raw)
 
 	if ptyReq, winCh, isPty := s.Pty(); isPty {
 		cmd.Env = append(cmd.Environ(), "TERM="+ptyReq.Term)

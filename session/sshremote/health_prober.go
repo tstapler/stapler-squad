@@ -260,12 +260,21 @@ func (p *RemoteHealthProber) watchReconnects(ch <-chan *ssh.Client, unsubscribe 
 // every concurrent Wait() caller wakes independently rather than racing to
 // "win" a single wakeup.
 //
-// Once Wait() returns, this only transitions to disconnected if client is
-// STILL the current pooled client for p.remoteName -- mirrors
-// ssh_pool.go's evictIfCurrent "current-check" idiom (`e.client != client`)
-// -- so that a stale death signal for an already-replaced connection can't
-// clobber a fresher reconnect's own connected transition back to
-// disconnected. Deliberately not tracked by p.wg (see Stop's doc comment).
+// Once Wait() returns, this evicts client from pool itself (Evict is a
+// no-op if pool's own internal Client.Wait() watcher -- ssh_pool.go's
+// register -- already beat it to it, or if a fresher reconnect already
+// replaced the entry) before transitioning to disconnected, rather than
+// relying on that other watcher to eventually run: both watchers wake
+// independently off the same Wait() broadcast with no ordering between
+// them, so publishing disconnected first can otherwise race a caller's
+// immediate post-disconnect GetOrDial against eviction it hasn't happened
+// yet, handing back the dead client instead of redialing. Evicting here
+// makes eviction provably complete before the state transition -- and
+// therefore before any waiter on that transition -- observes it. The
+// current-check after Evict (mirrors ssh_pool.go's `e.client != client`
+// idiom) still guards against a stale death signal for an already-replaced
+// connection clobbering a fresher reconnect's own connected transition.
+// Deliberately not tracked by p.wg (see Stop's doc comment).
 func (p *RemoteHealthProber) watchClientDeath(client *ssh.Client) {
 	_ = client.Wait()
 
@@ -274,6 +283,8 @@ func (p *RemoteHealthProber) watchClientDeath(client *ssh.Client) {
 		return
 	default:
 	}
+
+	p.pool.Evict(p.remoteName, client)
 
 	if current, ok := p.pool.Peek(p.remoteName); ok && current != client {
 		return

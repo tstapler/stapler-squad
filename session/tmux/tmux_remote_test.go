@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // remoteSessionCount lists sessions on the isolated tmux socket over the
@@ -19,7 +21,7 @@ func remoteSessionCount(t *testing.T, socket, name string) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, Binary(), "-L", socket, "list-sessions", "-F", "#{session_name}").CombinedOutput()
+	out, err := safeexec.CommandContext(ctx, Binary(), "-L", socket, "list-sessions", "-F", "#{session_name}").CombinedOutput()
 	if err != nil {
 		// "no server running" / no sessions yet -- zero matches, not a test failure.
 		return 0
@@ -43,7 +45,7 @@ func newRemoteTestTmuxSession(t *testing.T, sessionName string, runner CommandRu
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = exec.CommandContext(ctx, Binary(), "-L", socket, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, Binary(), "-L", socket, "kill-server").Run()
 	})
 	sess := NewTmuxSessionWithServerSocket(sessionName, "sleep 60", TmuxPrefix, socket, WithCommandRunner(runner), WithRegistry(nil))
 	return sess, socket

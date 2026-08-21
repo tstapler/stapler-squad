@@ -17,9 +17,10 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // fakeRemoteCommandRunner is a minimal tmux.CommandRunner test double.
@@ -183,7 +184,7 @@ func TestInjectHookConfigRemote_ReadScript_DistinguishesMissingFileFromUnreadabl
 		return "if [ -e '" + path + "' ]; then cat '" + path + "'; fi"
 	}
 
-	missingOut, err := exec.Command("sh", "-c", readScript(missing)).CombinedOutput()
+	missingOut, err := safeexec.CommandContext(context.Background(), "sh", "-c", readScript(missing)).CombinedOutput()
 	if err != nil {
 		t.Fatalf("missing-file script exit = %v, want success (empty output, no error)", err)
 	}
@@ -191,7 +192,7 @@ func TestInjectHookConfigRemote_ReadScript_DistinguishesMissingFileFromUnreadabl
 		t.Errorf("missing-file script output = %q, want empty", missingOut)
 	}
 
-	presentOut, err := exec.Command("sh", "-c", readScript(present)).CombinedOutput()
+	presentOut, err := safeexec.CommandContext(context.Background(), "sh", "-c", readScript(present)).CombinedOutput()
 	if err != nil {
 		t.Fatalf("present-file script exit = %v, want success", err)
 	}
@@ -207,7 +208,7 @@ func TestInjectHookConfigRemote_ReadScript_DistinguishesMissingFileFromUnreadabl
 	if err := os.Mkdir(unreadableDir, 0o755); err != nil {
 		t.Fatalf("mkdir fixture: %v", err)
 	}
-	_, err = exec.Command("sh", "-c", readScript(unreadableDir)).CombinedOutput()
+	_, err = safeexec.CommandContext(context.Background(), "sh", "-c", readScript(unreadableDir)).CombinedOutput()
 	if err == nil {
 		t.Fatal("script exit = nil for a path that exists but cat cannot read (a directory), want a non-nil error propagated rather than silently swallowed")
 	}

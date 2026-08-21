@@ -50,6 +50,8 @@ import (
 
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 func main() {
@@ -114,7 +116,7 @@ func execHandler(s gliderssh.Session) {
 		return
 	}
 
-	cmd := exec.CommandContext(s.Context(), "sh", "-c", raw)
+	cmd := safeexec.CommandContext(s.Context(), "sh", "-c", raw)
 	cmd.Stdin = s
 	cmd.Stdout = s
 	cmd.Stderr = s.Stderr()
