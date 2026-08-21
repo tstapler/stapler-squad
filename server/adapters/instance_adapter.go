@@ -105,6 +105,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		}
 	}
 
+	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
+	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+
 	// Convert Claude session data if available
 	if inst.GetClaudeSession() != nil {
 		cs := inst.GetClaudeSession()

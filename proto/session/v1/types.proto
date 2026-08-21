@@ -253,6 +253,11 @@ message Session {
   // Count of active background agents/shells/monitors from the WaitingForAgent detector.
   // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
   int32 subagent_count = 75;
+
+  // Cached signal for whether the branch has commits ahead of its base — used to
+  // pre-emptively disable the "Create PR" trigger (AC6), refreshed on the same
+  // cadence as diff_stats, not computed synchronously per-request.
+  bool has_commits_ahead = 76;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's
