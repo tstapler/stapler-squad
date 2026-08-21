@@ -47,7 +47,7 @@ func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error)
 
 // PushChanges commits and pushes changes in the worktree to the remote branch
 func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 
@@ -297,7 +297,7 @@ func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
 // OpenBranchURL opens the branch URL in the default browser
 func (g *GitWorktree) OpenBranchURL() error {
 	// Check if GitHub CLI is available
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 
@@ -325,6 +325,14 @@ func (g *GitWorktree) runCombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 		return g.cmdExec.CombinedOutput(cmd)
 	}
 	return cmd.CombinedOutput()
+}
+
+// checkGHCLI verifies the GitHub CLI is installed and authenticated, routing
+// the auth-status check through g.cmdExec so tests with a fake executor
+// control the outcome instead of depending on the ambient environment's real
+// gh installation/auth state.
+func (g *GitWorktree) checkGHCLI() error {
+	return checkGHCLIWithExecutor(g.cmdExec)
 }
 func (g *GitWorktree) PushBranch() error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -357,7 +365,7 @@ type PRCreateOptions struct {
 // without creating a new one.
 func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int, err error) {
 	title, body, baseBranch := opts.Title, opts.Body, opts.BaseBranch
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return "", 0, err
 	}
 	if title == "" {
@@ -690,7 +698,7 @@ func (s *PRStatus) FeedbackAuthors() []string {
 // GetPRStatus fetches the combined CI check status, reviewer decisions,
 // mergeability, and PR comments for the given pull request number.
 func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -853,7 +861,7 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 // automatically once required CI checks pass. Best-effort: fails silently
 // when the repo does not have auto-merge enabled in its branch protection rules.
 func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -875,7 +883,7 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 // login is accepted by every gh version this repo targets while the alias is
 // version-gated (see plan.md's Pattern Decisions table).
 func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -894,7 +902,7 @@ func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
 // branch's work already landed on main through a different path) rather than
 // genuinely broken — see BUG-032.
 func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -910,7 +918,7 @@ func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
 
 // IsPRMerged reports whether the given PR number has been merged.
 func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

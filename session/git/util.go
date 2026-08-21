@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"os"
@@ -127,6 +128,14 @@ func CanonicalizeWorktreePath(path string) string {
 
 // checkGHCLI checks if GitHub CLI is installed and configured
 func checkGHCLI() error {
+	return checkGHCLIWithExecutor(nil)
+}
+
+// checkGHCLIWithExecutor is checkGHCLI's implementation, taking an optional
+// injectable executor so callers with a fake executor (tests) can control the
+// "gh auth status" outcome instead of depending on the ambient environment's
+// real gh installation/auth state.
+func checkGHCLIWithExecutor(cmdExec executor.Executor) error {
 	// Check if gh is installed
 	if _, err := exec.LookPath("gh"); err != nil {
 		return fmt.Errorf("GitHub CLI (gh) is not installed. Please install it first")
@@ -136,7 +145,13 @@ func checkGHCLI() error {
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer authCancel()
 	cmd := safeexec.CommandContext(authCtx, "gh", "auth", "status")
-	if err := cmd.Run(); err != nil {
+	var runErr error
+	if cmdExec != nil {
+		_, runErr = cmdExec.CombinedOutput(cmd)
+	} else {
+		runErr = cmd.Run()
+	}
+	if runErr != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
 
