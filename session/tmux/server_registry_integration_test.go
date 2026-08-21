@@ -81,8 +81,45 @@ func startIsolatedRegistry(t *testing.T) (*tmux.TmuxServerRegistry, string) {
 	// exit-empty=on and then exits before the separate new-session arrives.
 	// TmuxPrefix+"keepalive" is the name that TmuxServerRegistry.startControlMode
 	// attaches to. "sleep 300" keeps the session alive for the test duration.
+	//
+	// A successful new-session (exit 0) does not guarantee the server stays up:
+	// it can die moments later (the same startup race EnsureServerRunning
+	// recovers from in session/tmux/tmux.go), after which every subsequent
+	// command against this socket fails permanently for the rest of the test --
+	// confirmed by raising registryPollTimeout to 15s and observing the
+	// reconnect backoff climb through its full curve without ever recovering
+	// (see TestTmuxServerRegistry_ConcurrentSubscriptions's flake history).
+	// Verify the server actually answers list-sessions before trusting it, and
+	// restart from a clean socket if it doesn't, mirroring EnsureServerRunning's
+	// "verify, don't just trust the exit code" pattern.
 	keepaliveName := tmux.TmuxPrefix + "keepalive"
-	newSessionWithRetry(t, socket, "-d", "-s", keepaliveName, "sleep 300")
+	const maxServerStartAttempts = 3
+	// A single successful list-sessions right after creation isn't proof the server
+	// can sustain what happens next: registry.Start() immediately fires off its own
+	// initial syncSessions() plus a control-mode attach-session, and this test creates
+	// a second session right after -- a burst of several near-simultaneous client
+	// connections against a server that may still be mid-startup. Require a few
+	// consecutive successes (tight retries, no sleep -- ADR-003) before trusting it.
+	const stabilityChecks = 10
+	var lastVerifyErr error
+	for attempt := 0; attempt < maxServerStartAttempts; attempt++ {
+		newSessionWithRetry(t, socket, "-d", "-s", keepaliveName, "sleep 300")
+		lastVerifyErr = nil
+		for check := 0; check < stabilityChecks; check++ {
+			out, err := exec.Command(tmux.Binary(), "-L", socket, "list-sessions").CombinedOutput()
+			if err != nil {
+				lastVerifyErr = fmt.Errorf("list-sessions: %w (%s)", err, out)
+				break
+			}
+		}
+		if lastVerifyErr == nil {
+			break
+		}
+		exec.Command(tmux.Binary(), "-L", socket, "kill-server").Run() //nolint:errcheck
+	}
+	if lastVerifyErr != nil {
+		t.Fatalf("isolated tmux server on socket %q never became stably queryable after %d attempts: %v", socket, maxServerStartAttempts, lastVerifyErr)
+	}
 
 	registry := tmux.NewTmuxServerRegistry(socket)
 
@@ -247,17 +284,28 @@ func TestTmuxServerRegistry_ConcurrentSubscriptions(t *testing.T) {
 		t.Fatalf("kill-session: %v (%s)", err, out)
 	}
 
-	timeout := time.After(registryPollTimeout)
+	// Wait on all channels concurrently, each against its own full registryPollTimeout
+	// budget -- not sequentially against one shared time.After(). A single slow
+	// close (e.g. a control-mode reconnect backoff cycle under load) must not eat into
+	// the budget left for channels checked later in a sequential loop, which would
+	// cascade one slow reconnect into spurious failures for otherwise-healthy
+	// subscribers.
+	var wgClosed sync.WaitGroup
 	for i, ch := range channels {
 		if ch == nil {
 			t.Errorf("goroutine %d: channel is nil", i)
 			continue
 		}
-		select {
-		case <-ch:
-			// closed as expected
-		case <-timeout:
-			t.Fatalf("goroutine %d: channel not closed within 1s after kill-session", i)
-		}
+		wgClosed.Add(1)
+		go func(idx int, c <-chan struct{}) {
+			defer wgClosed.Done()
+			select {
+			case <-c:
+				// closed as expected
+			case <-time.After(registryPollTimeout):
+				t.Errorf("goroutine %d: channel not closed within %s after kill-session", idx, registryPollTimeout)
+			}
+		}(i, ch)
 	}
+	wgClosed.Wait()
 }
