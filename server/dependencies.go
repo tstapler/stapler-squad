@@ -1063,6 +1063,24 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var historyDir string
 	if homeDirErr == nil {
 		historyDir = filepath.Join(homeDir, ".claude", "projects")
+		if config.IsIsolatedInstance() {
+			// An isolated test/demo instance (go test binary, named instance,
+			// or STAPLER_SQUAD_TEST_DIR harness) must not walk the real,
+			// unbounded ~/.claude/projects tree below via TokenStore.Start /
+			// ArtifactExtractor.Start — on a dev machine with a long Claude
+			// Code history this is thousands of real JSONL files, some large,
+			// which overflows TokenStore's bounded parse queue and made the
+			// walk+parse take 100s-1500s+ in CI, well past any reasonable
+			// test timeout. Same hazard class as IsIsolatedInstance's other
+			// documented case (shared tmux socket); here the isolated
+			// resource is the config dir, so point historyDir there instead
+			// — the directory starts empty, so TokenStore/ArtifactExtractor
+			// stay fully functional (against test fixtures) without ever
+			// touching real session data.
+			if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
+				historyDir = filepath.Join(configDir, "claude-projects")
+			}
+		}
 		tokenStore = tokens.NewTokenStore(historyDir)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		tokenStore.Start(context.Background())
