@@ -998,7 +998,7 @@ export function ReviewQueuePanel({
             (ux.md Surface 1 & 2): State A (enabled, opens CreatePullRequestModal), State B
             (disabled, no commits ahead), State C (existing PR — link, never reopens the modal). */}
         {queueItem.reason === AttentionReason.TASK_COMPLETE && (() => {
-          const hasCommitsAhead = sessionByItemId.get(queueItem.sessionId)?.hasCommitsAhead ?? false;
+          const hasCommitsAhead = queueItem.hasCommitsAhead;
           const prNumber = queueItem.githubPrUrl ? parseGitHubRef(queueItem.githubPrUrl)?.prNumber : undefined;
           return (
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>

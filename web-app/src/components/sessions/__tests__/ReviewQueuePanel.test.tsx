@@ -153,9 +153,9 @@ function makeReviewItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
     branch: "",
     category: "",
     tags: [],
-    // Absent/zero diffStats is the "no commits ahead" (State B) signal the Create PR
-    // trigger disables on — see ReviewQueuePanel.tsx's hasCommitsAhead proxy comment.
     diffStats: undefined,
+    // false is the "no commits ahead" (State B) signal the Create PR trigger disables on.
+    hasCommitsAhead: false,
     branchDivergedFromBase: false,
     githubPrUrl: "",
     ...overrides,
@@ -219,7 +219,7 @@ describe("ReviewQueuePanel — Create PR trigger", () => {
     const item = makeReviewItem({
       reason: AttentionReason.TASK_COMPLETE,
       githubPrUrl: "",
-      diffStats: { added: 3, removed: 1 } as unknown as ReviewItem["diffStats"],
+      hasCommitsAhead: true,
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
@@ -285,7 +285,7 @@ describe("ReviewQueuePanel — Create PR modal wiring", () => {
     const item = makeReviewItem({
       reason: AttentionReason.TASK_COMPLETE,
       githubPrUrl: "",
-      diffStats: { added: 3, removed: 1 } as unknown as ReviewItem["diffStats"],
+      hasCommitsAhead: true,
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
   });

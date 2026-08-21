@@ -651,6 +651,11 @@ message ReviewItem {
   // was enqueued. Used by the frontend deriveWorkingState() utility to compute
   // the effective WorkingState without relying on the deprecated working_state field.
   SubStatus sub_status = 21;
+
+  // Cached signal for whether the branch has commits ahead of its base — used
+  // to pre-emptively disable the "Create PR" trigger in the review queue
+  // (mirrors Session.has_commits_ahead), not computed synchronously per-request.
+  bool has_commits_ahead = 22;
 }
 
 // Priority levels for review queue items (highest to lowest urgency).
