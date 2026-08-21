@@ -18,6 +18,7 @@ import (
 // underlying process (no instance.Start() call), since that remains the
 // caller's responsibility.
 func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -65,6 +66,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 // ErrPathNotExist (checked via errors.Is, per the sentinel-error contract the
 // RPC handler relies on to reconstruct the original connect.CodeNotFound).
 func TestCreateManagedInstance_ReturnsErrPathNotExist_When_DirectoryMissingAndNotCreateIfMissing(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -92,6 +94,7 @@ func TestCreateManagedInstance_ReturnsErrPathNotExist_When_DirectoryMissingAndNo
 // handler maps to a different user-facing message via errors.Is(err,
 // ErrResumePathNotExist).
 func TestCreateManagedInstance_ReturnsErrResumePathNotExist_When_ResumingMissingPath(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 

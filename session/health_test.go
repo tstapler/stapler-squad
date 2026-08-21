@@ -7,6 +7,7 @@ import (
 
 // TestHealthCheckResult tests the HealthCheckResult struct
 func TestHealthCheckResult(t *testing.T) {
+	t.Parallel()
 	// Test the HealthCheckResult struct creation and field access
 	result := HealthCheckResult{
 		InstanceTitle:     "test-session",
@@ -44,6 +45,7 @@ func TestHealthCheckResult(t *testing.T) {
 
 // TestNewSessionHealthChecker tests health checker creation
 func TestNewSessionHealthChecker(t *testing.T) {
+	t.Parallel()
 	// We'll test with a nil storage for this basic test
 	checker := NewSessionHealthChecker(nil)
 
@@ -58,6 +60,7 @@ func TestNewSessionHealthChecker(t *testing.T) {
 
 // TestScheduledHealthCheck tests that the scheduled health check can start and stop
 func TestScheduledHealthCheck(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 
 	// Test that scheduled health check can be started and stopped
@@ -83,6 +86,7 @@ func TestScheduledHealthCheck(t *testing.T) {
 // TestHealthCheckerDebounce verifies that recovery is deferred until failureThreshold
 // consecutive check failures occur, then resets the counter after an attempt.
 func TestHealthCheckerDebounce(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 
 	// Create a minimal instance that appears started but has no tmux session.
@@ -171,6 +175,7 @@ func (d *deadPaneMock) IsAlive() bool {
 // and TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed for
 // the post-grace-period Crashed/Stopped transition behavior.
 func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRespawn(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 
 	inner := &mockTmuxManager{
@@ -220,6 +225,7 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 // recorded instead of being silently respawned -- so the UI can surface a
 // banner and a resume action rather than the raw "Pane is dead" terminal text.
 func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 	checker.startedAt = time.Now().Add(-2 * time.Hour) // well outside restartGracePeriod
 
@@ -260,6 +266,7 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod(t *tes
 // a dead pane whose wrapped program exited cleanly (code 0, no signal) must be
 // marked Stopped, not Crashed.
 func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 	checker.startedAt = time.Now().Add(-2 * time.Hour) // well outside restartGracePeriod
 
@@ -301,6 +308,7 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 // scenario: a session created seconds ago whose process exits normally must
 // reach Stopped promptly, not sit through a silent kill+respawn cycle.
 func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDespiteGracePeriod(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 	checker.startedAt = time.Now() // fresh checker, well within restartGracePeriod
 
@@ -342,6 +350,7 @@ func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDes
 // since a dead-pane detection here is plausibly a restart-race artifact rather
 // than a genuine crash.
 func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGracePeriod(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 	checker.startedAt = time.Now() // fresh checker (simulating a just-restarted process)
 
@@ -393,6 +402,7 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 // the old single-socket assumption, whichever socket was picked would apply its
 // down/up state to both instances.
 func TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 	querier := newFakeTmuxSocketQuerier()
 	checker.tmuxSocket = querier
@@ -423,6 +433,7 @@ func TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances(
 // it's on (i.e. instances on a non-default socket are not skipped just because they
 // weren't the socket the (old, buggy) code happened to pick).
 func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t *testing.T) {
+	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 	querier := newFakeTmuxSocketQuerier()
 	checker.tmuxSocket = querier

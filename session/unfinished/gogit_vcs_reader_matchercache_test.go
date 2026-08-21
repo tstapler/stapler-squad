@@ -15,6 +15,7 @@ import (
 )
 
 func TestGetOrBuildUntrackedMatcher_SurvivesCachedRepoEviction_WhenHeadUnchanged(t *testing.T) {
+	t.Parallel()
 	dir := newGitignoreBenchRepo(t, 1)
 	g := &GoGitVCSReader{}
 	headHash := plumbing.NewHash("0000000000000000000000000000000000000001")
@@ -43,6 +44,7 @@ func TestGetOrBuildUntrackedMatcher_SurvivesCachedRepoEviction_WhenHeadUnchanged
 }
 
 func TestGetOrBuildUntrackedMatcher_Rebuilds_WhenHeadChanged(t *testing.T) {
+	t.Parallel()
 	dir := newGitignoreBenchRepo(t, 1)
 	g := &GoGitVCSReader{}
 

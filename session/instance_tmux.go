@@ -40,14 +40,15 @@ import (
 // beyond a repeating log line.
 const maxInlinePromptBytes = 4096
 
-// promptFileCleanupDelay is how long promptArg waits before removing a
-// temp-file-backed prompt (see promptArg). The file only needs to survive
-// long enough for the shell tmux spawns to evaluate the `$(cat ...)` command
-// substitution, which happens as part of exec'ing the claude command --
-// effectively immediately after `tmux new-session` returns successfully. The
-// delay is generous purely to tolerate a slow/loaded box; it is not a
-// correctness requirement, so tests may shrink it to avoid a real sleep.
-var promptFileCleanupDelay = 30 * time.Second
+// defaultPromptFileCleanupDelay is how long promptArg waits before removing a
+// temp-file-backed prompt (see promptArg), unless overridden per-instance via
+// promptFileCleanupDelayOverride. The file only needs to survive long enough
+// for the shell tmux spawns to evaluate the `$(cat ...)` command substitution,
+// which happens as part of exec'ing the claude command -- effectively
+// immediately after `tmux new-session` returns successfully. The delay is
+// generous purely to tolerate a slow/loaded box; it is not a correctness
+// requirement, so tests may shrink it (per-instance) to avoid a real sleep.
+const defaultPromptFileCleanupDelay = 30 * time.Second
 
 // programKind is a sealed sum type over the kinds of launchable programs.
 // Holding a claudeProgram is proof that isClaude() returned true — downstream
@@ -314,19 +315,15 @@ func (i *Instance) promptArg() string {
 		return shellQuote(i.Prompt)
 	}
 	i.promptFilePath.Store(&path)
-	// Captured before spawning: promptFileCleanupDelay is a package var tests
-	// override for the duration of a single call (see
-	// withShortPromptFileCleanupDelay), restoring it via t.Cleanup once the
-	// test returns. Reading the var directly inside the goroutine below would
-	// race that restore — the goroutine can still be asleep, holding a read of
-	// the shared var pending, when t.Cleanup's write lands.
-	//
 	// This timer is a fallback safety net, not the primary cleanup path:
 	// Instance.Destroy() removes the file immediately via cleanupPromptFile.
 	// The timer still exists for cases Destroy never runs (process crash,
 	// or a session that's replaced by a later promptArg call before it is
 	// ever destroyed).
-	delay := promptFileCleanupDelay
+	delay := defaultPromptFileCleanupDelay
+	if i.promptFileCleanupDelayOverride > 0 {
+		delay = i.promptFileCleanupDelayOverride
+	}
 	go func() {
 		time.Sleep(delay)
 		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {

@@ -182,6 +182,20 @@ func NewGitWorktreeFromStorageWithExecutor(repoPath string, worktreePath string,
 		return nil
 	}
 
+	// Rehydrated worktreePath values may predate this normalization (persisted
+	// before CanonicalizeWorktreePath existed) or may already be canonical — either
+	// way, normalize on read so in-memory comparisons stay consistent without a data
+	// migration. Best-effort and non-fatal: if the directory no longer exists on
+	// disk (deleted worktree, stale storage entry), skip normalization rather than
+	// let EvalSymlinks's ENOENT propagate — CanonicalizeWorktreePath itself already
+	// falls back to filepath.Clean on error, but we gate on os.Stat first so we
+	// don't even attempt symlink resolution against a path known to be gone.
+	if worktreePath != "" {
+		if _, statErr := os.Stat(worktreePath); statErr == nil {
+			worktreePath = CanonicalizeWorktreePath(worktreePath)
+		}
+	}
+
 	g := &GitWorktree{
 		repoPath:      repoPath,
 		worktreePath:  worktreePath,
@@ -244,6 +258,10 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 	// First check if the branch is already checked out in an existing worktree
 	existingWorktreePath, found := findExistingWorktreeForBranch(repoPath, branchName)
 	if found {
+		// git realpath's the path it reports in 'worktree list' output, so
+		// canonicalize before storing to keep this consistent with the
+		// already-resolved paths getWorktreeDirectory hands to fresh creates.
+		existingWorktreePath = CanonicalizeWorktreePath(existingWorktreePath)
 		log.Info("found existing worktree for branch, reusing it", "branch", branchName, "path", existingWorktreePath)
 		g := &GitWorktree{
 			repoPath:     repoPath,
@@ -380,6 +398,12 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 	if !IsGitRepo(existingWorktreePath) {
 		return nil, fmt.Errorf("path '%s' is not a valid git repository or worktree", existingWorktreePath)
 	}
+
+	// Callers may hand in a raw, not-yet-canonicalized path (e.g. rehydrated from
+	// storage written before this normalization existed); canonicalize it here so
+	// worktreePath comparisons stay consistent with the resolved paths produced by
+	// fresh-create and git-list-based reuse paths elsewhere in this package.
+	existingWorktreePath = CanonicalizeWorktreePath(existingWorktreePath)
 
 	// Find the repository root from the worktree path
 	repoPath, err := findMainRepoPathForWorktree(existingWorktreePath)

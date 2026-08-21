@@ -13,6 +13,7 @@ import (
 
 // T-UNIT-SUB-1: Push delivers data to the consumer channel.
 func TestMemPTYSubscriber_Push_DeliversToConsumer(t *testing.T) {
+	t.Parallel()
 	s := newMemPTYSubscriber()
 	defer s.Close()
 
@@ -28,6 +29,7 @@ func TestMemPTYSubscriber_Push_DeliversToConsumer(t *testing.T) {
 
 // T-UNIT-SUB-2: drain coalesces multiple chunks buffered in pushCh into a single send.
 func TestMemPTYSubscriber_Drain_CoalescesChunks(t *testing.T) {
+	t.Parallel()
 	s := newMemPTYSubscriber()
 	defer s.Close()
 
@@ -54,6 +56,7 @@ func TestMemPTYSubscriber_Drain_CoalescesChunks(t *testing.T) {
 
 // T-UNIT-SUB-3: Push returns ErrSubscriberFull when pushCh is at capacity.
 func TestMemPTYSubscriber_Push_ReturnsErrSubscriberFull_WhenAtCapacity(t *testing.T) {
+	t.Parallel()
 	// Construct directly without starting drain so pushCh fills deterministically.
 	// The drain goroutine coalesces items from pushCh faster than we can fill it,
 	// making the test racy when using newMemPTYSubscriber().
@@ -78,6 +81,7 @@ func TestMemPTYSubscriber_Push_ReturnsErrSubscriberFull_WhenAtCapacity(t *testin
 
 // T-UNIT-SUB-4: Close causes Chan to be closed after drain exits.
 func TestMemPTYSubscriber_Close_ClosesConsumerChannel(t *testing.T) {
+	t.Parallel()
 	s := newMemPTYSubscriber()
 	s.Close()
 
@@ -97,6 +101,7 @@ func TestMemPTYSubscriber_Close_ClosesConsumerChannel(t *testing.T) {
 
 // T-UNIT-SUB-5: Close is idempotent — calling it multiple times does not panic.
 func TestMemPTYSubscriber_Close_IsIdempotent(t *testing.T) {
+	t.Parallel()
 	s := newMemPTYSubscriber()
 	require.NotPanics(t, func() {
 		s.Close()
@@ -107,6 +112,7 @@ func TestMemPTYSubscriber_Close_IsIdempotent(t *testing.T) {
 
 // T-UNIT-SUB-6: Push after Close does not panic and the data is silently discarded.
 func TestMemPTYSubscriber_Push_AfterClose_DoesNotPanic(t *testing.T) {
+	t.Parallel()
 	s := newMemPTYSubscriber()
 	s.Close()
 
@@ -130,6 +136,7 @@ closed:
 
 // T-UNIT-SUB-7: Chan returns the same channel on repeated calls.
 func TestMemPTYSubscriber_Chan_ReturnsSameChannel(t *testing.T) {
+	t.Parallel()
 	s := newMemPTYSubscriber()
 	defer s.Close()
 
@@ -141,6 +148,7 @@ func TestMemPTYSubscriber_Chan_ReturnsSameChannel(t *testing.T) {
 // T-UNIT-SUB-8: Push copies data — mutating the original slice after Push
 // does not affect what the consumer receives.
 func TestMemPTYSubscriber_Push_CopiesData(t *testing.T) {
+	t.Parallel()
 	s := newMemPTYSubscriber()
 	defer s.Close()
 

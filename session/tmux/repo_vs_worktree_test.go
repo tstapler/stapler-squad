@@ -12,6 +12,7 @@ import (
 // TestRepoVsWorktreeDirectoryHandling specifically tests that sessions restore
 // in the correct directories for both regular repos and worktrees
 func TestRepoVsWorktreeDirectoryHandling(t *testing.T) {
+	t.Parallel()
 	t.Run("RegularRepoSessionRestoration", func(t *testing.T) {
 		testRegularRepoSessionRestoration(t)
 	})
@@ -200,6 +201,7 @@ func testMixedScenarioValidation(t *testing.T) {
 // TestSessionTypeClassification tests that we can identify and handle
 // different types of session restoration scenarios
 func TestSessionTypeClassification(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 
 	scenarios := []struct {

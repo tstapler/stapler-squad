@@ -11,6 +11,7 @@ import (
 // only GitHubCheckConclusion changes (no priority-boundary crossing), and must NOT fire
 // when neither priority nor conclusion changed.
 func TestApplyPRUpdate_FiresOnUpdated_WhenCheckConclusionChangesWithoutPriorityChange(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "ci-conclusion-test"}
 	// Seed a "blocking" priority with a "pending" CI conclusion so a later "failure"
 	// conclusion crosses no priority boundary (both are priority "blocking").
@@ -54,6 +55,7 @@ func TestApplyPRUpdate_FiresOnUpdated_WhenCheckConclusionChangesWithoutPriorityC
 // poller constructing its own, which would double GitHub API call volume for
 // repos both pollers hit.
 func TestPRStatusPoller_ETagCache_ReturnsSharedNonNilInstance(t *testing.T) {
+	t.Parallel()
 	poller := NewPRStatusPoller(nil)
 
 	cache := poller.ETagCache()

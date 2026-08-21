@@ -143,33 +143,30 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     };
   }, [launcherPresets]);
 
-  // Re-fetch presets each time the omnibar opens so a hand-edited launcher-presets.json
-  // change appears immediately, without a server restart (Success Criterion 1).
+  const { hosts: enterpriseHosts, refetch: refetchEnterpriseHosts } = useGitHubEnterpriseHosts();
+
+  // Re-fetch presets and GHE hosts each time the omnibar opens so a hand-edited
+  // launcher-presets.json change, or a GitHub Enterprise account added mid-session,
+  // appears immediately without a server restart or page reload (Success Criterion 1;
+  // same staleness problem for enterprise hosts as launcher presets).
   const prevOmnibarOpenRef = useRef(false);
   useEffect(() => {
     if (isOpen && !prevOmnibarOpenRef.current) {
       refetchLauncherPresets();
+      refetchEnterpriseHosts();
     }
     prevOmnibarOpenRef.current = isOpen;
-  }, [isOpen, refetchLauncherPresets]);
+  }, [isOpen, refetchLauncherPresets, refetchEnterpriseHosts]);
 
-  const enterpriseHosts = useGitHubEnterpriseHosts();
-
-  // Dynamically register/unregister GitHubEnterpriseURLDetector whenever the
-  // configured GHES host list changes.
-  const githubEnterpriseDetectorRef = useRef<GitHubEnterpriseURLDetector | null>(null);
+  // GitHubEnterpriseURLDetector is registered synchronously (with an empty host
+  // list) inside createDefaultRegistry(), so the registry always has a slot for
+  // it — no window where a GHES URL falls through to SessionSearch. This effect
+  // just keeps its host list in sync as the async RPC result changes.
   useEffect(() => {
-    const registry = getDefaultRegistry();
-    if (githubEnterpriseDetectorRef.current) {
-      registry.unregister(githubEnterpriseDetectorRef.current);
-    }
-    const detector = new GitHubEnterpriseURLDetector(enterpriseHosts);
-    registry.register(detector);
-    githubEnterpriseDetectorRef.current = detector;
-    return () => {
-      registry.unregister(detector);
-      githubEnterpriseDetectorRef.current = null;
-    };
+    const detector = getDefaultRegistry().find("GitHubEnterpriseURL") as
+      | GitHubEnterpriseURLDetector
+      | undefined;
+    detector?.setHosts(enterpriseHosts);
   }, [enterpriseHosts]);
 
   const open = useCallback(() => {

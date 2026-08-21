@@ -45,6 +45,7 @@ const (
 )
 
 func TestVerifySlackSignature_Accepts_When_ValidSignatureAndFreshTimestamp(t *testing.T) {
+	t.Parallel()
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	sig := computeTestSlackSignature(slackSigTestSecret, ts, slackSigTestBody)
 
@@ -53,6 +54,7 @@ func TestVerifySlackSignature_Accepts_When_ValidSignatureAndFreshTimestamp(t *te
 }
 
 func TestVerifySlackSignature_Rejects_When_BodyTampered(t *testing.T) {
+	t.Parallel()
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	sig := computeTestSlackSignature(slackSigTestSecret, ts, slackSigTestBody)
 
@@ -63,6 +65,7 @@ func TestVerifySlackSignature_Rejects_When_BodyTampered(t *testing.T) {
 }
 
 func TestVerifySlackSignature_Rejects_When_TimestampStale(t *testing.T) {
+	t.Parallel()
 	staleTS := strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10)
 	sig := computeTestSlackSignature(slackSigTestSecret, staleTS, slackSigTestBody)
 
@@ -77,6 +80,7 @@ func TestVerifySlackSignature_Rejects_When_TimestampStale(t *testing.T) {
 }
 
 func TestVerifySlackSignature_Rejects_When_WrongSecret(t *testing.T) {
+	t.Parallel()
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	sig := computeTestSlackSignature("secret-one", ts, slackSigTestBody)
 

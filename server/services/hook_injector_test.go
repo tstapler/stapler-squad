@@ -18,6 +18,7 @@ import (
 // TestInjectHooksConfigAllTypes (U-3.7): InjectHooksConfig injects all five hook types
 // with correct event keys and session-ID headers.
 func TestInjectHooksConfigAllTypes(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	hooks := []HookName{
 		HookPermissionApproval,
@@ -89,6 +90,7 @@ func TestInjectHooksConfigAllTypes(t *testing.T) {
 // TestInjectHooksConfigPreservesUserHooks (U-3.8): existing user hooks are preserved
 // and our hook is prepended.
 func TestInjectHooksConfigPreservesUserHooks(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	existing := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"lint-hook","timeout":10}]}]}}`
 	writeSettings(t, tmpDir, existing)
@@ -148,6 +150,7 @@ func TestInjectHooksConfigPreservesUserHooks(t *testing.T) {
 // TestPermissionApprovalAlwaysInjected (U-3.9): even when the hooks slice is empty,
 // PermissionRequest is always injected.
 func TestPermissionApprovalAlwaysInjected(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	if err := InjectHooksConfig(tmpDir, "test-session", []HookName{}); err != nil {
@@ -179,6 +182,7 @@ func TestPermissionApprovalAlwaysInjected(t *testing.T) {
 // TestInjectHooksNeverCorruptsJSON (P-3, property-based): InjectHooksConfig always
 // produces valid JSON and preserves existing top-level keys.
 func TestInjectHooksNeverCorruptsJSON(t *testing.T) {
+	t.Parallel()
 	bases := []string{
 		`{}`,
 		`{"other": "data"}`,
@@ -190,6 +194,7 @@ func TestInjectHooksNeverCorruptsJSON(t *testing.T) {
 	for _, base := range bases {
 		base := base // capture
 		t.Run(base, func(t *testing.T) {
+			t.Parallel()
 			tmpDir := t.TempDir()
 			writeSettings(t, tmpDir, base)
 
@@ -220,6 +225,7 @@ func TestInjectHooksNeverCorruptsJSON(t *testing.T) {
 // TestInjectHooksIdempotent: calling InjectHooksConfig twice with the same arguments
 // must not duplicate hook entries.
 func TestInjectHooksIdempotent(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	hooks := []HookName{HookPermissionApproval, HookStopNotification}
 
@@ -268,6 +274,7 @@ func TestInjectHooksIdempotent(t *testing.T) {
 // address -- proving the map is rebuilt fresh from baseURLFn() on every call rather than
 // cached at package-construction time (the old hookEndpoint package-level var's behavior).
 func Test_hookEndpoints_should_ReflectCurrentBaseURLFn_When_CalledTwiceWithDifferentAddresses(t *testing.T) {
+	t.Parallel()
 	first := hookEndpoints(func() string { return "http://localhost:0" })
 	for name, url := range first {
 		if !strings.Contains(url, "http://localhost:0") {
@@ -300,6 +307,7 @@ func Test_hookEndpoints_should_ReflectCurrentBaseURLFn_When_CalledTwiceWithDiffe
 // only the hook(s) named, leaving every other hook (ours or the user's own) intact —
 // including other entries under the same PostToolUse event key.
 func TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresent(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Inject both PostToolUse-mapped hooks plus an unrelated event.
@@ -359,6 +367,7 @@ func TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresen
 // injected at all. hookCommandReferencesURL must reject that false-positive match while still
 // matching a command that genuinely references the URL.
 func Test_hookCommandReferencesURL_should_NotMatchWhenURLIsAStrictPrefixOfAnother(t *testing.T) {
+	t.Parallel()
 	shortURL := "http://localhost:8543/api/hooks/post-tool-use"
 	longURL := "http://localhost:8543/api/hooks/post-tool-use-drift-check"
 	commandForLongURL := "curl -s --max-time 300 -X POST '" + longURL + "' -H 'Content-Type: application/json' -d @-"
@@ -379,6 +388,7 @@ func Test_hookCommandReferencesURL_should_NotMatchWhenURLIsAStrictPrefixOfAnothe
 // hookCommandReferencesURL's doc comment); post-fix it must pass every time regardless of
 // iteration order.
 func TestInjectHooksConfig_should_InjectBothHooks_When_OneEndpointIsAPrefixOfAnother(t *testing.T) {
+	t.Parallel()
 	for i := 0; i < 50; i++ {
 		tmpDir := t.TempDir()
 		if err := InjectHooksConfig(tmpDir, "sess", []HookName{HookPostToolLogging, HookGitDriftCheck}); err != nil {
@@ -428,6 +438,7 @@ func TestInjectHooksConfig_should_InjectBothHooks_When_OneEndpointIsAPrefixOfAno
 // internal/claudehooks/claudehooks.go's mutate() already documents this exact
 // failure mode and uses a unique os.CreateTemp name for the same reason.
 func TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	const n = 20
@@ -461,6 +472,7 @@ func TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorr
 // case: a freshly-created (or always-manual) worktree that never had the hook, so
 // every backlog spawn's "reconcile in both directions" call is a no-op there.
 func TestRemoveHooksConfig_should_BeNoOp_When_HookWasNeverInjected(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// No settings file at all.
@@ -691,6 +703,7 @@ func Test_InjectHooksConfig_should_BeIdempotent_When_RemoteTargetCalledTwice(t *
 // TestRemoveHooksConfig_should_BeIdempotent_When_CalledTwice mirrors
 // TestInjectHooksIdempotent for the removal direction.
 func TestRemoveHooksConfig_should_BeIdempotent_When_CalledTwice(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	if err := InjectHooksConfig(tmpDir, "sess", []HookName{HookGitDriftCheck}); err != nil {
 		t.Fatalf("InjectHooksConfig: %v", err)

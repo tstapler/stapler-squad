@@ -4,6 +4,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ConnectError, Code } from "@connectrpc/connect";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import * as styles from "./SessionMonitor.css";
 
 interface SessionMonitorProps {
@@ -58,7 +59,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       setTerminalError(null);
       if (output) setTerminalOutput(output);
     } catch (err) {
-      setTerminalError(err instanceof Error ? err.message : "Could not reach the server.");
+      setTerminalError(getErrorMessage(err, "Could not reach the server."));
       if (err instanceof ConnectError && err.code === Code.NotFound) stopPolling();
     }
   }, [sessionId, getTerminalSnapshot, stopPolling]);
@@ -69,7 +70,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       setConversationError(null);
       setMessages(msgs);
     } catch (err) {
-      setConversationError(err instanceof Error ? err.message : "Could not reach the server.");
+      setConversationError(getErrorMessage(err, "Could not reach the server."));
       if (err instanceof ConnectError && err.code === Code.NotFound) stopPolling();
     }
   }, [sessionId, getConversationMessages, stopPolling]);

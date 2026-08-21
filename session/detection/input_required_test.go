@@ -6,6 +6,7 @@ import (
 
 // TestStatusDetector_DetectInputRequired verifies that Claude Code's numbered selection prompts are detected.
 func TestStatusDetector_DetectInputRequired(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	tests := []struct {
@@ -42,6 +43,7 @@ func TestStatusDetector_DetectInputRequired(t *testing.T) {
 
 // TestStatusDetector_DetectInputRequired_WithContext verifies context includes matched pattern description.
 func TestStatusDetector_DetectInputRequired_WithContext(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	tests := []struct {
@@ -75,6 +77,7 @@ func TestStatusDetector_DetectInputRequired_WithContext(t *testing.T) {
 
 // TestStatusDetector_InputRequired_CaseInsensitive verifies patterns work regardless of surrounding text.
 func TestStatusDetector_InputRequired_CaseInsensitive(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	tests := []string{
@@ -95,6 +98,7 @@ func TestStatusDetector_InputRequired_CaseInsensitive(t *testing.T) {
 
 // TestStatusDetector_InputRequired_NoFalsePositives verifies we don't incorrectly match non-input text.
 func TestStatusDetector_InputRequired_NoFalsePositives(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	tests := []struct {
@@ -251,6 +255,7 @@ func TestStatusDetector_InputRequired_NoFalsePositives(t *testing.T) {
 
 // TestStatusDetector_InputRequired_Priority verifies InputRequired has correct priority.
 func TestStatusDetector_InputRequired_Priority(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	tests := []struct {
@@ -297,6 +302,7 @@ func TestStatusDetector_InputRequired_Priority(t *testing.T) {
 
 // TestStatusDetector_InputRequired_GetPatternNames verifies pattern names can be retrieved.
 func TestStatusDetector_InputRequired_GetPatternNames(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	names := detector.GetPatternNames(StatusInputRequired)
@@ -321,6 +327,7 @@ func TestStatusDetector_InputRequired_GetPatternNames(t *testing.T) {
 
 // TestStatusDetector_InputRequired_HasPattern verifies pattern existence check.
 func TestStatusDetector_InputRequired_HasPattern(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	if !detector.HasPattern(StatusInputRequired, "numbered_option_selector") {
@@ -345,6 +352,7 @@ func TestStatusDetector_InputRequired_HasPattern(t *testing.T) {
 
 // TestStatusDetector_InputRequired_String verifies string conversion.
 func TestStatusDetector_InputRequired_String(t *testing.T) {
+	t.Parallel()
 	status := StatusInputRequired
 	expected := "Input Required"
 	if status.String() != expected {

@@ -34,12 +34,11 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 	})
 
 	sessionName := "test_killcm_session"
-	{
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		newSessionCmd := safeexec.CommandContext(ctx, Binary(), "-L", socketName, "new-session", "-d", "-s", sessionName, "-x", "80", "-y", "24")
-		require.NoError(t, newSessionCmd.Run())
-	}
+	// createSessionWithRetry (tmux_test.go) rather than a single un-retried
+	// new-session call -- same real-subprocess-killed-by-fixed-timeout failure
+	// class root-caused for TestEnsureServerRunning_NoOp. -x/-y preserve the
+	// original explicit window size for headless CI.
+	createSessionWithRetry(t, socketName, sessionName, "-x", "80", "-y", "24")
 
 	// Simulate two control-mode clients orphaned by a prior process instance. A real
 	// orphaned client's stdin is one end of a pipe the (now-dead) parent process held
@@ -99,6 +98,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 // against a socket with no server running returns (0, nil) rather than an error --
 // it runs unconditionally at every startup, including the very first one.
 func TestKillOrphanedControlModeClients_NoServerIsNotAnError(t *testing.T) {
+	t.Parallel()
 	killed, err := KillOrphanedControlModeClients(fmt.Sprintf("test_killcm_noserver_%d_%d", os.Getpid(), time.Now().UnixNano()))
 	require.NoError(t, err)
 	require.Equal(t, 0, killed)

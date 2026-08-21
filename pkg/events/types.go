@@ -56,6 +56,11 @@ const (
 	// is written (UpdateItemSessionTriageResult). Converts to the existing
 	// BacklogItemUpdatedEvent oneof variant on the wire, not a new proto message.
 	BacklogChangeTriageProgressUpdated BacklogChangeKind = "triage_progress_updated"
+	// BacklogChangeActivityNoteAdded is emitted when a free-form activity note
+	// is posted (AppendActivityNote, ADR-001's sibling table). Converts to the
+	// dedicated BacklogItemActivityNoteAddedEvent oneof variant, never a full
+	// item snapshot (ADR-002).
+	BacklogChangeActivityNoteAdded BacklogChangeKind = "activity_note_added"
 )
 
 // BacklogItemEventPayload carries the backlog-specific data for an
@@ -88,6 +93,9 @@ type BacklogItemEventPayload struct {
 	// the adapter so the verdict reaches subscribers as first-class payload
 	// data rather than something derived by joining item_sessions.
 	Verdict *session.ReviewVerdictData
+	// ActivityNote mirrors session.BacklogItemChange.ActivityNote one-to-one;
+	// populated only when Kind == BacklogChangeActivityNoteAdded.
+	ActivityNote *session.ActivityNoteData
 	// IsSnapshot is true when this event was generated as part of an
 	// initial-snapshot send (e.g. WatchBacklogItems's first batch) rather
 	// than a live mutation.

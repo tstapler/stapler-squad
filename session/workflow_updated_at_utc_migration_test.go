@@ -16,6 +16,7 @@ import (
 // UpdatedAt to a Local time.Time (bypassing the schema's UTC default), then verifies
 // the backfill both normalizes the Location to UTC and preserves the exact instant.
 func TestRunWorkflowUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows_When_Called(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -43,6 +44,7 @@ func TestRunWorkflowUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows_Wh
 // TestRunWorkflowUpdatedAtUTCBackfill_should_BeIdempotent_When_RunTwice proves a
 // second run is a safe no-op.
 func TestRunWorkflowUpdatedAtUTCBackfill_should_BeIdempotent_When_RunTwice(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()

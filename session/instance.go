@@ -414,6 +414,13 @@ type Instance struct {
 	// relying solely on promptFileCleanupDelay's background timer.
 	promptFilePath atomic.Pointer[string]
 
+	// promptFileCleanupDelayOverride, when non-zero, replaces
+	// defaultPromptFileCleanupDelay for this instance's promptArg calls. It
+	// exists so tests can shrink the cleanup delay without a shared
+	// package-level var, which would race across t.Parallel() tests (each
+	// test gets its own Instance, so there is nothing to synchronize).
+	promptFileCleanupDelayOverride time.Duration
+
 	// mu protects Instance's mutable data fields (Status, started, Tags,
 	// Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts, etc.).
 	// Use sendSyncErr / send for writes and Snapshot() for reads.
@@ -425,9 +432,33 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// driverStopper carries the stop/done signaling pair for the current
+	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
+	// read by StopSessionDriver (called from Destroy) to signal and join the
+	// driver goroutine so it cannot outlive Destroy().
+	driverStopper atomic.Pointer[sessionDriverStopper]
+	// driverMu serializes StartSessionDriver/StopSessionDriver access to
+	// driverRunning/driverStopper/driverDestroyed as one atomic unit. Without
+	// it, CreateSession's async initialization goroutine (which calls
+	// instance.Start(true) and StartSessionDriver well after the RPC has
+	// already returned and the instance is discoverable via
+	// FindLiveInstance — see server/services/session_service.go) can call
+	// StartSessionDriver *after* a fast-following DeleteSession's Destroy()
+	// has already run StopSessionDriver and found no stopper yet, orphaning a
+	// driver goroutine that nothing will ever signal to stop.
+	driverMu sync.Mutex
+	// driverDestroyed is set by StopSessionDriver (called from Destroy)
+	// while holding driverMu, and checked by StartSessionDriver under the
+	// same lock: once an instance has been destroyed, no later
+	// StartSessionDriver call may spawn a new driver goroutine for it, no
+	// matter how late that call arrives relative to Destroy().
+	driverDestroyed bool
 	// driverWG tracks the SessionDriver goroutine (runSessionDriver or its
 	// handleDriverFailure-spawned restart) so tests can join it before
-	// t.TempDir() cleanup runs. See StartSessionDriver and JoinSessionDriver.
+	// t.TempDir() cleanup runs via JoinSessionDriver. StopSessionDriver
+	// (called from Destroy) is the production stop/signal mechanism;
+	// driverWG exists only so tests that don't call Destroy can still wait
+	// for the goroutine to finish before their tempdir is removed.
 	driverWG sync.WaitGroup
 	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
 	// goroutines so tests can join them before t.TempDir() cleanup runs.
@@ -439,9 +470,10 @@ type Instance struct {
 	// 25-minute wall-clock deadline or a detected terminal status, both of
 	// which can lag well behind Destroy() returning) notices on its very next
 	// driverPollInterval tick and exits immediately instead of continuing to
-	// call SendKeys/AcquireExecSlot against a torn-down session. Zero-value
-	// safe (false) so the many `&Instance{}` construction sites that bypass
-	// NewInstance need no changes.
+	// call SendKeys/AcquireExecSlot against a torn-down session, as a
+	// defense-in-depth fallback alongside driverStopper's proactive
+	// cancellation. Zero-value safe (false) so the many `&Instance{}`
+	// construction sites that bypass NewInstance need no changes.
 	destroyed atomic.Bool
 
 	// sessionGoal is the cached goal state for this session.
@@ -1534,6 +1566,20 @@ func (i *Instance) Destroy() error {
 
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
+
+	// Stop any running (or not-yet-started) SessionDriver goroutine and mark
+	// this instance destroyed *before* checking i.started: CreateSession's
+	// async initialization goroutine can still be racing to call
+	// instance.Start(true) and StartSessionDriver after this Destroy() call
+	// begins (the instance is discoverable via FindLiveInstance well before
+	// that goroutine finishes — see server/services/session_service.go's
+	// CreateSession trackCleanup goroutine). Calling StopSessionDriver here
+	// unconditionally — even while started is still false — sets
+	// driverDestroyed so a StartSessionDriver call arriving later for this
+	// instance refuses to start a driver goroutine that nothing would ever
+	// be able to stop, so it cannot keep polling Preview() (and thus
+	// re-resolving config via the tmux exec gate) after Destroy() returns.
+	StopSessionDriver(i)
 
 	if !i.started.Load() {
 		// If instance was never started, just return success

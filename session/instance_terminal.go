@@ -4,6 +4,8 @@ package session
 // GitHub metadata delegation, permissions, and other display-oriented Instance methods.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -171,6 +173,44 @@ func (i *Instance) Preview() (string, error) {
 	}
 
 	return content, nil
+}
+
+// PreviewContext is Preview with an external context threaded onto the
+// underlying tmux subprocess call itself (not just the exec-gate wait), so a
+// caller that cancels ctx can kill an already-running capture-pane process
+// rather than only giving up on waiting for it. Used by the SessionDriver
+// polling loop (session_driver.go), whose stop channel needs to interrupt a
+// capture already in flight so StopSessionDriver's bounded join can't stall
+// on a stuck subprocess — see runGatedWith's doc comment in
+// session/tmux/exec_gate.go for why the gate's own timeout doesn't cover
+// this. Falls back to the plain, non-cancellable Preview() for backends that
+// don't expose a context-aware capture (native backend, no active tmux
+// session, or no controller).
+func (i *Instance) PreviewContext(ctx context.Context) (string, error) {
+	if i.previewBlocked() {
+		return "", nil
+	}
+
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if tpm, ok := tb.mgr.(*TmuxProcessManager); ok {
+			content, err := tpm.CapturePaneContentContext(ctx)
+			if err == nil {
+				return content, nil
+			}
+			// A cancellation/deadline means the caller no longer wants this
+			// result — falling back to the non-cancellable Preview() here
+			// would silently ignore that and block on a fresh subprocess
+			// call anyway, defeating the whole point of threading ctx
+			// through in the first place (see doc comment above). Only
+			// fall back for genuine capture failures (e.g. subprocess
+			// error, no pane).
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return "", ctx.Err()
+			}
+		}
+	}
+
+	return i.Preview()
 }
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history.

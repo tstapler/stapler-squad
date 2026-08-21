@@ -21,6 +21,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
+	t.Parallel()
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
 	}
@@ -28,6 +29,7 @@ func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
 }
 
 func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
+	t.Parallel()
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
 	}
@@ -35,6 +37,7 @@ func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
 }
 
 func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
+	t.Parallel()
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE,
 		ExistingWorktree: "/some/worktree",
@@ -43,6 +46,7 @@ func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
 }
 
 func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
+	t.Parallel()
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 	}
@@ -50,6 +54,7 @@ func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
 }
 
 func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
+	t.Parallel()
 	// Backward-compat: a resolved branch with no explicit session_type → new_worktree.
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
@@ -58,6 +63,7 @@ func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
 }
 
 func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t *testing.T) {
+	t.Parallel()
 	// Backward-compat: ExistingWorktree field present → existing_worktree (takes priority over branch).
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
@@ -67,6 +73,7 @@ func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t 
 }
 
 func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
+	t.Parallel()
 	// SESSION_TYPE_ONE_OFF maps to SessionTypeOneOff (caller converts to directory after path gen).
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
@@ -75,6 +82,7 @@ func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
 }
 
 func TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory(t *testing.T) {
+	t.Parallel()
 	// A proto enum value we don't recognise yet should degrade gracefully.
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType(999),
@@ -87,6 +95,7 @@ func TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory(t *testing.T)
 // ---------------------------------------------------------------------------
 
 func TestCreateSession_EmptyTitle_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -101,6 +110,7 @@ func TestCreateSession_EmptyTitle_ReturnsInvalidArgument(t *testing.T) {
 }
 
 func TestCreateSession_EmptyPath_NonOneOff_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -115,6 +125,7 @@ func TestCreateSession_EmptyPath_NonOneOff_ReturnsInvalidArgument(t *testing.T) 
 }
 
 func TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -131,6 +142,7 @@ func TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testi
 }
 
 func TestCreateSession_should_SetAutoApprove_When_ProgramIsClaude(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -227,6 +239,7 @@ func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *test
 }
 
 func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -249,6 +262,7 @@ func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
 }
 
 func TestCreateSession_EmptyTitleAndPath_TitleErrorFirst(t *testing.T) {
+	t.Parallel()
 	// Both title and path are missing; title validation must fire first.
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
@@ -382,6 +396,7 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 // constant silently regressing below the documented worst case (git clone up
 // to ~120s) — see the comment on createSessionTimeout.
 func TestCreateSessionTimeout_ComfortablyAboveGitCloneBound(t *testing.T) {
+	t.Parallel()
 	assert.Greater(t, createSessionTimeout, 120*time.Second)
 }
 
@@ -396,6 +411,7 @@ func TestCreateSessionTimeout_ComfortablyAboveGitCloneBound(t *testing.T) {
 // the test deterministic and fast: ctx.Done() is already closed before the
 // subprocess can do any meaningful network I/O.
 func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -430,6 +446,7 @@ func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
 //
 // Requires tmux to be installed; skipped automatically otherwise.
 func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)

@@ -7,6 +7,7 @@ import "testing"
 // adapters, while gemini (real Gemini CLI — a different storage format from Antigravity's
 // own ~/.gemini/antigravity-cli/... layout) and other unmatched programs resolve to nil.
 func TestResolveHistoryAdapter(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		program  string
 		wantName string // "" means resolveHistoryAdapter must return nil
@@ -22,6 +23,7 @@ func TestResolveHistoryAdapter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.program, func(t *testing.T) {
+			t.Parallel()
 			got := resolveHistoryAdapter(tt.program)
 			if tt.wantName == "" {
 				if got != nil {

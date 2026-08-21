@@ -20,6 +20,7 @@ import (
 // made EnablePRAutoMerge fail with "no pull requests found" for a PR that
 // otherwise pushed and tracked fine. See CreatePR in worktree_git.go.
 func TestPrNumberFromURLRe_ExtractsTrailingNumber(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		url  string
@@ -63,6 +64,7 @@ func TestPrNumberFromURLRe_ExtractsTrailingNumber(t *testing.T) {
 // onto CommandRunner unconditionally (see ADR-002's addendum) — spy.runFunc plays
 // the same role raceSimulatorExecutor's raceSetup hook used to.
 func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingGoroutine(t *testing.T) {
+	t.Parallel()
 	spy := &gitSpyCommandRunner{}
 	g := NewGitWorktreeFromStorageWithExecutor(
 		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
@@ -101,6 +103,7 @@ func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingG
 // runGitCommand was migrated onto CommandRunner unconditionally (see ADR-002's
 // addendum) — len(spy.runCalls) plays the same role countingErrExecutor.calls used to.
 func TestIsDirtyWithHint_BacksOffAfterError(t *testing.T) {
+	t.Parallel()
 	spy := &gitSpyCommandRunner{
 		runOut: []byte("fatal: cannot change to '/fake/worktree': No such file or directory"),
 		runErr: exec.ErrNotFound,
@@ -131,6 +134,7 @@ func TestIsDirtyWithHint_BacksOffAfterError(t *testing.T) {
 // proving the HasConflicts OR condition is correct for both the trigger cases
 // and the near-miss cases that must NOT trigger.
 func TestParsePRStatusPayload_ConflictDetection(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		mergeable        string
@@ -214,6 +218,7 @@ func TestParsePRStatusPayload_ConflictDetection(t *testing.T) {
 // that it renders identically regardless of which field (mergeable vs.
 // mergeStateStatus) tripped the HasConflicts OR condition.
 func TestParsePRStatusPayload_ConflictGuidanceText(t *testing.T) {
+	t.Parallel()
 	wantSubstrings := []string{
 		"--force-with-lease",
 		".gitignore",
@@ -256,6 +261,7 @@ func TestParsePRStatusPayload_ConflictGuidanceText(t *testing.T) {
 // untested CIFailing detection logic: a terminal FAILURE conclusion must set
 // CIFailing=true, while a non-terminal IN_PROGRESS check must not.
 func TestParsePRStatusPayload_CIFailing(t *testing.T) {
+	t.Parallel()
 	t.Run("terminal FAILURE conclusion sets CIFailing true", func(t *testing.T) {
 		raw := []byte(`{"statusCheckRollup":[{"name":"build","conclusion":"FAILURE"}],"reviews":[],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
@@ -297,6 +303,7 @@ func TestParsePRStatusPayload_CIFailing(t *testing.T) {
 // review must set HasBlockingReviews=true, while an APPROVED-only review set
 // must not.
 func TestParsePRStatusPayload_HasBlockingReviews(t *testing.T) {
+	t.Parallel()
 	t.Run("CHANGES_REQUESTED review sets HasBlockingReviews true", func(t *testing.T) {
 		raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"CHANGES_REQUESTED","body":"Fix the null check","author":{"login":"reviewer1"}}],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
@@ -341,6 +348,7 @@ func TestParsePRStatusPayload_HasBlockingReviews(t *testing.T) {
 // PR has both HasConflicts and CIFailing true, the conflict section must
 // precede the CI section in FeedbackText.
 func TestParsePRStatusPayload_ConflictSectionOrderedFirst(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[{"name":"build","conclusion":"FAILURE"}],"reviews":[],"comments":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -365,6 +373,7 @@ func TestParsePRStatusPayload_ConflictSectionOrderedFirst(t *testing.T) {
 // TestIsSubstantiveFeedback proves the length-only noise filter used to keep
 // bare "LGTM"-style feedback out of the HasReviewFeedback signal.
 func TestIsSubstantiveFeedback(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		body string
@@ -392,6 +401,7 @@ func TestIsSubstantiveFeedback(t *testing.T) {
 // the substantive-feedback signal except Copilot's own review account, which
 // this feature exists to capture.
 func TestIsExcludedBotAuthor(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		login string
@@ -421,6 +431,7 @@ func TestIsExcludedBotAuthor(t *testing.T) {
 // "include all comments" behavior preserved) without counting toward the
 // signal.
 func TestParsePRStatusPayload_HasReviewFeedback_should_ExcludeNonCopilotBotAuthor(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[],"comments":[{"body":"Coverage decreased (-0.1%) to 95.3% on this pull request.","author":{"login":"codecov[bot]"},"createdAt":"2026-08-02T13:00:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -444,6 +455,7 @@ func TestParsePRStatusPayload_HasReviewFeedback_should_ExcludeNonCopilotBotAutho
 // non-Copilot bot must never be captured into commentReviews or count toward
 // HasReviewFeedback.
 func TestParsePRStatusPayload_HasReviewFeedback_should_ExcludeNonCopilotBotCommentedReview(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"This PR increases bundle size by 12%.","author":{"login":"bundlesize-bot[bot]"},"submittedAt":"2026-08-02T14:00:00Z"}],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -463,6 +475,7 @@ func TestParsePRStatusPayload_HasReviewFeedback_should_ExcludeNonCopilotBotComme
 // substantive COMMENTED-state review (Copilot's typical review posture) sets
 // HasReviewFeedback and captures the review's submittedAt as LatestFeedbackAt.
 func TestParsePRStatusPayload_HasReviewFeedback_CommentedReview(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"Consider extracting this into a helper function.","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:32:07Z"}],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -482,6 +495,7 @@ func TestParsePRStatusPayload_HasReviewFeedback_CommentedReview(t *testing.T) {
 // TestParsePRStatusPayload_HasReviewFeedback_PlainComment proves a substantive
 // plain PR comment (no review state at all) also sets HasReviewFeedback.
 func TestParsePRStatusPayload_HasReviewFeedback_PlainComment(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[],"comments":[{"body":"Please rebase onto main.","author":{"login":"tstapler"},"createdAt":"2026-08-02T13:00:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -504,6 +518,7 @@ func TestParsePRStatusPayload_HasReviewFeedback_PlainComment(t *testing.T) {
 // (existing "include all comments" behavior preserved) without counting
 // toward the signal.
 func TestParsePRStatusPayload_HasReviewFeedback_NonSubstantiveIgnored(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"lgtm","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:00:00Z"}],"comments":[{"body":"lgtm","author":{"login":"tstapler"},"createdAt":"2026-08-02T13:00:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -529,6 +544,7 @@ func TestParsePRStatusPayload_HasReviewFeedback_NonSubstantiveIgnored(t *testing
 // proves LatestFeedbackAt is the max across both commentReviews and
 // generalComments, not just one slice.
 func TestParsePRStatusPayload_LatestFeedbackAt_should_ReturnMaxTimestamp_When_MultipleFeedbackItemsPresent(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"COMMENTED","body":"Consider extracting this into a helper function.","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:32:07Z"}],"comments":[{"body":"Please rebase.","author":{"login":"tstapler"},"createdAt":"2026-08-02T15:10:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -549,6 +565,7 @@ func TestParsePRStatusPayload_LatestFeedbackAt_should_ReturnMaxTimestamp_When_Mu
 // proves HasReviewFeedback/LatestFeedbackAt stay at their zero values when
 // nothing substantive was captured.
 func TestParsePRStatusPayload_LatestFeedbackAt_should_ReturnZeroValue_When_NoSubstantiveFeedback(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[],"comments":[{"body":"lgtm","author":{"login":"tstapler"},"createdAt":"2026-08-02T13:00:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -568,6 +585,7 @@ func TestParsePRStatusPayload_LatestFeedbackAt_should_ReturnZeroValue_When_NoSub
 // emits a "## Reviewer comments" section for commentReviews, positioned after
 // the "## Review: changes requested" block(s) and before "## PR comments".
 func TestParsePRStatusPayload_ReviewerCommentsSectionRendered(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[{"state":"CHANGES_REQUESTED","body":"Fix the null check","author":{"login":"reviewer1"}},{"state":"COMMENTED","body":"Consider extracting this into a helper function.","author":{"login":"copilot-pull-request-reviewer[bot]"},"submittedAt":"2026-08-02T14:32:07Z"}],"comments":[{"body":"Please rebase.","author":{"login":"tstapler"},"createdAt":"2026-08-02T15:10:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)
@@ -595,6 +613,7 @@ func TestParsePRStatusPayload_ReviewerCommentsSectionRendered(t *testing.T) {
 // introduced zero rendering drift: the "## PR comments" block is byte-for-byte
 // identical to what the pre-retype append-time-constructed string produced.
 func TestParsePRStatusPayload_Render_should_ProduceByteIdenticalOutput_When_GeneralCommentsRetyped(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"statusCheckRollup":[],"reviews":[],"comments":[{"body":"Please rebase.","author":{"login":"tstapler"},"createdAt":"2026-08-02T15:10:00Z"},{"body":"lgtm","author":{"login":"reviewer2"},"createdAt":"2026-08-02T15:11:00Z"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 
 	status, err := parsePRStatusPayload(raw)

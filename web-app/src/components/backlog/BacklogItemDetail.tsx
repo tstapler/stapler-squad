@@ -27,6 +27,7 @@ import { selectSessionsError } from "@/lib/store/sessionsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -54,6 +55,7 @@ import { SessionsSection } from "./detail/SessionsSection";
 import { AutonomousHealthStrip } from "./detail/AutonomousHealthStrip";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
+import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import * as styles from "./BacklogItemDetail.css";
@@ -361,6 +363,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [sessionsExpanded, setSessionsExpanded] = useSectionExpandState(itemId, "sessions", true);
   const [workflowExpanded, setWorkflowExpanded] = useSectionExpandState(itemId, "workflow", false);
   const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
+  const [activityLogExpanded, setActivityLogExpanded] = useSectionExpandState(itemId, "activity-log", false);
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
   const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
   const [sourceExpanded, setSourceExpanded] = useSectionExpandState(itemId, "source", false);
@@ -421,6 +424,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ["sessions", sessionsExpanded, setSessionsExpanded],
     ["workflow", workflowExpanded, setWorkflowExpanded],
     ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
+    ["activity-log", activityLogExpanded, setActivityLogExpanded],
     ["notes", notesExpanded, setNotesExpanded],
     ["source", sourceExpanded, setSourceExpanded],
     ["manual-override", manualOverrideExpanded, setManualOverrideExpanded],
@@ -460,7 +464,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
       }
     } catch (e) {
-      if (mountedRef.current) setError(e instanceof Error ? e.message : "Failed to load item.");
+      if (mountedRef.current) setError(getErrorMessage(e, "Failed to load item."));
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -494,7 +498,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Session deleted.", "success", toastKey);
         await load();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to delete session.";
+        const msg = getErrorMessage(err, "Failed to delete session.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
       } finally {
@@ -528,7 +532,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
         showActionToast("Steering message sent.", "success", toastKey);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to steer session.";
+        const msg = getErrorMessage(err, "Failed to steer session.");
         showActionToast(msg, "error", toastKey);
         throw err instanceof Error ? err : new Error(msg);
       } finally {
@@ -685,7 +689,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(successMessage, "success", toastKey);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Action failed.";
+        const msg = getErrorMessage(e, "Action failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
       } finally {
@@ -710,7 +714,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setManualReviewOutcome("PASS");
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Submit failed.";
+      const msg = getErrorMessage(e, "Submit failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -815,7 +819,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Triage cancelled.", "success", toastKey);
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Cancel failed.";
+      const msg = getErrorMessage(e, "Cancel failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -833,7 +837,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       await load();
     } catch (e) {
       console.error("[BacklogItemDetail] retrigger triage failed", e);
-      const msg = e instanceof Error ? e.message : "Triage re-trigger failed.";
+      const msg = getErrorMessage(e, "Triage re-trigger failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
     } finally {
@@ -879,7 +883,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Revisions requested.", "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "Reject failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "Reject failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -936,7 +940,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Undo applied.", "success", `${item.id}:undo_triage_apply`);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Undo failed.";
+        const msg = getErrorMessage(e, "Undo failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", `${item.id}:undo_triage_apply`);
       }
@@ -963,7 +967,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Approved.", "success", toastKey);
       await load();
     } catch (e) {
-      showActionToast(e instanceof Error ? e.message : "Approve failed.", "error", toastKey);
+      showActionToast(getErrorMessage(e, "Approve failed."), "error", toastKey);
       throw e;
     } finally {
       if (mountedRef.current) setActionLoading(null);
@@ -987,7 +991,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Reopened — new session started.", "success", toastKey);
       await load();
     } catch (e) {
-      showActionToast(e instanceof Error ? e.message : "Reopen failed.", "error", toastKey);
+      showActionToast(getErrorMessage(e, "Reopen failed."), "error", toastKey);
       throw e;
     } finally {
       if (mountedRef.current) setActionLoading(null);
@@ -1011,7 +1015,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Overridden to done.", "success", toastKey);
         await load();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Override failed.";
+        const msg = getErrorMessage(e, "Override failed.");
         if (mountedRef.current) setError(msg);
         showActionToast(msg, "error", toastKey);
         throw e;
@@ -1053,7 +1057,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(`Status manually overridden to ${toStatus}.`, "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "Status override failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "Status override failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -1077,7 +1081,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast(`PR #${prNumber} linked — item moved to pr_pending.`, "success", toastKey);
         await load();
       } catch (e) {
-        showActionToast(e instanceof Error ? e.message : "PR association failed.", "error", toastKey);
+        showActionToast(getErrorMessage(e, "PR association failed."), "error", toastKey);
         throw e;
       } finally {
         if (mountedRef.current) setActionLoading(null);
@@ -1107,7 +1111,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       showActionToast("Gate skipped — marked done.", "success", toastKey);
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Skip gate failed.";
+      const msg = getErrorMessage(e, "Skip gate failed.");
       if (mountedRef.current) setError(msg);
       showActionToast(msg, "error", toastKey);
       throw e;
@@ -1251,12 +1255,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               )}
             </div>
             <div className={styles.idRow}>
-              <span className={styles.idText} data-testid="backlog-item-id">{item.id}</span>
+              <span className={styles.idText} data-testid="backlog-item-id">{item.publicId || item.id}</span>
               <button
                 type="button"
                 className={styles.copyButton}
-                onClick={() => handleCopy("id", item.id)}
-                aria-label="Copy item ID"
+                onClick={() => handleCopy("id", item.publicId || item.id)}
+                aria-label={copiedField === "id" ? "Copied item ID to clipboard" : "Copy item ID"}
                 data-testid="copy-item-id-button"
               >
                 {copiedField === "id" ? "✓ Copied" : "Copy ID"}
@@ -1264,12 +1268,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               <button
                 type="button"
                 className={styles.copyButton}
-                onClick={() => handleCopy("link", `${window.location.origin}/backlog?item=${item.id}`)}
-                aria-label="Copy shareable link"
+                onClick={() =>
+                  handleCopy("link", `ssq://${window.location.host}/backlog/v1/${item.publicId || item.id}`)
+                }
+                aria-label={copiedField === "link" ? "Copied link to clipboard" : "Copy shareable link"}
                 data-testid="copy-item-link-button"
               >
                 {copiedField === "link" ? "✓ Copied" : "Copy Link"}
               </button>
+              {/*
+                Dynamic aria-live confirmation region: the copy buttons'
+                own aria-label already changes post-copy (above), but a
+                screen reader focused elsewhere on the page only hears
+                that if it re-visits the button. This region announces
+                the same confirmation proactively, closing the
+                accessibility gap flagged in
+                project_plans/backlog-deep-linking/design/ux.md (Copy
+                Link/Copy ID had only a static label before).
+              */}
+              <span
+                aria-live="polite"
+                role="status"
+                data-testid="copy-status-announcement"
+                style={{
+                  position: "absolute",
+                  width: "1px",
+                  height: "1px",
+                  overflow: "hidden",
+                  clip: "rect(0 0 0 0)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {copiedField === "id" && "Item ID copied to clipboard"}
+                {copiedField === "link" && "Link copied to clipboard"}
+              </span>
             </div>
           </div>
           <div className={styles.headerActions}>
@@ -1570,6 +1602,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />
 
           <ProgressHistorySection item={item} defaultExpanded={progressHistoryExpanded} />
+
+          <ActivityLogSection item={item} defaultExpanded={activityLogExpanded} />
 
           <NotesSection
             item={item}

@@ -61,6 +61,7 @@ func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
 // wires the caller's engine through, rather than silently falling back to
 // newDefaultSearchEngine()'s config.IsTestMode() branching.
 func TestNewSessionServiceWithSearchEngine_UsesInjectedEngine(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)

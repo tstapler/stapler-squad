@@ -2406,19 +2406,26 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 	})
 }
 
+// registryConfirmsExists reports whether the push-based registry is healthy
+// and affirmatively confirms that session name exists. A `false` result only
+// means "the registry didn't confirm it" — it does NOT mean the session is
+// absent, since the registry may be lagging behind tmux reality (e.g. the
+// %session-created event has not been delivered yet, or a synchronous
+// NotifySessionCreated call hasn't landed). Callers must always fall through
+// to a cache/subprocess check for an authoritative negative; only a `true`
+// result here is trustworthy on its own.
+func (t *TmuxSession) registryConfirmsExists(name string) bool {
+	return t.registry != nil && t.registry.IsHealthy() && t.registry.SessionExists(name)
+}
+
 func (t *TmuxSession) DoesSessionExist() bool {
 	if t == nil {
 		return false
 	}
-	// Fast path: use the push-based registry when it is healthy and it confirms
-	// the session exists. If the registry returns false, it may be lagging behind
-	// tmux reality (e.g. the %session-created event has not been delivered yet),
-	// so fall through to the cache/subprocess path for an authoritative answer.
-	if t.registry != nil && t.registry.IsHealthy() {
-		if t.registry.SessionExists(t.sanitizedName) {
-			return true
-		}
-		// Registry returned false — do not trust it blindly; fall through.
+	// Fast path: use the push-based registry when it confirms the session
+	// exists. See registryConfirmsExists for why a false here isn't trusted.
+	if t.registryConfirmsExists(t.sanitizedName) {
+		return true
 	}
 
 	// Fast path: lock-free atomic load.
@@ -2485,6 +2492,17 @@ func (t *TmuxSession) invalidateExistsCache() {
 func (t *TmuxSession) DoesSessionExistNoCache() bool {
 	if t == nil {
 		return false
+	}
+
+	// Fast path: use the push-based registry when it confirms the session
+	// exists. A registry `true` reflects either a delivered CM event or a
+	// synchronous NotifySessionCreated call, so it's as authoritative as a
+	// fresh subprocess check. See registryConfirmsExists for why a false
+	// here isn't trusted — always fall through to the subprocess path below
+	// for an authoritative negative, preserving this function's "always
+	// fresh" contract.
+	if t.registryConfirmsExists(t.sanitizedName) {
+		return true
 	}
 
 	v, _, _ := t.noCacheSF.Do("", func() (interface{}, error) {
@@ -2617,19 +2635,35 @@ func cmCtx() (context.Context, context.CancelFunc) {
 // When STAPLER_SQUAD_CM_COMMANDS=true and control mode is running, the query is sent
 // over the control mode stdin pipe (zero new subprocesses); otherwise falls back to subprocess.
 func (t *TmuxSession) CapturePaneContent() (string, error) {
+	return t.CapturePaneContentContext(context.Background())
+}
+
+// CapturePaneContentContext is CapturePaneContent with an external context
+// threaded onto the subprocess call itself (not just the exec-gate wait), so
+// a caller that cancels ctx can kill an already-running capture-pane process
+// rather than only giving up on waiting for a free gate slot. Added for the
+// SessionDriver polling path (session.PreviewContext), whose stop channel
+// needs to interrupt a capture-pane call already in flight, not just abandon
+// the wait for one — see session/session_driver.go's stop/join mechanism.
+func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, error) {
 	if t.cmEnabledForBackground() {
-		ctx, cancel := cmCtx()
+		// Derived from the caller's ctx (not cmCtx()'s independent
+		// context.Background()) so a caller cancellation propagates into this
+		// branch too, while the 3s bound still caps worst-case latency — see
+		// this method's doc comment on why callers need cancellation to reach
+		// an in-flight capture, not just the exec-gate wait.
+		cmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		body, cmErr := t.sendCMCommand(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
+		body, cmErr := t.sendCMCommand(cmCtx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 		if cmErr == nil {
 			return sanitizeUTF8String([]byte(body)), nil
 		}
 		log.Debug("CapturePaneContent CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
-	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
-	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
+	output, err := runGated(ctx, t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
@@ -2644,7 +2678,12 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
 		}
 		log.Warn("failed to capture pane content for session", logArgs...)
-		return "", fmt.Errorf("error capturing pane content for session '%s': %v", t.sanitizedName, err)
+		// %w (not %v): preserves the error chain so a caller-side
+		// errors.Is(err, context.Canceled/DeadlineExceeded) check (e.g.
+		// Instance.PreviewContext) can still see through this wrap when the
+		// underlying failure was ctx cancellation rather than a genuine
+		// subprocess/capture error.
+		return "", fmt.Errorf("error capturing pane content for session '%s': %w", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil
 }

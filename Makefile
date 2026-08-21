@@ -170,7 +170,8 @@ web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FIL
 		cd web-app && pnpm install --frozen-lockfile; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@cd web-app && NEXT_BUILD_MODE=development ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
+	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
+	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -624,7 +625,7 @@ vet-rpc-markers: registry-generate-backend ## Check that all RPC handlers have a
 		echo "✅ All RPC handlers have +api: markers."; \
 	fi
 
-lint: ensure-tools proto-gen lint-custom ## Run golangci-lint with comprehensive checks
+lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## Run golangci-lint with comprehensive checks
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
@@ -643,6 +644,17 @@ lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (hotpolllog, n
 $(LINTER_BIN):
 	@mkdir -p $(CURDIR)/bin
 	@go -C tools/lint build -o $(LINTER_BIN) ./cmd/linter
+
+# Excludes third_party/ (vendored tmux source — not ours to lint) and
+# node_modules/. Includes scripts/ssq-hook-handler, which has no .sh
+# extension but is a real bash script (installed as a hook handler).
+SHELL_SCRIPTS := $(shell find . -not -path "./third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+
+lint-shell: ## Run shellcheck over all first-party shell scripts
+	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)
+	@echo "Running shellcheck on $(words $(SHELL_SCRIPTS)) first-party shell script(s)..."
+	@shellcheck -x $(SHELL_SCRIPTS)
+	@echo "shellcheck: ok"
 
 actor-lint: ## Detect actor self-deadlock patterns using ast-grep (sg)
 	@which sg >/dev/null 2>&1 || (echo "sg (ast-grep) not installed; run: cargo install ast-grep" && exit 1)
@@ -772,6 +784,30 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Run 'make help' to see available commands"
 
 ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+
+# ready: everything `make ci` runs, plus the CI-only checks that have no local
+# equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
+# gocognit/funlen/revive, new-code-only) and web-app's ESLint/CSS lint/scanner/
+# ci-gates suites. Skips checks that need live PR/GH-Action context with no
+# local equivalent (the external go-test-coverage action, the E2E-coverage PR
+# comment) — those only run in CI. `--new-from-rev=origin/main` requires a
+# reachable origin/main; `git fetch origin main` first if it's stale.
+ready: ci ready-complexity-gate ## Local approximation of every required PR check (make ci + complexity gate + web-app lint/scanner suites)
+	cd web-app && npx next lint
+	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
+	cd tools/scanner && go test ./...
+	cd tools/ci-gates && pnpm install --silent && pnpm test
+	@echo "✅ ready: local approximation of PR checks complete"
+
+ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive gate, mirroring lint.yml's PR-only complexity check
+	@GOBIN=$$(go env GOBIN); \
+	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
+	if ! which golangci-lint >/dev/null 2>&1; then \
+		echo "Installing golangci-lint v2..."; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
+	fi; \
+	golangci-lint run --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 \
+		--enable=gocyclo,gocognit,funlen,revive --new-from-rev=origin/main
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
