@@ -21,6 +21,7 @@
 
 import { test, expect, Page } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
+import { SessionsPage } from "./pages/SessionsPage";
 
 const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
 
@@ -85,7 +86,8 @@ async function openSessionCardMenu(page: Page, title: string) {
     localStorage.setItem("stapler-squad:onboarded", "true");
   });
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-  const card = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: title });
+  const sessionsPage = new SessionsPage(page);
+  const card = sessionsPage.getSessionCard(title);
   await expect(card).toBeVisible({ timeout: 10000 });
   await card.getByRole("button", { name: /more session actions|more actions/i }).click();
   return card;

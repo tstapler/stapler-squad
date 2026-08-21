@@ -277,6 +277,64 @@ describe("CreatePullRequestModal", () => {
     ).toBe("my-base");
   });
 
+  it("CreatePullRequestModal_should_ShowGenericError_When_DraftFetchResolvesNull", async () => {
+    // The real hook signature is Promise<DraftPullRequestResponse | null> — a
+    // resolved-but-falsy response is reachable without the call throwing.
+    const draftPullRequest = jest.fn().mockResolvedValue(null);
+
+    render(
+      <CreatePullRequestModal
+        session={makeSession()}
+        isOpen={true}
+        onClose={jest.fn()}
+        draftPullRequest={draftPullRequest}
+        createPullRequest={jest.fn()}
+      />
+    );
+
+    const errorEl = await screen.findByTestId("create-pr-error");
+    expect(errorEl).toHaveTextContent("Couldn't load PR draft — try again.");
+    expect(screen.queryByTestId("create-pr-title-input")).not.toBeInTheDocument();
+
+    // Same dead-end-free contract as the thrown-error path: Retry and Close both present.
+    expect(screen.getByTestId("create-pr-retry")).toBeEnabled();
+    expect(screen.getByTestId("create-pr-close")).toBeEnabled();
+  });
+
+  it("CreatePullRequestModal_should_ShowGenericError_When_SubmitResolvesWithoutPrUrl", async () => {
+    // The real hook signature is Promise<CreatePullRequestResponse | null> — a
+    // resolved response missing prUrl is reachable without the call throwing.
+    const draftPullRequest = jest.fn().mockResolvedValue(makeDraft());
+    const createPullRequest = jest.fn().mockResolvedValue(makeCreateSuccess({ prUrl: "" }));
+
+    render(
+      <CreatePullRequestModal
+        session={makeSession()}
+        isOpen={true}
+        onClose={jest.fn()}
+        draftPullRequest={draftPullRequest}
+        createPullRequest={createPullRequest}
+      />
+    );
+
+    await waitForDraftedForm();
+    fireEvent.change(screen.getByTestId("create-pr-title-input"), {
+      target: { value: "My title" },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-pr-submit"));
+    });
+
+    expect(screen.getByTestId("create-pr-error")).toHaveTextContent(
+      "Couldn't create the pull request — try again."
+    );
+    // Field values are preserved, same contract as the thrown-error submit path.
+    expect(
+      (screen.getByTestId("create-pr-title-input") as HTMLInputElement).value
+    ).toBe("My title");
+  });
+
   it("CreatePullRequestModal_should_OfferRetryAndClose_When_DraftFetchFails", async () => {
     const draftPullRequest = jest.fn().mockRejectedValue(new Error("network error"));
 

@@ -32,6 +32,26 @@ jest.mock("@/lib/contexts/SessionServiceContext", () => ({
   }),
 }));
 
+// CreatePullRequestModal has its own dedicated test suite (CreatePullRequestModal.test.tsx) —
+// stub it here so these tests verify wiring (trigger -> open/close) without duplicating that
+// coverage, matching the same pattern used in ReviewQueuePanel.test.tsx.
+jest.mock("../CreatePullRequestModal", () => ({
+  CreatePullRequestModal: ({
+    session,
+    isOpen,
+    onClose,
+  }: {
+    session: { id: string };
+    isOpen: boolean;
+    onClose: () => void;
+  }) =>
+    isOpen ? (
+      <div data-testid="create-pr-modal" data-session-id={session.id}>
+        <button onClick={onClose}>Close</button>
+      </div>
+    ) : null,
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -332,6 +352,64 @@ describe("SessionActionsOverflow", () => {
       rerender(<SessionActionsOverflow session={updatedSession} onChangeProgram={jest.fn()} />);
 
       expect(screen.getByRole("combobox")).toHaveValue("agy");
+    });
+  });
+
+  describe("Create PR trigger", () => {
+    it("disables the Create PR trigger (with tooltip) when the session has no commits ahead (State B)", () => {
+      const session = makeSession({ hasCommitsAhead: false, githubPrUrl: "" });
+      renderOverflow({ session });
+      openMenu();
+
+      const trigger = screen.getByTestId(`create-pr-trigger-${session.id}`);
+      expect(trigger).toBeDisabled();
+      expect(trigger).toHaveAttribute("title", "No commits ahead of main yet");
+    });
+
+    it("enables the Create PR trigger when the session has commits ahead (State A)", () => {
+      const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
+      renderOverflow({ session });
+      openMenu();
+
+      const trigger = screen.getByTestId(`create-pr-trigger-${session.id}`);
+      expect(trigger).not.toBeDisabled();
+    });
+
+    it("shows a View PR link instead of the trigger when the session already has a githubPrUrl (State C)", () => {
+      const session = makeSession({
+        githubPrUrl: "https://github.com/org/repo/pull/99",
+        githubPrNumber: 99,
+      });
+      renderOverflow({ session });
+      openMenu();
+
+      expect(screen.queryByTestId(`create-pr-trigger-${session.id}`)).not.toBeInTheDocument();
+      const link = screen.getByTestId("github-pr-link");
+      expect(link).toHaveAttribute("href", "https://github.com/org/repo/pull/99");
+      expect(link).toHaveTextContent("#99");
+    });
+
+    it("opens the shared CreatePullRequestModal for the session when the enabled trigger is clicked", () => {
+      const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
+      renderOverflow({ session });
+      openMenu();
+
+      fireEvent.click(screen.getByTestId(`create-pr-trigger-${session.id}`));
+
+      const modal = screen.getByTestId("create-pr-modal");
+      expect(modal).toBeInTheDocument();
+      expect(modal).toHaveAttribute("data-session-id", session.id);
+    });
+
+    it("closes the modal when the modal's onClose fires", () => {
+      const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
+      renderOverflow({ session });
+      openMenu();
+
+      fireEvent.click(screen.getByTestId(`create-pr-trigger-${session.id}`));
+      fireEvent.click(screen.getByRole("button", { name: /close/i }));
+
+      expect(screen.queryByTestId("create-pr-modal")).not.toBeInTheDocument();
     });
   });
 });
