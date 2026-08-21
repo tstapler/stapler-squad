@@ -16,8 +16,13 @@ per-session, server-owned, survives reloads and browser switches.
 In scope: pin/unpin toggle on a session, server-persisted boolean, pinned
 sessions rendered in a dedicated top section of the session list.
 
-Out of scope: pin ordering/reordering within the pinned section (pins sort by
-existing list order, e.g. `pinned_at` desc, not drag-to-reorder), pinning
+Out of scope: pin ordering/reordering within the pinned section (drag-to-reorder
+is not supported; **resolved in plan.md/design/ux.md**: pinned sessions sort
+by the list's currently active `sortField`/`sortDir`, the same as every other
+session — no separate `pinned_at` timestamp field exists or is needed. An
+earlier draft of this doc suggested `pinned_at` desc as the default; that was
+a non-binding illustration, struck here per the 2026-08-21 cross-artifact
+consistency check to stop contradicting the resolved decision), pinning
 archived sessions (archiving should probably clear/ignore pin — decide in
 research), cross-workspace pin sync.
 
@@ -54,9 +59,14 @@ research), cross-workspace pin sync.
   `go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema`
   (`.claude/rules/ent-schema-generation.md`).
 - Proto change → `make proto-gen`; new `Session` field uses the next free
-  field number. **Correction from research (features.md, pitfalls.md):** the
-  true highest field in use is `workspace_key = 71`, not `archived_at = 63` —
-  so `pinned` must be field `72`.
+  field number — **re-verify at implementation time** rather than trusting
+  any number recorded here or in the plan, since this file changes
+  independently of this project's timeline. As of the 2026-08-21 validation
+  pass, the highest in-use field is `subagent_count = 75`, making `pinned`
+  field `76` (superseding both this doc's earlier claim of `72`, which was
+  itself already a correction of an even earlier `archived_at = 63` claim —
+  see pre-mortem.md's P1 item for how the plan's own field-72 claim also
+  went stale).
 - New RPC/UI feature → per-feature JSON files under `docs/registry/features/`
   plus `make registry-generate` (`.claude/rules/feature-registry.md`).
 - New user-facing feature → e2e test in `tests/e2e/`, `@feature` header,
@@ -75,7 +85,10 @@ research), cross-workspace pin sync.
   all plain `field.Bool(...).Default(false)` on the same entity; `pinned`
   follows the same shape.
 - `ArchiveSession` / `UnarchiveSession` RPC pair
-  (`proto/session/v1/session.proto`, `server/services/session_service.go:4285`)
+  (`proto/session/v1/session.proto`, `server/services/session_service.go:4876` —
+  line number corrected 2026-08-21; re-verify at implementation time, as with
+  every other line reference in this doc and plan.md, since the file grows
+  independently of this project's timeline)
   is the closest existing "toggle a persisted session flag via RPC" precedent
   for `PinSession`/`UnpinSession`.
 - `session/instance_actor_setters.go` (e.g. `SetArchivedAtIfNil`) is the
