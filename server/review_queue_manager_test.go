@@ -1556,4 +1556,3 @@ func TestOnItemAdded_Integration_DigestSuppressesPerItemNotification_When_BothWo
 		t.Errorf("NotifyReviewQueueItem calls = %d, want 0 (suppressed by the digest firing on the same call)", notify)
 	}
 }
-
