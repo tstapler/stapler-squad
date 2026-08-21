@@ -72,6 +72,13 @@ func WithQuiescenceQuietPeriod(d time.Duration) HubOption {
 	return func(h *StreamHub) { h.quiescenceQuietPeriod = d }
 }
 
+// WithBatchMaxWindow overrides the hub's BatchWindow ceiling (default:
+// MaxBatchWindow, 20ms) — tests use this to shrink it so ceiling-flush
+// assertions run in milliseconds.
+func WithBatchMaxWindow(d time.Duration) HubOption {
+	return func(h *StreamHub) { h.batchMaxWindow = d }
+}
+
 // StreamHub is the single-owner runtime object for one tmux session's output
 // stream: it fans output out to every attached subscriber over a
 // Transport-agnostic interface, and is the sole caller of that session's
@@ -87,11 +94,18 @@ type StreamHub struct {
 	teardownGrace         time.Duration
 	quiescenceTimeout     time.Duration
 	quiescenceQuietPeriod time.Duration
+	batchMaxWindow        time.Duration
 
 	mu            sync.Mutex
 	state         HubLifecycleState
 	subscribers   map[SubscriberID]*subscriber
 	teardownTimer *time.Timer
+
+	// batchWindow is the hub's single opportunistic-with-ceiling
+	// accumulation buffer and timer (Epic 2.1) — OnRawOutput feeds it
+	// instead of broadcasting directly, so N attached subscribers share one
+	// coalesce/flush pass per burst instead of each paying their own.
+	batchWindow *BatchWindow
 
 	// resizeMu guards negotiatedSize/resizing — kept separate from mu (the
 	// subscriber-registry lock) so a slow SessionController call (a real
@@ -124,13 +138,24 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 		teardownGrace:         DefaultHubTeardownGrace,
 		quiescenceTimeout:     defaultQuiescenceTimeout,
 		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
+		batchMaxWindow:        MaxBatchWindow,
 		state:                 HubStarting,
 		subscribers:           make(map[SubscriberID]*subscriber),
 	}
 	for _, opt := range opts {
 		opt(h)
 	}
+	h.batchWindow = NewBatchWindow(h.onBatchFlush, WithMaxBatchWindow(h.batchMaxWindow))
 	return h
+}
+
+// onBatchFlush is the hub's BatchWindow.onFlush callback: it broadcasts the
+// flushed unit's bytes to every attached subscriber. unit.Seq/unit.Reason
+// are exposed for observability and tests today; stamping them into the
+// actual wire envelope a subscriber receives is Epic 2.2's WebSocketTransport
+// scope, not this epic's.
+func (h *StreamHub) onBatchFlush(unit BroadcastUnit) {
+	h.Broadcast(unit.Data)
 }
 
 // State returns the hub's current HubLifecycleState.
@@ -363,7 +388,10 @@ var streamEndedSentinel = []byte("\x00STREAM_ENDED\x00")
 // server/services/connectrpc_websocket.go's existing resizeSettling-gated
 // forwarding loop, which also drops rather than replays suppressed frames,
 // relying on the post-quiescence capture-pane snapshot (applyNegotiatedSize)
-// to bring every subscriber back in sync instead.
+// to bring every subscriber back in sync instead. Frames that pass the
+// resize gate are fed into the hub's single BatchWindow (Epic 2.1) rather
+// than broadcast directly, so N attached subscribers share one
+// accumulation/coalesce pass per burst instead of each running their own.
 func (h *StreamHub) OnRawOutput(data []byte) {
 	h.resizeMu.Lock()
 	resizing := h.resizing
@@ -371,7 +399,7 @@ func (h *StreamHub) OnRawOutput(data []byte) {
 	if resizing {
 		return
 	}
-	h.Broadcast(data)
+	h.batchWindow.Add(data)
 }
 
 // applyNegotiatedSize is the hub's single call site for
@@ -415,7 +443,11 @@ func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
 		return
 	}
 
-	h.Broadcast([]byte(content))
+	// The post-resize CatchUpSnapshot bypasses the BatchWindow entirely
+	// (Story 2.1.2, research/pitfalls.md §2c/§2d): it must never wait behind
+	// whatever raw output happens to be mid-accumulation, since it is itself
+	// the authoritative resync point every subscriber is waiting on.
+	h.batchWindow.Bypass([]byte(content))
 }
 
 // handleControllerError is reached when SetWindowSize or CapturePaneContent
@@ -433,6 +465,10 @@ func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
 func (h *StreamHub) handleControllerError(err error) {
 	log.Error("streamhub: SessionController call failed, ending stream",
 		"session", h.sessionName, "error", err)
-	h.Broadcast(streamEndedSentinel)
+	// The stream-ended sentinel is the same class of urgent control signal as
+	// ResizeQuiescence/CatchUpSnapshot (Story 2.1.2): it must reach every
+	// subscriber immediately, not wait behind a pending batch that a
+	// now-dead controller will never help flush cleanly anyway.
+	h.batchWindow.Bypass(streamEndedSentinel)
 	_ = h.ForceTeardown()
 }
