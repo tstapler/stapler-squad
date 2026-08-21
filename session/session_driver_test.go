@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -1173,65 +1174,73 @@ func TestAnswerDialogOnce(t *testing.T) {
 // the shared `if idle > graceTimeout` path (also covered indirectly by
 // TestSessionDriver_SecondFailure_MarksNeedsAttention's similar shape).
 func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testing.T) {
-	t.Parallel()
-	fakePM := &stuckDialogProcessManager{
-		dialogText: trustDialogText,
-		failCount:  maxDialogAnswerAttempts,
-	}
+	synctest.Test(t, func(t *testing.T) {
+		// FindConversationFilePath (called by the driver when deciding whether
+		// the initial prompt was already delivered) walks $HOME/.claude/projects
+		// on real disk — synctest can't fast-forward that I/O, and on a real
+		// dev machine that directory holds genuine, large session history,
+		// which both stalls the bubble for real wall-clock seconds and makes
+		// the walk's outcome depend on whatever happens to be in that history.
+		// Pointing HOME at an empty temp dir makes the walk resolve instantly
+		// and deterministically to "not found," independent of the machine
+		// running the test.
+		t.Setenv("HOME", t.TempDir())
 
-	inst := &Instance{
-		Title:          "dialog-give-up-escalation",
-		UUID:           "test-uuid-give-up-escalation",
-		Status:         Ready,
-		processManager: fakePM,
-		reviewQueue:    NewReviewQueue(),
-	}
-	inst.started.Store(true)
+		fakePM := &stuckDialogProcessManager{
+			dialogText: trustDialogText,
+			failCount:  maxDialogAnswerAttempts,
+		}
 
-	var retried atomic.Bool
-	retried.Store(true) // simulate "already retried once" so the second-failure path fires directly
+		inst := &Instance{
+			Title:          "dialog-give-up-escalation",
+			UUID:           "test-uuid-give-up-escalation",
+			Status:         Ready,
+			processManager: fakePM,
+			reviewQueue:    NewReviewQueue(),
+		}
+		inst.started.Store(true)
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
-	}()
-	defer func() {
-		inst.mu.Lock()
-		inst.Status = Paused
-		inst.snapshot.Store(buildSnapshot(inst))
-		inst.mu.Unlock()
-		<-done
-	}()
+		var retried atomic.Bool
+		retried.Store(true) // simulate "already retried once" so the second-failure path fires directly
 
-	// maxDialogAnswerAttempts failed dialog-answer sends drive the latch to
-	// dialogGaveUp; the 4th SendKeys call (initial-prompt send, unblocked by
-	// the fall-through) is the direct proof the loop escaped the `continue`.
-	// The fake pane's content never satisfies claudeAtPrompt (it's always
-	// the same trust-dialog text), so the initial-prompt-send branch is only
-	// reached via its timedOut fallback once driverReadyTimeout (30s)
-	// elapses — the deadline below must clear that, not just the dialog
-	// latch's own ~6s give-up window.
-	//
-	// The extra driverReadyTimeout term (doubling the base budget) is
-	// deliberate slack, not just the ~6s dialog-latch window plus a token
-	// second: this goroutine genuinely blocks on the real 30s
-	// driverReadyTimeout wall-clock wait, so under `go test -race -p 1` for
-	// the full suite (thousands of tests, heavy scheduler/CPU contention)
-	// that wait alone can occasionally overrun a razor-thin margin — this
-	// test was seen to pass in 34s of a 37s budget in an isolated run, a
-	// margin that intermittently failed when run alongside the rest of the
-	// package under -race. Widening the margin (not retrying) is the fix,
-	// since the 30s block is inherent to the code path under test.
-	deadline := time.After(2*driverReadyTimeout + driverPollInterval*3 + time.Second)
-	for fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
-		select {
-		case <-deadline:
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
+		}()
+		defer func() {
+			inst.mu.Lock()
+			inst.Status = Paused
+			inst.snapshot.Store(buildSnapshot(inst))
+			inst.mu.Unlock()
+			<-done
+		}()
+
+		// maxDialogAnswerAttempts failed dialog-answer sends drive the latch to
+		// dialogGaveUp; the 4th SendKeys call (initial-prompt send, unblocked by
+		// the fall-through) is the direct proof the loop escaped the `continue`.
+		// The fake pane's content never satisfies claudeAtPrompt (it's always
+		// the same trust-dialog text), so the initial-prompt-send branch is only
+		// reached via its timedOut fallback once driverReadyTimeout (30s)
+		// elapses.
+		//
+		// synctest.Wait only fast-forwards the clock past the *current*
+		// generation of durably-blocked timers — once every goroutine is
+		// blocked (the driver parked on its poll ticker) it returns
+		// immediately rather than continuing to advance time indefinitely.
+		// The initial-prompt send is gated on driverReadyTimeout (30s)
+		// elapsing, so the test goroutine must itself durably block (via
+		// time.Sleep) past that deadline to let the ticker actually fire
+		// enough times; only then does Wait clean up any trailing
+		// non-timer-gated work.
+		time.Sleep(driverReadyTimeout + 5*time.Second)
+		synctest.Wait()
+
+		if fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
 			t.Fatalf("SendKeys count never exceeded %d — the dialogGaveUp fall-through never reached the initial-prompt-send step (stuck in the continue trap)",
 				maxDialogAnswerAttempts)
-		case <-time.After(10 * time.Millisecond):
 		}
-	}
+	})
 }
 
 // TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak
