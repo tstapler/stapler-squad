@@ -818,6 +818,10 @@ func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
 // Pass the previously returned newEtag (empty string for first call).
 // Returns (nil, etag, false, nil) on 304 Not Modified — caller should treat as unchanged.
 func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
+	if getGHToken(ctx) == "" {
+		return nil, etag, false, ErrNotAuthenticated
+	}
+
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=all&per_page=10",
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.QueryEscape(owner+":"+branch))
