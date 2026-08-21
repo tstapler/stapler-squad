@@ -264,7 +264,7 @@ func TestApprovalHandler_SatisfiesRelayHandlerEndToEnd(t *testing.T) {
 		t.Fatalf("marshal request payload: %v", err)
 	}
 
-	socketPath := sshremote.RemoteApprovalSocketPath(basePath)
+	socketPath := sshremote.RemoteApprovalSocketPath(basePath, "e2e-stable-session-id")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen unix %s: %v", socketPath, err)
@@ -371,7 +371,7 @@ func TestRemoteApprovalHookCommand_RealShellDeliversToRelay(t *testing.T) {
 	defer relay.Stop()
 
 	token, _ := relay.BearerToken()
-	socketPath := sshremote.RemoteApprovalSocketPath(basePath)
+	socketPath := sshremote.RemoteApprovalSocketPath(basePath, "hook-command-e2e-session")
 
 	// The REAL production command -- byte-for-byte what InjectHooksConfig
 	// with WithRemoteHookTarget would write into a session's
@@ -453,7 +453,7 @@ func TestRemoteApprovalHookCommand_SurvivesSlowHumanDecision(t *testing.T) {
 	defer relay.Stop()
 
 	token, _ := relay.BearerToken()
-	socketPath := sshremote.RemoteApprovalSocketPath(basePath)
+	socketPath := sshremote.RemoteApprovalSocketPath(basePath, "hook-command-timing-session")
 	hookCmd := remoteApprovalHookCommand(RemoteHookTarget{SocketPath: socketPath, BearerToken: token})
 
 	reqJSON, err := json.Marshal(classifier.PermissionRequestPayload{

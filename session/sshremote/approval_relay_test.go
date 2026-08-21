@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -289,17 +291,37 @@ func (f *fakePermissionRequestHandler) waitForCall(t *testing.T, timeout time.Du
 
 func TestRemoteApprovalSocketPath(t *testing.T) {
 	tests := []struct {
-		basePath string
-		want     string
+		basePath        string
+		stableSessionID string
+		want            string
 	}{
-		{"/home/agent/work", "/home/agent/work/.stapler-squad-approval.sock"},
-		{"/home/agent/work/", "/home/agent/work/.stapler-squad-approval.sock"},
+		{"/home/agent/work", "session-a", "/home/agent/work/.ssq-appr-" + hashSessionIDForTest("session-a") + ".sock"},
+		{"/home/agent/work/", "session-a", "/home/agent/work/.ssq-appr-" + hashSessionIDForTest("session-a") + ".sock"},
 	}
 	for _, tt := range tests {
-		if got := RemoteApprovalSocketPath(tt.basePath); got != tt.want {
-			t.Errorf("RemoteApprovalSocketPath(%q) = %q, want %q", tt.basePath, got, tt.want)
+		if got := RemoteApprovalSocketPath(tt.basePath, tt.stableSessionID); got != tt.want {
+			t.Errorf("RemoteApprovalSocketPath(%q, %q) = %q, want %q", tt.basePath, tt.stableSessionID, got, tt.want)
 		}
 	}
+}
+
+// TestRemoteApprovalSocketPath_DifferentSessionIDsDisambiguateSharedBasePath proves the
+// collision fix: two sessions rooted at the identical remote directory (e.g. both
+// SessionTypeDirectory sessions pointed at the same path) must not resolve to the same
+// socket, or the second session's hook's `unlink-early` bind would silently steal the
+// first session's listener out from under it.
+func TestRemoteApprovalSocketPath_DifferentSessionIDsDisambiguateSharedBasePath(t *testing.T) {
+	const sharedBasePath = "/home/agent/shared-dir"
+	a := RemoteApprovalSocketPath(sharedBasePath, "session-a")
+	b := RemoteApprovalSocketPath(sharedBasePath, "session-b")
+	if a == b {
+		t.Fatalf("expected distinct socket paths for distinct session IDs sharing a base path, got %q for both", a)
+	}
+}
+
+func hashSessionIDForTest(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("%x", sum[:remoteApprovalSocketIDHashBytes])
 }
 
 func TestNewRemoteApprovalRelay_ValidatesArgs(t *testing.T) {
@@ -369,7 +391,7 @@ func TestRemoteApprovalRelay_DrivesRequestThroughHandler(t *testing.T) {
 	}
 
 	rawRequest := json.RawMessage(`{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/home/agent/work"}`)
-	socketPath := RemoteApprovalSocketPath(basePath)
+	socketPath := RemoteApprovalSocketPath(basePath, "stable-session-1")
 	payload := relayedApprovalPayload{Token: token, Request: rawRequest}
 	resultCh := writeApprovalAndReadResponse(t, socketPath, payload)
 
@@ -420,7 +442,7 @@ func TestRemoteApprovalRelay_RejectsWrongBearerToken(t *testing.T) {
 	relay.Start(ctx)
 	defer relay.Stop()
 
-	socketPath := RemoteApprovalSocketPath(basePath)
+	socketPath := RemoteApprovalSocketPath(basePath, "session-key")
 	payload := relayedApprovalPayload{Token: "not-the-real-token", Request: json.RawMessage(`{"tool_name":"Bash"}`)}
 	<-writeApprovalAndReadResponse(t, socketPath, payload)
 
@@ -463,7 +485,7 @@ func TestRemoteApprovalRelay_RejectsExpiredBearerToken(t *testing.T) {
 	token, _ := relay.BearerToken()
 	time.Sleep(50 * time.Millisecond) // let the short TTL elapse
 
-	socketPath := RemoteApprovalSocketPath(basePath)
+	socketPath := RemoteApprovalSocketPath(basePath, "session-key")
 	payload := relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"Bash"}`)}
 	<-writeApprovalAndReadResponse(t, socketPath, payload)
 
@@ -512,7 +534,7 @@ func TestRemoteApprovalRelay_DialTimeout_DoesNotWedgePollLoop(t *testing.T) {
 	defer relay.Stop()
 
 	token, _ := relay.BearerToken()
-	socketPath := RemoteApprovalSocketPath(basePath)
+	socketPath := RemoteApprovalSocketPath(basePath, "session-key")
 
 	// Accept a connection and then hang -- never write a single byte -- to
 	// simulate a stalled remote-side writer. decodePayload's read must be
@@ -587,7 +609,7 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 	defer relay.Stop()
 
 	token, _ := relay.BearerToken()
-	socketPath := RemoteApprovalSocketPath(basePath)
+	socketPath := RemoteApprovalSocketPath(basePath, "session-key")
 
 	// Baseline: prove the relay works before any disruption.
 	<-writeApprovalAndReadResponse(t, socketPath, relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"before"}`)})

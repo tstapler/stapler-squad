@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -23,22 +24,56 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// remoteApprovalSocketName is the fixed filename RemoteApprovalRelay expects
-// a remote session's injected agent hooks (Epic 5.2 -- not this package) to
-// write approval-request payloads to, rooted under the session's remote
-// base path. See RemoteApprovalSocketPath and Task 5.1.1a in
+// remoteApprovalSocketNamePrefix/Suffix bracket the per-session disambiguator
+// in the filename RemoteApprovalRelay expects a remote session's injected
+// agent hooks (Epic 5.2 -- not this package) to write approval-request
+// payloads to, rooted under the session's remote base path. See
+// RemoteApprovalSocketPath and Task 5.1.1a in
 // project_plans/ssh-remote-workspaces/implementation/plan.md.
-const remoteApprovalSocketName = ".stapler-squad-approval.sock"
+//
+// Kept deliberately terse (not e.g. ".stapler-squad-approval-<hash>.sock"):
+// AF_UNIX socket paths are capped at 108 bytes total (Linux sockaddr_un.
+// sun_path, null terminator included; macOS/BSD's sockaddr_un caps at 104) --
+// a kernel constant, not something basePath's caller controls -- and this
+// filename is appended onto a caller-supplied basePath that can already be
+// deep. A verbose name here silently turns "listen unix: bind: invalid
+// argument" into that basePath's problem.
+const (
+	remoteApprovalSocketNamePrefix = ".ssq-appr-"
+	remoteApprovalSocketNameSuffix = ".sock"
+)
 
-// RemoteApprovalSocketPath returns the fixed remote-host Unix domain socket
-// path convention for a session rooted at basePath on the remote host.
+// remoteApprovalSocketIDHashBytes is truncated to 4 bytes (8 hex chars): this
+// disambiguates sessions that happen to share a basePath (see below), not a
+// security boundary, so collision resistance only needs to cover the
+// small number of sessions realistically sharing one remote directory --
+// full-width SHA-256 would just burn AF_UNIX's tight path budget for no
+// benefit.
+const remoteApprovalSocketIDHashBytes = 4
+
+// RemoteApprovalSocketPath returns the remote-host Unix domain socket path
+// convention for a session rooted at basePath on the remote host, keyed by
+// stableSessionID (the same value server/services.ApprovalHandler.
+// resolveSessionID correlates a relayed request back to -- see
+// RemoteApprovalRelayTarget.StableSessionID's doc comment). Hashed rather
+// than used verbatim in the filename: two sessions can share the exact same
+// basePath (e.g. two SessionTypeDirectory sessions both pointed at the same
+// remote directory), and a fixed, basePath-only filename would let the
+// second session's `unlink-early` socket bind silently steal the first
+// session's listener out from under it -- found in pre-ship review. A short
+// SHA-256 prefix of the ID sidesteps filename-safety concerns a raw
+// title-derived StableSessionID would raise (arbitrary characters, unbounded
+// length) without needing a bespoke sanitizer.
+//
 // Uses path.Join (POSIX-style forward slashes), deliberately NOT
 // filepath.Join: basePath always names a location on the REMOTE host (a
 // Linux/macOS SSH target, per RemoteConfig's base_path), so joining it must
 // not switch to backslash separators when stapler-squad itself happens to
 // be built on Windows.
-func RemoteApprovalSocketPath(basePath string) string {
-	return path.Join(basePath, remoteApprovalSocketName)
+func RemoteApprovalSocketPath(basePath, stableSessionID string) string {
+	sum := sha256.Sum256([]byte(stableSessionID))
+	name := fmt.Sprintf("%s%x%s", remoteApprovalSocketNamePrefix, sum[:remoteApprovalSocketIDHashBytes], remoteApprovalSocketNameSuffix)
+	return path.Join(basePath, name)
 }
 
 // defaultBearerTokenTTL bounds how long a RemoteApprovalRelay's bearer
@@ -348,7 +383,7 @@ func NewRemoteApprovalRelay(
 		pool:            pool,
 		handler:         handler,
 		remoteName:      target.RemoteName,
-		socketPath:      RemoteApprovalSocketPath(target.BasePath),
+		socketPath:      RemoteApprovalSocketPath(target.BasePath, target.StableSessionID),
 		stableSessionID: target.StableSessionID,
 		title:           target.Title,
 		pollInterval:    defaultPollInterval,
