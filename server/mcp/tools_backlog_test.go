@@ -336,11 +336,13 @@ func TestReportProgress_should_ReturnActionableHint_When_SessionNotLinked(t *tes
 }
 
 func TestRegisterBacklogTools_should_RegisterLinkSessionToItemTool_When_ToolsRegistered(t *testing.T) {
-	data, err := os.ReadFile("tools_backlog.go")
-	require.NoError(t, err)
-	content := string(data)
-	assert.Contains(t, content, `mcpgo.NewTool("link_session_to_item"`)
-	assert.Contains(t, content, `mcpgo.NewTool("get_linked_item"`)
+	storage := newTestBacklogStorage(t)
+	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil)
+	tools := s.ListTools()
+	_, hasLink := tools["link_session_to_item"]
+	_, hasGetLinked := tools["get_linked_item"]
+	assert.True(t, hasLink, "link_session_to_item must be registered")
+	assert.True(t, hasGetLinked, "get_linked_item must be registered")
 }
 
 // newTestBacklogStorage creates a temporary Storage for testing.

@@ -1021,14 +1021,10 @@ func (h *backlogHandlers) linkSessionToItem(ctx context.Context, req mcpgo.CallT
 
 	// Idempotency short-circuit: already linked to this exact item is a no-op success.
 	if existing, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID); linkErr == nil {
-		status := ""
-		if item, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr == nil {
-			status = item.Status
-		}
 		return okResult(LinkSessionToItemResult{
 			MCPResult: MCPResult{Success: true},
 			ItemID:    itemID, SessionUUID: callerUUID, ItemSessionID: existing.ID,
-			AlreadyLinked: true, SlashCommandsRegenerated: false, ItemStatus: status,
+			AlreadyLinked: true, SlashCommandsRegenerated: false, ItemStatus: h.lookupItemStatus(ctx, itemID),
 		}), nil
 	}
 	var previousItemID string
@@ -1054,12 +1050,12 @@ func (h *backlogHandlers) linkSessionToItem(ctx context.Context, req mcpgo.CallT
 			"get_linked_item only reports your own session's linkage, not other sessions' — it cannot resolve this. If you believe this is stale (the other session crashed or was force-restarted), wait for the backlog reconciler to clear it, or escalate to a human rather than retrying — this tool has no force-relink override by design."), nil
 	}
 
-	var findErr error
-	if h.store != nil {
-		_, findErr = findSessionTitleByUUID(h.store, callerUUID)
-	} else {
-		findErr = fmt.Errorf("no instance store wired")
-	}
+	// Determined BEFORE calling the attacher using the exact same condition
+	// AttachSessionToItem's own step 6 uses to decide whether to write slash
+	// commands (inst.UUID == sessionUUID && inst.Path != "") — findSessionTitleByUUID
+	// checks UUID only, which would report true for an instance AttachSessionToItem
+	// wouldn't have written to.
+	slashCommandsRegenerated := sessionHasWritableInstance(h.store, callerUUID)
 	resp, attachErr := h.backlogSvc.AttachSessionToItem(ctx, connect.NewRequest(&sessionv1.AttachSessionToItemRequest{
 		ItemId: itemID, SessionUuid: callerUUID,
 	}))
@@ -1076,18 +1072,42 @@ func (h *backlogHandlers) linkSessionToItem(ctx context.Context, req mcpgo.CallT
 		}
 	}
 	is := resp.Msg.GetItemSession()
-	itemStatus := ""
-	if item, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr == nil {
-		itemStatus = item.Status
-	}
-	slashCommandsRegenerated := findErr == nil
 	log.InfoLog.Printf("[mcp:link_session_to_item] session=%s item=%s already_linked=false slash_commands_regenerated=%v", callerUUID, itemID, slashCommandsRegenerated)
 	return okResult(LinkSessionToItemResult{
 		MCPResult: MCPResult{Success: true},
 		ItemID:    itemID, SessionUUID: callerUUID, ItemSessionID: is.GetId(),
 		AlreadyLinked: false, PreviouslyLinkedItemID: previousItemID,
-		SlashCommandsRegenerated: slashCommandsRegenerated, ItemStatus: itemStatus,
+		SlashCommandsRegenerated: slashCommandsRegenerated, ItemStatus: h.lookupItemStatus(ctx, itemID),
 	}), nil
+}
+
+// lookupItemStatus returns itemID's current status, or "" if the lookup fails.
+func (h *backlogHandlers) lookupItemStatus(ctx context.Context, itemID string) string {
+	item, err := h.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return ""
+	}
+	return item.Status
+}
+
+// sessionHasWritableInstance reports whether store has a live instance for sessionUUID
+// with a resolvable path, mirroring the exact condition AttachSessionToItem's own step 6
+// uses to decide whether to write slash commands. A nil store or lookup failure reports
+// false rather than panicking or erroring.
+func sessionHasWritableInstance(store session.InstanceStore, sessionUUID string) bool {
+	if store == nil {
+		return false
+	}
+	instances, err := store.ListInstanceData()
+	if err != nil {
+		return false
+	}
+	for _, d := range instances {
+		if d.UUID == sessionUUID && d.Path != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // getLinkedItem is a read-only lookup of which backlog item(s) the calling session is

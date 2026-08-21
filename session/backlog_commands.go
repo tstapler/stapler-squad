@@ -99,6 +99,9 @@ func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
 		return // directory just created / unreadable — nothing to prune
 	}
 	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
 		name := e.Name()
 		if !staleCommandFileRe.MatchString(name) {
 			continue
