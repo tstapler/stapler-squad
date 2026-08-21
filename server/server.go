@@ -714,7 +714,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		autoReopener = deps.BacklogService
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService)
+	// Reuses the same liveness primitive wired onto BacklogLifecycleListener
+	// (see newSessionLivenessChecker's doc comment in dependencies.go) so
+	// link_session_to_item's exclusivity check doesn't trust a stale
+	// EndedAt==nil row for a crashed/killed session.
+	var mcpLiveCheck func(sessionUUID string) bool
+	if deps.Registry != nil {
+		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
+	}
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
