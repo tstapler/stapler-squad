@@ -709,7 +709,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.ErrorLog.Printf("[startup] panic in background init goroutine: %v", r)
+				log.ErrorLog().Printf("[startup] panic in background init goroutine: %v", r)
 			}
 		}()
 		// Step 6: start tmux sessions for loaded instances (non-fatal failures).

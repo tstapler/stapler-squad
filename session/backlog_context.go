@@ -180,7 +180,7 @@ func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessio
 			}
 			verdicts, err := parsePerCriterionVerdicts(s.ReviewVerdict.PerCriterion)
 			if err != nil {
-				log.WarningLog.Printf("backlog_context: failed to parse per-criterion verdicts for item session %s: %v", s.ID, err)
+				log.WarningLog().Printf("backlog_context: failed to parse per-criterion verdicts for item session %s: %v", s.ID, err)
 				continue
 			}
 			for _, v := range verdicts {
@@ -214,7 +214,7 @@ func BuildTokenBudgetedPrompt(item *BacklogItemData, priorSessions []ItemSession
 		return output
 	}
 
-	log.WarningLog.Printf("backlog prompt over token budget for item %s: %d estimated tokens", item.ID, estimated)
+	log.WarningLog().Printf("backlog prompt over token budget for item %s: %d estimated tokens", item.ID, estimated)
 
 	// Pass 1: drop prior sessions.
 	output = BuildSessionInitialPrompt(item, nil)

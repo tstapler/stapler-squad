@@ -1310,7 +1310,7 @@ var testInfoLogMu sync.Mutex
 // the existing *log.Logger in place (SetOutput/SetPrefix/SetFlags) rather
 // than reassigning the log.InfoLog variable itself: reassignment is a data
 // race against any concurrently running goroutine that reads log.InfoLog
-// directly (e.g. production code calling log.InfoLog.Printf), even though
+// directly (e.g. production code calling log.InfoLog().Printf), even though
 // testInfoLogMu serializes the writers here — a mutex around only the write
 // side cannot protect an unsynchronized reader elsewhere in the program.
 // The returned buffer is a *syncBuffer (not *bytes.Buffer) so a leaked
@@ -1320,7 +1320,7 @@ func redirectInfoLog(t *testing.T) *syncBuffer {
 	t.Helper()
 	testInfoLogMu.Lock()
 	buf := &syncBuffer{}
-	logger := log.InfoLog
+	logger := log.InfoLog()
 	origOutput := logger.Writer()
 	origPrefix := logger.Prefix()
 	origFlags := logger.Flags()

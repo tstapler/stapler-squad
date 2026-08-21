@@ -149,7 +149,7 @@ func (c *ChainFirer) Dispatch(item *BacklogItemData) {
 	select {
 	case c.inFlight <- struct{}{}:
 	default:
-		log.WarningLog.Printf("[ChainFirer] dispatch dropped, at capacity, item=%s", item.ID)
+		log.WarningLog().Printf("[ChainFirer] dispatch dropped, at capacity, item=%s", item.ID)
 		return
 	}
 
@@ -158,13 +158,13 @@ func (c *ChainFirer) Dispatch(item *BacklogItemData) {
 		defer func() { <-c.inFlight }()
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.WarningLog.Printf("[ChainFirer] Fire panicked (recovered): %v", rec)
+				log.WarningLog().Printf("[ChainFirer] Fire panicked (recovered): %v", rec)
 			}
 		}()
 		fireCtx, cancel := context.WithTimeout(context.Background(), chainFireTimeout)
 		defer cancel()
 		if _, err := c.Fire(fireCtx, &itemCopy); err != nil {
-			log.WarningLog.Printf("[ChainFirer] fire failed, item=%s: %v", itemCopy.ID, err)
+			log.WarningLog().Printf("[ChainFirer] fire failed, item=%s: %v", itemCopy.ID, err)
 		}
 	}()
 }
@@ -194,7 +194,7 @@ func (c *ChainFirer) Fire(ctx context.Context, item *BacklogItemData) (fired boo
 	}
 
 	if item.TriggeredByChainDepth >= maxChainDepth {
-		log.WarningLog.Printf("[ChainFirer] chain depth exceeded for item %s (depth=%d, max=%d)", item.ID, item.TriggeredByChainDepth, maxChainDepth)
+		log.WarningLog().Printf("[ChainFirer] chain depth exceeded for item %s (depth=%d, max=%d)", item.ID, item.TriggeredByChainDepth, maxChainDepth)
 		if !c.claimIfUnfired(ctx, item) {
 			return false, nil // another goroutine already claimed/handled this item
 		}
@@ -203,7 +203,7 @@ func (c *ChainFirer) Fire(ctx context.Context, item *BacklogItemData) (fired boo
 	}
 
 	if item.ChainedAt != nil && time.Since(*item.ChainedAt) > maxChainWaitDuration {
-		log.WarningLog.Printf("[ChainFirer] chain expired waiting for WIP capacity, item=%s (chained_at=%s)", item.ID, item.ChainedAt)
+		log.WarningLog().Printf("[ChainFirer] chain expired waiting for WIP capacity, item=%s (chained_at=%s)", item.ID, item.ChainedAt)
 		if !c.claimIfUnfired(ctx, item) {
 			return false, nil
 		}
@@ -226,7 +226,7 @@ func (c *ChainFirer) Fire(ctx context.Context, item *BacklogItemData) (fired boo
 	if c.repo != nil {
 		priorSessions, err = c.repo.ListItemSessions(ctx, item.ID)
 		if err != nil {
-			log.WarningLog.Printf("[ChainFirer] ListItemSessions failed for item %s: %v", item.ID, err)
+			log.WarningLog().Printf("[ChainFirer] ListItemSessions failed for item %s: %v", item.ID, err)
 			priorSessions = nil // BuildSessionInitialPrompt handles nil priorSessions fine
 		}
 	}
@@ -252,7 +252,7 @@ func (c *ChainFirer) Fire(ctx context.Context, item *BacklogItemData) (fired boo
 		return false, fmt.Errorf("fire chained workflow %s for item %s: %w", wf.ID, item.ID, fireErr)
 	}
 
-	log.InfoLog.Printf("[ChainFirer] fired chain for item %s -> workflow %s (session %s, depth %d)", item.ID, wf.Slug, sessionID, chainDepth)
+	log.InfoLog().Printf("[ChainFirer] fired chain for item %s -> workflow %s (session %s, depth %d)", item.ID, wf.Slug, sessionID, chainDepth)
 	return true, nil
 }
 
@@ -268,7 +268,7 @@ func (c *ChainFirer) claimIfUnfired(ctx context.Context, item *BacklogItemData) 
 	}
 	claimed, err := c.repo.ClaimChainFire(ctx, item.ID, item.UpdatedAt)
 	if err != nil {
-		log.WarningLog.Printf("[ChainFirer] claim attempt failed for item %s: %v", item.ID, err)
+		log.WarningLog().Printf("[ChainFirer] claim attempt failed for item %s: %v", item.ID, err)
 		return false
 	}
 	return claimed
@@ -282,7 +282,7 @@ func (c *ChainFirer) revertClaim(ctx context.Context, itemID string) {
 		return
 	}
 	if err := c.repo.RevertChainFireClaim(ctx, itemID); err != nil {
-		log.WarningLog.Printf("[ChainFirer] failed to revert claim for item %s: %v", itemID, err)
+		log.WarningLog().Printf("[ChainFirer] failed to revert claim for item %s: %v", itemID, err)
 	}
 }
 
@@ -300,7 +300,7 @@ func (c *ChainFirer) recordFireEvent(ctx context.Context, workflowID *uuid.UUID,
 		Outcome:      outcome,
 		ErrorMessage: errMsg,
 	}); err != nil {
-		log.WarningLog.Printf("[ChainFirer] failed to record fire event: %v", err)
+		log.WarningLog().Printf("[ChainFirer] failed to record fire event: %v", err)
 	}
 }
 
@@ -348,7 +348,7 @@ func (r *TriggerChainReconciler) ReconcileChains(ctx context.Context, er *EntRep
 		Limit:             chainReconcileScanLimit,
 	})
 	if err != nil {
-		log.WarningLog.Printf("[TriggerChainReconciler] list error: %v", err)
+		log.WarningLog().Printf("[TriggerChainReconciler] list error: %v", err)
 		return
 	}
 	for i := range items {

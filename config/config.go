@@ -1152,7 +1152,7 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 			return data, nil
 		}
 		// If existing key is invalid, regenerate
-		log.WarningLog.Printf("[Config] existing encryption key is invalid, regenerating")
+		log.WarningLog().Printf("[Config] existing encryption key is invalid, regenerating")
 	}
 
 	// Generate new 32-byte key
@@ -1165,7 +1165,7 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist encryption key: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist encryption key: %v", err)
 	}
 
 	return key, nil
@@ -1186,7 +1186,7 @@ func (c *Config) GetOrCreateClaimantHostID() (string, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist claimant host id: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist claimant host id: %v", err)
 	}
 
 	return c.ClaimantHostID, nil

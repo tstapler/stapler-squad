@@ -110,7 +110,7 @@ func RunServer(ctx context.Context, store session.InstanceStore, svc *services.S
 	// backlog tools can identify the calling session.
 	if uuid := os.Getenv("STAPLER_SESSION_UUID"); uuid != "" {
 		ctx = WithSessionUUID(ctx, uuid)
-		log.InfoLog.Printf("[mcp] session UUID injected from environment: %s", uuid)
+		log.InfoLog().Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
 	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc))

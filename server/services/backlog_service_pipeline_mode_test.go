@@ -26,14 +26,14 @@ import (
 )
 
 // swapWarningLog redirects tslog.WarningLog to a buffer for the duration of
-// the calling test, restoring the original on cleanup. Mirrors the
-// established pattern in session/pipeline_engine_test.go.
+// the calling test, restoring the original on cleanup via the atomic
+// SetWarningLogForTest setter. Mirrors the established pattern in
+// session/pipeline_engine_test.go.
 func swapWarningLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	orig := tslog.WarningLog
-	tslog.WarningLog = stdlog.New(&buf, "WARNING: ", 0)
-	t.Cleanup(func() { tslog.WarningLog = orig })
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
 	return &buf
 }
 

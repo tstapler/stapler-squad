@@ -93,7 +93,7 @@ func (s *BacklogService) AttachSessionToItem(
 	// the session being attached (mirrors SpawnSessionFromItem's ordering).
 	attachPriorSessions, priorErr := s.storage.ListItemSessions(ctx, item.ID)
 	if priorErr != nil {
-		log.WarningLog.Printf("[AttachSessionToItem] failed to load prior sessions for item %s: %v", item.ID, priorErr)
+		log.WarningLog().Printf("[AttachSessionToItem] failed to load prior sessions for item %s: %v", item.ID, priorErr)
 		attachPriorSessions = nil
 	}
 
@@ -139,7 +139,7 @@ func (s *BacklogService) AttachSessionToItem(
 				// UUID) doesn't race the next periodic SaveInstances sweep — same fix as
 				// SpawnSessionFromItem.
 				if saveErr := s.storage.SaveInstances([]*session.Instance{inst}); saveErr != nil {
-					log.WarningLog.Printf("[AttachSessionToItem] failed to persist instance immediately after attach item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
+					log.WarningLog().Printf("[AttachSessionToItem] failed to persist instance immediately after attach item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
 				}
 				break
 			}
@@ -149,7 +149,7 @@ func (s *BacklogService) AttachSessionToItem(
 	// 7. Transition item to in_progress (only if the state machine permits it).
 	if session.CanTransitionBacklog(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem); transErr != nil {
-			log.ErrorLog.Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
+			log.ErrorLog().Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
 			// Same shape as SpawnSessionFromItem's fresh-spawn path: a real
 			// session is now attached and running while the item's status still
 			// says otherwise.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -183,9 +184,9 @@ func TestLogForSession(t *testing.T) {
 	// Initialize global loggers
 	logPath := filepath.Join(tempDir, "staplersquad.log")
 	file, _ := os.Create(logPath)
-	InfoLog = NewDummyLogger(file, "INFO: ")
-	WarningLog = NewDummyLogger(file, "WARNING: ")
-	ErrorLog = NewDummyLogger(file, "ERROR: ")
+	SetInfoLogForTest(NewDummyLogger(file, "INFO: "))
+	SetWarningLogForTest(NewDummyLogger(file, "WARNING: "))
+	SetErrorLogForTest(NewDummyLogger(file, "ERROR: "))
 
 	// Initialize session loggers map
 	sessionLoggers = make(map[string]*SessionLoggers)
@@ -218,4 +219,46 @@ func TestLogForSession(t *testing.T) {
 // NewDummyLogger creates a test logger that doesn't panic on write errors
 func NewDummyLogger(w io.Writer, prefix string) *log.Logger {
 	return log.New(w, prefix, 0)
+}
+
+// TestAtomicLoggerConcurrentAccess exercises the atomicLogger accessor under
+// -race: one set of goroutines repeatedly swaps the warning logger while
+// another set concurrently loads and uses it. Before atomicLogger, the
+// equivalent bare package-var reassignment raced with these reads; this test
+// guards against that regression reappearing.
+func TestAtomicLoggerConcurrentAccess(t *testing.T) {
+	orig := SetWarningLogForTest(NewDummyLogger(io.Discard, "WARNING: "))
+	defer SetWarningLogForTest(orig)
+
+	const writers = 4
+	const readers = 8
+	const iterations = 200
+
+	var wg sync.WaitGroup
+	wg.Add(writers + readers)
+
+	for i := 0; i < writers; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				SetWarningLogForTest(NewDummyLogger(io.Discard, "WARNING: "))
+			}
+		}()
+	}
+
+	for i := 0; i < readers; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				l := WarningLog()
+				if l == nil {
+					t.Error("WarningLog() returned nil during concurrent access")
+					return
+				}
+				l.Printf("concurrent read %d", j)
+			}
+		}()
+	}
+
+	wg.Wait()
 }

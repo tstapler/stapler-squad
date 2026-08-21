@@ -58,13 +58,13 @@ func runBacklogItemUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) 
 		if _, saveErr := er.client.BacklogItem.UpdateOneID(item.ID).
 			SetUpdatedAt(item.UpdatedAt.UTC()).
 			Save(ctx); saveErr != nil {
-			log.WarningLog.Printf("[Migration] backlog item updated_at UTC backfill: item=%s: %v", item.ID, saveErr)
+			log.WarningLog().Printf("[Migration] backlog item updated_at UTC backfill: item=%s: %v", item.ID, saveErr)
 			continue
 		}
 		migrated++
 	}
 	if migrated > 0 {
-		log.InfoLog.Printf("[Migration] backlog item updated_at UTC backfill: normalized %d row(s)", migrated)
+		log.InfoLog().Printf("[Migration] backlog item updated_at UTC backfill: normalized %d row(s)", migrated)
 	}
 	return nil
 }

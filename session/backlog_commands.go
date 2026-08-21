@@ -214,7 +214,7 @@ func CleanupSlashCommands(worktreePath string) error {
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 	if err := os.RemoveAll(cmdDir); err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
+			log.WarningLog().Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
 		}
 	}
 	return nil
@@ -271,7 +271,7 @@ func CleanupBacklogContextFile(worktreePath string) error {
 	path := filepath.Join(worktreePath, ".backlog-context.md")
 	if err := os.Remove(path); err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
+			log.WarningLog().Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
 		}
 	}
 	return nil
@@ -300,14 +300,14 @@ func addWorktreeExcludes(worktreePath string) {
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()
 	if err != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
+		log.WarningLog().Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
 		return
 	}
 	gitCommonDir := strings.TrimSpace(string(out))
 
 	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
 	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o755); mkErr != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
+		log.WarningLog().Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
 		return
 	}
 
@@ -316,7 +316,7 @@ func addWorktreeExcludes(worktreePath string) {
 
 	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if openErr != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
+		log.WarningLog().Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
 		return
 	}
 	defer f.Close()
@@ -342,9 +342,9 @@ func addWorktreeExcludes(worktreePath string) {
 func selfHealWorktreeScaffolding(worktreePath string) {
 	removed, err := git.UntrackScaffolding(worktreePath, git.ScaffoldingExcludePatterns)
 	if err != nil {
-		log.WarningLog.Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
+		log.WarningLog().Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
 	} else if len(removed) > 0 {
-		log.InfoLog.Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
+		log.InfoLog().Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
 	}
 	addWorktreeExcludes(worktreePath)
 }

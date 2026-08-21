@@ -156,13 +156,13 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 		if _, saveErr := r.client.BacklogItem.UpdateOneID(row.ID).
 			SetPublicID(newID.String()).
 			Save(ctx); saveErr != nil {
-			log.WarningLog.Printf("[Migration] backlog item public id backfill: item=%s: %v", row.ID, saveErr)
+			log.WarningLog().Printf("[Migration] backlog item public id backfill: item=%s: %v", row.ID, saveErr)
 			continue
 		}
 		migrated++
 	}
 	if migrated > 0 {
-		log.InfoLog.Printf("[Migration] backlog item public id backfill: populated %d row(s)", migrated)
+		log.InfoLog().Printf("[Migration] backlog item public id backfill: populated %d row(s)", migrated)
 	}
 	return nil
 }
@@ -257,7 +257,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 
 	// Best-effort publish: never blocks or fails session creation itself.
 	if item, lookupErr := r.GetBacklogItem(ctx, data.ItemID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] CreateItemSession: failed to resolve backlog item %s for publish: %v", data.ItemID, lookupErr)
+		log.WarningLog().Printf("[EntRepository] CreateItemSession: failed to resolve backlog item %s for publish: %v", data.ItemID, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:           ChangeSessionAttached,
@@ -405,7 +405,7 @@ func (r *EntRepository) UpdateItemSessionStarted(ctx context.Context, id string,
 	// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 	// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionStarted: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionStarted: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
@@ -432,7 +432,7 @@ func (r *EntRepository) UpdateItemSessionSessionUUID(ctx context.Context, id str
 
 	// Best-effort publish: never blocks or fails the update itself.
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionSessionUUID: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionSessionUUID: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:      ChangeSessionAttached,
@@ -548,7 +548,7 @@ func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id str
 	// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 	// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionGitActivity: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionGitActivity: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
@@ -578,7 +578,7 @@ func (r *EntRepository) UpdateItemSessionFileTouch(ctx context.Context, id strin
 	// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 	// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionFileTouch: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionFileTouch: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
@@ -608,7 +608,7 @@ func (r *EntRepository) UpdateItemSessionTriageResult(ctx context.Context, id st
 	// ItemSession row was deleted concurrently) — that's logged and skipped,
 	// not fatal, same "publish is best-effort" guarantee as every other hook.
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionTriageResult: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionTriageResult: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeTriageProgressUpdated,
@@ -638,7 +638,7 @@ func (r *EntRepository) UpdateItemSessionVerificationNotes(ctx context.Context, 
 	// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 	// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionVerificationNotes: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionVerificationNotes: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
@@ -721,7 +721,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 	// verdict travels IN the payload (not via a client-side join against
 	// item_sessions) — see BacklogItemChange.Verdict's doc comment.
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedSessionID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] SaveReviewVerdict: failed to resolve owning backlog item for item session %s: %v", itemSessionID, lookupErr)
+		log.WarningLog().Printf("[EntRepository] SaveReviewVerdict: failed to resolve owning backlog item for item session %s: %v", itemSessionID, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:    ChangeVerdictRecorded,
@@ -794,7 +794,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 	// verdict-recording paths (RPC and MCP submit_review_verdict) converge on
 	// one event kind, each carrying the verdict inline.
 	if item, lookupErr := r.GetBacklogItem(ctx, isData.ItemID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] CreateItemSessionWithVerdict: failed to resolve backlog item %s for publish: %v", isData.ItemID, lookupErr)
+		log.WarningLog().Printf("[EntRepository] CreateItemSessionWithVerdict: failed to resolve backlog item %s for publish: %v", isData.ItemID, lookupErr)
 	} else {
 		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:    ChangeVerdictRecorded,
@@ -867,7 +867,7 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 	for _, id := range transitionedIDs {
 		updated, getErr := r.client.BacklogItem.Get(ctx, id)
 		if getErr != nil {
-			log.WarningLog.Printf("[EntRepository] ReconcileStuckItems: failed to reload item %s for publish: %v", id, getErr)
+			log.WarningLog().Printf("[EntRepository] ReconcileStuckItems: failed to reload item %s for publish: %v", id, getErr)
 			continue
 		}
 		result := backlogItemToData(updated)

@@ -2845,7 +2845,7 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 // as BUG-030/040/041/046/048, and this fix's originally-reported findings):
 // reconcileBouncingItems confirms the linked PR is already merged, then its
 // own TransitionBacklogItemStatus(done) call can fail — previously that
-// failure was only log.WarningLog.Printf'd, leaving the item bouncing forever
+// failure was only log.WarningLog().Printf'd, leaving the item bouncing forever
 // with code that had already shipped and nothing else surfacing the mismatch.
 //
 // The precondition failure is forced deterministically (not via a real
