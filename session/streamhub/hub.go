@@ -116,6 +116,22 @@ type StreamHub struct {
 	negotiatedSize TerminalSize
 	resizing       bool
 
+	// resizeApplyMu serializes RequestResize's full negotiate-then-apply
+	// sequence end to end, across every subscriber attached to this hub.
+	// It is a distinct lock from resizeMu (which only guards brief
+	// reads/writes of negotiatedSize/resizing for OnRawOutput/
+	// NegotiatedSize) because resizeApplyMu is held for the entire
+	// duration of applyNegotiatedSize's SetWindowSize ->
+	// quiescence-wait -> CapturePaneContent pipeline, which can run for
+	// hundreds of milliseconds. Without it, two subscribers voting for a
+	// resize near-simultaneously could each independently observe
+	// changed == true (under resizeMu, released before applyNegotiatedSize
+	// runs) and both call applyNegotiatedSize concurrently — violating its
+	// doc comment's "exactly once per call" contract and this package's
+	// single-owner concurrency guarantee, which is the entire point of the
+	// stream-hub redesign.
+	resizeApplyMu sync.Mutex
+
 	// slowSubscriberDropsTotal counts slow-subscriber evictions (never
 	// individual dropped frames — Story 1.4.2's AC is explicit that this must
 	// increment once per eviction, not once per dropped frame). This is a
@@ -510,6 +526,20 @@ func (h *StreamHub) OnRawOutput(data []byte) {
 		return
 	}
 	h.batchWindow.Add(data)
+}
+
+// TryFlush flushes the hub's BatchWindow immediately if anything is pending,
+// with FlushOpportunistic as the reason. This is the hub-level hook a raw
+// output feed (pumpControlModeOutputIntoHub) calls once it has drained every
+// frame immediately available on its subscription channel — mirroring the
+// `default: break coalesce` point in
+// server/services/connectrpc_websocket.go's legacy per-connection coalesce
+// loop, so a hub-owned burst is not forced to always pay MaxBatchWindow's
+// full ceiling latency when the feed momentarily has nothing left to drain.
+// A no-op if nothing is buffered (e.g. a resize is in progress and
+// OnRawOutput has been suppressing every frame).
+func (h *StreamHub) TryFlush() {
+	h.batchWindow.TryFlush()
 }
 
 // applyNegotiatedSize is the hub's single call site for

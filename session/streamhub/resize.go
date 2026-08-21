@@ -38,6 +38,15 @@ func (h *StreamHub) RequestResize(id SubscriberID, size TerminalSize) {
 		return
 	}
 
+	// resizeApplyMu is held across the entire negotiate-then-apply
+	// sequence below (vote recording through applyNegotiatedSize's
+	// return), not just the negotiatedSize read/write — otherwise two
+	// concurrent callers can each observe changed == true and both invoke
+	// applyNegotiatedSize at once. See resizeApplyMu's doc comment in
+	// hub.go for the full race this closes.
+	h.resizeApplyMu.Lock()
+	defer h.resizeApplyMu.Unlock()
+
 	sub.recordResizeVote(size)
 	votes := h.collectResizeVotes()
 	negotiated := negotiateSize(votes)
