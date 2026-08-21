@@ -1334,6 +1334,52 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	}
 }
 
+// connectionCountPollInterval bounds how quickly a subscriber-count change
+// (Epic 4.2, Story 4.2.1) reaches an already-connected browser tab. 1s is
+// fast enough for a human-perceptible "another tab just attached" signal
+// without adding meaningful load — hub.SubscriberCount() is an O(1) map-len
+// read under a mutex already held for microseconds elsewhere in the hub.
+const connectionCountPollInterval = 1 * time.Second
+
+// sendConnectionCountUpdates polls hub.SubscriberCount() and pushes a
+// side-channel TerminalData (an otherwise-empty TerminalOutput carrying only
+// ConnectionCount) to this one connection whenever the count changes. See
+// streamViaHub's call site for why this is a poll rather than being stamped
+// onto the hub's own broadcast frames. Returns once stop is closed.
+func sendConnectionCountUpdates(stream *connectWebSocketStream, hub *streamhub.StreamHub, sessionID string, stop <-chan struct{}) {
+	ticker := time.NewTicker(connectionCountPollInterval)
+	defer ticker.Stop()
+
+	lastSent := -1
+	send := func() {
+		count := hub.SubscriberCount()
+		if count == lastSent {
+			return
+		}
+		lastSent = count
+		countCopy := int32(count)
+		msg := &sessionv1.TerminalData{
+			SessionId: sessionID,
+			Data: &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{ConnectionCount: &countCopy},
+			},
+		}
+		if err := marshalProtoEnvelope(stream, 0, msg); err != nil {
+			log.Warn("[streamViaHub] failed to send connection_count update", "session", sessionID, "err", err)
+		}
+	}
+
+	send() // report the count this connection sees immediately, don't wait a full tick
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			send()
+		}
+	}
+}
+
 // streamViaHub is streamViaControlMode's PathHubOwned counterpart (Epic 2.2,
 // Story 2.2.2): instead of this connection running its own
 // resize/quiescence/capture pipeline, it attaches a WebSocketTransport to the
@@ -1453,6 +1499,22 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	doneChan := make(chan struct{})
 	errChan := make(chan error, 1)
 	var resizeSettling atomic.Bool
+
+	// Epic 4.2, Story 4.2.1: push hub.SubscriberCount() to this connection
+	// whenever it changes, so the frontend's ConnectionCountIndicator (Story
+	// 4.2.2) can mount/unmount without depending on real terminal output
+	// arriving (an idle session would otherwise never learn its peer count
+	// changed). This is deliberately a side-channel poll rather than
+	// stamping connection_count onto every hub-broadcast frame: the hub's
+	// raw-output fan-out (StreamHub.Broadcast -> Transport.Send) passes
+	// unmarshaled tmux bytes shared verbatim across all subscribers
+	// (session/streamhub/hub.go's onBatchFlush / WebSocketTransport.Send),
+	// so per-subscriber proto framing lives outside streamhub's and
+	// WebSocketTransport's current scope — out of bounds for this UI-only
+	// epic. Stops the moment this connection's read loop below returns.
+	stopConnCountUpdates := make(chan struct{})
+	defer close(stopConnCountUpdates)
+	go sendConnectionCountUpdates(stream, hub, sessionID, stopConnCountUpdates)
 
 	// runInputReadLoop blocks this goroutine until the WebSocket read errors
 	// or an EndStream flag arrives — there is no separate output-forwarding

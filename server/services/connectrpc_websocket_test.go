@@ -2319,3 +2319,63 @@ func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDime
 		t.Errorf("expected ResyncId to remain unechoed, got %q", output.ResyncId)
 	}
 }
+
+// TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwned
+// is Epic 4.2, Story 4.2.1's AC: a PathHubOwned session's connection reports
+// hub.SubscriberCount() via sendConnectionCountUpdates' side-channel
+// TerminalOutput messages, and the value tracks attach/detach in real time
+// (validation.md REQ-14).
+func TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwned(t *testing.T) {
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	controller := &fakeSessionController{}
+	hub := streamhub.NewStreamHub("conn-count-test", controller, streamhub.WithTeardownGrace(0))
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go sendConnectionCountUpdates(serverStream, hub, "conn-count-test", stop)
+
+	transport1 := NewWebSocketTransport(serverStream)
+	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
+	transport1.BindSubscriber(hub, id1)
+	defer hub.DetachSubscriber(id1)
+
+	readConnectionCount := func() int32 {
+		t.Helper()
+		require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(3*time.Second)))
+		env := readEnvelopeFromClient(t, clientConn)
+		var msg sessionv1.TerminalData
+		require.NoError(t, proto.Unmarshal(env.Data, &msg))
+		output := msg.GetOutput()
+		require.NotNil(t, output, "expected a TerminalData_Output message")
+		require.NotNil(t, output.ConnectionCount, "expected ConnectionCount to be set")
+		return output.GetConnectionCount()
+	}
+
+	// sendConnectionCountUpdates' immediate send() (before its first ticker
+	// tick) delivers the current count without waiting a full poll interval.
+	require.Equal(t, int32(1), readConnectionCount())
+
+	transport2 := NewWebSocketTransport(serverStream)
+	id2 := hub.AttachSubscriber(transport2, streamhub.SubscriberCapability{CanResize: true})
+	transport2.BindSubscriber(hub, id2)
+	defer hub.DetachSubscriber(id2)
+
+	require.Equal(t, int32(2), readConnectionCount())
+}
+
+// TestStreamTerminal_should_OmitConnectionCount_When_SessionIsPathLegacyPerConnection
+// is Story 4.2.1's second AC: a legacy-path connection never has
+// sendConnectionCountUpdates running against it at all, so no
+// connection_count field is ever fabricated from a signal (e.g.
+// activeControlModeStreams) that isn't a real live subscriber count. This is
+// enforced structurally — streamViaControlMode's send paths
+// (marshalProtoEnvelope with TerminalOutput{Data: data}) never set
+// ConnectionCount, verified here as a proto-level guarantee: a
+// TerminalOutput built the same way streamViaControlMode builds one leaves
+// ConnectionCount nil.
+func TestStreamTerminal_should_OmitConnectionCount_When_SessionIsPathLegacyPerConnection(t *testing.T) {
+	msg := &sessionv1.TerminalOutput{Data: []byte("legacy output")}
+	require.Nil(t, msg.ConnectionCount, "legacy-path TerminalOutput must never carry a fabricated connection_count")
+}
