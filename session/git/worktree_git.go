@@ -338,9 +338,12 @@ func (g *GitWorktree) PushBranch() error {
 }
 
 // CreatePR creates a GitHub pull request for the current branch and returns the
-// PR URL and number. Title defaults to the branch name if empty.
+// PR URL and number. Title defaults to the branch name if empty. baseBranch, if
+// non-empty, is passed to `gh pr create --base`; if empty, gh's own
+// default-branch resolution is used (preserves pre-existing behavior for every
+// caller that doesn't care which branch it targets).
 // If a PR already exists for the branch it is returned without creating a new one.
-func (g *GitWorktree) CreatePR(title, body string) (prURL string, prNumber int, err error) {
+func (g *GitWorktree) CreatePR(title, body, baseBranch string) (prURL string, prNumber int, err error) {
 	if err := checkGHCLI(); err != nil {
 		return "", 0, err
 	}
@@ -358,6 +361,9 @@ func (g *GitWorktree) CreatePR(title, body string) (prURL string, prNumber int, 
 	defer cancel()
 
 	args := []string{"pr", "create", "--title", title, "--body", body, "--head", g.branchName}
+	if baseBranch != "" {
+		args = append(args, "--base", baseBranch)
+	}
 	cmd := safeexec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = g.worktreePath
 	out, runErr := g.runCombinedOutput(cmd)
