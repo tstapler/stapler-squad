@@ -17,6 +17,13 @@ jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
   useReviewQueueContext: () => ({ items: [] }),
 }));
 
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
+}));
+
 jest.mock("@/lib/store", () => ({
   useAppSelector: jest.fn(() => ({})),
 }));
