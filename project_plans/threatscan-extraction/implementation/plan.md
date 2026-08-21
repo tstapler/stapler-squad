@@ -2,6 +2,26 @@
 
 Source: `project_plans/threatscan-extraction/requirements.md` + `research/{stack,features,architecture,pitfalls,ux,build-vs-buy}.md`.
 
+## Known limitation (triad review, 2026-08-21)
+
+The 7 new `ScopeContext` pattern categories added in Epic 3 (prompt injection, HTML
+injection, role-play hijack, exfiltration) ship **fully unwired**: nothing in
+production calls `Scan` with `ScopeContext`/`ScopeAll` after this item — only its
+own tests do. This item adds *dormant* pattern data, not a live security-coverage
+change. Wiring them into a real call site is companion issue #115
+(`project_plans/threat-pattern-scan/`, backlog item `8dde518b-8aa1-44b9-a3ef-e634f63e8245`,
+status `idea`, no committed schedule). State this explicitly in the eventual PR
+description so a reviewer or stakeholder doesn't read "add prompt-injection/
+exfiltration detection" as "backlog fields are now protected."
+
+**Namespace coordination with #115**: `project_plans/threat-pattern-scan/`'s own
+implementation plan independently designs its own `pkg/threatscan` from scratch —
+different `Scan` signature, different `Scope` iota ordering, single-file layout —
+with no awareness of this plan. The two cannot both land as written; whichever
+implements first should win the `pkg/threatscan` namespace and the other item's
+plan must be revised to consume it. Flagged for the operator to sequence; not
+resolved by this item alone (see backlog triage notes).
+
 ## System type
 
 Small, internal Go library extraction + a bounded pattern-set addition. No schema
@@ -276,6 +296,22 @@ failures" is only checkable against a known-good baseline.
 
 ### Story 2.2: Regression tests reusing existing fixtures
 
+**Task 2.2.0** — Golden-list regex-source verification (pre-mortem P1, see
+`implementation/pre-mortem.md` #3)
+- File: `pkg/threatscan/patterns_test.go`
+- `TestDefaultPatterns_should_MatchGoldenSecretPatternSourceStrings_When_Compared`:
+  a hardcoded `map[string]string{id: rawRegexSource}` literal copied
+  character-for-character from `session/backlog_review.go:28-39` *before* that
+  file is edited in Epic 4 (an independent oracle, not derived from
+  `patterns.go`'s migrated copy). Asserts, for each of the 12 migrated IDs, that
+  `DefaultPatterns()`'s matching entry's `re.String()` is byte-identical to the
+  golden source string. This catches a subtly broadened/narrowed regex (e.g. a
+  widened character class or an accidental case-insensitivity flag) that could
+  otherwise pass every hand-authored near-miss fixture in Task 2.2.3 because
+  those fixtures were themselves derived from the migrated regex, not the
+  original — the failure mode the pre-mortem flagged as most likely to ship
+  silently.
+
 **Task 2.2.1** — Write `pkg/threatscan/patterns_test.go` addition: registry membership
 - File: `pkg/threatscan/patterns_test.go`
 - `TestDefaultPatterns_should_IncludeAllTwelveMigratedSecretPatternIDs_When_Called`:
@@ -471,6 +507,18 @@ failures" is only checkable against a known-good baseline.
   proving the `(?s)` flag's cross-newline behavior is deliberate and tested, not
   an untested assumption.
 
+**Task 3.6.1b** — Write `pkg/threatscan/scanner_test.go` addition: domain-realistic
+false-positive guard (triad review / pre-mortem P2 #2)
+- File: `pkg/threatscan/scanner_test.go`
+- `TestScan_should_NotFalsePositive_When_ScanningRealisticWebhookCurlBugReport`:
+  fixture built from this repo's own `docs/bugs/open/BUG-076-flaky-testcreateworkflow-webhooksecret-full-suite-only.md`-style
+  content (a bug report describing webhook/curl test flakiness in plain prose,
+  not a sanitized strawman). Asserts `threatscan.Scan(fixture, threatscan.ScopeAll)`
+  does not report `exfiltration_curl_webhook` or `exfiltration_send_to_http` —
+  the CLAUDE.md-only fixture in Task 3.6.2 doesn't cover this repo's own
+  legitimate webhook-testing vocabulary, which #115 would hit first if this gap
+  shipped unaddressed.
+
 **Task 3.6.2** — Write `pkg/threatscan/scanner_test.go` addition: false-positive guard
 - File: `pkg/threatscan/scanner_test.go`
 - `TestScan_should_NotFalsePositive_When_ScanningRealisticRepoDocContent`: fixture
@@ -596,6 +644,23 @@ failures" is only checkable against a known-good baseline.
   exclusions). Verification-only task; if a match shows up there, it means
   someone routed around the `DefaultPatterns()`-as-function design instead of
   following it — treat that as a defect to fix, not a passing check.
+
+### Story 5.1b: Structural enforcement + measured-not-asserted perf (triad review)
+
+**Task 5.1b.1** — CI guard for the `Excerpt`-never-populated invariant (pre-mortem P2 #4)
+- Add a CI grep check (or a `go vet`-style static check) that fails if any
+  `.Excerpt = ` assignment appears in `pkg/threatscan/*.go` outside the package's
+  own zero-value construction — converts the doc-comment invariant (AC2) from
+  "a future PR might silently violate this" into something CI actually catches.
+
+**Task 5.1b.2** — `BenchmarkScan` (pre-mortem P3 #5)
+- File: `pkg/threatscan/scanner_test.go`
+- Add `func BenchmarkScan(b *testing.B)` over `DefaultPatterns()`'s full registry;
+  record the ns/op figure in the PR description, converting the Pattern
+  Decisions table's "immaterial" recompilation-cost claim into a measured fact
+  rather than an assumption. Add one sentence to `patterns.go`'s caching-decision
+  comment naming a concrete revisit trigger (e.g. "if a caller invokes `Scan`
+  more than N times/sec, revisit `sync.Once` caching").
 
 ### Story 5.2: Full verification pass
 
