@@ -346,41 +346,25 @@ func (s *Storage) RemediationBlocked(ctx context.Context, itemID string, reason 
 // reach the unexported repo field. Returns false, nil (never an error) when
 // the backend does not support stuck-state writes.
 func (s *Storage) RecordRemediationAttempt(ctx context.Context, itemID string, reason domain.StuckReason, attempts int32, nextAt *time.Time) (bool, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return false, nil
-	}
-	return er.RecordRemediationAttempt(ctx, itemID, reason, attempts, nextAt)
+	return s.repo.RecordRemediationAttempt(ctx, itemID, reason, attempts, nextAt)
 }
 
 // RecordRemediationRestartGrace is a thin passthrough to *EntRepository, same
 // rationale as RecordRemediationAttempt above.
 func (s *Storage) RecordRemediationRestartGrace(ctx context.Context, itemID string, reason domain.StuckReason, bootTime time.Time) (bool, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return false, nil
-	}
-	return er.RecordRemediationRestartGrace(ctx, itemID, reason, bootTime)
+	return s.repo.RecordRemediationRestartGrace(ctx, itemID, reason, bootTime)
 }
 
 // ResetStuckRemediation is a thin passthrough to *EntRepository, same
 // rationale as RecordRemediationAttempt above.
 func (s *Storage) ResetStuckRemediation(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return false, nil
-	}
-	return er.ResetStuckRemediation(ctx, itemID, reason)
+	return s.repo.ResetStuckRemediation(ctx, itemID, reason)
 }
 
 // BulkResetStuckRemediation is a thin passthrough to *EntRepository, same
 // rationale as RecordRemediationAttempt above.
 func (s *Storage) BulkResetStuckRemediation(ctx context.Context, reason *domain.StuckReason, onlyParked bool) (int, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return 0, nil
-	}
-	return er.BulkResetStuckRemediation(ctx, reason, onlyParked)
+	return s.repo.BulkResetStuckRemediation(ctx, reason, onlyParked)
 }
 
 // RecordManualRemediationAttempt implements the operator-triggered "Retry

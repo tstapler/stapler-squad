@@ -677,13 +677,8 @@ func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, it
 	}
 
 	// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
-	// toast's dedup key below — without a durable repo to gate on, fall back
-	// to the old always-notify behavior rather than silently dropping the toast.
-	er, ok := l.storage.repo.(*EntRepository)
-	if !ok {
-		notifyToast()
-		return
-	}
+	// toast's dedup key below.
+	er := l.storage.repo
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPushFailed, BacklogStatusReview,
 		fmt.Sprintf("%s: %v", reason, err))
 	if markErr != nil {
@@ -726,10 +721,8 @@ func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemI
 	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
 		return transErr
 	}
-	if er, ok := l.storage.repo.(*EntRepository); ok {
-		l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonPushFailed, caller)
-		l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonAbandonedReview, caller)
-	}
+	l.resolveStuckLogged(ctx, l.storage.repo, itemID, domain.StuckReasonPushFailed, caller)
+	l.resolveStuckLogged(ctx, l.storage.repo, itemID, domain.StuckReasonAbandonedReview, caller)
 	return nil
 }
 
