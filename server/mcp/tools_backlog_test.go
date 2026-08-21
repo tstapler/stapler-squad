@@ -339,10 +339,15 @@ func TestRegisterBacklogTools_should_RegisterLinkSessionToItemTool_When_ToolsReg
 	storage := newTestBacklogStorage(t)
 	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil)
 	tools := s.ListTools()
-	_, hasLink := tools["link_session_to_item"]
+	linkTool, hasLink := tools["link_session_to_item"]
 	_, hasGetLinked := tools["get_linked_item"]
-	assert.True(t, hasLink, "link_session_to_item must be registered")
+	require.True(t, hasLink, "link_session_to_item must be registered")
 	assert.True(t, hasGetLinked, "get_linked_item must be registered")
+
+	desc := linkTool.Tool.Description
+	assert.Contains(t, desc, "ITEM_NOT_FOUND", "description must document the ITEM_NOT_FOUND constraint")
+	assert.Contains(t, desc, "CONFLICT", "description must document the CONFLICT constraint")
+	assert.Contains(t, desc, "FAILED_PRECONDITION", "description must document the FAILED_PRECONDITION constraint")
 }
 
 // newTestBacklogStorage creates a temporary Storage for testing.
