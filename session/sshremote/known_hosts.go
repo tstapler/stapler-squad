@@ -1,6 +1,8 @@
 package sshremote
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -235,6 +237,43 @@ func (s *KnownHostsStore) HostKeyCallback() ssh.HostKeyCallback {
 	return func(hostname string, _ net.Addr, key ssh.PublicKey) error {
 		return s.checkHostKey(hostname, key)
 	}
+}
+
+// IsHostTrusted reports whether ANY key is currently trusted for host,
+// independent of which key it is. Exists for callers that need to enforce
+// "TOFU already happened for this host" as a precondition WITHOUT holding a
+// candidate key to Verify against -- server/services.RemoteService.
+// CreateRemote is the motivating case: its contract deliberately never
+// dials the remote itself (see its own doc comment), so it never has a real
+// key on hand, yet review found it was saving a RemoteConfig with no
+// server-side check that TestRemoteConnection/TrustRemoteHostKey ever ran,
+// relying entirely on frontend flow discipline.
+//
+// Implemented by probing checkHostKey with a freshly generated, never-
+// persisted-anywhere throwaway key: IsHostKeyMismatch(err) on the result
+// means an entry exists for host (just not matching the probe key, which is
+// guaranteed since nothing else could ever hold it) -- this is the only way
+// to ask "does the knownhosts.New callback have ANY entry for host" without
+// already knowing the real key, since golang.org/x/crypto/ssh/knownhosts
+// exposes no direct "has host" query and checkHostKey/Verify are both
+// inherently key-comparison operations.
+func (s *KnownHostsStore) IsHostTrusted(host string) (bool, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return false, fmt.Errorf("sshremote: generate probe key: %w", err)
+	}
+	signer, err := ssh.NewSignerFromSigner(priv)
+	if err != nil {
+		return false, fmt.Errorf("sshremote: build probe signer: %w", err)
+	}
+
+	err = s.checkHostKey(host, signer.PublicKey())
+	if err == nil {
+		// Astronomically unlikely (the probe key happened to match a stored
+		// key) but still correctly "trusted" if it somehow occurred.
+		return true, nil
+	}
+	return IsHostKeyMismatch(err), nil
 }
 
 // Trust records key as the trusted host key for host, persisting it via an

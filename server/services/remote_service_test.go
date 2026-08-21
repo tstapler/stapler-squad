@@ -401,7 +401,14 @@ func TestCreateRemote_DuplicateName_ReturnsAlreadyExists(t *testing.T) {
 
 func TestCreateRemote_NonDefaultPort_FoldedIntoHostString(t *testing.T) {
 	cfg := &config.Config{}
-	svc, _, _ := newTestRemoteService(t, cfg)
+	svc, knownHosts, _ := newTestRemoteService(t, cfg)
+
+	// CreateRemote now requires the host key to already be trusted -- see
+	// TestCreateRemote_UntrustedHost_ReturnsFailedPrecondition for that
+	// check's own dedicated test; this one only cares about port-folding,
+	// so it satisfies the precondition directly rather than running a real
+	// TestRemoteConnection/TrustRemoteHostKey round trip.
+	require.NoError(t, knownHosts.Trust("10.0.1.40:2222", newRemoteTestKey(t)))
 
 	resp, err := svc.CreateRemote(context.Background(), connect.NewRequest(&sessionv1.CreateRemoteRequest{
 		Name: "gpu-box", Host: "10.0.1.40", User: "tyler", Port: 2222, BasePath: "/home/tyler/work",
@@ -413,6 +420,26 @@ func TestCreateRemote_NonDefaultPort_FoldedIntoHostString(t *testing.T) {
 	saved, ok := cfg.RemoteByName("gpu-box")
 	require.True(t, ok)
 	require.Equal(t, "10.0.1.40:2222", saved.Host, "non-default port must be folded into the stored Host string")
+}
+
+// TestCreateRemote_UntrustedHost_ReturnsFailedPrecondition is the regression
+// test for the review-found gap: CreateRemote previously had no server-side
+// check that TestRemoteConnection/TrustRemoteHostKey ever ran for this host
+// -- a caller invoking it directly (bypassing the draft-mode frontend flow)
+// could persist a RemoteConfig with no TOFU verification ever having
+// happened, contradicting AC1's "verifies... before the remote is saved."
+func TestCreateRemote_UntrustedHost_ReturnsFailedPrecondition(t *testing.T) {
+	cfg := &config.Config{}
+	svc, _, _ := newTestRemoteService(t, cfg)
+
+	_, err := svc.CreateRemote(context.Background(), connect.NewRequest(&sessionv1.CreateRemoteRequest{
+		Name: "never-trusted", Host: "untrusted.example.com", User: "tyler", BasePath: "/srv/workspaces",
+	}))
+	require.Error(t, err)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+
+	_, ok := cfg.RemoteByName("never-trusted")
+	require.False(t, ok, "an untrusted host's remote must never be persisted")
 }
 
 func TestListRemotes_ReturnsAllConfiguredRemotes(t *testing.T) {

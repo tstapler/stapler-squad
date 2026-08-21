@@ -267,25 +267,17 @@ func (s *RemoteService) ListRemotes(
 // draft-mode TestRemoteConnection/TrustRemoteHostKey has confirmed the
 // remote is reachable).
 //
-// TRACKED GAP: this handler does NOT itself verify the target host's key is
-// already present in s.knownHosts before saving -- the TOFU precondition
-// (TestRemoteConnection succeeded, or TrustRemoteHostKey was called) is
-// enforced only by caller/frontend flow discipline, not by this RPC's own
-// contract. A caller invoking CreateRemote directly, bypassing the
-// draft-mode Test/Trust sequence, would still fail SAFE the first time the
-// remote is actually dialed (SessionService.CreateSession's remote-target
-// path and this service's own TestRemoteConnection both build their
-// ssh.ClientConfig.HostKeyCallback from s.knownHosts.HostKeyCallback(),
-// which rejects an untrusted host key at the SSH layer) -- so this is a
-// missing defense-in-depth check at the API layer, not an exploitable gap
-// in the actual trust boundary. Not fixed here: the only meaningful
-// server-side check available without re-dialing the remote (parsing
-// known_hosts for a Host-name entry, independent of which key it pins)
-// wouldn't actually verify trust of the CURRENT key either, and re-dialing
-// from inside a "just save config" RPC would re-entangle it with the same
-// network-operation complexity Epic 3.3's TestRemoteConnection already
-// owns. Revisit if CreateRemote ever grows a caller other than this
-// feature's own draft-mode frontend flow.
+// Enforces the TOFU precondition itself (review-found gap, previously only
+// enforced by frontend flow discipline -- AC1's "verifies... before the
+// remote is saved" is a contract of this RPC, not just of the shipped UI):
+// s.knownHosts.IsHostTrusted must report a trusted key already on file for
+// this host before the config write proceeds. This does NOT re-dial the
+// remote (that's still TestRemoteConnection/TrustRemoteHostKey's job,
+// deliberately not re-entangled here) -- it only asks whether SOME prior
+// Trust() call already ran for this exact host string, independent of which
+// key it pinned. A caller that bypasses the draft-mode Test/Trust sequence
+// now fails fast here with CodeFailedPrecondition, instead of only failing
+// later at actual dial time.
 func (s *RemoteService) CreateRemote(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateRemoteRequest],
@@ -301,6 +293,16 @@ func (s *RemoteService) CreateRemote(
 	cfg := s.loadConfig()
 	if _, ok := cfg.RemoteByName(name); ok {
 		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("a remote named %q is already configured", name))
+	}
+
+	hostForTrust := hostWithPort(req.Msg.Host, req.Msg.Port)
+	trusted, err := s.knownHosts.IsHostTrusted(hostForTrust)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("check host key trust for %q: %w", hostForTrust, err))
+	}
+	if !trusted {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("host key for %q has not been verified yet -- call TestRemoteConnection and TrustRemoteHostKey first", hostForTrust))
 	}
 
 	// The intended onboarding flow already generated an identity for name

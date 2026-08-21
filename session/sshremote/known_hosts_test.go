@@ -269,3 +269,71 @@ func TestIsHostKeyMismatch_ClassifiesBothCallPathsIdentically(t *testing.T) {
 		t.Error("IsHostKeyMismatch(nil) = true, want false")
 	}
 }
+
+// TestIsHostTrusted_ReturnsFalse_When_HostNeverSeen covers the case
+// server/services.RemoteService.CreateRemote's regression test
+// (TestCreateRemote_UntrustedHost_ReturnsFailedPrecondition) exercises
+// indirectly through the RPC layer -- this pins the store-level behavior
+// directly.
+func TestIsHostTrusted_ReturnsFalse_When_HostNeverSeen(t *testing.T) {
+	store := newTestKnownHostsStore(t)
+
+	trusted, err := store.IsHostTrusted("never-seen.example.com")
+	if err != nil {
+		t.Fatalf("IsHostTrusted: %v", err)
+	}
+	if trusted {
+		t.Error("IsHostTrusted() = true, want false for a host with no Trust() call ever made")
+	}
+}
+
+// TestIsHostTrusted_ReturnsTrue_When_HostTrusted proves IsHostTrusted
+// recognizes an existing trust entry WITHOUT being given the actual trusted
+// key (its whole point -- see its doc comment for why CreateRemote needs
+// exactly this, key-agnostic, question).
+func TestIsHostTrusted_ReturnsTrue_When_HostTrusted(t *testing.T) {
+	store := newTestKnownHostsStore(t)
+	key := newTestHostKey(t)
+
+	if err := store.Trust("prod.example.com", key); err != nil {
+		t.Fatalf("Trust: %v", err)
+	}
+
+	trusted, err := store.IsHostTrusted("prod.example.com")
+	if err != nil {
+		t.Fatalf("IsHostTrusted: %v", err)
+	}
+	if !trusted {
+		t.Error("IsHostTrusted() = false, want true for a host Trust() was already called for")
+	}
+}
+
+// TestIsHostTrusted_IsIndependentOfWhichKeyIsTrusted proves the "any key"
+// framing precisely: even a host whose CURRENTLY trusted key differs from
+// whatever the caller might eventually present (e.g. a rotated/mismatched
+// key -- TestVerify_ReturnsErrHostKeyMismatch_NotErrUnknownHostKey_When_
+// KeyChangedSinceTrust's scenario) still reports trusted=true here, since
+// IsHostTrusted only asks "has Trust ever run for this host," not "does
+// this specific key match."
+func TestIsHostTrusted_IsIndependentOfWhichKeyIsTrusted(t *testing.T) {
+	store := newTestKnownHostsStore(t)
+
+	if err := store.Trust("prod.example.com", newTestHostKey(t)); err != nil {
+		t.Fatalf("Trust: %v", err)
+	}
+
+	// A DIFFERENT key than the one trusted -- would fail Verify, but
+	// IsHostTrusted doesn't take a key at all.
+	rotated := newTestHostKey(t)
+	if err := store.Verify("prod.example.com", rotated); err == nil {
+		t.Fatal("sanity check failed: Verify should reject the rotated key")
+	}
+
+	trusted, err := store.IsHostTrusted("prod.example.com")
+	if err != nil {
+		t.Fatalf("IsHostTrusted: %v", err)
+	}
+	if !trusted {
+		t.Error("IsHostTrusted() = false, want true -- an entry exists for this host regardless of which key it pins")
+	}
+}
