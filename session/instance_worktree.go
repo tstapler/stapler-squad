@@ -93,6 +93,27 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			} else {
 				log.Warn("failed to resolve remote worktree base commit SHA", "session", i.Title, "path", i.ExistingWorktree, "err", shaErr)
 			}
+			// i.Branch is empty for a remote session composed from
+			// SessionTypeDirectory/SessionTypeExistingWorktree (post-review
+			// composability with ADR-001's "remote as an orthogonal flag" --
+			// neither type carries an explicit branch the way NewWorktree
+			// does), and Worktree.branch_name is NotEmpty just like
+			// base_commit_sha above -- same best-effort resolve-from-remote
+			// pattern, so persistence doesn't silently fail
+			// (Storage.SaveInstances) the first time this instance is saved.
+			// "HEAD" (git's own answer for a detached checkout) is treated
+			// the same as a lookup failure -- it's a real string but not a
+			// meaningful branch name to persist or display.
+			if i.Branch == "" {
+				i.Branch = "unknown"
+				if out, brErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
+					if br := strings.TrimSpace(string(out)); br != "" && br != "HEAD" {
+						i.Branch = br
+					}
+				} else {
+					log.Warn("failed to resolve remote worktree branch name", "session", i.Title, "path", i.ExistingWorktree, "err", brErr)
+				}
+			}
 			cancel()
 			gitWorktree := git.NewGitWorktreeFromStorage(i.Path, i.ExistingWorktree, i.Title, i.Branch, baseCommitSHA, git.WithCommandRunner(runner))
 			i.gitManager.SetWorktree(gitWorktree)

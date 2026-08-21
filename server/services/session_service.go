@@ -1737,9 +1737,23 @@ func (s *SessionService) CreateSession(
 		sessionType = session.SessionTypeDirectory
 	}
 
+	// resolveRemoteTarget is resolved here (rather than immediately before the
+	// mode-specific block below) because the Directory-mode os.Stat check right
+	// below it must NOT run against the local filesystem for a remote request --
+	// resolvedPath names a path on the remote host in that case, which this
+	// process cannot os.Stat. It only depends on req.Msg/cfg (both already
+	// available), so hoisting it earlier is side-effect-free.
+	resolvedRemote, remoteRequested, remoteErr := resolveRemoteTarget(req.Msg, cfg)
+	if remoteErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, remoteErr)
+	}
+
 	// For Directory mode: if path does not exist and create_if_missing is not set, return
-	// CodeNotFound so the frontend can show a confirmation dialog.
-	if sessionType == session.SessionTypeDirectory {
+	// CodeNotFound so the frontend can show a confirmation dialog. Skipped for a remote
+	// target -- create_if_missing is not yet supported for remote Directory sessions (see
+	// the remote mode-specific block below), and existence is the remote host's to answer,
+	// not this process's local filesystem.
+	if sessionType == session.SessionTypeDirectory && !remoteRequested {
 		if _, err := os.Stat(resolvedPath); os.IsNotExist(err) {
 			if !req.Msg.CreateIfMissing {
 				if req.Msg.ResumeId != "" {
@@ -1771,37 +1785,54 @@ func (s *SessionService) CreateSession(
 	}
 
 	// Remote-target mode-specific block (ssh-remote-workspaces Phase 4, Epic 4.2,
-	// Task 4.2.1c): when req.Msg.Remote names a saved remote, resolve its stored
-	// identity, dial an SSHRunner, and synchronously create the remote worktree +
-	// remote tmux session -- mirroring how the AutonomousMode/OneOff blocks above
-	// do mode-specific work before session.CreateManagedInstance is called, so a
-	// failure here surfaces as a normal RPC error instead of being buried in the
-	// async goroutine below.
+	// Task 4.2.1c; extended post-review to compose with more than one
+	// SessionType per ADR-001 "remote as an orthogonal flag" -- every existing
+	// SessionType is meaningful on a remote host too): when req.Msg.Remote
+	// names a saved remote, resolve its stored identity, dial an SSHRunner, and
+	// synchronously bring up the remote worktree/directory + remote tmux
+	// session -- mirroring how the AutonomousMode/OneOff blocks above do
+	// mode-specific work before session.CreateManagedInstance is called, so a
+	// failure here surfaces as a normal RPC error instead of being buried in
+	// the async goroutine below.
 	//
-	// v1 only supports session_type=new_worktree: resolvedPath is treated as an
-	// existing repo already on the remote host (mirroring how a local
-	// SessionTypeNewWorktree session's Path names an existing local repo), and the
-	// new worktree is created under the remote's configured base_path. Any other
-	// session type combined with a remote target is rejected up front rather than
-	// silently attempting local-filesystem worktree discovery against a path that
-	// only exists on the remote host.
+	// Supported session types: SessionTypeNewWorktree (resolvedPath is an
+	// existing repo already on the remote host, mirroring how a local
+	// SessionTypeNewWorktree session's Path names an existing local repo; a
+	// fresh worktree is created under the remote's configured base_path),
+	// SessionTypeExistingWorktree (req.Msg.ExistingWorktree already names a
+	// worktree path on the remote host -- no creation, just attach), and
+	// SessionTypeDirectory (resolvedPath already names a plain directory on
+	// the remote host -- no worktree machinery at all, mirrors local
+	// Directory sessions). SessionTypeNewProject is deliberately NOT yet
+	// supported: local NewProject uses go-git's PlainInit/PlainOpen directly
+	// against the local filesystem (session/git/util.go's
+	// InitializeProjectDirectory), which has no CommandRunner-based remote
+	// equivalent yet -- a real gap, tracked separately, not silently
+	// papered over here. Any other session type combined with a remote
+	// target is rejected up front rather than silently attempting
+	// local-filesystem discovery against a path that only exists on the
+	// remote host.
 	//
 	// On success, sessionType/existingWorktreeOverride are remapped to
-	// SessionTypeExistingWorktree pointing at the worktree just created -- see
-	// setupFirstTimeWorktree's doc comment (session/instance_worktree.go) for why
-	// that's the shape the later async Start() goroutine needs: it only attaches
-	// to the already-created worktree/tmux session, it never tries to create them
-	// again (Setup() is skipped entirely for SessionTypeExistingWorktree).
+	// SessionTypeExistingWorktree pointing at the worktree/directory just
+	// resolved -- see setupFirstTimeWorktree's doc comment
+	// (session/instance_worktree.go) for why that's the shape the later async
+	// Start() goroutine needs: it only attaches to the already-created
+	// worktree/tmux session, it never tries to create them again (Setup() is
+	// skipped entirely for SessionTypeExistingWorktree).
 	var executionTarget session.ExecutionTarget = session.LocalTarget{}
 	existingWorktreeOverride := req.Msg.ExistingWorktree
-	resolvedRemote, remoteRequested, remoteErr := resolveRemoteTarget(req.Msg, cfg)
-	if remoteErr != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, remoteErr)
-	}
 	if remoteRequested {
-		if sessionType != session.SessionTypeNewWorktree {
+		switch sessionType {
+		case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory:
+			// supported, handled below
+		default:
 			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("remote sessions currently only support session_type=new_worktree, got %q", sessionType))
+				fmt.Errorf("remote sessions do not support session_type=%q (supported: new_worktree, existing_worktree, directory)", sessionType))
+		}
+		if sessionType == session.SessionTypeExistingWorktree && req.Msg.ExistingWorktree == "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				errors.New("existing_worktree path is required for remote session_type=existing_worktree"))
 		}
 		if s.remoteKeyStore == nil || s.remoteKnownHosts == nil {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -1820,37 +1851,61 @@ func (s *SessionService) CreateSession(
 				fmt.Errorf("failed to connect to remote %q: %w", resolvedRemote.Name, dialErr))
 		}
 
-		if branch == "" {
-			branch = cfg.BranchPrefix + git.SanitizeBranchName(req.Msg.Title)
-		}
-		remoteWorktreePath := path.Join(resolvedRemote.BasePath, git.SanitizeBranchName(req.Msg.Title))
-		worktreeOps := git.NewRemoteWorktreeOps(runner)
-		remoteWT := git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorktreePath, Branch: branch}
+		// remoteWorkingPath is the remote path the tmux session attaches to.
+		// worktreeOps/remoteWT/createdWorktree are populated only for
+		// SessionTypeNewWorktree, the one case that actually creates
+		// something on the remote host worth rolling back if the tmux
+		// bring-up below fails -- ExistingWorktree/Directory attach to a
+		// path the caller already asserts exists, so there is nothing this
+		// block itself created to clean up.
+		var (
+			remoteWorkingPath string
+			worktreeOps       *git.RemoteWorktreeOps
+			remoteWT          git.RemoteWorktree
+			createdWorktree   bool
+		)
+		switch sessionType {
+		case session.SessionTypeNewWorktree:
+			if branch == "" {
+				branch = cfg.BranchPrefix + git.SanitizeBranchName(req.Msg.Title)
+			}
+			remoteWorkingPath = path.Join(resolvedRemote.BasePath, git.SanitizeBranchName(req.Msg.Title))
+			worktreeOps = git.NewRemoteWorktreeOps(runner)
+			remoteWT = git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorkingPath, Branch: branch}
 
-		// RemoteWorktreeOps.CreateWorktree (Phase 2, session/git/remote_worktree.go)
-		// mirrors the local "attach to an already-existing branch" `git worktree add
-		// <path> <branch>` shape deliberately, with no -b -- so a session that wants
-		// a fresh branch on the remote (the common case, mirroring local
-		// SessionTypeNewWorktree's own branch auto-creation) needs it created first.
-		// Best-effort: "git branch <name>" failing because the branch already exists
-		// is expected and ignored; any other failure (unreachable repo, invalid
-		// resolvedPath) is surfaced immediately rather than deferred to a more
-		// confusing failure from CreateWorktree itself.
-		if out, branchErr := runner.Run(ctx, resolvedPath, "git", "branch", branch); branchErr != nil &&
-			!strings.Contains(string(out), "already exists") {
-			return nil, connect.NewError(connect.CodeInternal,
-				fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
-					branch, resolvedRemote.Name, strings.TrimSpace(string(out)), branchErr))
-		}
-		if createErr := worktreeOps.CreateWorktree(ctx, remoteWT); createErr != nil {
-			return nil, connect.NewError(connect.CodeInternal,
-				fmt.Errorf("failed to create remote worktree on %q: %w", resolvedRemote.Name, createErr))
+			// RemoteWorktreeOps.CreateWorktree (Phase 2, session/git/remote_worktree.go)
+			// mirrors the local "attach to an already-existing branch" `git worktree add
+			// <path> <branch>` shape deliberately, with no -b -- so a session that wants
+			// a fresh branch on the remote (the common case, mirroring local
+			// SessionTypeNewWorktree's own branch auto-creation) needs it created first.
+			// Best-effort: "git branch <name>" failing because the branch already exists
+			// is expected and ignored; any other failure (unreachable repo, invalid
+			// resolvedPath) is surfaced immediately rather than deferred to a more
+			// confusing failure from CreateWorktree itself.
+			if out, branchErr := runner.Run(ctx, resolvedPath, "git", "branch", branch); branchErr != nil &&
+				!strings.Contains(string(out), "already exists") {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
+						branch, resolvedRemote.Name, strings.TrimSpace(string(out)), branchErr))
+			}
+			if createErr := worktreeOps.CreateWorktree(ctx, remoteWT); createErr != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to create remote worktree on %q: %w", resolvedRemote.Name, createErr))
+			}
+			createdWorktree = true
+		case session.SessionTypeExistingWorktree:
+			remoteWorkingPath = req.Msg.ExistingWorktree
+		case session.SessionTypeDirectory:
+			remoteWorkingPath = resolvedPath
 		}
 
 		// Best-effort compensating cleanup if the remote tmux session can't be
 		// brought up after the worktree already exists (Task 4.2.1e,
 		// adversarial-review.md Blocker 3): the worktree creation above already
 		// succeeded, so a failure here must not leave it silently orphaned.
+		// Only applies when createdWorktree -- ExistingWorktree/Directory
+		// never created anything this block owns, so there is nothing to
+		// roll back on tmux failure for those.
 		//
 		// s.testTmuxServerSocket must be applied here exactly as instance.go's
 		// initTmuxSession applies InstanceOptions.TmuxServerSocket (set to the
@@ -1871,20 +1926,24 @@ func (s *SessionService) CreateSession(
 		} else {
 			remoteSession = tmux.NewTmuxSessionWithPrefix(req.Msg.Title, program, "staplersquad_", tmux.WithCommandRunner(runner))
 		}
-		if ensureErr := remoteSession.EnsureRemoteSession(ctx, remoteWorktreePath); ensureErr != nil {
+		if ensureErr := remoteSession.EnsureRemoteSession(ctx, remoteWorkingPath); ensureErr != nil {
+			if !createdWorktree {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf(
+					"failed to start remote tmux session on %q: %w", resolvedRemote.Name, ensureErr))
+			}
 			if cleanupErr := worktreeOps.RemoveWorktree(ctx, remoteWT); cleanupErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf(
 					"failed to start remote tmux session on %q (%v); best-effort cleanup of remote worktree %s ALSO failed (%v) -- this path may be orphaned on the remote host and require manual removal",
-					resolvedRemote.Name, ensureErr, remoteWorktreePath, cleanupErr))
+					resolvedRemote.Name, ensureErr, remoteWorkingPath, cleanupErr))
 			}
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf(
 				"failed to start remote tmux session on %q: %w (remote worktree %s was cleaned up)",
-				resolvedRemote.Name, ensureErr, remoteWorktreePath))
+				resolvedRemote.Name, ensureErr, remoteWorkingPath))
 		}
 
 		executionTarget = session.NewRemoteExecutionTarget(*resolvedRemote, runner)
 		sessionType = session.SessionTypeExistingWorktree
-		existingWorktreeOverride = remoteWorktreePath
+		existingWorktreeOverride = remoteWorkingPath
 	}
 
 	// Build instance options

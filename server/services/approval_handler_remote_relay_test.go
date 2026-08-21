@@ -20,18 +20,21 @@ package services
 // importable across package boundaries.
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net"
+	"os/exec"
 	"testing"
 	"time"
 
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -293,5 +296,99 @@ func TestApprovalHandler_SatisfiesRelayHandlerEndToEnd(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("never received a response back through the relay")
+	}
+}
+
+// TestRemoteApprovalHookCommand_RealShellDeliversToRelay is the
+// missing end-to-end proof this review found: every existing test in this
+// package and in session/sshremote (including
+// TestApprovalHandler_SatisfiesRelayHandlerEndToEnd just above) simulates
+// the remote hook script's wire behavior directly in Go -- none of them ever
+// executes remoteApprovalHookCommand's ACTUAL generated shell string through
+// a real shell. That gap hid a real production bug: the command used to
+// target UNIX-CONNECT (connect, as a client) when RemoteApprovalRelay's own
+// direct-streamlocal dial requires sshd to CONNECT to the remote-side
+// socket, meaning something there must LISTEN -- with both sides only ever
+// connecting, no approval request could ever reach the relay in a real
+// deployment, verified empirically (an actual `sh -c` run of the old command
+// against a real relay produced socat's "No such file or directory" and the
+// handler was never invoked). This test runs the real generated command
+// (now UNIX-LISTEN,unlink-early) through a real shell, exactly as Claude
+// Code's hook runner would, and proves it reaches *ApprovalHandler through a
+// real RemoteApprovalRelay over a real (in-process) SSH connection.
+//
+// Skips if socat is not on PATH -- this exercises the real remote-host
+// dependency remoteApprovalWriteTool's doc comment already flags, which this
+// test environment may or may not have installed.
+func TestRemoteApprovalHookCommand_RealShellDeliversToRelay(t *testing.T) {
+	if _, err := exec.LookPath("socat"); err != nil {
+		t.Skip("socat not on PATH -- skipping the real-shell end-to-end proof")
+	}
+
+	srv := startRemoteRelayTestServer(t)
+	pool := tmux.NewSSHClientPool()
+	target := tmux.SSHTarget{Name: "hook-command-e2e-remote", Addr: srv.Addr}
+	cfg := remoteRelayTestClientConfig(t, srv.HostKey)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, err := pool.GetOrDial(ctx, target, &cfg); err != nil {
+		t.Fatalf("GetOrDial() error: %v", err)
+	}
+
+	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
+	handler.SetClassifier(autoAllowClassifier{})
+
+	basePath := t.TempDir()
+	relay, err := sshremote.NewRemoteApprovalRelay(pool, handler, sshremote.RemoteApprovalRelayTarget{
+		RemoteName:      target.Name,
+		BasePath:        basePath,
+		StableSessionID: "hook-command-e2e-session",
+		Title:           "Hook Command E2E Test Session",
+	})
+	if err != nil {
+		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
+	}
+	relay.Start(ctx)
+	defer relay.Stop()
+
+	token, _ := relay.BearerToken()
+	socketPath := sshremote.RemoteApprovalSocketPath(basePath)
+
+	// The REAL production command -- byte-for-byte what InjectHooksConfig
+	// with WithRemoteHookTarget would write into a session's
+	// .claude/settings.local.json, per InjectHookConfigRemote's own call to
+	// remoteApprovalHookCommand.
+	hookCmd := remoteApprovalHookCommand(RemoteHookTarget{SocketPath: socketPath, BearerToken: token})
+
+	reqPayload := classifier.PermissionRequestPayload{
+		ToolName:      "Bash",
+		ToolInput:     map[string]interface{}{"command": "echo hi"},
+		Cwd:           "/home/agent/work",
+		HookEventName: "PermissionRequest",
+	}
+	reqJSON, err := json.Marshal(reqPayload)
+	if err != nil {
+		t.Fatalf("marshal request payload: %v", err)
+	}
+
+	// Exactly how Claude Code invokes a hook command: pipe the hook-event
+	// JSON to its stdin, capture stdout as the response.
+	cmd := safeexec.CommandContext(ctx, "sh", "-c", hookCmd)
+	cmd.Stdin = bytes.NewReader(reqJSON)
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("real hook command failed: %v (output: %s)", runErr, out)
+	}
+
+	var decoded hookDecisionResponse
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("hook command output %s did not decode as hookDecisionResponse: %v", out, err)
+	}
+	if decoded.HookSpecificOutput.HookEventName != "PermissionRequest" {
+		t.Errorf("HookEventName = %q, want %q", decoded.HookSpecificOutput.HookEventName, "PermissionRequest")
+	}
+	if decoded.HookSpecificOutput.Decision.Behavior != "allow" {
+		t.Errorf("Decision.Behavior = %q, want %q (from autoAllowClassifier)", decoded.HookSpecificOutput.Decision.Behavior, "allow")
 	}
 }

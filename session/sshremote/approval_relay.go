@@ -199,6 +199,25 @@ type RemoteApprovalRelay struct {
 
 	startOnce sync.Once
 	stopOnce  sync.Once
+
+	// pendingRequest/pendingResponse buffer an already-computed decision
+	// that handleConnection failed to deliver back over its connection (the
+	// network drop this AC calls for: the human decided, but the
+	// direct-streamlocal channel died before the response could be written)
+	// -- requirements.md AC4's "network blip drops and re-establishes the
+	// connection mid-request" case. When the hook script's own retry (see
+	// server/services.remoteApprovalHookCommand) resends the SAME request
+	// bytes on a fresh connection, handleConnection recognizes the match and
+	// redelivers pendingResponse immediately instead of calling
+	// r.handler.HandlePermissionRequest a second time -- ApprovalHandler has
+	// no request-level de-dup of its own, so re-invoking it would create a
+	// second pending-approval record and could re-prompt a human who already
+	// decided once. Only ever read/written from within run()'s single
+	// goroutine (handleConnection is only ever called from there, never
+	// concurrently -- the type's own doc comment's "only one approval in
+	// flight at a time" constraint), so no mutex guards these fields.
+	pendingRequest  []byte
+	pendingResponse []byte
 }
 
 // RemoteApprovalRelayOption configures a RemoteApprovalRelay at construction
@@ -508,6 +527,18 @@ func (r *RemoteApprovalRelay) dial(client *ssh.Client) (net.Conn, error) {
 // original request-only behavior for those failure paths: there is no
 // well-formed request to hand the handler, so there is nothing meaningful
 // to respond with either.
+//
+// Redelivery (requirements.md AC4's network-blip-mid-request case): if
+// payload.Request matches r.pendingRequest -- a decision this method already
+// computed on a PRIOR connection but failed to deliver, because that
+// connection died before the write completed -- this is the hook script's
+// own retry (server/services.remoteApprovalHookCommand) resending the exact
+// same captured request, not a new one. r.handler is NOT called again;
+// r.pendingResponse is written back directly. Re-invoking the handler here
+// would be wrong even though it would "work" mechanically: ApprovalHandler
+// has no request-level de-dup, so it would create a second pending-approval
+// record and could re-prompt a human who already made a decision for the
+// first one.
 func (r *RemoteApprovalRelay) handleConnection(conn net.Conn) {
 	defer conn.Close() //nolint:errcheck // best-effort; the response (if any) has already been written by the time this runs
 
@@ -523,6 +554,23 @@ func (r *RemoteApprovalRelay) handleConnection(conn net.Conn) {
 		log.Warn("remote approval relay: rejected payload with invalid or expired bearer token", "remote", r.remoteName, "sessionID", r.stableSessionID)
 		return
 	}
+
+	if r.pendingResponse != nil && bytes.Equal(r.pendingRequest, payload.Request) {
+		if _, err := conn.Write(r.pendingResponse); err != nil {
+			log.Warn("remote approval relay: redelivery of a buffered decision failed, keeping it buffered for the next retry", "remote", r.remoteName, "sessionID", r.stableSessionID, "err", err)
+			return
+		}
+		log.Info("remote approval relay: redelivered a previously-undelivered decision after reconnect", "remote", r.remoteName, "sessionID", r.stableSessionID)
+		r.pendingRequest = nil
+		r.pendingResponse = nil
+		return
+	}
+	// A genuinely different request supersedes any stale buffered one --
+	// per the "only one approval in flight at a time" constraint, an
+	// unrelated new request means the previous one's retry window (if any)
+	// has passed.
+	r.pendingRequest = nil
+	r.pendingResponse = nil
 
 	// httptest.NewRequest, not http.NewRequest: this synthetic request never
 	// travels over a real net/http transport (it's fed directly into
@@ -546,7 +594,9 @@ func (r *RemoteApprovalRelay) handleConnection(conn net.Conn) {
 	r.handler.HandlePermissionRequest(rec, req)
 
 	if _, err := conn.Write(rec.Body.Bytes()); err != nil {
-		log.Warn("remote approval relay: failed to write decision back to remote", "remote", r.remoteName, "sessionID", r.stableSessionID, "err", err)
+		log.Warn("remote approval relay: failed to write decision back to remote, buffering for redelivery on retry", "remote", r.remoteName, "sessionID", r.stableSessionID, "err", err)
+		r.pendingRequest = append([]byte(nil), payload.Request...)
+		r.pendingResponse = append([]byte(nil), rec.Body.Bytes()...)
 	}
 }
 

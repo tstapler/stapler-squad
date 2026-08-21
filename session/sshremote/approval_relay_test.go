@@ -5,12 +5,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -606,8 +608,14 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 
 	// Simulate the agent script retrying: it keeps re-listening/re-writing
 	// the same request on the fixed socket path until it gets through -- the
-	// documented agent-side-retry constraint Story 5.1.2 relies on (no
-	// relay-side buffering).
+	// documented agent-side-retry constraint Story 5.1.2 relies on (see
+	// server/services.remoteApprovalHookCommand's retry loop, the real
+	// production mechanism this simulates). This scenario has no undelivered
+	// decision to buffer/redeliver (the connection died before the FIRST
+	// attempt's request even reached the relay, unlike
+	// TestRemoteApprovalRelay_RedeliversAfterDrop's write-failure-after-
+	// decision case in this same file), so it exercises reconnect/redial
+	// alone, independent of the redelivery-buffering path.
 	stopRetry := make(chan struct{})
 	retryFinished := make(chan struct{})
 	go func() {
@@ -693,4 +701,107 @@ func TestWriteApprovalAndReadResponse_SmokeTestsTheTestHelper(t *testing.T) {
 		t.Fatal("writeApprovalAndReadResponse never completed")
 	}
 	_ = os.Remove(socketPath)
+}
+
+// writeFailConn wraps a real net.Conn (for Read/Close/deadlines, so
+// decodePayload can still successfully read a request through it) but
+// forces every Write to fail. Used instead of actually killing a real
+// direct-streamlocal-forwarded connection: an SSH channel's Write() can
+// succeed at the local send-buffering/flow-control layer even when the
+// downstream forwarded Unix-socket peer is already dead (the fake sshd's
+// own io.Copy(dconn, ch) only notices and closes the channel
+// asymmetrically later) -- confirmed the hard way, an earlier version of
+// this test closed the real forwarded connection first and observed the
+// relay's subsequent conn.Write() succeed anyway, non-deterministically.
+// Forcing the failure directly at this boundary tests handleConnection's
+// buffering logic itself, deterministically, independent of that transport
+// race.
+type writeFailConn struct {
+	net.Conn
+	writeErr error
+}
+
+func (c *writeFailConn) Write([]byte) (int, error) {
+	return 0, c.writeErr
+}
+
+// TestRemoteApprovalRelay_RedeliversAfterDrop is the core regression test
+// for the review-found AC4 gap: "a network drop while a request is blocked
+// waiting on a human decision is not implemented (no buffering/redelivery)
+// or tested." The first connection delivers a request and computes a
+// decision, but its Write back to the remote side is forced to fail
+// (writeFailConn) -- simulating the connection having died in the interval
+// between the human deciding and the response reaching the wire. A second
+// connection resending the SAME request bytes (the hook script's own retry,
+// server/services.remoteApprovalHookCommand) must receive that SAME decision
+// without r.handler being invoked a second time -- re-invoking it would
+// create a second pending-approval record and could re-prompt a human who
+// already decided once.
+func TestRemoteApprovalRelay_RedeliversAfterDrop(t *testing.T) {
+	pool := newTestPool(t)
+
+	var handlerCalls int32
+	handler := newFakePermissionRequestHandler()
+	wantResponse := []byte(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`)
+	handler.handle = func([]byte, string, *http.Request) []byte {
+		atomic.AddInt32(&handlerCalls, 1)
+		return wantResponse
+	}
+
+	relay, err := NewRemoteApprovalRelay(pool, handler, RemoteApprovalRelayTarget{RemoteName: "redeliver-remote", BasePath: "/base", StableSessionID: "redeliver-session", Title: "Test"})
+	if err != nil {
+		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Start only to populate r.ctx (handleConnection's synthetic request is
+	// bound to it) -- its poll loop stays idle for this test since nothing
+	// is ever pooled; handleConnection is invoked directly below, bypassing
+	// dial/accept entirely.
+	relay.Start(ctx)
+	defer relay.Stop()
+
+	token, _ := relay.BearerToken()
+	sameRequest := json.RawMessage(`{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}`)
+	payloadBytes, err := json.Marshal(relayedApprovalPayload{Token: token, Request: sameRequest})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	// First attempt: a real net.Pipe delivers the request bytes; the write
+	// back is forced to fail.
+	serverSide, clientSide := net.Pipe()
+	go func() { _, _ = clientSide.Write(payloadBytes) }()
+	relay.handleConnection(&writeFailConn{Conn: serverSide, writeErr: errors.New("simulated connection drop mid-request")})
+	_ = clientSide.Close()
+
+	if got := atomic.LoadInt32(&handlerCalls); got != 1 {
+		t.Fatalf("handler call count after first (failed-write) attempt = %d, want 1", got)
+	}
+
+	// Retry: the SAME request bytes over a genuinely working connection must
+	// get the buffered decision without the handler running again.
+	serverSide2, clientSide2 := net.Pipe()
+	respCh := make(chan []byte, 1)
+	go func() {
+		_, _ = clientSide2.Write(payloadBytes)
+		buf := make([]byte, len(wantResponse))
+		n, _ := io.ReadFull(clientSide2, buf)
+		respCh <- buf[:n]
+		_ = clientSide2.Close()
+	}()
+	relay.handleConnection(serverSide2)
+
+	select {
+	case resp := <-respCh:
+		if string(resp) != string(wantResponse) {
+			t.Errorf("retry response = %s, want the SAME buffered decision %s", resp, wantResponse)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry never received the buffered decision -- it was lost, not redelivered")
+	}
+
+	if got := atomic.LoadInt32(&handlerCalls); got != 1 {
+		t.Errorf("handler call count after retry = %d, want still 1 (redelivery must not re-invoke the handler and re-prompt a human)", got)
+	}
 }

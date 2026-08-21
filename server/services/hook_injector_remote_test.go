@@ -114,8 +114,8 @@ func TestInjectHookConfigRemote_WritesFreshSettings_WhenNoneExist(t *testing.T) 
 	if err := json.Unmarshal(settings["hooks"], &hooksMap); err != nil {
 		t.Fatalf("parse hooks map: %v", err)
 	}
-	if !bytes.Contains(hooksMap["PermissionRequest"], []byte("UNIX-CONNECT:"+target.SocketPath)) {
-		t.Errorf("PermissionRequest hooks = %s, want a command targeting %s via UNIX-CONNECT", hooksMap["PermissionRequest"], target.SocketPath)
+	if !bytes.Contains(hooksMap["PermissionRequest"], []byte("UNIX-LISTEN:"+target.SocketPath)) {
+		t.Errorf("PermissionRequest hooks = %s, want a command targeting %s via UNIX-LISTEN", hooksMap["PermissionRequest"], target.SocketPath)
 	}
 	if !bytes.Contains(hooksMap["PermissionRequest"], []byte(target.BearerToken)) {
 		t.Errorf("PermissionRequest hooks = %s, want the bearer token %q embedded", hooksMap["PermissionRequest"], target.BearerToken)

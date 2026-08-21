@@ -418,3 +418,177 @@ func TestCreateSession_RemoteTarget_ConnectionDropDuringCleanup_SurfacesOrphanWa
 	worktreePath := filepath.Join(fix.basePath, "remote-connection-drops")
 	require.Contains(t, connectErr.Message(), worktreePath)
 }
+
+// TestCreateSession_RemoteTarget_ExistingWorktree_AttachesWithoutCreatingNewOne
+// proves ADR-001's "remote as an orthogonal flag" promise for
+// SessionTypeExistingWorktree: a remote request naming an already-existing
+// remote path via existing_worktree must attach directly to it -- no `git
+// branch`/`git worktree add` invocation, no new directory appearing under
+// the remote's base_path -- rather than being rejected as it was before this
+// composability was added (previously: "remote sessions currently only
+// support session_type=new_worktree").
+func TestCreateSession_RemoteTarget_ExistingWorktree_AttachesWithoutCreatingNewOne(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	srv := startRemoteSessionTestSSHServer(t)
+	fix := newRemoteSessionFixture(t, srv)
+
+	// preexistingPath stands in for a worktree the caller already knows
+	// about on the remote host -- created directly (not via CreateWorktree)
+	// so a passing test proves CreateSession never tried to create it.
+	preexistingPath := filepath.Join(fix.basePath, "already-there")
+	require.NoError(t, os.MkdirAll(preexistingPath, 0o755))
+	initRemoteSessionTestRepo(t, preexistingPath)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:            "remote-existing-worktree",
+		Path:             fix.repoPath,
+		Program:          "sh",
+		SessionType:      sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE,
+		ExistingWorktree: preexistingPath,
+		Remote:           &sessionv1.RemoteTarget{RemoteName: "test-remote"},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+
+	sessionName := "staplersquad_remote-existing-worktree"
+	require.Eventually(t, func() bool {
+		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
+	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
+
+	// No new worktree directory was created under base_path beyond the one
+	// this test itself made.
+	entries, readErr := os.ReadDir(fix.basePath)
+	require.NoError(t, readErr)
+	require.Len(t, entries, 1, "CreateSession must not create a new worktree for session_type=existing_worktree")
+	require.Equal(t, "already-there", entries[0].Name())
+
+	var found *session.Instance
+	for _, inst := range fix.poller.GetInstances() {
+		if inst.Title == "remote-existing-worktree" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found, "created instance must be registered with the poller")
+	require.True(t, found.ExecutionTarget != nil && found.ExecutionTarget.IsRemote())
+
+	// Persistence must actually succeed with a non-empty branch: a remote
+	// ExistingWorktree/Directory session has no caller-supplied branch, and
+	// Worktree.branch_name is NotEmpty at the ent layer -- an empty value
+	// here previously failed Storage.SaveInstances silently (logged as an
+	// ERROR, never surfaced to the RPC caller) until setupFirstTimeWorktree
+	// started resolving a real branch name from the remote (or "unknown" as
+	// a last resort), per session/instance_worktree.go.
+	requireRemoteSessionPersistedWithBranch(t, fix, "remote-existing-worktree")
+}
+
+// TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree proves the
+// same composability for SessionTypeDirectory: no git worktree/branch
+// machinery at all, just a remote tmux session attached directly at
+// resolvedPath (an already-existing plain directory on the remote host,
+// mirroring local Directory sessions).
+func TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	srv := startRemoteSessionTestSSHServer(t)
+	fix := newRemoteSessionFixture(t, srv)
+
+	plainDir := filepath.Join(fix.basePath, "plain-dir")
+	require.NoError(t, os.MkdirAll(plainDir, 0o755))
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "remote-directory-session",
+		Path:        plainDir,
+		Program:     "sh",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+		Remote:      &sessionv1.RemoteTarget{RemoteName: "test-remote"},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+
+	sessionName := "staplersquad_remote-directory-session"
+	require.Eventually(t, func() bool {
+		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
+	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
+
+	entries, readErr := os.ReadDir(fix.basePath)
+	require.NoError(t, readErr)
+	require.Len(t, entries, 1, "CreateSession must not create any worktree for session_type=directory")
+	require.Equal(t, "plain-dir", entries[0].Name())
+
+	requireRemoteSessionPersistedWithBranch(t, fix, "remote-directory-session")
+}
+
+// requireRemoteSessionPersistedWithBranch waits for title's instance to reach
+// durable storage with a non-empty Branch -- see the ExistingWorktree test's
+// doc comment for why this specifically regression-tests the
+// Worktree.branch_name NotEmpty persistence failure a caller-supplied-branch
+// of "" (Directory/ExistingWorktree remote sessions) previously hit silently.
+func requireRemoteSessionPersistedWithBranch(t *testing.T, fix *remoteSessionFixture, title string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		data, listErr := fix.storage.ListInstanceData()
+		if listErr != nil {
+			return false
+		}
+		for _, d := range data {
+			if d.Title == title {
+				return d.Branch != ""
+			}
+		}
+		return false
+	}, 10*time.Second, 200*time.Millisecond, "instance must be persisted to storage with a non-empty branch")
+}
+
+// TestCreateSession_RemoteTarget_ExistingWorktree_MissingPath_ReturnsInvalidArgument
+// covers the one precondition unique to the remote+ExistingWorktree
+// combination: local ExistingWorktree sessions get this same validation for
+// free from git.NewGitWorktreeFromExisting's path resolution, but the remote
+// path skips local git discovery entirely, so the check has to be explicit.
+func TestCreateSession_RemoteTarget_ExistingWorktree_MissingPath_ReturnsInvalidArgument(t *testing.T) {
+	srv := startRemoteSessionTestSSHServer(t)
+	fix := newRemoteSessionFixture(t, srv)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "remote-existing-worktree-no-path",
+		Path:        fix.repoPath,
+		Program:     "sh",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE,
+		Remote:      &sessionv1.RemoteTarget{RemoteName: "test-remote"},
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	require.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+	require.Contains(t, connectErr.Message(), "existing_worktree")
+}
+
+// TestCreateSession_RemoteTarget_UnsupportedSessionType_ReturnsInvalidArgument
+// proves session_type=new_project is rejected up front rather than silently
+// attempting local-filesystem git-init discovery against a path that only
+// exists on the remote host -- see the remote mode-specific block's doc
+// comment in session_service.go for why new_project specifically isn't yet
+// supported (InitializeProjectDirectory has no CommandRunner-based remote
+// equivalent).
+func TestCreateSession_RemoteTarget_UnsupportedSessionType_ReturnsInvalidArgument(t *testing.T) {
+	srv := startRemoteSessionTestSSHServer(t)
+	fix := newRemoteSessionFixture(t, srv)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "remote-new-project-unsupported",
+		Path:        filepath.Join(fix.basePath, "new-project-dir"),
+		Program:     "sh",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT,
+		Remote:      &sessionv1.RemoteTarget{RemoteName: "test-remote"},
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	require.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+	require.Contains(t, connectErr.Message(), "new_project")
+}

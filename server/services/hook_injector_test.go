@@ -527,8 +527,8 @@ func Test_InjectHooksConfig_should_TargetRelaySocket_When_WithRemoteHookTargetPa
 	if strings.Contains(command, "http://localhost:8543") {
 		t.Errorf("remote hook command must not reference localhost:8543, got: %s", command)
 	}
-	if !strings.Contains(command, "UNIX-CONNECT:"+target.SocketPath) {
-		t.Errorf("remote hook command must target the relay socket via UNIX-CONNECT, got: %s", command)
+	if !strings.Contains(command, "UNIX-LISTEN:"+target.SocketPath) {
+		t.Errorf("remote hook command must target the relay socket via UNIX-LISTEN, got: %s", command)
 	}
 	if !strings.Contains(command, target.BearerToken) {
 		t.Errorf("remote hook command must embed the relay's bearer token, got: %s", command)
@@ -604,7 +604,7 @@ func Test_InjectHooksConfig_should_LeaveOtherHookTypesOnHTTP_When_WithRemoteHook
 			if strings.Contains(h.Command, "/api/hooks/stop") {
 				found = true
 			}
-			if strings.Contains(h.Command, "UNIX-CONNECT") {
+			if strings.Contains(h.Command, "UNIX-LISTEN") {
 				t.Errorf("Stop hook must never be routed at the relay socket, got: %s", h.Command)
 			}
 		}
@@ -616,7 +616,7 @@ func Test_InjectHooksConfig_should_LeaveOtherHookTypesOnHTTP_When_WithRemoteHook
 
 // Test_WithRemoteHookTarget_should_BeNoOp_When_SocketPathEmpty guards the documented
 // zero-value behavior: a caller that hasn't resolved a real relay yet (RemoteHookTarget{})
-// must never emit a broken empty UNIX-CONNECT -- it silently falls back to local behavior.
+// must never emit a broken empty UNIX-LISTEN -- it silently falls back to local behavior.
 func Test_WithRemoteHookTarget_should_BeNoOp_When_SocketPathEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -635,8 +635,8 @@ func Test_WithRemoteHookTarget_should_BeNoOp_When_SocketPathEmpty(t *testing.T) 
 	}
 	for _, g := range groups {
 		for _, h := range g.Hooks {
-			if strings.Contains(h.Command, "UNIX-CONNECT") {
-				t.Errorf("zero-value RemoteHookTarget must not produce a UNIX-CONNECT command, got: %s", h.Command)
+			if strings.Contains(h.Command, "UNIX-LISTEN") {
+				t.Errorf("zero-value RemoteHookTarget must not produce a UNIX-LISTEN command, got: %s", h.Command)
 			}
 		}
 	}
@@ -673,7 +673,7 @@ func Test_InjectHooksConfig_should_BeIdempotent_When_RemoteTargetCalledTwice(t *
 	count := 0
 	for _, g := range groups {
 		for _, h := range g.Hooks {
-			if strings.Contains(h.Command, "UNIX-CONNECT:"+target.SocketPath) {
+			if strings.Contains(h.Command, "UNIX-LISTEN:"+target.SocketPath) {
 				count++
 			}
 		}
