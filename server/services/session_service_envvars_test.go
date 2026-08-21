@@ -14,10 +14,12 @@ import (
 // TestCreateSession_ThreadsEnvVars_WhenSetInRequest verifies that env_vars in the
 // CreateSessionRequest are propagated to the live instance's EnvVars field.
 func TestCreateSession_ThreadsEnvVars_WhenSetInRequest(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire poller so FindLiveInstance works immediately after CreateSession.
 	queue := session.NewReviewQueue()

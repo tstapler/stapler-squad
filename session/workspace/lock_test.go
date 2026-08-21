@@ -8,6 +8,7 @@ import (
 )
 
 func TestNoOpLock(t *testing.T) {
+	t.Parallel()
 	lock := NewNoOpLock()
 	defer lock.Close()
 
@@ -60,6 +61,7 @@ func TestNoOpLock(t *testing.T) {
 }
 
 func TestNoOpLockConcurrent(t *testing.T) {
+	t.Parallel()
 	lock := NewNoOpLock()
 	defer lock.Close()
 
@@ -105,6 +107,7 @@ func TestNoOpLockConcurrent(t *testing.T) {
 }
 
 func TestNoOpLockTimeout(t *testing.T) {
+	t.Parallel()
 	lock := NewNoOpLock()
 	defer lock.Close()
 
@@ -126,6 +129,7 @@ func TestNoOpLockTimeout(t *testing.T) {
 }
 
 func TestNoOpLockExtend(t *testing.T) {
+	t.Parallel()
 	lock := NewNoOpLock()
 	defer lock.Close()
 
@@ -143,6 +147,7 @@ func TestNoOpLockExtend(t *testing.T) {
 }
 
 func TestNoOpLockDoubleRelease(t *testing.T) {
+	t.Parallel()
 	lock := NewNoOpLock()
 	defer lock.Close()
 

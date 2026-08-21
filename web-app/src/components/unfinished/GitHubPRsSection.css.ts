@@ -90,6 +90,13 @@ export const prTitle = style({
   color: vars.color.textPrimary,
   textDecoration: "none",
   flexGrow: 1,
+  // minWidth:0 overrides the flex item's default content-based automatic
+  // minimum size; overflowWrap lets long unbreakable tokens (e.g.
+  // "cache_read_input_tokens/cache_creation_input_tokens") wrap instead of
+  // forcing this row (and every ancestor up to UnfinishedTab's .container)
+  // wider than the viewport on mobile.
+  minWidth: 0,
+  overflowWrap: "break-word",
   lineHeight: 1.4,
   ":hover": {
     textDecoration: "underline",
@@ -389,6 +396,47 @@ export const addAccountButton = style({
     borderColor: vars.color.primary,
     color: vars.color.primary,
   },
+});
+
+export const cliImportSection = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  padding: `${vars.space["2"]} 0`,
+});
+
+export const cliImportLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const cliImportHostList = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+});
+
+export const cliImportHostButton = style({
+  padding: `2px ${vars.space["2"]}`,
+  background: vars.color.accentBg,
+  border: `1px solid ${vars.color.inputFocusBorder}`,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.inputFocusBorder,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  selectors: {
+    "&:disabled": {
+      opacity: 0.6,
+      cursor: "default",
+    },
+  },
+});
+
+export const cliImportDivider = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  opacity: 0.7,
 });
 
 // --- Stats bar ---

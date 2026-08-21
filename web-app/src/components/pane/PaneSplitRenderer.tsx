@@ -60,6 +60,7 @@ function PaneNodeComponent({ node, state, dispatch, sessions, isMobile, hasSplit
         state={state}
         dispatch={dispatch}
         sessions={sessions}
+        isMobile={isMobile}
         hasSplits={hasSplits}
       />
     );
@@ -120,13 +121,17 @@ function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSpli
         isMobile={isMobile}
         hasSplits={hasSplits}
       />
-      <ResizeHandle
-        splitId={pane.id}
-        direction={pane.direction}
-        onResize={(splitId: PaneId, ratio: number) =>
-          dispatch({ type: "RESIZE_PANE", splitId, ratio })
-        }
-      />
+      {/* Draggable resize is a desktop affordance — touch dragging a 6px divider is
+          impractical, and mobile horizontal splits use a fixed 50/50 ratio instead. */}
+      {!isMobile && (
+        <ResizeHandle
+          splitId={pane.id}
+          direction={pane.direction}
+          onResize={(splitId: PaneId, ratio: number) =>
+            dispatch({ type: "RESIZE_PANE", splitId, ratio })
+          }
+        />
+      )}
       <PaneNodeComponent
         node={pane.second}
         state={state}
@@ -144,6 +149,7 @@ interface PaneLeafProps {
   state: PaneState;
   dispatch: React.Dispatch<PaneAction>;
   sessions: Session[];
+  isMobile: boolean;
   hasSplits: boolean;
 }
 
@@ -181,9 +187,9 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
         onCreateCheckpoint={actions.onCreateCheckpoint}
         onListCheckpoints={actions.onListCheckpoints}
         onForkFromCheckpoint={actions.onForkFromCheckpoint}
-        onRunOneShot={actions.onRunOneShot}
         onSetRateLimitEnabled={actions.onSetRateLimitEnabled}
         onToggleAutonomousMode={actions.onToggleAutonomousMode}
+        onToggleAutoApprove={actions.onToggleAutoApprove}
         onSteerAutonomousSession={actions.onSteerAutonomousSession}
         onClearConversationState={actions.onClearConversationState}
         onHibernateSession={hibernateSession ? (id) => void hibernateSession(id) : undefined}
@@ -195,7 +201,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
   );
 }
 
-function PaneLeafComponent({ pane, state, dispatch, sessions, hasSplits }: PaneLeafProps) {
+function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneLeafProps) {
   const { pickerPendingSession, cancelPicker } = usePaneContext();
   const isFocused = state.focusedPaneId === pane.id;
   const isZoomed = state.zoomedPaneId === pane.id;
@@ -254,7 +260,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, hasSplits }: PaneL
         onFocus={handleFocus}
         onZoom={handleZoom}
         onSetView={handleSetView}
-        splitButtonVisible={true}
+        splitButtonVisible={!isMobile}
         onSplitVertical={handleSplitVertical}
         onSplitHorizontal={handleSplitHorizontal}
       />
@@ -340,8 +346,10 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
       className={rendererRoot}
       data-context="cockpit"
     >
-      {/* Reset layout button — only shown when there is a split layout */}
-      {hasMultiplePanes && (
+      {/* Reset layout button — desktop window-management chrome; on mobile the
+          MobilePaneTabStrip + per-pane close buttons cover the same need without
+          eating scarce header space. */}
+      {hasMultiplePanes && !isNarrow && (
         <div className={resetLayoutBar}>
           <button
             data-testid="reset-layout-btn"

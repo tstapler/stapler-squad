@@ -34,6 +34,7 @@ var validTransitionSet = map[[2]Status]bool{
 // a new transition to transitionDefs without also updating validTransitionSet
 // (or vice-versa) will cause this test to fail.
 func TestCanTransition_ExhaustiveMatrix(t *testing.T) {
+	t.Parallel()
 	for _, from := range allStatuses {
 		for _, to := range allStatuses {
 			pair := [2]Status{from, to}
@@ -53,6 +54,7 @@ func TestCanTransition_ExhaustiveMatrix(t *testing.T) {
 // TestCanTransition_ValidTransitions is a human-readable complement to the matrix
 // test — it names each valid transition explicitly for documentation value.
 func TestCanTransition_ValidTransitions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		from Status
@@ -77,6 +79,7 @@ func TestCanTransition_ValidTransitions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if !CanTransition(tt.from, tt.to) {
 				t.Errorf("CanTransition(%s, %s) = false, want true", tt.from, tt.to)
 			}
@@ -88,6 +91,7 @@ func TestCanTransition_ValidTransitions(t *testing.T) {
 // allowed. The exhaustive matrix test above already catches all of them, but having
 // named cases here makes failures easier to diagnose.
 func TestCanTransition_InvalidTransitions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		from Status
@@ -114,6 +118,7 @@ func TestCanTransition_InvalidTransitions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if CanTransition(tt.from, tt.to) {
 				t.Errorf("CanTransition(%s, %s) = true, want false", tt.from, tt.to)
 			}
@@ -122,6 +127,7 @@ func TestCanTransition_InvalidTransitions(t *testing.T) {
 }
 
 func TestCanTransition_UnknownStatus(t *testing.T) {
+	t.Parallel()
 	unknownStatus := Status(999)
 	if CanTransition(unknownStatus, Active) {
 		t.Error("CanTransition with unknown from status should return false")
@@ -132,6 +138,7 @@ func TestCanTransition_UnknownStatus(t *testing.T) {
 }
 
 func TestErrInvalidTransition(t *testing.T) {
+	t.Parallel()
 	err := ErrInvalidTransition{From: Paused, To: Hibernated}
 
 	expected := "invalid transition: Paused -> Hibernated"
@@ -150,6 +157,7 @@ func TestErrInvalidTransition(t *testing.T) {
 
 // TestTransitionDefs_StoppedRecovery verifies Stopped can reach Active.
 func TestTransitionDefs_StoppedRecovery(t *testing.T) {
+	t.Parallel()
 	if !CanTransition(Stopped, Active) {
 		t.Error("Stopped should be able to transition to Active (session revival)")
 	}
@@ -157,6 +165,7 @@ func TestTransitionDefs_StoppedRecovery(t *testing.T) {
 
 // TestTransitionDefs_AllStatusesCovered verifies every status has at least one outgoing transition.
 func TestTransitionDefs_AllStatusesCovered(t *testing.T) {
+	t.Parallel()
 	for _, s := range allStatuses {
 		if s == Stopped {
 			continue // Stopped → Active is covered above
@@ -177,6 +186,7 @@ func TestTransitionDefs_AllStatusesCovered(t *testing.T) {
 // TestTransitionDefs_StoppedReachableFromEveryState verifies that every
 // non-terminal state can reach Stopped in at most one hop.
 func TestTransitionDefs_StoppedReachableFromEveryState(t *testing.T) {
+	t.Parallel()
 	for _, s := range allStatuses {
 		if s == Stopped {
 			continue
@@ -192,6 +202,7 @@ func TestTransitionDefs_StoppedReachableFromEveryState(t *testing.T) {
 // - CanTransition(Hibernated, Active) returns true.
 // - CanTransition(Active, Status(NeedsApprovalOldValue=4)) returns false (removed).
 func TestCanTransition_NewStates(t *testing.T) {
+	t.Parallel()
 	if !CanTransition(Active, Hibernated) {
 		t.Error("CanTransition(Active, Hibernated) = false, want true")
 	}
@@ -211,14 +222,20 @@ func TestCanTransition_NewStates(t *testing.T) {
 // TestTransitionTo_ValidTransitions verifies that Instance.transitionTo updates
 // Status and returns nil for every allowed transition.
 func TestTransitionTo_ValidTransitions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for pair := range validTransitionSet {
 		from, to := pair[0], pair[1]
 		t.Run(from.String()+"->"+to.String(), func(t *testing.T) {
+			t.Parallel()
 			// Path must be a real directory: Hibernated->Active performs a genuine
 			// cold-restore Start() that now hard-fails on a missing workdir instead
 			// of silently falling back to the process cwd (see ErrWorkDirMissing).
 			inst := &Instance{Title: "test", Status: from, Path: t.TempDir()}
+			t.Cleanup(func() {
+				JoinHibernation(inst)
+				JoinSessionDriver(inst)
+			})
 			err := inst.transitionTo(ctx, to)
 			if err != nil {
 				t.Errorf("transitionTo(%s) from %s: unexpected error %v", to, from, err)
@@ -233,6 +250,7 @@ func TestTransitionTo_ValidTransitions(t *testing.T) {
 // TestTransitionTo_InvalidTransitions verifies that Instance.transitionTo returns
 // ErrInvalidTransition and leaves Status unchanged for every disallowed transition.
 func TestTransitionTo_InvalidTransitions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, from := range allStatuses {
 		for _, to := range allStatuses {
@@ -241,6 +259,7 @@ func TestTransitionTo_InvalidTransitions(t *testing.T) {
 			}
 			from, to := from, to // capture
 			t.Run(from.String()+"->"+to.String(), func(t *testing.T) {
+				t.Parallel()
 				inst := &Instance{Title: "test", Status: from}
 				err := inst.transitionTo(ctx, to)
 				if err == nil {
@@ -262,6 +281,7 @@ func TestTransitionTo_InvalidTransitions(t *testing.T) {
 // TestTransitionTo_ChainedTransitions verifies common multi-hop paths through
 // the state machine work as a sequence of transitionTo calls.
 func TestTransitionTo_ChainedTransitions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	type step struct{ to Status }
 
@@ -289,10 +309,15 @@ func TestTransitionTo_ChainedTransitions(t *testing.T) {
 
 	for _, chain := range chains {
 		t.Run(chain.name, func(t *testing.T) {
+			t.Parallel()
 			// Path must be a real directory: Hibernated->Active performs a genuine
 			// cold-restore Start() that now hard-fails on a missing workdir instead
 			// of silently falling back to the process cwd (see ErrWorkDirMissing).
 			inst := &Instance{Title: "test-chain", Status: chain.start, Path: t.TempDir()}
+			t.Cleanup(func() {
+				JoinHibernation(inst)
+				JoinSessionDriver(inst)
+			})
 			for i, step := range chain.steps {
 				if err := inst.transitionTo(ctx, step.to); err != nil {
 					t.Fatalf("step %d: transitionTo(%s) from %s: %v", i, step.to, inst.Status, err)

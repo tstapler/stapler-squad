@@ -17,9 +17,11 @@ import (
 // CodeInternal, but never CodeInvalidArgument for the path guard, because the
 // guard condition explicitly exempts requests that carry an AliasName.
 func TestCreateSession_PathGuard_AliasNameBypassesPathRequired(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	req := connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:     "test",

@@ -39,6 +39,17 @@ var (
 // Enabled by default; set STAPLER_SQUAD_CM_COMMANDS=false to opt out.
 var cmCommandsEnabled atomic.Bool
 
+// controlModeSlowSubscriberGrace bounds how long broadcastControlModeUpdate will block
+// waiting for room in a full subscriber channel before giving up and closing it. A fast
+// typing burst (readline/prompt redraws emit several %output events per keystroke) can
+// momentarily fill the 100-slot buffer while the consumer is mid-write on a coalesced
+// WebSocket frame; that consumer is healthy and about to drain, not stuck. Closing on the
+// very first instantaneously-full send conflated that transient burst with a genuinely
+// dead subscriber, disconnecting the terminal. Waiting up to this grace period lets a
+// bursty-but-healthy consumer catch up; only a subscriber still full after the grace period
+// is treated as stuck.
+const controlModeSlowSubscriberGrace = 250 * time.Millisecond
+
 func init() {
 	cmCommandsEnabled.Store(os.Getenv("STAPLER_SQUAD_CM_COMMANDS") != "false")
 }
@@ -678,20 +689,40 @@ func (t *TmuxSession) decodeControlModeOutput(encoded []byte) []byte {
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
-// RLock is safe: UnsubscribeFromControlModeUpdates holds WLock when closing channels,
-// so RLock and WLock are mutually exclusive — no send-on-closed-channel is possible.
+// Takes the full write lock (not RLock) because a slow subscriber is closed and removed
+// from t.controlModeSubscribers here rather than having its update dropped: dropping any
+// byte of this stream corrupts ANSI/cursor state for terminal consumers, since this is the
+// stream actually rendered in the browser (mirrors NativeProcessManager.fanOut's
+// close-and-remove pattern in session/native_process_manager.go).
+//
+// A channel that's instantaneously full is given a bounded grace period
+// (controlModeSlowSubscriberGrace) to drain before being closed — see that constant's doc
+// comment for why an instant close-on-first-full-send disconnects healthy-but-bursty
+// consumers, not just genuinely stuck ones.
 func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
-	t.controlModeSubMu.RLock()
-	defer t.controlModeSubMu.RUnlock()
+	t.controlModeSubMu.Lock()
+	defer t.controlModeSubMu.Unlock()
 
 	for subscriberID, ch := range t.controlModeSubscribers {
 		select {
 		case ch <- data:
 			// Successfully sent
+			continue
 		default:
-			// Channel full - subscriber can't keep up
-			// Don't block other subscribers, just log
-			log.Warn("control mode subscriber channel full, dropping update", "subscriber", subscriberID, "session", t.sanitizedName)
+			// Channel momentarily full - fall through to the bounded wait below rather
+			// than concluding the subscriber is stuck on a single snapshot.
+		}
+
+		select {
+		case ch <- data:
+			// Consumer drained in time - a burst, not sustained lag.
+		case <-time.After(controlModeSlowSubscriberGrace):
+			// Still full after the grace period - subscriber genuinely can't keep up.
+			// Close and remove it rather than dropping this chunk, so the consumer sees
+			// end-of-stream instead of a silently corrupted terminal.
+			close(ch)
+			delete(t.controlModeSubscribers, subscriberID)
+			log.Warn("control mode subscriber channel full after grace period, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
 		}
 	}
 }

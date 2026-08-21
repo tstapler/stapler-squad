@@ -206,6 +206,14 @@ export const itemContext = style({
   fontStyle: "italic",
 });
 
+// Composes itemContext rather than modifying it directly — itemContext is also used for
+// queueItem.context on non-approval cards, which must not gain this bound. Mirrors
+// commandPreview's own maxHeight/overflowY/wordBreak values.
+export const escalationReasonText = style([
+  itemContext,
+  { maxHeight: "6em", overflowY: "auto", wordBreak: "break-word" },
+]);
+
 export const commandPreview = style({
   margin: 0,
   padding: `${vars.space["2"]} 10px`,
@@ -394,17 +402,9 @@ export const retryButton = style({
   },
 });
 
-export const visuallyHidden = style({
-  position: "absolute",
-  width: "1px",
-  height: "1px",
-  padding: 0,
-  margin: "-1px",
-  overflow: "hidden",
-  clipPath: "inset(50%)",
-  whiteSpace: "nowrap",
-  border: 0,
-});
+// Hoisted to a shared file so TriggersPanel/TriggerFormModal/CallbackSettings can
+// reuse it too instead of hand-rolling the same inline style object.
+export { visuallyHidden } from "@/styles/a11y.css";
 
 export const oldestCallout = style({
   marginTop: vars.space["2"],

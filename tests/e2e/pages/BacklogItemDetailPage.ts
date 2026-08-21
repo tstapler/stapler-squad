@@ -48,6 +48,13 @@ export class BacklogItemDetailPage {
     }
   }
 
+  async collapseSection(sectionKey: string) {
+    const header = this.sectionHeader(sectionKey);
+    if ((await header.getAttribute("aria-expanded")) === "true") {
+      await header.click();
+    }
+  }
+
   /**
    * Locates a synthetic session row's own Collapsible header inside the
    * Sessions section by its accessible name (the session id text rendered
@@ -74,6 +81,14 @@ export class BacklogItemDetailPage {
     return this.page.getByTestId("triage-review-panel");
   }
 
+  relatedWorkInput(): Locator {
+    return this.page.getByTestId("triage-related-work-input");
+  }
+
+  relatedWorkResults(): Locator {
+    return this.page.getByTestId("triage-related-work-results");
+  }
+
   async openItemByTitle(title: string) {
     const row = this.page.getByTestId("backlog-table-row").filter({ hasText: title });
     await row.first().click();
@@ -98,7 +113,7 @@ export class BacklogItemDetailPage {
  */
 export async function seedHeadlessTriageItem(
   request: APIRequestContext,
-  opts: { title: string; status?: string; summary?: string }
+  opts: { title: string; status?: string; summary?: string; ended?: boolean }
 ): Promise<{ itemId: string; sessionId: string }> {
   const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-headless-triage-session`, {
     headers: { "Content-Type": "application/json" },
@@ -106,6 +121,7 @@ export async function seedHeadlessTriageItem(
       title: opts.title,
       status: opts.status ?? "review",
       summary: opts.summary ?? "",
+      ended: opts.ended ?? false,
     },
   });
   if (!resp.ok()) {

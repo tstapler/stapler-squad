@@ -3,8 +3,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -37,12 +35,7 @@ type workspaceTestFixture struct {
 func setupWorkspaceTestFixture(t *testing.T) *workspaceTestFixture {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "workspace-svc-test-*")
-	require.NoError(t, err)
-
-	dbPath := fmt.Sprintf("%s/sessions.db", tmpDir)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
@@ -52,12 +45,6 @@ func setupWorkspaceTestFixture(t *testing.T) *workspaceTestFixture {
 
 	cleanup := func() {
 		bus.Close()
-		if err := repo.Close(); err != nil {
-			t.Logf("cleanup: repo.Close: %v", err)
-		}
-		if err := os.RemoveAll(tmpDir); err != nil {
-			t.Logf("cleanup: os.RemoveAll: %v", err)
-		}
 	}
 
 	return &workspaceTestFixture{
@@ -90,6 +77,7 @@ func seedInstance(t *testing.T, storage *session.Storage, title string) {
 // --------------------------------------------------------------------------
 
 func TestWorkspaceService_SwitchWorkspace_MissingID(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -104,6 +92,7 @@ func TestWorkspaceService_SwitchWorkspace_MissingID(t *testing.T) {
 }
 
 func TestWorkspaceService_SwitchWorkspace_MissingTarget(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -129,6 +118,7 @@ func TestWorkspaceService_SwitchWorkspace_MissingTarget(t *testing.T) {
 // inFlightSwitches before issuing the RPC call, mirroring exactly what the handler
 // does at the top of SwitchWorkspace.
 func TestWorkspaceService_ConcurrentSwitchReturnsUnavailable(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -163,6 +153,7 @@ func TestWorkspaceService_ConcurrentSwitchReturnsUnavailable(t *testing.T) {
 // After the call completes, a second call must NOT receive CodeUnavailable —
 // demonstrating that the defer ws.inFlightSwitches.Delete(req.Msg.Id) fired.
 func TestWorkspaceService_SwitchGuardCleansUpOnCompletion(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -209,6 +200,7 @@ func TestWorkspaceService_SwitchGuardCleansUpOnCompletion(t *testing.T) {
 // the underlying workspace operation fails. The key assertion is that the call
 // for session B is NOT rejected with CodeUnavailable.
 func TestWorkspaceService_SwitchGuardIsPerSession(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -246,6 +238,7 @@ func TestWorkspaceService_SwitchGuardIsPerSession(t *testing.T) {
 // accepts a session UUID as the ID parameter. Before the UUID migration, only
 // the Title was accepted; now MatchesID checks both UUID and Title.
 func TestWorkspaceService_GetVCSStatus_FindsByUUID(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -271,6 +264,7 @@ func TestWorkspaceService_GetVCSStatus_FindsByUUID(t *testing.T) {
 // TestWorkspaceService_GetVCSStatus_FindsByTitle verifies that the legacy
 // Title-based lookup still works after the UUID migration.
 func TestWorkspaceService_GetVCSStatus_FindsByTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -291,6 +285,7 @@ func TestWorkspaceService_GetVCSStatus_FindsByTitle(t *testing.T) {
 // TestWorkspaceService_GetVCSStatus_UnknownIDReturnsNotFound verifies that an
 // ID that matches neither UUID nor Title of any session returns CodeNotFound.
 func TestWorkspaceService_GetVCSStatus_UnknownIDReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -312,6 +307,7 @@ func TestWorkspaceService_GetVCSStatus_UnknownIDReturnsNotFound(t *testing.T) {
 // that when SetLiveFinder is wired and FindLiveInstance returns an instance,
 // that instance is used directly without consulting storage.
 func TestWorkspaceService_FindInstanceFast_LiveFinderHit_BypassesStorage(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -336,6 +332,7 @@ func TestWorkspaceService_FindInstanceFast_LiveFinderHit_BypassesStorage(t *test
 // TestWorkspaceService_FindInstanceFast_LiveFinderMiss_FallsBackToStorage verifies
 // that when the live finder returns nil, findInstanceFast falls back to storage.
 func TestWorkspaceService_FindInstanceFast_LiveFinderMiss_FallsBackToStorage(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -363,6 +360,7 @@ func TestWorkspaceService_FindInstanceFast_LiveFinderMiss_FallsBackToStorage(t *
 // counts added alongside per-file insertion/deletion stats — through to the
 // sessionv1.FileChange proto.
 func TestFileChangeToProto(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   vc.FileChange
@@ -426,6 +424,7 @@ func TestFileChangeToProto(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := fileChangeToProto(tt.in)
 
 			assert.Equal(t, tt.want.Path, got.Path)

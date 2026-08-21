@@ -8,10 +8,12 @@ import { InsightsService } from "@/gen/session/v1/insights_pb";
 import type {
   GetInsightsSummaryResponse,
   SessionTokenSummary,
+  TurnTokenStat,
 } from "@/gen/session/v1/insights_pb";
 import {
   GetInsightsSummaryRequestSchema,
   WatchInsightsRequestSchema,
+  GetSessionTurnTimelineRequestSchema,
 } from "@/gen/session/v1/insights_pb";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
@@ -167,13 +169,61 @@ export function useInsightsSummary(
   };
 }
 
-/** Returns the n sessions by cost, useful for showing "most expensive sessions today". */
-export function useTopSessions(
-  sessions: SessionTokenSummary[],
-  limit = 10
-): SessionTokenSummary[] {
-  return sessions
-    .slice()
-    .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
-    .slice(0, limit);
+export interface UseSessionTurnTimelineReturn {
+  turns: TurnTokenStat[];
+  loading: boolean;
+  error: string | null;
+}
+
+/**
+ * Hook that lazily fetches per-turn token stats for a single session, keyed on
+ * conversationId. No-ops (empty turns, not loading) when conversationId is
+ * falsy — used by SessionDetailDrawer, fetched only when the drawer is open
+ * for a given session, never batched with the list RPCs.
+ */
+export function useSessionTurnTimeline(
+  conversationId: string | undefined
+): UseSessionTurnTimelineReturn {
+  const [turns, setTurns] = useState<TurnTokenStat[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const baseUrl = getApiBaseUrl();
+  const transport = useMemo(
+    () => createConnectTransport({ baseUrl, interceptors: [createAuthInterceptor()] }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [baseUrl]
+  );
+  const client = useMemo(() => createClient(InsightsService, transport), [transport]);
+
+  useEffect(() => {
+    if (!conversationId) {
+      setTurns([]);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const res = await client.getSessionTurnTimeline(
+          create(GetSessionTurnTimelineRequestSchema, { conversationId })
+        );
+        if (!cancelled) setTurns(res.turns);
+      } catch (err) {
+        if (!cancelled) {
+          console.error("[GetSessionTurnTimeline] fetch error:", err);
+          setError(err instanceof Error ? err.message : "Failed to load turn timeline");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, client]);
+
+  return { turns, loading, error };
 }

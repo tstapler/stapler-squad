@@ -120,10 +120,20 @@ func (hl *HistoryLinker) SetInstances(instances []*Instance) {
 	hl.instances = instances
 }
 
-// AddInstance adds a single instance for monitoring.
+// AddInstance adds a single instance for monitoring. A no-op if an instance
+// with the same ID is already registered: callers may legitimately invoke
+// this more than once for the same instance (e.g. wireCallbacks runs on every
+// loadInstancesWithWiring call, including the ListSessions fallback), and an
+// unguarded append would leave duplicate entries in hl.instances, causing
+// correlateSession to run twice per poll tick for the same session.
 func (hl *HistoryLinker) AddInstance(instance *Instance) {
 	hl.mu.Lock()
 	defer hl.mu.Unlock()
+	for _, existing := range hl.instances {
+		if existing.MatchesID(instance.Title) {
+			return
+		}
+	}
 	hl.instances = append(hl.instances, instance)
 }
 

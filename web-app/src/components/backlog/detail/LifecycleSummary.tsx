@@ -1,9 +1,11 @@
 "use client";
 // +feature: backlog:item-detail-lifecycle-summary
 
-import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import type { PipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
+import { routes } from "@/lib/routes";
+import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { BlockerChip } from "../BlockerChip";
 import { StageTracker } from "./StageTracker";
 import { LivenessLine } from "./LivenessLine";
@@ -30,6 +32,12 @@ export interface LifecycleSummaryProps {
    * page ever renders BacklogBoard and BacklogItemDetail together.
    */
   stuckItem?: StuckBacklogItem;
+  /**
+   * Same signature as StuckItem.tsx's "Retry now" handler — sourced from the
+   * single useStuckBacklogItems() call in BacklogItemDetail.tsx and threaded
+   * down, mirroring how `stuckItem` itself is resolved once and passed down.
+   */
+  onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
 }
 
 /**
@@ -37,7 +45,7 @@ export interface LifecycleSummaryProps {
  * badge + Liveness Line — replacing the old standalone status badge (D1).
  * The single authoritative place lifecycle status is shown.
  */
-export function LifecycleSummary({ item, pipelineDisplay, stuckItem }: LifecycleSummaryProps) {
+export function LifecycleSummary({ item, pipelineDisplay, stuckItem, onTriggerRemediationNow }: LifecycleSummaryProps) {
   // Only a "resolved" mode with a non-default name is glanceable-worthy —
   // the common default-pipeline case renders no badge at all (Task 3.1.4g).
   const showPipelineBadge = pipelineDisplay?.kind === "resolved" && pipelineDisplay.name !== "default";
@@ -45,7 +53,18 @@ export function LifecycleSummary({ item, pipelineDisplay, stuckItem }: Lifecycle
   return (
     <div className={styles.container} data-testid="lifecycle-summary">
       <StageTracker status={item.status} />
-      {stuckItem && <BlockerChip variant="full" item={stuckItem} />}
+      {stuckItem && (
+        <>
+          <BlockerChip variant="full" item={stuckItem} onTriggerRemediationNow={onTriggerRemediationNow} />
+          <a
+            href={routes.unfinishedItem(item.id)}
+            className={styles.unfinishedLink}
+            data-testid="lifecycle-unfinished-link"
+          >
+            View in Unfinished
+          </a>
+        </>
+      )}
       {item.category && (
         <span className={styles.pipelineBadge} data-testid="lifecycle-category-badge">
           Category: {item.category}
@@ -56,6 +75,15 @@ export function LifecycleSummary({ item, pipelineDisplay, stuckItem }: Lifecycle
           Pipeline: {pipelineDisplay.name}
         </span>
       )}
+      {(() => {
+        const reworkCap = resolveReworkCapOverride(item.reworkCapOverride);
+        if (reworkCap.kind === "unset") return null;
+        return (
+          <span className={styles.pipelineBadge} data-testid="lifecycle-rework-cap-badge">
+            Rework cap: {reworkCap.kind === "unlimited" ? "unlimited" : reworkCap.rounds}
+          </span>
+        );
+      })()}
       <LivenessLine item={item} />
     </div>
   );

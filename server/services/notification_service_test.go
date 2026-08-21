@@ -24,6 +24,7 @@ func newNotificationTestServer(t *testing.T) (*SessionService, *events.EventBus,
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	mux := http.NewServeMux()
 	path, handler := sessionv1connect.NewSessionServiceHandler(svc)
@@ -44,6 +45,7 @@ func newTestClient(srv *httptest.Server) sessionv1connect.SessionServiceClient {
 // title (the value hooks send), the published event carries the session's UUID
 // — not the raw title — so the web client can match it.
 func TestSendNotification_ResolvesSessionTitleToStableID(t *testing.T) {
+	t.Parallel()
 	svc, bus, srv := newNotificationTestServer(t)
 
 	// Wire a ReviewQueuePoller containing an instance whose title differs from its UUID.
@@ -97,6 +99,7 @@ func TestSendNotification_ResolvesSessionTitleToStableID(t *testing.T) {
 // TestSendNotification_UnknownSessionUsesRawID verifies that when no session
 // matches the incoming ID, the raw value is used as-is (graceful fallback).
 func TestSendNotification_UnknownSessionUsesRawID(t *testing.T) {
+	t.Parallel()
 	svc, bus, srv := newNotificationTestServer(t)
 
 	// No poller / no instances — nothing to resolve against.
@@ -134,6 +137,7 @@ func TestSendNotification_UnknownSessionUsesRawID(t *testing.T) {
 }
 
 func TestValidateLocalhostOrigin(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		peerAddr      string
@@ -163,6 +167,7 @@ func TestValidateLocalhostOrigin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := validateLocalhostAddr(tt.peerAddr)
 			if (err != nil) != tt.expectedError {
 				t.Errorf("validateLocalhostAddr(%q) error = %v, expectedError %v", tt.peerAddr, err, tt.expectedError)

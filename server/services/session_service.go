@@ -12,12 +12,15 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -31,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
@@ -52,6 +56,11 @@ var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 const createSessionTimeout = 150 * time.Second
 
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// testTmuxServerSocketCounter gives each SessionService created within a test binary run a
+// unique tmux -L socket suffix (combined with os.Getpid() for cross-process uniqueness), so
+// concurrent tests never contend on the same isolated socket. See SessionService.testTmuxServerSocket.
+var testTmuxServerSocketCounter uint64
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
 // The actual implementation is in server/review_queue_manager.go
@@ -103,6 +112,11 @@ type SessionService struct {
 	// approvalStore holds pending Claude Code hook approval requests.
 	approvalStore *ApprovalStore
 
+	// deleteSessionCleanupTimeout bounds DeleteSession's cleanup-timeout warning;
+	// see defaultDeleteSessionCleanupTimeout's doc comment. Overridable via
+	// SetDeleteSessionCleanupTimeout for tests.
+	deleteSessionCleanupTimeout time.Duration
+
 	// databaseSvc handles workspace/database switcher RPCs.
 	databaseSvc *DatabaseService
 
@@ -111,6 +125,11 @@ type SessionService struct {
 	// evict a shell's streamer on close instead of letting a stale/degraded one
 	// persist across shell restarts.
 	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+
+	// userPRCache supplies enterprise hosts from dynamically-added GitHub
+	// accounts (gh CLI import, device auth) for CreateSession's GitHub URL
+	// detection — mirrors ListGitHubAccounts' host union in github_user_service.go.
+	userPRCache *githubpkg.UserPRCache
 
 	// fileSvc handles file tree browsing RPCs (ListFiles, GetFileContent).
 	fileSvc *FileService
@@ -124,11 +143,24 @@ type SessionService struct {
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
 
+	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
+	slackConfigSvc *SlackConfigService
+
+	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
+	// (webhook-triggers Phase 5, FR7).
+	callbackConfigSvc *CallbackConfigService
+
+	// launcherPresetsSvc handles the GetLauncherPresets RPC.
+	launcherPresetsSvc *LauncherPresetsService
+
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
 
 	// checkpointSvc handles CreateCheckpoint/ListCheckpoints/ClearConversationState RPCs.
 	checkpointSvc *CheckpointService
+
+	// prCreationSvc handles DraftPullRequest/CreatePullRequest RPCs.
+	prCreationSvc *PRCreationService
 
 	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
 	featureFlagSvc *FeatureFlagService
@@ -159,8 +191,21 @@ type SessionService struct {
 	// backlog item state transitions fire when the session exits.
 	backlogLifecycleListener *session.BacklogLifecycleListener
 
+	// sessionSummaryGenerator is wired to each newly created session (alongside
+	// backlogLifecycleListener, at the same call sites) so that session-completion-
+	// summary generation fires on exit/stop. Nil until SetSessionSummaryGenerator is
+	// called (session/session_summary_service.go's ent-client/headless-pool wiring
+	// happens after SessionService construction).
+	sessionSummaryGenerator *session.SessionSummaryGenerator
+
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
+
+	// quotaGate feeds account-wide rate-limit detections into the quota
+	// headroom gate that pauses/resumes backlog automation. Late-wired via
+	// SetQuotaGate since QuotaGate needs backlogCtrl, which doesn't exist yet
+	// inside NewSessionService.
+	quotaGate *QuotaGate
 
 	// analyticsClient is the ent client for the analytics database (escape events, etc.).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
@@ -193,6 +238,139 @@ type SessionService struct {
 	// registry is the live-handle map for all running sessions. Wired after construction
 	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
 	registry *session.Registry
+
+	// deleteCleanupWG tracks DeleteSession's background tmux/worktree cleanup
+	// goroutines so Shutdown can await them instead of letting them outlive the
+	// process (or, in tests, outlive the test that spawned them).
+	deleteCleanupWG sync.WaitGroup
+
+	// deleteCleanupMu guards deleteCleanupClosed and serializes it against
+	// deleteCleanupWG.Add via trackCleanup, so Add never races Shutdown's Wait —
+	// see deleteCleanupClosed's doc comment.
+	deleteCleanupMu sync.Mutex
+
+	// deleteCleanupClosed is set once Shutdown begins draining deleteCleanupWG.
+	// sync.WaitGroup requires that any Add with a positive delta happen before
+	// the matching Wait call is invoked (or after a prior Wait returns) —
+	// calling Add concurrently with Wait when the counter may be zero is a
+	// documented misuse that can panic or let Wait return before the new work
+	// finishes. trackCleanup checks this flag under deleteCleanupMu before
+	// calling Add; Shutdown sets it under the same mutex before calling Wait.
+	// That makes the two mutually exclusive: any Add() that wins the lock race
+	// happens-before closed is set true (and thus happens-before Wait()), and
+	// any Add() that loses sees closed=true and never calls Add at all — it
+	// runs the cleanup untracked instead, which is fine because Shutdown no
+	// longer needs to wait for it.
+	deleteCleanupClosed bool
+
+	// testTmuxServerSocket, when non-empty, is applied to every Instance this
+	// service creates via TmuxServerSocket, isolating the tmux -L socket used
+	// by test runs from the shared production default. Set automatically by
+	// NewSessionServiceWithSearchEngine under config.IsTestMode() — see
+	// docs/bugs/fixed/BUG-075 for why this is a service-wide test hook rather
+	// than a per-call-site change across the package's ~90 NewSessionService
+	// test call sites.
+	testTmuxServerSocket string
+}
+
+// trackCleanup runs fn in a goroutine tracked by deleteCleanupWG so Shutdown
+// can await it, unless Shutdown has already begun draining the WaitGroup — see
+// deleteCleanupClosed's doc comment for why Add can't be allowed to race Wait.
+func (s *SessionService) trackCleanup(fn func()) {
+	s.deleteCleanupMu.Lock()
+	if s.deleteCleanupClosed {
+		s.deleteCleanupMu.Unlock()
+		go fn()
+		return
+	}
+	s.deleteCleanupWG.Add(1)
+	s.deleteCleanupMu.Unlock()
+	go func() {
+		defer s.deleteCleanupWG.Done()
+		fn()
+	}()
+}
+
+// deleteSessionCleanupTimeout bounds how long DeleteSession's background
+// liveInst.Destroy() cleanup (tmux kill, git diff stats, and worktree
+// filesystem cleanup) runs before a warning is logged that it's taking
+// longer than expected. Destroy() takes no context and cannot be forcibly
+// cancelled (see BUG-072 for threading a real context.Context through the
+// cleanup chain so this could cancel the work itself), so this only bounds
+// *when a warning fires* — deleteCleanupWG.Done() (and thus
+// Shutdown/deleteCleanupWG.Wait()) still waits for Destroy() to actually
+// finish regardless of this timeout. That matters for tests: an early Done()
+// at this timeout would let Destroy() (and the SessionDriver goroutine it
+// stops) outlive Shutdown() and the test that called it, free to interfere
+// with whatever state (e.g. a later -count iteration's t.Setenv-scoped
+// STAPLER_SQUAD_TEST_DIR) reuses the process next. Matches
+// KillTmuxSessionByTitle's 5s cap on the same kill-session subprocess.
+//
+// defaultDeleteSessionCleanupTimeout is the production default; SessionService
+// stores its own copy in deleteSessionCleanupTimeout so tests can shrink it via
+// SetDeleteSessionCleanupTimeout instead of waiting out the real 5 seconds to
+// exercise the timeout-warning branch below (mirrors
+// BacklogService.triageCleanupTimeout / SetTriageCleanupTimeout).
+const defaultDeleteSessionCleanupTimeout = 5 * time.Second
+
+// SetDeleteSessionCleanupTimeout overrides the default timeout for DeleteSession's
+// cleanup-timeout warning branch. Test-only seam — see
+// defaultDeleteSessionCleanupTimeout's doc comment for why this needs to be
+// overridable rather than a fixed const.
+func (s *SessionService) SetDeleteSessionCleanupTimeout(d time.Duration) {
+	s.deleteSessionCleanupTimeout = d
+}
+
+// destroyWithTimeout runs destroy() (normally inst.Destroy) and waits up to
+// timeout for it to finish. If it doesn't finish in time, this returns a
+// timeout error immediately while destroy() continues running in the
+// background goroutine it was started in — see deleteSessionCleanupTimeout's
+// doc comment for why the bound is on the wait, not the work itself.
+//
+// destroy is a func() error rather than a *session.Instance so the
+// timeout-exceeded branch can be exercised directly in tests with a
+// deliberately slow callback, without needing a real Instance whose Destroy()
+// can be made to hang on demand.
+func destroyWithTimeout(destroy func() error, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- destroy()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("timed out after %s waiting for session cleanup to finish (still running in background)", timeout)
+	}
+}
+
+// waitForDestroyLoggingSlowCleanup runs destroy() (normally liveInst.Destroy) in a
+// goroutine and waits for it to finish. Unlike destroyWithTimeout, it never abandons
+// the goroutine: if destroy() takes longer than timeout, onSlow is invoked (to log a
+// warning) but this function keeps waiting for the real result instead of returning
+// early. That matters because the caller (DeleteSession) only signals
+// deleteCleanupWG.Done() after this returns — an early return at the timeout would let
+// destroy() outlive Shutdown()/the caller and interfere with whatever reuses that state
+// next (e.g. the next -count iteration's t.Setenv-scoped STAPLER_SQUAD_TEST_DIR); see
+// defaultDeleteSessionCleanupTimeout's doc comment.
+//
+// destroy is a func() error (rather than a *session.Instance) for the same testability
+// reason as destroyWithTimeout: onSlow lets a test observe the timeout firing without
+// needing a real Instance whose Destroy() can be made to hang on demand.
+func waitForDestroyLoggingSlowCleanup(destroy func() error, timeout time.Duration, onSlow func()) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- destroy()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		if onSlow != nil {
+			onSlow()
+		}
+		return <-done
+	}
 }
 
 // workflowMeta holds cached metadata about a workflow used at session-list time.
@@ -238,10 +416,95 @@ type ScrollbackSequencer interface {
 // Conclusion: the two-param constructor (storage, eventBus) is the correct boundary.
 // All other deps are external to this package or have construction-order constraints.
 
-// NewSessionService creates a new SessionService with the given storage and event bus.
+// NewSessionService creates a new SessionService with the given storage and event bus,
+// using a disk-backed search engine (or an in-memory one under config.IsTestMode(), to
+// keep the ~78 existing test call sites working without change — see
+// NewSessionServiceWithSearchEngine's doc comment for why IsTestMode() is only the
+// default, not the seam itself).
 // NOTE: Instances are NOT loaded here to prevent double-loading and initialization timing issues.
 // Instances will be loaded in server.go after dependencies (statusManager, reviewQueue) are wired.
 func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus) *SessionService {
+	return NewSessionServiceWithSearchEngine(storage, eventBus, newDefaultSearchEngine())
+}
+
+// newDefaultSearchEngine builds the search engine NewSessionService uses when the caller
+// doesn't inject one: disk-backed with incremental persistence in production, in-memory
+// under config.IsTestMode(). Under go test, skipping disk avoids a shared per-process test
+// directory that every NewSessionService call in a test binary would otherwise persist
+// into — the index grows across the whole package run and gob-decoding it gets slow enough
+// under -race to blow CI's timeout budget, independent of what each test is exercising.
+func newDefaultSearchEngine() *search.SearchEngine {
+	if config.IsTestMode() {
+		return search.NewSearchEngine()
+	}
+	indexStore, err := search.NewIndexStore()
+	if err != nil {
+		log.Warn("failed to create index store, using in-memory search", "err", err)
+		return search.NewSearchEngine()
+	}
+	searchEngine := search.NewSearchEngineWithPersistence(indexStore)
+	if loadErr := searchEngine.LoadIndex(); loadErr != nil {
+		var versionErr *search.IndexVersionMismatchError
+		if errors.As(loadErr, &versionErr) {
+			// The on-disk index predates a schema change (see CurrentIndexVersion)
+			// and was rejected rather than mis-decoded. This self-heals: the next
+			// search request finds syncMetadata unset and triggers a full rebuild
+			// (SearchEngine.IncrementalSync -> buildIndexLocked) from live session
+			// history, so results are only empty until that first search — not
+			// until new session activity occurs.
+			log.Warn("search index format changed; discarding incompatible on-disk index",
+				"old_version", versionErr.Got, "new_version", versionErr.Want, "path", versionErr.Path,
+				"impact", "search results empty until next search request triggers an automatic full reindex")
+		} else {
+			log.Warn("failed to load persisted search index", "err", loadErr)
+		}
+	} else if meta := searchEngine.GetSyncMetadata(); meta != nil {
+		log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
+	}
+	return searchEngine
+}
+
+// publishClaudeSettingsNotification is the shared publish call for both claude-settings
+// notification sites (startup activation and watcher reload) — see NewNotificationEvent.
+func publishClaudeSettingsNotification(eventBus *events.EventBus, title, message, origin string) {
+	if eventBus == nil {
+		return
+	}
+	eventBus.Publish(events.NewNotificationEvent(
+		"", "System", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		title, message,
+		map[string]string{"type": "claude_settings_reload", "origin": origin},
+	))
+}
+
+// loadClaudeSettingsRulesAtStartup parses ~/.claude/settings.json (and project-level
+// equivalents under cwd) and merges the resulting rules into classifierObj, publishing a
+// one-time notification if any were found. Extracted from NewSessionServiceWithSearchEngine
+// so it can be unit-tested directly without needing config.IsTestMode() to be false.
+func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassifier, cwd string, eventBus *events.EventBus) {
+	var claudeSettingsRules []classifier.Rule
+	for _, result := range LoadClaudeSettingsRulesDetailed(cwd) {
+		claudeSettingsRules = append(claudeSettingsRules, result.Rules...)
+	}
+	if len(claudeSettingsRules) == 0 {
+		return
+	}
+	classifierObj.AddRules(claudeSettingsRules)
+	log.Info("[ClaudeSettings] activated claude-settings rules at startup", "rule_count", len(claudeSettingsRules))
+	publishClaudeSettingsNotification(eventBus, "Claude Settings Rules Activated",
+		fmt.Sprintf("%d rule(s) from your Claude settings are now active as stapler-squad auto-approval rules.", len(claudeSettingsRules)),
+		"startup")
+}
+
+// NewSessionServiceWithSearchEngine is the dependency-injection seam for the search engine:
+// pass an explicit *search.SearchEngine (e.g. search.NewSearchEngine() for in-memory)
+// instead of relying on NewSessionService's config.IsTestMode() default. Full migration of
+// the ~78 existing NewSessionService(storage, eventBus) call sites to explicit injection is
+// a separate, larger mechanical refactor — out of scope here; this seam exists so new or
+// updated tests can opt in without waiting on that migration.
+func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *events.EventBus, searchEngine *search.SearchEngine) *SessionService {
 	reviewQueue := session.NewReviewQueue()
 
 	// concStorage is the concrete backing store used by sub-services that haven't migrated to
@@ -250,22 +513,6 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	var concStorage *session.Storage
 	if cs, ok := storage.(*session.Storage); ok {
 		concStorage = cs
-	}
-
-	// Initialize search engine with disk persistence for incremental index updates.
-	var searchEngine *search.SearchEngine
-	indexStore, err := search.NewIndexStore()
-	if err != nil {
-		log.Warn("failed to create index store, using in-memory search", "err", err)
-		searchEngine = search.NewSearchEngine()
-	} else {
-		searchEngine = search.NewSearchEngineWithPersistence(indexStore)
-		if loadErr := searchEngine.LoadIndex(); loadErr != nil {
-			log.Warn("failed to load persisted search index", "err", loadErr)
-		} else if searchEngine.GetSyncMetadata() != nil {
-			meta := searchEngine.GetSyncMetadata()
-			log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
-		}
 	}
 
 	// Build approval store with disk persistence path
@@ -294,10 +541,33 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	analyticsStore := NewAnalyticsStore(concStorage)
 	analyticsStore.Start(context.Background())
 	classifierObj := classifier.NewRuleBasedClassifier()
-	// Merge user rules into the classifier.
+	// Merge user rules into the classifier. Safe to call AddRules directly (bypassing
+	// RulesService.rebuildMu) only because this and the claude-settings load below both run
+	// before ClaudeSettingsWatcher.Start() is ever invoked (that happens later, in
+	// wireDepsIntoServer) and before the server accepts RPCs — do not add a third AddRules
+	// call site here without going through rebuildMu once the watcher may already be running.
 	if userRules := rulesStore.ToRules(); len(userRules) > 0 {
 		classifierObj.AddRules(userRules)
 	}
+
+	// Determine the server process's own working directory for claude-settings
+	// project-level scope. Empty cwd makes LoadClaudeSettingsRulesDetailed skip
+	// project-level paths gracefully. Global-only for v1 — this is always the
+	// server's own cwd, never a per-session git worktree path (see ADR-001).
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		log.Warn("failed to determine working directory for claude-settings project scope", "err", cwdErr)
+		cwd = ""
+	}
+
+	// Loads claude-settings rules (previously dead code — LoadClaudeSettingsRules had zero
+	// call sites). Gated on IsTestMode() so tests don't read the developer's real
+	// ~/.claude/settings.json and become machine-dependent (same guard newDefaultSearchEngine
+	// uses two lines above).
+	if !config.IsTestMode() {
+		loadClaudeSettingsRulesAtStartup(classifierObj, cwd, eventBus)
+	}
+
 	// Wire AI rule generation. NewBestAvailableAIClient selects the highest-priority
 	// available backend: Anthropic HTTP API (if ANTHROPIC_API_KEY is set) → claude CLI
 	// → gemini CLI → opencode CLI. Returns nil when no backend is available.
@@ -315,6 +585,25 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	}
 	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
 
+	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
+	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
+	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
+	claudeSettingsWatcher := NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
+		rulesSvc.rebuildClaudeSettingsRules(rules)
+		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
+		// notify is false for Start()'s initial priming reload — the operator already saw a
+		// startup activation notification if any rules exist, and nothing meaningful
+		// happened for this callback to report otherwise. A zero-rule result is also
+		// never notification-worthy, on any call: "0 rules reloaded" is a no-op from the
+		// operator's perspective whether it's the priming reload or a later real one.
+		if !notify || len(rules) == 0 {
+			return
+		}
+		publishClaudeSettingsNotification(eventBus, "Claude Settings Reloaded",
+			fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin), origin)
+	})
+	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
+
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
 	if dir, err := config.GetConfigDir(); err == nil {
@@ -324,13 +613,13 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	}
 	capCfg = capCfg.CapacityConfigOrDefault()
 
-	var directCfg config.Config
+	directCfg := &config.Config{}
 	if dir, err := config.GetConfigDir(); err == nil {
 		if c, err := config.LoadConfigFromPath(filepath.Join(dir, "config.json")); err == nil {
-			directCfg = *c
+			directCfg = c
 		}
 	}
-	credChain := NewDefaultChain(&directCfg)
+	credChain := NewDefaultChain(directCfg)
 
 	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
@@ -345,43 +634,63 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
-		storage:           storage,
-		concStorage:       concStorage,
-		eventBus:          eventBus,
-		reviewQueueSvc:    reviewQueueSvc,
-		searchSvc:         NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
-		githubSvc:         NewGitHubService(concStorage),
-		workspaceSvc:      workspaceSvc,
-		configSvc:         NewConfigService(),
-		notificationSvc:   notificationSvc,
-		approvalSvc:       approvalSvc,
-		utilitySvc:        utilitySvc,
-		rulesSvc:          rulesSvc,
-		approvalStore:     approvalStore,
-		databaseSvc:       NewDatabaseService(),
-		fileSvc:           NewFileService(workspaceSvc),
-		pathCompletionSvc: NewPathCompletionService(),
-		slashCommandSvc:   NewSlashCommandService(),
-		defaultsSvc:       NewDefaultsService(),
-		projectSvc:        NewProjectService(concStorage),
-		checkpointSvc:     NewCheckpointService(storage, eventBus),
-		featureFlagSvc:    NewFeatureFlagService(),
-		terminalSvc:       NewTerminalService(),
-		promptStore:       newPromptStore(),
-		capacityMonitor:   capacityMonitor,
+		storage:                     storage,
+		concStorage:                 concStorage,
+		eventBus:                    eventBus,
+		reviewQueueSvc:              reviewQueueSvc,
+		searchSvc:                   NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		githubSvc:                   NewGitHubService(concStorage),
+		workspaceSvc:                workspaceSvc,
+		configSvc:                   NewConfigService(),
+		notificationSvc:             notificationSvc,
+		approvalSvc:                 approvalSvc,
+		utilitySvc:                  utilitySvc,
+		rulesSvc:                    rulesSvc,
+		approvalStore:               approvalStore,
+		databaseSvc:                 NewDatabaseService(),
+		fileSvc:                     NewFileService(workspaceSvc),
+		pathCompletionSvc:           NewPathCompletionService(),
+		slashCommandSvc:             NewSlashCommandService(),
+		defaultsSvc:                 NewDefaultsService(),
+		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
+		callbackConfigSvc:           NewCallbackConfigService(),
+		launcherPresetsSvc:          NewLauncherPresetsService(),
+		projectSvc:                  NewProjectService(concStorage),
+		checkpointSvc:               NewCheckpointService(storage, eventBus),
+		featureFlagSvc:              NewFeatureFlagService(),
+		terminalSvc:                 NewTerminalService(),
+		promptStore:                 newPromptStore(),
+		capacityMonitor:             capacityMonitor,
+		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
 
+	if config.IsTestMode() {
+		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))
+	}
+
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
 	workspaceSvc.SetLiveFinder(svc)
+	// Wire the live-instance lookup into ApprovalService's block-on-red-CI guard (AC5).
+	// GitHubCheckConclusion is not persisted (see plan.md's Implementation Deviations),
+	// so this must be the live registry, not storage.
+	approvalSvc.SetLiveInstanceFinder(svc)
 	// Wire the live-instance provider so ListClaudeHistory can populate
 	// session_status on history entries without a separate storage call.
 	svc.searchSvc.SetInstanceProvider(svc.allInstances)
 	// Wire CheckpointService's instance-load fallback to this service's own
 	// loadInstancesWithWiring so ClearConversationState gets properly-wired instances.
 	svc.checkpointSvc.SetLoadInstancesFn(svc.loadInstancesWithWiring)
+
+	// Construct prCreationSvc with the shared storage/eventBus and a bound
+	// findInstance method value (narrow dependency, not the whole SessionService —
+	// see interface-pollution-checklist.md). headlessPool and
+	// backlogLifecycleListener are wired onto SessionService after construction
+	// (see the Set* wiring doc comment above NewSessionService), so they are nil
+	// here at construction time.
+	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
 	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)
@@ -516,7 +825,9 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if inst == nil {
 		return nil // already gone / never tracked
 	}
-	if !inst.SetArchivedAtIfNil(time.Now()) {
+	// SetArchivedAtIfNilAndStop also transitions Status to Stopped (see ArchiveSession's
+	// comment) — safe to call unconditionally: no-ops the transition if already Stopped.
+	if !inst.SetArchivedAtIfNilAndStop(time.Now()) {
 		return nil // already archived
 	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
@@ -585,7 +896,8 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	name := stapleSquadTmuxName(title)
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", name)
+	args := tmux.ResolveSocket("").Args("kill-session", "-t", name)
+	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		combined := strings.ToLower(string(out))
@@ -658,6 +970,33 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 		return nil
 	}
 	return s.rulesSvc.analyticsStore
+}
+
+// GetClaudeSettingsWatcher returns the claude-settings file watcher for starting/stopping it
+// with the server lifecycle (see wireDepsIntoServer).
+func (s *SessionService) GetClaudeSettingsWatcher() *ClaudeSettingsWatcher {
+	if s.rulesSvc == nil {
+		return nil
+	}
+	return s.rulesSvc.claudeSettingsWatcher
+}
+
+// Shutdown stops background goroutines owned by SessionService (currently the
+// AnalyticsStore flush loop started in NewSessionService). Idempotent — safe
+// to call multiple times (AnalyticsStore.Stop is itself sync.Once-guarded).
+func (s *SessionService) Shutdown() {
+	if store := s.GetAnalyticsStore(); store != nil {
+		store.Stop()
+	}
+	// Stop accepting new tracked cleanup work before draining what's already
+	// tracked — see deleteCleanupClosed's doc comment for why this ordering
+	// (under deleteCleanupMu, before Wait) is what makes Add/Wait race-free.
+	s.deleteCleanupMu.Lock()
+	s.deleteCleanupClosed = true
+	s.deleteCleanupMu.Unlock()
+	// Await DeleteSession's background cleanup goroutines so they don't
+	// outlive this process (or, in tests, outlive the test that spawned them).
+	s.deleteCleanupWG.Wait()
 }
 
 // SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
@@ -790,6 +1129,7 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 // CreateDirectorySession so that backlog state transitions fire on session exit.
 func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
 	s.backlogLifecycleListener = l
+	s.prCreationSvc.SetBacklogLifecycleListener(l)
 }
 
 // GetBacklogLifecycleListener returns the wired BacklogLifecycleListener (nil if
@@ -798,6 +1138,14 @@ func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycle
 // PipelineEngine instance (Story 1.5.1) — see server/dependencies_test.go.
 func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycleListener {
 	return s.backlogLifecycleListener
+}
+
+// SetSessionSummaryGenerator wires the generator to all sessions created via
+// CreateSession/CreateDirectorySession/CreateWorktreeSession after this call,
+// mirroring SetBacklogLifecycleListener's wiring pattern (see the WireToInstance
+// call sites alongside session.WireSessionSummaryListener below).
+func (s *SessionService) SetSessionSummaryGenerator(g *session.SessionSummaryGenerator) {
+	s.sessionSummaryGenerator = g
 }
 
 // SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
@@ -840,17 +1188,18 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
 	opts := session.InstanceOptions{
-		Title:           title,
-		Path:            path,
-		Program:         resolved.Program,
-		PermissionMode:  session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
-		SessionType:     session.SessionTypeDirectory,
-		Prompt:          prompt,
-		Tags:            tags,
-		OneShot:         oneShot,
-		Hidden:          hidden,
-		MCPServerURL:    s.resolveMCPServerURL(),
-		CreateIfMissing: true,
+		Title:            title,
+		Path:             path,
+		Program:          resolved.Program,
+		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
+		SessionType:      session.SessionTypeDirectory,
+		Prompt:           prompt,
+		Tags:             tags,
+		OneShot:          oneShot,
+		Hidden:           hidden,
+		MCPServerURL:     s.resolveMCPServerURL(),
+		CreateIfMissing:  true,
+		TmuxServerSocket: s.testTmuxServerSocket,
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -878,6 +1227,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	}
 	return instance, nil
 }
 
@@ -900,6 +1252,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 		Hidden:           hidden,
 		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  false,
+		TmuxServerSocket: s.testTmuxServerSocket,
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -927,6 +1280,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
+	if s.sessionSummaryGenerator != nil {
+		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	}
 	return instance, nil
 }
 
@@ -940,6 +1296,7 @@ func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
 func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
 	s.autonomousSvc.SetPool(pool)
+	s.prCreationSvc.SetHeadlessPool(pool)
 }
 
 // SetLifecycleContext binds the server's root context to the service.
@@ -959,6 +1316,19 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	s.wireClaudeSessionIDCallback(inst)
 	s.wireAutoArchiveCallback(inst)
 	s.wireSessionExitedPublisher(inst)
+	// Register with the HistoryLinker so its poll/fsnotify correlation loop
+	// detects this session's Claude JSONL file and persists claude_session_id.
+	// Without this, only sessions loaded at server boot (server/dependencies.go)
+	// were ever registered — every session created afterward (regular sessions
+	// via CreateSession, and every backlog/autonomous session via
+	// CreateWorktreeSession/CreateDirectorySession) never got a conversation
+	// UUID captured, so HasClaudeSession() stayed false and a session whose
+	// tmux pane died (restart, hibernation, crash) started a fresh Claude
+	// conversation on recovery instead of resuming — confirmed live
+	// 2026-08-02 on backlog work sessions failing to resume post-restart.
+	if s.historyLinker != nil {
+		s.historyLinker.AddInstance(inst)
+	}
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.
@@ -1026,6 +1396,13 @@ func (s *SessionService) SetTmuxStreamerManager(mgr *session.ExternalTmuxStreame
 	s.tmuxStreamerManager = mgr
 }
 
+// SetUserPRCache wires the shared UserPRCache so CreateSession's GitHub URL
+// detection recognizes enterprise hosts from dynamically-added accounts, not
+// just hosts with a statically configured OAuth App in config.json.
+func (s *SessionService) SetUserPRCache(cache *githubpkg.UserPRCache) {
+	s.userPRCache = cache
+}
+
 // SetNotificationStore sets the notification history store for the notification history RPCs
 // and wires it into the approval service so resolved approvals are stamped with their decision.
 func (s *SessionService) SetNotificationStore(store *notifications.NotificationHistoryStore) {
@@ -1043,10 +1420,36 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 	s.configSvc = svc
 }
 
+// SetSlackNotifier rewires slackConfigSvc onto the given SlackNotifier
+// instance — intended for server/dependencies.go to call with the SAME
+// *services.SlackNotifier wired into ReactiveQueueManager/ApprovalHandler,
+// so GetSlackConfig's last_delivery reflects real production sends from
+// those trigger points, not only sends made via TestSlackWebhook. Optional:
+// if never called, slackConfigSvc keeps the private SlackNotifier instance
+// NewSessionService constructed for it.
+func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
+	s.slackConfigSvc = NewSlackConfigService(n)
+}
+
+// SlackNotifierForTest returns the SlackNotifier instance currently wired
+// into slackConfigSvc. Exported only so cross-package wiring regression
+// tests (server package) can assert pointer identity against the other
+// consumers (ReactiveQueueManager, ApprovalHandler) without restructuring
+// production code — not intended for any non-test caller.
+func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
+	return s.slackConfigSvc.slackNotifier
+}
+
 // SetFeatureController wires a runtime controller for the named feature flag.
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {
 	s.featureFlagSvc.SetFeatureController(name, c)
+}
+
+// SetStatusDetailProvider wires an optional status-detail provider for the
+// named feature flag. Delegates to FeatureFlagService.
+func (s *SessionService) SetStatusDetailProvider(name string, fn func() string) {
+	s.featureFlagSvc.SetStatusDetailProvider(name, fn)
 }
 
 // ListSessions returns all sessions with optional filtering.
@@ -1072,10 +1475,14 @@ func (s *SessionService) ListSessions(
 	// Convert instances to proto messages
 	sessions := make([]*sessionv1.Session, 0, len(instances))
 	for _, inst := range instances {
-		// Apply optional status filter
+		// Apply optional status filter. Read the status directly off the instance
+		// instead of building the full proto just to inspect one field — building it
+		// runs the full GetEffectiveStatus/GetStatusAndIdleInfo/DetectStateFromContent
+		// chain, which is expensive enough that doing it twice per instance (once here,
+		// once for the real output below) roughly doubles ListSessions' allocation cost
+		// whenever a status filter is applied.
 		if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-			protoStatus := adapters.InstanceToProto(inst, nil).Status
-			if protoStatus != *req.Msg.Status {
+			if adapters.StatusToProto(inst.GetEffectiveStatus()) != *req.Msg.Status {
 				continue
 			}
 		}
@@ -1195,13 +1602,14 @@ func (s *SessionService) GetSession(
 }
 
 // workspacePeersBlockFor returns a one-time "other active sessions in this workspace"
-// nudge for a new session being created at repoPath, or "" on any detection/lookup
-// failure, when there's no concrete storage backing this service, or when there are no
-// peers (AC5). Best-effort: this is a convenience nudge, not required session context.
-// Delegates to session.WorkspacePeersBlockForPath, shared with BacklogService's
-// initialPromptFor so the two callers can't drift on how the nudge is built.
+// nudge for a new session being created at repoPath, or "" when the workspacePeersNudgeFlagName
+// feature flag is off (default), on any detection/lookup failure, when there's no concrete
+// storage backing this service, or when there are no peers. Best-effort: this is a
+// convenience nudge, not required session context. Delegates to
+// session.WorkspacePeersBlockForPath, shared with BacklogService's initialPromptFor so the
+// two callers can't drift on how the nudge is built.
 func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return session.WorkspacePeersBlockForPath(ctx, s.concStorage, repoPath)
+	return workspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
 // CreateSession initializes a new AI agent session with tmux and git worktree.
@@ -1269,20 +1677,32 @@ func (s *SessionService) CreateSession(
 			"fork_at_message", req.Msg.ForkAtMessage)
 	}
 
-	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/github.com/owner/repo)
+	// Load config once; used by the GitHub URL resolution below as well as the
+	// one-off path and the defaults/alias path further down.
+	cfg := config.LoadConfig()
+
+	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
 	resolvedPath := expandTildePath(req.Msg.Path)
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
 
-	if session.IsGitHubURL(req.Msg.Path) {
+	// Union statically-configured hosts with hosts from dynamically-added
+	// accounts (gh CLI import, device auth) — mirrors ListGitHubAccounts'
+	// host union in github_user_service.go so CreateSession recognizes the
+	// same enterprise URLs the omnibar's detector does.
+	enterpriseHosts := s.enterpriseHosts(cfg)
+
+	if session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
 
-		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// ResolveGitHubInputCtxWithHosts threads ctx down to the underlying git
 		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
 		// timeout genuinely cancels the subprocess instead of abandoning it
-		// to keep running in the background after the RPC returns.
-		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
+		// to keep running in the background after the RPC returns. It also
+		// recognizes URLs against any configured GitHub Enterprise hosts, not
+		// just github.com.
+		localPath, ref, err := session.ResolveGitHubInputCtxWithHosts(ctx, req.Msg.Path, enterpriseHosts)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
@@ -1300,9 +1720,6 @@ func (s *SessionService) CreateSession(
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
 	}
-
-	// Load config once; used by both the one-off path and the defaults/alias path below.
-	cfg := config.LoadConfig()
 
 	// One-off session: generate a fresh directory and override resolvedPath.
 	// Autonomous sessions created without an explicit path (the omnibar's normal
@@ -1422,11 +1839,21 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
-	// One-time workspace-peers nudge for genuinely new sessions (not resumes) — AC5.
-	// Best-effort: any detection/lookup failure just omits the nudge.
+	// One-time workspace-peers nudge for genuinely new sessions (not resumes), when the
+	// workspacePeersNudgeFlagName feature flag is enabled. Best-effort: any detection/lookup
+	// failure just omits the nudge.
 	initialPrompt := req.Msg.InitialPrompt
 	if req.Msg.ResumeId == "" {
 		initialPrompt += s.workspacePeersBlockFor(ctx, resolvedPath)
+	}
+
+	// auto_approve is representable-but-invalid for an agent yoloFlagFor can't inject a
+	// bypass flag for -- the Omnibar UI disables the checkbox client-side, but that's not
+	// a guarantee for other RPC callers (MCP tools, scripts, curl), so the invariant is
+	// enforced here too rather than left purely client-enforced.
+	if req.Msg.AutoApprove && !session.AutoApproveSupported(program) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("auto_approve is not supported for program %q", program))
 	}
 
 	// Build instance options
@@ -1437,6 +1864,7 @@ func (s *SessionService) CreateSession(
 		Branch:           branch,
 		Program:          program,
 		AutoYes:          autoYes,
+		AutoApprove:      req.Msg.AutoApprove,
 		Prompt:           req.Msg.Prompt,
 		InitialPrompt:    initialPrompt,
 		ExistingWorktree: req.Msg.ExistingWorktree,
@@ -1454,6 +1882,12 @@ func (s *SessionService) CreateSession(
 		WorkflowID:       req.Msg.WorkflowId,
 		EnvVars:          instanceEnvVars,
 		CLIFlags:         instanceCLIFlags,
+		TmuxServerSocket: s.testTmuxServerSocket,
+		// ExtraArgs is a direct passthrough of req.Msg.ExtraArgs — unlike CLIFlags, it has no
+		// defaults-resolution concept to merge with. It composes with instanceCLIFlags at
+		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
+		// an intentional, tested ordering (see TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
+		ExtraArgs: req.Msg.ExtraArgs,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -1464,37 +1898,31 @@ func (s *SessionService) CreateSession(
 		instanceOpts.ClonedRepoPath = clonedRepoPath
 		if gitHubRef.PRNumber > 0 {
 			instanceOpts.GitHubPRNumber = gitHubRef.PRNumber
+			instanceOpts.GitHubPRURL = gitHubRef.PRURL()
 		}
 	}
 
-	// Create instance using NewInstance constructor
-	instance, err := session.NewInstance(instanceOpts)
+	// Construct and persist the instance (Creating status) via the shared
+	// domain function -- see session/create_managed_instance.go (Story
+	// 1.2.0a). This does NOT start tmux/the process; that happens in the
+	// async goroutine below, exactly as before this extraction.
+	instance, err := session.CreateManagedInstance(ctx, session.CreateManagedInstanceParams{
+		Options:         instanceOpts,
+		Storage:         s.storage,
+		Registry:        s.registry,
+		CreateIfMissing: req.Msg.CreateIfMissing,
+		ResumeID:        req.Msg.ResumeId,
+	})
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to create instance: %w", err))
-	}
-
-	// Register in the live-handle map BEFORE persisting to storage so there is never
-	// a window where the session is findable by storage.FindInstanceDataByID but has
-	// no live actor. ForceRelease (not the release closure) is used in the rollback
-	// path because a concurrent Acquire racing between Register and AddInstance failure
-	// could bump refcount to 2, making plain release() decrement 2→1 and leave a
-	// phantom entry alive.
-	if s.registry != nil {
-		live := session.NewLiveInstance(instance)
-		if _, regErr := s.registry.Register(live); regErr != nil {
-			live.Stop()
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to register instance: %w", regErr))
+		switch {
+		case errors.Is(err, session.ErrPathNotExist), errors.Is(err, session.ErrResumePathNotExist):
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		case errors.Is(err, session.ErrInstanceConstructionFailed):
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		default:
+			// Covers ErrInstanceRegistrationFailed and ErrInstanceSaveFailed.
+			return nil, connect.NewError(connect.CodeInternal, err)
 		}
-		// Note: AddInstance failure rolls back via ForceRelease below.
-	}
-
-	// Save the instance to storage with Creating status immediately so the client
-	// can receive the session and show a spinner while initialization proceeds.
-	if err := s.storage.AddInstance(instance); err != nil {
-		if s.registry != nil {
-			s.registry.ForceRelease(instance.GetStableID())
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
 	// Add the session to the poller so WatchSessions picks it up immediately.
@@ -1521,7 +1949,13 @@ func (s *SessionService) CreateSession(
 	creatingProto := adapters.InstanceToProto(instance, s.workflowNames())
 
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
-	go func() {
+	// Tracked via trackCleanup (not a bare `go func()`) so Shutdown blocks until this
+	// goroutine finishes — otherwise it can outlive the test that spawned it and touch a
+	// later test's tempdirs/STAPLER_SQUAD_TEST_DIR/tmux-exec-gate directory after that
+	// later test's t.Cleanup has already torn them down, producing "sql: database is
+	// closed" errors and the cross-iteration "directory not empty" flake in
+	// TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent.
+	s.trackCleanup(func() {
 		// Wire callbacks before starting so rate-limit and status-change events fire.
 		s.wireCallbacks(instance)
 
@@ -1550,6 +1984,9 @@ func (s *SessionService) CreateSession(
 
 		if s.backlogLifecycleListener != nil {
 			s.backlogLifecycleListener.WireToInstance(instance)
+		}
+		if s.sessionSummaryGenerator != nil {
+			session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 		}
 
 		// Wire the status manager and start the controller AFTER Start() returns so the
@@ -1584,7 +2021,7 @@ func (s *SessionService) CreateSession(
 		_ = s.storage.SaveInstances([]*session.Instance{instance})
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
 		log.Info("[CreateSession] async start complete", "session", instanceTitle)
-	}()
+	})
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: creatingProto,
@@ -1619,6 +2056,82 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) sess
 		return session.SessionTypeNewWorktree
 	}
 	return session.SessionTypeDirectory
+}
+
+// enterpriseHosts unions statically-configured GitHub Enterprise hosts with hosts
+// from dynamically-added accounts (gh CLI import, device auth) — mirrors
+// ListGitHubAccounts' host union in github_user_service.go so every caller
+// recognizes the same enterprise URLs the omnibar's detector does. CreateSession
+// and PreviewDestinationPath both call this so the two never diverge.
+func (s *SessionService) enterpriseHosts(cfg *config.Config) []string {
+	configuredHosts := cfg.GetGitHubEnterpriseHosts()
+	var cachedAccounts []githubpkg.CachedAccount
+	if s.userPRCache != nil {
+		cachedAccounts = s.userPRCache.GetCachedAccounts()
+	}
+	seenHosts := make(map[string]bool, len(configuredHosts)+len(cachedAccounts))
+	hosts := make([]string, 0, len(configuredHosts)+len(cachedAccounts))
+	addHost := func(host string) {
+		host = githubpkg.NormalizeHost(host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seenHosts[host] {
+			return
+		}
+		seenHosts[host] = true
+		hosts = append(hosts, host)
+	}
+	for _, h := range configuredHosts {
+		addHost(h.Host)
+	}
+	for _, a := range cachedAccounts {
+		addHost(a.Host)
+	}
+	return hosts
+}
+
+// PreviewDestinationPath computes where a session's checkout/worktree would land
+// without performing any git or filesystem mutation. Used by the Omnibar to show a
+// live destination hint before the user submits session creation.
+// +api: session:preview-destination-path
+func (s *SessionService) PreviewDestinationPath(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PreviewDestinationPathRequest],
+) (*connect.Response[sessionv1.PreviewDestinationPathResponse], error) {
+	cfg := config.LoadConfig()
+
+	switch req.Msg.Mode {
+	case "github_url":
+		ref, err := session.ParseGitHubURLWithHosts(req.Msg.Input, s.enterpriseHosts(cfg))
+		if err != nil {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: "not a recognized GitHub URL",
+			}), nil
+		}
+		path := session.DefaultRepoPathManager.GetRepoPath(ref)
+		return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+			Path:    path,
+			IsExact: true,
+		}), nil
+
+	case "new_worktree":
+		if req.Msg.RepoPath == "" || req.Msg.SessionName == "" {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: "repo_path and session_name are required",
+			}), nil
+		}
+		prefix, err := git.PreviewWorktreePath(req.Msg.RepoPath, req.Msg.SessionName)
+		if err != nil {
+			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+				UnresolvedReason: fmt.Sprintf("could not resolve repo path: %v", err),
+			}), nil
+		}
+		return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
+			Path:    prefix,
+			IsExact: false,
+		}), nil
+
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown mode: %q", req.Msg.Mode))
+	}
 }
 
 // classifyPauseResumeErr maps a Pause()/Resume() error to the appropriate connect
@@ -1661,11 +2174,9 @@ func (s *SessionService) UpdateSession(
 
 	// Find the instance to update
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -1674,8 +2185,32 @@ func (s *SessionService) UpdateSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Captured before any rename below mutates instance.Title in-memory. A narrow
+	// metadata update must key its WHERE clause off the pre-rename title, or it misses
+	// the DB row entirely once instance.Title has already moved to the new value.
+	currentTitle := instance.Title
+
+	// Validate the note length before any field below mutates live in-memory state
+	// (SetTitleDirect/SetCategory publish immediately via snapshot.Store, not staged
+	// until SaveInstances) — otherwise a rejected request could still leave title/category
+	// changes visible to concurrent readers.
+	if req.Msg.Note != nil && len(*req.Msg.Note) > session.MaxNoteLength {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("note exceeds maximum length of %d bytes", session.MaxNoteLength))
+	}
+
 	// Track which fields are being updated for event publishing
 	var updatedFields []string
+
+	// Metadata fields (title/category/note/working_dir) persist via a single narrow
+	// UPDATE (UpdateInstanceMetadata) instead of the full-row SaveInstances rewrite.
+	// A non-nil pointer here means "this field was part of the request".
+	var metaTitle, metaCategory, metaNote, metaWorkingDir *string
+
+	// sideEffectChanged tracks fields (tags, status, rate_limit_enabled, autonomous_mode)
+	// that still need the full-row SaveInstances write — e.g. tags requires managing the
+	// tags M2M relation, which a narrow column UPDATE can't replicate.
+	var sideEffectChanged bool
 
 	// Handle title update (before status change so rename is atomic with resume)
 	if req.Msg.Title != nil && *req.Msg.Title != "" && *req.Msg.Title != instance.Title {
@@ -1687,12 +2222,33 @@ func (s *SessionService) UpdateSession(
 		}
 		instance.SetTitleDirect(*req.Msg.Title)
 		updatedFields = append(updatedFields, "title")
+		metaTitle = req.Msg.Title
 	}
 
 	// Handle category update
 	if req.Msg.Category != nil {
 		instance.SetCategory(*req.Msg.Category)
 		updatedFields = append(updatedFields, "category")
+		metaCategory = req.Msg.Category
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
+		metaNote = req.Msg.Note
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
+	}
+
+	// Handle note update. Length already validated above.
+	if req.Msg.Note != nil {
+		instance.SetNote(*req.Msg.Note)
+		updatedFields = append(updatedFields, "note")
 	}
 
 	// Handle tags update.
@@ -1707,6 +2263,7 @@ func (s *SessionService) UpdateSession(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update tags: %w", err))
 		}
 		updatedFields = append(updatedFields, "tags")
+		sideEffectChanged = true
 	}
 
 	// Handle program update. Empty string means "System default" — resolve to the
@@ -1714,9 +2271,26 @@ func (s *SessionService) UpdateSession(
 	// the capacity-monitor auto-fallback path (UpdateSessionProgram below) via
 	// Instance.SwitchProgram so the two entry points can't drift or double-restart.
 	if req.Msg.Program != nil {
+		// Flush any pending title/category/note rename now, keyed on currentTitle,
+		// before SwitchProgram's callback below can trigger its own SaveInstances
+		// call. That call persists via instance.ToInstanceData(), whose Title is
+		// already the in-memory-renamed value — looking the DB row up by that new
+		// title (before the narrow rename below has run) misses the still-old-titled
+		// row and duplicates it via saveInstancesToRepo's Create fallback, exactly
+		// the orphaned/duplicate-row bug this file's UpdateSessionMetadata exists to
+		// avoid. Flushing here first keeps every later persist call in this handler
+		// looking up the same, already-correct row.
+		if metaTitle != nil || metaCategory != nil || metaNote != nil {
+			if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, nil); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+			}
+			if metaTitle != nil {
+				currentTitle = *metaTitle
+			}
+			metaTitle, metaCategory, metaNote = nil, nil, nil
+		}
 		changed, _, switchErr := instance.SwitchProgram(ctx, *req.Msg.Program, func() error {
-			instances[instanceIndex] = instance
-			return s.storage.SaveInstances(instances)
+			return s.storage.SaveInstances([]*session.Instance{instance})
 		})
 		if changed {
 			updatedFields = append(updatedFields, "program")
@@ -1731,6 +2305,7 @@ func (s *SessionService) UpdateSession(
 	if req.Msg.WorkingDir != nil {
 		instance.SetWorkingDir(*req.Msg.WorkingDir)
 		updatedFields = append(updatedFields, "working_dir")
+		metaWorkingDir = req.Msg.WorkingDir
 	}
 
 	// Handle rate limit enabled toggle. SetRateLimitEnabled persists to the
@@ -1744,6 +2319,7 @@ func (s *SessionService) UpdateSession(
 			}
 		}
 		updatedFields = append(updatedFields, "rate_limit_enabled")
+		sideEffectChanged = true
 	}
 
 	// Handle autonomous mode toggle. Starting/stopping the AutonomousDriver is a
@@ -1760,29 +2336,75 @@ func (s *SessionService) UpdateSession(
 			s.autonomousSvc.stopAndDeregisterDriver(instance.Title)
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
+		sideEffectChanged = true
 	}
 
-	// Handle steering: inject a message into an active autonomous session.
-	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
-		if !instance.AutonomousMode {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("steer_message can only be sent to sessions with autonomous_mode enabled"))
+	// Handle auto-approve toggle. Restart-on-Active-change (serialized against a
+	// concurrent program switch via restartTriggerMu) is handled inside SetAutoApprove.
+	// Same server-side invariant as CreateSession: auto_approve=true is rejected for an
+	// agent yoloFlagFor can't inject a bypass flag for, not just disabled client-side.
+	if req.Msg.AutoApprove != nil && *req.Msg.AutoApprove != instance.AutoApprove {
+		if *req.Msg.AutoApprove && !session.AutoApproveSupported(instance.Program) {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("auto_approve is not supported for program %q", instance.Program))
 		}
-		controller := instance.GetController()
-		if controller != nil {
-			if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
-				log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
-			} else {
-				log.Info("[UpdateSession] steering message sent", "session", instance.Title)
-				s.eventBus.Publish(events.NewNotificationEvent(
-					instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
-					int32(10), // NotificationType_INFO
-					int32(2),  // NotificationPriority_MEDIUM
-					"Steering input sent",
-					fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
-					nil,
-				))
+		if err := instance.SetAutoApprove(*req.Msg.AutoApprove, func() error {
+			return s.storage.SaveInstances([]*session.Instance{instance})
+		}); err != nil {
+			log.Error("[UpdateSession] failed to restart session after auto-approve change", "session", instance.Title, "err", err)
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after auto-approve change: %w", err))
+		}
+		updatedFields = append(updatedFields, "auto_approve")
+	}
+
+	// Handle steering: inject a message into an active session. Autonomous
+	// sessions keep the existing ClaudeController command-queue path (ADR-001);
+	// non-autonomous, Instance-backed sessions fall back to the same PTY send
+	// primitive the MCP steer_session tool already uses (tools_terminal.go's
+	// SendKeys fallback branch) so browser-originated steering reaches ordinary
+	// backlog work/review sessions too, not just autonomous ones.
+	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
+		if len(*req.Msg.SteerMessage) > session.MaxSteerMessageLength {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("steer_message exceeds maximum length of %d bytes", session.MaxSteerMessageLength))
+		}
+		if instance.AutonomousMode {
+			// Unchanged: autonomous sessions keep the ClaudeController command-queue path.
+			controller := instance.GetController()
+			if controller != nil {
+				if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
+					log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
+				} else {
+					s.notifySteerSent(instance, *req.Msg.SteerMessage)
+				}
 			}
+		} else {
+			// New: non-autonomous, Instance-backed sessions get the same PTY send
+			// primitive the MCP steer_session tool already falls back to. Unlike the
+			// autonomous branch, a send failure IS returned to the caller so the UI
+			// can surface it (research/ux.md's Gap 2 error-state table).
+			//
+			// SendKeys is bounded with a timeout, mirroring terminal_service.go's
+			// WriteToSession — a browser click against a wedged/dead session must not
+			// hang this RPC handler goroutine forever.
+			text := session.BuildSubmittableInput(*req.Msg.SteerMessage, true)
+			errCh := make(chan error, 1)
+			go func() { errCh <- instance.SendKeys(text) }()
+
+			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			select {
+			case err := <-errCh:
+				if err != nil {
+					return nil, connect.NewError(connect.CodeFailedPrecondition,
+						fmt.Errorf("failed to steer session %q: %w", instance.Title, err))
+				}
+			case <-timeoutCtx.Done():
+				return nil, connect.NewError(connect.CodeDeadlineExceeded,
+					fmt.Errorf("timed out steering session %q", instance.Title))
+			}
+			s.notifySteerSent(instance, *req.Msg.SteerMessage)
 		}
 	}
 
@@ -1805,6 +2427,7 @@ func (s *SessionService) UpdateSession(
 				instance.SetPauseReason(*req.Msg.PauseReason)
 			}
 			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
 		} else if targetStatus != session.Paused && instance.Status == session.Paused {
 			// Resume from paused state
 			if err := instance.Resume(); err != nil {
@@ -1813,36 +2436,49 @@ func (s *SessionService) UpdateSession(
 			// Clear pause reason only after a successful resume.
 			instance.SetPauseReason("")
 			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
 		}
 	}
 
-	// Update the instance in the list and save
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	// Persist changes. The narrow metadata UPDATE runs first so a title rename lands
+	// under currentTitle in the DB before any side-effecting SaveInstances call below
+	// looks the row up by the already-in-memory-mutated new title — doing it in the
+	// other order would miss the still-old-titled DB row and orphan it via
+	// SaveInstances' Update-fails-so-Create fallback (see UpdateSessionMetadata).
+	if metaTitle != nil || metaCategory != nil || metaNote != nil || metaWorkingDir != nil {
+		if err := s.storage.UpdateInstanceMetadata(currentTitle, metaTitle, metaCategory, metaNote, metaWorkingDir); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+		}
+	}
+	if sideEffectChanged {
+		if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+		}
 	}
 
 	// Publish events based on what was updated
 	if len(updatedFields) > 0 {
-		// Publish general update event, including detection state when available.
-		if s.statusManager != nil {
-			statusInfo := s.statusManager.GetStatus(instance)
-			if statusInfo.IsControllerActive {
-				s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
-					instance, updatedFields,
-					statusInfo.ClaudeStatus, statusInfo.StatusContext,
-				))
-			} else {
-				s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
-			}
-		} else {
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
-		}
+		s.publishSessionUpdatedEvent(instance, updatedFields)
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
+}
+
+// notifySteerSent logs and publishes the "steering input sent" notification
+// shared by both the autonomous and non-autonomous steer branches in
+// UpdateSession.
+func (s *SessionService) notifySteerSent(instance *session.Instance, steerMessage string) {
+	log.Info("[UpdateSession] steering message sent", "session", instance.Title)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
+		int32(10), // NotificationType_INFO
+		int32(2),  // NotificationPriority_MEDIUM
+		"Steering input sent",
+		fmt.Sprintf("%s: %s", instance.Title, steerMessage),
+		nil,
+	))
 }
 
 // HibernateSession checkpoints the session state, kills the AI process, and
@@ -1862,11 +2498,9 @@ func (s *SessionService) HibernateSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -1893,8 +2527,7 @@ func (s *SessionService) HibernateSession(
 	// session does not linger with a stale queue entry until reconcileSessions fires.
 	s.removeFromAllPollers(instance.Title)
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -1922,11 +2555,9 @@ func (s *SessionService) ResumeHibernatedSession(
 	}
 
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -1938,14 +2569,58 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
 
 	return connect.NewResponse(&sessionv1.ResumeHibernatedSessionResponse{
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
+	}), nil
+}
+
+// ResumeCrashedSession re-launches the AI process for a Crashed session (dead
+// tmux pane detected by SessionHealthChecker, session/health.go), transitioning
+// it back to Active status. The tmux session was already killed when the
+// instance was marked Crashed, so Start(false) takes the cold-restore path and
+// threads --resume automatically when a conversation UUID is known.
+// +api: session:resume_crashed
+func (s *SessionService) ResumeCrashedSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ResumeCrashedSessionRequest],
+) (*connect.Response[sessionv1.ResumeCrashedSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.MatchesID(req.Msg.Id) {
+			instance = inst
+			break
+		}
+	}
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	if err := instance.ResumeFromCrash(ctx); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
+
+	return connect.NewResponse(&sessionv1.ResumeCrashedSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
 }
@@ -1986,6 +2661,16 @@ func (s *SessionService) DeleteSession(
 	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
 	s.autonomousSvc.stopAndDeregisterDriver(sessionTitle)
 
+	// Capture the live instance BEFORE removing from pollers. removeFromAllPollers
+	// (below) evicts this session from the ReviewQueuePoller's instance list — the
+	// exact list FindLiveInstance searches — so calling FindLiveInstance after
+	// removeFromAllPollers always returned nil here, silently skipping Destroy()'s
+	// git worktree cleanup for every delete (live or not) in favor of the
+	// tmux-only KillTmuxSessionByTitle fallback. Capturing the pointer first fixes
+	// that without reopening the race the ordering comment below is about (that
+	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
+	liveInst := s.FindLiveInstance(sessionTitle)
+
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
 	// re-add the session between storage deletion and the old LoadInstances() reload.
@@ -1994,23 +2679,28 @@ func (s *SessionService) DeleteSession(
 
 	// Destroy tmux/git resources asynchronously so the RPC returns immediately
 	// after storage deletion. Cleanup errors are non-fatal — they are logged and
-	// do not affect the success response the caller receives.
-	if inst := s.FindLiveInstance(sessionTitle); inst != nil {
-		go func() {
-			if err := inst.Destroy(); err != nil {
+	// do not affect the success response the caller receives. Both goroutines are
+	// tracked via deleteCleanupWG so Shutdown (and tests) can await them instead
+	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
+	if liveInst != nil {
+		s.trackCleanup(func() {
+			err := waitForDestroyLoggingSlowCleanup(liveInst.Destroy, s.deleteSessionCleanupTimeout, func() {
+				log.Warn("session cleanup still running in background after timeout", "session", req.Msg.Id, "timeout", s.deleteSessionCleanupTimeout)
+			})
+			if err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
-		}()
+		})
 	} else {
 		// Instance is not in the live in-memory poller (e.g. the server restarted
 		// since this session was created). Fall back to killing the tmux session by
 		// its deterministic name so the Claude process inside it doesn't survive as
 		// an orphan after the DB record is gone.
-		go func() {
+		s.trackCleanup(func() {
 			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
-		}()
+		})
 	}
 
 	// Cancel any pending approvals BEFORE deleting from storage, so blocked
@@ -2103,7 +2793,11 @@ func (s *SessionService) WatchSessions(
 				}
 			}
 			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-				if adapters.StatusToProto(inst.Status) != *req.Msg.StatusFilter {
+				// inst.GetStatus() reads the lock-free published snapshot rather than
+				// inst.Status directly -- see reconcileSessions' identical fix
+				// (9fcded805) for why a raw field read here races with the actor's
+				// transitionToLocked write under -race.
+				if adapters.StatusToProto(session.Status(inst.GetStatus())) != *req.Msg.StatusFilter {
 					continue
 				}
 			}
@@ -2136,7 +2830,7 @@ func (s *SessionService) WatchSessions(
 			}
 
 			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-				if event.Session != nil && adapters.StatusToProto(event.Session.Status) != *req.Msg.StatusFilter {
+				if event.Session != nil && adapters.StatusToProto(session.Status(event.Session.GetStatus())) != *req.Msg.StatusFilter {
 					continue
 				}
 			}
@@ -2625,6 +3319,13 @@ func (s *SessionService) GetSessionDiff(
 				found.Worktree.BaseCommitSHA,
 			)
 			diffStats = wt.Diff()
+		} else if found.Path != "" {
+			// ponytail: directory sessions have no worktree; use the session path directly.
+			// resolveBaseCommitSHA() will find the merge-base with main/master as fallback.
+			wt := git.NewGitWorktreeFromStorage(found.Path, found.Path, found.Title, "", "")
+			if wt != nil {
+				diffStats = wt.Diff()
+			}
 		}
 	}
 
@@ -2750,6 +3451,18 @@ func (s *SessionService) GetPRInfo(
 	return s.githubSvc.GetPRInfo(ctx, req)
 }
 
+// DraftPullRequest delegates to prCreationSvc. See PRCreationService for the
+// handler implementation.
+func (s *SessionService) DraftPullRequest(ctx context.Context, req *connect.Request[sessionv1.DraftPullRequestRequest]) (*connect.Response[sessionv1.DraftPullRequestResponse], error) {
+	return s.prCreationSvc.DraftPullRequest(ctx, req)
+}
+
+// CreatePullRequest delegates to prCreationSvc. See PRCreationService for the
+// handler implementation.
+func (s *SessionService) CreatePullRequest(ctx context.Context, req *connect.Request[sessionv1.CreatePullRequestRequest]) (*connect.Response[sessionv1.CreatePullRequestResponse], error) {
+	return s.prCreationSvc.CreatePullRequest(ctx, req)
+}
+
 // GetPRComments retrieves all comments on the PR for a session.
 func (s *SessionService) GetPRComments(
 	ctx context.Context,
@@ -2827,11 +3540,9 @@ func (s *SessionService) RenameSession(
 
 	// Find the instance to rename
 	var instance *session.Instance
-	var instanceIndex int
-	for i, inst := range instances {
+	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			instance = inst
-			instanceIndex = i
 			break
 		}
 	}
@@ -2856,9 +3567,11 @@ func (s *SessionService) RenameSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to rename session: %w", err))
 	}
 
-	// Update the instance in the list and save
-	instances[instanceIndex] = instance
-	if err := s.storage.SaveInstances(instances); err != nil {
+	// Narrow single-row rename, keyed on the pre-mutation title. The generic
+	// SaveInstances path looks the DB row up by the (already renamed) in-memory
+	// title, misses the still-old-titled row, and falls into a Create fallback that
+	// orphans it — using oldTitle as the WHERE key avoids that.
+	if err := s.storage.UpdateInstanceMetadata(oldTitle, &req.Msg.NewTitle, nil, nil, nil); err != nil {
 		// Try to rollback the rename
 		instance.SetTitleDirect(oldTitle)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save renamed instance: %w", err))
@@ -3037,6 +3750,13 @@ func (s *SessionService) DeleteApprovalRule(
 	req *connect.Request[sessionv1.DeleteApprovalRuleRequest],
 ) (*connect.Response[sessionv1.DeleteApprovalRuleResponse], error) {
 	return s.rulesSvc.DeleteApprovalRule(ctx, req)
+}
+
+func (s *SessionService) ReloadClaudeSettingsRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ReloadClaudeSettingsRulesRequest],
+) (*connect.Response[sessionv1.ReloadClaudeSettingsRulesResponse], error) {
+	return s.rulesSvc.ReloadClaudeSettingsRules(ctx, req)
 }
 
 // GetApprovalAnalytics returns aggregated analytics for classification decisions.
@@ -3300,6 +4020,11 @@ func (s *SessionService) GetSessionDefaults(ctx context.Context, req *connect.Re
 	return s.defaultsSvc.GetSessionDefaults(ctx, req)
 }
 
+// GetLauncherPresets returns the hand-authored launcher presets, freshly read on every call.
+func (s *SessionService) GetLauncherPresets(ctx context.Context, req *connect.Request[sessionv1.GetLauncherPresetsRequest]) (*connect.Response[sessionv1.GetLauncherPresetsResponse], error) {
+	return s.launcherPresetsSvc.GetLauncherPresets(ctx, req)
+}
+
 // ResolveDefaults merges all default layers for the given working directory and profile.
 func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Request[sessionv1.ResolveDefaultsRequest]) (*connect.Response[sessionv1.ResolveDefaultsResponse], error) {
 	return s.defaultsSvc.ResolveDefaults(ctx, req)
@@ -3308,6 +4033,21 @@ func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Reque
 // UpdateGlobalDefaults replaces the global default fields.
 func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.Request[sessionv1.UpdateGlobalDefaultsRequest]) (*connect.Response[sessionv1.UpdateGlobalDefaultsResponse], error) {
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
+}
+
+// GetSlackConfig returns the current Slack notification configuration.
+func (s *SessionService) GetSlackConfig(ctx context.Context, req *connect.Request[sessionv1.GetSlackConfigRequest]) (*connect.Response[sessionv1.GetSlackConfigResponse], error) {
+	return s.slackConfigSvc.GetSlackConfig(ctx, req)
+}
+
+// UpdateSlackConfig updates the Slack notification configuration.
+func (s *SessionService) UpdateSlackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateSlackConfigRequest]) (*connect.Response[sessionv1.UpdateSlackConfigResponse], error) {
+	return s.slackConfigSvc.UpdateSlackConfig(ctx, req)
+}
+
+// TestSlackWebhook sends a synchronous test message and reports the outcome.
+func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Request[sessionv1.TestSlackWebhookRequest]) (*connect.Response[sessionv1.TestSlackWebhookResponse], error) {
+	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
 }
 
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every
@@ -3325,6 +4065,15 @@ func (s *SessionService) SetOnGlobalDefaultsUpdated(fn func()) {
 // (PR #199 review F1). See DefaultsService.SetSharedBacklogConfig.
 func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
 	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
+}
+
+// SetSharedCallbackConfig wires the *config.Config instance (and its guarding
+// mutex) CallbackDispatcher reads callback URLs from into this SessionService's
+// CallbackConfigService, so UpdateCallbackConfig can propagate a saved URL into
+// CallbackDispatcher's live view without a process restart. See
+// CallbackConfigService.SetSharedCallbackConfig.
+func (s *SessionService) SetSharedCallbackConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.callbackConfigSvc.SetSharedCallbackConfig(cfg, mu)
 }
 
 // UpsertProfile creates or updates a named profile.
@@ -3345,6 +4094,20 @@ func (s *SessionService) UpsertDirectoryRule(ctx context.Context, req *connect.R
 // DeleteDirectoryRule removes a directory rule by path.
 func (s *SessionService) DeleteDirectoryRule(ctx context.Context, req *connect.Request[sessionv1.DeleteDirectoryRuleRequest]) (*connect.Response[sessionv1.DeleteDirectoryRuleResponse], error) {
 	return s.defaultsSvc.DeleteDirectoryRule(ctx, req)
+}
+
+// ─── Callback Config delegates (webhook-triggers Phase 5, FR7) ──────────────
+
+// +api: callback-config:get
+// GetCallbackConfig reports which outbound-callback URLs are configured.
+func (s *SessionService) GetCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.GetCallbackConfigRequest]) (*connect.Response[sessionv1.GetCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.GetCallbackConfig(ctx, req)
+}
+
+// +api: callback-config:update
+// UpdateCallbackConfig sets one or more outbound-callback URLs.
+func (s *SessionService) UpdateCallbackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateCallbackConfigRequest]) (*connect.Response[sessionv1.UpdateCallbackConfigResponse], error) {
+	return s.callbackConfigSvc.UpdateCallbackConfig(ctx, req)
 }
 
 // ListAliases returns all configured alias presets.
@@ -3930,6 +4693,13 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 	// Session state sync (rate_limit_state/rate_limit_reset_time) must fire
 	// regardless of Hidden — only the Notifications-page entry above is gated.
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
+
+	// Feed the account-wide quota gate's hard/reactive override signal. Not
+	// gated on inst.Hidden (unlike the notification above) — a rate limit hit
+	// by a hidden/headless session still consumes real account quota.
+	if s.quotaGate != nil {
+		s.quotaGate.recordRateLimitEvent(time.Now())
+	}
 }
 
 // onRateLimitRecovery publishes the rate-limit-recovery notification for inst.
@@ -4168,6 +4938,17 @@ func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[s
 	return s.workflowSvc.RunWorkflow(ctx, req)
 }
 
+// +api: workflow:list-trigger-fire-events
+// ListTriggerFireEvents delegates to WorkflowService.
+func (s *SessionService) ListTriggerFireEvents(ctx context.Context, req *connect.Request[sessionv1.ListTriggerFireEventsRequest]) (*connect.Response[sessionv1.ListTriggerFireEventsResponse], error) {
+	if s.workflowSvc == nil {
+		return connect.NewResponse(&sessionv1.ListTriggerFireEventsResponse{
+			Events: []*sessionv1.TriggerFireEventProto{},
+		}), nil
+	}
+	return s.workflowSvc.ListTriggerFireEvents(ctx, req)
+}
+
 // GetDetectionEvents returns recent status-detection events for a session's Claude controller.
 // Used by the debug panel (FR-8) — returns an empty list when the session has no active controller.
 func (s *SessionService) GetDetectionEvents(ctx context.Context, req *connect.Request[sessionv1.GetDetectionEventsRequest]) (*connect.Response[sessionv1.GetDetectionEventsResponse], error) {
@@ -4222,7 +5003,12 @@ func (s *SessionService) ArchiveSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 	now := time.Now()
-	inst.SetArchivedAt(&now)
+	// ArchiveWithStop also transitions Status to Stopped (best-effort — archiving
+	// previously left ArchivedAt set while Status stayed Active/Paused/Hibernated,
+	// which the retention sweep and other Stopped-gated logic depend on being in sync).
+	if err := inst.ArchiveWithStop(now); err != nil {
+		log.Warn("failed to transition archived session to Stopped", "session", req.Msg.SessionId, "err", err)
+	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
@@ -4398,10 +5184,31 @@ func (s *SessionService) GetProviderLimits(
 	}), nil
 }
 
+// publishSessionUpdatedEvent publishes a SessionUpdated event for instance covering
+// updatedFields, using the statusManager-aware NewSessionUpdatedEventWithDetection variant
+// when a controller is actively running (so clients see live ClaudeStatus/StatusContext),
+// and falling back to the plain NewSessionUpdatedEvent otherwise. Shared by UpdateSession's
+// end-of-handler publish and UpdateSessionProgram (the capacity-monitor auto-fallback path)
+// so the two program-switch entry points publish identically instead of drifting.
+func (s *SessionService) publishSessionUpdatedEvent(instance *session.Instance, updatedFields []string) {
+	if s.statusManager != nil {
+		statusInfo := s.statusManager.GetStatus(instance)
+		if statusInfo.IsControllerActive {
+			s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
+				instance, updatedFields,
+				statusInfo.ClaudeStatus, statusInfo.StatusContext,
+			))
+			return
+		}
+	}
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
+}
+
 // UpdateSessionProgram handles switching programs for a session, doing the history
 // porting, DB save, and PTY restart. Shares its implementation with the UpdateSession RPC
-// handler via Instance.SwitchProgram (see session/instance_program.go) so the two
-// program-switch entry points — this auto-fallback path and the manual RPC — can't drift.
+// handler via Instance.SwitchProgram (see session/instance_program.go) and
+// publishSessionUpdatedEvent above so the two program-switch entry points — this
+// auto-fallback path and the manual RPC — can't drift.
 func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID string, newProgram string) error {
 	inst := s.findInstance(sessionID)
 	if inst == nil {
@@ -4418,7 +5225,7 @@ func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID str
 		return fmt.Errorf("failed to restart session: %w", err)
 	}
 
-	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))
+	s.publishSessionUpdatedEvent(inst, []string{"program"})
 
 	return nil
 }
@@ -4433,6 +5240,12 @@ func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
 	if s.capacityMonitor != nil {
 		s.capacityMonitor.tokenStore = store
 	}
+}
+
+// SetQuotaGate wires the account-wide quota gate so onRateLimitDetected can
+// feed it the hard/reactive override signal.
+func (s *SessionService) SetQuotaGate(g *QuotaGate) {
+	s.quotaGate = g
 }
 
 // GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.

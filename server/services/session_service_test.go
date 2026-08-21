@@ -2,8 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,24 +15,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"go.uber.org/goleak"
 )
 
-// createTestStorage creates a test storage backed by a temporary SQLite database.
+// createTestStorage creates a test storage backed by an in-memory Ent
+// repository via session.NewTestEntRepository — see that function's doc
+// comment for why this uses a named, shared-cache in-memory DSN rather than
+// a bare ":memory:" literal.
+//
+// This package's fixtures are called 300+ times across its test files; each
+// call still pays the full Ent schema-creation + backfill-migration cost,
+// but backing it with an in-memory SQLite database (rather than a
+// t.TempDir()-backed file) removes the disk I/O and WAL fsync overhead.
 func createTestStorage(t *testing.T) *session.Storage {
 	t.Helper()
 
-	// Use t.TempDir() for automatic, unique-per-test cleanup that prevents
-	// stale SQLite files from a previous crashed run from causing flakiness.
-	testDir := t.TempDir()
-
-	repo, err := session.NewEntRepository(session.WithDatabasePath(testDir + "/sessions.db"))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
@@ -77,12 +82,14 @@ func addPausedSession(t *testing.T, fix *forkTestFixture, title string) {
 // via DeleteSession RPC, it's also removed from the review queue.
 // This is a regression test for the bug where deleted sessions persisted in the review queue.
 func TestDeleteSession_RemovesFromReviewQueue(t *testing.T) {
+	t.Parallel()
 	// Create in-memory test storage
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 
 	// Create session service
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Create and add a test instance to storage.
 	// Must use Status=Paused: LoadInstances calls FromInstanceData which calls
@@ -150,10 +157,12 @@ func TestDeleteSession_RemovesFromReviewQueue(t *testing.T) {
 // TestDeleteSession_NonExistentSession verifies that deleting a non-existent session
 // returns a proper error.
 func TestDeleteSession_NonExistentSession(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	req := connect.NewRequest(&sessionv1.DeleteSessionRequest{
 		Id: "non-existent-session",
@@ -176,10 +185,12 @@ func TestDeleteSession_NonExistentSession(t *testing.T) {
 
 // TestDeleteSession_EmptyId verifies that deleting with empty ID returns an error.
 func TestDeleteSession_EmptyId(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	req := connect.NewRequest(&sessionv1.DeleteSessionRequest{
 		Id: "",
@@ -205,9 +216,11 @@ func TestDeleteSession_EmptyId(t *testing.T) {
 // Regression test: the frontend sends session.id = GetStableID() = UUID for newer
 // sessions, but the old server code only matched by Title, causing "session not found".
 func TestDeleteSession_ByUUID(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const sessionUUID = "550e8400-e29b-41d4-a716-446655440000"
 	testInstance := &session.Instance{
@@ -242,9 +255,11 @@ func TestDeleteSession_ByUUID(t *testing.T) {
 // receive the event and can remove the session from their local state without
 // waiting for the next reconnect snapshot.
 func TestDeleteSession_PublishesDeletedEvent(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "evt-session",
@@ -280,9 +295,11 @@ func TestDeleteSession_PublishesDeletedEvent(t *testing.T) {
 // fix depends on: once the RPC returns success the session must be absent from
 // subsequent list queries.
 func TestDeleteSession_ListInstanceDataExcludesDeleted(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	for _, title := range []string{"keep-me", "delete-me"} {
 		require.NoError(t, storage.AddInstance(&session.Instance{
@@ -324,9 +341,11 @@ func TestDeleteSession_ListInstanceDataExcludesDeleted(t *testing.T) {
 // since the tmux session doesn't exist, KillSession is a no-op but the test
 // exercises the code path where FindLiveInstance returns non-nil.
 func TestDeleteSession_DestroyFailureIsNonFatal(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Add a paused session to storage so DeleteSession can find it.
 	testInst := &session.Instance{
@@ -354,14 +373,318 @@ func TestDeleteSession_DestroyFailureIsNonFatal(t *testing.T) {
 	}
 }
 
+// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil verifies that
+// Shutdown blocks until DeleteSession's background cleanup goroutine (the
+// KillTmuxSessionByTitle fallback used when FindLiveInstance returns nil) has
+// actually finished, rather than returning while it is still running.
+//
+// The DeleteSession call below exercises the real KillTmuxSessionByTitle
+// branch, but that goroutine finishes almost instantly against a non-real
+// tmux session — a fast-finishing real cleanup goroutine looks the same
+// whether or not Shutdown actually blocks on it, and goroutine-count
+// before/after comparisons in a shared test binary are flaky by construction
+// (see go.uber.org/goleak's rationale). So this test additionally tracks a
+// second, artificially slow cleanup goroutine (same technique as
+// TestShutdown_BlocksUntilTrackedCleanupCompletes) on the same deleteCleanupWG
+// that DeleteSession's goroutine was tracked on, and asserts it has already
+// finished by the time Shutdown returns — a check that fails against the
+// pre-fix buggy code — plus goleak.VerifyNone to confirm nothing was leaked.
+func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
+	// Not t.Parallel(): this test's goleak.IgnoreCurrent()/VerifyNone() baseline
+	// can be polluted by other parallel tests' own background goroutines (e.g.
+	// database/sql connection-pool cleaners from their own createTestStorage
+	// pools) starting mid-flight and getting misattributed as "leaked" by this
+	// test. See withShrunkIdleSettleTimers's identical rationale in
+	// session/autonomous_driver_test.go.
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "no-live-instance",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	baseline := goleak.IgnoreCurrent()
+
+	// No ReviewQueuePoller wired: FindLiveInstance returns nil, so DeleteSession
+	// takes the KillTmuxSessionByTitle fallback branch.
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "no-live-instance",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	var mu sync.Mutex
+	finished := false
+	svc.trackCleanup(func() {
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+
+	svc.Shutdown()
+
+	mu.Lock()
+	assert.True(t, finished, "Shutdown returned before the tracked cleanup goroutine finished")
+	mu.Unlock()
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent is the
+// liveInst-present counterpart to TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil:
+// it wires a ReviewQueuePoller with a live instance so FindLiveInstance returns
+// non-nil and DeleteSession takes the liveInst.Destroy() branch (which runs
+// waitForDestroyLoggingSlowCleanup — see TestWaitForDestroyLoggingSlowCleanup_*
+// for direct coverage of that helper's own timeout/non-abandoning behavior),
+// then uses the same artificial-delay + goleak technique to verify Shutdown
+// still blocks until tracked cleanup exits and nothing leaks.
+func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T) {
+	// Not t.Parallel(): see TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil's
+	// goleak-baseline-pollution rationale above.
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	testInst := &session.Instance{
+		Title:     "live-instance",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInst))
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	poller.SetInstances([]*session.Instance{testInst})
+	svc.SetReviewQueuePoller(poller)
+
+	baseline := goleak.IgnoreCurrent()
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "live-instance",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	var mu sync.Mutex
+	finished := false
+	svc.trackCleanup(func() {
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+
+	svc.Shutdown()
+
+	mu.Lock()
+	assert.True(t, finished, "Shutdown returned before the tracked cleanup goroutine finished")
+	mu.Unlock()
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestShutdown_BlocksUntilTrackedCleanupCompletes proves Shutdown's blocking
+// contract directly: it tracks a cleanup goroutine that sleeps for a fixed
+// duration before recording completion, then asserts that completion is
+// already recorded by the time Shutdown returns. Unlike the goroutine-count
+// comparisons above (which pass identically whether or not Shutdown actually
+// blocks, since a fast-finishing goroutine looks the same either way — see
+// the deleteCleanupWG.Wait() removal check in git history for this repo's own
+// confirmation of that gap), this test fails if deleteCleanupWG.Wait() is
+// ever removed or short-circuited from Shutdown.
+func TestShutdown_BlocksUntilTrackedCleanupCompletes(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	var mu sync.Mutex
+	finished := false
+	svc.trackCleanup(func() {
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+
+	svc.Shutdown()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.True(t, finished, "Shutdown returned before the tracked cleanup goroutine finished")
+}
+
+// TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout exercises
+// destroyWithTimeout's timeout-exceeded branch, which had zero coverage: it
+// passes a callback that deliberately sleeps far longer than the configured
+// timeout and asserts destroyWithTimeout returns a timeout error at
+// approximately the timeout, not after waiting for the full work duration.
+// destroyWithTimeout takes destroy as a func() error (rather than a
+// *session.Instance) specifically so this can be tested without needing a
+// real Instance whose Destroy() can be made to hang on demand — see
+// destroyWithTimeout's doc comment.
+func TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout(t *testing.T) {
+	t.Parallel()
+	const testTimeout = 20 * time.Millisecond
+	const workDuration = 300 * time.Millisecond
+
+	workDone := make(chan struct{})
+	start := time.Now()
+	err := destroyWithTimeout(func() error {
+		time.Sleep(workDuration)
+		close(workDone)
+		return nil
+	}, testTimeout)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
+	assert.Lessf(t, elapsed, workDuration,
+		"destroyWithTimeout took %s, should have returned at ~%s (the configured timeout) rather than waiting for the full %s of work",
+		elapsed, testTimeout, workDuration)
+
+	// Drain the background goroutine so it doesn't outlive the test (it is
+	// intentionally untracked past the timeout — see destroyWithTimeout's doc
+	// comment — but leaving it running would otherwise trip goleak in other
+	// tests in this package that run concurrently or immediately after).
+	<-workDone
+}
+
+// TestWaitForDestroyLoggingSlowCleanup_DoesNotAbandonWorkAfterTimeout exercises
+// DeleteSession's actual liveInst-cleanup timeout logic (extracted into
+// waitForDestroyLoggingSlowCleanup so it's directly testable — see that
+// function's doc comment). Unlike destroyWithTimeout, this must NOT abandon
+// the work at the timeout: it fires onSlow once the timeout elapses but keeps
+// waiting for the real result, so the returned error (and elapsed time)
+// reflect the full work duration, not the timeout.
+func TestWaitForDestroyLoggingSlowCleanup_DoesNotAbandonWorkAfterTimeout(t *testing.T) {
+	const testTimeout = 20 * time.Millisecond
+	const workDuration = 150 * time.Millisecond
+
+	var mu sync.Mutex
+	onSlowCalled := false
+
+	workDone := make(chan struct{})
+	start := time.Now()
+	err := waitForDestroyLoggingSlowCleanup(func() error {
+		time.Sleep(workDuration)
+		close(workDone)
+		return nil
+	}, testTimeout, func() {
+		mu.Lock()
+		onSlowCalled = true
+		mu.Unlock()
+	})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.True(t, onSlowCalled, "onSlow should fire once the timeout elapses")
+	mu.Unlock()
+
+	assert.GreaterOrEqualf(t, elapsed, workDuration,
+		"waitForDestroyLoggingSlowCleanup returned after %s, should have waited for the full %s of work instead of abandoning it at the %s timeout",
+		elapsed, workDuration, testTimeout)
+
+	select {
+	case <-workDone:
+	default:
+		t.Fatal("destroy work should already be complete by the time waitForDestroyLoggingSlowCleanup returned")
+	}
+}
+
+// TestWaitForDestroyLoggingSlowCleanup_NoTimeout_OnSlowNeverCalled is the
+// fast-path counterpart: when destroy() finishes before timeout, onSlow must
+// never fire and the real error/result is returned directly.
+func TestWaitForDestroyLoggingSlowCleanup_NoTimeout_OnSlowNeverCalled(t *testing.T) {
+	var mu sync.Mutex
+	onSlowCalled := false
+
+	sentinel := errors.New("destroy failed")
+	err := waitForDestroyLoggingSlowCleanup(func() error {
+		return sentinel
+	}, time.Second, func() {
+		mu.Lock()
+		onSlowCalled = true
+		mu.Unlock()
+	})
+
+	require.ErrorIs(t, err, sentinel)
+	mu.Lock()
+	assert.False(t, onSlowCalled, "onSlow must not fire when destroy() finishes before the timeout")
+	mu.Unlock()
+}
+
+// TestDeleteSession_LiveInstance_LogsWarningOnSlowCleanupButStillWaits wires
+// waitForDestroyLoggingSlowCleanup's timeout branch through the actual
+// DeleteSession RPC path (via SetDeleteSessionCleanupTimeout, the test-only
+// override — see defaultDeleteSessionCleanupTimeout's doc comment) and
+// asserts the expected warning is logged, then that Shutdown still blocks
+// until the real cleanup goroutine finishes and nothing leaks.
+func TestDeleteSession_LiveInstance_LogsWarningOnSlowCleanupButStillWaits(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	// A near-zero timeout guarantees the slow-cleanup branch fires for any
+	// real Destroy(), however fast, without needing a genuinely slow instance.
+	svc.SetDeleteSessionCleanupTimeout(time.Nanosecond)
+
+	testInst := &session.Instance{
+		Title:     "live-instance-slow-cleanup",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInst))
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	poller.SetInstances([]*session.Instance{testInst})
+	svc.SetReviewQueuePoller(poller)
+
+	baseline := goleak.IgnoreCurrent()
+	buf := captureLogs(t)
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "live-instance-slow-cleanup",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	svc.Shutdown()
+
+	assert.Contains(t, buf.String(), "session cleanup still running in background after timeout",
+		"DeleteSession's liveInst branch should log the slow-cleanup warning when deleteSessionCleanupTimeout elapses")
+
+	goleak.VerifyNone(t, baseline)
+}
+
 // TestDeleteSession_StorageDeletedBeforeResponse verifies that storage is fully
 // committed before the RPC response is returned, so any immediate listSessions
 // call from a reconnecting client sees the session as gone. This is the core
 // contract the frontend tombstone fix relies on.
 func TestDeleteSession_StorageDeletedBeforeResponse(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "timing-session",
@@ -402,9 +725,11 @@ func TestDeleteSession_StorageDeletedBeforeResponse(t *testing.T) {
 // This test verifies that wireSessionExitedPublisher, wired during session loading,
 // fires a SessionUpdatedEvent with a Stopped instance when EventExited is raised.
 func TestSessionExitedPublisher_PublishesUpdatedEvent(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// Use Status=Paused so FromInstanceData marks the instance as started=true,
 	// matching what the real lifecycle does for an instance that was once Active.
@@ -446,9 +771,11 @@ func TestSessionExitedPublisher_PublishesUpdatedEvent(t *testing.T) {
 // TestSessionExitedPublisher_ClearsDetectedStatus verifies that the SessionUpdatedEvent
 // published on exit has DetectedStatus == StatusUnknown, i.e., detection is cleared.
 func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "thinking-session-2",
@@ -493,6 +820,7 @@ func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
 // TestUpdateSession_TagsUpdate verifies that a tags update is applied to the
 // session and persisted to storage so a subsequent reload reflects the change.
 func TestUpdateSession_TagsUpdate(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -528,6 +856,7 @@ func TestUpdateSession_TagsUpdate(t *testing.T) {
 // TestUpdateSession_TagsUpdate_Replaces verifies that calling UpdateSession with
 // a new tag list replaces (not appends to) the previous tags.
 func TestUpdateSession_TagsUpdate_Replaces(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -567,6 +896,419 @@ func TestUpdateSession_TagsUpdate_Replaces(t *testing.T) {
 		"old tags must be removed after replacement")
 }
 
+// TestUpdateSession_NoteUpdate verifies that a session note round-trips through
+// UpdateSession and persists through a full storage reload, not just the in-memory
+// response (mirrors TestUpdateSession_TagsUpdate).
+func TestUpdateSession_NoteUpdate(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	note := "left this waiting on CI"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &note,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, note, resp.Msg.Session.Note, "response should contain the updated note")
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == "my-session" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found, "session should still exist in storage after update")
+	assert.Equal(t, note, found.Note, "note should be persisted in storage")
+}
+
+// TestUpdateSession_NoteUpdate_BumpsUpdatedAt is a regression test: setNoteLocked
+// used to mutate Instance.Note without touching Instance.UpdatedAt. The frontend's
+// upsertSession reducer (sessionsSlice.ts) skips applying an incoming session as a
+// no-op dedup optimization whenever its updatedAt matches the already-stored value —
+// so on a session whose UpdatedAt hadn't otherwise moved (e.g. freshly created and
+// still idle), a note save would succeed server-side yet never appear in the UI,
+// since the client-side dedup silently discarded the "unchanged" update. Confirmed
+// live via tests/e2e/session-notes.spec.ts before this fix. UpdatedAt must always
+// move forward on a note change so that dedup check can't misfire.
+func TestUpdateSession_NoteUpdate_BumpsUpdatedAt(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	before := fix.poller.FindInstance("my-session")
+	require.NotNil(t, before)
+	beforeUpdatedAt := before.UpdatedAt
+
+	note := "left this waiting on CI"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &note,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	require.NotNil(t, resp.Msg.Session.UpdatedAt)
+	assert.True(t, resp.Msg.Session.UpdatedAt.AsTime().After(beforeUpdatedAt),
+		"UpdatedAt must move forward after a note-only update, or the frontend's "+
+			"upsertSession no-op dedup will silently drop the change")
+}
+
+// TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument verifies that a
+// note longer than session.MaxNoteLength is rejected with InvalidArgument and
+// does not partially write.
+func TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	tooLong := strings.Repeat("a", session.MaxNoteLength+1)
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &tooLong,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == "my-session" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Empty(t, found.Note, "note must not be partially written when rejected")
+}
+
+// TestUpdateSession_NoteLengthValidation_IsByteAccurate proves the length check uses
+// Go's byte-length len(string), not a rune count — an ASCII-only fixture can't tell
+// these apart since 1 rune == 1 byte for ASCII, so this specifically exercises a
+// multi-byte string whose rune count is under session.MaxNoteLength but whose byte
+// length exceeds it (mirrors the frontend's equivalent guard in NotePanel.tsx).
+func TestUpdateSession_NoteLengthValidation_IsByteAccurate(t *testing.T) {
+	t.Parallel()
+	// "あ" is 1 rune but 3 UTF-8 bytes: 3400 runes = 3400 runes / 10200 bytes,
+	// under the rune-based reading of the cap but over the byte-based one.
+	multiByteTooLong := strings.Repeat("あ", 3400)
+	require.Less(t, len([]rune(multiByteTooLong)), session.MaxNoteLength,
+		"fixture invariant: rune count must be under MaxNoteLength")
+	require.Greater(t, len(multiByteTooLong), session.MaxNoteLength,
+		"fixture invariant: byte length must exceed MaxNoteLength")
+
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &multiByteTooLong,
+	}))
+	require.Error(t, err, "a note under the rune-count cap but over the byte cap must still be rejected")
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestUpdateSession_NoteExceedsMaxLength_LeavesOtherFieldsUnmutated is a regression
+// test for a partial-mutation bug: the note-length check used to run after
+// SetCategory/SetTitleDirect had already mutated the live in-memory Instance and
+// published a new snapshot (visible to concurrent readers like WatchSessions), even
+// though the RPC as a whole returned InvalidArgument. A combined request that fails
+// on Note must leave every other field it also touched completely unmutated — not
+// just unwritten to storage (SaveInstances never runs on this error path either way,
+// so a storage-only check wouldn't catch this), but unmutated in the live instance
+// the poller holds.
+func TestUpdateSession_NoteExceedsMaxLength_LeavesOtherFieldsUnmutated(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	originalCategory := "original-category"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:       "my-session",
+		Category: &originalCategory,
+	}))
+	require.NoError(t, err)
+
+	newCategory := "should-not-apply"
+	tooLong := strings.Repeat("a", session.MaxNoteLength+1)
+	_, err = fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:       "my-session",
+		Category: &newCategory,
+		Note:     &tooLong,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+	live := fix.poller.FindInstance("my-session")
+	require.NotNil(t, live, "session should still be resolvable in the live poller list")
+	assert.Equal(t, originalCategory, live.Category,
+		"category must remain unmutated in the live in-memory instance when the note in the same request is rejected")
+}
+
+// TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload is the regression test
+// for the ent Update path's guarded-vs-unconditional SetNote fix: it must fail
+// against a guarded (`if data.Note != ""`) Update and pass against the
+// unconditional one, since clearing a note is a meaningful state, not "unset".
+func TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	stale := "stale reminder"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &stale,
+	}))
+	require.NoError(t, err)
+
+	empty := ""
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &empty,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "", resp.Msg.Session.Note, "response should reflect the cleared note")
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == "my-session" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, "", found.Note, "cleared note must persist as empty across reload, not the stale prior value")
+}
+
+// TestUpdateSession_UnrelatedFieldUpdate_PreservesExistingNote guards the interaction
+// between the RPC handler's conditional field application (Note only mutated when
+// req.Msg.Note != nil) and ent_repository.go's *unconditional* SetNote(data.Note) on
+// every Update call: an UpdateSession call that doesn't touch Note at all must not
+// let the unconditional set clobber an existing note, since data.Note always reflects
+// the instance's already-current in-memory value when Note wasn't part of this request.
+func TestUpdateSession_UnrelatedFieldUpdate_PreservesExistingNote(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "my-session")
+
+	existingNote := "left this waiting on CI"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "my-session",
+		Note: &existingNote,
+	}))
+	require.NoError(t, err)
+
+	newTitle := "my-session-renamed"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:    "my-session",
+		Title: &newTitle,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, existingNote, resp.Msg.Session.Note, "response should still show the existing note after a Title-only update")
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == newTitle {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, existingNote, found.Note, "note must survive an unrelated field update across reload")
+}
+
+// TestUpdateSession_NoteOnlyEdit_DoesNotTouchOtherSessions is the regression test for the
+// write-amplification bug: UpdateSession used to call SaveInstances with the ENTIRE live
+// instance list, issuing one full-row UPDATE per OTHER started session even though only the
+// target session's field changed. This asserts that N other sessions' UpdatedAt timestamps
+// are untouched by a single-field edit to one session.
+func TestUpdateSession_NoteOnlyEdit_DoesNotTouchOtherSessions(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "target-session")
+	addPausedSession(t, fix, "other-session-1")
+	addPausedSession(t, fix, "other-session-2")
+
+	before, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	beforeUpdatedAt := make(map[string]time.Time, len(before))
+	for _, inst := range before {
+		beforeUpdatedAt[inst.Title] = inst.UpdatedAt
+	}
+
+	note := "left this waiting on CI"
+	_, err = fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:   "target-session",
+		Note: &note,
+	}))
+	require.NoError(t, err)
+
+	after, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	for _, inst := range after {
+		if inst.Title == "target-session" {
+			continue
+		}
+		assert.True(t, inst.UpdatedAt.Equal(beforeUpdatedAt[inst.Title]),
+			"session %q must not be rewritten by an edit to a different session (before=%v after=%v)",
+			inst.Title, beforeUpdatedAt[inst.Title], inst.UpdatedAt)
+	}
+}
+
+// TestUpdateSession_TitleRename_DoesNotOrphanOldRow is the regression test for the
+// title-rename identity bug: the generic SaveInstances path looks the DB row up by the
+// already-in-memory-renamed title, misses the still-old-titled row, and falls into a
+// Create fallback that leaves the old row behind as an orphan. Asserts exactly one row
+// (under the new title) exists after a rename, not two.
+func TestUpdateSession_TitleRename_DoesNotOrphanOldRow(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "old-title")
+
+	newTitle := "new-title"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:    "old-title",
+		Title: &newTitle,
+	}))
+	require.NoError(t, err)
+
+	data, err := fix.storage.ListInstanceData()
+	require.NoError(t, err)
+
+	var matches []string
+	for _, d := range data {
+		if d.Title == "old-title" || d.Title == newTitle {
+			matches = append(matches, d.Title)
+		}
+	}
+	assert.Equal(t, []string{newTitle}, matches,
+		"rename must not leave an orphaned row under the old title (found: %v)", matches)
+}
+
+// TestUpdateSession_TitleAndProgramCombo_DoesNotDuplicateRow is the regression test for a
+// bug found in code review: when a single UpdateSession request changes both Title and
+// Program, the Program branch's SwitchProgram callback used to persist via SaveInstances
+// BEFORE the deferred narrow title rename ran. SaveInstances looks the DB row up by the
+// already-in-memory-renamed title, misses the still-old-titled row, and duplicates it via
+// saveInstancesToRepo's Create fallback — leaving two rows under the new title. Asserts
+// exactly one row exists under either title after a combined Title+Program edit.
+func TestUpdateSession_TitleAndProgramCombo_DoesNotDuplicateRow(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "combo-old-title")
+
+	newTitle := "combo-new-title"
+	newProgram := "aider"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:      "combo-old-title",
+		Title:   &newTitle,
+		Program: &newProgram,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, newTitle, resp.Msg.Session.Title)
+	assert.Equal(t, newProgram, resp.Msg.Session.Program)
+
+	data, err := fix.storage.ListInstanceData()
+	require.NoError(t, err)
+
+	var matches []string
+	for _, d := range data {
+		if d.Title == "combo-old-title" || d.Title == newTitle {
+			matches = append(matches, d.Title)
+		}
+	}
+	assert.Equal(t, []string{newTitle}, matches,
+		"combined title+program edit must not leave a duplicate row (found: %v)", matches)
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == newTitle {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, newProgram, found.Program, "program change must be persisted alongside the rename")
+}
+
+// TestUpdateSession_ConcurrentDifferentFieldEdits_BothPersist verifies that two concurrent
+// UpdateSession calls touching different fields (note, category) of the same session both
+// land — neither narrow metadata write should lose the other's update.
+func TestUpdateSession_ConcurrentDifferentFieldEdits_BothPersist(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "concurrent-session")
+
+	note := "concurrent note"
+	category := "concurrent-category"
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+			Id:   "concurrent-session",
+			Note: &note,
+		}))
+		assert.NoError(t, err)
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+			Id:       "concurrent-session",
+			Category: &category,
+		}))
+		assert.NoError(t, err)
+	}()
+	wg.Wait()
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var found *session.Instance
+	for _, inst := range loaded {
+		if inst.Title == "concurrent-session" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, note, found.Note, "note update must not be lost to the concurrent category update")
+	assert.Equal(t, category, found.Category, "category update must not be lost to the concurrent note update")
+}
+
 // --------------------------------------------------------------------------
 // UpdateSession – handler ordering: metadata before status
 // --------------------------------------------------------------------------
@@ -576,6 +1318,7 @@ func TestUpdateSession_TagsUpdate_Replaces(t *testing.T) {
 // Paused → Paused) commits all fields atomically.  The test acts as a contract
 // check for the documented ordering: title/category/tags are applied before status.
 func TestUpdateSession_HandlerOrdering_MetadataBeforeStatus(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -626,6 +1369,7 @@ func TestUpdateSession_HandlerOrdering_MetadataBeforeStatus(t *testing.T) {
 // that pausing an Active instance that was never started (e.g. the async
 // CreateSession goroutine hasn't finished) succeeds as a no-op instead of 500ing.
 func TestUpdateSession_Pause_NeverStartedActiveInstance_NoOpSuccessNotInternal(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -654,6 +1398,7 @@ func TestUpdateSession_Pause_NeverStartedActiveInstance_NoOpSuccessNotInternal(t
 // an invalid transition (Stopped -> Paused) is classified as FailedPrecondition,
 // not CodeInternal.
 func TestUpdateSession_Pause_StoppedInstance_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -685,6 +1430,7 @@ func TestUpdateSession_Pause_StoppedInstance_ReturnsFailedPrecondition(t *testin
 // FailedPrecondition rather than silently no-op-pausing (closing the pre-mortem
 // F1 gap: MCP tools call Instance.Pause() directly, bypassing UpdateSession).
 func TestUpdateSession_Pause_PermissionDenied_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -720,6 +1466,7 @@ func TestUpdateSession_Pause_PermissionDenied_ReturnsFailedPrecondition(t *testi
 // in session/pause_resume_test.go — Instance.processManager isn't exported for
 // injection from this package.)
 func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -747,12 +1494,310 @@ func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *test
 }
 
 // --------------------------------------------------------------------------
+// UpdateSession — steer_message (ADR-001: widened steer RPC)
+// --------------------------------------------------------------------------
+
+// TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys verifies
+// AC7: a non-autonomous, live Instance-backed session now steers via
+// Instance.SendKeys (the same primitive the MCP steer_session tool's PTY
+// fallback uses) instead of unconditionally rejecting with FailedPrecondition.
+//
+// Instance.processManager isn't exported for injection from this package (see
+// the note on TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition
+// above), so this drives a real Instance.Resume() with the package-level
+// backend switched to the native PTY backend — the same real-subprocess
+// approach session/native_process_manager_test.go uses — rather than a
+// fake/mock SendKeys recorder, to get a genuinely "started" Instance whose
+// SendKeys call actually succeeds.
+func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("requires PTY allocation")
+	}
+
+	session.RegisterBackendProvider(session.BackendNative)
+	defer session.RegisterBackendProvider(session.BackendTmux)
+
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "steerable-work-session",
+		Path:        t.TempDir(),
+		Status:      session.Paused,
+		Program:     "bash",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := inst.Resume(); err != nil {
+		t.Skipf("PTY not available in this environment: %v", err)
+	}
+	t.Cleanup(func() { _ = inst.KillSession() })
+	require.False(t, inst.AutonomousMode, "regression guard: instance must not be autonomous for this test")
+
+	addInstanceToPoller(fix.poller, inst)
+
+	msg := "focus on the auth module first"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "steerable-work-session",
+		SteerMessage: &msg,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+}
+
+// TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_ReturnsFailedPrecondition
+// verifies the other half of AC7's error contract: unlike the autonomous
+// branch (which only logs a send failure), a SendKeys failure on the
+// non-autonomous branch is returned to the caller as FailedPrecondition so
+// the UI can surface it. A never-started Instance deterministically fails
+// SendKeys ("cannot send keys to instance that has not been started or is
+// paused"), giving a real failure without needing a fake ProcessManager.
+func TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "never-started-work-session",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	msg := "focus on the auth module first"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "never-started-work-session",
+		SteerMessage: &msg,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
+// TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController is a
+// regression guard (AC7's "no parallel steering implementation"): the
+// pre-existing autonomous branch (ClaudeController.SendCommandImmediate) must
+// be untouched by widening the handler to add the non-autonomous SendKeys
+// branch. An autonomous session with no live controller wired still returns
+// success (a send failure on this branch is only logged, never rejected),
+// exactly like the pre-widening behavior.
+func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:          "autonomous-session",
+		Path:           "/tmp/test",
+		Status:         session.Active,
+		Program:        "claude",
+		Permissions:    session.GetManagedPermissions(),
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	msg := "focus on the auth module first"
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "autonomous-session",
+		SteerMessage: &msg,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+}
+
+// TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument verifies
+// that a steer_message longer than session.MaxSteerMessageLength is rejected with
+// InvalidArgument before any send is attempted, mirroring the Note field's
+// length-cap guard (TestUpdateSession_NoteExceedsMaxLength_ReturnsInvalidArgument)
+// — steer_message is a free-text entry point that now reaches ordinary
+// work/review sessions, not just autonomous ones, so it needs the same cap.
+func TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "steer-too-long-session",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	tooLong := strings.Repeat("a", session.MaxSteerMessageLength+1)
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "steer-too-long-session",
+		SteerMessage: &tooLong,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// --------------------------------------------------------------------------
+// ResumeCrashedSession
+// --------------------------------------------------------------------------
+
+func TestResumeCrashedSession_EmptyId(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	_, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: ""}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+func TestResumeCrashedSession_NotFound(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	_, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: "does-not-exist"}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+}
+
+// TestResumeHibernatedSession_DoesNotTouchOtherSessions is the regression test for the
+// layer-1 write-amplification fix applied to ResumeHibernatedSession (and identically to
+// HibernateSession/ResumeCrashedSession, which share the exact same
+// `instances[instanceIndex] = instance; SaveInstances(instances)` -> `SaveInstances([]*session.Instance{instance})`
+// shape): resuming one Hibernated session used to persist via the entire live instance
+// list, rewriting every other started session's row too. Asserts a sibling session's
+// UpdatedAt is untouched.
+func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	hibernated := &session.Instance{
+		Title:     "hibernated-session",
+		UUID:      "dddddddd-0000-0000-0000-000000000004",
+		Path:      "/tmp/test",
+		Status:    session.Hibernated,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(hibernated))
+
+	other := &session.Instance{
+		Title:     "hibernate-sibling-session",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(other))
+
+	// ResumeFromHibernation dispatches the actual relaunch to a background goroutine
+	// that calls the real Start(false) — a real tmux session gets created as a side
+	// effect. Best-effort clean it up so repeated test runs don't leave orphaned tmux
+	// sessions, mirroring TestResumeCrashedSession_TransitionsCrashedToActive.
+	t.Cleanup(func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = hibernated.KillSession()
+	})
+
+	before, err := storage.LoadInstances()
+	require.NoError(t, err)
+	var beforeOtherUpdatedAt time.Time
+	for _, inst := range before {
+		if inst.Title == "hibernate-sibling-session" {
+			beforeOtherUpdatedAt = inst.UpdatedAt
+		}
+	}
+	require.False(t, beforeOtherUpdatedAt.IsZero(), "sibling session must be found before the call")
+
+	resp, err := svc.ResumeHibernatedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeHibernatedSessionRequest{Id: "dddddddd-0000-0000-0000-000000000004"}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, resp.Msg.Session.Status)
+
+	after, err := storage.LoadInstances()
+	require.NoError(t, err)
+	for _, inst := range after {
+		if inst.Title == "hibernate-sibling-session" {
+			assert.True(t, inst.UpdatedAt.Equal(beforeOtherUpdatedAt),
+				"sibling session must not be rewritten by resuming a different session (before=%v after=%v)",
+				beforeOtherUpdatedAt, inst.UpdatedAt)
+		}
+	}
+}
+
+// TestResumeCrashedSession_TransitionsCrashedToActive verifies that resuming a
+// Crashed session (dead pane detected by SessionHealthChecker) transitions it
+// back to Active in the response, giving the frontend a one-tap resume action
+// instead of requiring the user to hand-type the --resume command.
+func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	const sessionUUID = "cccccccc-0000-0000-0000-000000000003"
+	testInstance := &session.Instance{
+		Title:      "crashed-session",
+		UUID:       sessionUUID,
+		Path:       "/tmp/test",
+		Status:     session.Crashed,
+		ExitReason: "signal SIGKILL (exit code 137)",
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInstance))
+
+	// ResumeFromCrash (session/instance_crash.go) dispatches the actual relaunch
+	// to a background goroutine that calls the real Start(false) -- a real tmux
+	// session gets created as a side effect. Best-effort clean it up so repeated
+	// test runs don't leave orphaned tmux sessions on the machine; the goroutine
+	// isn't awaited, so this is a short grace delay, not a guarantee.
+	t.Cleanup(func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = testInstance.KillSession()
+	})
+
+	resp, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: sessionUUID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, resp.Msg.Session.Status)
+}
+
+// --------------------------------------------------------------------------
 // UpdateSession – title conflict
 // --------------------------------------------------------------------------
 
 // TestUpdateSession_TitleConflict verifies that attempting to rename a session to
 // the title of an already-existing session returns CodeAlreadyExists.
 func TestUpdateSession_TitleConflict(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -775,6 +1820,7 @@ func TestUpdateSession_TitleConflict(t *testing.T) {
 // TestUpdateSession_NotFound verifies that updating a non-existent session returns
 // CodeNotFound.
 func TestUpdateSession_NotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -792,6 +1838,7 @@ func TestUpdateSession_NotFound(t *testing.T) {
 // TestUpdateSession_MissingID verifies that UpdateSession with an empty ID returns
 // CodeInvalidArgument.
 func TestUpdateSession_MissingID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -813,6 +1860,7 @@ func TestUpdateSession_MissingID(t *testing.T) {
 // TestGetSession_EmptyID verifies that GetSession returns CodeInvalidArgument
 // when no session ID is provided.
 func TestGetSession_EmptyID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -829,6 +1877,7 @@ func TestGetSession_EmptyID(t *testing.T) {
 // TestGetSession_FoundByTitle verifies that GetSession can find a session by Title
 // when the poller is wired.
 func TestGetSession_FoundByTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -852,6 +1901,7 @@ func TestGetSession_FoundByTitle(t *testing.T) {
 // TestGetSession_FoundByUUID verifies that GetSession can find a session by UUID
 // when the poller is wired.
 func TestGetSession_FoundByUUID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -876,6 +1926,7 @@ func TestGetSession_FoundByUUID(t *testing.T) {
 // TestGetSession_NotFound verifies that GetSession returns CodeNotFound when the
 // poller is wired but no session matches the requested ID.
 func TestGetSession_NotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -897,6 +1948,7 @@ func TestGetSession_NotFound(t *testing.T) {
 // TestListSessions_ReturnsAllSessions verifies that ListSessions returns all sessions
 // registered in the poller when no filter is applied.
 func TestListSessions_ReturnsAllSessions(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -923,6 +1975,7 @@ func TestListSessions_ReturnsAllSessions(t *testing.T) {
 // TestListSessions_WithStatusFilter verifies that ListSessions filters sessions by
 // the requested status, returning only those that match.
 func TestListSessions_WithStatusFilter(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -953,6 +2006,7 @@ func TestListSessions_WithStatusFilter(t *testing.T) {
 // TestListSessions_WithCategoryFilter verifies that ListSessions filters sessions by
 // the requested category, returning only those that match.
 func TestListSessions_WithCategoryFilter(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -989,6 +2043,7 @@ func TestListSessions_WithCategoryFilter(t *testing.T) {
 // TestRenameSession_EmptyID verifies that RenameSession returns CodeInvalidArgument
 // when no session ID is provided.
 func TestRenameSession_EmptyID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -1006,6 +2061,7 @@ func TestRenameSession_EmptyID(t *testing.T) {
 // TestRenameSession_EmptyNewTitle verifies that RenameSession returns CodeInvalidArgument
 // when no new title is provided.
 func TestRenameSession_EmptyNewTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -1023,6 +2079,7 @@ func TestRenameSession_EmptyNewTitle(t *testing.T) {
 // TestRenameSession_NotFound verifies that RenameSession returns CodeNotFound when
 // the target session does not exist in storage.
 func TestRenameSession_NotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -1040,6 +2097,7 @@ func TestRenameSession_NotFound(t *testing.T) {
 // TestRenameSession_ConflictsWithExisting verifies that RenameSession returns
 // CodeAlreadyExists when the desired new title is already taken by another session.
 func TestRenameSession_ConflictsWithExisting(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -1061,6 +2119,7 @@ func TestRenameSession_ConflictsWithExisting(t *testing.T) {
 // the updated session in the response with the new title. It also confirms the new
 // title record is persisted to storage.
 func TestRenameSession_Success(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -1096,6 +2155,7 @@ func TestRenameSession_Success(t *testing.T) {
 // TestCreateSession_EmptyTitle verifies that CreateSession returns CodeInvalidArgument
 // when no title is provided.
 func TestCreateSession_EmptyTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -1113,6 +2173,7 @@ func TestCreateSession_EmptyTitle(t *testing.T) {
 // TestCreateSession_EmptyPath verifies that CreateSession returns CodeInvalidArgument
 // when no path is provided.
 func TestCreateSession_EmptyPath(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -1130,6 +2191,7 @@ func TestCreateSession_EmptyPath(t *testing.T) {
 // TestCreateSession_TitleAlreadyExists verifies that CreateSession returns
 // CodeAlreadyExists when a session with the same title already exists in storage.
 func TestCreateSession_TitleAlreadyExists(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -1147,6 +2209,45 @@ func TestCreateSession_TitleAlreadyExists(t *testing.T) {
 	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
 }
 
+// TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked
+// is the Story 1.2.0a regression test: it proves CreateSession's handler no
+// longer contains its own inline path-existence check but instead delegates
+// construction to session.CreateManagedInstance. It does this by observing
+// CreateManagedInstance's specific sentinel-error contract (session.ErrPathNotExist,
+// wrapped and mapped to connect.CodeNotFound) surface unchanged through the
+// handler for a Directory-mode session whose path does not exist and
+// CreateIfMissing is unset -- behavior that only holds if the handler is
+// calling into the extracted domain function rather than duplicating (or
+// dropping) the check itself.
+func TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	tmpDir := t.TempDir()
+	missingPath := tmpDir + "/does-not-exist"
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "delegation-regression",
+		Path:        missingPath,
+		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code(),
+		"CreateSession must surface session.CreateManagedInstance's ErrPathNotExist as CodeNotFound, proving the handler delegates rather than duplicating path-existence logic")
+
+	// No instance should have been persisted -- CreateManagedInstance must
+	// fail before any Storage.AddInstance call.
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	for _, d := range data {
+		assert.NotEqual(t, "delegation-regression", d.Title, "no instance should be persisted when path resolution fails")
+	}
+}
+
 // --------------------------------------------------------------------------
 // DeleteSession + CancelSession ordering (F10)
 // --------------------------------------------------------------------------
@@ -1155,9 +2256,11 @@ func TestCreateSession_TitleAlreadyExists(t *testing.T) {
 // all pending approvals for the session before removing it from storage.
 // This ensures approval goroutines can exit cleanly while the session still exists.
 func TestDeleteSession_CancelsPendingApprovals(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const sessionUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	testInstance := &session.Instance{
@@ -1200,9 +2303,11 @@ func TestDeleteSession_CancelsPendingApprovals(t *testing.T) {
 // TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop verifies that
 // DeleteSession succeeds gracefully when there are no pending approvals.
 func TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "clean-session",
@@ -1233,6 +2338,7 @@ func TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop(t *testing.T) {
 // PORT=0 listener's real address — permanently freezing the MCP URL at
 // http://localhost:0/mcp.
 func TestSessionService_should_ReturnUpdatedPort_When_MCPServerURLFnInvokedAfterAddrChanges(t *testing.T) {
+	t.Parallel()
 	svc := &SessionService{}
 
 	// Simulate the server's address being resolved lazily, e.g. after
@@ -1255,6 +2361,7 @@ func TestSessionService_should_ReturnUpdatedPort_When_MCPServerURLFnInvokedAfter
 // verifies that reading the MCP server URL before SetMCPServerURL has been
 // called returns a safe empty string instead of a nil-pointer panic.
 func TestSessionService_should_ReturnEmptyString_When_MCPServerURLFnNotYetConfigured(t *testing.T) {
+	t.Parallel()
 	svc := &SessionService{}
 
 	assert.NotPanics(t, func() {
@@ -1340,6 +2447,35 @@ func filterEventsByType(all []*events.Event, typ events.EventType) []*events.Eve
 	return matched
 }
 
+// newRateLimitHiddenTestFixture builds an isolated storage/eventBus/service
+// triple plus a Hidden test instance for the rate-limit Hidden-gate tests
+// below. Each caller must get its own fixture rather than sharing one across
+// t.Parallel() subtests: the eventBus broadcasts every publish to every
+// subscriber, so a shared instance let a sibling subtest's SessionUpdated
+// event land in another subtest's channel and flip an exact-count assertion
+// (see TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden's
+// doc comment for the flake this caused).
+func newRateLimitHiddenTestFixture(t *testing.T, title string) (*SessionService, *events.EventBus, *session.Instance) {
+	t.Helper()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	inst := &session.Instance{
+		Title:     title,
+		UUID:      title + "-uuid",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		Hidden:    true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	return svc, eventBus, inst
+}
+
 // TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden verifies
 // the Epic 5 Story 5.1 Hidden gate: a Hidden instance (e.g. a headless review
 // session spawned via SpawnReviewSession) must never receive a rate-limit
@@ -1347,27 +2483,11 @@ func filterEventsByType(all []*events.Event, typ events.EventType) []*events.Eve
 // AttentionReason to preserve as a narrowing safety net — suppression here is
 // unconditional on Hidden, matching Epic 3's generic done/stuck notifier.
 func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *testing.T) {
-	storage := createTestStorage(t)
-	eventBus := events.NewEventBus(8)
-	svc := NewSessionService(storage, eventBus)
-
-	newHiddenInstance := func(title string) *session.Instance {
-		inst := &session.Instance{
-			Title:     title,
-			UUID:      title + "-uuid",
-			Path:      "/tmp/test",
-			Status:    session.Paused,
-			Program:   "claude",
-			Hidden:    true,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		}
-		require.NoError(t, storage.AddInstance(inst))
-		return inst
-	}
+	t.Parallel()
 
 	t.Run("onDetected", func(t *testing.T) {
-		inst := newHiddenInstance("rl-hidden-detected")
+		t.Parallel()
+		svc, eventBus, inst := newRateLimitHiddenTestFixture(t, "rl-hidden-detected")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -1379,7 +2499,8 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 	})
 
 	t.Run("onRecovery", func(t *testing.T) {
-		inst := newHiddenInstance("rl-hidden-recovery")
+		t.Parallel()
+		svc, eventBus, inst := newRateLimitHiddenTestFixture(t, "rl-hidden-recovery")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -1400,11 +2521,9 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 // (rate_limit_state/rate_limit_reset_time), not a Notifications-page entry,
 // and must still fire unmodified for Hidden instances.
 func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden(t *testing.T) {
-	storage := createTestStorage(t)
-	eventBus := events.NewEventBus(8)
-	svc := NewSessionService(storage, eventBus)
+	t.Parallel()
 
-	newHiddenInstance := func(title string) *session.Instance {
+	newHiddenInstance := func(t *testing.T, storage *session.Storage, title string) *session.Instance {
 		inst := &session.Instance{
 			Title:     title,
 			UUID:      title + "-uuid",
@@ -1419,8 +2538,19 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		return inst
 	}
 
+	// Each subtest gets its own storage/eventBus/service — see the matching
+	// comment in TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden.
+	// This test's exact require.Len(updates, 1) assertion is what actually
+	// surfaced the shared-eventBus crosstalk as a flake: a sibling subtest's
+	// SessionUpdated publish would occasionally land in this subtest's channel
+	// before it drained, making the count 2 instead of 1.
 	t.Run("onDetected", func(t *testing.T) {
-		inst := newHiddenInstance("rl-hidden-detected-sync")
+		t.Parallel()
+		storage := createTestStorage(t)
+		eventBus := events.NewEventBus(8)
+		svc := NewSessionService(storage, eventBus)
+		t.Cleanup(func() { svc.Shutdown() })
+		inst := newHiddenInstance(t, storage, "rl-hidden-detected-sync")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -1439,7 +2569,12 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 	})
 
 	t.Run("onRecovery", func(t *testing.T) {
-		inst := newHiddenInstance("rl-hidden-recovery-sync")
+		t.Parallel()
+		storage := createTestStorage(t)
+		eventBus := events.NewEventBus(8)
+		svc := NewSessionService(storage, eventBus)
+		t.Cleanup(func() { svc.Shutdown() })
+		inst := newHiddenInstance(t, storage, "rl-hidden-recovery-sync")
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -1464,10 +2599,12 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 // metadata built via events.SessionScopedMetadata — {"item_id": ..., "session_scoped": "true"}
 // — not the nil it carried before this fix.
 func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHidden(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(8)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "rl-metadata-test"
 	inst := &session.Instance{
@@ -1506,4 +2643,166 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	require.NotNil(t, notifs[0].NotificationMetadata, "metadata must not be nil so downstream consumers can correlate the notification to its item")
 	assert.Equal(t, item.ID, notifs[0].NotificationMetadata[events.MetadataKeyItemID])
 	assert.Equal(t, "true", notifs[0].NotificationMetadata[events.MetadataKeySessionScoped])
+}
+
+// TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine confirms Shutdown() calls
+// through to AnalyticsStore.Stop(), is idempotent, and leaves Record() as a safe no-op
+// afterward. Shutdown() joins the flush goroutine synchronously (AnalyticsStore.Stop
+// blocks on <-s.done), so a hung flush loop would make this test time out rather than
+// silently pass — no goleak/process-wide check needed to catch that regression.
+func TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(10)
+	svc := NewSessionService(storage, eventBus)
+
+	store := svc.GetAnalyticsStore()
+	require.NotNil(t, store, "NewSessionService must wire an AnalyticsStore")
+
+	done := make(chan struct{})
+	go func() {
+		svc.Shutdown()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown() did not return within 2s — AnalyticsStore.Stop is likely blocked")
+	}
+
+	require.NotPanics(t, svc.Shutdown, "a second Shutdown() call must be idempotent")
+
+	require.NotPanics(t, func() {
+		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
+	}, "Record() after Shutdown() must stay a silent no-op, not panic")
+}
+
+// TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier is the Story 2.1.1
+// root-cause regression test: LoadClaudeSettingsRules had zero call sites before this
+// project, so ~/.claude/settings.json permissions.allow entries never took effect as
+// stapler-squad auto-approval rules. Exercises the extracted
+// loadClaudeSettingsRulesAtStartup helper directly rather than going through
+// NewSessionService, which skips this under config.IsTestMode() precisely so the rest of
+// this repo's test suite doesn't depend on the developer's real ~/.claude/settings.json —
+// see loadClaudeSettingsRulesAtStartup's call site in NewSessionServiceWithSearchEngine.
+func TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git log*)"]}}`)
+
+	classifierObj := classifier.NewRuleBasedClassifier()
+	loadClaudeSettingsRulesAtStartup(classifierObj, "", events.NewEventBus(100))
+
+	toolName := ""
+	found := false
+	for _, r := range classifierObj.Rules() {
+		if r.Source == "claude-settings" {
+			found = true
+			toolName = r.ToolName
+		}
+	}
+	require.True(t, found, "claude-settings rule from ~/.claude/settings.json must be present at startup")
+	assert.Equal(t, "Bash", toolName)
+}
+
+// TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable is the Story 4.3.1
+// lifecycle-wiring regression test: GetClaudeSettingsWatcher must return a non-nil watcher
+// after NewSessionService, so wireDepsIntoServer has something to Start with the server's
+// lifecycle context.
+func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	assert.NotNil(t, svc.GetClaudeSettingsWatcher())
+}
+
+// TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
+// Blocker 2 end-to-end regression test: the live deployed systemd unit runs with
+// WorkingDirectory=$HOME (see scripts/install-service.sh), so the server's own cwd equals
+// home. Without the settingsPaths dedup fix, the classifier would load the same file's rules
+// twice (once tagged "global", once tagged "project"). Exercises
+// loadClaudeSettingsRulesAtStartup directly — see the sibling
+// TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier's doc comment for why.
+func TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git *)"]}}`)
+
+	classifierObj := classifier.NewRuleBasedClassifier()
+	loadClaudeSettingsRulesAtStartup(classifierObj, home, events.NewEventBus(100)) // cwd == home, mirrors the live deployed config
+
+	type key struct {
+		pattern  string
+		priority int
+	}
+	seen := make(map[key]int)
+	for _, r := range classifierObj.Rules() {
+		if r.Source != "claude-settings" {
+			continue
+		}
+		pattern := ""
+		if r.CommandPattern != nil {
+			pattern = r.CommandPattern.String()
+		}
+		seen[key{pattern: pattern, priority: r.Priority}]++
+	}
+	require.NotEmpty(t, seen)
+	for k, count := range seen {
+		assert.Equal(t, 1, count, "claude-settings rule %+v must not be duplicated when cwd == home", k)
+	}
+}
+
+// TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishesNoNotification
+// is the end-to-end regression test for the reviewed defect against the ACTUAL callback
+// wired up in NewSessionServiceWithSearchEngine (not just the isolated watcher unit test):
+// Start()'s initial priming reload must never publish a "Claude Settings Reloaded"
+// EventNotification, whether or not any claude-settings rules are configured. Covers both
+// halves the reviewer flagged: a spurious "0 claude-settings rule(s) reloaded" toast on
+// every restart with no rules configured, and a redundant duplicate of the startup
+// activation notification when rules do exist.
+func TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishesNoNotification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		withRules bool
+	}{
+		{name: "zero rules configured", withRules: false},
+		{name: "rules configured", withRules: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if tc.withRules {
+				writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+					`{"permissions":{"allow":["Bash(git log*)"]}}`)
+			}
+
+			storage := createTestStorage(t)
+			eventBus := events.NewEventBus(100)
+			svc := NewSessionService(storage, eventBus)
+			t.Cleanup(func() { svc.Shutdown() })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			eventCh, _ := eventBus.Subscribe(ctx)
+
+			watcher := svc.GetClaudeSettingsWatcher()
+			require.NotNil(t, watcher)
+			watcher.Start(ctx) // exercises the exact NewSessionServiceWithSearchEngine-wired callback
+
+			select {
+			case ev := <-eventCh:
+				t.Fatalf("Start's initial priming reload must not publish a notification, got: %+v", ev)
+			case <-time.After(200 * time.Millisecond):
+				// No notification observed within the window — expected.
+			}
+		})
+	}
 }

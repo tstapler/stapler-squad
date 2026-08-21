@@ -261,6 +261,10 @@ func (ss *SearchService) ListClaudeHistory(
 		entries = hist.GetAll()
 	}
 
+	if req.Msg.GetExcludeAutomationSessions() && ss.getInstances != nil {
+		entries = filterHistoryEntriesByAutomation(entries, ss.getInstances())
+	}
+
 	totalCount := len(entries)
 
 	// --- Cursor pagination ---------------------------------------------------
@@ -332,6 +336,38 @@ func (ss *SearchService) ListClaudeHistory(
 	}), nil
 }
 
+// resolveHistoryEntry looks up a history entry by id, retrying against the
+// tmux-session-UUID -> Claude-conversation-UUID resolver when the direct
+// lookup fails. Callers (e.g. the backlog UI) sometimes pass a tmux session
+// UUID rather than the Claude conversation UUID that history.jsonl entries
+// are actually keyed by; resolveConversationUUID bridges that gap.
+//
+// Returns the entry and the ID it was ultimately found under (equal to id
+// unless the fallback fired), so callers needing the resolved ID for a
+// follow-up lookup (e.g. GetMessagesFromConversationFile) can reuse it.
+func (ss *SearchService) resolveHistoryEntry(
+	ctx context.Context,
+	hist *session.ClaudeSessionHistory,
+	id string,
+) (*session.ClaudeHistoryEntry, string, error) {
+	entry, err := hist.GetByID(id)
+	if err == nil {
+		return entry, id, nil
+	}
+	if ss.resolveConversationUUID == nil {
+		return nil, "", err
+	}
+	resolved, resolveErr := ss.resolveConversationUUID(ctx, id)
+	if resolveErr != nil || resolved == "" || resolved == id {
+		return nil, "", err
+	}
+	resolvedEntry, resolvedErr := hist.GetByID(resolved)
+	if resolvedErr != nil {
+		return nil, "", err
+	}
+	return resolvedEntry, resolved, nil
+}
+
 // GetClaudeHistoryDetail retrieves detailed information for a specific history entry,
 // including lazily-fetched VCS status for the project directory.
 //
@@ -346,7 +382,7 @@ func (ss *SearchService) GetClaudeHistoryDetail(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
 
-	entry, err := hist.GetByID(req.Msg.Id)
+	entry, _, err := ss.resolveHistoryEntry(ctx, hist, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
@@ -406,12 +442,16 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetClaudeHistoryMessagesRequest],
 ) (*connect.Response[sessionv1.GetClaudeHistoryMessagesResponse], error) {
+	if req.Msg.AnchorIndex != nil && req.Msg.Tail {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("anchor_index and tail are mutually exclusive"))
+	}
+
 	hist, err := ss.getOrRefreshHistoryCache(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
 
-	_, err = hist.GetByID(req.Msg.Id)
+	_, resolvedID, err := ss.resolveHistoryEntry(ctx, hist, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %w", err))
 	}
@@ -423,7 +463,7 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 	if req.Msg.Tail && req.Msg.Limit > 0 && req.Msg.Offset == 0 {
 		fileLimit = int(req.Msg.Limit)
 	}
-	messages, err := hist.GetMessagesFromConversationFile(req.Msg.Id, fileLimit)
+	messages, err := hist.GetMessagesFromConversationFile(resolvedID, fileLimit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load messages: %w", err))
 	}
@@ -431,23 +471,23 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 	totalCount := len(messages)
 	offset := int(req.Msg.Offset)
 	limit := int(req.Msg.Limit)
-
-	if offset > 0 && offset < len(messages) {
+	if req.Msg.AnchorIndex != nil {
+		anchor := int(*req.Msg.AnchorIndex)
+		offset = anchor - limit/2
+		if offset < 0 {
+			offset = 0
+		}
+	}
+	if offset >= len(messages) {
+		messages = messages[:0]
+	} else if offset > 0 {
 		messages = messages[offset:]
 	}
 	if limit > 0 && limit < len(messages) {
 		messages = messages[:limit]
 	}
 
-	protoMessages := make([]*sessionv1.ClaudeMessage, 0, len(messages))
-	for _, msg := range messages {
-		protoMessages = append(protoMessages, &sessionv1.ClaudeMessage{
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Timestamp: timestamppb.New(msg.Timestamp),
-			Model:     msg.Model,
-		})
-	}
+	protoMessages := toProtoClaudeMessages(messages)
 
 	return connect.NewResponse(&sessionv1.GetClaudeHistoryMessagesResponse{
 		Messages:   protoMessages,
@@ -469,6 +509,20 @@ func (ss *SearchService) SearchClaudeHistory(
 
 	if req.Msg.Query == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("query is required"))
+	}
+
+	// offset is applied directly to the raw engine fetch, so it addresses a
+	// position in the raw (pre-dedup/filter) result stream, not the
+	// post-processed one — paginating (offset>0) together with any
+	// post-processing flag can skip or duplicate sessions across pages.
+	// Rebasing offset against the deduped/filtered set is real work with no
+	// caller needing it today (RelatedWorkQuery, the only caller of these
+	// flags, never sets offset) — reject the combination explicitly instead
+	// of silently returning a wrong page.
+	needsPostProcessing := req.Msg.GetGroupBySession() || req.Msg.GetExcludeAutomationSessions() || req.Msg.GetProject() != ""
+	if req.Msg.Offset > 0 && needsPostProcessing {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("offset is not supported together with group_by_session, exclude_automation_sessions, or project"))
 	}
 
 	hist, err := ss.getOrRefreshHistoryCache(ctx)
@@ -498,12 +552,12 @@ func (ss *SearchService) SearchClaudeHistory(
 		log.Info("search index sync", "result", syncResult.String())
 	}
 
-	limit := int(req.Msg.Limit)
-	if limit <= 0 {
-		limit = 20
+	requestedLimit := int(req.Msg.Limit)
+	if requestedLimit <= 0 {
+		requestedLimit = 20
 	}
-	if limit > 100 {
-		limit = 100
+	if requestedLimit > 100 {
+		requestedLimit = 100
 	}
 
 	offset := int(req.Msg.Offset)
@@ -511,8 +565,28 @@ func (ss *SearchService) SearchClaudeHistory(
 		offset = 0
 	}
 
+	// needsPostProcessing is true whenever a post-fetch filter/dedup step will
+	// run on protoResults below. In that case, truncating the *raw* engine
+	// fetch to requestedLimit first would let a single busy or filtered-out
+	// session consume the entire raw window before dedup/filtering ever gets
+	// a chance to run — so over-fetch a larger raw candidate set instead, and
+	// apply requestedLimit only after post-processing (see the truncation
+	// step near the end of this function). This raises but does not remove
+	// the starvation threshold: if more than rawLimit/requestedLimit sessions
+	// outscore a relevant one, it can still be crowded out of the raw window.
+	// (offset>0 combined with this is rejected above, before the history
+	// load, so needsPostProcessing here only ever gates the oversampling and
+	// post-processing steps, never the offset math.)
+	rawLimit := requestedLimit
+	if needsPostProcessing {
+		rawLimit = requestedLimit * 5
+		if rawLimit > 100 {
+			rawLimit = 100
+		}
+	}
+
 	searchOpts := search.SearchOptions{
-		Limit:  limit,
+		Limit:  rawLimit,
 		Offset: offset,
 	}
 
@@ -588,6 +662,8 @@ func (ss *SearchService) SearchClaudeHistory(
 			},
 		})
 	}
+
+	protoResults = ss.applyResultPostProcessing(protoResults, req.Msg, hist, requestedLimit, needsPostProcessing)
 
 	return connect.NewResponse(&sessionv1.SearchClaudeHistoryResponse{
 		Results:      protoResults,

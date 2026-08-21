@@ -23,7 +23,9 @@ export const routes = {
   settingsPipelineModes: "/settings/pipeline-modes",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
+  sessionsImport: "/sessions/import",
   workflows: "/workflows",
+  triggers: "/triggers",
   login: "/login",
   account: "/account",
   escapeAnalytics: "/analytics/escape",
@@ -34,6 +36,7 @@ export const routes = {
     if (title) params.set("title", title);
     return `/?${params.toString()}`;
   },
+  unfinishedItem: (itemId: string) => `/unfinished?item=${encodeURIComponent(itemId)}`,
 } as const;
 
 export type Route = typeof routes;

@@ -2,6 +2,12 @@ import { style } from "@vanilla-extract/css";
 import { recipe } from "@vanilla-extract/recipes";
 import { vars, breakpoints } from "@/styles/theme.css";
 
+// PaneSplitRenderer hides ResizeHandle below breakpoints.inner (900px, its isNarrow
+// check) — the horizontal-split override below must trigger at the same width or a
+// split created at a non-0.5 ratio (paneReducer.ts/paneUtils.ts default new splits to
+// 0.35/0.28) renders lopsided on mobile with no drag handle left to fix it.
+const narrowMediaQuery = `(max-width: ${parseInt(breakpoints.inner, 10) - 1}px)`;
+
 /**
  * Split container: CSS grid with a ratio-driven first column/row and a 6px handle column/row.
  * --split-ratio is set as an inline style at runtime (CSS custom property bridge).
@@ -31,6 +37,13 @@ export const splitContainer = recipe({
         // top | handle | bottom
         gridTemplateColumns: "100%",
         gridTemplateRows: "calc(var(--split-ratio, 0.5) * 100%) 6px 1fr",
+        "@media": {
+          [narrowMediaQuery]: {
+            // ResizeHandle is hidden below this width, so force 50/50 instead of
+            // trusting whatever ratio the split happened to be created with.
+            gridTemplateRows: "1fr 6px 1fr",
+          },
+        },
       },
     },
   },

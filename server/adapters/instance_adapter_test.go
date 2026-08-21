@@ -67,6 +67,22 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 	}
 }
 
+// TestInstanceToProto_SubagentCount_DefaultZero verifies that a fresh instance with no
+// registered status manager/controller (the common case: Active status but nothing
+// wired up yet) maps to SubagentCount=0 rather than leaving the proto field unset in a
+// way that would panic or read garbage — statusInfo is the zero-value InstanceStatusInfo
+// in that path (see the "set unconditionally" comment on the SubagentCount assignment).
+func TestInstanceToProto_SubagentCount_DefaultZero(t *testing.T) {
+	inst := &session.Instance{}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.SubagentCount != 0 {
+		t.Errorf("SubagentCount = %d, want 0 for an instance with no status manager", proto.SubagentCount)
+	}
+}
+
 func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
 	inst := &session.Instance{} // no controller → state is None
 	proto := InstanceToProto(inst, nil)
@@ -140,6 +156,52 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	gotActive := toProtoSubStatusFromInfo(session.Active, 0, session.InstanceStatusInfo{IsControllerActive: false})
 	if gotActive != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 		t.Logf("toProtoSubStatusFromInfo(Active/no-controller) = %v (expected UNSPECIFIED)", gotActive)
+	}
+}
+
+// TestToProtoSubStatus_CoversAllDetectedStatusValues is a mandatory (not optional)
+// table-driven guard, added during Phase 4 pre-mortem repair (P1 #2): it iterates every
+// named detection.DetectedStatus value that has a defined SubStatus mapping and asserts
+// BOTH toProtoSubStatusFromInfo (instance_adapter.go, the live session list/watch RPC
+// path) and subStatusFromItem (review_queue_adapter.go) return a non-UNSPECIFIED value.
+// This is the actual RPC-facing pair — neither is exhaustive-lint-enforced (server/
+// adapters is excluded per .golangci.yml) — so this test is what catches one switch
+// being updated while the other is silently missed, a discrepancy that otherwise looks
+// like a frontend bug (backend detects the status; the browser never shows the chip).
+func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
+	statuses := []detection.DetectedStatus{
+		detection.StatusReady,
+		detection.StatusProcessing,
+		detection.StatusExecuting,
+		detection.StatusNeedsApproval,
+		detection.StatusInputRequired,
+		detection.StatusError,
+		detection.StatusTestsFailing,
+		detection.StatusIdle,
+		detection.StatusSuccess,
+		detection.StatusWaitingForAgent,
+		detection.StatusCompacting,
+	}
+
+	for _, status := range statuses {
+		t.Run(status.String(), func(t *testing.T) {
+			info := session.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: status}
+			gotInstance := toProtoSubStatusFromInfo(session.Active, 0, info)
+			if gotInstance == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+				t.Errorf("toProtoSubStatusFromInfo(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
+			}
+
+			item := &session.ReviewItem{ClaudeStatus: status}
+			gotReviewQueue := subStatusFromItem(item)
+			if gotReviewQueue == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+				t.Errorf("subStatusFromItem(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
+			}
+
+			if gotInstance != gotReviewQueue {
+				t.Errorf("toProtoSubStatusFromInfo(%s) = %v but subStatusFromItem(%s) = %v — the two adapters must agree",
+					status, gotInstance, status, gotReviewQueue)
+			}
+		})
 	}
 }
 

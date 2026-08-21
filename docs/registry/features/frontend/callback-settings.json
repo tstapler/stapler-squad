@@ -1,0 +1,20 @@
+{
+  "id": "callback-settings",
+  "type": "frontend",
+  "name": "Outbound callback URL settings — masked, never round-trips the real URL",
+  "component": "CallbackSettings",
+  "path": "web-app/src/components/sessions/CallbackSettings.tsx",
+  "filePath": "web-app/src/components/sessions/CallbackSettings.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "CallbackSettings_should_showConfiguredBadge_When_urlIsSet",
+    "CallbackSettings_should_neverDisplayTheActualUrl",
+    "CallbackSettings_should_disableSave_When_noFieldsEdited",
+    "CallbackSettings_should_callUpdateConfigWithOnlyEditedField_When_saved",
+    "CallbackSettings_should_sendEmptyString_When_clearButtonClicked",
+    "callback-settings_should_roundTripMaskedConfiguredBadge_When_validUrlSaved",
+    "callback-settings_should_rejectSSRFTargetWithVisibleError_When_savingLoopbackUrl"
+  ],
+  "lastModified": "2026-08-06T00:00:00Z"
+}

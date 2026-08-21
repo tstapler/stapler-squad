@@ -330,7 +330,7 @@ describe('Helper functions', () => {
         prNumber: 123,
         originalUrl: 'https://github.com/owner/my-repo/pull/123',
       };
-      expect(getSuggestedSessionName(ref)).toBe('pr-123-my-repo');
+      expect(getSuggestedSessionName(ref)).toBe('owner-my-repo-pr-123');
     });
 
     it('returns correct name for branch', () => {
@@ -341,7 +341,7 @@ describe('Helper functions', () => {
         branch: 'feature-branch',
         originalUrl: 'owner/repo:feature-branch',
       };
-      expect(getSuggestedSessionName(ref)).toBe('repo-feature-branch');
+      expect(getSuggestedSessionName(ref)).toBe('owner-repo-feature-branch');
     });
 
     it('sanitizes branch name with slashes', () => {
@@ -352,7 +352,7 @@ describe('Helper functions', () => {
         branch: 'feature/test',
         originalUrl: 'owner/repo:feature/test',
       };
-      expect(getSuggestedSessionName(ref)).toBe('repo-feature-test');
+      expect(getSuggestedSessionName(ref)).toBe('owner-repo-feature-test');
     });
 
     it('returns correct name for repo', () => {
@@ -362,7 +362,7 @@ describe('Helper functions', () => {
         repo: 'my-repo',
         originalUrl: 'owner/my-repo',
       };
-      expect(getSuggestedSessionName(ref)).toBe('my-repo');
+      expect(getSuggestedSessionName(ref)).toBe('owner-my-repo');
     });
   });
 

@@ -17,6 +17,7 @@ import (
 // ─── extractPRURL unit tests ──────────────────────────────────────────────────
 
 func TestExtractPRURL_Found(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		output string
@@ -65,6 +66,7 @@ func TestExtractPRURL_Found(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := extractPRURL(tc.output)
 			if got != tc.want {
 				t.Errorf("extractPRURL(%q) = %q; want %q", tc.output, got, tc.want)
@@ -74,6 +76,7 @@ func TestExtractPRURL_Found(t *testing.T) {
 }
 
 func TestExtractPRURL_NotFound(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"",
 		"no URLs here",
@@ -92,8 +95,10 @@ func TestExtractPRURL_NotFound(t *testing.T) {
 // ─── BatchCreateSessions concurrency tests ────────────────────────────────────
 
 func TestBatchCreateSessions_SemaphoreLimitsConcurrency(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	const total = 6
 	// Use titles that will fail validation (empty path) so goroutines exit immediately —
@@ -132,9 +137,11 @@ func TestBatchCreateSessions_SemaphoreLimitsConcurrency(t *testing.T) {
 }
 
 func TestBatchCreateSessions_MaxConcurrencyEnforced(t *testing.T) {
+	t.Parallel()
 	// Verify that the server caps MaxConcurrency at 3 even if caller requests more.
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	var peak int64
 	done := make(chan struct{})
@@ -162,8 +169,10 @@ func TestBatchCreateSessions_MaxConcurrencyEnforced(t *testing.T) {
 }
 
 func TestBatchCreateSessions_EmptyRequest(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 
 	resp, err := svc.BatchCreateSessions(t.Context(), connect.NewRequest(&sessionv1.BatchCreateSessionsRequest{}))
 	if err != nil {
@@ -189,6 +198,14 @@ func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
 		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644); err != nil {
 		t.Fatalf("write config.json: %v", err)
 	}
+
+	// Registered after t.TempDir() above, so t.Cleanup's LIFO order runs this
+	// BEFORE TempDir's own removal — otherwise TempDir deletes testDir (and the
+	// tmux-exec-gate dir living under it via STAPLER_SQUAD_TEST_DIR) while
+	// CreateSession's async trackCleanup goroutine may still be running and
+	// touching that directory, producing an intermittent "directory not empty"
+	// cleanup failure.
+	t.Cleanup(func() { svc.Shutdown() })
 
 	resp, err := svc.BatchCreateSessions(t.Context(), connect.NewRequest(&sessionv1.BatchCreateSessionsRequest{
 		Sessions: []*sessionv1.BatchSessionRequest{

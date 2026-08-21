@@ -41,15 +41,17 @@ func (p *BacklogItemEventPublisher) PublishItemChanged(item *session.BacklogItem
 	}
 
 	payload := &events.BacklogItemEventPayload{
-		Kind:          mapBacklogChangeKind(change.Kind),
-		Item:          item,
-		OldStatus:     change.OldStatus,
-		NewStatus:     change.NewStatus,
-		UpdatedFields: change.UpdatedFields,
-		SessionID:     change.SessionID,
-		ArchivedAt:    change.ArchivedAt,
-		RemovedReason: change.RemovedReason,
-		Verdict:       change.Verdict,
+		Kind:           mapBacklogChangeKind(change.Kind),
+		Item:           item,
+		OldStatus:      change.OldStatus,
+		NewStatus:      change.NewStatus,
+		UpdatedFields:  change.UpdatedFields,
+		SessionID:      change.SessionID,
+		ArchivedAt:     change.ArchivedAt,
+		RemovedReason:  change.RemovedReason,
+		Verdict:        change.Verdict,
+		ClaimantHostID: change.ClaimantHostID,
+		ActivityNote:   change.ActivityNote,
 	}
 	p.Bus.Publish(events.NewBacklogItemChangedEvent(payload))
 }
@@ -76,6 +78,8 @@ func mapBacklogChangeKind(kind session.BacklogChangeKind) events.BacklogChangeKi
 		return events.BacklogChangeItemRemoved
 	case session.ChangeTriageProgressUpdated:
 		return events.BacklogChangeTriageProgressUpdated
+	case session.ChangeActivityNoteAdded:
+		return events.BacklogChangeActivityNoteAdded
 	default:
 		panic(fmt.Sprintf("BacklogItemEventPublisher: unmapped BacklogChangeKind %q", kind))
 	}

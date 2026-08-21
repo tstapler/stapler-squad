@@ -11,6 +11,7 @@ import (
 // TestConvertEventToProto_SessionAcknowledged verifies that EventSessionAcknowledged
 // is converted to the SessionAcknowledged proto variant with correct fields (UT-GO-01).
 func TestConvertEventToProto_SessionAcknowledged(t *testing.T) {
+	t.Parallel()
 	ts := time.Now()
 	event := &events.Event{
 		Type:      events.EventSessionAcknowledged,
@@ -48,6 +49,7 @@ func TestConvertEventToProto_SessionAcknowledged(t *testing.T) {
 // TestConvertEventToProto_UserInteraction verifies that EventUserInteraction is
 // converted to the UserInteraction proto variant with correct fields (UT-GO-02).
 func TestConvertEventToProto_UserInteraction(t *testing.T) {
+	t.Parallel()
 	ts := time.Now()
 	event := &events.Event{
 		Type:            events.EventUserInteraction,
@@ -86,6 +88,7 @@ func TestConvertEventToProto_UserInteraction(t *testing.T) {
 // TestConvertEventToProto_UserInteraction_UnknownType verifies that an unknown
 // InteractionType string falls back to UNSPECIFIED rather than panicking.
 func TestConvertEventToProto_UserInteraction_UnknownType(t *testing.T) {
+	t.Parallel()
 	event := &events.Event{
 		Type:            events.EventUserInteraction,
 		Timestamp:       time.Now(),

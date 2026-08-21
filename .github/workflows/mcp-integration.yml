@@ -40,12 +40,25 @@ jobs:
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # The integration test (TestMCPHandshakeSubprocess) spawns a real
       # --mcp subprocess and exercises the full MCP stdio handshake.
       # It calls `go build` internally, so the Go toolchain must be present.
+      #
+      # -timeout=1200s: the pure-Go sqlite migration (modernc.org/sqlite,
+      # see backlog/stapler-squad-fix-cgo-release-sqlite-driver) made
+      # session.NewEntRepository()'s ent schema migration + backfills
+      # measurably more expensive under -race than the old cgo driver
+      # (~2.9s/call under -race vs. ~0.77s without, measured locally via
+      # a standalone repro against this branch). server/services has 308
+      # call sites of the createTestStorage(t) helper that each pay this
+      # cost once, so its test binary alone needs on the order of 15
+      # minutes of headroom under -race; the previous 150s budget was
+      # sized for the old cgo driver and never adjusted for the new one.
       - name: Run MCP integration tests
         run: |
-          go test -tags=integration -timeout=120s -v -race \
+          go test -tags=integration -timeout=1200s -v -race \
             ./server/mcp/... \
             ./server/services/...

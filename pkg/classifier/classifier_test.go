@@ -3267,3 +3267,238 @@ func TestSentinel_PulumiUpEscalates(t *testing.T) {
 		}
 	}
 }
+
+// ── RequireCIPassing (ci_passing) condition tests ──────────────────────────────
+
+func TestClassify_RequireCIPassing_Success_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:               "test-ci-passing",
+			Name:             "Require CI passing",
+			ToolName:         "Bash",
+			RequireCIPassing: true,
+			Decision:         AutoAllow,
+			RiskLevel:        RiskLow,
+			Priority:         100,
+			Enabled:          true,
+			Source:           "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{CIStatus: "success"})
+	if result.Decision != AutoAllow {
+		t.Errorf("expected AutoAllow when CIStatus=success, got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+func TestClassify_RequireCIPassing_Failure_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:               "test-ci-passing",
+			Name:             "Require CI passing",
+			ToolName:         "Bash",
+			RequireCIPassing: true,
+			Decision:         AutoAllow,
+			RiskLevel:        RiskLow,
+			Priority:         100,
+			Enabled:          true,
+			Source:           "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{CIStatus: "failure"})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate when CIStatus=failure (rule shouldn't match), got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+func TestClassify_RequireCIPassing_NoPR_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:               "test-ci-passing",
+			Name:             "Require CI passing",
+			ToolName:         "Bash",
+			RequireCIPassing: true,
+			Decision:         AutoAllow,
+			RiskLevel:        RiskLow,
+			Priority:         100,
+			Enabled:          true,
+			Source:           "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{CIStatus: ""})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate when CIStatus=\"\" (no PR/unknown), got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+// TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch is AC6's literal
+// worked example: a rule combining a regex CommandPattern with RequireCIPassing only
+// matches when BOTH hold.
+func TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:       "test-npm-publish-ci-gated",
+			Name:     "Allow npm publish only with green CI",
+			ToolName: "Bash",
+			//nolint:commandpattern this test deliberately exercises the CommandPattern+RequireCIPassing AND combination (AC6); Criteria matching is not what's under test here
+			CommandPattern:   regexp.MustCompile(`^npm publish`),
+			RequireCIPassing: true,
+			Decision:         AutoAllow,
+			RiskLevel:        RiskMedium,
+			Priority:         100,
+			Enabled:          true,
+			Source:           "user",
+		},
+	})
+
+	tests := []struct {
+		name     string
+		cmd      string
+		ciStatus string
+		want     ClassificationDecision
+	}{
+		{"regex matches, CI passing", "npm publish", "success", AutoAllow},
+		{"regex matches, CI failing", "npm publish", "failure", Escalate},
+		{"regex does not match, CI passing", "npm install", "success", Escalate},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": tt.cmd}}
+			result := c.Classify(payload, ClassificationContext{CIStatus: tt.ciStatus})
+			if result.Decision != tt.want {
+				t.Errorf("cmd=%q ciStatus=%q: expected %v, got %v (rule=%s)", tt.cmd, tt.ciStatus, tt.want, result.Decision, result.RuleID)
+			}
+		})
+	}
+}
+
+func TestClassify_MinSessionIdleMinutes_Matches_WhenIdleExceedsThreshold(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:                    "test-min-idle",
+			Name:                  "Require session idle",
+			ToolName:              "Bash",
+			MinSessionIdleMinutes: 60,
+			Decision:              AutoAllow,
+			RiskLevel:             RiskLow,
+			Priority:              100,
+			Enabled:               true,
+			Source:                "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{SessionIdleMinutes: 75})
+	if result.Decision != AutoAllow {
+		t.Errorf("expected AutoAllow when idle (75) exceeds threshold (60), got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+func TestClassify_MinSessionIdleMinutes_DoesNotMatch_WhenIdleBelowThreshold(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:                    "test-min-idle",
+			Name:                  "Require session idle",
+			ToolName:              "Bash",
+			MinSessionIdleMinutes: 60,
+			Decision:              AutoAllow,
+			RiskLevel:             RiskLow,
+			Priority:              100,
+			Enabled:               true,
+			Source:                "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{SessionIdleMinutes: 10})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate when idle (10) is below threshold (60), got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+// TestClassify_MinSessionIdleMinutes_ANDsWithOtherConditions_WhenCombinedWithRequireCIPassing
+// proves AND, not OR: even though CIStatus is "success" (satisfying RequireCIPassing), the
+// idle condition alone must still block the match.
+func TestClassify_MinSessionIdleMinutes_ANDsWithOtherConditions_WhenCombinedWithRequireCIPassing(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:                    "test-min-idle-and-ci",
+			Name:                  "Require CI passing and session idle",
+			ToolName:              "Bash",
+			RequireCIPassing:      true,
+			MinSessionIdleMinutes: 60,
+			Decision:              AutoAllow,
+			RiskLevel:             RiskLow,
+			Priority:              100,
+			Enabled:               true,
+			Source:                "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{CIStatus: "success", SessionIdleMinutes: 5})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate: CI passing but idle (5) below threshold (60) should still block the match, got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+// TestClassify_MinSessionIdleMinutes_FailsClosed_WhenContextIdleUnset is the critical
+// fail-closed test: a zero/unset ClassificationContext.SessionIdleMinutes (as if the caller
+// never populated it) must never accidentally satisfy a MinSessionIdleMinutes > 0 condition.
+func TestClassify_MinSessionIdleMinutes_FailsClosed_WhenContextIdleUnset(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:                    "test-min-idle-unset",
+			Name:                  "Require session idle",
+			ToolName:              "Bash",
+			MinSessionIdleMinutes: 60,
+			Decision:              AutoAllow,
+			RiskLevel:             RiskLow,
+			Priority:              100,
+			Enabled:               true,
+			Source:                "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate (fail-closed) when ctx.SessionIdleMinutes is unset, got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+// TestRiskLevel_ValuesAreStableForPersistence guards RiskLevel's iota block against
+// reordering/insertion — the values are persisted as an int column
+// (ApprovalRule.risk_level, session/ent/schema/approvalrule.go) and depended on by the
+// string conversions in server/services (riskLevelString/parseRiskLevel). See the WARNING
+// comment on the RiskLevel type declaration (review-queue-severity, sdd:6-verify Layer 2
+// architecture finding). A future edit that reorders this block would pass every other test
+// in this package but silently corrupt already-persisted rule risk levels; this test exists
+// so that specific failure mode fails loudly here instead.
+func TestRiskLevel_ValuesAreStableForPersistence(t *testing.T) {
+	if RiskLow != 0 {
+		t.Errorf("RiskLow = %d, want 0", RiskLow)
+	}
+	if RiskMedium != 1 {
+		t.Errorf("RiskMedium = %d, want 1", RiskMedium)
+	}
+	if RiskHigh != 2 {
+		t.Errorf("RiskHigh = %d, want 2", RiskHigh)
+	}
+	if RiskCritical != 3 {
+		t.Errorf("RiskCritical = %d, want 3", RiskCritical)
+	}
+}

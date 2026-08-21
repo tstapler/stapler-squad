@@ -1,0 +1,13 @@
+{
+  "id": "insights-model-over-time-chart",
+  "type": "frontend",
+  "component": "ModelOverTimeChart",
+  "path": "web-app/src/app/insights/ModelOverTimeChart.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "ModelOverTimeChart > ModelOverTimeChart_should_showUnpricedSuffix_When_familyInUnpricedModels",
+    "ModelOverTimeChart > ModelOverTimeChart_should_renderUnchanged_When_familyNotInUnpricedModels"
+  ],
+  "lastModified": "2026-08-02T00:00:00.000Z"
+}

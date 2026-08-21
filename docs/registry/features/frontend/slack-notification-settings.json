@@ -1,0 +1,20 @@
+{
+  "id": "slack-notification-settings",
+  "type": "frontend",
+  "component": "SlackNotificationSettings",
+  "path": "web-app/src/components/settings/SlackNotificationSettings.tsx",
+  "filePath": "web-app/src/components/settings/SlackNotificationSettings.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "SlackNotificationSettings_should_MaskWebhookField_When_AlreadyConfigured",
+    "SlackNotificationSettings_should_DisableToggles_When_NoWebhookConfigured",
+    "SlackNotificationSettings_should_ShowEdgeTriggeredDigestHint_NextToThresholdInput",
+    "SlackNotificationSettings_should_HaveExplicitLabelForEveryInput",
+    "SlackNotificationSettings_should_SetAriaInvalidAndDescribedBy_When_WebhookUrlInvalid",
+    "SlackNotificationSettings_should_UseRoleAlertForBlockingErrors_And_RoleStatusForInfoState",
+    "SlackNotificationSettings_should_UseNativeCheckboxInputsWithBoundLabels",
+    "SlackNotificationSettings_should_UpdateResultRegionOnlyAfterRequestCompletes_NotOnClick"
+  ],
+  "lastModified": "2026-08-16T00:00:00Z"
+}

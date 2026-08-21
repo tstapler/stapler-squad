@@ -5,6 +5,7 @@ import { useApprovals } from "@/lib/hooks/useApprovals";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import { ApprovalCard } from "./ApprovalCard";
+import { riskLevelRank } from "@/lib/sessions/riskLevel";
 import * as styles from "./ApprovalDrawer.css";
 
 interface ApprovalDrawerProps {
@@ -14,7 +15,8 @@ interface ApprovalDrawerProps {
 
 /**
  * Non-modal right-side drawer listing all pending approvals across all sessions.
- * Sorted by time-to-expire (most urgent first) per MP3 requirement.
+ * Sorted by severity (most dangerous first), then time-to-expire (most urgent first) as
+ * a tiebreaker within equal severity — see riskLevelRank in @/lib/sessions/riskLevel.
  * Does not block the rest of the UI — no backdrop overlay.
  */
 export function ApprovalDrawer({ isOpen, onClose }: ApprovalDrawerProps) {
@@ -60,10 +62,13 @@ export function ApprovalDrawer({ isOpen, onClose }: ApprovalDrawerProps) {
 
   if (!isOpen) return null;
 
-  // Sort by secondsRemaining ascending (most urgent first)
-  const sorted = [...approvals].sort(
-    (a, b) => a.secondsRemaining - b.secondsRemaining
-  );
+  // Sort by severity descending (most dangerous first; unrecorded ranks as High, never
+  // last — see riskLevelRank), secondsRemaining ascending (most urgent first) as tiebreaker.
+  const sorted = [...approvals].sort((a, b) => {
+    const rankDiff = riskLevelRank(b.riskLevel) - riskLevelRank(a.riskLevel);
+    if (rankDiff !== 0) return rankDiff;
+    return a.secondsRemaining - b.secondsRemaining;
+  });
 
   return (
     <aside

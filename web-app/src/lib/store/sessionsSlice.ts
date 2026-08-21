@@ -37,7 +37,23 @@ const sessionsSlice = createSlice({
   reducers: {
     setSessions(state, action: PayloadAction<Session[]>) {
       const filtered = action.payload.filter(s => !state.deletedIds[s.id]);
-      sessionsAdapter.setAll(state, filtered);
+      // Preserve existing entity references when a session's data is unchanged
+      // (same updatedAt) so React.memo on SessionRowWrapper can skip re-rendering
+      // rows untouched by this snapshot/poll — mirrors the guard in upsertSession.
+      const merged = filtered.map((incoming) => {
+        const existing = state.entities[incoming.id];
+        if (
+          existing &&
+          existing.updatedAt !== undefined &&
+          incoming.updatedAt !== undefined &&
+          existing.updatedAt.seconds === incoming.updatedAt.seconds &&
+          existing.updatedAt.nanos === incoming.updatedAt.nanos
+        ) {
+          return existing;
+        }
+        return incoming;
+      });
+      sessionsAdapter.setAll(state, merged);
     },
     upsertSession(state, action: PayloadAction<Session>) {
       // Don't resurrect a deleted session via an in-flight update event
@@ -119,7 +135,13 @@ export const selectActiveSessionsSortedByUpdatedAt = createSelector(
   (sessions) =>
     sessions
       .filter((s) => s.status !== SessionStatus.UNSPECIFIED)
-      .sort((a, b) => Number(b.updatedAt?.seconds ?? 0) - Number(a.updatedAt?.seconds ?? 0))
+      .sort((a, b) => {
+        const byUpdated = Number(b.updatedAt?.seconds ?? 0) - Number(a.updatedAt?.seconds ?? 0);
+        if (byUpdated !== 0) return byUpdated;
+        const byCreated = Number(b.createdAt?.seconds ?? 0) - Number(a.createdAt?.seconds ?? 0);
+        if (byCreated !== 0) return byCreated;
+        return a.id.localeCompare(b.id);
+      })
 );
 export const selectSessionIds = adapterSelectors.selectIds;
 export const selectSessionsTotal = adapterSelectors.selectTotal;

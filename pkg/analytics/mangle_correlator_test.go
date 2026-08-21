@@ -97,6 +97,43 @@ func TestMangleCorrelator_OrdinalPerType(t *testing.T) {
 	}
 }
 
+// TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters is the PerfFix-2 regression
+// test: stage1Ordinals/stage2Ordinals previously had no TTL of their own, so a session's
+// ordinal counters for a (session, type) pair survived forever once EvictExpired had nothing
+// left in pending to reap for that pair — confirmed as the #1 live-heap consumer
+// (25.18% inuse_space) before ordinalLastSeen-driven pruning was added.
+func TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters(t *testing.T) {
+	spy := &spyWriter{}
+	c := NewMangleCorrelator(100*time.Millisecond, 100)
+
+	c.RecordStage1("sess1", "SGR", "hash-1", 5)
+	c.CheckStage2("sess1", "SGR", "hash-1", 5)
+
+	ok := ordinalKey{"sess1", "SGR"}
+	c.mu.Lock()
+	_, s1ok := c.stage1Ordinals[ok]
+	_, s2ok := c.stage2Ordinals[ok]
+	c.mu.Unlock()
+	if !s1ok || !s2ok {
+		t.Fatalf("expected ordinal counters to be present immediately after use, s1=%v s2=%v", s1ok, s2ok)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	c.EvictExpired(context.Background(), spy)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.stage1Ordinals[ordinalKey{"sess1", "SGR"}]; ok {
+		t.Error("expected stage1Ordinals entry to be pruned once its (session, type) pair went quiet")
+	}
+	if _, ok := c.stage2Ordinals[ordinalKey{"sess1", "SGR"}]; ok {
+		t.Error("expected stage2Ordinals entry to be pruned once its (session, type) pair went quiet")
+	}
+	if _, ok := c.ordinalLastSeen[ordinalKey{"sess1", "SGR"}]; ok {
+		t.Error("expected ordinalLastSeen entry to be pruned once its (session, type) pair went quiet")
+	}
+}
+
 // TestMangleCorrelator_DroppedSequenceDesyncsSubsequentOrdinals documents the known
 // limitation of ordinal correlation: an actual dropped sequence of a given type shifts
 // every subsequent ordinal for that (session, type) out of alignment. This is not a

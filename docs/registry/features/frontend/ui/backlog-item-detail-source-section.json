@@ -1,0 +1,14 @@
+{
+  "id": "backlog:item-detail-source-section",
+  "type": "frontend",
+  "component": "SourceSection",
+  "path": "web-app/src/components/backlog/detail/SourceSection.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "SourceSection_should_RenderIssueLinkAndLabelChips_When_PropsPresent",
+    "SourceSection_should_OmitLabelChips_When_LabelsEmpty",
+    "SourceSection is collapsed by default"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}
