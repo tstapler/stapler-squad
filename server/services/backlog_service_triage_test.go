@@ -3446,15 +3446,15 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 	// keep succeeding is not constructible with this package's existing test
 	// fixtures. BacklogService.storage is a concrete *session.Storage, not an
 	// interface — it cannot be swapped for a test double. *session.Storage's
-	// ItemSession-specific methods (CreateItemSession, ListItemSessions,
-	// UpdateItemSessionTriageResult, UpdateItemSessionEnded — session/storage.go
-	// ~L953-1104) each hard type-assert their internal repo field to
-	// *session.EntRepository and fail closed otherwise (`er, ok :=
-	// s.repo.(*EntRepository); if !ok { return ... }`). Wrapping that repo in a
-	// decorator that overrides only UpdateBacklogItem (which is instead a plain
-	// passthrough to the session.Repository interface, session/storage.go:721-723)
-	// would make the decorator's dynamic type no longer *EntRepository, breaking
-	// every ItemSession call this same goroutine depends on — including the one
+	// internal repo field is itself a concrete *session.EntRepository (no
+	// interface indirection), so every ItemSession-specific method
+	// (CreateItemSession, ListItemSessions, UpdateItemSessionTriageResult,
+	// UpdateItemSessionEnded — session/storage.go ~L953-1104) always calls
+	// straight through to it. Wrapping that repo in a decorator that overrides
+	// only UpdateBacklogItem would require *session.Storage.repo to accept
+	// something other than *session.EntRepository, which it does not — and
+	// even if it did, such a decorator would need to forward every other
+	// method this same goroutine depends on — including the one
 	// this test needs to detect completion (UpdateItemSessionEnded). The only
 	// other lever — closing the real ent DB connection between TriggerTriage
 	// returning and its goroutine's persistence step running — races the
